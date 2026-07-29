@@ -2959,6 +2959,33 @@ def execute_workflow(
         if not workflow:
             return {"status": "error", "message": "Workflow not found"}
 
+        # Every trigger converges here - schedules, price alerts, order updates,
+        # webhooks and Run Now - so this is the only place that can guarantee an
+        # incomplete graph never reaches the broker. Guarding the HTTP routes
+        # alone left the background triggers unchecked, and saving deliberately
+        # accepts a half-built graph. Checked before the execution record exists,
+        # so a rejected run is not logged as one that started.
+        from services.flow_workflow_validator import validate_workflow
+
+        validation_errors = validate_workflow(
+            {
+                "name": workflow.name,
+                "nodes": workflow.nodes or [],
+                "edges": workflow.edges or [],
+            },
+            strict=True,
+        )
+        if validation_errors:
+            message = validation_errors[0]["message"]
+            logger.error(
+                f"Workflow {workflow_id} ({workflow.name}) is not runnable: {message}"
+            )
+            return {
+                "status": "error",
+                "message": f"Workflow cannot be executed: {message}",
+                "errors": validation_errors,
+            }
+
         execution = create_execution(workflow_id, status="running")
         if not execution:
             return {"status": "error", "message": "Failed to create execution record"}

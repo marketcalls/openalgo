@@ -91,6 +91,31 @@ TRIGGER_NODE_TYPES: frozenset[str] = frozenset(
     {"start", "webhookTrigger", "priceAlert", "orderUpdateTrigger"}
 )
 
+# Fields required only for particular option values. A channel alert is
+# configured with priceLower/priceUpper and has no single `price`, so requiring
+# one unconditionally rejected a documented, working alert.
+CONDITIONAL_REQUIRED_FIELDS: dict[str, dict[str, dict[str, tuple[str, ...]]]] = {
+    "priceAlert": {
+        "condition": {
+            "above": ("price",),
+            "below": ("price",),
+            "greater_than": ("price",),
+            "less_than": ("price",),
+            "crosses_above": ("price",),
+            "crosses_below": ("price",),
+            "crossing": ("price",),
+            "crossing_up": ("price",),
+            "crossing_down": ("price",),
+            "entering_channel": ("priceLower", "priceUpper"),
+            "inside_channel": ("priceLower", "priceUpper"),
+            "exiting_channel": ("priceLower", "priceUpper"),
+            "outside_channel": ("priceLower", "priceUpper"),
+            "moving_up_percent": ("percentage",),
+            "moving_down_percent": ("percentage",),
+        }
+    },
+}
+
 MAX_NODES = 500
 MAX_EDGES = 1000
 
@@ -141,7 +166,8 @@ REQUIRED_NODE_FIELDS: dict[str, tuple[str, ...]] = {
     "splitOrder": ("symbol", "exchange", "action", "quantity", "splitSize"),
     "basketOrder": ("orders",),
     "optionsMultiOrder": ("underlying", "quantity"),
-    "priceAlert": ("symbol", "exchange", "condition", "price"),
+    # `price` is required only for level conditions - see CONDITIONAL_FIELDS.
+    "priceAlert": ("symbol", "exchange", "condition"),
     "subscribeLtp": ("symbol", "exchange"),
     "subscribeQuote": ("symbol", "exchange"),
     "subscribeDepth": ("symbol", "exchange"),
@@ -305,7 +331,11 @@ def validate_workflow(
 
         data = node.get("data")
         if strict and isinstance(data, dict) and isinstance(node_type, str):
-            for field in REQUIRED_NODE_FIELDS.get(node_type, ()):
+            required = list(REQUIRED_NODE_FIELDS.get(node_type, ()))
+            for selector, options in CONDITIONAL_REQUIRED_FIELDS.get(node_type, {}).items():
+                chosen = str(data.get(selector, "")).strip().lower()
+                required.extend(options.get(chosen, ()))
+            for field in required:
                 value = data.get(field)
                 if value is None or (isinstance(value, str) and not value.strip()):
                     errors.append(
