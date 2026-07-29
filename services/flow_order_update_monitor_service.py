@@ -13,7 +13,9 @@ see docs/prompt/websockets-format.md "Order Updates") instead of running its
 own polling thread.
 """
 
+import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
@@ -22,6 +24,15 @@ from utils.event_bus import bus
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Shared and bounded, never one thread per event: order updates arrive in
+# bursts (a basket filling leg by leg), and each run executes a whole workflow
+# holding DB sessions and broker calls. A module-level pool caps that
+# concurrency and reuses its threads for the life of the worker.
+_WORKFLOW_POOL = ThreadPoolExecutor(
+    max_workers=max(int(os.getenv("FLOW_ORDER_UPDATE_WORKERS", "4")), 1),
+    thread_name_prefix="flow-order-update",
+)
 
 # order_status values a watch can match on; "any" matches every update.
 VALID_STATUSES = {"any", "open", "trigger pending", "complete", "rejected", "cancelled"}
@@ -260,13 +271,22 @@ class FlowOrderUpdateMonitor:
                     self.remove_watch(watch.workflow_id)
                 else:
                     watch.triggered = False
+                # No app context here, so teardown_appcontext never runs and
+                # every scoped session this workflow touched would stay bound
+                # to the pool thread, holding its connection indefinitely.
+                from utils.db_sessions import remove_all_scoped_sessions
 
-        threading.Thread(target=run_workflow, daemon=True).start()
+                remove_all_scoped_sessions()
+
+        _WORKFLOW_POOL.submit(run_workflow)
 
     def shutdown(self):
         bus.unsubscribe("order.update", self._on_order_update)
         with self._watches_lock:
             self._watches.clear()
+        # Let in-flight workflows finish; the pool's threads are released with
+        # it rather than left running past shutdown.
+        _WORKFLOW_POOL.shutdown(wait=False)
         logger.info("FlowOrderUpdateMonitor shutdown")
 
 

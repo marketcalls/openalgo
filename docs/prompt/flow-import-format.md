@@ -57,7 +57,8 @@ Do not emit nodes for these; restructure the strategy instead.
 
 | Not available | What to do instead |
 |---|---|
-| Variables that persist between runs (flags, counters, "already traded today") | Ask the broker: `positionCheck`, or `orderBook` statistics. Or derive it statelessly from the quote's session `high`/`low`. |
+| Variables that persist between runs (flags, counters, "already traded today") | Ask the broker, which is the real record of what you did: `positionCheck` for an open position, or `orderBook` statistics for orders already placed today (the order book resets daily). |
+| Remembering that price *reached* a level earlier today ("the gap has filled", "it already tagged VWAP") | The quote's session `high`/`low` are the running extremes of today's session, so `day_low <= PDH` proves price traded down to PDH at some point today. This records where price has been, **not** what you have traded - do not use it to infer your own activity. |
 | Loops / iteration / "monitor from 09:20 to 12:30" | Use `start` with `scheduleType: "interval"` plus a `timeWindow` condition. One run per tick. |
 | Waiting inside a run for a target or stop | A separate workflow on its own schedule. Entry, exit and square-off are different workflows. |
 | Iterating a list of symbols | One workflow per symbol, or drive it from `webhookTrigger` using `{{webhook.symbol}}`. |
