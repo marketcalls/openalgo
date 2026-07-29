@@ -54,11 +54,14 @@ def get_margin_data(auth_token):
         cash_bucket = available_to_trade["cash_available_to_trade"]
         pledge_bucket = available_to_trade["pledge_available_to_trade"]
 
+        # pledge_available_to_trade has no top-level "total" (unlike
+        # cash_available_to_trade) -- verified against a live response.
+        # Available pledge margin = granted margin_from_pledge minus what's
+        # already deployed in margin_used.
+        pledge_used = pledge_bucket["margin_used"]["total"]
         total_available_margin = cash_bucket["total"]
-        total_collateral = pledge_bucket["total"]
-        total_used_margin = (
-            cash_bucket["margin_used"]["total"] + pledge_bucket["margin_used"]["total"]
-        )
+        total_collateral = pledge_bucket["margin_from_pledge"]["total"] - pledge_used
+        total_used_margin = cash_bucket["margin_used"]["total"] + pledge_used
 
         total_realised = 0.0
         total_unrealised = 0.0
