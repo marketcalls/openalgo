@@ -70,11 +70,15 @@ def get_margin_data(auth_token):
             logger.error(f"API error fetching margin data: {error_details}")
             return {}
 
-        # Calculate the sum of available_margin and used_margin
+        # "availablecash" must be the actual cash balance, not total margin.
+        # Upstox's "available_margin" is documented as "Total margin available
+        # for trading" (includes pledged/collateral margin, like Kite's "net"
+        # -- see GitHub issue #1582), while "notional_cash" is the cash-only
+        # figure, so use that instead.
         total_available_margin = sum(
             [
-                margin_data["data"]["commodity"]["available_margin"],
-                margin_data["data"]["equity"]["available_margin"],
+                margin_data["data"]["commodity"]["notional_cash"],
+                margin_data["data"]["equity"]["notional_cash"],
             ]
         )
         total_used_margin = sum(
