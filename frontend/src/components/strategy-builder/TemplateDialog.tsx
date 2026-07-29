@@ -18,6 +18,12 @@ import {
 } from '@/components/ui/select'
 import { strikeMoneyness } from '@/lib/strategyMath'
 import type { StrategyTemplate, TemplateLeg } from '@/lib/strategyTemplates'
+import {
+  resolveExpiryOffset,
+  resolveListedContract,
+  resolveStrikeOffset,
+  validateTemplateStrikeTopology,
+} from '@/lib/templateResolution'
 import { cn } from '@/lib/utils'
 import type { OptionStrike } from '@/types/option-chain'
 
@@ -40,21 +46,7 @@ export interface TemplateDialogProps {
   atmStrike: number | null
   /** Common strike increment in the chain (e.g. 50 for NIFTY). */
   strikeStep: number
-  onConfirm: (legs: ResolvedTemplateLeg[], totalLots: number) => void
-}
-
-function nearestStrike(target: number, strikes: number[]): number | null {
-  if (strikes.length === 0) return null
-  let best = strikes[0]
-  let bestDist = Math.abs(strikes[0] - target)
-  for (const s of strikes) {
-    const d = Math.abs(s - target)
-    if (d < bestDist) {
-      bestDist = d
-      best = s
-    }
-  }
-  return best
+  onConfirm: (legs: ResolvedTemplateLeg[], totalLots: number) => void | Promise<void>
 }
 
 export function TemplateDialog({
@@ -71,47 +63,78 @@ export function TemplateDialog({
 }: TemplateDialogProps) {
   const [lots, setLots] = useState(1)
   const [strikeOverrides, setStrikeOverrides] = useState<Record<number, number>>({})
+  const [isConfirming, setIsConfirming] = useState(false)
 
   // Reset overrides when template changes
   // biome-ignore lint/correctness/useExhaustiveDependencies: template?.id is an intentional reset trigger — the body only calls setters, but it MUST re-fire when the selected template changes to clear stale overrides
   useEffect(() => {
     setStrikeOverrides({})
     setLots(1)
+    setIsConfirming(false)
   }, [template?.id])
 
-  const strikes = useMemo(() => chain?.map((s) => s.strike) ?? [], [chain])
+  const strikes = useMemo(
+    () =>
+      Array.from(new Set(chain?.map((strike) => strike.strike) ?? [])).sort(
+        (left, right) => left - right
+      ),
+    [chain]
+  )
 
-  const resolved = useMemo<ResolvedTemplateLeg[]>(() => {
-    if (!template || atmStrike === null || chain === null) return []
-    // Locate the "near" expiry inside the list so we can index-offset from it.
-    const baseIdx = Math.max(0, expiries.indexOf(expiry))
-    return template.legs.map((leg, idx) => {
-      const target = atmStrike + leg.strikeOffset * strikeStep
+  const resolution = useMemo<{
+    legs: ResolvedTemplateLeg[]
+    errors: string[]
+  }>(() => {
+    if (!template || atmStrike === null || chain === null) return { legs: [], errors: [] }
+
+    const unresolvedTopology: Array<{
+      strikeOffset: number
+      resolvedStrike: number | null
+    }> = []
+    const errors: string[] = []
+    const legs = template.legs.map((leg, idx) => {
       const override = strikeOverrides[idx]
-      const resolvedStrike = override ?? nearestStrike(target, strikes) ?? target
+      const listedStrike = resolveStrikeOffset(strikes, atmStrike, leg.strikeOffset)
+      const resolvedStrike = override ?? listedStrike
+      unresolvedTopology.push({ strikeOffset: leg.strikeOffset, resolvedStrike })
 
-      // Calendar / diagonal support: each leg can have its own expiry offset.
-      // We clamp to the last available expiry so a template that expects a
-      // next-month leg still renders even when only one expiry is available.
       const offset = leg.expiryOffset ?? 0
-      const targetIdx = Math.min(baseIdx + offset, expiries.length - 1)
-      const resolvedExpiry = expiries[Math.max(0, targetIdx)] ?? expiry
+      const listedExpiry = resolveExpiryOffset(expiries, expiry, offset)
+      if (listedExpiry === null) {
+        errors.push(
+          offset > 0
+            ? `A later expiry is required for ${template.name}.`
+            : `The selected expiry cannot resolve every leg in ${template.name}.`
+        )
+      }
+      const resolvedExpiry = listedExpiry ?? expiry
+      const displayStrike = resolvedStrike ?? atmStrike
 
       // Chain symbols are only available for the currently-loaded expiry.
       // For legs on a different expiry the caller rebuilds the symbol from
       // scratch via buildOptionSymbol.
       const canUseChain = resolvedExpiry === expiry
-      const row = canUseChain ? chain.find((s) => s.strike === resolvedStrike) : undefined
-      const side = leg.optionType === 'CE' ? row?.ce : row?.pe
+      const side = canUseChain ? resolveListedContract(chain, displayStrike, leg.optionType) : null
+      if (canUseChain && resolvedStrike !== null && side === null) {
+        errors.push(
+          `The required ${leg.optionType} contract at ${displayStrike} is not available in the loaded option chain.`
+        )
+      }
       return {
         ...leg,
-        resolvedStrike,
+        resolvedStrike: displayStrike,
         resolvedExpiry,
         price: side?.ltp ?? 0,
         symbol: side?.symbol ?? null,
       }
     })
-  }, [template, atmStrike, chain, strikes, strikeStep, strikeOverrides, expiry, expiries])
+
+    errors.push(...validateTemplateStrikeTopology(unresolvedTopology))
+    return { legs, errors: Array.from(new Set(errors)) }
+  }, [template, atmStrike, chain, strikes, strikeOverrides, expiry, expiries])
+
+  const resolved = resolution.legs
+  const validationErrors = resolution.errors
 
   if (!template) return null
 
@@ -201,6 +224,17 @@ export function TemplateDialog({
             )
           })}
 
+          {validationErrors.length > 0 && (
+            <div
+              role="alert"
+              className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+            >
+              {validationErrors.map((error) => (
+                <p key={error}>{error}</p>
+              ))}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1">
               <label className="text-[11px] font-medium text-muted-foreground">Expiry</label>
@@ -253,10 +287,23 @@ export function TemplateDialog({
           </Button>
           <Button
             size="sm"
-            onClick={() => onConfirm(resolved, lots)}
+            disabled={
+              isConfirming ||
+              validationErrors.length > 0 ||
+              resolved.length !== template.legs.length
+            }
+            onClick={async () => {
+              if (validationErrors.length > 0) return
+              setIsConfirming(true)
+              try {
+                await onConfirm(resolved, lots)
+              } finally {
+                setIsConfirming(false)
+              }
+            }}
             className="bg-emerald-500 hover:bg-emerald-600"
           >
-            Add Strategy
+            {isConfirming ? 'Validating...' : 'Add Strategy'}
           </Button>
         </DialogFooter>
       </DialogContent>
