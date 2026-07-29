@@ -12,6 +12,7 @@ node types, edge endpoints, and the one-trigger rule. Per-node field contracts
 stay with the executor, which is where their defaults and coercions live.
 """
 
+import re
 from typing import Any
 
 from utils.logging import get_logger
@@ -93,6 +94,47 @@ TRIGGER_NODE_TYPES: frozenset[str] = frozenset(
 MAX_NODES = 500
 MAX_EDGES = 1000
 
+# Source handles each node kind may emit. Condition nodes and gates fork; the
+# executor treats yes/no as synonyms of true/false. Anything else on an edge is
+# a typo that silently drops the branch at run time.
+_BRANCHING_HANDLES = frozenset({"true", "false", "yes", "no"})
+BRANCHING_NODE_TYPES: frozenset[str] = frozenset(
+    {
+        "positionCheck",
+        "fundCheck",
+        "priceCondition",
+        "varCondition",
+        "timeWindow",
+        "timeCondition",
+        "andGate",
+        "orGate",
+        "notGate",
+    }
+)
+
+# Fields an order node cannot execute without. Checked here because a workflow
+# missing them fails at the broker, mid-session, rather than at import.
+REQUIRED_NODE_FIELDS: dict[str, tuple[str, ...]] = {
+    "placeOrder": ("symbol", "exchange", "action", "quantity"),
+    "smartOrder": ("symbol", "exchange", "action", "quantity"),
+    "optionsOrder": ("underlying", "action", "quantity"),
+    "modifyOrder": ("orderId",),
+    "cancelOrder": ("orderId",),
+    "getOrderStatus": ("orderId",),
+    "getQuote": ("symbol", "exchange"),
+    "getDepth": ("symbol", "exchange"),
+    "history": ("symbol", "exchange", "interval"),
+    "indicator": ("symbol", "exchange", "indicatorName"),
+    "priorPeriodOhlc": ("symbol", "exchange"),
+    "barOffset": ("symbol", "exchange"),
+    "openPosition": ("symbol", "exchange"),
+    "telegramAlert": ("message",),
+    "whatsappAlert": ("to", "message"),
+    "mathExpression": ("expression",),
+    "varCondition": ("leftValue", "operator"),
+    "priceCondition": ("symbol", "exchange", "operator"),
+}
+
 
 class WorkflowValidationError(Exception):
     """One or more structural problems, each with a path and a reason."""
@@ -111,8 +153,22 @@ def _err(path: str, code: str, message: str, expected=None, received=None) -> di
     return entry
 
 
-def validate_workflow(payload: Any, *, require_name: bool = True) -> list[dict[str, Any]]:
-    """Return a list of structural errors; empty means the workflow is valid."""
+def validate_workflow(
+    payload: Any, *, require_name: bool = True, strict: bool = True
+) -> list[dict[str, Any]]:
+    """Return a list of errors; empty means the workflow passes.
+
+    Two levels, because the editor saves continuously while a graph is still
+    being wired:
+
+    * Always checked (structure) - shape, ids, known node types, edge endpoints,
+      branch handles. A graph failing these cannot be rendered and is corrupt
+      however incomplete the user\'s work is.
+    * ``strict`` only (completeness) - required node fields, exactly one
+      trigger, reachability, and cycles. Enforced at import and activation,
+      where the workflow is presented as finished, and skipped on save so a
+      half-built graph remains savable.
+    """
     errors: list[dict[str, Any]] = []
 
     if not isinstance(payload, dict):
@@ -226,7 +282,22 @@ def validate_workflow(payload: Any, *, require_name: bool = True) -> list[dict[s
         elif node_type in TRIGGER_NODE_TYPES:
             triggers.append(str(node_id))
 
-        if not isinstance(node.get("data"), dict):
+        data = node.get("data")
+        if strict and isinstance(data, dict) and isinstance(node_type, str):
+            for field in REQUIRED_NODE_FIELDS.get(node_type, ()):
+                value = data.get(field)
+                if value is None or (isinstance(value, str) and not value.strip()):
+                    errors.append(
+                        _err(
+                            f"{base}/data/{field}",
+                            "missing_required_field",
+                            f"A {node_type} node needs {field}. Without it the node "
+                            "fails at run time, not at import.",
+                            field,
+                            value,
+                        )
+                    )
+        if not isinstance(data, dict):
             errors.append(
                 _err(
                     f"{base}/data",
@@ -317,7 +388,84 @@ def validate_workflow(payload: Any, *, require_name: bool = True) -> list[dict[s
                     )
                 )
 
-    if nodes and not triggers:
+    node_types_by_id = {
+        n.get("id"): n.get("type")
+        for n in nodes
+        if isinstance(n, dict) and isinstance(n.get("id"), str)
+    }
+    for i, edge in enumerate(edges):
+        if not isinstance(edge, dict):
+            continue
+        handle = edge.get("sourceHandle")
+        if handle is None or handle == "":
+            continue  # an unconditional edge is legitimate
+        source_type = node_types_by_id.get(edge.get("source"))
+        if source_type in BRANCHING_NODE_TYPES and str(handle) not in _BRANCHING_HANDLES:
+            errors.append(
+                _err(
+                    f"/edges/{i}/sourceHandle",
+                    "invalid_source_handle",
+                    f"'{handle}' is not a branch of a {source_type} node, so this edge "
+                    "is never followed and its branch is silently dropped.",
+                    sorted(_BRANCHING_HANDLES),
+                    handle,
+                )
+            )
+        elif source_type and source_type not in BRANCHING_NODE_TYPES:
+            if str(handle) in _BRANCHING_HANDLES:
+                errors.append(
+                    _err(
+                        f"/edges/{i}/sourceHandle",
+                        "invalid_source_handle",
+                        f"A {source_type} node does not branch, so it has no '{handle}' handle.",
+                        "no sourceHandle",
+                        handle,
+                    )
+                )
+
+    # Gate input slots. `targetHandle: "input-N"` must name a slot the gate
+    # actually has: a higher N is never filled, so the gate waits for an input
+    # that can never arrive and its branch silently never fires.
+    gate_slots = {
+        n.get("id"): max(int(n.get("data", {}).get("inputCount") or 2), 1)
+        for n in nodes
+        if isinstance(n, dict)
+        and n.get("type") in ("andGate", "orGate")
+        and isinstance(n.get("data"), dict)
+    }
+    for i, edge in enumerate(edges):
+        if not isinstance(edge, dict):
+            continue
+        handle = edge.get("targetHandle")
+        if handle is None or handle == "":
+            continue
+        slots = gate_slots.get(edge.get("target"))
+        if slots is None:
+            continue
+        match = re.fullmatch(r"input-(\d+)", str(handle))
+        if not match or int(match.group(1)) >= slots:
+            errors.append(
+                _err(
+                    f"/edges/{i}/targetHandle",
+                    "invalid_target_handle",
+                    f"'{handle}' is not an input slot on this gate, which has {slots}. "
+                    "The gate would wait for an input that never arrives.",
+                    [f"input-{n}" for n in range(slots)],
+                    handle,
+                )
+            )
+
+    if strict and not nodes:
+        errors.append(
+            _err(
+                "/nodes",
+                "no_trigger",
+                "Workflow has no nodes, so it can never run.",
+                "at least a trigger node",
+                0,
+            )
+        )
+    elif strict and nodes and not triggers:
         errors.append(
             _err(
                 "/nodes",
@@ -328,7 +476,7 @@ def validate_workflow(payload: Any, *, require_name: bool = True) -> list[dict[s
                 0,
             )
         )
-    elif len(triggers) > 1:
+    elif strict and len(triggers) > 1:
         # The executor walks from the first trigger it finds; the rest of the
         # graph never executes and nothing reports why.
         errors.append(
@@ -342,11 +490,123 @@ def validate_workflow(payload: Any, *, require_name: bool = True) -> list[dict[s
             )
         )
 
+    # Only meaningful once ids and endpoints are sound.
+    if strict and not errors:
+        errors.extend(_graph_errors(nodes, edges, node_ids, triggers))
+
     return errors
 
 
-def assert_valid_workflow(payload: Any, *, require_name: bool = True) -> None:
-    """Raise WorkflowValidationError when the workflow is structurally invalid."""
-    errors = validate_workflow(payload, require_name=require_name)
+def _graph_errors(nodes: list, edges: list, node_ids: set[str], triggers: list[str]) -> list[dict]:
+    """Cycles and nodes the trigger can never reach."""
+    errors: list[dict] = []
+    adjacency: dict[str, list[str]] = {nid: [] for nid in node_ids}
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        src, dst = edge.get("source"), edge.get("target")
+        if src in adjacency and dst in node_ids:
+            adjacency[src].append(dst)
+
+    # Cycle detection. The executor caps depth and visits rather than detecting
+    # a loop, so a cycle burns the whole budget and truncates the run instead of
+    # reporting anything.
+    WHITE, GREY, BLACK = 0, 1, 2
+    colour = dict.fromkeys(node_ids, WHITE)
+    cycle: list[str] = []
+
+    def visit(node: str, path: list[str]) -> bool:
+        colour[node] = GREY
+        for nxt in adjacency.get(node, ()):
+            if colour[nxt] == GREY:
+                cycle.extend(path[path.index(nxt) :] + [nxt] if nxt in path else [nxt])
+                return True
+            if colour[nxt] == WHITE and visit(nxt, path + [nxt]):
+                return True
+        colour[node] = BLACK
+        return False
+
+    for nid in node_ids:
+        if colour[nid] == WHITE and visit(nid, [nid]):
+            errors.append(
+                _err(
+                    "/edges",
+                    "cycle",
+                    "The graph contains a cycle, which runs until the executor's "
+                    "visit limit and then truncates rather than reporting a loop: "
+                    + " -> ".join(cycle[:6]),
+                    "an acyclic graph",
+                    cycle[:6],
+                )
+            )
+            break
+
+    # Reachability from the trigger. A node the trigger cannot reach never runs,
+    # and nothing at run time says so.
+    if triggers:
+        seen: set[str] = set()
+        stack = list(triggers)
+        while stack:
+            nid = stack.pop()
+            if nid in seen:
+                continue
+            seen.add(nid)
+            stack.extend(adjacency.get(nid, ()))
+        unreachable = sorted(node_ids - seen)
+        if unreachable:
+            errors.append(
+                _err(
+                    "/nodes",
+                    "unreachable",
+                    "These nodes cannot be reached from the trigger and will never "
+                    "run: " + ", ".join(unreachable[:8]),
+                    "every node reachable from the trigger",
+                    unreachable[:8],
+                )
+            )
+    return errors
+
+
+def assert_valid_workflow(payload: Any, *, require_name: bool = True, strict: bool = True) -> None:
+    """Raise WorkflowValidationError when the workflow does not pass."""
+    errors = validate_workflow(payload, require_name=require_name, strict=strict)
     if errors:
         raise WorkflowValidationError(errors)
+
+
+# Legacy node payloads, and the canonical shape they map to. Applied at import
+# so the stored workflow is correct, rather than relying on every reader to
+# remember the old spelling forever.
+def migrate_legacy_node_data(nodes: list) -> tuple[list, list[str]]:
+    """Upgrade legacy node payloads. Returns (nodes, human-readable notes)."""
+    notes: list[str] = []
+    if not isinstance(nodes, list):
+        return nodes, notes
+
+    migrated = []
+    for node in nodes:
+        if not isinstance(node, dict) or not isinstance(node.get("data"), dict):
+            migrated.append(node)
+            continue
+        node_type = node.get("type")
+        data = dict(node["data"])
+
+        if node_type == "fundCheck" and "minAvailable" not in data and "threshold" in data:
+            # The guard reads minAvailable. Left as `threshold` it silently
+            # becomes a minimum of zero, so the check passes on any balance.
+            data["minAvailable"] = data.pop("threshold")
+            data.pop("operator", None)
+            notes.append(
+                f"fundCheck '{node.get('id')}': threshold -> minAvailable "
+                f"({data['minAvailable']})"
+            )
+        elif node_type == "positionCheck" and "condition" not in data and "operator" in data:
+            data.pop("operator", None)
+            data["condition"] = "exists"
+            notes.append(f"positionCheck '{node.get('id')}': operator -> condition")
+        elif node_type == "priceCondition" and "value" not in data and "threshold" in data:
+            data["value"] = data.pop("threshold")
+            notes.append(f"priceCondition '{node.get('id')}': threshold -> value")
+
+        migrated.append({**node, "data": data})
+    return migrated, notes

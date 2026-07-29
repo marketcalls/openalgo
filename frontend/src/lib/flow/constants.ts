@@ -832,9 +832,14 @@ export const DEFAULT_NODE_DATA = {
     strategy: 'straddle' as const,
     underlying: 'NIFTY',
     exchange: 'NSE_INDEX' as const,
-    expiryDate: '',
+    // The executor resolves an expiry *type*; expiryDate was never read here.
+    expiryType: 'current_week' as const,
     legs: [],
+    action: 'SELL' as const,
+    quantity: 1,
+    strangleWidth: 'OTM2' as const,
     priceType: 'MARKET' as const,
+    price: 0,
     product: 'MIS' as const,
   },
   cancelOrder: {
@@ -1027,7 +1032,9 @@ export const DEFAULT_NODE_DATA = {
     outputVariable: '',
   },
   intervals: {
-    outputVariable: '',
+    // Persisted, not just shown: an empty default meant the panel displayed
+    // "intervals" while the node stored its result nowhere.
+    outputVariable: 'intervals',
   },
   multiQuotes: {
     symbols: '',
