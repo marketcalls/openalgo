@@ -11,6 +11,7 @@ import it directly instead of going through the MCP tool layer. The MCP tool
 is left untouched; this is a fresh, reusable implementation of the same idea.
 """
 
+import hashlib
 import inspect
 import os
 import threading
@@ -47,6 +48,27 @@ _history_cache: TTLCache = TTLCache(
 )
 _history_cache_lock = threading.Lock()
 
+# One lock per in-flight cache key, so concurrent misses for the same request
+# collapse into a single broker call instead of racing past the cache and
+# each hitting the rate limiter (single-flight).
+_history_inflight: dict[tuple, threading.Lock] = {}
+_history_inflight_lock = threading.Lock()
+
+
+def _account_tag(client) -> str:
+    """Short, non-secret discriminator for the calling account.
+
+    Market data is not account-specific, but the connected *broker* is, and
+    two accounts can be on brokers whose bars differ (adjustments, session
+    handling). Keying on a hash keeps one account's history from being
+    served to another without ever putting the API key itself into a cache
+    key that may end up in a log line.
+    """
+    api_key = getattr(client, "api_key", None)
+    if not api_key:
+        return "anon"
+    return hashlib.sha256(str(api_key).encode()).hexdigest()[:12]
+
 
 def fetch_history_cached(
     client,
@@ -63,28 +85,53 @@ def fetch_history_cached(
     range must stay retryable rather than being pinned for the whole TTL.
     Set FLOW_HISTORY_CACHE_TTL=0 to effectively disable caching.
     """
-    key = (symbol, exchange, interval, start_date, end_date, source)
+    key = (_account_tag(client), symbol, exchange, interval, start_date, end_date, source)
 
-    if _HISTORY_CACHE_TTL > 0:
+    def _cached():
         with _history_cache_lock:
-            hit = _history_cache.get(key)
+            return _history_cache.get(key)
+
+    def _fetch():
+        result = client.get_history(
+            symbol=symbol,
+            exchange=exchange,
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date,
+            source=source,
+        )
+        if _HISTORY_CACHE_TTL > 0 and (result or {}).get("data"):
+            with _history_cache_lock:
+                _history_cache[key] = result
+        return result
+
+    if _HISTORY_CACHE_TTL <= 0:
+        return _fetch()
+
+    hit = _cached()
+    if hit is not None:
+        logger.debug(f"History cache hit: {symbol} {interval} ({source})")
+        return hit
+
+    with _history_inflight_lock:
+        inflight = _history_inflight.get(key)
+        leader = inflight is None
+        if leader:
+            inflight = threading.Lock()
+            _history_inflight[key] = inflight
+
+    with inflight:
+        # A follower waited on the leader's lock; by now the cache is warm.
+        hit = _cached()
         if hit is not None:
-            logger.debug(f"History cache hit: {symbol} {interval} ({source})")
+            logger.debug(f"History cache hit after wait: {symbol} {interval} ({source})")
             return hit
-
-    result = client.get_history(
-        symbol=symbol,
-        exchange=exchange,
-        interval=interval,
-        start_date=start_date,
-        end_date=end_date,
-        source=source,
-    )
-
-    if _HISTORY_CACHE_TTL > 0 and (result or {}).get("data"):
-        with _history_cache_lock:
-            _history_cache[key] = result
-    return result
+        try:
+            return _fetch()
+        finally:
+            if leader:
+                with _history_inflight_lock:
+                    _history_inflight.pop(key, None)
 
 
 def clear_history_cache() -> None:
@@ -113,6 +160,11 @@ MAX_HISTORY_BARS = max(int(os.getenv("FLOW_MAX_HISTORY_BARS", "200")), 1)
 # an adapter fall back to dumping daily rows. ~11 years keeps weekly at its
 # full 200 bars while bounding the long-period aggregates.
 MAX_HISTORY_CALENDAR_DAYS = max(int(os.getenv("FLOW_MAX_HISTORY_CALENDAR_DAYS", "4000")), 1)
+
+# Extra rows fed to an indicator beyond its requested lookback, so recursive
+# indicators (EMA/MACD/ATR) have settled by the time the reported window
+# starts. Still bounded by MAX_HISTORY_BARS.
+_INDICATOR_WARMUP_BARS = 50
 
 
 def clamp_bars(requested: int | None, what: str = "bars") -> int:
@@ -611,7 +663,11 @@ def compute_indicator(
         for col in ("open", "high", "low", "close", "volume"):
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
-        df = df.tail(clamp_bars(lookback_bars))
+        # Keep warm-up rows beyond the requested lookback: EMA, MACD, ATR and
+        # friends are recursive, so starting the recursion exactly at the
+        # requested window biases the most recent values. The extra rows are
+        # already in the fetched response, so this costs no additional call.
+        df = df.tail(min(clamp_bars(lookback_bars) + _INDICATOR_WARMUP_BARS, MAX_HISTORY_BARS))
         cols, args = resolve_indicator_inputs(df, fn, inputs)
         df_index = df.index
 
