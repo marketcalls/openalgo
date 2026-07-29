@@ -22,6 +22,7 @@ import pandas as pd
 from cachetools import TTLCache
 from openalgo import ta
 
+from utils.env_config import env_int
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -42,7 +43,7 @@ logger = get_logger(__name__)
 # Bounded via maxsize so it cannot grow without limit in a long-lived worker
 # (see the FD/memory hygiene rules in CLAUDE.md).
 _HISTORY_CACHE_TTL = float(os.getenv("FLOW_HISTORY_CACHE_TTL", "30"))
-_HISTORY_CACHE_MAXSIZE = int(os.getenv("FLOW_HISTORY_CACHE_MAXSIZE", "256"))
+_HISTORY_CACHE_MAXSIZE = env_int("FLOW_HISTORY_CACHE_MAXSIZE", 256, minimum=1)
 _history_cache: TTLCache = TTLCache(
     maxsize=max(_HISTORY_CACHE_MAXSIZE, 1), ttl=max(_HISTORY_CACHE_TTL, 0.001)
 )
@@ -187,14 +188,14 @@ def clear_history_cache() -> None:
 # not only when trimming the response, so the oversized fetch never happens
 # in the first place. Raise FLOW_MAX_HISTORY_BARS if a strategy genuinely
 # needs more depth.
-MAX_HISTORY_BARS = max(int(os.getenv("FLOW_MAX_HISTORY_BARS", "200")), 1)
+MAX_HISTORY_BARS = env_int("FLOW_MAX_HISTORY_BARS", 200, minimum=1)
 
 # Absolute ceiling on the calendar span of any single request. The bar count
 # alone is not enough: 200 quarterly bars is a 54-year range and 200 yearly
 # bars is 219 years - spans no broker will serve sensibly, and which can make
 # an adapter fall back to dumping daily rows. ~11 years keeps weekly at its
 # full 200 bars while bounding the long-period aggregates.
-MAX_HISTORY_CALENDAR_DAYS = max(int(os.getenv("FLOW_MAX_HISTORY_CALENDAR_DAYS", "4000")), 1)
+MAX_HISTORY_CALENDAR_DAYS = env_int("FLOW_MAX_HISTORY_CALENDAR_DAYS", 4000, minimum=1)
 
 # Extra rows fed to an indicator beyond its requested lookback, so recursive
 # indicators (EMA/MACD/ATR) have settled by the time the reported window
@@ -282,7 +283,12 @@ TWO_SERIES_INDICATORS = {
 
 # Indicators with a non-flat call shape (submodule access) that the generic
 # getattr(ta, name)(...) dispatch below cannot call directly.
-UNSUPPORTED_INDICATORS = {"median_bands"}
+# Indicators the installed `openalgo` build cannot actually compute. Listing a
+# name the user can select but that never returns a value is worse than not
+# offering it. Verified against openalgo 2.0.3: ta.ulcerindex and ta.vi return
+# all-NaN for every input length tried (100/400/2000 bars, ndarray and Series).
+# Re-test and remove from this set when the upstream implementation is fixed.
+UNSUPPORTED_INDICATORS = {"median_bands", "ulcerindex", "vi"}
 
 # Approx bars per trading day per interval (NSE ~6h15m session), used only to
 # size the calendar window when fetching by bar-count.
@@ -667,7 +673,10 @@ def compute_indicator(
             "Condition node instead."
         )
     if name in UNSUPPORTED_INDICATORS:
-        raise ValueError(f"'{name}' has a non-standard call shape and is not supported here.")
+        raise ValueError(
+            f"'{name}' is not available: the installed openalgo build does not "
+            "return usable values for it. Pick a different indicator."
+        )
     fn = getattr(ta, name, None)
     if fn is None:
         raise ValueError(f"unknown indicator '{indicator_name}'")
@@ -735,6 +744,29 @@ def compute_indicator(
     offset = clamp_bars(offset_bars + 1, "offset bars") - 1
     at_offset = _at(-1 - offset)
 
+    latest = _at(-1)
+
+    # An indicator that returns nothing usable must not report success. A
+    # workflow comparing against `latest.value` would otherwise branch on None
+    # and look like a condition that simply never fired, with no error anywhere.
+    # This catches a broken upstream implementation as well as genuinely
+    # insufficient warm-up data.
+    if isinstance(latest, dict) and latest and all(v is None for v in latest.values()):
+        return {
+            "status": "error",
+            "indicator": name,
+            "message": (
+                f"Indicator '{name}' produced no value over {len(df_index)} bars - "
+                "every output was null. Increase the lookback if the indicator "
+                "needs a longer warm-up, or check that this indicator is usable "
+                "with the selected inputs."
+            ),
+            "inputs": cols,
+            "params": resolved_params,
+            "outputs": list(out.columns),
+            "bars_used": len(df_index),
+        }
+
     return {
         "status": "success",
         "indicator": name,
@@ -744,7 +776,7 @@ def compute_indicator(
         "inputs": cols,
         "params": resolved_params,
         "outputs": list(out.columns),
-        "latest": _at(-1),
+        "latest": latest,
         "previous": _at(-2),
         "series": tail_series,
         "bars_used": len(df_index),
