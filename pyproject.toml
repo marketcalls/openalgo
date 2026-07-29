@@ -198,6 +198,9 @@ packages = []
 
 # Pytest configuration
 [tool.pytest.ini_options]
+# The repo root must be importable: tests import `services`, `database`, and
+# `utils` directly, which otherwise only works if PYTHONPATH is set by hand.
+pythonpath = ["."]
 testpaths = ["test"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]

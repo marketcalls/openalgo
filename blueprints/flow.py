@@ -67,6 +67,22 @@ def create_workflow():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
+    # Structural validation only: the editor saves while a graph is still being
+    # wired, so completeness (required fields, one trigger, reachability) is
+    # enforced at import and activation instead of blocking every save.
+    from services.flow_workflow_validator import validate_workflow
+
+    errors = validate_workflow(data, require_name=False, strict=False)
+    if errors:
+        return jsonify(
+            {
+                "status": "error",
+                "error": "Invalid workflow structure",
+                "message": errors[0]["message"],
+                "errors": errors,
+            }
+        ), 400
+
     name = data.get("name", "Untitled Workflow")
     description = data.get("description")
     nodes = data.get("nodes", [])
@@ -133,6 +149,22 @@ def update_workflow(workflow_id):
     data = request.get_json()
     if not data:
         return jsonify({"error": "No data provided"}), 400
+
+    # Partial updates (rename, toggle) carry no graph, so validate only what is
+    # present. Same structural-not-complete rule as create.
+    if "nodes" in data or "edges" in data:
+        from services.flow_workflow_validator import validate_workflow
+
+        errors = validate_workflow(data, require_name=False, strict=False)
+        if errors:
+            return jsonify(
+                {
+                    "status": "error",
+                    "error": "Invalid workflow structure",
+                    "message": errors[0]["message"],
+                    "errors": errors,
+                }
+            ), 400
 
     workflow = update_workflow(workflow_id, **data)
     if not workflow:
@@ -208,6 +240,24 @@ def activate_workflow(workflow_id):
     api_key = get_current_api_key()
     if not api_key:
         return jsonify({"error": "API key not configured"}), 400
+
+    # Activation is the point the workflow is asked to run for real, so the
+    # completeness rules apply here even though saving allowed a partial graph.
+    from services.flow_workflow_validator import validate_workflow
+
+    errors = validate_workflow(
+        {"name": workflow.name, "nodes": workflow.nodes or [], "edges": workflow.edges or []},
+        strict=True,
+    )
+    if errors:
+        return jsonify(
+            {
+                "status": "error",
+                "error": "Workflow cannot be activated",
+                "message": errors[0]["message"],
+                "errors": errors,
+            }
+        ), 400
 
     nodes = workflow.nodes or []
 
@@ -702,14 +752,39 @@ def export_workflow(workflow_id):
 @flow_bp.route("/api/workflows/import", methods=["POST"])
 @check_session_validity
 def import_workflow():
-    """Import a workflow"""
+    """Import a workflow.
+
+    Validated before persistence: the editor checks the payload, but this
+    endpoint is reachable directly, and a malformed graph stored here fails
+    later - at activation or mid-execution - instead of at import.
+    """
     from database.flow_db import create_workflow
+    from services.flow_workflow_validator import migrate_legacy_node_data, validate_workflow
 
     data = request.get_json()
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    name = data.get("name", "Imported Workflow")
+    # Upgrade legacy node payloads before validating, so an older exported
+    # workflow imports as its canonical shape rather than being stored with a
+    # field no reader honors.
+    migration_notes: list[str] = []
+    if isinstance(data.get("nodes"), list):
+        data = dict(data)
+        data["nodes"], migration_notes = migrate_legacy_node_data(data["nodes"])
+
+    errors = validate_workflow(data)
+    if errors:
+        return jsonify(
+            {
+                "status": "error",
+                "error": "Invalid workflow format",
+                "message": errors[0]["message"],
+                "errors": errors,
+            }
+        ), 400
+
+    name = data.get("name")
     description = data.get("description")
     nodes = data.get("nodes", [])
     edges = data.get("edges", [])
@@ -719,7 +794,10 @@ def import_workflow():
     )
 
     if workflow:
-        return jsonify({"status": "success", "workflow_id": workflow.id}), 201
+        response = {"status": "success", "workflow_id": workflow.id}
+        if migration_notes:
+            response["migrations"] = migration_notes
+        return jsonify(response), 201
     return jsonify({"error": "Failed to import workflow"}), 500
 
 
