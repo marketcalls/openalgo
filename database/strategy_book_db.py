@@ -31,7 +31,7 @@ read time in `services/strategy_pnl_service.py`.
 """
 
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import (
     Column,
@@ -40,24 +40,16 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
-    create_engine,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.pool import NullPool
 
+from database.engine_factory import create_db_engine
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-if DATABASE_URL and "sqlite" in DATABASE_URL:
-    engine = create_engine(
-        DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
-    )
-else:
-    engine = create_engine(DATABASE_URL, pool_size=50, max_overflow=100, pool_timeout=10)
+engine = create_db_engine()
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
@@ -83,6 +75,31 @@ class StrategyOrderTag(Base):
     # Cumulative quantity already booked for this order, so a repeated or
     # partial-fill update only contributes its unseen delta.
     applied_quantity = Column(Float, nullable=False, default=0.0)
+    # Cumulative notional (quantity x price) already booked. Brokers report
+    # `average_price` cumulatively, so the incremental price of a partial fill
+    # must be derived from the change in notional - booking the delta at the
+    # latest cumulative average corrupts the cost basis whenever partials
+    # execute at different prices.
+    applied_notional = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+
+
+class StrategyPendingFill(Base):
+    """A fill whose order tag had not been recorded yet.
+
+    EventBus callbacks run on a shared pool, and in analyze mode an
+    immediately marketable order publishes its fill from the sandbox engine
+    *before* place_order_service publishes order.placed. Without buffering,
+    such a fill finds no tag and is lost permanently.
+    """
+
+    __tablename__ = "strategy_pending_fills"
+
+    id = Column(Integer, primary_key=True)
+    orderid = Column(String(64), nullable=False, index=True)
+    filled_quantity = Column(Float, nullable=False)
+    average_price = Column(Float, nullable=False)
+    action = Column(String(10), nullable=False)
     created_at = Column(DateTime, nullable=False, default=datetime.now)
 
 
@@ -112,9 +129,37 @@ class StrategyPosition(Base):
 
 
 def init_strategy_book_db() -> None:
-    """Create tables if absent. Safe to call repeatedly."""
+    """Create tables if absent, then apply column migrations. Idempotent."""
     Base.metadata.create_all(bind=engine)
+    _migrate_add_columns()
     logger.info("Strategy book DB initialized")
+
+
+def _migrate_add_columns():
+    """Add columns introduced after the table's first release (idempotent).
+
+    create_all() only creates missing *tables*, so an install that already has
+    strategy_order_tags would otherwise never gain applied_notional and every
+    query against the model would fail.
+    """
+    try:
+        from sqlalchemy import inspect, text
+
+        inspector = inspect(engine)
+        if "strategy_order_tags" not in inspector.get_table_names():
+            return
+        existing = {c["name"] for c in inspector.get_columns("strategy_order_tags")}
+        with engine.begin() as conn:
+            if "applied_notional" not in existing:
+                conn.execute(
+                    text(
+                        "ALTER TABLE strategy_order_tags "
+                        "ADD COLUMN applied_notional FLOAT NOT NULL DEFAULT 0.0"
+                    )
+                )
+                logger.info("Strategy book DB: added applied_notional column")
+    except Exception:
+        logger.exception("Strategy book DB: column migration failed")
 
 
 def record_order_tag(
@@ -138,11 +183,87 @@ def record_order_tag(
             )
         )
         db_session.commit()
-        return True
     except Exception:
         db_session.rollback()
         logger.exception(f"Could not tag order {orderid} with strategy {strategy}")
         return False
+
+    _drain_pending_fills(str(orderid))
+    return True
+
+
+def _drain_pending_fills(orderid: str) -> None:
+    """Apply any fills that arrived before this order's tag was recorded."""
+    try:
+        pending = (
+            db_session.query(StrategyPendingFill)
+            .filter_by(orderid=orderid)
+            .order_by(StrategyPendingFill.id)
+            .all()
+        )
+        rows = [(p.filled_quantity, p.average_price, p.action) for p in pending]
+        for p in pending:
+            db_session.delete(p)
+        db_session.commit()
+    except Exception:
+        db_session.rollback()
+        logger.exception(f"Could not read buffered fills for order {orderid}")
+        return
+
+    for qty, price, action in rows:
+        logger.info(f"Applying buffered fill for order {orderid} (arrived before its tag)")
+        apply_fill(orderid, qty, price, action)
+
+
+def _buffer_fill(orderid: str, filled_quantity: float, average_price: float, action: str) -> None:
+    """Hold a fill until its order tag is recorded.
+
+    Most untagged fills are not racing anything - they are ordinary orders
+    placed outside any strategy, and their tag will never arrive. Those rows
+    are pruned by age so the table cannot grow without bound.
+    """
+    if not orderid:
+        return
+    try:
+        _prune_pending_fills()
+        db_session.add(
+            StrategyPendingFill(
+                orderid=str(orderid),
+                filled_quantity=abs(float(filled_quantity or 0)),
+                average_price=float(average_price or 0),
+                action=str(action or ""),
+            )
+        )
+        db_session.commit()
+        logger.debug(f"Buffered fill for untagged order {orderid}")
+    except Exception:
+        db_session.rollback()
+        logger.exception(f"Could not buffer fill for order {orderid}")
+
+
+# A tag that is going to arrive arrives within milliseconds - the buffer only
+# has to survive the publish race, never a session.
+_PENDING_FILL_TTL = timedelta(minutes=int(os.getenv("STRATEGY_PENDING_FILL_TTL_MIN", "10")))
+
+
+def _prune_pending_fills() -> None:
+    """Drop buffered fills whose tag never arrived (ordinary untagged orders)."""
+    try:
+        cutoff = datetime.now() - _PENDING_FILL_TTL
+        removed = (
+            db_session.query(StrategyPendingFill)
+            .filter(StrategyPendingFill.created_at < cutoff)
+            .delete(synchronize_session=False)
+        )
+        if removed:
+            db_session.commit()
+            # The bulk delete bypasses the identity map; drop the stale entries
+            # so a reused primary key does not warn on the next flush.
+            db_session.expire_all()
+            logger.debug(f"Strategy book: pruned {removed} unclaimed buffered fill(s)")
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not prune pending fills")
 
 
 def get_order_tag(orderid: str) -> StrategyOrderTag | None:
@@ -167,6 +288,9 @@ def apply_fill(
     """
     tag = get_order_tag(orderid)
     if tag is None:
+        # The fill beat its own order.placed event. Buffer it; record_order_tag
+        # drains the buffer as soon as the tag lands.
+        _buffer_fill(orderid, filled_quantity, average_price, action)
         return None
 
     filled_quantity = abs(float(filled_quantity or 0))
@@ -174,7 +298,13 @@ def apply_fill(
     if delta <= 0:
         return None  # already booked; duplicate or out-of-order event
 
-    price = float(average_price or 0)
+    # `average_price` is cumulative over the whole order, so the incremental
+    # price is the change in notional over the change in quantity. Booking the
+    # delta at the cumulative average would misprice partials filled at
+    # different levels.
+    cumulative_notional = filled_quantity * float(average_price or 0)
+    incremental_notional = cumulative_notional - float(tag.applied_notional or 0)
+    price = incremental_notional / delta if delta else float(average_price or 0)
     signed = delta if str(action).upper() == "BUY" else -delta
     today = date.today().isoformat()
 
@@ -227,6 +357,7 @@ def apply_fill(
                 leg.average_price = price
 
         tag.applied_quantity = filled_quantity
+        tag.applied_notional = cumulative_notional
         db_session.commit()
         return {
             "strategy": leg.strategy,
@@ -247,6 +378,7 @@ def apply_fill(
 
 def get_strategy_legs(user_id: str | None = None, strategy: str | None = None) -> list[dict]:
     """Every tracked leg, optionally narrowed to one user and/or strategy."""
+    today = date.today().isoformat()
     try:
         query = db_session.query(StrategyPosition)
         if user_id:
@@ -262,7 +394,12 @@ def get_strategy_legs(user_id: str | None = None, strategy: str | None = None) -
                 "quantity": float(r.quantity or 0),
                 "average_price": float(r.average_price or 0),
                 "realized_pnl": float(r.realized_pnl or 0),
-                "today_realized_pnl": float(r.today_realized_pnl or 0),
+                # Stale once the trading date rolls over. The stored value is
+                # only reset by the next fill, so a strategy read early in a
+                # new session would otherwise report yesterday's figure.
+                "today_realized_pnl": (
+                    float(r.today_realized_pnl or 0) if r.trade_date == today else 0.0
+                ),
                 "updated_at": r.updated_at.isoformat() if r.updated_at else None,
             }
             for r in query.all()
@@ -286,12 +423,21 @@ def list_strategies(user_id: str | None = None) -> list[str]:
 
 
 def reset_strategy(user_id: str, strategy: str) -> int:
-    """Delete a strategy's legs. Administrative / test helper."""
+    """Delete a strategy's legs and its order tags. Administrative helper.
+
+    The tags carry the applied-quantity watermark, so leaving them behind
+    would make the reset strategy permanently unable to re-book those orders.
+    Fills from orders still in flight at reset time become untagged and are
+    ignored, which is the intended clean-slate semantic.
+    """
     try:
         n = (
             db_session.query(StrategyPosition)
             .filter_by(user_id=user_id, strategy=strategy)
             .delete()
+        )
+        db_session.query(StrategyOrderTag).filter_by(user_id=user_id, strategy=strategy).delete(
+            synchronize_session=False
         )
         db_session.commit()
         return n

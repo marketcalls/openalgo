@@ -290,6 +290,16 @@ def get_strategy_pnl(
 
     legs = get_strategy_legs(user_id=user_id, strategy=strategy)
     positions_resp = client.positionbook() or {}
+    # Propagate rather than pricing against an empty book. A transient broker
+    # failure would otherwise mark every open leg unpriced, report unrealized
+    # as zero, and still return success - letting a workflow act on a total
+    # that is materially wrong.
+    if positions_resp.get("status") == "error":
+        message = positions_resp.get("error") or positions_resp.get("message") or "unavailable"
+        return {
+            "status": "error",
+            "message": f"Position book unavailable, cannot value open legs: {message}",
+        }
     positions = positions_resp.get("data") or []
     if not isinstance(positions, list):
         positions = []
