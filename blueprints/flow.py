@@ -702,14 +702,31 @@ def export_workflow(workflow_id):
 @flow_bp.route("/api/workflows/import", methods=["POST"])
 @check_session_validity
 def import_workflow():
-    """Import a workflow"""
+    """Import a workflow.
+
+    Validated before persistence: the editor checks the payload, but this
+    endpoint is reachable directly, and a malformed graph stored here fails
+    later - at activation or mid-execution - instead of at import.
+    """
     from database.flow_db import create_workflow
+    from services.flow_workflow_validator import validate_workflow
 
     data = request.get_json()
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    name = data.get("name", "Imported Workflow")
+    errors = validate_workflow(data)
+    if errors:
+        return jsonify(
+            {
+                "status": "error",
+                "error": "Invalid workflow format",
+                "message": errors[0]["message"],
+                "errors": errors,
+            }
+        ), 400
+
+    name = data.get("name")
     description = data.get("description")
     nodes = data.get("nodes", [])
     edges = data.get("edges", [])

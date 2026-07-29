@@ -42,7 +42,8 @@ Actions    placeOrder · smartOrder · optionsOrder · optionsMultiOrder ·
 Conditions positionCheck · fundCheck · priceCondition · varCondition ·
            timeWindow · timeCondition · andGate · orGate · notGate
 Data       getQuote · multiQuotes · getDepth · history · indicator ·
-           priorPeriodOhlc · barOffset · openPosition · getOrderStatus ·
+           priorPeriodOhlc · barOffset · strategyPnl · openPosition ·
+           getOrderStatus ·
            orderBook · tradeBook · positionBook · holdings · funds · margin ·
            symbol · optionSymbol · expiry · intervals · optionChain ·
            syntheticFuture · holidays · timings
@@ -286,10 +287,18 @@ gate needs a working else-branch:
 Gates wait until every wired input has been evaluated, then fire exactly
 once per run.
 
-`andGate` / `orGate` source handles are not bool branches — they emit a single
-`condition` value to whatever connects to them downstream. Their **incoming**
-edges do use `targetHandle` to pin a specific input slot:
+`andGate` / `orGate` **do** branch: both render `true` and `false` source
+handles, and the executor routes their result through the same truthy/falsy
+edge filter as a condition node. Set `sourceHandle: "true"` or `"false"` on a
+gate's outgoing edges exactly as you would for a condition. An edge with no
+`sourceHandle` is followed unconditionally, which is rarely what you want from
+a gate.
+
+Their **incoming** edges use `targetHandle` to pin a specific input slot:
 `targetHandle: "input-0"`, `"input-1"`, ... up to `inputCount - 1`.
+
+`notGate` emits `yes` / `no` handles, which the executor treats as synonyms of
+`true` / `false`.
 
 ---
 
@@ -987,6 +996,41 @@ Exposes `{{name.open/high/low/close/volume}}` plus aliases `{{name.pdh}}`,
   "type": "priorPeriodOhlc",
   "position": { "x": 100, "y": 100 },
   "data": { "symbol": "NIFTY", "exchange": "NSE_INDEX", "period": "previous_day", "source": "api", "outputVariable": "pd" }
+}
+```
+
+#### strategyPnl — Strategy P&L
+
+Realized / unrealized / total P&L for **one strategy**, not the whole account.
+The broker nets positions per `(symbol, exchange, product)` and carries no
+strategy label, so this is the only way a workflow can exit on its own
+performance while another strategy holds the same contract.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `strategy` | string | the workflow's own name | Matches the tag this workflow's order nodes apply. Leave blank in almost every case. |
+| `outputVariable` | string | — | |
+
+Exposes `{{name.realized}}`, `{{name.today_realized}}`, `{{name.unrealized}}`,
+`{{name.total}}`, `{{name.today_total}}`, `{{name.open_quantity}}`,
+`{{name.unpriced_legs}}` and a per-leg `{{name.legs[0].*}}` breakdown.
+
+The book is fed from orders placed **through OpenAlgo carrying a strategy
+tag**; a position opened by hand in the broker terminal is invisible to it.
+`unpriced_legs` counts open legs with no live price, which are excluded from
+`unrealized` — a non-zero value means `total` is understated. If the position
+book or the strategy book cannot be read, the node returns `status: "error"`
+rather than a zero, because a zero is indistinguishable from a flat strategy.
+
+Guard on `open_quantity` before acting, or an exit re-fires every run once the
+position is already flat and realized P&L still exceeds the target.
+
+```json
+{
+  "id": "node_2",
+  "type": "strategyPnl",
+  "position": { "x": 100, "y": 100 },
+  "data": { "outputVariable": "pnl" }
 }
 ```
 
