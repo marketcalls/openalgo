@@ -18,6 +18,8 @@ export interface PythonStrategy {
   schedule_days: string[]
   created_at: string
   updated_at: string
+  has_config_schema?: boolean
+  config_field_count?: number
 }
 
 export interface PythonStrategyContent {
@@ -28,6 +30,12 @@ export interface PythonStrategyContent {
   line_count: number
   size_kb: number
   last_modified: string
+}
+
+export interface PythonStrategyUploadResult {
+  strategy_id: string
+  has_config_schema?: boolean
+  config_field_count?: number
 }
 
 export interface LogFile {
@@ -54,6 +62,50 @@ export interface ScheduleConfig {
   stop_time: string
   days: string[]
   exchange?: string
+}
+
+export interface OCSOption {
+  label?: string
+  value: string | number | boolean
+}
+
+export interface OCSField {
+  key: string
+  type: string
+  label: string
+  required?: boolean
+  default?: unknown
+  description?: string
+  tooltip?: string
+  placeholder?: string
+  min?: number
+  max?: number
+  step?: number
+  regex?: string
+  options?: Array<string | number | boolean | OCSOption>
+  group?: string
+  tab?: string
+  section?: string
+}
+
+export interface OCSSchema {
+  ocs_version: string
+  strategy: string
+  title?: string
+  description?: string
+  fields: OCSField[]
+}
+
+export interface OCSConfigResponse {
+  status: string
+  schema: OCSSchema
+  values: Record<string, unknown>
+  resolved_values: Record<string, unknown>
+}
+
+export interface OCSValidationError {
+  field: string
+  message: string
 }
 
 // Exchanges that drive the strategy's calendar/holiday awareness in /python.

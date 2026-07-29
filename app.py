@@ -86,9 +86,11 @@ from blueprints.pnltracker import pnltracker_bp  # Import the pnl tracker bluepr
 from blueprints.python_strategy import initialize_with_app_context as init_python_strategy
 from blueprints.python_strategy import python_strategy_bp  # Import the python strategy blueprint
 from blueprints.react_app import (  # Import React frontend blueprint
+    frontend_auto_build_enabled,
     is_react_frontend_available,
     react_bp,
     serve_react_app,
+    start_frontend_auto_build,
 )
 from blueprints.sandbox import sandbox_bp  # Import the sandbox blueprint
 from blueprints.scalping import scalping_bp  # Import the Scalping terminal blueprint
@@ -262,9 +264,14 @@ def create_app():
     # Register RESTx API blueprint first
     # Register React frontend blueprint FIRST for migrated routes
     # Register React frontend routes
-    if is_react_frontend_available():
+    start_frontend_auto_build()
+    react_available = is_react_frontend_available()
+    if react_available or frontend_auto_build_enabled():
         app.register_blueprint(react_bp)
-        logger.debug("React frontend enabled (frontend/dist found)")
+        if react_available:
+            logger.debug("React frontend enabled (frontend/dist found)")
+        else:
+            logger.debug("React frontend routes enabled while opt-in auto-build runs")
     else:
         logger.warning("React frontend not available - run 'npm run build' in frontend/")
 
