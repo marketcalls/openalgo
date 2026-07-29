@@ -1391,6 +1391,13 @@ resolve. Shapes below were captured from live responses, not inferred.
 | `indicator` | `{status, indicator, nested, inputs, params, outputs, latest, previous, at_offset, series, offset_bars, bars_used}` | `{{r.latest.value}}`, `{{r.previous.value}}`, `{{r.at_offset.out0}}`, `{{r.series[0].value}}` |
 | `priorPeriodOhlc` | `{status, symbol, exchange, period, date, open, high, low, close, volume, pdh, pdl, pdc}` | `{{pd.pdh}}`, `{{pd.pdl}}`, `{{pd.close}}` |
 | `barOffset` | `{status, symbol, exchange, offsetBars, timestamp, open, high, low, close, volume}` | `{{b.close}}`, `{{b.high}}` |
+| `strategyPnl` | `{status, strategy, realized, today_realized, unrealized, total, open_quantity, unpriced_legs, legs: [{symbol, exchange, product, quantity, average_price, ltp, realized_pnl, unrealized}]}` | `{{pnl.total}}`, `{{pnl.today_realized}}`, `{{pnl.open_quantity}}` |
+
+`strategyPnl` reports **only this strategy's** legs, not the account's. It
+defaults to the workflow's own name, which is the same tag its order nodes
+apply, so the usual case needs no configuration. `unpriced_legs` counts open
+legs with no live price - those are excluded from `unrealized`, so treat a
+non-zero value as "this total is incomplete" before acting on it.
 
 Single-output indicators expose `value`; multi-output expose `out0`, `out1`,
 … (macd: line/signal/histogram, supertrend: level/direction, bbands:
