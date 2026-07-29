@@ -9,7 +9,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Set
 
 from services.flow_openalgo_client import FlowOpenAlgoClient, get_flow_client
@@ -33,6 +33,10 @@ class PriceAlert:
     triggered: bool = False
     created_at: datetime = field(default_factory=datetime.now)
     api_key: str | None = None
+    # The editor offers these; they were previously dropped at activation, so
+    # "Every Time" silently behaved as "Only Once" and expiry never applied.
+    trigger: str = "once"
+    expiration: str = "none"
 
 
 class FlowPriceMonitor:
@@ -63,6 +67,28 @@ class FlowPriceMonitor:
         self._stop_event = threading.Event()
         logger.info("FlowPriceMonitor initialized")
 
+    # The editor and this monitor grew separate vocabularies for the same four
+    # conditions, so every alert the UI could produce fell through to the final
+    # `return False` and the trigger never fired. Both spellings are accepted;
+    # the UI's are the ones users actually have saved.
+    _CONDITION_ALIASES = {
+        "above": "greater_than",
+        "price_above": "greater_than",
+        "below": "less_than",
+        "price_below": "less_than",
+        "crosses_above": "crossing_up",
+        "cross_above": "crossing_up",
+        "crosses_below": "crossing_down",
+        "cross_below": "crossing_down",
+        "crosses": "crossing",
+    }
+
+    @classmethod
+    def normalize_condition(cls, value: str | None) -> str:
+        """Canonical condition name, accepting either vocabulary."""
+        raw = str(value or "").strip().lower().replace("-", "_")
+        return cls._CONDITION_ALIASES.get(raw, raw)
+
     def add_alert(
         self,
         workflow_id: int,
@@ -74,8 +100,11 @@ class FlowPriceMonitor:
         price_upper: float | None = None,
         percentage: float | None = None,
         api_key: str | None = None,
+        trigger: str = "once",
+        expiration: str = "none",
     ) -> bool:
         """Add a price alert for a workflow"""
+        condition = self.normalize_condition(condition)
         alert = PriceAlert(
             workflow_id=workflow_id,
             symbol=symbol,
@@ -86,6 +115,8 @@ class FlowPriceMonitor:
             price_upper=price_upper,
             percentage=percentage,
             api_key=api_key,
+            trigger=str(trigger or "once").strip().lower(),
+            expiration=str(expiration or "none").strip().lower(),
         )
 
         self._alerts[workflow_id] = alert
@@ -165,10 +196,33 @@ class FlowPriceMonitor:
                 except Exception as e:
                     logger.exception(f"Error checking alert for workflow {workflow_id}: {e}")
 
+    # Windows the editor offers for "expiration". A watch past its window is
+    # removed rather than left running for the life of the process.
+    _EXPIRATION_WINDOWS = {
+        "1h": timedelta(hours=1),
+        "4h": timedelta(hours=4),
+        "1d": timedelta(days=1),
+        "1w": timedelta(weeks=1),
+    }
+
+    def _is_expired(self, alert: PriceAlert) -> bool:
+        window = self._EXPIRATION_WINDOWS.get(alert.expiration)
+        if window is None:
+            return False
+        return datetime.now() - alert.created_at >= window
+
     def _check_alert(self, alert: PriceAlert):
         """Check a single alert against current price"""
         if not alert.api_key:
             logger.warning(f"No API key for alert workflow {alert.workflow_id}")
+            return
+
+        if self._is_expired(alert):
+            logger.info(
+                f"Price alert for workflow {alert.workflow_id} expired after "
+                f"{alert.expiration}; no longer watching."
+            )
+            self.remove_alert(alert.workflow_id)
             return
 
         try:
@@ -196,7 +250,12 @@ class FlowPriceMonitor:
                 )
 
                 self._trigger_workflow(alert.workflow_id, current_price, alert.api_key)
-                self.remove_alert(alert.workflow_id)
+                if alert.trigger == "every_time":
+                    # Keep watching; record the price so an edge-triggered
+                    # crossing needs a fresh cross rather than re-firing.
+                    alert.last_price = current_price
+                else:
+                    self.remove_alert(alert.workflow_id)
             else:
                 alert.last_price = current_price
 
@@ -205,7 +264,7 @@ class FlowPriceMonitor:
 
     def _evaluate_condition(self, alert: PriceAlert, current_price: float) -> bool:
         """Evaluate if the price condition is met"""
-        condition = alert.condition
+        condition = self.normalize_condition(alert.condition)
         target = alert.target_price
         last_price = alert.last_price
 
@@ -262,6 +321,12 @@ class FlowPriceMonitor:
             pct_change = ((last_price - current_price) / last_price) * 100
             return pct_change >= (alert.percentage or 0)
 
+        # Never silently false: an unknown condition means the alert can never
+        # fire, which is indistinguishable from "the level was not reached".
+        logger.error(
+            f"Price alert for workflow {alert.workflow_id} has an unrecognized "
+            f"condition {alert.condition!r}; it can never trigger."
+        )
         return False
 
     def _trigger_workflow(self, workflow_id: int, trigger_price: float, api_key: str):

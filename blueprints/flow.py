@@ -150,12 +150,21 @@ def update_workflow(workflow_id):
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    # Partial updates (rename, toggle) carry no graph, so validate only what is
-    # present. Same structural-not-complete rule as create.
+    # Partial updates (rename, toggle) carry no graph, and the API also accepts
+    # nodes without edges or vice versa. Validate the merged graph so a partial
+    # update is checked against what the workflow will actually become, rather
+    # than being rejected for the half it did not send.
     if "nodes" in data or "edges" in data:
+        from database.flow_db import get_workflow as _get_workflow
         from services.flow_workflow_validator import validate_workflow
 
-        errors = validate_workflow(data, require_name=False, strict=False)
+        existing = _get_workflow(workflow_id)
+        merged = {
+            "name": data.get("name") or (existing.name if existing else ""),
+            "nodes": data.get("nodes", (existing.nodes if existing else []) or []),
+            "edges": data.get("edges", (existing.edges if existing else []) or []),
+        }
+        errors = validate_workflow(merged, require_name=False, strict=False)
         if errors:
             return jsonify(
                 {
@@ -241,23 +250,9 @@ def activate_workflow(workflow_id):
     if not api_key:
         return jsonify({"error": "API key not configured"}), 400
 
-    # Activation is the point the workflow is asked to run for real, so the
-    # completeness rules apply here even though saving allowed a partial graph.
-    from services.flow_workflow_validator import validate_workflow
-
-    errors = validate_workflow(
-        {"name": workflow.name, "nodes": workflow.nodes or [], "edges": workflow.edges or []},
-        strict=True,
-    )
-    if errors:
-        return jsonify(
-            {
-                "status": "error",
-                "error": "Workflow cannot be activated",
-                "message": errors[0]["message"],
-                "errors": errors,
-            }
-        ), 400
+    blocked = _execution_blocked(workflow)
+    if blocked:
+        return jsonify({**blocked, "error": "Workflow cannot be activated"}), 400
 
     nodes = workflow.nodes or []
 
@@ -307,6 +302,10 @@ def activate_workflow(workflow_id):
                 price_upper=trigger_data.get("priceUpper"),
                 percentage=trigger_data.get("percentage"),
                 api_key=api_key,
+                # Previously dropped here, so "Every Time" behaved as one-shot
+                # and the expiry window was never applied.
+                trigger=trigger_data.get("trigger", "once"),
+                expiration=trigger_data.get("expiration", "none"),
             )
 
         elif trigger_type == "orderUpdateTrigger":
@@ -383,6 +382,31 @@ def deactivate_workflow(workflow_id):
 # === Execution Routes ===
 
 
+def _execution_blocked(workflow):
+    """Structured 400 payload when a workflow is not fit to execute, else None.
+
+    Saving deliberately accepts a half-built graph so the editor stays usable,
+    which means "stored" is not the same as "runnable". Every path that can
+    reach the broker - Run Now, activation, and webhooks - checks completeness
+    here instead. A workflow can also be edited into an invalid state after it
+    was activated, so checking once at activation is not enough.
+    """
+    from services.flow_workflow_validator import validate_workflow
+
+    errors = validate_workflow(
+        {"name": workflow.name, "nodes": workflow.nodes or [], "edges": workflow.edges or []},
+        strict=True,
+    )
+    if not errors:
+        return None
+    return {
+        "status": "error",
+        "error": "Workflow cannot be executed",
+        "message": errors[0]["message"],
+        "errors": errors,
+    }
+
+
 @flow_bp.route("/api/workflows/<int:workflow_id>/execute", methods=["POST"])
 @check_session_validity
 def execute_workflow_now(workflow_id):
@@ -397,6 +421,10 @@ def execute_workflow_now(workflow_id):
     api_key = get_current_api_key()
     if not api_key:
         return jsonify({"error": "API key not configured"}), 400
+
+    blocked = _execution_blocked(workflow)
+    if blocked:
+        return jsonify(blocked), 400
 
     try:
         result = execute_workflow(workflow_id, api_key=api_key)
@@ -664,6 +692,13 @@ def _execute_webhook(token, webhook_data=None, url_secret=None):
                 "error": "No API key configured for workflow execution. Please re-activate the workflow."
             }
         ), 500
+
+    blocked = _execution_blocked(workflow)
+    if blocked:
+        logger.error(
+            f"Webhook for workflow {workflow.id} rejected: {blocked['message']}"
+        )
+        return jsonify(blocked), 400
 
     try:
         logger.info(f"Webhook triggered for workflow {workflow.id}: {workflow.name}")

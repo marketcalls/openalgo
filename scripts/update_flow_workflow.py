@@ -17,8 +17,14 @@ secret, API key, and active state.
 
 The graph is re-read from the database on every run, so a workflow that is
 already active picks up the new nodes on its next tick. The one exception is
-the trigger itself: its schedule is registered at activation, so if you change
-the trigger type or its schedule, deactivate and reactivate the workflow.
+the trigger itself: its schedule and any price/order watch are registered at
+activation, so changing any part of the trigger's configuration needs a
+deactivate/reactivate cycle. This script reports when that applies.
+
+Output note: this is an operator-facing CLI, so results go to stdout via
+print() rather than the application logger - the output *is* the product here,
+and it must be readable when run outside the app. Application code continues to
+use utils.logging.get_logger.
 """
 
 import argparse
@@ -33,7 +39,33 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(pathlib.Path(__file__).resolve().parents[1] / ".env")
 
 from database.flow_db import get_all_workflows, get_workflow, update_workflow  # noqa: E402
-from services.flow_workflow_validator import validate_workflow  # noqa: E402
+from services.flow_workflow_validator import (  # noqa: E402
+    migrate_legacy_node_data,
+    validate_workflow,
+)
+
+# Fields registered at activation rather than read per run. A change to any of
+# them needs a deactivate/reactivate cycle, which comparing node *types* alone
+# would miss - editing an interval from 1m to 5m keeps the same trigger type.
+_TRIGGER_TYPES = ("start", "webhookTrigger", "priceAlert", "orderUpdateTrigger")
+_TRIGGER_CONFIG_FIELDS = (
+    "scheduleType", "time", "days", "executeAt", "intervalMinutes", "intervalValue",
+    "intervalUnit", "marketHoursOnly", "symbol", "exchange", "condition", "price",
+    "orderId", "status", "trigger",
+)
+
+
+def _trigger_config(nodes: list) -> dict:
+    """The activation-relevant configuration of a graph's trigger node(s)."""
+    config: dict = {}
+    for node in nodes:
+        if not isinstance(node, dict) or node.get("type") not in _TRIGGER_TYPES:
+            continue
+        data = node.get("data") or {}
+        config[str(node.get("type"))] = {
+            field: data.get(field) for field in _TRIGGER_CONFIG_FIELDS if field in data
+        }
+    return config
 
 
 def show_list() -> int:
@@ -75,6 +107,12 @@ def main() -> int:
         print(f"Could not read {args.file}: {exc}")
         return 1
 
+    # Same normalization the import endpoint applies, so a legacy export does
+    # not arrive here still carrying a field no reader honors.
+    migration_notes: list[str] = []
+    if isinstance(payload.get("nodes"), list):
+        payload["nodes"], migration_notes = migrate_legacy_node_data(payload["nodes"])
+
     # Same rules the import endpoint applies, so a graph that would be rejected
     # at import is not written here through the side door.
     errors = validate_workflow(payload)
@@ -83,6 +121,11 @@ def main() -> int:
         for err in errors:
             print(f"  {err['path']}: {err['message']}")
         return 1
+
+    # Captured before the write. Reading workflow.nodes afterwards can return
+    # the refreshed row, so the comparison would be against the new graph.
+    old_trigger = _trigger_config(workflow.nodes or [])
+    new_trigger = _trigger_config(payload["nodes"])
 
     old_nodes = len(workflow.nodes or [])
     old_edges = len(workflow.edges or [])
@@ -96,6 +139,10 @@ def main() -> int:
     if args.name:
         print(f"  name        : {workflow.name} -> {args.name}")
     print("  webhook url : unchanged")
+    if migration_notes:
+        print("  migrations  :")
+        for note in migration_notes:
+            print(f"    - {note}")
 
     if args.dry_run:
         print("\nDry run: nothing written.")
@@ -111,15 +158,13 @@ def main() -> int:
 
     print("\nUpdated.")
     if workflow.is_active:
-        old_triggers = {
-            n.get("type") for n in (workflow.nodes or []) if isinstance(n, dict)
-        }
-        new_triggers = {n.get("type") for n in payload["nodes"] if isinstance(n, dict)}
-        trigger_types = {"start", "webhookTrigger", "priceAlert", "orderUpdateTrigger"}
-        if (old_triggers & trigger_types) != (new_triggers & trigger_types):
+        if old_trigger != new_trigger:
             print(
-                "The trigger changed and this workflow is active. Deactivate and "
-                "reactivate it so the scheduler picks up the new trigger."
+                "The trigger configuration changed and this workflow is active.\n"
+                f"  was: {old_trigger}\n"
+                f"  now: {new_trigger}\n"
+                "Deactivate and reactivate it: the schedule and any price/order "
+                "watch are registered at activation, not read per run."
             )
         else:
             print("Active workflow: the new graph applies from the next run.")

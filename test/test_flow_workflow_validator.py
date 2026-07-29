@@ -15,8 +15,10 @@ from pathlib import Path
 import pytest
 
 from services.flow_workflow_validator import (
+    BRANCHING_NODE_TYPES,
     TRIGGER_NODE_TYPES,
     VALID_NODE_TYPES,
+    migrate_legacy_node_data,
     validate_workflow,
 )
 
@@ -205,3 +207,87 @@ def test_corrupt_graphs_are_rejected_even_when_saving():
     corrupt = _wf([{"id": "a", "type": "NotReal", "position": {"x": 0, "y": 0}, "data": {}}])
     errors = validate_workflow(corrupt, require_name=False, strict=False)
     assert any(e["code"] == "unknown_node_type" for e in errors)
+
+
+NODE_COMPONENT_DIR = FRONTEND / "components" / "flow" / "nodes"
+
+
+@pytest.mark.skipif(not NODE_COMPONENT_DIR.exists(), reason="frontend sources not present")
+def test_branching_set_matches_components_that_render_branch_handles():
+    """A node whose own handles the validator rejects cannot be imported.
+
+    priceAlert renders true/false handles like the condition nodes, and leaving
+    it out made a valid workflow fail validation on its own edges.
+    """
+    rendering = set()
+    for path in NODE_COMPONENT_DIR.glob("*Node.tsx"):
+        text = path.read_text()
+        if re.search(r'id="(true|false|yes|no)"', text):
+            name = path.stem[: -len("Node")]
+            rendering.add(name[0].lower() + name[1:])
+    rendering -= {"base"}  # shared base component, not a node type
+    rendering &= VALID_NODE_TYPES
+    assert rendering <= BRANCHING_NODE_TYPES, sorted(rendering - BRANCHING_NODE_TYPES)
+
+
+def test_malformed_gate_input_count_does_not_crash():
+    """A malformed payload must be rejected, not raise out of the validator."""
+    wf = _wf([_node("g", "andGate")])
+    wf["nodes"][0]["data"]["inputCount"] = "abc"
+    validate_workflow(wf)  # must not raise
+
+
+def test_empty_split_order_is_rejected():
+    wf = _wf(
+        [_node("t", "start"), _node("s", "splitOrder")],
+        [{"id": "e1", "source": "t", "target": "s"}],
+    )
+    assert any(e["code"] == "missing_required_field" for e in validate_workflow(wf))
+
+
+def test_phantom_handle_on_a_non_branching_node_is_rejected():
+    wf = _wf(
+        [_node("t", "start"), _node("q", "getQuote", symbol="X", exchange="NSE"), _node("a")],
+        [
+            {"id": "e1", "source": "t", "target": "q"},
+            {"id": "e2", "source": "q", "target": "a", "sourceHandle": "output-9"},
+        ],
+    )
+    assert any(e["code"] == "invalid_source_handle" for e in validate_workflow(wf))
+
+
+def test_price_alert_may_use_its_own_branch_handles():
+    wf = _wf(
+        [
+            _node("t", "priceAlert", symbol="X", exchange="NSE", condition="above", price=100),
+            _node("a"),
+        ],
+        [{"id": "e1", "source": "t", "target": "a", "sourceHandle": "true"}],
+    )
+    assert not any(e["code"] == "invalid_source_handle" for e in validate_workflow(wf))
+
+
+@pytest.mark.parametrize(
+    "operator,expected_condition",
+    [("gt", "quantity_above"), ("lt", "quantity_below"), ("weird", None)],
+)
+def test_position_check_migration_preserves_the_comparison(operator, expected_condition):
+    """Flattening every legacy operator to "exists" turns a guard into a no-op."""
+    nodes = [_node("p", "positionCheck", operator=operator, threshold=5)]
+    migrated, _ = migrate_legacy_node_data(nodes)
+    assert migrated[0]["data"].get("condition") == expected_condition
+    assert migrated[0]["data"].get("threshold") == 5
+
+
+def test_fund_check_migration_never_reverses_the_guard():
+    """fundCheck only expresses a minimum, so a legacy less-than is left alone."""
+    migrated, notes = migrate_legacy_node_data(
+        [_node("f", "fundCheck", operator="gt", threshold=10000)]
+    )
+    assert migrated[0]["data"] == {"minAvailable": 10000}
+
+    migrated, notes = migrate_legacy_node_data(
+        [_node("f", "fundCheck", operator="lt", threshold=10000)]
+    )
+    assert "minAvailable" not in migrated[0]["data"]
+    assert any("no equivalent" in note for note in notes)
