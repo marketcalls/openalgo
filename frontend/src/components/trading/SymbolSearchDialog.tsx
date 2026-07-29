@@ -6,7 +6,7 @@ import type { SearchRow } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
 
 /**
- * TradingView / Upstox-style symbol search modal for the /trading page.
+ * Symbol search modal for the /trading page.
  *
  * Searches broker-supported symbols (the master-contract cache is already
  * broker-scoped), groups them into segment chips derived from the broker's
