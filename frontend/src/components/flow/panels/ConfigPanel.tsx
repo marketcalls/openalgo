@@ -126,6 +126,7 @@ const NODE_TITLES: Record<string, string> = {
   history: 'History Data',
   indicator: 'Indicator',
   priorPeriodOhlc: 'Prior Period OHLC',
+  strategyPnl: 'Strategy P&L',
   barOffset: 'Bar Offset',
   expiry: 'Get Expiry',
   multiQuotes: 'Multi Quotes',
@@ -2093,6 +2094,38 @@ export function ConfigPanel() {
                     Access with {'{{name.latest.value}}'}, {'{{name.previous.value}}'}, or{' '}
                     {'{{name.series[N]}}'}. Multi-output indicators (MACD, BBands, ADX, ...)
                     expose out0, out1, ...
+                  </p>
+                </div>
+              </>
+            )}
+
+            {nodeType === 'strategyPnl' && (
+              <>
+                <div className="space-y-2">
+                  <Label className="text-xs">Strategy</Label>
+                  <Input
+                    className="h-8"
+                    placeholder="blank = this workflow's name"
+                    value={(nodeData.strategy as string) || ''}
+                    onChange={(e) => handleDataChange('strategy', e.target.value)}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Order nodes tag their orders with the workflow name, so leaving this
+                    blank reports this workflow's own P&amp;L.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Output Variable</Label>
+                  <Input
+                    className="h-8"
+                    placeholder="spnl"
+                    value={(nodeData.outputVariable as string) || ''}
+                    onChange={(e) => handleDataChange('outputVariable', e.target.value)}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Exposes {'{{spnl.realized}}'}, {'{{spnl.unrealized}}'},{' '}
+                    {'{{spnl.total}}'}, {'{{spnl.today_realized}}'},{' '}
+                    {'{{spnl.open_quantity}}'}.
                   </p>
                 </div>
               </>

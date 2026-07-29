@@ -529,6 +529,12 @@ export const NODE_DEFINITIONS = {
       category: 'data' as const,
     },
     {
+      type: 'strategyPnl',
+      label: 'Strategy P&L',
+      description: 'Realized/unrealized P&L for a strategy',
+      category: 'data' as const,
+    },
+    {
       type: 'priorPeriodOhlc',
       label: 'Prior Period OHLC',
       description: 'Previous hour/day/week/month candle',
@@ -785,6 +791,10 @@ export const DEFAULT_NODE_DATA = {
     offsetBars: 0,
     sourceSeries: '',
     sourceField: '',
+    outputVariable: '',
+  },
+  strategyPnl: {
+    strategy: '',
     outputVariable: '',
   },
   priorPeriodOhlc: {
