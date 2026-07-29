@@ -114,8 +114,15 @@ class FlowOrderUpdateMonitor:
             raise ValueError(
                 f"orderUpdateTrigger status must be one of {sorted(VALID_STATUSES)}, got {status!r}"
             )
-        if user_id is None and api_key:
-            user_id = self._resolve_user_id(api_key)
+        if user_id is None:
+            user_id = self._resolve_user_id(api_key) if api_key else None
+        if not user_id:
+            # Fail closed. An unscoped watch would match any account's order
+            # event and then execute this workflow with the stored API key.
+            raise ValueError(
+                "orderUpdateTrigger could not resolve the owning account from the "
+                "workflow's API key. Re-save the workflow with a valid API key."
+            )
         watch = OrderUpdateWatch(
             workflow_id=workflow_id,
             api_key=api_key,
@@ -201,11 +208,12 @@ class FlowOrderUpdateMonitor:
     def _matches(self, watch: OrderUpdateWatch, event) -> bool:
         # Account scoping. A workflow executes with its owner's API key, so a
         # symbol-only watch must never be fired by a different account's fill.
-        # Only enforced when the event actually carries an identity — some
-        # sandbox paths omit user_id, and failing closed there would silently
-        # stop analyze-mode triggers from ever firing.
-        event_user = self._event_user_id(event)
-        if watch.user_id and event_user and event_user != watch.user_id:
+        # Strict: an event that carries no identity cannot satisfy an
+        # owner-scoped watch. Order adapters always populate user_id, and the
+        # sandbox engine takes it as a required constructor argument, so a
+        # missing value means the event's origin is unknown - not that it
+        # belongs to this account.
+        if watch.user_id and self._event_user_id(event) != watch.user_id:
             return False
         if watch.status != "any" and normalize_status(event.order_status) != watch.status:
             return False

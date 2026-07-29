@@ -286,6 +286,7 @@ class FlowOpenAlgoClient:
             # which raises TypeError on None and surfaces as an opaque 500.
             return {
                 "status": "error",
+                "code": 400,
                 "error": "source='db' requires both start_date and end_date (YYYY-MM-DD)",
             }
 
