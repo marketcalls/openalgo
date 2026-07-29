@@ -104,6 +104,23 @@ def _todays_rollover_boundary():
     return now_ist.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
 
+def get_trading_session_date():
+    """Return the current trading session's date as an ISO string (IST).
+
+    A trading session runs from SESSION_EXPIRY_TIME (default 03:00 IST) to the
+    same time next day, matching the broker token rollover. Between midnight
+    and that boundary the session still belongs to the *previous* calendar
+    date, so anything bucketed "per trading day" must use this rather than
+    ``date.today()`` - which is also the server's local date and may not be IST
+    at all on a host outside India.
+    """
+    now_ist = datetime.now(pytz.timezone("UTC")).astimezone(pytz.timezone("Asia/Kolkata"))
+    boundary = _todays_rollover_boundary()
+    if now_ist < boundary:
+        return (now_ist - timedelta(days=1)).date().isoformat()
+    return now_ist.date().isoformat()
+
+
 def _has_fresher_session(username, current_session_id=None):
     """Return True if an active session for ``username`` (other than
     ``current_session_id``) authenticated at or after today's rollover boundary.

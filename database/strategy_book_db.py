@@ -31,7 +31,8 @@ read time in `services/strategy_pnl_service.py`.
 """
 
 import os
-from datetime import date, datetime, timedelta
+import threading
+from datetime import datetime, timedelta
 
 from sqlalchemy import (
     Column,
@@ -48,6 +49,13 @@ from database.engine_factory import create_db_engine
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Serializes the read-modify-write of an order's applied-quantity watermark and
+# its position row. The event bus dispatches on a thread pool, so concurrent
+# updates for one order would otherwise double-book or lose a fill. Reentrant
+# because draining a buffered fill re-enters apply_fill. Production is a single
+# worker, so an in-process lock is sufficient.
+_fill_lock = threading.RLock()
 
 engine = create_db_engine()
 
@@ -132,7 +140,31 @@ def init_strategy_book_db() -> None:
     """Create tables if absent, then apply column migrations. Idempotent."""
     Base.metadata.create_all(bind=engine)
     _migrate_add_columns()
+    _prune_old_tags()
     logger.info("Strategy book DB initialized")
+
+
+# One tag row exists per order, forever, and the key space is every order ever
+# placed - so it needs a retention bound. An order cannot report new fills days
+# after the fact, making anything past this window safe to drop.
+_TAG_RETENTION = timedelta(days=int(os.getenv("STRATEGY_TAG_RETENTION_DAYS", "30")))
+
+
+def _prune_old_tags() -> None:
+    """Drop order tags well past the point where new fills could arrive."""
+    try:
+        cutoff = datetime.now() - _TAG_RETENTION
+        removed = (
+            db_session.query(StrategyOrderTag)
+            .filter(StrategyOrderTag.created_at < cutoff)
+            .delete(synchronize_session=False)
+        )
+        if removed:
+            db_session.commit()
+            logger.info(f"Strategy book: pruned {removed} order tag(s) past retention")
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not prune old order tags")
 
 
 def _migrate_add_columns():
@@ -160,6 +192,22 @@ def _migrate_add_columns():
                 logger.info("Strategy book DB: added applied_notional column")
     except Exception:
         logger.exception("Strategy book DB: column migration failed")
+
+
+def _session_date() -> str:
+    """The current trading session's date (03:00 IST rollover), as ISO text.
+
+    Not ``date.today()``: that is the server's local calendar date, which
+    mislabels everything traded between midnight and the rollover and is not
+    even IST on a host outside India.
+    """
+    try:
+        from utils.session import get_trading_session_date
+
+        return get_trading_session_date()
+    except Exception:
+        logger.exception("Could not resolve trading session date; falling back to local date")
+        return datetime.now().date().isoformat()
 
 
 def record_order_tag(
@@ -193,7 +241,13 @@ def record_order_tag(
 
 
 def _drain_pending_fills(orderid: str) -> None:
-    """Apply any fills that arrived before this order's tag was recorded."""
+    """Apply any fills that arrived before this order's tag was recorded.
+
+    Each row is deleted only *after* its fill is booked. Deleting first would
+    lose the fill permanently if booking then failed. Booking first is safe in
+    the other direction too: apply_fill is idempotent on the applied-quantity
+    watermark, so a row that is booked but not yet deleted is a no-op on retry.
+    """
     try:
         pending = (
             db_session.query(StrategyPendingFill)
@@ -201,18 +255,25 @@ def _drain_pending_fills(orderid: str) -> None:
             .order_by(StrategyPendingFill.id)
             .all()
         )
-        rows = [(p.filled_quantity, p.average_price, p.action) for p in pending]
-        for p in pending:
-            db_session.delete(p)
-        db_session.commit()
+        rows = [(p.id, p.filled_quantity, p.average_price, p.action) for p in pending]
     except Exception:
         db_session.rollback()
         logger.exception(f"Could not read buffered fills for order {orderid}")
         return
 
-    for qty, price, action in rows:
-        logger.info(f"Applying buffered fill for order {orderid} (arrived before its tag)")
-        apply_fill(orderid, qty, price, action)
+    for row_id, qty, price, action in rows:
+        try:
+            logger.info(f"Applying buffered fill for order {orderid} (arrived before its tag)")
+            apply_fill(orderid, qty, price, action)
+            db_session.query(StrategyPendingFill).filter_by(id=row_id).delete(
+                synchronize_session=False
+            )
+            db_session.commit()
+        except Exception:
+            db_session.rollback()
+            # Left in place deliberately: the row is retried on the next tag or
+            # fill for this order, and pruned by age if it never applies.
+            logger.exception(f"Could not apply buffered fill {row_id} for order {orderid}")
 
 
 def _buffer_fill(orderid: str, filled_quantity: float, average_price: float, action: str) -> None:
@@ -285,7 +346,22 @@ def apply_fill(
 
     Returns a summary of the affected leg, or None when the order is unknown
     (not placed with a strategy tag) or the fill adds nothing new.
+
+    Serialized: the event bus dispatches callbacks on a thread pool, so two
+    updates for the same order can run concurrently. Reading the watermark,
+    booking the delta and writing the watermark back must be one critical
+    section or a duplicate event double-books the fill.
     """
+    with _fill_lock:
+        return _apply_fill_locked(orderid, filled_quantity, average_price, action)
+
+
+def _apply_fill_locked(
+    orderid: str,
+    filled_quantity: float,
+    average_price: float,
+    action: str,
+) -> dict | None:
     tag = get_order_tag(orderid)
     if tag is None:
         # The fill beat its own order.placed event. Buffer it; record_order_tag
@@ -306,7 +382,7 @@ def apply_fill(
     incremental_notional = cumulative_notional - float(tag.applied_notional or 0)
     price = incremental_notional / delta if delta else float(average_price or 0)
     signed = delta if str(action).upper() == "BUY" else -delta
-    today = date.today().isoformat()
+    today = _session_date()
 
     try:
         leg = (
@@ -378,7 +454,9 @@ def apply_fill(
 
 def get_strategy_legs(user_id: str | None = None, strategy: str | None = None) -> list[dict]:
     """Every tracked leg, optionally narrowed to one user and/or strategy."""
-    today = date.today().isoformat()
+    # Same boundary the write path stamps, so a leg booked at 02:00 IST is not
+    # read back as belonging to a different day.
+    today = _session_date()
     try:
         query = db_session.query(StrategyPosition)
         if user_id:

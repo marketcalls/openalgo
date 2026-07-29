@@ -17,13 +17,9 @@ from the event bus. This module reads it:
 * **total** - realized + unrealized (plus `today_realized` / `today_total`
   for intraday exits)
 
-`pnl_from_book` is the primary path. `compute_strategy_pnl` is the
-independent trade-replay implementation: it derives the same figures from
-tagged tradebook rows without consulting the book, which makes it useful for
-reconciling the book against the broker's own record of the session. Both
-share one accounting convention - weighted-average cost, where a position
-flipping through zero realizes the closed leg and reopens the remainder at
-the fill price.
+Accounting convention: weighted-average cost, where a position flipping
+through zero realizes the closed leg and reopens the remainder at the fill
+price.
 """
 
 from typing import Any
@@ -40,146 +36,6 @@ def _f(value: Any, default: float = 0.0) -> float:
         return default
 
 
-class _Book:
-    """Weighted-average position accounting for one instrument."""
-
-    __slots__ = ("qty", "avg", "realized")
-
-    def __init__(self) -> None:
-        self.qty = 0.0  # signed: positive long, negative short
-        self.avg = 0.0  # average cost of the open quantity
-        self.realized = 0.0
-
-    def apply(self, signed_qty: float, price: float) -> None:
-        if signed_qty == 0:
-            return
-
-        # Opening, or adding to an existing position in the same direction.
-        if self.qty == 0 or (self.qty > 0) == (signed_qty > 0):
-            total = abs(self.qty) + abs(signed_qty)
-            self.avg = ((self.avg * abs(self.qty)) + (price * abs(signed_qty))) / total
-            self.qty += signed_qty
-            return
-
-        # Reducing, closing, or flipping.
-        closing = min(abs(signed_qty), abs(self.qty))
-        direction = 1.0 if self.qty > 0 else -1.0
-        self.realized += closing * (price - self.avg) * direction
-        remaining = abs(signed_qty) - closing
-        self.qty += signed_qty
-
-        if abs(self.qty) < 1e-9:
-            self.qty = 0.0
-            self.avg = 0.0
-        elif remaining > 0:
-            # Flipped through zero: the leftover opens a fresh position.
-            self.avg = price
-
-
-def compute_strategy_pnl(
-    trades: list[dict[str, Any]],
-    positions: list[dict[str, Any]] | None = None,
-    strategy: str | None = None,
-) -> dict[str, Any]:
-    """Aggregate realized / unrealized / total P&L per strategy.
-
-    Args:
-        trades: tradebook rows (need `strategy`, `symbol`, `exchange`,
-            `product`, `action`, `quantity`, and `average_price` or `price`).
-        positions: position-book rows, used only for last traded price and to
-            detect positions carried over from a previous session.
-        strategy: when given, only this strategy is returned.
-
-    Returns a dict keyed by strategy name; each value carries `realized`,
-    `unrealized`, `total`, `open_quantity`, `trade_count`, `carried_over` and
-    a per-instrument `legs` breakdown.
-    """
-    positions = positions or []
-
-    ltp_by_key: dict[tuple, float] = {}
-    pos_by_key: dict[tuple, dict[str, Any]] = {}
-    for row in positions:
-        key = (row.get("symbol"), row.get("exchange"), row.get("product"))
-        ltp_by_key[key] = _f(row.get("ltp"))
-        pos_by_key[key] = row
-
-    books: dict[str, dict[tuple, _Book]] = {}
-    counts: dict[str, int] = {}
-
-    for trade in trades:
-        name = (trade.get("strategy") or "").strip() or "untagged"
-        if strategy and name != strategy:
-            continue
-        key = (trade.get("symbol"), trade.get("exchange"), trade.get("product"))
-        qty = abs(_f(trade.get("quantity")))
-        if qty == 0:
-            continue
-        price = _f(trade.get("average_price")) or _f(trade.get("price"))
-        signed = qty if str(trade.get("action", "")).upper() == "BUY" else -qty
-        books.setdefault(name, {}).setdefault(key, _Book()).apply(signed, price)
-        counts[name] = counts.get(name, 0) + 1
-
-    out: dict[str, Any] = {}
-    for name, per_key in books.items():
-        realized = unrealized = 0.0
-        open_qty = 0.0
-        carried_over = False
-        legs = []
-
-        for key, book in per_key.items():
-            realized += book.realized
-            leg_unrealized = 0.0
-            if abs(book.qty) > 1e-9:
-                ltp = ltp_by_key.get(key)
-                if ltp is None:
-                    # Open per this strategy's trades but absent from the
-                    # position book - cannot mark to market.
-                    carried_over = True
-                else:
-                    leg_unrealized = book.qty * (ltp - book.avg)
-                unrealized += leg_unrealized
-                open_qty += book.qty
-            legs.append(
-                {
-                    "symbol": key[0],
-                    "exchange": key[1],
-                    "product": key[2],
-                    "quantity": round(book.qty, 4),
-                    "average_price": round(book.avg, 4),
-                    "ltp": ltp_by_key.get(key),
-                    "realized": round(book.realized, 4),
-                    "unrealized": round(leg_unrealized, 4),
-                }
-            )
-
-        out[name] = {
-            "strategy": name,
-            "realized": round(realized, 4),
-            "unrealized": round(unrealized, 4),
-            "total": round(realized + unrealized, 4),
-            "open_quantity": round(open_qty, 4),
-            "trade_count": counts.get(name, 0),
-            "carried_over": carried_over,
-            "legs": legs,
-        }
-
-    if strategy:
-        return out.get(
-            strategy,
-            {
-                "strategy": strategy,
-                "realized": 0.0,
-                "unrealized": 0.0,
-                "total": 0.0,
-                "open_quantity": 0.0,
-                "trade_count": 0,
-                "carried_over": False,
-                "legs": [],
-            },
-        )
-    return out
-
-
 def pnl_from_book(
     legs: list[dict[str, Any]],
     positions: list[dict[str, Any]] | None = None,
@@ -193,8 +49,15 @@ def pnl_from_book(
     function of a price that changes continuously.
     """
     positions = positions or []
+    # `ltp` is the standardized OpenAlgo position field (see
+    # docs/api/account-services/positionbook.md); every broker mapper converts
+    # its own raw field into it. `last_price` is accepted only as a fallback
+    # for a mapper that passes the broker's name through unchanged.
     ltp_by_key = {
-        (p.get("symbol"), p.get("exchange"), p.get("product")): _f(p.get("ltp")) for p in positions
+        (p.get("symbol"), p.get("exchange"), p.get("product")): _f(
+            p.get("ltp") if p.get("ltp") is not None else p.get("last_price")
+        )
+        for p in positions
     }
 
     grouped: dict[str, dict[str, Any]] = {}

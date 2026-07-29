@@ -26,8 +26,12 @@ _FILLABLE = {"complete", "filled", "partially filled", "partial"}
 
 
 def _user_id(event) -> str:
+    return _request_field(event, "user_id")
+
+
+def _request_field(event, key: str) -> str:
     data = getattr(event, "request_data", None) or {}
-    return str(data.get("user_id") or "")
+    return str(data.get(key) or "") if isinstance(data, dict) else ""
 
 
 def on_order_placed(event) -> None:
@@ -60,21 +64,37 @@ def on_batch_completed(event) -> None:
         return
 
     user_id = _user_id(event)
-    default_exchange = getattr(event, "exchange", "") or ""
+    # A split or options batch is one contract, so the event carries the leg
+    # identity. A basket spans several, so each result supplies its own and the
+    # event has none - hence per-leg values win and the event is the fallback.
     default_symbol = getattr(event, "symbol", "") or ""
+    default_exchange = getattr(event, "exchange", "") or ""
+    default_product = getattr(event, "product", "") or _request_field(event, "product")
     for leg in results:
         if not isinstance(leg, dict):
             continue
         orderid = leg.get("orderid") or leg.get("order_id") or ""
         if not orderid:
             continue  # a rejected leg has no id
+        symbol = leg.get("symbol") or default_symbol
+        exchange = leg.get("exchange") or default_exchange
+        product = leg.get("product") or default_product
+        if not (symbol and exchange and product):
+            # Without all three the leg cannot be matched against the broker
+            # position book, so its unrealized P&L would silently read zero.
+            logger.warning(
+                f"Strategy book: skipping batch leg {orderid} for {strategy} - "
+                f"incomplete identity (symbol={symbol!r} exchange={exchange!r} "
+                f"product={product!r})"
+            )
+            continue
         record_order_tag(
             orderid=str(orderid),
             user_id=user_id,
             strategy=strategy,
-            symbol=leg.get("symbol") or default_symbol,
-            exchange=leg.get("exchange") or default_exchange,
-            product=leg.get("product") or "",
+            symbol=symbol,
+            exchange=exchange,
+            product=product,
         )
 
 
