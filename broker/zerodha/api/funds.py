@@ -41,9 +41,15 @@ def get_margin_data(auth_token):
         return {}
 
     try:
-        # Calculate the sum of net values for available margin
+        # Kite's "net" is total available margin (cash + collateral - utilised debits),
+        # which already double-counts collateral against the separately reported
+        # "collateral" field below. "availablecash" must be the actual free cash
+        # balance, so use available.cash, not net. See GitHub issue #1582.
         total_available_margin = sum(
-            [margin_data["data"]["commodity"]["net"], margin_data["data"]["equity"]["net"]]
+            [
+                margin_data["data"]["commodity"]["available"]["cash"],
+                margin_data["data"]["equity"]["available"]["cash"],
+            ]
         )
         # Calculate the sum of debits for used margin
         total_used_margin = sum(
