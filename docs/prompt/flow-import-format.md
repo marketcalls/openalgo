@@ -170,6 +170,7 @@ Six node types fan out into a TRUE branch and a FALSE branch:
 | `positionCheck` | `"true"` / `"false"` |
 | `fundCheck` | `"true"` / `"false"` |
 | `priceCondition` | `"true"` / `"false"` |
+| `varCondition` | `"true"` / `"false"` |
 | `timeWindow` | `"true"` / `"false"` |
 | `timeCondition` | `"yes"` / `"no"` |
 | `notGate` | `"yes"` / `"no"` |
@@ -181,6 +182,20 @@ to use the vocabulary native to each node so saved workflows match the UI.
 Edges that source from a condition node and **do not** specify a `sourceHandle`
 are followed unconditionally on every run (use this for "fire-and-forget" log
 or telegram nodes that want to see every result).
+
+**Gate wiring matters.** Feeding a gate through `sourceHandle: "true"` edges
+means the gate is only reached when that condition is true, so the gate can
+never evaluate to false and **its `false` branch is unreachable**. Use
+pass-through wiring (only `targetHandle`, no `sourceHandle`) whenever the
+gate needs a working else-branch:
+
+```json
+{ "id": "e3", "source": "c1", "target": "gate", "targetHandle": "input-0" }
+{ "id": "e4", "source": "c2", "target": "gate", "targetHandle": "input-1" }
+```
+
+Gates wait until every wired input has been evaluated, then fire exactly
+once per run.
 
 `andGate` / `orGate` source handles are not bool branches — they emit a single
 `condition` value to whatever connects to them downstream. Their **incoming**
@@ -210,8 +225,8 @@ the `nodes` array.
 ### 7.1 Trigger nodes
 
 A workflow must contain exactly one trigger node, and that node must be one
-of: `start`, `priceAlert`, `webhookTrigger`. Every other path of execution
-flows from there.
+of: `start`, `priceAlert`, `webhookTrigger`, `orderUpdateTrigger`. Every
+other path of execution flows from there.
 
 #### start — Schedule Trigger
 
@@ -300,6 +315,34 @@ nodes (e.g. `{{webhook.action}}`, `{{webhook.qty}}`, `{{webhook.strike}}`).
     "symbol": "NIFTY",
     "exchange": "NFO"
   }
+}
+```
+
+#### orderUpdateTrigger — Order Update Trigger
+
+Fires when an order changes status (fill, rejection, cancellation), pushed
+from the account order-update stream — no polling.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `orderId` | string | — | Literal broker order id. **`{{variable}}` references are rejected** — a trigger has no upstream node to resolve them. |
+| `symbol` | string | — | OpenAlgo symbol. |
+| `exchange` | string | `""` | Empty = any exchange. An explicit value must match. |
+| `status` | `"any"` \| `"open"` \| `"trigger pending"` \| `"complete"` \| `"rejected"` \| `"cancelled"` | `"complete"` | |
+| `trigger` | `"once"` \| `"every_time"` | `"once"` | |
+
+At least one of `orderId` / `symbol` is required; an unfiltered watch would
+fire on every order in the account. The event is exposed to downstream nodes
+as `{{webhook.orderid}}`, `{{webhook.symbol}}`, `{{webhook.order_status}}`,
+`{{webhook.filled_quantity}}`, `{{webhook.average_price}}`,
+`{{webhook.rejection_reason}}`.
+
+```json
+{
+  "id": "node_1",
+  "type": "orderUpdateTrigger",
+  "position": { "x": 100, "y": 100 },
+  "data": { "symbol": "NIFTY04AUG2624250CE", "exchange": "NFO", "status": "complete", "trigger": "once" }
 }
 ```
 
@@ -620,6 +663,31 @@ Result: `condition=True` if the rule matches the live position.
 }
 ```
 
+#### varCondition — Compare Any Two Values
+
+Generic counterpart to `priceCondition`. Compares two **interpolated** values
+— an indicator output, a prior-period level, a workflow variable, or a
+literal — instead of always re-fetching a live quote field.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `leftValue` | string | `""` | Supports `{{vars}}`. |
+| `operator` | `">"` \| `"<"` \| `"=="` \| `">="` \| `"<="` \| `"!="` | `">"` | |
+| `rightValue` | string | `"0"` | Supports `{{vars}}`. |
+
+Uses `"true"`/`"false"` handles. **If either operand does not resolve to a
+number the node errors and takes neither branch** — an unresolved variable
+cannot silently route the else-path into a trade.
+
+```json
+{
+  "id": "node_3",
+  "type": "varCondition",
+  "position": { "x": 100, "y": 200 },
+  "data": { "leftValue": "{{rsi.latest.value}}", "operator": "<", "rightValue": "30" }
+}
+```
+
 #### timeWindow — Time Window
 
 | Field | Type | Default | Notes |
@@ -755,6 +823,94 @@ schemas.
 }
 ```
 
+#### indicator — Technical Indicator
+
+Runs any of 118 `openalgo.ta` indicators over a symbol's history, or over
+another indicator's output series.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `symbol`, `exchange` | string | — | Not needed in nested mode. |
+| `interval` | string | `"D"` | **Free text**, not an enum — any interval the broker supports. Use the `intervals` node to discover them. |
+| `source` | `"api"` \| `"db"` | `"api"` | `"db"` reads Historify and resamples locally (2m/3m/25m/2h from stored 1m; W/M/Q/Y from D). |
+| `indicatorName` | string | `"sma"` | Lowercase function name. |
+| `params` | string | `"{}"` | JSON object of the indicator's own args, e.g. `"{\"period\": 14}"`. |
+| `lookbackBars` | int | `100` | Capped at 200. |
+| `tailBars` | int | `5` | Length of the returned `series` array. |
+| `offsetBars` | int | `0` | Which bar `at_offset` reads. 0 = latest closed. |
+| `sourceSeries` | string | — | Nest over another series, e.g. `{{rsi.series}}` or a raw `{{h.data}}`. |
+| `sourceField` | string | `""` | Field to read per `sourceSeries` row. Blank = auto (`value`, `out0`, `close`). |
+| `outputVariable` | string | — | |
+
+Exposes `{{name.latest.*}}`, `{{name.previous.*}}`, `{{name.at_offset.*}}`,
+`{{name.series}}`, `{{name.outputs}}`, `{{name.bars_used}}`. Single-output
+indicators use `value`; multi-output use `out0`, `out1`, … (macd: line/signal/
+histogram; supertrend: level/direction; bbands: upper/middle/lower).
+
+`crossover`, `crossunder`, `cross`, `correlation`, `beta` are **not
+available** — they need two independent series. Build a crossover from two
+`indicator` nodes plus an `andGate`. Only single-series indicators (sma, ema,
+rsi, wma, stdev, highest, lowest, …) can be nested via `sourceSeries`.
+
+```json
+{
+  "id": "node_2",
+  "type": "indicator",
+  "position": { "x": 100, "y": 100 },
+  "data": {
+    "symbol": "RELIANCE", "exchange": "NSE", "interval": "D", "source": "api",
+    "indicatorName": "rsi", "params": "{\"period\": 14}",
+    "lookbackBars": 100, "tailBars": 5, "offsetBars": 0,
+    "outputVariable": "rsi"
+  }
+}
+```
+
+#### priorPeriodOhlc — Previous Period OHLC
+
+Last fully-closed hour/day/week/month candle. Never returns a still-forming
+candle; raises if history is too short.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `symbol`, `exchange` | string | — | |
+| `period` | `"previous_hour"` \| `"previous_day"` \| `"previous_week"` \| `"previous_month"` | `"previous_day"` | |
+| `source` | `"api"` \| `"db"` | `"api"` | |
+| `outputVariable` | string | — | |
+
+Exposes `{{name.open/high/low/close/volume}}` plus aliases `{{name.pdh}}`,
+`{{name.pdl}}`, `{{name.pdc}}` and `{{name.date}}`.
+
+```json
+{
+  "id": "node_2",
+  "type": "priorPeriodOhlc",
+  "position": { "x": 100, "y": 100 },
+  "data": { "symbol": "NIFTY", "exchange": "NSE_INDEX", "period": "previous_day", "source": "api", "outputVariable": "pd" }
+}
+```
+
+#### barOffset — OHLCV N Bars Back
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `symbol`, `exchange` | string | — | |
+| `interval` | string | `"D"` | Free text. |
+| `source` | `"api"` \| `"db"` | `"api"` | |
+| `offsetBars` | int | `0` | 0 = most recent **closed** bar; today's forming candle is excluded. Counts bars, not calendar days. |
+| `outputVariable` | string | — | |
+
+Exposes `{{name.open/high/low/close/volume/timestamp}}`.
+
+```json
+{
+  "id": "node_2",
+  "type": "barOffset",
+  "position": { "x": 100, "y": 100 },
+  "data": { "symbol": "NIFTY", "exchange": "NSE_INDEX", "interval": "D", "source": "api", "offsetBars": 5, "outputVariable": "bar5" }
+}
+```
+
 #### openPosition — Open Position For Symbol
 
 | Field | Type | Default | Notes |
@@ -785,8 +941,13 @@ All five take only `outputVariable`. Common patterns:
 ```
 
 Useful interpolations: `{{orders.data.orders[0].orderid}}`,
-`{{positions.data[0].quantity}}`, `{{holdings.data[0].symbol}}`,
+`{{positions.data[0].quantity}}`, `{{holdings.data.holdings[0].symbol}}`,
 `{{funds.data.availablecash}}`.
+
+> Note the asymmetry, which is a common source of unresolvable paths:
+> `positionBook` and `tradeBook` put their rows directly in `data` (a list),
+> while `orderBook` nests them under `data.orders` and `holdings` under
+> `data.holdings`. See [§7.7 Node output shapes](#77-node-output-shapes).
 
 #### symbol — Symbol Info
 
@@ -938,6 +1099,25 @@ settings.
 }
 ```
 
+#### whatsappAlert — WhatsApp Alert
+
+Sends a WhatsApp message via the paired bot device. Requires pairing from the
+`/whatsapp` page first.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `to` | string | `""` | Phone digits, e.g. `919876543210`. Blank sends to the paired device itself. |
+| `message` | string | — | Supports `{{vars}}`. |
+
+```json
+{
+  "id": "node_3",
+  "type": "whatsappAlert",
+  "position": { "x": 100, "y": 300 },
+  "data": { "to": "", "message": "Order placed: {{ord.orderid}}" }
+}
+```
+
 #### variable — Set / Update Variable
 
 The UI dropdown offers eleven operations but only four are implemented by
@@ -1084,6 +1264,77 @@ single REST call. Behaviour is identical from the workflow's point of view.
 | `streamType` | `"ltp"` \| `"quote"` \| `"depth"` \| `"all"` | `"all"` | |
 | `symbol` | string | — | Empty = all symbols for this user. |
 | `exchange` | string | `"NSE"` | |
+
+---
+
+### 7.7 Node output shapes
+
+What each node stores in its `outputVariable`, so downstream `{{...}}` paths
+resolve. Shapes below were captured from live responses, not inferred.
+
+**Market data**
+
+| Node | Shape | Example paths |
+|---|---|---|
+| `getQuote` | `{status, data: {ltp, open, high, low, prev_close, volume, oi, bid, ask}}` | `{{q.data.ltp}}`, `{{q.data.prev_close}}` |
+| `multiQuotes` | `{status, results: [{symbol, exchange, data: {...}}]}` | `{{qs.results[0].data.ltp}}` |
+| `getDepth` | `{status, data: {bids: [{price, quantity}], asks: [...], ltp, totalbuyqty, totalsellqty, ...}}` | `{{d.data.bids[0].price}}` |
+| `history` | `{status, data: [{timestamp, open, high, low, close, volume, oi}]}` | `{{h.data[0].close}}` |
+| `intervals` | `{status, data: {seconds, minutes, hours, days, weeks, months}}` | `{{iv.data.minutes[0]}}` |
+
+`history` timestamps are **epoch seconds**, not ISO strings.
+
+**New data nodes**
+
+| Node | Shape | Example paths |
+|---|---|---|
+| `indicator` | `{status, indicator, nested, inputs, params, outputs, latest, previous, at_offset, series, offset_bars, bars_used}` | `{{r.latest.value}}`, `{{r.previous.value}}`, `{{r.at_offset.out0}}`, `{{r.series[0].value}}` |
+| `priorPeriodOhlc` | `{status, symbol, exchange, period, date, open, high, low, close, volume, pdh, pdl, pdc}` | `{{pd.pdh}}`, `{{pd.pdl}}`, `{{pd.close}}` |
+| `barOffset` | `{status, symbol, exchange, offsetBars, timestamp, open, high, low, close, volume}` | `{{b.close}}`, `{{b.high}}` |
+
+Single-output indicators expose `value`; multi-output expose `out0`, `out1`,
+… (macd: line/signal/histogram, supertrend: level/direction, bbands:
+upper/middle/lower, adx: +DI/-DI/ADX, stochastic: %K/%D).
+
+**Account and orders**
+
+| Node | Shape | Example paths |
+|---|---|---|
+| `funds` | `{status, data: {availablecash, collateral, m2mrealized, m2munrealized, utiliseddebits, ...}}` | `{{f.data.availablecash}}` |
+| `orderBook` | `{status, data: {orders: [...], statistics: {...}}}` | `{{o.data.orders[0].orderid}}` |
+| `tradeBook` | `{status, data: [{tradeid, orderid, symbol, average_price, ...}]}` | `{{t.data[0].average_price}}` |
+| `positionBook` | `{status, data: [{symbol, quantity, average_price, ltp, pnl, ...}], total_pnl}` | `{{p.data[0].pnl}}`, `{{p.total_pnl}}` |
+| `holdings` | `{status, data: {holdings: [...], statistics: {...}}}` | `{{hd.data.holdings[0].symbol}}` |
+| `openPosition` | `{status, quantity}` | `{{op.quantity}}` |
+| `getOrderStatus` | `{status, data: {order_status, average_price, quantity, ...}}` | `{{os.data.order_status}}` |
+
+**Order placement** (all order nodes)
+
+| Node | Shape | Example paths |
+|---|---|---|
+| `placeOrder`, `smartOrder` | `{status, orderid}` | `{{ord.orderid}}` |
+| `optionsOrder` | `{status, orderid, symbol, exchange, underlying, underlying_ltp, offset, option_type, mode}` | `{{ce.orderid}}`, `{{ce.symbol}}` |
+| `optionsMultiOrder`, `basketOrder`, `splitOrder` | `{status, results: [{...}]}` | `{{b.results[0].orderid}}` |
+
+`mode` is `"analyze"` in Analyzer mode and `"live"` otherwise — useful for a
+guard that refuses to run live.
+
+**Symbols and options**
+
+| Node | Shape | Example paths |
+|---|---|---|
+| `symbol` | `{status, data: {symbol, brsymbol, lotsize, tick_size, expiry, strike, token, ...}}` | `{{s.data.lotsize}}` |
+| `expiry` | `{status, message, data: ["04-AUG-26", ...]}` | `{{e.data[0]}}` |
+| `optionSymbol` | `{status, symbol, exchange, lotsize, tick_size, freeze_qty, underlying_ltp}` (**flat, not under `data`**) | `{{os.symbol}}`, `{{os.lotsize}}` |
+| `optionChain` | `{status, underlying, underlying_ltp, expiry_date, atm_strike, chain: [{strike, ce: {...}, pe: {...}}]}` | `{{ch.atm_strike}}`, `{{ch.chain[0].ce.ltp}}` |
+| `syntheticFuture` | `{status, underlying, expiry, atm_strike, synthetic_future_price, underlying_ltp}` | `{{sf.synthetic_future_price}}` |
+
+**Condition nodes** do not produce an `outputVariable`; they emit a
+`condition` boolean consumed by edge routing. Reference a condition's *inputs*
+instead of its result.
+
+For full REST response schemas see [`docs/api`](../api/README.md); the Flow
+client returns those payloads unchanged apart from adding `status`.
 
 ---
 
@@ -1518,6 +1769,117 @@ LTP is above 1500.
 }
 ```
 
+### 8.14 Indicator crossover (two indicators + AND gate)
+
+`crossover` is **not** available as an `indicator` node — it needs two
+independent series. Build it from two indicator nodes: fast above slow *now*,
+and fast at-or-below slow on the *previous* bar.
+
+Note the gate inputs use pass-through wiring (`targetHandle` only, no
+`sourceHandle`) so the gate receives both results and can also evaluate false.
+
+```json
+{
+  "name": "EMA golden cross",
+  "nodes": [
+    { "id": "n1", "type": "start", "position": {"x":0,"y":0}, "data": { "scheduleType": "interval", "intervalValue": 5, "intervalUnit": "minutes", "marketHoursOnly": true } },
+    { "id": "f", "type": "indicator", "position": {"x":0,"y":100}, "data": { "symbol": "NIFTY", "exchange": "NSE_INDEX", "interval": "D", "source": "api", "indicatorName": "ema", "params": "{\"period\":9}", "lookbackBars": 120, "tailBars": 3, "outputVariable": "fast" } },
+    { "id": "s", "type": "indicator", "position": {"x":0,"y":200}, "data": { "symbol": "NIFTY", "exchange": "NSE_INDEX", "interval": "D", "source": "api", "indicatorName": "ema", "params": "{\"period\":21}", "lookbackBars": 120, "tailBars": 3, "outputVariable": "slow" } },
+    { "id": "c1", "type": "varCondition", "position": {"x":0,"y":300}, "data": { "leftValue": "{{fast.latest.value}}", "operator": ">", "rightValue": "{{slow.latest.value}}" } },
+    { "id": "c2", "type": "varCondition", "position": {"x":250,"y":300}, "data": { "leftValue": "{{fast.previous.value}}", "operator": "<=", "rightValue": "{{slow.previous.value}}" } },
+    { "id": "and", "type": "andGate", "position": {"x":120,"y":400}, "data": { "inputCount": 2 } },
+    { "id": "buy", "type": "placeOrder", "position": {"x":120,"y":500}, "data": { "symbol": "NIFTY", "exchange": "NSE_INDEX", "action": "BUY", "quantity": 1, "priceType": "MARKET", "product": "MIS", "outputVariable": "ord" } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "n1", "target": "f" },
+    { "id": "e2", "source": "f",  "target": "s" },
+    { "id": "e3", "source": "s",  "target": "c1" },
+    { "id": "e4", "source": "s",  "target": "c2" },
+    { "id": "e5", "source": "c1", "target": "and", "targetHandle": "input-0" },
+    { "id": "e6", "source": "c2", "target": "and", "targetHandle": "input-1" },
+    { "id": "e7", "source": "and", "sourceHandle": "true", "target": "buy" }
+  ]
+}
+```
+
+For a death cross flip both operators (`<` on latest, `>=` on previous). To
+test a cross on an earlier bar, set `offsetBars` on both indicators and
+compare `{{fast.at_offset.value}}` with `{{slow.at_offset.value}}`.
+
+### 8.15 Multi-timeframe filter
+
+Two indicator nodes on the same symbol at different intervals. These are two
+distinct fetches — the request cache only collapses *identical* requests.
+
+```json
+{
+  "name": "Daily trend + intraday momentum",
+  "nodes": [
+    { "id": "n1", "type": "start", "position": {"x":0,"y":0}, "data": { "scheduleType": "interval", "intervalValue": 15, "intervalUnit": "minutes", "marketHoursOnly": true } },
+    { "id": "d", "type": "indicator", "position": {"x":0,"y":100}, "data": { "symbol": "NIFTY", "exchange": "NSE_INDEX", "interval": "D", "source": "api", "indicatorName": "ema", "params": "{\"period\":20}", "lookbackBars": 100, "tailBars": 3, "outputVariable": "emaD" } },
+    { "id": "i", "type": "indicator", "position": {"x":0,"y":200}, "data": { "symbol": "NIFTY", "exchange": "NSE_INDEX", "interval": "15m", "source": "api", "indicatorName": "rsi", "params": "{\"period\":14}", "lookbackBars": 100, "tailBars": 3, "outputVariable": "rsi15" } },
+    { "id": "q", "type": "getQuote", "position": {"x":0,"y":300}, "data": { "symbol": "NIFTY", "exchange": "NSE_INDEX", "outputVariable": "q" } },
+    { "id": "c1", "type": "varCondition", "position": {"x":0,"y":400}, "data": { "leftValue": "{{q.data.ltp}}", "operator": ">", "rightValue": "{{emaD.latest.value}}" } },
+    { "id": "c2", "type": "varCondition", "position": {"x":250,"y":400}, "data": { "leftValue": "{{rsi15.latest.value}}", "operator": ">", "rightValue": "50" } },
+    { "id": "g", "type": "andGate", "position": {"x":120,"y":500}, "data": { "inputCount": 2 } },
+    { "id": "log", "type": "log", "position": {"x":120,"y":600}, "data": { "message": "Aligned: ltp={{q.data.ltp}} emaD={{emaD.latest.value}} rsi15={{rsi15.latest.value}}", "level": "info" } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "n1", "target": "d" },
+    { "id": "e2", "source": "d", "target": "i" },
+    { "id": "e3", "source": "i", "target": "q" },
+    { "id": "e4", "source": "q", "target": "c1" },
+    { "id": "e5", "source": "q", "target": "c2" },
+    { "id": "e6", "source": "c1", "target": "g", "targetHandle": "input-0" },
+    { "id": "e7", "source": "c2", "target": "g", "targetHandle": "input-1" },
+    { "id": "e8", "source": "g", "sourceHandle": "true", "target": "log" }
+  ]
+}
+```
+
+### 8.16 Stateless "price retested a level today"
+
+Flow keeps no state between runs, so "price came back to PDH earlier today"
+cannot be a stored flag. Read **today's session low** from the quote instead:
+if `data.low <= PDH`, price has already visited that level today. Combined
+with a re-entry guard, this expresses a gap-aware breakout with no memory.
+
+```json
+{
+  "name": "PDH breakout with gap-up retest filter",
+  "nodes": [
+    { "id": "n1", "type": "start", "position": {"x":0,"y":0}, "data": { "scheduleType": "interval", "intervalValue": 1, "intervalUnit": "minutes", "marketHoursOnly": true } },
+    { "id": "pd", "type": "priorPeriodOhlc", "position": {"x":0,"y":100}, "data": { "symbol": "NIFTY", "exchange": "NSE_INDEX", "period": "previous_day", "source": "api", "outputVariable": "pd" } },
+    { "id": "q", "type": "getQuote", "position": {"x":0,"y":200}, "data": { "symbol": "NIFTY", "exchange": "NSE_INDEX", "outputVariable": "q" } },
+    { "id": "win", "type": "timeWindow", "position": {"x":0,"y":300}, "data": { "startTime": "09:20", "endTime": "15:00" } },
+    { "id": "brk", "type": "varCondition", "position": {"x":0,"y":400}, "data": { "leftValue": "{{q.data.ltp}}", "operator": ">", "rightValue": "{{pd.pdh}}" } },
+    { "id": "retest", "type": "varCondition", "position": {"x":250,"y":400}, "data": { "leftValue": "{{q.data.low}}", "operator": "<=", "rightValue": "{{pd.pdh}}" } },
+    { "id": "pos", "type": "positionCheck", "position": {"x":500,"y":400}, "data": { "symbol": "NIFTY", "exchange": "NSE_INDEX", "product": "NRML", "condition": "not_exists" } },
+    { "id": "g", "type": "andGate", "position": {"x":250,"y":500}, "data": { "inputCount": 4 } },
+    { "id": "ce", "type": "optionsOrder", "position": {"x":250,"y":600}, "data": { "underlying": "NIFTY", "expiryType": "current_week", "offset": "ATM", "optionType": "CE", "action": "BUY", "quantity": 1, "priceType": "MARKET", "product": "NRML", "outputVariable": "ce" } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "n1", "target": "pd" },
+    { "id": "e2", "source": "pd", "target": "q" },
+    { "id": "e3", "source": "q", "target": "win" },
+    { "id": "e4", "source": "win", "target": "brk" },
+    { "id": "e5", "source": "win", "target": "retest" },
+    { "id": "e6", "source": "win", "target": "pos" },
+    { "id": "e7",  "source": "win",    "target": "g", "targetHandle": "input-0" },
+    { "id": "e8",  "source": "brk",    "target": "g", "targetHandle": "input-1" },
+    { "id": "e9",  "source": "retest", "target": "g", "targetHandle": "input-2" },
+    { "id": "e10", "source": "pos",    "target": "g", "targetHandle": "input-3" },
+    { "id": "e11", "source": "g", "sourceHandle": "true", "target": "ce" }
+  ]
+}
+```
+
+Mirror it for the short side: `{{q.data.ltp}} < {{pd.pdl}}` and
+`{{q.data.high}} >= {{pd.pdl}}`.
+
+`positionCheck` with `not_exists` is what enforces one trade per breakout —
+it asks the broker, so unlike a counter variable it survives restarts.
+
 ---
 
 ## 9. Exchanges
@@ -1629,6 +1991,20 @@ positionBook (outputVariable=positions)
   month). The `expiry` node returns `"30-DEC-25"` (with hyphens) — pass that
   through `_format_expiry_for_api` if hand-converting, or use `expiryType`
   presets which the executor resolves automatically.
+- **History is capped at 200 bars.** Every history-reading node
+  (`history`, `indicator`, `barOffset`, `priorPeriodOhlc`) requests at most
+  the latest 200 bars for the chosen interval, and the cap is applied when
+  sizing the request window - a 10-year 1-minute range (~900k rows) never
+  reaches the broker. Tunable via `FLOW_MAX_HISTORY_BARS`.
+- **Identical history requests are cached** for a short TTL and collapse to
+  one broker call, so several indicators on the same symbol/interval do not
+  multiply rate-limit pressure. Distinct requests still cost a call each.
+- **`interval` is free text, not an enum.** Broker support varies; use the
+  `intervals` node to discover it, or `source: "db"` to resample locally
+  from Historify regardless of broker capability.
+- **Unresolved operands in `varCondition` take neither branch.** Unlike other
+  interpolation (which passes `{{...}}` through as literal text), this node
+  refuses to evaluate so a typo cannot route a trade.
 - **Lot size handling differs per node.** `optionsOrder` and
   `optionsMultiOrder` accept `quantity` **in lots** (multiplied by lot size
   internally). `placeOrder` / `smartOrder` / `splitOrder` / `basketOrder`

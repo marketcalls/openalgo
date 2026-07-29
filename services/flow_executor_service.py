@@ -108,6 +108,55 @@ class WorkflowContext:
 
     # Path segment: either a dotted key ([^.[\]]+) or a bracketed integer index (\[\d+\])
     _PATH_SEGMENT_RE = re.compile(r"([^\.\[\]]+)|\[(\d+)\]")
+    _WHOLE_TOKEN_RE = re.compile(r"^\{\{\s*([^}]+?)\s*\}\}$")
+
+    # Sentinel distinguishing "path did not resolve" from a legitimately None value.
+    _UNRESOLVED = object()
+
+    def _walk_path(self, var_path: str) -> Any:
+        """Walk a dotted/bracketed variable path against stored variables and
+        return the raw Python object (not stringified) - or `_UNRESOLVED` if
+        any segment is missing. Shared by `interpolate` (which stringifies
+        the result for text substitution) and `resolve_raw` (which returns
+        the object itself, needed to pass a list/dict between nodes without
+        a lossy str()-repr round-trip - see execute_indicator's nested mode).
+        """
+        value = self.variables
+        for seg in self._PATH_SEGMENT_RE.finditer(var_path):
+            key, idx = seg.group(1), seg.group(2)
+            if key is not None:
+                if isinstance(value, dict):
+                    value = value.get(key)
+                else:
+                    return self._UNRESOLVED
+            else:
+                i = int(idx)
+                if isinstance(value, (list, tuple)) and -len(value) <= i < len(value):
+                    value = value[i]
+                else:
+                    return self._UNRESOLVED
+            if value is None:
+                return self._UNRESOLVED
+        return value
+
+    def resolve_raw(self, text: str) -> Any:
+        """Resolve a string that is exactly one `{{path}}` token to the raw
+        stored object (list/dict/number), bypassing string interpolation.
+
+        Falls back to `interpolate(text)` (a string) when `text` isn't a
+        single whole-token reference (e.g. contains surrounding text, or
+        isn't a `{{...}}` reference at all) or the path doesn't resolve.
+        """
+        if not isinstance(text, str):
+            return text
+        m = self._WHOLE_TOKEN_RE.match(text)
+        if m:
+            var_path = m.group(1).strip()
+            if self._get_builtin_variable(var_path) is None:
+                value = self._walk_path(var_path)
+                if value is not self._UNRESOLVED:
+                    return value
+        return self.interpolate(text)
 
     def interpolate(self, text: str) -> str:
         """Replace {{variable}} patterns with actual values.
@@ -125,24 +174,9 @@ class WorkflowContext:
             if builtin_value is not None:
                 return builtin_value
 
-            value = self.variables
-            for seg in self._PATH_SEGMENT_RE.finditer(var_path):
-                key, idx = seg.group(1), seg.group(2)
-                if key is not None:
-                    if isinstance(value, dict):
-                        value = value.get(key)
-                    else:
-                        return match.group(0)
-                else:
-                    i = int(idx)
-                    if isinstance(value, (list, tuple)) and -len(value) <= i < len(value):
-                        value = value[i]
-                    else:
-                        return match.group(0)
-
-                if value is None:
-                    return match.group(0)
-
+            value = self._walk_path(var_path)
+            if value is self._UNRESOLVED:
+                return match.group(0)
             return str(value)
 
         return re.sub(r"\{\{([^}]+)\}\}", replacer, text)
@@ -158,9 +192,7 @@ class NodeExecutor:
 
     def log(self, message: str, level: str = "info"):
         """Add log entry"""
-        self.logs.append(
-            {"time": datetime.now().isoformat(), "message": message, "level": level}
-        )
+        self.logs.append({"time": datetime.now().isoformat(), "message": message, "level": level})
         if level == "error":
             logger.error(message)
         else:
@@ -778,12 +810,21 @@ class NodeExecutor:
         return result
 
     def execute_history(self, node_data: dict) -> dict:
-        """Execute History node"""
+        """Execute History node.
+
+        The requested range is capped to the most recent MAX_HISTORY_BARS bars
+        for the chosen interval - a 10-year 1-minute range is ~900k rows and
+        must never be requested from the broker or held in workflow context.
+        """
+        from services.indicator_service import clamp_history_range, trim_records
+
         symbol = self.get_str(node_data, "symbol", "")
         exchange = self.get_str(node_data, "exchange", "NSE")
         interval = self.get_str(node_data, "interval", "5m")
         start_date = self.get_str(node_data, "startDate", "")
         end_date = self.get_str(node_data, "endDate", "")
+        if start_date and end_date:
+            start_date, end_date = clamp_history_range(start_date, end_date, interval)
         self.log(f"Getting history for: {symbol} ({interval})")
         result = self.client.get_history(
             symbol=symbol,
@@ -792,9 +833,294 @@ class NodeExecutor:
             start_date=start_date,
             end_date=end_date,
         )
-        self.log(f"History data received")
+        if isinstance(result, dict) and result.get("data"):
+            result = {**result, "data": trim_records(result["data"])}
+        self.log("History data received")
         self.store_output(node_data, result)
         return result
+
+    @staticmethod
+    def _history_error(
+        response: dict | None, symbol: str, interval: str, source: str
+    ) -> str | None:
+        """Return a caller-facing message when a history fetch failed.
+
+        Not every broker supports every interval, and an unsupported one comes
+        back as a broker error - which would otherwise surface downstream as a
+        misleading "no historical data available for this symbol/date range".
+        """
+        response = response or {}
+        if response.get("status") == "error" or response.get("error"):
+            detail = response.get("message") or response.get("error") or "unknown error"
+            hint = ""
+            if source != "db":
+                hint = (
+                    f" If your broker does not support the '{interval}' interval, use the "
+                    "Intervals node to list supported ones, or set Source to Historify DB "
+                    "to resample it locally."
+                )
+            return f"History fetch failed for {symbol} ({interval}): {detail}.{hint}"
+        return None
+
+    def execute_prior_period_ohlc(self, node_data: dict) -> dict:
+        """Execute Prior Period OHLC node.
+
+        Returns the last fully-closed hour/day/week/month candle for a
+        symbol (e.g. PDH/PDL/PDC for `previous_day`) without requiring the
+        workflow author to compute a relative date - Flow JSON has no date
+        arithmetic (see docs/prompt/flow-import-format.md), so that math
+        happens here in Python instead, over a rolling window that
+        comfortably absorbs weekends/holidays.
+        """
+        from services.indicator_service import (
+            fetch_history_cached,
+            history_window,
+            prior_period_ohlc,
+            trim_records,
+        )
+
+        symbol = self.context.interpolate(self.get_str(node_data, "symbol"))
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        period = self.get_str(node_data, "period", "previous_day")
+        source = self.get_str(node_data, "source", "api")
+        if not symbol:
+            return {"status": "error", "message": "Symbol is required"}
+
+        interval = "1h" if period == "previous_hour" else "D"
+        lookback_days = (
+            5
+            if period == "previous_hour"
+            else (60 if period == "previous_month" else 21 if period == "previous_week" else 10)
+        )
+        start_date, end_date = history_window(lookback_days=lookback_days, interval=interval)
+        self.log(f"Fetching {period} OHLC for: {symbol} ({exchange})")
+        result = fetch_history_cached(
+            self.client, symbol, exchange, interval, start_date, end_date, source
+        )
+        history_error = self._history_error(result, symbol, interval, source)
+        if history_error:
+            self.log(history_error, "error")
+            return {"status": "error", "message": history_error}
+        records = trim_records((result or {}).get("data") or [])
+        try:
+            row = prior_period_ohlc(records, period)
+        except ValueError as e:
+            self.log(f"Prior period OHLC error: {e}", "error")
+            return {"status": "error", "message": str(e)}
+
+        output = {
+            "status": "success",
+            "symbol": symbol,
+            "exchange": exchange,
+            **row,
+            "pdh": row.get("high"),
+            "pdl": row.get("low"),
+            "pdc": row.get("close"),
+        }
+        self.log(
+            f"{period} OHLC for {symbol}: H={output['pdh']} L={output['pdl']} "
+            f"C={output['pdc']} (bucket={output['date']})"
+        )
+        self.store_output(node_data, output)
+        return output
+
+    def execute_bar_offset(self, node_data: dict) -> dict:
+        """Execute Bar Offset node - OHLCV of the Nth closed bar back.
+
+        `offsetBars=0` is the most recent CLOSED bar (not the still-forming
+        one), `1` is one bar before that, etc. Works at any interval the
+        broker (or, with source="db", Historify) supports, so this alone
+        covers "N bars back" / "N hours back" / "N days back" style
+        lookback without a separate node per unit.
+        """
+        from services.indicator_service import (
+            bar_at_offset,
+            clamp_bars,
+            fetch_history_cached,
+            history_window,
+            trim_records,
+        )
+
+        symbol = self.context.interpolate(self.get_str(node_data, "symbol"))
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        interval = self.get_str(node_data, "interval", "D")
+        source = self.get_str(node_data, "source", "api")
+        offset_bars = clamp_bars(self.get_int(node_data, "offsetBars", 0) + 1, "offset bars") - 1
+        if not symbol:
+            return {"status": "error", "message": "Symbol is required"}
+
+        lookback_bars = offset_bars + 5
+        start_date, end_date = history_window(lookback_bars=lookback_bars, interval=interval)
+        self.log(f"Fetching bar offset {offset_bars} for {symbol} ({interval})")
+        result = fetch_history_cached(
+            self.client, symbol, exchange, interval, start_date, end_date, source
+        )
+        history_error = self._history_error(result, symbol, interval, source)
+        if history_error:
+            self.log(history_error, "error")
+            return {"status": "error", "message": history_error}
+        records = trim_records((result or {}).get("data") or [])
+        row = bar_at_offset(records, offset_bars, interval=interval)
+        if row is None:
+            return {
+                "status": "error",
+                "message": f"Not enough history to reach {offset_bars} bars back for {symbol}",
+            }
+
+        output = {
+            "status": "success",
+            "symbol": symbol,
+            "exchange": exchange,
+            "offsetBars": offset_bars,
+            "timestamp": row.get("timestamp"),
+            "open": row.get("open"),
+            "high": row.get("high"),
+            "low": row.get("low"),
+            "close": row.get("close"),
+            "volume": row.get("volume"),
+        }
+        self.log(f"Bar offset {offset_bars} for {symbol}: {output}")
+        self.store_output(node_data, output)
+        return output
+
+    def execute_indicator(self, node_data: dict) -> dict:
+        """Execute Indicator node - any openalgo.ta indicator over a symbol's
+        history, or nested on top of another Indicator node's output series
+        when `sourceSeries` is set.
+        """
+        from services.indicator_service import (
+            compute_indicator,
+            fetch_history_cached,
+            history_window,
+            trim_records,
+        )
+
+        indicator_name = self.get_str(node_data, "indicatorName", "sma")
+        lookback_bars = self.get_int(node_data, "lookbackBars", 100)
+        tail_bars = self.get_int(node_data, "tailBars", 5)
+        offset_bars = self.get_int(node_data, "offsetBars", 0)
+        source_field = self.get_str(node_data, "sourceField", "")
+        params_raw = self.get_str(node_data, "params", "{}")
+        try:
+            params = json.loads(params_raw) if params_raw.strip() else {}
+        except (ValueError, TypeError):
+            return {"status": "error", "message": f"Invalid params JSON: {params_raw}"}
+
+        source_series_raw = node_data.get("sourceSeries")
+        if source_series_raw not in (None, ""):
+            # Nested mode: compute over another indicator's own series output
+            # (e.g. {{rsi1.series}}, a list of {value/out0: number} rows, or a
+            # raw list of numbers) instead of fetching fresh history. This is
+            # what lets a workflow author build SMA(RSI(14), 9)-style
+            # composite indicators.
+            #
+            # Uses resolve_raw(), NOT interpolate()+json.loads(): interpolate
+            # always stringifies via Python str() (single-quoted repr for a
+            # list of dicts), which is not valid JSON and would silently fail
+            # json.loads on every real nested reference. resolve_raw returns
+            # the actual stored list object when the field is exactly one
+            # {{...}} token.
+            raw_list = (
+                self.context.resolve_raw(str(source_series_raw))
+                if isinstance(source_series_raw, str)
+                else source_series_raw
+            )
+            if isinstance(raw_list, str):
+                try:
+                    raw_list = json.loads(raw_list)
+                except (ValueError, TypeError):
+                    self.log(f"sourceSeries did not resolve to an array: {raw_list!r}", "error")
+                    return {
+                        "status": "error",
+                        "message": "sourceSeries did not resolve to a JSON array",
+                    }
+            if not isinstance(raw_list, list):
+                self.log(f"sourceSeries must resolve to an array, got: {raw_list!r}", "error")
+                return {"status": "error", "message": "sourceSeries must resolve to an array"}
+            numeric_series = []
+            for item in raw_list:
+                if isinstance(item, dict):
+                    # `value`/`out0` come from another Indicator node; `close`
+                    # (or an explicit sourceField) lets a raw History array be
+                    # fed in directly, e.g. sourceSeries={{h.data}}.
+                    if source_field:
+                        value = item.get(source_field)
+                    else:
+                        value = next(
+                            (
+                                item[k]
+                                for k in ("value", "out0", "close")
+                                if item.get(k) is not None
+                            ),
+                            None,
+                        )
+                else:
+                    value = item
+                if value is None:
+                    continue
+                try:
+                    numeric_series.append(float(value))
+                except (TypeError, ValueError):
+                    # Keep bad node input contained: without this the
+                    # ValueError escapes execute_indicator and aborts the
+                    # whole workflow instead of failing just this node.
+                    self.log(f"sourceSeries contains a non-numeric value: {value!r}", "error")
+                    return {
+                        "status": "error",
+                        "message": f"sourceSeries contains a non-numeric value: {value!r}",
+                    }
+            self.log(
+                f"Computing nested {indicator_name} over {len(numeric_series)} upstream values"
+            )
+            try:
+                output = compute_indicator(
+                    None,
+                    indicator_name,
+                    params=params,
+                    tail_bars=tail_bars,
+                    source_series=numeric_series,
+                    offset_bars=offset_bars,
+                )
+            except ValueError as e:
+                self.log(f"Indicator error: {e}", "error")
+                return {"status": "error", "message": str(e)}
+            self.log(f"{indicator_name} (nested) latest: {output.get('latest')}")
+            self.store_output(node_data, output)
+            return output
+
+        symbol = self.context.interpolate(self.get_str(node_data, "symbol"))
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        interval = self.get_str(node_data, "interval", "D")
+        source = self.get_str(node_data, "source", "api")
+        if not symbol:
+            return {"status": "error", "message": "Symbol is required"}
+
+        start_date, end_date = history_window(lookback_bars=lookback_bars, interval=interval)
+        self.log(f"Computing {indicator_name} for {symbol} ({interval}, {lookback_bars} bars)")
+        history = fetch_history_cached(
+            self.client, symbol, exchange, interval, start_date, end_date, source
+        )
+        history_error = self._history_error(history, symbol, interval, source)
+        if history_error:
+            self.log(history_error, "error")
+            return {"status": "error", "message": history_error}
+        records = trim_records((history or {}).get("data") or [])
+        try:
+            output = compute_indicator(
+                records,
+                indicator_name,
+                params=params,
+                lookback_bars=lookback_bars,
+                tail_bars=tail_bars,
+                offset_bars=offset_bars,
+            )
+        except ValueError as e:
+            self.log(f"Indicator error: {e}", "error")
+            return {"status": "error", "message": str(e)}
+
+        self.log(f"{indicator_name} latest: {output.get('latest')}")
+        self.store_output(node_data, output)
+        return output
 
     def execute_order_book(self, node_data: dict) -> dict:
         """Execute OrderBook node"""
@@ -1165,6 +1491,17 @@ class NodeExecutor:
 
         return {"status": "success", "variable": var_name, "value": var_value}
 
+    def execute_whatsapp_alert(self, node_data: dict) -> dict:
+        """Execute WhatsApp Alert node"""
+        message = self.context.interpolate(node_data.get("message", ""))
+        to = self.context.interpolate(node_data.get("to", "")) or None
+        self.log(f"Sending WhatsApp alert to {to or 'self'}: {message}")
+        result = self.client.whatsapp(message=message, to=to)
+        self.log(
+            f"WhatsApp result: {result}", "info" if result.get("status") == "success" else "error"
+        )
+        return result
+
     def execute_telegram_alert(self, node_data: dict) -> dict:
         """Execute Telegram Alert node"""
         message = self.context.interpolate(node_data.get("message", ""))
@@ -1319,9 +1656,7 @@ class NodeExecutor:
         data = result.get("data", {}) or {}
         available = float(data.get("availablecash", 0) or 0)
         condition_met = available >= min_available
-        self.log(
-            f"Fund check: available={available} >= {min_available} = {condition_met}"
-        )
+        self.log(f"Fund check: available={available} >= {min_available} = {condition_met}")
         return {"status": "success", "condition": condition_met, "available": available}
 
     def execute_price_condition(self, node_data: dict) -> dict:
@@ -1357,9 +1692,7 @@ class NodeExecutor:
             field_value = float(data.get(field, 0) or 0)
 
         condition_met = self._compare(field_value, operator, threshold)
-        self.log(
-            f"Price check: {field}={field_value} {operator} {threshold} = {condition_met}"
-        )
+        self.log(f"Price check: {field}={field_value} {operator} {threshold} = {condition_met}")
         return {
             "status": "success",
             "condition": condition_met,
@@ -1368,18 +1701,78 @@ class NodeExecutor:
             "field_value": field_value,
         }
 
+    def execute_var_condition(self, node_data: dict) -> dict:
+        """Execute Var Condition node - compare any two interpolated values.
+
+        Unlike `priceCondition` (which always re-fetches a live quote field),
+        this compares whatever the caller puts on either side after
+        `{{...}}` interpolation - a workflow variable, an indicator output
+        (e.g. `{{rsi.latest.value}}`), a previous-day level
+        (`{{pdhpdl.pdh}}`), or a literal number. Fills the gap flagged in
+        docs/prompt/flow-import-format.md 8.5 ("wait for a varCondition
+        node").
+        """
+        left_raw = self.get_str(node_data, "leftValue", "0")
+        right_raw = self.get_str(node_data, "rightValue", "0")
+        operator = self.get_str(node_data, "operator", ">")
+
+        # Never coerce an unresolvable operand to 0.0. A misspelled variable
+        # or an indicator that returned no value would otherwise compare as
+        # "0" and route a real trading branch on a value the user never
+        # configured. Fail the condition loudly instead.
+        try:
+            left = float(left_raw)
+        except (TypeError, ValueError):
+            self.log(
+                f"Var check aborted: left operand did not resolve to a number: {left_raw!r}",
+                "error",
+            )
+            return {
+                "status": "error",
+                "condition": False,
+                "message": f"leftValue did not resolve to a number: {left_raw!r}",
+            }
+        try:
+            right = float(right_raw)
+        except (TypeError, ValueError):
+            self.log(
+                f"Var check aborted: right operand did not resolve to a number: {right_raw!r}",
+                "error",
+            )
+            return {
+                "status": "error",
+                "condition": False,
+                "message": f"rightValue did not resolve to a number: {right_raw!r}",
+            }
+
+        condition_met = self._compare(left, operator, right)
+        self.log(f"Var check: {left} {operator} {right} = {condition_met}")
+        return {
+            "status": "success",
+            "condition": condition_met,
+            "left": left,
+            "operator": operator,
+            "right": right,
+        }
+
     @staticmethod
     def _compare(left: float, operator: str, right: float) -> bool:
         """Compare two numbers using either symbol operators (>, <, ==, !=,
         >=, <=) used by the UI or word operators (gt, lt, eq, neq, gte, lte)
         used by some legacy node configs. Unknown operator → False."""
         ops = {
-            ">": left > right, "gt": left > right,
-            "<": left < right, "lt": left < right,
-            "==": left == right, "eq": left == right,
-            "!=": left != right, "neq": left != right,
-            ">=": left >= right, "gte": left >= right,
-            "<=": left <= right, "lte": left <= right,
+            ">": left > right,
+            "gt": left > right,
+            "<": left < right,
+            "lt": left < right,
+            "==": left == right,
+            "eq": left == right,
+            "!=": left != right,
+            "neq": left != right,
+            ">=": left >= right,
+            "gte": left >= right,
+            "<=": left <= right,
+            "lte": left <= right,
         }
         return ops.get(operator, False)
 
@@ -2095,6 +2488,12 @@ def execute_node_chain(
         result = executor.execute_open_position(node_data)
     elif node_type == "history":
         result = executor.execute_history(node_data)
+    elif node_type == "priorPeriodOhlc":
+        result = executor.execute_prior_period_ohlc(node_data)
+    elif node_type == "barOffset":
+        result = executor.execute_bar_offset(node_data)
+    elif node_type == "indicator":
+        result = executor.execute_indicator(node_data)
     elif node_type == "symbol":
         result = executor.execute_symbol(node_data)
     elif node_type == "optionSymbol":
@@ -2140,6 +2539,8 @@ def execute_node_chain(
         pass
     elif node_type == "telegramAlert":
         result = executor.execute_telegram_alert(node_data)
+    elif node_type == "whatsappAlert":
+        result = executor.execute_whatsapp_alert(node_data)
     elif node_type == "httpRequest":
         result = executor.execute_http_request(node_data)
     elif node_type == "positionCheck":
@@ -2148,6 +2549,8 @@ def execute_node_chain(
         result = executor.execute_fund_check(node_data)
     elif node_type == "priceCondition":
         result = executor.execute_price_condition(node_data)
+    elif node_type == "varCondition":
+        result = executor.execute_var_condition(node_data)
     elif node_type == "timeWindow":
         result = executor.execute_time_window(node_data)
     elif node_type == "timeCondition":
@@ -2156,6 +2559,8 @@ def execute_node_chain(
         result = executor.execute_price_alert(node_data)
     elif node_type == "webhookTrigger":
         executor.log("Webhook trigger activated")
+    elif node_type == "orderUpdateTrigger":
+        executor.log("Order-update trigger activated")
     # Streaming Nodes
     elif node_type == "subscribeLtp":
         result = executor.execute_subscribe_ltp(node_data)
@@ -2165,30 +2570,40 @@ def execute_node_chain(
         result = executor.execute_subscribe_depth(node_data)
     elif node_type == "unsubscribe":
         result = executor.execute_unsubscribe(node_data)
-    elif node_type == "andGate":
+    elif node_type in ("andGate", "orGate", "notGate"):
+        # Gates must wait until every wired input has actually been evaluated.
+        # The graph walk is depth-first, so the first input to finish would
+        # otherwise reach the gate while the others are still unevaluated:
+        # the gate fired on partial inputs ("A AND B" firing on A alone) AND
+        # fired again for each remaining input, duplicating whatever is
+        # downstream - two orders from one crossover. Skipping here is safe
+        # because the later input's own traversal reaches this gate again,
+        # by which point every source has a stored result.
+        #
+        # A gate is also combinational: exactly one result per run. It is
+        # commonly reachable by several paths (one per input edge, plus a
+        # pass-through from a shared parent), and each later arrival would
+        # otherwise re-evaluate it and re-fire everything downstream.
+        if context.get_condition_result(node_id) is not None:
+            return
         incoming_edges = incoming_edge_map.get(node_id, [])
         input_results = []
+        pending = 0
         for edge in incoming_edges:
             source_result = context.get_condition_result(edge.get("source"))
-            if source_result is not None:
+            if source_result is None:
+                pending += 1
+            else:
                 input_results.append(source_result)
-        result = executor.execute_and_gate(node_data, input_results)
-    elif node_type == "orGate":
-        incoming_edges = incoming_edge_map.get(node_id, [])
-        input_results = []
-        for edge in incoming_edges:
-            source_result = context.get_condition_result(edge.get("source"))
-            if source_result is not None:
-                input_results.append(source_result)
-        result = executor.execute_or_gate(node_data, input_results)
-    elif node_type == "notGate":
-        incoming_edges = incoming_edge_map.get(node_id, [])
-        input_results = []
-        for edge in incoming_edges:
-            source_result = context.get_condition_result(edge.get("source"))
-            if source_result is not None:
-                input_results.append(source_result)
-        result = executor.execute_not_gate(node_data, input_results)
+        if pending:
+            executor.log(f"{node_type}: waiting for {pending} more input(s) before evaluating")
+            return
+        if node_type == "andGate":
+            result = executor.execute_and_gate(node_data, input_results)
+        elif node_type == "orGate":
+            result = executor.execute_or_gate(node_data, input_results)
+        else:
+            result = executor.execute_not_gate(node_data, input_results)
     else:
         executor.log(f"Unknown node type: {node_type}", "warning")
 
@@ -2205,14 +2620,24 @@ def execute_node_chain(
         context.set_condition_result(node_id, condition_met)
         TRUE_HANDLES = {"yes", "true"}
         FALSE_HANDLES = {"no", "false"}
+        # A condition that could not be evaluated (e.g. an operand that did
+        # not resolve to a number) must take NEITHER branch. Treating it as
+        # False would route the else-path — on a "RSI < 70 -> BUY else SELL"
+        # graph a typo'd variable would silently fire the SELL. Pass-through
+        # edges (logging/alerting) still run so the failure is visible.
+        errored = result.get("status") == "error"
         filtered_edges = []
         for edge in edges_to_follow:
             source_handle = edge.get("sourceHandle", "") or ""
-            if condition_met and source_handle in TRUE_HANDLES:
+            is_branch_handle = source_handle in TRUE_HANDLES or source_handle in FALSE_HANDLES
+            if errored:
+                if not is_branch_handle:
+                    filtered_edges.append(edge)
+            elif condition_met and source_handle in TRUE_HANDLES:
                 filtered_edges.append(edge)
             elif not condition_met and source_handle in FALSE_HANDLES:
                 filtered_edges.append(edge)
-            elif source_handle not in TRUE_HANDLES and source_handle not in FALSE_HANDLES:
+            elif not is_branch_handle:
                 # Edge has no condition handle — pass-through (e.g. a Log node
                 # wired to the node's main bottom handle, not the True/False forks).
                 filtered_edges.append(edge)
@@ -2277,7 +2702,7 @@ def execute_workflow(
             edges = workflow.edges or []
 
             # Find trigger node
-            trigger_types = ["start", "webhookTrigger", "priceAlert"]
+            trigger_types = ["start", "webhookTrigger", "priceAlert", "orderUpdateTrigger"]
             start_node = next((n for n in nodes if n.get("type") in trigger_types), None)
             if not start_node:
                 raise Exception("No trigger node found")

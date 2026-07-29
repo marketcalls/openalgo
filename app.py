@@ -735,6 +735,15 @@ def setup_environment(app):
                 logger.error(f"Failed to initialize Flow scheduler: {e}")
 
             try:
+                from services.flow_order_update_monitor_service import (
+                    restore_order_update_watches,
+                )
+
+                restore_order_update_watches()
+            except Exception as e:
+                logger.error(f"Failed to restore Flow order-update watches: {e}")
+
+            try:
                 from services.historify_scheduler_service import init_historify_scheduler
 
                 init_historify_scheduler(socketio=socketio)
