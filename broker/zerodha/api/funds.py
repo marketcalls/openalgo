@@ -41,16 +41,6 @@ def get_margin_data(auth_token):
         return {}
 
     try:
-        # Kite's "net" is total available margin (cash + collateral - utilised debits),
-        # which already double-counts collateral against the separately reported
-        # "collateral" field below. "availablecash" must be the actual free cash
-        # balance, so use available.cash, not net. See GitHub issue #1582.
-        total_available_margin = sum(
-            [
-                margin_data["data"]["commodity"]["available"]["cash"],
-                margin_data["data"]["equity"]["available"]["cash"],
-            ]
-        )
         # Calculate the sum of debits for used margin
         total_used_margin = sum(
             [
@@ -66,6 +56,19 @@ def get_margin_data(auth_token):
                 margin_data["data"]["equity"]["available"]["collateral"],
             ]
         )
+
+        # "availablecash" must be the actual free cash balance, not total
+        # margin. Kite's own available.cash field has been observed to
+        # intermittently report 0 for a funded account even though the
+        # top-level "net" stays correct (see GitHub issue #1582 discussion).
+        # Kite defines net = cash + collateral - debits, so derive cash from
+        # the always-reliable net/debits/collateral instead of trusting
+        # available.cash directly -- mathematically identical when cash is
+        # healthy, and self-heals when it isn't.
+        total_net_margin = sum(
+            [margin_data["data"]["commodity"]["net"], margin_data["data"]["equity"]["net"]]
+        )
+        total_available_margin = total_net_margin + total_used_margin - total_collateral
 
         # Fetch PnL from position book
         total_realised = 0
