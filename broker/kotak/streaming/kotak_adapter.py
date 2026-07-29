@@ -14,6 +14,18 @@ from .kotak_websocket import KotakWebSocket
 
 logger = get_logger(__name__)
 
+# HSI scrip operations: sub_type -> (feed family, is_unsubscribe). The family
+# groups a subscribe with its matching unsubscribe so the batcher can collapse
+# them per scrip, while leaving quote/depth/index independent of each other.
+_SCRIP_OPS = {
+    "mws": ("quote", False),
+    "mwu": ("quote", True),
+    "dps": ("depth", False),
+    "dpu": ("depth", True),
+    "ifs": ("index", False),
+    "ifu": ("index", True),
+}
+
 
 class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """
@@ -56,7 +68,9 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._symbol_modes = {}  # {(kotak_exchange, token): set of active modes}
 
         # Batch subscription management - debounced fan-in so a burst of
-        # subscribe() calls collapses into one HSI frame per sub_type.
+        # subscribe()/unsubscribe() calls collapses into one HSI frame per
+        # sub_type. Subscribes and unsubscribes share one queue so their
+        # relative order per scrip is preserved (see _process_batch_subscriptions).
         # Each entry: {"kotak_exchange": str, "token": str, "sub_type": str, "channelnum": str}
         self._subscription_queue = []
         self._batch_timer = None
@@ -66,9 +80,26 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._max_batch_size = 100  # HSI MAX_SCRIPS limit per frame
 
     def initialize(self, broker_name: str, user_id: str, auth_data=None):
-        """Initialize adapter for a specific user/session - following AliceBlue pattern."""
+        """Initialize adapter for a specific user/session - following AliceBlue pattern.
+
+        Safe to call again on a live adapter: any existing client is closed
+        first. Without that, a re-initialisation would rebind _ws_client and
+        orphan the previous WebSocketApp with its socket and run thread still
+        alive, and nothing would ever close them.
+        """
         self._broker_name = broker_name.lower()
         self._user_id = user_id
+
+        # Close outside the adapter lock — close() joins the run thread, whose
+        # callbacks take that same lock (mirrors _attempt_reconnection).
+        old_client = self._ws_client
+        if old_client is not None:
+            logger.debug("initialize() called with an existing client — closing it first")
+            self._ws_client = None
+            try:
+                old_client.close()
+            except Exception as e:
+                logger.warning(f"Error closing previous WebSocket client on re-initialize: {e}")
 
         # Load authentication from DB
         auth_string = get_auth_token(user_id, bypass_cache=True)
@@ -508,15 +539,25 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not self._subscription_queue:
                 return
 
-            # Group by (sub_type, channelnum) and dedupe per group so we
-            # never send the same scrip twice in one frame.
-            groups = {}
+            # Collapse to the LAST operation per scrip per feed family. A
+            # subscribe and an unsubscribe for the same scrip land in separate
+            # frames, and emitting both would apply them in group order rather
+            # than call order — "sub, unsub, sub" within one window would leave
+            # the scrip unsubscribed. Keeping only the final op per family is
+            # both correct and fewer frames. Families are independent: the same
+            # scrip can hold a quote and a depth subscription at once.
+            # dict preserves the first-appearance position while the value is
+            # overwritten, so frame order still follows call order.
+            latest = {}
             for sub in self._subscription_queue:
-                key = (sub["sub_type"], sub["channelnum"])
-                groups.setdefault(key, [])
-                pair = (sub["kotak_exchange"], sub["token"])
-                if pair not in groups[key]:
-                    groups[key].append(pair)
+                family, _ = _SCRIP_OPS.get(sub["sub_type"], (sub["sub_type"], False))
+                key = (sub["kotak_exchange"], sub["token"], sub["channelnum"], family)
+                latest[key] = sub["sub_type"]
+
+            groups = {}
+            for (kotak_exchange, token, channelnum, _family), sub_type in latest.items():
+                groups.setdefault((sub_type, channelnum), []).append((kotak_exchange, token))
+
             self._subscription_queue.clear()
             ws = self._ws_client
 
@@ -525,17 +566,20 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return
 
         for (sub_type, channelnum), scrips in groups.items():
+            _, is_unsub = _SCRIP_OPS.get(sub_type, (sub_type, False))
+            send = ws.unsubscribe_batch if is_unsub else ws.subscribe_batch
+            verb = "unsubscribing" if is_unsub else "subscribing"
             for i in range(0, len(scrips), self._max_batch_size):
                 chunk = scrips[i : i + self._max_batch_size]
                 try:
                     logger.info(
-                        f"Batch subscribing {len(chunk)} scrips "
+                        f"Batch {verb} {len(chunk)} scrips "
                         f"(sub_type={sub_type}, channel={channelnum})"
                     )
-                    ws.subscribe_batch(chunk, sub_type=sub_type, channelnum=channelnum)
+                    send(chunk, sub_type=sub_type, channelnum=channelnum)
                 except Exception as e:
                     logger.error(
-                        f"Batch subscribe failed for sub_type={sub_type}: {e}"
+                        f"Batch {verb} failed for sub_type={sub_type}: {e}"
                     )
 
     def connect(self):
@@ -575,7 +619,9 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._reconnect_timer = None
                 logger.debug("Cancelled pending reconnection timer")
 
-            # Cancel any pending batch subscription timer and drop unsent items
+            # Cancel any pending batch timer and drop unsent items. Safe for
+            # queued unsubscribes too: the socket is closing, which drops every
+            # subscription on it anyway.
             if self._batch_timer:
                 self._batch_timer.cancel()
                 self._batch_timer = None
@@ -1023,12 +1069,11 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         self._symbol_state.pop(symbol_key, None)
                         logger.debug(f"Cleaned up mapping for: {exchange}:{symbol}")
 
-            # Send unsubscribe outside lock to avoid deadlock
+            # Enqueue outside lock — batched by _process_batch_subscriptions,
+            # so tearing down a large watchlist costs one frame, not one each.
             if should_unsub_broker:
-                ws = self._ws_client
-                if ws:
-                    ws.unsubscribe(kotak_exchange, token, sub_type="mwu")
-                    logger.debug(f"Unsubscribed from broker: {exchange}:{symbol}")
+                self._enqueue_subscription(kotak_exchange, token, sub_type="mwu")
+                logger.debug(f"Queued broker unsubscribe: {exchange}:{symbol}")
 
         except Exception as e:
             logger.error(f"Error unsubscribing from quote for {exchange}:{symbol}: {e}")
@@ -1116,12 +1161,10 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         self._symbol_state.pop(symbol_key, None)
                         logger.debug(f"Cleaned up mapping for: {exchange}:{symbol}")
 
-            # Send unsubscribe outside lock to avoid deadlock
+            # Enqueue outside lock — batched by _process_batch_subscriptions.
             if should_unsub_broker:
-                ws = self._ws_client
-                if ws:
-                    ws.unsubscribe(kotak_exchange, token, sub_type="dpu")
-                    logger.debug(f"Unsubscribed from broker depth: {exchange}:{symbol}")
+                self._enqueue_subscription(kotak_exchange, token, sub_type="dpu")
+                logger.debug(f"Queued broker depth unsubscribe: {exchange}:{symbol}")
 
         except Exception as e:
             logger.error(f"Error unsubscribing from depth for {exchange}:{symbol}: {e}")

@@ -41,25 +41,21 @@ import {
   daysToYears,
   nearestLegDays,
   netCredit,
+  payoffPriceRange,
   probabilityOfProfit,
   type StrategyLeg,
   totalPnlAt,
   totalPremium,
 } from '@/lib/strategyMath'
 import type { Direction, StrategyTemplate } from '@/lib/strategyTemplates'
+import {
+  canReuseChainContract,
+  normalizeExpiryCode,
+  resolveListedContract,
+} from '@/lib/templateResolution'
 import { useAuthStore } from '@/stores/authStore'
 import type { OptionChainResponse } from '@/types/option-chain'
 import { showToast } from '@/utils/toast'
-
-// Convert DD-MMM-YYYY (API-returned expiry) to DDMMMYY (OpenAlgo symbol format).
-function convertExpiryForSymbol(expiry: string): string {
-  if (!expiry) return ''
-  const parts = expiry.split('-')
-  if (parts.length === 3) {
-    return `${parts[0]}${parts[1].toUpperCase()}${parts[2].slice(-2)}`
-  }
-  return expiry.replace(/-/g, '').toUpperCase()
-}
 
 function optionExchangeFor(exchange: string): string {
   if (exchange === 'NFO' || exchange === 'NSE_INDEX') return 'NFO'
@@ -143,6 +139,7 @@ export default function StrategyBuilder() {
   const [daysElapsed, setDaysElapsed] = useState(0)
 
   const [greeksByLeg, setGreeksByLeg] = useState<Record<string, LegGreeks>>({})
+  const [payoffClock, setPayoffClock] = useState(() => Date.now())
 
   const [editLegId, setEditLegId] = useState<string | null>(null)
   const [marginRequired, setMarginRequired] = useState<number | null>(null)
@@ -296,7 +293,7 @@ export default function StrategyBuilder() {
         if (cancelled) return
         const normaliseList = (list: string[]) =>
           // Preserve order but drop empties and de-dupe after normalisation.
-          Array.from(new Set(list.filter(Boolean).map(convertExpiryForSymbol)))
+          Array.from(new Set(list.filter(Boolean).map(normalizeExpiryCode)))
         if (
           optsRes.status === 'success' &&
           Array.isArray(optsRes.data) &&
@@ -336,7 +333,7 @@ export default function StrategyBuilder() {
     setIsRefreshing(true)
     try {
       const exchange = underlyingExchangeFor(selectedExchange, selectedUnderlying)
-      const expiryCode = convertExpiryForSymbol(selectedExpiry)
+      const expiryCode = normalizeExpiryCode(selectedExpiry)
       const data = await queuedFetch(() =>
         optionChainApi.getOptionChain(apiKey, selectedUnderlying, exchange, expiryCode, 20)
       )
@@ -414,7 +411,7 @@ export default function StrategyBuilder() {
     ;(async () => {
       try {
         const exchange = underlyingExchangeFor(selectedExchange, selectedUnderlying)
-        const expiryCode = convertExpiryForSymbol(selectedExpiry)
+        const expiryCode = normalizeExpiryCode(selectedExpiry)
         const res = await queuedFetch(() =>
           apiClient.post<{
             status: string
@@ -462,20 +459,25 @@ export default function StrategyBuilder() {
     return Number.isFinite(minDiff) ? minDiff : 50
   }, [chainData])
 
+  useEffect(() => {
+    const interval = window.setInterval(() => setPayoffClock(Date.now()), 60_000)
+    return () => window.clearInterval(interval)
+  }, [])
+
   // DTE of the header-selected expiry (for the metadata badge only).
   const rawDays = useMemo(() => {
     if (!selectedExpiry) return null
-    const expiryCode = convertExpiryForSymbol(selectedExpiry)
-    return daysToExpiry(expiryCode)
-  }, [selectedExpiry])
+    const expiryCode = normalizeExpiryCode(selectedExpiry)
+    return daysToExpiry(expiryCode, new Date(payoffClock))
+  }, [selectedExpiry, payoffClock])
 
   // For the payoff curve: "At Expiry" uses the NEAREST leg's days-to-expiry
   // so calendar / diagonal spreads render correctly (the far leg retains
   // remaining time value). Falls back to the header expiry when no legs yet.
   const nearestDays = useMemo(() => {
     if (legs.length === 0) return rawDays ?? 0
-    return nearestLegDays(legs)
-  }, [legs, rawDays])
+    return nearestLegDays(legs, new Date(payoffClock))
+  }, [legs, rawDays, payoffClock])
 
   // Simulator caps "days forward" to the nearest expiry so the T+0 slider
   // can't go past the first leg's expiration.
@@ -488,12 +490,19 @@ export default function StrategyBuilder() {
   // Shifted spot for the payoff calculations
   const simulatedSpot = spotPrice !== null ? spotPrice * (1 + spotShiftPct / 100) : 0
 
+  const greeksLegFingerprint = useMemo(
+    () =>
+      legs
+        .filter((leg) => leg.segment === 'OPTION' && leg.symbol)
+        .map((leg) => `${leg.id}:${leg.symbol}:${leg.active ? 1 : 0}`)
+        .join('|'),
+    [legs]
+  )
+
   // Batch load Greeks for all legs (also used to fill ATM IV for the header)
-  // We intentionally key this fetch on `legs.length` (plus exchange/underlying/atm)
-  // rather than the full `legs` array: the latest `legs` snapshot is read inside
-  // the async body, and depending on the whole array would refire this
-  // un-debounced /multioptiongreeks network call on every leg-object edit.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: key on legs.length to avoid refiring the un-debounced Greeks fetch on every leg edit; the closure reads the latest legs at call time
+  // Refetch when the option contracts or their active state change, while
+  // ignoring payoff-neutral edits such as quantity, side, or entry premium.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: greeksLegFingerprint intentionally captures the contract fields read by this effect without refetching for every leg-object edit
   useEffect(() => {
     if (!apiKey || legs.length === 0) {
       setGreeksByLeg({})
@@ -580,7 +589,7 @@ export default function StrategyBuilder() {
     return () => {
       cancelled = true
     }
-  }, [apiKey, legs.length, selectedExchange, selectedUnderlying, atmStrike])
+  }, [apiKey, greeksLegFingerprint, selectedExchange, selectedUnderlying, atmStrike])
 
   // Margin fetch — whenever legs change, call the broker margin service.
   // Debounced so rapid edits don't hammer the endpoint.
@@ -751,14 +760,64 @@ export default function StrategyBuilder() {
   )
 
   const handleTemplateConfirm = useCallback(
-    (resolved: ResolvedTemplateLeg[], totalLots: number) => {
+    async (resolved: ResolvedTemplateLeg[], totalLots: number) => {
       if (!lotSize) {
         showToast.error('Lot size not detected — load the chain first')
         return
       }
-      const newLegs: StrategyLeg[] = resolved.map((r) => {
+      if (!apiKey || !chainData) {
+        showToast.error('Option chain not loaded yet')
+        return
+      }
+
+      const chainsByExpiry = new Map<string, OptionChainResponse['chain']>([
+        [normalizeExpiryCode(chainData.expiry_date || selectedExpiry), chainData.chain],
+      ])
+      const requiredExpiries = Array.from(
+        new Set(resolved.map((leg) => normalizeExpiryCode(leg.resolvedExpiry)))
+      )
+      try {
+        for (const legExpiry of requiredExpiries) {
+          if (chainsByExpiry.has(legExpiry)) continue
+          const farChain = await queuedFetch(() =>
+            optionChainApi.getOptionChain(
+              apiKey,
+              selectedUnderlying,
+              underlyingExchangeFor(selectedExchange, selectedUnderlying),
+              legExpiry,
+              20
+            )
+          )
+          if (farChain.status !== 'success' || !Array.isArray(farChain.chain)) {
+            showToast.error(`Unable to validate option contracts for ${legExpiry}`)
+            return
+          }
+          chainsByExpiry.set(legExpiry, farChain.chain)
+        }
+      } catch {
+        showToast.error('Unable to validate every template contract')
+        return
+      }
+
+      const validated = resolved.map((leg) => {
+        const legExpiry = normalizeExpiryCode(leg.resolvedExpiry)
+        const contract = resolveListedContract(
+          chainsByExpiry.get(legExpiry) ?? [],
+          leg.resolvedStrike,
+          leg.optionType
+        )
+        return contract ? { leg, legExpiry, contract } : null
+      })
+      const missing = validated.find((item) => item === null)
+      if (missing) {
+        showToast.error('A required option contract is not available for this template')
+        return
+      }
+
+      const newLegs: StrategyLeg[] = validated.map((item) => {
+        if (item === null) throw new Error('Validated template contract is missing')
+        const { leg: r, legExpiry, contract } = item
         // Each leg keeps its own expiry — calendars / diagonals span two.
-        const legExpiry = convertExpiryForSymbol(r.resolvedExpiry)
         // Preserve the template's per-leg ratio (e.g. butterfly body = 2 lots,
         // wings = 1 lot) and scale it by the user's chosen lot multiplier.
         // Without this, all legs come in at `totalLots` and ratio spreads /
@@ -773,19 +832,17 @@ export default function StrategyBuilder() {
           expiry: legExpiry,
           strike: r.resolvedStrike,
           optionType: r.optionType,
-          price: r.price,
+          price: contract.ltp,
           iv: 0,
           active: true,
-          symbol:
-            r.symbol ??
-            buildOptionSymbol(selectedUnderlying, legExpiry, r.resolvedStrike, r.optionType),
+          symbol: contract.symbol,
         }
       })
       setLegs((prev) => [...prev, ...newLegs])
       setTemplateDialogOpen(false)
       setActiveTemplate(null)
     },
-    [lotSize, selectedUnderlying]
+    [lotSize, apiKey, chainData, selectedExpiry, selectedUnderlying, selectedExchange]
   )
 
   // Manual leg add
@@ -795,7 +852,7 @@ export default function StrategyBuilder() {
         showToast.error('Lot size not detected')
         return
       }
-      const expiryCode = convertExpiryForSymbol(draft.expiry)
+      const expiryCode = normalizeExpiryCode(draft.expiry)
 
       // Prefer the broker-provided symbol from the live chain whenever
       // possible — some brokers (notably crypto exchanges like Delta) don't
@@ -850,12 +907,10 @@ export default function StrategyBuilder() {
         zeroCrossings: [],
       }
     }
-    // ±10% band around spot — tight enough to focus on the strategy's
-    // action zone and wide enough to contain the ±2σ shading for typical
-    // NIFTY/BANKNIFTY IV on weekly/monthly expiries. For very high-IV
-    // names or long-dated expiries the σ bands may extend beyond — the
-    // range can be widened later if needed.
-    const range: [number, number] = [spotPrice * 0.9, spotPrice * 1.1]
+    // Keep every active strike and the complete ±2σ context in view. This
+    // prevents wide structures and high-IV expiries from losing breakevens,
+    // payoff kinks, or volatility markers outside a fixed percentage window.
+    const range = payoffPriceRange(spotPrice, legs, atmIv ?? 0, simulatedYearsToNearExpiry)
     // "At Expiry" curve → advance calendar time to the nearest leg's expiry;
     // far-dated legs (calendar / diagonal) keep their remaining time value.
     // "T+0" curve → advance by the simulator's days-forward value.
@@ -869,7 +924,15 @@ export default function StrategyBuilder() {
       ivShiftPct,
       atmIv ?? 0
     )
-  }, [legs, spotPrice, nearestDays, clampedDaysElapsed, ivShiftPct, atmIv])
+  }, [
+    legs,
+    spotPrice,
+    nearestDays,
+    clampedDaysElapsed,
+    ivShiftPct,
+    atmIv,
+    simulatedYearsToNearExpiry,
+  ])
 
   const pop = useMemo(() => {
     if (!spotPrice || atmIv === null || simulatedYearsToNearExpiry <= 0) return 0
@@ -901,14 +964,17 @@ export default function StrategyBuilder() {
       // Normalise expiry to the OpenAlgo DDMMMYY format — the dropdown may
       // have supplied an API-format value like "21-APR-26" which would wreck
       // symbol construction and leg-row rendering otherwise.
-      const normalisedExpiry = convertExpiryForSymbol(updated.expiry)
+      const normalisedExpiry = normalizeExpiryCode(updated.expiry)
 
       // Prefer the live chain's symbol whenever available so crypto / non-
       // standard option symbols stay correct across edits.
       let rebuiltSymbol: string
       if (updated.segment === 'OPTION' && updated.strike !== undefined && updated.optionType) {
-        const row = chainData?.chain.find((s) => s.strike === updated.strike)
-        const side = updated.optionType === 'CE' ? row?.ce : row?.pe
+        const side =
+          chainData &&
+          canReuseChainContract(normalisedExpiry, chainData.expiry_date || selectedExpiry)
+            ? resolveListedContract(chainData.chain, updated.strike, updated.optionType)
+            : null
         rebuiltSymbol =
           side?.symbol ??
           buildOptionSymbol(
@@ -928,7 +994,7 @@ export default function StrategyBuilder() {
       )
       setEditLegId(null)
     },
-    [selectedUnderlying, chainData]
+    [selectedUnderlying, selectedExpiry, chainData]
   )
   const toggleAll = useCallback((active: boolean) => {
     setLegs((prev) => prev.map((l) => ({ ...l, active })))

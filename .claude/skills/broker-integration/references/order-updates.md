@@ -9,7 +9,7 @@ much smaller. Do not confuse the two:
 | Subscription | per symbol + mode (1/2/3) | one `subscribe_orders` for the whole account |
 | Registered in | `websocket_proxy/__init__.py` (`register_adapter`) | `services/order_update_service.py` (`_BROKER_FACTORIES`) |
 | You implement | connect, subscribe, unsubscribe, disconnect, parsing | **3 methods** |
-| Optional? | effectively required | yes — 11 of 35 brokers have one |
+| Optional? | effectively required | yes — 12 of 35 brokers have one |
 
 Client-facing protocol (see `docs/prompt/websockets-format.md`): the client
 sends `{"action": "subscribe_orders"}` after authenticating and receives
