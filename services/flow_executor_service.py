@@ -192,9 +192,7 @@ class NodeExecutor:
 
     def log(self, message: str, level: str = "info"):
         """Add log entry"""
-        self.logs.append(
-            {"time": datetime.now().isoformat(), "message": message, "level": level}
-        )
+        self.logs.append({"time": datetime.now().isoformat(), "message": message, "level": level})
         if level == "error":
             logger.error(message)
         else:
@@ -840,7 +838,11 @@ class NodeExecutor:
         happens here in Python instead, over a rolling window that
         comfortably absorbs weekends/holidays.
         """
-        from services.indicator_service import history_window, prior_period_ohlc
+        from services.indicator_service import (
+            fetch_history_cached,
+            history_window,
+            prior_period_ohlc,
+        )
 
         symbol = self.context.interpolate(self.get_str(node_data, "symbol"))
         exchange = self.get_str(node_data, "exchange", "NSE")
@@ -850,14 +852,15 @@ class NodeExecutor:
             return {"status": "error", "message": "Symbol is required"}
 
         interval = "1h" if period == "previous_hour" else "D"
-        lookback_days = 5 if period == "previous_hour" else (
-            60 if period == "previous_month" else 21 if period == "previous_week" else 10
+        lookback_days = (
+            5
+            if period == "previous_hour"
+            else (60 if period == "previous_month" else 21 if period == "previous_week" else 10)
         )
         start_date, end_date = history_window(lookback_days=lookback_days, interval=interval)
         self.log(f"Fetching {period} OHLC for: {symbol} ({exchange})")
-        result = self.client.get_history(
-            symbol=symbol, exchange=exchange, interval=interval,
-            start_date=start_date, end_date=end_date, source=source,
+        result = fetch_history_cached(
+            self.client, symbol, exchange, interval, start_date, end_date, source
         )
         records = (result or {}).get("data") or []
         try:
@@ -891,7 +894,11 @@ class NodeExecutor:
         covers "N bars back" / "N hours back" / "N days back" style
         lookback without a separate node per unit.
         """
-        from services.indicator_service import bar_at_offset, history_window
+        from services.indicator_service import (
+            bar_at_offset,
+            fetch_history_cached,
+            history_window,
+        )
 
         symbol = self.context.interpolate(self.get_str(node_data, "symbol"))
         exchange = self.get_str(node_data, "exchange", "NSE")
@@ -904,9 +911,8 @@ class NodeExecutor:
         lookback_bars = offset_bars + 5
         start_date, end_date = history_window(lookback_bars=lookback_bars, interval=interval)
         self.log(f"Fetching bar offset {offset_bars} for {symbol} ({interval})")
-        result = self.client.get_history(
-            symbol=symbol, exchange=exchange, interval=interval,
-            start_date=start_date, end_date=end_date, source=source,
+        result = fetch_history_cached(
+            self.client, symbol, exchange, interval, start_date, end_date, source
         )
         records = (result or {}).get("data") or []
         row = bar_at_offset(records, offset_bars, interval=interval)
@@ -937,7 +943,11 @@ class NodeExecutor:
         history, or nested on top of another Indicator node's output series
         when `sourceSeries` is set.
         """
-        from services.indicator_service import compute_indicator, history_window
+        from services.indicator_service import (
+            compute_indicator,
+            fetch_history_cached,
+            history_window,
+        )
 
         indicator_name = self.get_str(node_data, "indicatorName", "sma")
         lookback_bars = self.get_int(node_data, "lookbackBars", 100)
@@ -962,16 +972,20 @@ class NodeExecutor:
             # json.loads on every real nested reference. resolve_raw returns
             # the actual stored list object when the field is exactly one
             # {{...}} token.
-            raw_list = self.context.resolve_raw(str(source_series_raw)) \
-                if isinstance(source_series_raw, str) else source_series_raw
+            raw_list = (
+                self.context.resolve_raw(str(source_series_raw))
+                if isinstance(source_series_raw, str)
+                else source_series_raw
+            )
             if isinstance(raw_list, str):
                 try:
                     raw_list = json.loads(raw_list)
                 except (ValueError, TypeError):
-                    self.log(
-                        f"sourceSeries did not resolve to an array: {raw_list!r}", "error"
-                    )
-                    return {"status": "error", "message": "sourceSeries did not resolve to a JSON array"}
+                    self.log(f"sourceSeries did not resolve to an array: {raw_list!r}", "error")
+                    return {
+                        "status": "error",
+                        "message": "sourceSeries did not resolve to a JSON array",
+                    }
             if not isinstance(raw_list, list):
                 self.log(f"sourceSeries must resolve to an array, got: {raw_list!r}", "error")
                 return {"status": "error", "message": "sourceSeries must resolve to an array"}
@@ -981,12 +995,28 @@ class NodeExecutor:
                     value = item.get("value", item.get("out0"))
                 else:
                     value = item
-                if value is not None:
+                if value is None:
+                    continue
+                try:
                     numeric_series.append(float(value))
-            self.log(f"Computing nested {indicator_name} over {len(numeric_series)} upstream values")
+                except (TypeError, ValueError):
+                    # Keep bad node input contained: without this the
+                    # ValueError escapes execute_indicator and aborts the
+                    # whole workflow instead of failing just this node.
+                    self.log(f"sourceSeries contains a non-numeric value: {value!r}", "error")
+                    return {
+                        "status": "error",
+                        "message": f"sourceSeries contains a non-numeric value: {value!r}",
+                    }
+            self.log(
+                f"Computing nested {indicator_name} over {len(numeric_series)} upstream values"
+            )
             try:
                 output = compute_indicator(
-                    None, indicator_name, params=params, tail_bars=tail_bars,
+                    None,
+                    indicator_name,
+                    params=params,
+                    tail_bars=tail_bars,
                     source_series=numeric_series,
                 )
             except ValueError as e:
@@ -1005,15 +1035,17 @@ class NodeExecutor:
 
         start_date, end_date = history_window(lookback_bars=lookback_bars, interval=interval)
         self.log(f"Computing {indicator_name} for {symbol} ({interval}, {lookback_bars} bars)")
-        history = self.client.get_history(
-            symbol=symbol, exchange=exchange, interval=interval,
-            start_date=start_date, end_date=end_date, source=source,
+        history = fetch_history_cached(
+            self.client, symbol, exchange, interval, start_date, end_date, source
         )
         records = (history or {}).get("data") or []
         try:
             output = compute_indicator(
-                records, indicator_name, params=params,
-                lookback_bars=lookback_bars, tail_bars=tail_bars,
+                records,
+                indicator_name,
+                params=params,
+                lookback_bars=lookback_bars,
+                tail_bars=tail_bars,
             )
         except ValueError as e:
             self.log(f"Indicator error: {e}", "error")
@@ -1557,9 +1589,7 @@ class NodeExecutor:
         data = result.get("data", {}) or {}
         available = float(data.get("availablecash", 0) or 0)
         condition_met = available >= min_available
-        self.log(
-            f"Fund check: available={available} >= {min_available} = {condition_met}"
-        )
+        self.log(f"Fund check: available={available} >= {min_available} = {condition_met}")
         return {"status": "success", "condition": condition_met, "available": available}
 
     def execute_price_condition(self, node_data: dict) -> dict:
@@ -1595,9 +1625,7 @@ class NodeExecutor:
             field_value = float(data.get(field, 0) or 0)
 
         condition_met = self._compare(field_value, operator, threshold)
-        self.log(
-            f"Price check: {field}={field_value} {operator} {threshold} = {condition_met}"
-        )
+        self.log(f"Price check: {field}={field_value} {operator} {threshold} = {condition_met}")
         return {
             "status": "success",
             "condition": condition_met,
@@ -1621,14 +1649,34 @@ class NodeExecutor:
         right_raw = self.get_str(node_data, "rightValue", "0")
         operator = self.get_str(node_data, "operator", ">")
 
+        # Never coerce an unresolvable operand to 0.0. A misspelled variable
+        # or an indicator that returned no value would otherwise compare as
+        # "0" and route a real trading branch on a value the user never
+        # configured. Fail the condition loudly instead.
         try:
             left = float(left_raw)
         except (TypeError, ValueError):
-            left = 0.0
+            self.log(
+                f"Var check aborted: left operand did not resolve to a number: {left_raw!r}",
+                "error",
+            )
+            return {
+                "status": "error",
+                "condition": False,
+                "message": f"leftValue did not resolve to a number: {left_raw!r}",
+            }
         try:
             right = float(right_raw)
         except (TypeError, ValueError):
-            right = 0.0
+            self.log(
+                f"Var check aborted: right operand did not resolve to a number: {right_raw!r}",
+                "error",
+            )
+            return {
+                "status": "error",
+                "condition": False,
+                "message": f"rightValue did not resolve to a number: {right_raw!r}",
+            }
 
         condition_met = self._compare(left, operator, right)
         self.log(f"Var check: {left} {operator} {right} = {condition_met}")
@@ -1646,12 +1694,18 @@ class NodeExecutor:
         >=, <=) used by the UI or word operators (gt, lt, eq, neq, gte, lte)
         used by some legacy node configs. Unknown operator → False."""
         ops = {
-            ">": left > right, "gt": left > right,
-            "<": left < right, "lt": left < right,
-            "==": left == right, "eq": left == right,
-            "!=": left != right, "neq": left != right,
-            ">=": left >= right, "gte": left >= right,
-            "<=": left <= right, "lte": left <= right,
+            ">": left > right,
+            "gt": left > right,
+            "<": left < right,
+            "lt": left < right,
+            "==": left == right,
+            "eq": left == right,
+            "!=": left != right,
+            "neq": left != right,
+            ">=": left >= right,
+            "gte": left >= right,
+            "<=": left <= right,
+            "lte": left <= right,
         }
         return ops.get(operator, False)
 
@@ -2489,14 +2543,24 @@ def execute_node_chain(
         context.set_condition_result(node_id, condition_met)
         TRUE_HANDLES = {"yes", "true"}
         FALSE_HANDLES = {"no", "false"}
+        # A condition that could not be evaluated (e.g. an operand that did
+        # not resolve to a number) must take NEITHER branch. Treating it as
+        # False would route the else-path — on a "RSI < 70 -> BUY else SELL"
+        # graph a typo'd variable would silently fire the SELL. Pass-through
+        # edges (logging/alerting) still run so the failure is visible.
+        errored = result.get("status") == "error"
         filtered_edges = []
         for edge in edges_to_follow:
             source_handle = edge.get("sourceHandle", "") or ""
-            if condition_met and source_handle in TRUE_HANDLES:
+            is_branch_handle = source_handle in TRUE_HANDLES or source_handle in FALSE_HANDLES
+            if errored:
+                if not is_branch_handle:
+                    filtered_edges.append(edge)
+            elif condition_met and source_handle in TRUE_HANDLES:
                 filtered_edges.append(edge)
             elif not condition_met and source_handle in FALSE_HANDLES:
                 filtered_edges.append(edge)
-            elif source_handle not in TRUE_HANDLES and source_handle not in FALSE_HANDLES:
+            elif not is_branch_handle:
                 # Edge has no condition handle — pass-through (e.g. a Log node
                 # wired to the node's main bottom handle, not the True/False forks).
                 filtered_edges.append(edge)
@@ -2561,7 +2625,7 @@ def execute_workflow(
             edges = workflow.edges or []
 
             # Find trigger node
-            trigger_types = ["start", "webhookTrigger", "priceAlert"]
+            trigger_types = ["start", "webhookTrigger", "priceAlert", "orderUpdateTrigger"]
             start_node = next((n for n in nodes if n.get("type") in trigger_types), None)
             if not start_node:
                 raise Exception("No trigger node found")

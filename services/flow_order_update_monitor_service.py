@@ -27,6 +27,18 @@ logger = get_logger(__name__)
 VALID_STATUSES = {"any", "open", "trigger pending", "complete", "rejected", "cancelled"}
 
 
+def normalize_status(value: str | None) -> str:
+    """Canonicalize an order_status for comparison.
+
+    Broker adapters disagree on the multi-word spelling: Zerodha's order
+    adapter emits "trigger pending" (matching docs/prompt/websockets-format.md
+    and the sandbox engine) while other paths use "trigger_pending". Comparing
+    raw strings makes the Trigger Pending filter silently never match. Fold
+    underscores to spaces and lowercase so both spellings compare equal.
+    """
+    return str(value or "").strip().lower().replace("_", " ")
+
+
 @dataclass
 class OrderUpdateWatch:
     """One workflow's subscription to order-update events."""
@@ -38,6 +50,10 @@ class OrderUpdateWatch:
     exchange: str | None = None
     status: str = "complete"
     trigger: str = "once"
+    # Owning account (OpenAlgo username), resolved from the workflow's API key
+    # at activation. Used to keep one account's order events from firing
+    # another account's watch — see _matches().
+    user_id: str | None = None
     triggered: bool = False
     created_at: datetime = field(default_factory=datetime.now)
 
@@ -73,30 +89,62 @@ class FlowOrderUpdateMonitor:
         exchange: str | None = None,
         status: str = "complete",
         trigger: str = "once",
+        user_id: str | None = None,
     ) -> bool:
         """Watch for order-update events matching the given filters.
 
         At least one of `order_id` / `symbol` must be set — an unfiltered
         watch would fire the workflow on every order in the account.
+
+        `order_id` must be a literal broker order id. `{{...}}` interpolation
+        is rejected: a trigger node has no upstream context to resolve
+        against, so the placeholder would be stored verbatim and could never
+        match a real order id.
         """
         if not order_id and not symbol:
             raise ValueError("orderUpdateTrigger needs an Order ID or a Symbol to watch")
+        if order_id and "{{" in order_id:
+            raise ValueError(
+                "orderUpdateTrigger Order ID must be a literal order id, not a "
+                "{{variable}} reference - a trigger node has no upstream node to "
+                "resolve it from. Leave it blank and filter by Symbol instead."
+            )
+        normalized_status = normalize_status(status)
+        if normalized_status not in VALID_STATUSES:
+            raise ValueError(
+                f"orderUpdateTrigger status must be one of {sorted(VALID_STATUSES)}, got {status!r}"
+            )
+        if user_id is None and api_key:
+            user_id = self._resolve_user_id(api_key)
         watch = OrderUpdateWatch(
             workflow_id=workflow_id,
             api_key=api_key,
             order_id=order_id or None,
             symbol=symbol or None,
             exchange=exchange or None,
-            status=status if status in VALID_STATUSES else "complete",
+            status=normalized_status,
             trigger=trigger,
+            user_id=user_id,
         )
         with self._watches_lock:
             self._watches[workflow_id] = watch
         logger.info(
             f"Added order-update watch for workflow {workflow_id}: "
-            f"orderid={order_id} symbol={symbol} status={status}"
+            f"orderid={order_id} symbol={symbol} status={normalized_status} user={user_id}"
         )
         return True
+
+    @staticmethod
+    def _resolve_user_id(api_key: str) -> str | None:
+        """Map an OpenAlgo API key to its owning username (the same identity
+        order adapters put in event.request_data["user_id"])."""
+        try:
+            from database.auth_db import verify_api_key
+
+            return verify_api_key(api_key)
+        except Exception:
+            logger.exception("Could not resolve owner for order-update watch")
+            return None
 
     def remove_watch(self, workflow_id: int) -> bool:
         with self._watches_lock:
@@ -125,28 +173,52 @@ class FlowOrderUpdateMonitor:
 
     def _on_order_update(self, event) -> None:
         """EventBus callback — runs on the bus's shared thread pool, so keep
-        it fast and hand off actual workflow execution to its own thread."""
+        it fast and hand off actual workflow execution to its own thread.
+
+        The `triggered` claim is made *inside* the lock: the bus dispatches
+        callbacks on a pool, so two order events arriving concurrently could
+        otherwise both pass a `not w.triggered` check and fire a `once` watch
+        twice (duplicate orders).
+        """
+        claimed = []
         with self._watches_lock:
-            matches = [
-                w for w in self._watches.values() if not w.triggered and self._matches(w, event)
-            ]
-        for watch in matches:
+            for watch in self._watches.values():
+                if watch.triggered or not self._matches(watch, event):
+                    continue
+                watch.triggered = True  # atomic claim under the lock
+                claimed.append(watch)
+        for watch in claimed:
             self._fire(watch, event)
 
     @staticmethod
-    def _matches(watch: OrderUpdateWatch, event) -> bool:
-        if watch.status != "any" and event.order_status != watch.status:
+    def _event_user_id(event) -> str | None:
+        """Owning account of an order event, as set by the order adapters and
+        the sandbox engine in `request_data["user_id"]`."""
+        data = getattr(event, "request_data", None) or {}
+        user_id = data.get("user_id")
+        return str(user_id) if user_id else None
+
+    def _matches(self, watch: OrderUpdateWatch, event) -> bool:
+        # Account scoping. A workflow executes with its owner's API key, so a
+        # symbol-only watch must never be fired by a different account's fill.
+        # Only enforced when the event actually carries an identity — some
+        # sandbox paths omit user_id, and failing closed there would silently
+        # stop analyze-mode triggers from ever firing.
+        event_user = self._event_user_id(event)
+        if watch.user_id and event_user and event_user != watch.user_id:
+            return False
+        if watch.status != "any" and normalize_status(event.order_status) != watch.status:
             return False
         if watch.order_id and event.orderid != watch.order_id:
             return False
         if watch.symbol and event.symbol != watch.symbol:
             return False
-        if watch.exchange and event.exchange and event.exchange != watch.exchange:
+        # An explicit exchange filter must not be satisfied by a missing value.
+        if watch.exchange and event.exchange != watch.exchange:
             return False
         return True
 
     def _fire(self, watch: OrderUpdateWatch, event) -> None:
-        watch.triggered = True
         logger.info(
             f"Order-update trigger fired for workflow {watch.workflow_id}: "
             f"orderid={event.orderid} status={event.order_status}"
@@ -197,3 +269,49 @@ flow_order_update_monitor = FlowOrderUpdateMonitor()
 def get_flow_order_update_monitor() -> FlowOrderUpdateMonitor:
     """Get the global order-update monitor instance"""
     return flow_order_update_monitor
+
+
+def restore_order_update_watches() -> int:
+    """Re-register watches for already-active orderUpdateTrigger workflows.
+
+    Watches live only in memory, but `is_active` is persisted. Without this,
+    a server restart leaves such workflows marked active while firing
+    nothing, and the activate endpoint rejects them as `already_active` — so
+    they stay silently dead until manually deactivated and reactivated.
+    Call once at startup, after the DB is ready.
+    """
+    from database.flow_db import get_active_workflows, get_workflow_api_key
+
+    monitor = get_flow_order_update_monitor()
+    restored = 0
+    for workflow in get_active_workflows():
+        trigger_node = next(
+            (n for n in (workflow.nodes or []) if n.get("type") == "orderUpdateTrigger"), None
+        )
+        if not trigger_node:
+            continue
+        api_key = get_workflow_api_key(workflow)
+        if not api_key:
+            logger.warning(
+                f"Cannot restore order-update watch for workflow {workflow.id}: no stored API key"
+            )
+            continue
+        data = trigger_node.get("data", {}) or {}
+        try:
+            monitor.add_watch(
+                workflow_id=workflow.id,
+                api_key=api_key,
+                order_id=data.get("orderId") or None,
+                symbol=data.get("symbol") or None,
+                exchange=data.get("exchange") or None,
+                status=data.get("status", "complete"),
+                trigger=data.get("trigger", "once"),
+            )
+            restored += 1
+        except ValueError as e:
+            logger.warning(f"Skipping invalid order-update watch for workflow {workflow.id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to restore order-update watch for workflow {workflow.id}")
+    if restored:
+        logger.info(f"Restored {restored} order-update watch(es) from active workflows")
+    return restored
