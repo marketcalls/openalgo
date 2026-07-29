@@ -109,6 +109,9 @@ BRANCHING_NODE_TYPES: frozenset[str] = frozenset(
         "andGate",
         "orGate",
         "notGate",
+        # Renders true/false handles like the condition nodes, so rejecting them
+        # made a valid price-alert workflow fail on its own edges.
+        "priceAlert",
     }
 )
 
@@ -133,6 +136,24 @@ REQUIRED_NODE_FIELDS: dict[str, tuple[str, ...]] = {
     "mathExpression": ("expression",),
     "varCondition": ("leftValue", "operator"),
     "priceCondition": ("symbol", "exchange", "operator"),
+    # Broker-mutating nodes. An empty one reaches the broker as a malformed
+    # order rather than failing at import.
+    "splitOrder": ("symbol", "exchange", "action", "quantity", "splitSize"),
+    "basketOrder": ("orders",),
+    "optionsMultiOrder": ("underlying", "quantity"),
+    "priceAlert": ("symbol", "exchange", "condition", "price"),
+    "subscribeLtp": ("symbol", "exchange"),
+    "subscribeQuote": ("symbol", "exchange"),
+    "subscribeDepth": ("symbol", "exchange"),
+    "optionSymbol": ("underlying", "optionType"),
+    "optionChain": ("underlying",),
+    "syntheticFuture": ("underlying",),
+    "expiry": ("symbol", "exchange"),
+    "symbol": ("symbol", "exchange"),
+    "multiQuotes": ("symbols",),
+    "httpRequest": ("url",),
+    "variable": ("variableName",),
+    "waitUntil": ("targetTime",),
 }
 
 
@@ -412,22 +433,36 @@ def validate_workflow(
                 )
             )
         elif source_type and source_type not in BRANCHING_NODE_TYPES:
-            if str(handle) in _BRANCHING_HANDLES:
-                errors.append(
-                    _err(
-                        f"/edges/{i}/sourceHandle",
-                        "invalid_source_handle",
-                        f"A {source_type} node does not branch, so it has no '{handle}' handle.",
-                        "no sourceHandle",
-                        handle,
-                    )
+            # Non-branching nodes render a single unnamed source handle, so any
+            # named one is a phantom: the edge points at a socket that does not
+            # exist and the branch it carries is silently dropped.
+            errors.append(
+                _err(
+                    f"/edges/{i}/sourceHandle",
+                    "invalid_source_handle",
+                    f"A {source_type} node has no '{handle}' output handle; it emits a "
+                    "single unconditional output.",
+                    "no sourceHandle",
+                    handle,
                 )
+            )
 
     # Gate input slots. `targetHandle: "input-N"` must name a slot the gate
     # actually has: a higher N is never filled, so the gate waits for an input
     # that can never arrive and its branch silently never fires.
+    def _slot_count(value) -> int:
+        """Gate input count, tolerant of a malformed value.
+
+        Casting directly raised ValueError out of the validator, so a
+        malformed payload crashed the request it was supposed to reject.
+        """
+        try:
+            return max(int(value), 1) if value not in (None, "") else 2
+        except (TypeError, ValueError):
+            return 2
+
     gate_slots = {
-        n.get("id"): max(int(n.get("data", {}).get("inputCount") or 2), 1)
+        n.get("id"): _slot_count(n.get("data", {}).get("inputCount"))
         for n in nodes
         if isinstance(n, dict)
         and n.get("type") in ("andGate", "orGate")
@@ -441,6 +476,20 @@ def validate_workflow(
             continue
         slots = gate_slots.get(edge.get("target"))
         if slots is None:
+            # Only gates render numbered input slots. Naming one on any other
+            # node points the edge at a socket that does not exist.
+            if re.fullmatch(r"input-\d+", str(handle)):
+                target_type = node_types_by_id.get(edge.get("target"))
+                errors.append(
+                    _err(
+                        f"/edges/{i}/targetHandle",
+                        "invalid_target_handle",
+                        f"Only gate nodes have numbered input slots; a "
+                        f"{target_type or 'non-gate'} node has no '{handle}'.",
+                        "no targetHandle",
+                        handle,
+                    )
+                )
             continue
         match = re.fullmatch(r"input-(\d+)", str(handle))
         if not match or int(match.group(1)) >= slots:
@@ -592,18 +641,54 @@ def migrate_legacy_node_data(nodes: list) -> tuple[list, list[str]]:
         data = dict(node["data"])
 
         if node_type == "fundCheck" and "minAvailable" not in data and "threshold" in data:
-            # The guard reads minAvailable. Left as `threshold` it silently
-            # becomes a minimum of zero, so the check passes on any balance.
-            data["minAvailable"] = data.pop("threshold")
-            data.pop("operator", None)
-            notes.append(
-                f"fundCheck '{node.get('id')}': threshold -> minAvailable "
-                f"({data['minAvailable']})"
-            )
+            # fundCheck can only express "at least this much". A legacy
+            # greater-than maps cleanly; a legacy less-than means the opposite,
+            # and silently reversing a capital guard is worse than refusing to
+            # guess, so that one is left for the user to restate.
+            operator = str(data.get("operator") or "gt").strip().lower()
+            if operator in ("gt", "gte", "ge", ">", ">="):
+                data["minAvailable"] = data.pop("threshold")
+                data.pop("operator", None)
+                notes.append(
+                    f"fundCheck '{node.get('id')}': threshold -> minAvailable "
+                    f"({data['minAvailable']})"
+                )
+            else:
+                notes.append(
+                    f"fundCheck '{node.get('id')}': operator '{operator}' has no "
+                    "equivalent - this node only supports a minimum. Left unchanged; "
+                    "set Minimum Available yourself."
+                )
         elif node_type == "positionCheck" and "condition" not in data and "operator" in data:
-            data.pop("operator", None)
-            data["condition"] = "exists"
-            notes.append(f"positionCheck '{node.get('id')}': operator -> condition")
+            # Preserve the comparison instead of flattening every legacy operator
+            # to "exists", which would turn a quantity-based exit into an
+            # unconditional one.
+            operator = str(data.get("operator") or "").strip().lower()
+            mapping = {
+                "gt": "quantity_above",
+                ">": "quantity_above",
+                "gte": "quantity_above",
+                "ge": "quantity_above",
+                ">=": "quantity_above",
+                "lt": "quantity_below",
+                "<": "quantity_below",
+                "lte": "quantity_below",
+                "le": "quantity_below",
+                "<=": "quantity_below",
+            }
+            condition = mapping.get(operator)
+            if condition:
+                data["condition"] = condition
+                data.pop("operator", None)
+                notes.append(
+                    f"positionCheck '{node.get('id')}': operator '{operator}' -> "
+                    f"condition '{condition}' (threshold kept)"
+                )
+            else:
+                notes.append(
+                    f"positionCheck '{node.get('id')}': operator '{operator}' has no "
+                    "equivalent condition. Left unchanged; set the condition yourself."
+                )
         elif node_type == "priceCondition" and "value" not in data and "threshold" in data:
             data["value"] = data.pop("threshold")
             notes.append(f"priceCondition '{node.get('id')}': threshold -> value")

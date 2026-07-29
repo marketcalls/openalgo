@@ -570,8 +570,20 @@ class NodeExecutor:
                 legs.append(leg_entry)
         else:
             # Generate legs from predefined strategy type
-            # A generated strategy shares one price type across its legs, so
-            # validate it once before building them.
+            # A generated strategy shares one price type across its legs. Its
+            # legs have no individual trigger price - the panel offers MARKET
+            # and LIMIT only - so an SL type here has no way to carry the
+            # trigger the broker requires. Say that, rather than sending a
+            # zero trigger or rejecting it as a missing price.
+            if multi_price_type in ("SL", "SL-M"):
+                message = (
+                    f"{multi_price_type} is not available for a generated "
+                    f"{strategy_type} strategy: its legs carry no trigger price. "
+                    "Use MARKET or LIMIT, or build the legs individually as custom "
+                    "legs where each can set its own trigger price."
+                )
+                self.log(f"Options multi-order failed: {message}", "error")
+                return {"status": "error", "message": message}
             invalid = self._invalid_price_reason(multi_price_type, multi_price, 0.0)
             if invalid:
                 error_result = {"status": "error", "message": invalid}
@@ -1897,6 +1909,18 @@ class NodeExecutor:
         if "minAvailable" in node_data:
             min_available = self.get_float(node_data, "minAvailable", 0.0)
         elif "threshold" in node_data:
+            # This node only expresses "at least". A legacy less-than means the
+            # opposite, so treating its threshold as a minimum would invert the
+            # guard - refuse instead of guessing.
+            legacy_operator = str(node_data.get("operator") or "gt").strip().lower()
+            if legacy_operator not in ("gt", "gte", "ge", ">", ">="):
+                message = (
+                    f"Fund Check has a legacy '{legacy_operator}' comparison, which this "
+                    "node cannot express - it only supports a minimum. Open the node and "
+                    "set Minimum Available."
+                )
+                self.log(message, "error")
+                return {"status": "error", "message": message}
             min_available = self.get_float(node_data, "threshold", 0.0)
             self.log(
                 f"Fund Check is using its legacy threshold of {min_available}. "

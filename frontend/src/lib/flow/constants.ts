@@ -755,6 +755,9 @@ export const DEFAULT_NODE_DATA = {
     exchange: 'NSE',
     condition: 'above' as const,
     price: 0,
+    // Both are honored at activation; defaults match the panel's own.
+    trigger: 'once' as const,
+    expiration: 'none' as const,
   },
   orderUpdateTrigger: {
     orderId: '',

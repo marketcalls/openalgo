@@ -205,6 +205,8 @@ class FlowOpenAlgoClient:
         Args:
             orders: List of order dicts with symbol, exchange, action, quantity, etc.
             strategy: Strategy name for tracking
+            trigger_price: Trigger price for SL / SL-M orders (declared last so
+                existing positional callers keep working)
         """
         from services.basket_order_service import place_basket_order
 
@@ -437,7 +439,6 @@ class FlowOpenAlgoClient:
             price_type: MARKET, LIMIT, SL, SL-M
             product: NRML, MIS
             price: Price for limit orders
-            trigger_price: Trigger price for SL / SL-M orders
             splitsize: Split large orders into smaller chunks (0 = no split)
             strategy: Strategy name for tracking
         """
