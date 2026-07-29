@@ -1,0 +1,51 @@
+/**
+ * WhatsApp Alert Node
+ * Send notification via the paired WhatsApp bot device
+ */
+
+import { Handle, Position } from '@xyflow/react'
+import { MessageCircle } from 'lucide-react'
+import { memo } from 'react'
+import { cn } from '@/lib/utils'
+import type { WhatsappAlertNodeData } from '@/types/flow'
+
+interface WhatsappAlertNodeProps {
+  data: WhatsappAlertNodeData
+  selected?: boolean
+}
+
+export const WhatsappAlertNode = memo(({ data, selected }: WhatsappAlertNodeProps) => {
+  const truncatedMessage = data.message
+    ? data.message.length > 25
+      ? `${data.message.substring(0, 25)}...`
+      : data.message
+    : 'No message'
+
+  return (
+    <div
+      className={cn(
+        'workflow-node min-w-[120px] border-l-muted-foreground',
+        selected && 'selected'
+      )}
+    >
+      <Handle type="target" position={Position.Top} className="!top-0 !-translate-y-1/2" />
+      <div className="p-2">
+        <div className="mb-1.5 flex items-center gap-1.5">
+          <div className="flex h-5 w-5 items-center justify-center rounded bg-[#25D366]/20 text-[#25D366]">
+            <MessageCircle className="h-3 w-3" />
+          </div>
+          <div>
+            <div className="text-xs font-medium leading-tight">WhatsApp</div>
+            <div className="text-[9px] text-muted-foreground">{data.to || 'Self'}</div>
+          </div>
+        </div>
+        <div className="rounded bg-muted/50 px-1.5 py-1">
+          <span className="text-[9px] text-muted-foreground line-clamp-2">{truncatedMessage}</span>
+        </div>
+      </div>
+      <Handle type="source" position={Position.Bottom} className="!bottom-0 !translate-y-1/2" />
+    </div>
+  )
+})
+
+WhatsappAlertNode.displayName = 'WhatsappAlertNode'
