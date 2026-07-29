@@ -197,6 +197,11 @@ const DERIVATIVE_EXCHANGES = new Set(['NFO', 'BFO', 'CDS', 'BCD', 'MCX', 'NCO', 
 const QUOTE_ONLY = new Set(['NSE_INDEX', 'BSE_INDEX', 'MCX_INDEX', 'GLOBAL_INDEX'])
 const STRATEGY = 'chart-trading'
 const VISIBLE_BARS = 120
+/** Candle direction colours, shared by the OHLC legend and the last-price line. */
+const UP = '#26a69a'
+const DN = '#ef5350'
+/** Last-price line before any bar exists to take a direction from. */
+const LTP_NEUTRAL = '#e0b020'
 
 const nowSec = () => Math.floor(Date.now() / 1000)
 const esc = (s: unknown) =>
@@ -420,8 +425,8 @@ export class TradingTerminal {
       return
     }
     const lots = this.sym.lots ? ` · lot ${this.sym.lotsize}` : ''
-    const up = '#26a69a'
-    const dn = '#ef5350'
+    const up = UP
+    const dn = DN
     const col = bar && bar.close >= bar.open ? up : dn
     const chg =
       this.lastLtp != null && this.prevClose
@@ -691,7 +696,7 @@ export class TradingTerminal {
     this.ltpLine =
       lp != null
         ? this.chart.addPriceLine(
-            { price: lp, color: '#e0b020', lineWidth: 1, dashed: true, id: 'ltp' },
+            { price: lp, color: this.ltpColor(lp), lineWidth: 1, dashed: true, id: 'ltp' },
             0
           )
         : null
@@ -1261,12 +1266,25 @@ export class TradingTerminal {
     }
   }
 
+  /**
+   * Colour for the last-price line: the direction of the bar it sits in, so it
+   * matches that candle and the OHLC legend. Amber only until a bar exists to
+   * compare against.
+   */
+  private ltpColor(price: number): string {
+    const bar = this.rawBars.length ? this.rawBars[this.rawBars.length - 1] : null
+    if (!bar) return LTP_NEUTRAL
+    return price >= bar.open ? UP : DN
+  }
+
   /* single tick path shared by WS pushes and the REST fallback */
   private onTick(e: { symbol?: string; ltp: number; ltq?: number; timeSec?: number }) {
     if (!this.sym || (e.symbol && e.symbol !== this.sym.symbol)) return
     this.lastLtp = e.ltp
     this.cb.onLtp(e.ltp)
-    if (this.ltpLine) this.ltpLine.setPrice(e.ltp)
+    // Recolour with the price: the line belongs to the forming candle, so it
+    // follows that candle's direction rather than sitting amber forever.
+    if (this.ltpLine) this.ltpLine.setOptions({ price: e.ltp, color: this.ltpColor(e.ltp) })
     if (this.position && this.posLine) this.posLine.setLeftLabel(this.posLabel())
     if (this.tradeBtns && !this.depthActive) this.tradeBtns.setMark(e.ltp)
     if (this.builder) {
