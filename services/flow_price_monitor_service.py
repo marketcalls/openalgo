@@ -5,16 +5,26 @@ Real-time price monitoring for Price Alert triggers (Flask/sync version)
 Uses polling instead of WebSocket for simplicity in Flask context
 """
 
-import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, Set
 
 from services.flow_openalgo_client import FlowOpenAlgoClient, get_flow_client
+from utils.env_config import env_int
+from utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+# Shared and bounded, never one thread per fire: an every_time alert on a fast
+# poll interval would otherwise spawn a thread per tick, each running a whole
+# workflow. Mirrors the order-update monitor's pool.
+_WORKFLOW_POOL = ThreadPoolExecutor(
+    max_workers=env_int("FLOW_PRICE_ALERT_WORKERS", 4, minimum=1),
+    thread_name_prefix="flow-price-alert",
+)
 
 
 @dataclass
@@ -170,7 +180,11 @@ class FlowPriceMonitor:
         self._running = False
 
         if self._monitor_thread:
-            self._monitor_thread.join(timeout=5)
+            # remove_alert() is called from inside the monitoring loop when a
+            # one-shot alert fires or expires, and joining the current thread
+            # raises RuntimeError. The loop exits on the stop event anyway.
+            if self._monitor_thread is not threading.current_thread():
+                self._monitor_thread.join(timeout=5)
             self._monitor_thread = None
 
         logger.info("Price monitoring stopped")
@@ -242,7 +256,11 @@ class FlowPriceMonitor:
             condition_met = self._evaluate_condition(alert, current_price)
 
             if condition_met and not alert.triggered:
-                alert.triggered = True
+                # `triggered` is the one-shot latch, and _check_all_alerts skips
+                # any alert carrying it. Setting it for an every_time alert left
+                # the watch registered but permanently ignored.
+                if alert.trigger != "every_time":
+                    alert.triggered = True
                 logger.info(
                     f"Price alert triggered for workflow {alert.workflow_id}: "
                     f"{alert.symbol}@{alert.exchange} {alert.condition} "
@@ -347,9 +365,15 @@ class FlowPriceMonitor:
 
             except Exception as e:
                 logger.exception(f"Failed to execute workflow {workflow_id}: {e}")
+            finally:
+                # No Flask app context on a pool thread, so teardown_appcontext
+                # never fires and every session the run touched would stay bound
+                # to the thread holding its connection.
+                from utils.db_sessions import remove_all_scoped_sessions
 
-        thread = threading.Thread(target=run_workflow, daemon=True)
-        thread.start()
+                remove_all_scoped_sessions()
+
+        _WORKFLOW_POOL.submit(run_workflow)
 
     def is_running(self) -> bool:
         """Check if monitoring is active"""

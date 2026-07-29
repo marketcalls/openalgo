@@ -49,9 +49,17 @@ from services.flow_workflow_validator import (  # noqa: E402
 # would miss - editing an interval from 1m to 5m keeps the same trigger type.
 _TRIGGER_TYPES = ("start", "webhookTrigger", "priceAlert", "orderUpdateTrigger")
 _TRIGGER_CONFIG_FIELDS = (
+    # start
     "scheduleType", "time", "days", "executeAt", "intervalMinutes", "intervalValue",
-    "intervalUnit", "marketHoursOnly", "symbol", "exchange", "condition", "price",
-    "orderId", "status", "trigger",
+    "intervalUnit", "marketHoursOnly",
+    # priceAlert - every field add_alert() captures at activation, including the
+    # channel bounds and percentage that only some conditions use
+    "symbol", "exchange", "condition", "price", "priceLower", "priceUpper",
+    "percentage", "expiration",
+    # orderUpdateTrigger
+    "orderId", "status",
+    # shared
+    "trigger",
 )
 
 

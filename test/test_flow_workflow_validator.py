@@ -291,3 +291,26 @@ def test_fund_check_migration_never_reverses_the_guard():
     )
     assert "minAvailable" not in migrated[0]["data"]
     assert any("no equivalent" in note for note in notes)
+
+
+@pytest.mark.parametrize(
+    "condition,data,expect_error",
+    [
+        ("above", {"price": 100}, False),
+        ("above", {}, True),
+        ("entering_channel", {"priceLower": 90, "priceUpper": 110}, False),
+        ("entering_channel", {"price": 100}, True),
+        ("moving_up_percent", {"percentage": 2}, False),
+    ],
+)
+def test_price_alert_requirements_follow_the_condition(condition, data, expect_error):
+    """A channel alert has no single price, so requiring one rejected a valid alert."""
+    wf = _wf(
+        [
+            _node("t", "priceAlert", symbol="X", exchange="NSE", condition=condition, **data),
+            _node("a", "log", message="hi"),
+        ],
+        [{"id": "e1", "source": "t", "target": "a"}],
+    )
+    errors = [e for e in validate_workflow(wf) if e["code"] == "missing_required_field"]
+    assert bool(errors) is expect_error
