@@ -395,6 +395,15 @@ export interface IndicatorNodeData {
   outputVariable?: string
 }
 
+/** Strategy P&L - realized / unrealized / total for one strategy, so a
+ * workflow can exit on its own performance instead of the whole account's. */
+export interface StrategyPnlNodeData {
+  label?: string
+  /** Blank = this workflow's own name, which is also the tag its order nodes apply. */
+  strategy?: string
+  outputVariable?: string
+}
+
 /** Prior Period OHLC - last fully-closed hour/day/week/month candle
  * (e.g. previous day's high/low for a PDH/PDL breakout strategy) without
  * the workflow author computing a relative date. */
@@ -706,6 +715,7 @@ export type DataNodeData =
   | HistoryNodeData
   | IndicatorNodeData
   | PriorPeriodOhlcNodeData
+  | StrategyPnlNodeData
   | BarOffsetNodeData
   | OpenPositionNodeData
   | ExpiryNodeData

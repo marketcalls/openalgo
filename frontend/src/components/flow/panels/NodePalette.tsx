@@ -294,6 +294,13 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
       color: 'bg-cyan-500/10',
     },
     {
+      type: 'strategyPnl',
+      label: 'Strategy P&L',
+      description: 'Per-strategy realized/unrealized',
+      icon: <Wallet className="h-3.5 w-3.5 text-cyan-500" />,
+      color: 'bg-cyan-500/10',
+    },
+    {
       type: 'priorPeriodOhlc',
       label: 'Prior Period OHLC',
       description: 'Prev hour/day/week/month',

@@ -185,10 +185,29 @@ class WorkflowContext:
 class NodeExecutor:
     """Executes individual workflow nodes"""
 
-    def __init__(self, client: FlowOpenAlgoClient, context: WorkflowContext, logs: list):
+    def __init__(
+        self,
+        client: FlowOpenAlgoClient,
+        context: WorkflowContext,
+        logs: list,
+        default_strategy: str = "flow_workflow",
+    ):
         self.client = client
         self.context = context
         self.logs = logs
+        # Tag applied to every order this workflow places, so trades can be
+        # attributed back to the strategy that produced them (the tradebook
+        # carries this field). Defaults to the workflow's own name; a node may
+        # override it with `strategyTag`.
+        self.default_strategy = default_strategy or "flow_workflow"
+
+    def strategy_tag(self, node_data: dict) -> str:
+        """Strategy label for an order node.
+
+        Uses `strategyTag`, not `strategy`: optionsMultiOrder already uses
+        `strategy` for the structure type (straddle / iron_condor / custom).
+        """
+        return self.get_str(node_data, "strategyTag", "") or self.default_strategy
 
     def log(self, message: str, level: str = "info"):
         """Add log entry"""
@@ -255,6 +274,7 @@ class NodeExecutor:
             product_type=product,
             price=price,
             trigger_price=trigger_price,
+            strategy=self.strategy_tag(node_data),
         )
         self.log(
             f"Order result: {result}", "info" if result.get("status") == "success" else "error"
@@ -281,6 +301,7 @@ class NodeExecutor:
             position_size=position_size,
             price_type=price_type,
             product_type=product,
+            strategy=self.strategy_tag(node_data),
         )
         self.log(
             f"Smart order result: {result}",
@@ -348,6 +369,7 @@ class NodeExecutor:
             price_type=price_type,
             product=product,
             splitsize=split_size,
+            strategy=self.strategy_tag(node_data),
         )
         self.log(
             f"Options order result: {result}",
@@ -455,6 +477,7 @@ class NodeExecutor:
             exchange=underlying_exchange,
             expiry_date=expiry_date,
             legs=legs,
+            strategy=self.strategy_tag(node_data),
         )
         self.log(
             f"Options multi-order result: {result}",
@@ -757,6 +780,7 @@ class NodeExecutor:
             split_size=split_size,
             price_type=price_type,
             product_type=product,
+            strategy=self.strategy_tag(node_data),
         )
         self.log(
             f"Split order result: {result}",
@@ -861,6 +885,36 @@ class NodeExecutor:
                 )
             return f"History fetch failed for {symbol} ({interval}): {detail}.{hint}"
         return None
+
+    def execute_strategy_pnl(self, node_data: dict) -> dict:
+        """Execute Strategy P&L node - realized / unrealized / total for one
+        strategy, so a workflow can exit on its own performance rather than
+        the account's.
+
+        `strategy` defaults to this workflow's name, which is also the tag its
+        order nodes apply, so the common case needs no configuration.
+        """
+        from services.strategy_pnl_service import get_strategy_pnl
+
+        strategy = self.get_str(node_data, "strategy", "") or self.default_strategy
+        result = get_strategy_pnl(self.client, strategy=strategy)
+        if result.get("status") == "error":
+            self.log(f"Strategy P&L error: {result.get('message')}", "error")
+            return result
+
+        self.log(
+            f"Strategy P&L [{strategy}]: realized={result.get('realized')} "
+            f"unrealized={result.get('unrealized')} total={result.get('total')} "
+            f"openQty={result.get('open_quantity')}"
+        )
+        if result.get("unpriced_legs"):
+            self.log(
+                f"{result['unpriced_legs']} open leg(s) had no live price and were "
+                "excluded from unrealized P&L",
+                "warning",
+            )
+        self.store_output(node_data, result)
+        return result
 
     def execute_prior_period_ohlc(self, node_data: dict) -> dict:
         """Execute Prior Period OHLC node.
@@ -2488,6 +2542,8 @@ def execute_node_chain(
         result = executor.execute_open_position(node_data)
     elif node_type == "history":
         result = executor.execute_history(node_data)
+    elif node_type == "strategyPnl":
+        result = executor.execute_strategy_pnl(node_data)
     elif node_type == "priorPeriodOhlc":
         result = executor.execute_prior_period_ohlc(node_data)
     elif node_type == "barOffset":
@@ -2694,7 +2750,7 @@ def execute_workflow(
                 raise Exception("API key required for workflow execution")
 
             client = get_flow_client(api_key)
-            executor = NodeExecutor(client, context, logs)
+            executor = NodeExecutor(client, context, logs, default_strategy=workflow.name)
             logger.info(f"Starting workflow: {workflow.name}")
             executor.log(f"Starting workflow: {workflow.name}")
 
