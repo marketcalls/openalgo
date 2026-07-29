@@ -12,6 +12,94 @@ flat declarative style suitable for that purpose.
 
 ---
 
+## 0. Output contract — read before generating anything
+
+**Emit exactly this shape. Nothing else imports.**
+
+```jsonc
+// shape only - see the runnable example below
+{ "name": "...", "nodes": [ ... ], "edges": [ ... ] }
+```
+
+* `name` (string), `nodes` (array), `edges` (array) are **required at the top
+  level**. Any other top-level shape is rejected with *"Invalid workflow
+  format. Must have name, nodes, and edges."*
+* Every node must be `{ "id", "type", "position": {"x","y"}, "data": {} }`.
+* **`type` must be copied verbatim from the list below.** Do not invent node
+  types, and do not translate a strategy description into your own schema.
+  If a requirement has no matching node, say so in prose — do not fabricate
+  one.
+* Emit the JSON object alone: no ``` fences, no commentary, no comments, no
+  trailing commas.
+
+### The only valid `type` values
+
+```
+Triggers   start · priceAlert · webhookTrigger · orderUpdateTrigger
+Actions    placeOrder · smartOrder · optionsOrder · optionsMultiOrder ·
+           basketOrder · splitOrder · modifyOrder · cancelOrder ·
+           cancelAllOrders · closePositions
+Conditions positionCheck · fundCheck · priceCondition · varCondition ·
+           timeWindow · timeCondition · andGate · orGate · notGate
+Data       getQuote · multiQuotes · getDepth · history · indicator ·
+           priorPeriodOhlc · barOffset · openPosition · getOrderStatus ·
+           orderBook · tradeBook · positionBook · holdings · funds · margin ·
+           symbol · optionSymbol · expiry · intervals · optionChain ·
+           syntheticFuture · holidays · timings
+Streaming  subscribeLtp · subscribeQuote · subscribeDepth · unsubscribe
+Utility    log · telegramAlert · whatsappAlert · variable · mathExpression ·
+           httpRequest · delay · waitUntil · group
+```
+
+### Capabilities Flow does NOT have
+
+Do not emit nodes for these; restructure the strategy instead.
+
+| Not available | What to do instead |
+|---|---|
+| Variables that persist between runs (flags, counters, "already traded today") | Ask the broker: `positionCheck`, or `orderBook` statistics. Or derive it statelessly from the quote's session `high`/`low`. |
+| Loops / iteration / "monitor from 09:20 to 12:30" | Use `start` with `scheduleType: "interval"` plus a `timeWindow` condition. One run per tick. |
+| Waiting inside a run for a target or stop | A separate workflow on its own schedule. Entry, exit and square-off are different workflows. |
+| Iterating a list of symbols | One workflow per symbol, or drive it from `webhookTrigger` using `{{webhook.symbol}}`. |
+| Structured trade logs, backtesting, string manipulation, date arithmetic | Not Flow. Order Book / Trade Book / P&L Tracker hold the trade record. |
+| `crossover` / `crossunder` / `correlation` / `beta` as an `indicator` | Two `indicator` nodes plus an `andGate` — see §8.14. |
+
+### Worked example of the required shape
+
+```json
+{
+  "name": "Buy RELIANCE if RSI below 30",
+  "nodes": [
+    { "id": "n1", "type": "start", "position": { "x": 0, "y": 0 },
+      "data": { "scheduleType": "interval", "intervalValue": 5, "intervalUnit": "minutes", "marketHoursOnly": true } },
+    { "id": "n2", "type": "indicator", "position": { "x": 0, "y": 100 },
+      "data": { "symbol": "RELIANCE", "exchange": "NSE", "interval": "D", "source": "api",
+                "indicatorName": "rsi", "params": "{\"period\": 14}", "outputVariable": "rsi" } },
+    { "id": "n3", "type": "varCondition", "position": { "x": 0, "y": 200 },
+      "data": { "leftValue": "{{rsi.latest.value}}", "operator": "<", "rightValue": "30" } },
+    { "id": "n4", "type": "placeOrder", "position": { "x": 0, "y": 300 },
+      "data": { "symbol": "RELIANCE", "exchange": "NSE", "action": "BUY", "quantity": 1,
+                "priceType": "MARKET", "product": "MIS", "outputVariable": "ord" } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "n1", "target": "n2" },
+    { "id": "e2", "source": "n2", "target": "n3" },
+    { "id": "e3", "source": "n3", "sourceHandle": "true", "target": "n4" }
+  ]
+}
+```
+
+### Shapes that are rejected
+
+```jsonc
+{ "strategy": {...}, "settings": {...}, "flow": [...] }   // no name/nodes/edges
+{ "workflow": { "name": "...", "nodes": [], "edges": [] } } // nested one level too deep
+{ "name": "x", "nodes": [ { "type": "Decision" } ] }        // invented type, and no id/position/data
+{ "name": "x", "nodes": [], "edges": [], }                  // trailing comma
+```
+
+---
+
 ## 1. Workflow shape
 
 A workflow is a JSON object with the following top-level keys (the snippet
