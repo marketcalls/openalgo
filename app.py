@@ -721,15 +721,35 @@ def setup_environment(app):
             # accepted: order.placed carries the only copy of the strategy tag,
             # so an order placed before this registration loses its attribution
             # permanently. Registered ahead of db_ready for that reason.
-            try:
-                from database.strategy_book_db import init_strategy_book_db
-                from subscribers.strategy_book_subscriber import register as register_strategy_book
-                from utils.event_bus import bus as _bus
+            # Retried rather than attempted once: the failure that matters here
+            # is a transient one (the DB file briefly unavailable during a
+            # parallel init), and losing it means every order placed afterwards
+            # is unattributable. Startup still proceeds if it ultimately fails -
+            # a P&L ledger must not keep the platform from trading - but the
+            # book then reports itself unavailable instead of an innocent zero,
+            # so nothing downstream can mistake it for a flat strategy.
+            for _attempt in range(1, 4):
+                try:
+                    from database.strategy_book_db import init_strategy_book_db
+                    from subscribers.strategy_book_subscriber import (
+                        register as register_strategy_book,
+                    )
+                    from utils.event_bus import bus as _bus
 
-                init_strategy_book_db()
-                register_strategy_book(_bus)
-            except Exception:
-                logger.exception("Failed to initialize strategy book")
+                    init_strategy_book_db()
+                    register_strategy_book(_bus)
+                    break
+                except Exception:
+                    logger.exception(
+                        f"Failed to initialize strategy book (attempt {_attempt} of 3)"
+                    )
+                    time.sleep(0.5 * _attempt)
+            else:
+                logger.error(
+                    "Strategy book unavailable after 3 attempts. Orders will still be "
+                    "placed, but per-strategy P&L will report an error until restart "
+                    "rather than a misleading zero."
+                )
 
             # Signal that DB tables are ready (unblocks cache restoration)
             app.db_ready.set()

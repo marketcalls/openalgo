@@ -149,9 +149,16 @@ def get_strategy_pnl(
     cost basis, and durable across restarts) and marks open quantity against
     a single position-book call for last traded prices.
     """
-    from database.strategy_book_db import get_strategy_legs
+    from database.strategy_book_db import StrategyBookUnavailable, get_strategy_legs
 
-    legs = get_strategy_legs(user_id=user_id, strategy=strategy)
+    try:
+        legs = get_strategy_legs(user_id=user_id, strategy=strategy)
+    except StrategyBookUnavailable as exc:
+        # An unreadable book is unknown, not empty. Reporting zero here would
+        # look identical to a flat, healthy strategy to an exit trigger.
+        logger.error(f"Strategy P&L unavailable: {exc}")
+        return {"status": "error", "message": f"Strategy book unavailable: {exc}"}
+
     positions_resp = client.positionbook() or {}
     # Propagate rather than pricing against an empty book. A transient broker
     # failure would otherwise mark every open leg unpriced, report unrealized

@@ -331,6 +331,10 @@ def resolve_and_place_leg(
                 "leg": leg_index + 1,
                 "symbol": resolved_symbol,
                 "exchange": resolved_exchange,
+                # The split path reports one aggregated leg. Without product,
+                # subscribers keying on (symbol, exchange, product) cannot match
+                # it, unlike the non-split path below.
+                "product": leg_data.get("product", "MIS"),
                 "offset": leg_data.get("offset"),
                 "option_type": leg_data.get("option_type", "").upper(),
                 "action": leg_data.get("action", "").upper(),
