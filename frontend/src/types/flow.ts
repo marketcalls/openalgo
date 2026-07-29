@@ -380,6 +380,13 @@ export interface IndicatorNodeData {
    * {{ind.series[N]}} can address a specific historical bar - Flow JSON
    * interpolation only supports positive array indices). */
   tailBars: number
+  /** Read the value N closed bars back (0 = latest). Exposed as
+   * {{ind.at_offset.value}} / {{ind.at_offset.out0}} - prefer this over
+   * reverse-indexing `series`, whose offsets shift with tailBars. */
+  offsetBars?: number
+  /** Field to pull from each sourceSeries row. Blank = auto (value, then
+   * out0, then close) so a raw History array works directly. */
+  sourceField?: string
   /** Optional - set to {{otherIndicator.series}} to compute this indicator
    * over another Indicator node's output instead of fetching fresh
    * history. Only single-series indicators (SMA, EMA, RSI, WMA, stdev,

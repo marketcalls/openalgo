@@ -93,6 +93,55 @@ def clear_history_cache() -> None:
         _history_cache.clear()
 
 
+# --- Bar-count ceiling ----------------------------------------------------
+#
+# Flow nodes must never pull an open-ended range. Ten years of daily bars is
+# ~2,500 rows, but ten years of 1-minute bars is ~900,000 - a download that
+# takes minutes, burns the broker's rate budget (Dhan 5 req/s, some Zerodha
+# paths 1 req/s) and then sits in the workflow context in memory. No
+# indicator here needs that depth; SMA-200 is the deepest common window.
+#
+# The ceiling is applied when *sizing the request window* (history_window),
+# not only when trimming the response, so the oversized fetch never happens
+# in the first place. Raise FLOW_MAX_HISTORY_BARS if a strategy genuinely
+# needs more depth.
+MAX_HISTORY_BARS = max(int(os.getenv("FLOW_MAX_HISTORY_BARS", "200")), 1)
+
+# Absolute ceiling on the calendar span of any single request. The bar count
+# alone is not enough: 200 quarterly bars is a 54-year range and 200 yearly
+# bars is 219 years - spans no broker will serve sensibly, and which can make
+# an adapter fall back to dumping daily rows. ~11 years keeps weekly at its
+# full 200 bars while bounding the long-period aggregates.
+MAX_HISTORY_CALENDAR_DAYS = max(int(os.getenv("FLOW_MAX_HISTORY_CALENDAR_DAYS", "4000")), 1)
+
+
+def clamp_bars(requested: int | None, what: str = "bars") -> int:
+    """Clamp a requested bar count to MAX_HISTORY_BARS (min 1)."""
+    try:
+        value = int(requested)
+    except (TypeError, ValueError):
+        value = MAX_HISTORY_BARS
+    if value > MAX_HISTORY_BARS:
+        logger.info(
+            f"Requested {value} {what} exceeds the {MAX_HISTORY_BARS}-bar ceiling; "
+            f"using the latest {MAX_HISTORY_BARS}"
+        )
+        return MAX_HISTORY_BARS
+    return max(value, 1)
+
+
+def trim_records(records: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Keep only the most recent MAX_HISTORY_BARS rows of a history response."""
+    if not records:
+        return records or []
+    if len(records) > MAX_HISTORY_BARS:
+        logger.info(
+            f"History returned {len(records)} bars; trimming to the latest {MAX_HISTORY_BARS}"
+        )
+        return records[-MAX_HISTORY_BARS:]
+    return records
+
+
 # Every ta function names its OHLCV-series parameters consistently
 # (open_prices/open, high, low, close, data, volume) and always lists them
 # before any scalar parameter (period, length, multiplier, ...). Introspecting
@@ -243,10 +292,45 @@ def history_window(
     if lookback_days:
         start = (date.fromisoformat(end) - timedelta(days=int(lookback_days))).isoformat()
         return start, end
+    # Clamp here, not just when trimming the response: sizing the window from
+    # an unclamped bar count is what would issue the multi-year download.
+    bars = clamp_bars(lookback_bars, "history bars")
     bars_per_day = _BARS_PER_DAY.get(interval.lower(), 75)
-    calendar_days = int((lookback_bars / bars_per_day) * 1.6) + 5
+    calendar_days = int((bars / bars_per_day) * 1.6) + 5
+    if calendar_days > MAX_HISTORY_CALENDAR_DAYS:
+        logger.info(
+            f"{bars} {interval} bars would span {calendar_days} days; capping the request "
+            f"at {MAX_HISTORY_CALENDAR_DAYS} days"
+        )
+        calendar_days = MAX_HISTORY_CALENDAR_DAYS
     start = (date.fromisoformat(end) - timedelta(days=calendar_days)).isoformat()
     return start, end
+
+
+def clamp_history_range(start_date: str, end_date: str, interval: str) -> tuple[str, str]:
+    """Narrow an explicit [start, end] range so it spans at most
+    MAX_HISTORY_BARS bars for the given interval.
+
+    Used by the History node, where the user supplies literal dates: a
+    10-year 1-minute range is ~900k bars and must never reach the broker.
+    Only the start is moved forward, so the most recent data is preserved.
+    """
+    try:
+        requested_start = date.fromisoformat(str(start_date)[:10])
+        end = date.fromisoformat(str(end_date)[:10])
+    except (TypeError, ValueError):
+        return start_date, end_date
+    floor_start, _ = history_window(
+        lookback_bars=MAX_HISTORY_BARS, interval=interval, end_date=end.isoformat()
+    )
+    floor = date.fromisoformat(floor_start)
+    if requested_start < floor:
+        logger.info(
+            f"History range {start_date}..{end_date} at {interval} exceeds the "
+            f"{MAX_HISTORY_BARS}-bar ceiling; starting from {floor} instead"
+        )
+        return floor.isoformat(), end.isoformat()
+    return start_date, end_date
 
 
 def _resolve_params(name: str, params: dict[str, Any] | None) -> dict[str, Any]:
@@ -461,6 +545,7 @@ def compute_indicator(
     lookback_bars: int = 100,
     tail_bars: int = 5,
     source_series: list[float] | None = None,
+    offset_bars: int = 0,
 ) -> dict[str, Any]:
     """Compute one `ta` indicator over OHLCV records (as returned by
     `services.history_service.get_history`'s `data` field) — or, in nested
@@ -526,7 +611,7 @@ def compute_indicator(
         for col in ("open", "high", "low", "close", "volume"):
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
-        df = df.tail(max(int(lookback_bars), 5) + 50)
+        df = df.tail(clamp_bars(lookback_bars))
         cols, args = resolve_indicator_inputs(df, fn, inputs)
         df_index = df.index
 
@@ -549,13 +634,22 @@ def compute_indicator(
                 row[col] = None
         return row
 
-    n = max(int(tail_bars), 1)
+    n = clamp_bars(tail_bars, "tail bars")
     tail_series = [_at(offset) for offset in range(-n, 0)]
+
+    # Direct "value N bars back" reader. Reverse-indexing `series` works but
+    # is fragile: series[0]'s meaning shifts whenever tail_bars changes, so a
+    # strategy asking for "supertrend 5 bars ago" would silently read a
+    # different bar after an unrelated tail_bars edit.
+    offset = clamp_bars(offset_bars + 1, "offset bars") - 1
+    at_offset = _at(-1 - offset)
 
     return {
         "status": "success",
         "indicator": name,
         "nested": source_series is not None,
+        "offset_bars": offset,
+        "at_offset": at_offset,
         "inputs": cols,
         "params": resolved_params,
         "outputs": list(out.columns),

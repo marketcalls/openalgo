@@ -810,12 +810,21 @@ class NodeExecutor:
         return result
 
     def execute_history(self, node_data: dict) -> dict:
-        """Execute History node"""
+        """Execute History node.
+
+        The requested range is capped to the most recent MAX_HISTORY_BARS bars
+        for the chosen interval - a 10-year 1-minute range is ~900k rows and
+        must never be requested from the broker or held in workflow context.
+        """
+        from services.indicator_service import clamp_history_range, trim_records
+
         symbol = self.get_str(node_data, "symbol", "")
         exchange = self.get_str(node_data, "exchange", "NSE")
         interval = self.get_str(node_data, "interval", "5m")
         start_date = self.get_str(node_data, "startDate", "")
         end_date = self.get_str(node_data, "endDate", "")
+        if start_date and end_date:
+            start_date, end_date = clamp_history_range(start_date, end_date, interval)
         self.log(f"Getting history for: {symbol} ({interval})")
         result = self.client.get_history(
             symbol=symbol,
@@ -824,9 +833,34 @@ class NodeExecutor:
             start_date=start_date,
             end_date=end_date,
         )
-        self.log(f"History data received")
+        if isinstance(result, dict) and result.get("data"):
+            result = {**result, "data": trim_records(result["data"])}
+        self.log("History data received")
         self.store_output(node_data, result)
         return result
+
+    @staticmethod
+    def _history_error(
+        response: dict | None, symbol: str, interval: str, source: str
+    ) -> str | None:
+        """Return a caller-facing message when a history fetch failed.
+
+        Not every broker supports every interval, and an unsupported one comes
+        back as a broker error - which would otherwise surface downstream as a
+        misleading "no historical data available for this symbol/date range".
+        """
+        response = response or {}
+        if response.get("status") == "error" or response.get("error"):
+            detail = response.get("message") or response.get("error") or "unknown error"
+            hint = ""
+            if source != "db":
+                hint = (
+                    f" If your broker does not support the '{interval}' interval, use the "
+                    "Intervals node to list supported ones, or set Source to Historify DB "
+                    "to resample it locally."
+                )
+            return f"History fetch failed for {symbol} ({interval}): {detail}.{hint}"
+        return None
 
     def execute_prior_period_ohlc(self, node_data: dict) -> dict:
         """Execute Prior Period OHLC node.
@@ -842,6 +876,7 @@ class NodeExecutor:
             fetch_history_cached,
             history_window,
             prior_period_ohlc,
+            trim_records,
         )
 
         symbol = self.context.interpolate(self.get_str(node_data, "symbol"))
@@ -862,7 +897,11 @@ class NodeExecutor:
         result = fetch_history_cached(
             self.client, symbol, exchange, interval, start_date, end_date, source
         )
-        records = (result or {}).get("data") or []
+        history_error = self._history_error(result, symbol, interval, source)
+        if history_error:
+            self.log(history_error, "error")
+            return {"status": "error", "message": history_error}
+        records = trim_records((result or {}).get("data") or [])
         try:
             row = prior_period_ohlc(records, period)
         except ValueError as e:
@@ -896,15 +935,17 @@ class NodeExecutor:
         """
         from services.indicator_service import (
             bar_at_offset,
+            clamp_bars,
             fetch_history_cached,
             history_window,
+            trim_records,
         )
 
         symbol = self.context.interpolate(self.get_str(node_data, "symbol"))
         exchange = self.get_str(node_data, "exchange", "NSE")
         interval = self.get_str(node_data, "interval", "D")
         source = self.get_str(node_data, "source", "api")
-        offset_bars = self.get_int(node_data, "offsetBars", 0)
+        offset_bars = clamp_bars(self.get_int(node_data, "offsetBars", 0) + 1, "offset bars") - 1
         if not symbol:
             return {"status": "error", "message": "Symbol is required"}
 
@@ -914,7 +955,11 @@ class NodeExecutor:
         result = fetch_history_cached(
             self.client, symbol, exchange, interval, start_date, end_date, source
         )
-        records = (result or {}).get("data") or []
+        history_error = self._history_error(result, symbol, interval, source)
+        if history_error:
+            self.log(history_error, "error")
+            return {"status": "error", "message": history_error}
+        records = trim_records((result or {}).get("data") or [])
         row = bar_at_offset(records, offset_bars, interval=interval)
         if row is None:
             return {
@@ -947,11 +992,14 @@ class NodeExecutor:
             compute_indicator,
             fetch_history_cached,
             history_window,
+            trim_records,
         )
 
         indicator_name = self.get_str(node_data, "indicatorName", "sma")
         lookback_bars = self.get_int(node_data, "lookbackBars", 100)
         tail_bars = self.get_int(node_data, "tailBars", 5)
+        offset_bars = self.get_int(node_data, "offsetBars", 0)
+        source_field = self.get_str(node_data, "sourceField", "")
         params_raw = self.get_str(node_data, "params", "{}")
         try:
             params = json.loads(params_raw) if params_raw.strip() else {}
@@ -992,7 +1040,20 @@ class NodeExecutor:
             numeric_series = []
             for item in raw_list:
                 if isinstance(item, dict):
-                    value = item.get("value", item.get("out0"))
+                    # `value`/`out0` come from another Indicator node; `close`
+                    # (or an explicit sourceField) lets a raw History array be
+                    # fed in directly, e.g. sourceSeries={{h.data}}.
+                    if source_field:
+                        value = item.get(source_field)
+                    else:
+                        value = next(
+                            (
+                                item[k]
+                                for k in ("value", "out0", "close")
+                                if item.get(k) is not None
+                            ),
+                            None,
+                        )
                 else:
                     value = item
                 if value is None:
@@ -1018,6 +1079,7 @@ class NodeExecutor:
                     params=params,
                     tail_bars=tail_bars,
                     source_series=numeric_series,
+                    offset_bars=offset_bars,
                 )
             except ValueError as e:
                 self.log(f"Indicator error: {e}", "error")
@@ -1038,7 +1100,11 @@ class NodeExecutor:
         history = fetch_history_cached(
             self.client, symbol, exchange, interval, start_date, end_date, source
         )
-        records = (history or {}).get("data") or []
+        history_error = self._history_error(history, symbol, interval, source)
+        if history_error:
+            self.log(history_error, "error")
+            return {"status": "error", "message": history_error}
+        records = trim_records((history or {}).get("data") or [])
         try:
             output = compute_indicator(
                 records,
@@ -1046,6 +1112,7 @@ class NodeExecutor:
                 params=params,
                 lookback_bars=lookback_bars,
                 tail_bars=tail_bars,
+                offset_bars=offset_bars,
             )
         except ValueError as e:
             self.log(f"Indicator error: {e}", "error")
