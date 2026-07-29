@@ -13,11 +13,13 @@ export const EXCHANGES = [
   { value: 'CDS', label: 'CDS' },
   { value: 'BCD', label: 'BCD' },
   { value: 'MCX', label: 'MCX' },
+  { value: 'NCDEX', label: 'NCDEX' },
   { value: 'NCO', label: 'NCO' },
   { value: 'NSE_INDEX', label: 'NSE_INDEX' },
   { value: 'BSE_INDEX', label: 'BSE_INDEX' },
   { value: 'MCX_INDEX', label: 'MCX_INDEX' },
   { value: 'GLOBAL_INDEX', label: 'GLOBAL_INDEX' },
+  { value: 'CRYPTO', label: 'CRYPTO' },
 ] as const
 
 export const INDEX_EXCHANGES = [
@@ -214,8 +216,15 @@ export const GREEKS = [
 // real `ta` module signatures, not hand-maintained, so re-derive it the
 // same way if the pinned `openalgo` SDK version changes.
 export const INDICATOR_CATEGORIES = [
-  'Trend', 'Momentum', 'Volatility', 'Volume', 'Oscillators',
-  'Statistical', 'Hybrid', 'Price Transform', 'Utility',
+  'Trend',
+  'Momentum',
+  'Volatility',
+  'Volume',
+  'Oscillators',
+  'Statistical',
+  'Hybrid',
+  'Price Transform',
+  'Utility',
 ] as const
 
 export const INDICATOR_CATALOG = [
@@ -271,7 +280,6 @@ export const INDICATOR_CATALOG = [
   { value: 'rvi', label: 'RVI', category: 'Volatility' },
   { value: 'starc', label: 'STARC', category: 'Volatility' },
   { value: 'true_range', label: 'True Range', category: 'Volatility' },
-  { value: 'ulcerindex', label: 'Ulcerindex', category: 'Volatility' },
   { value: 'ultimate_oscillator', label: 'Ultimate Oscillator', category: 'Volatility' },
   { value: 'uo_oscillator', label: 'Uo Oscillator', category: 'Volatility' },
   { value: 'adl', label: 'ADL', category: 'Volume' },
@@ -305,7 +313,6 @@ export const INDICATOR_CATALOG = [
   { value: 'rocr100', label: 'Rocr100', category: 'Oscillators' },
   { value: 'stc', label: 'STC', category: 'Oscillators' },
   { value: 'tsi', label: 'TSI', category: 'Oscillators' },
-  { value: 'vi', label: 'VI', category: 'Oscillators' },
   { value: 'linreg', label: 'Linreg', category: 'Statistical' },
   { value: 'linregangle', label: 'Linregangle', category: 'Statistical' },
   { value: 'linregintercept', label: 'Linregintercept', category: 'Statistical' },
@@ -529,6 +536,12 @@ export const NODE_DEFINITIONS = {
       category: 'data' as const,
     },
     {
+      type: 'strategyPnl',
+      label: 'Strategy P&L',
+      description: 'Realized/unrealized P&L for a strategy',
+      category: 'data' as const,
+    },
+    {
       type: 'priorPeriodOhlc',
       label: 'Prior Period OHLC',
       description: 'Previous hour/day/week/month candle',
@@ -545,6 +558,108 @@ export const NODE_DEFINITIONS = {
       label: 'Open Position',
       description: 'Get position for symbol',
       category: 'data' as const,
+    },
+    {
+      type: 'getOrderStatus',
+      label: 'Order Status',
+      description: 'Check order status',
+      category: 'data' as const,
+    },
+    {
+      type: 'expiry',
+      label: 'Expiry Dates',
+      description: 'F&O expiry dates',
+      category: 'data' as const,
+    },
+    {
+      type: 'intervals',
+      label: 'Intervals',
+      description: 'Broker-supported timeframes',
+      category: 'data' as const,
+    },
+    {
+      type: 'multiQuotes',
+      label: 'Multi Quotes',
+      description: 'Quotes for several symbols',
+      category: 'data' as const,
+    },
+    {
+      type: 'symbol',
+      label: 'Symbol Info',
+      description: 'Lot size, tick size, token',
+      category: 'data' as const,
+    },
+    {
+      type: 'optionSymbol',
+      label: 'Option Symbol',
+      description: 'Resolve an ATM-relative strike',
+      category: 'data' as const,
+    },
+    {
+      type: 'syntheticFuture',
+      label: 'Synthetic Future',
+      description: 'Synthetic future price',
+      category: 'data' as const,
+    },
+    {
+      type: 'optionChain',
+      label: 'Option Chain',
+      description: 'Strikes with CE and PE',
+      category: 'data' as const,
+    },
+    {
+      type: 'margin',
+      label: 'Margin',
+      description: 'Margin required for a position or basket',
+      category: 'data' as const,
+    },
+    {
+      type: 'holidays',
+      label: 'Holidays',
+      description: 'Exchange holiday list for a year',
+      category: 'data' as const,
+    },
+    {
+      type: 'timings',
+      label: 'Market Timings',
+      description: 'Market open and close for a date',
+      category: 'data' as const,
+    },
+    {
+      type: 'subscribeLtp',
+      label: 'Subscribe LTP',
+      description: 'Stream last traded price',
+      category: 'streaming' as const,
+    },
+    {
+      type: 'subscribeQuote',
+      label: 'Subscribe Quote',
+      description: 'Stream full quote',
+      category: 'streaming' as const,
+    },
+    {
+      type: 'subscribeDepth',
+      label: 'Subscribe Depth',
+      description: 'Stream market depth',
+      category: 'streaming' as const,
+    },
+    {
+      type: 'unsubscribe',
+      label: 'Unsubscribe',
+      description: 'Stop a stream',
+      category: 'streaming' as const,
+    },
+    {
+      type: 'mathExpression',
+      label: 'Math Expression',
+      description: 'Arithmetic over variables',
+      category: 'utility' as const,
+    },
+    {
+      type: 'group',
+      label: 'Group',
+      description: 'Visual grouping only',
+      category: 'utility' as const,
     },
     {
       type: 'orderBook',
@@ -663,6 +778,8 @@ export const DEFAULT_NODE_DATA = {
     quantity: 1,
     priceType: 'MARKET' as const,
     product: 'MIS' as const,
+    price: 0,
+    triggerPrice: 0,
   },
   smartOrder: {
     symbol: '',
@@ -673,24 +790,56 @@ export const DEFAULT_NODE_DATA = {
     priceType: 'MARKET' as const,
     product: 'MIS' as const,
   },
+  getOrderStatus: {
+    orderId: '',
+    waitForCompletion: false,
+    outputVariable: 'orderStatus',
+  },
+  subscribeLtp: {
+    symbol: '',
+    exchange: 'NSE' as const,
+    outputVariable: 'ltp',
+  },
+  subscribeQuote: {
+    symbol: '',
+    exchange: 'NSE' as const,
+    outputVariable: 'quote',
+  },
+  subscribeDepth: {
+    symbol: '',
+    exchange: 'NSE' as const,
+    outputVariable: 'depth',
+  },
+  unsubscribe: {
+    symbol: '',
+    exchange: 'NSE' as const,
+    streamType: 'all' as const,
+  },
   optionsOrder: {
     underlying: 'NIFTY',
     exchange: 'NSE_INDEX' as const,
-    expiryDate: '',
+    expiryType: 'current_week' as const,
     offset: 'ATM',
     optionType: 'CE' as const,
     action: 'BUY' as const,
     quantity: 1,
     priceType: 'MARKET' as const,
     product: 'MIS' as const,
+    price: 0,
+    triggerPrice: 0,
   },
   optionsMultiOrder: {
     strategy: 'straddle' as const,
     underlying: 'NIFTY',
     exchange: 'NSE_INDEX' as const,
-    expiryDate: '',
+    // The executor resolves an expiry *type*; expiryDate was never read here.
+    expiryType: 'current_week' as const,
     legs: [],
+    action: 'SELL' as const,
+    quantity: 1,
+    strangleWidth: 'OTM2' as const,
     priceType: 'MARKET' as const,
+    price: 0,
     product: 'MIS' as const,
   },
   cancelOrder: {
@@ -726,18 +875,21 @@ export const DEFAULT_NODE_DATA = {
     symbol: '',
     exchange: 'NSE',
     product: 'MIS' as const,
-    operator: 'gt' as const,
+    condition: 'exists' as const,
     threshold: 0,
   },
   fundCheck: {
-    operator: 'gt' as const,
-    threshold: 10000,
+    // The executor reads minAvailable. Shipping operator/threshold left a new
+    // node with no minAvailable at all, so the guard defaulted to 0 and passed
+    // on any balance - a fund check that never checked.
+    minAvailable: 10000,
   },
   priceCondition: {
     symbol: '',
     exchange: 'NSE',
-    operator: 'gt' as const,
-    threshold: 0,
+    field: 'ltp' as const,
+    operator: '>' as const,
+    value: 0,
   },
   varCondition: {
     leftValue: '',
@@ -769,6 +921,9 @@ export const DEFAULT_NODE_DATA = {
     symbol: '',
     exchange: 'NSE',
     interval: '5m' as const,
+    // The panel exposes Days; startDate/endDate stay available for an explicit
+    // range and take precedence when both are set.
+    days: 30,
     startDate: '',
     endDate: '',
     outputVariable: '',
@@ -785,6 +940,10 @@ export const DEFAULT_NODE_DATA = {
     offsetBars: 0,
     sourceSeries: '',
     sourceField: '',
+    outputVariable: '',
+  },
+  strategyPnl: {
+    strategy: '',
     outputVariable: '',
   },
   priorPeriodOhlc: {
@@ -873,7 +1032,9 @@ export const DEFAULT_NODE_DATA = {
     outputVariable: '',
   },
   intervals: {
-    outputVariable: '',
+    // Persisted, not just shown: an empty default meant the panel displayed
+    // "intervals" while the node stored its result nowhere.
+    outputVariable: 'intervals',
   },
   multiQuotes: {
     symbols: '',
@@ -894,11 +1055,13 @@ export const DEFAULT_NODE_DATA = {
     outputVariable: '',
   },
   holidays: {
-    exchange: 'NSE',
+    // The calendar service takes a year, not an exchange. Blank = current year.
+    year: undefined as number | undefined,
     outputVariable: '',
   },
   timings: {
-    exchange: 'NSE',
+    // The calendar service takes a date (YYYY-MM-DD). Blank = today.
+    date: '',
     outputVariable: '',
   },
   mathExpression: {

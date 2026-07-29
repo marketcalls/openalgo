@@ -421,6 +421,8 @@ class FlowOpenAlgoClient:
         price: float = 0,
         splitsize: int = 0,
         strategy: str = "flow_workflow",
+        # Appended last so existing positional callers keep working.
+        trigger_price: float = 0,
     ) -> dict[str, Any]:
         """Place an options order with ATM/ITM/OTM offset resolution
 
@@ -435,6 +437,7 @@ class FlowOpenAlgoClient:
             price_type: MARKET, LIMIT, SL, SL-M
             product: NRML, MIS
             price: Price for limit orders
+            trigger_price: Trigger price for SL / SL-M orders
             splitsize: Split large orders into smaller chunks (0 = no split)
             strategy: Strategy name for tracking
         """
@@ -453,6 +456,7 @@ class FlowOpenAlgoClient:
             "pricetype": price_type,
             "product": product,
             "price": price,
+            "trigger_price": trigger_price,
             "splitsize": splitsize,
         }
 
@@ -499,46 +503,55 @@ class FlowOpenAlgoClient:
 
     # --- Market Calendar ---
 
-    def holidays(self, exchange: str = "NSE") -> dict[str, Any]:
-        """Get market holidays"""
+    def holidays(self, year: int | None = None) -> dict[str, Any]:
+        """Get market holidays for a year (defaults to the current year)."""
         from services.market_calendar_service import get_holidays
 
-        success, response, status_code = get_holidays(exchange=exchange, api_key=self.api_key)
+        success, response, status_code = get_holidays(year=year)
         return self._handle_response(success, response, status_code)
 
-    def timings(self, exchange: str = "NSE") -> dict[str, Any]:
-        """Get market timings"""
+    def timings(self, date_str: str) -> dict[str, Any]:
+        """Get market timings for a date (YYYY-MM-DD)."""
         from services.market_calendar_service import get_timings
 
-        success, response, status_code = get_timings(exchange=exchange, api_key=self.api_key)
+        success, response, status_code = get_timings(date_str)
         return self._handle_response(success, response, status_code)
 
     # --- Margin ---
 
     def margin(
         self,
-        symbol: str,
-        exchange: str,
-        quantity: int,
+        symbol: str = "",
+        exchange: str = "NSE",
+        quantity: int = 0,
         price: float = 0,
         product_type: str = "MIS",
         action: str = "BUY",
         price_type: str = "MARKET",
+        positions: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Get margin required for an order"""
-        from services.margin_service import get_margin
+        """Margin required for one position, or for a basket.
 
-        order_data = {
-            "symbol": symbol,
-            "exchange": exchange,
-            "quantity": str(quantity),  # Schema expects string
-            "price": str(price),  # Schema expects string
-            "product": product_type,  # Schema expects 'product' not 'product_type'
-            "pricetype": price_type,  # Schema expects 'pricetype' (no underscore)
-            "action": action.upper(),
-        }
+        The service calculates a basket, so a single position is sent as a
+        one-element array. `positions` takes precedence when supplied.
+        """
+        from services.margin_service import calculate_margin
 
-        success, response, status_code = get_margin(order_data, api_key=self.api_key)
+        if not positions:
+            positions = [
+                {
+                    "exchange": exchange,
+                    "symbol": symbol,
+                    "action": action.upper(),
+                    "quantity": str(quantity),
+                    "product": product_type,
+                    "pricetype": price_type,
+                    "price": str(price),
+                }
+            ]
+
+        margin_data = {"apikey": self.api_key, "positions": positions}
+        success, response, status_code = calculate_margin(margin_data, api_key=self.api_key)
         return self._handle_response(success, response, status_code)
 
     # --- Alerts ---
