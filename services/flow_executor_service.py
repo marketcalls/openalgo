@@ -2579,6 +2579,13 @@ def execute_node_chain(
         # downstream - two orders from one crossover. Skipping here is safe
         # because the later input's own traversal reaches this gate again,
         # by which point every source has a stored result.
+        #
+        # A gate is also combinational: exactly one result per run. It is
+        # commonly reachable by several paths (one per input edge, plus a
+        # pass-through from a shared parent), and each later arrival would
+        # otherwise re-evaluate it and re-fire everything downstream.
+        if context.get_condition_result(node_id) is not None:
+            return
         incoming_edges = incoming_edge_map.get(node_id, [])
         input_results = []
         pending = 0
