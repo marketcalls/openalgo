@@ -1,10 +1,38 @@
-import json
-
 from broker.kotak.mapping.transform_data import map_exchange
 from database.token_db import get_oa_symbol, get_symbol
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _openalgo_symbol(row, exchange):
+    """Resolve one Kotak row to its OpenAlgo symbol.
+
+    Token first, then the broker trading symbol. The fallback is not
+    belt-and-braces: Kotak populates "tok" on orderbook rows but leaves it as
+    an empty string on tradebook rows, so a token-only lookup silently leaks
+    the raw broker symbol ("YESBANK-EQ") into the UI, which then fails every
+    downstream lookup that expects an OpenAlgo symbol. brsymbol in the master
+    contract is pTrdSymbol (master_contract_db.py:155), i.e. exactly the value
+    Kotak sends as trdSym.
+    """
+    token = str(row.get("tok") or "").strip()
+    if token:
+        mapped = get_symbol(token, exchange)
+        if mapped:
+            return mapped
+
+    broker_symbol = row.get("trdSym") or row.get("sym") or ""
+    if broker_symbol:
+        mapped = get_oa_symbol(broker_symbol, exchange)
+        if mapped:
+            return mapped
+
+    logger.debug(
+        f"No OpenAlgo symbol for token '{token}' / symbol '{broker_symbol}' on {exchange}. "
+        "Keeping the broker trading symbol."
+    )
+    return None
 
 
 def map_order_data(order_data):
@@ -21,7 +49,7 @@ def map_order_data(order_data):
     # if order_data has key 'data' and its value is None
 
     if order_data["stat"] == "Not_Ok":
-        logger.info("No data available.")
+        logger.debug("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
         return order_data
 
@@ -29,28 +57,19 @@ def map_order_data(order_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        logger.info("No data available.")
+        logger.debug("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data["data"]
 
     if order_data:
         for order in order_data:
-            # Extract the instrument_token and exchange for the current order
-            symboltoken = order["tok"]
             exchange = map_exchange(order["exSeg"])
             order["exSeg"] = exchange
 
-            # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_symbol(symboltoken, exchange)
-
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
+            symbol_from_db = _openalgo_symbol(order, exchange)
             if symbol_from_db:
                 order["trdSym"] = symbol_from_db
-            else:
-                logger.info(
-                    f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol."
-                )
     return order_data
 
 
@@ -163,7 +182,7 @@ def map_trade_data(trade_data):
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
     if trade_data["stat"] == "Not_Ok":
-        logger.info("No data available.")
+        logger.debug("No data available.")
         trade_data = {}  # or set it to an empty list if it's supposed to be a list
         return trade_data
         # Check if 'data' is None
@@ -171,36 +190,26 @@ def map_trade_data(trade_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        logger.info("No data available.")
+        logger.debug("No data available.")
         trade_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         trade_data = trade_data["data"]
 
     if trade_data:
         for order in trade_data:
-            # Extract the instrument_token and exchange for the current order
-            symbol = order["tok"]
             exchange = map_exchange(order["exSeg"])
             order["exSeg"] = exchange
-            logger.info(f"{symbol}")
-            logger.info(f"{exchange}")
-            # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_symbol(symbol, exchange)
-            logger.info(f"{symbol_from_db}")
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
+
+            symbol_from_db = _openalgo_symbol(order, exchange)
             if symbol_from_db:
                 order["trdSym"] = symbol_from_db
-            else:
-                logger.info(
-                    f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol."
-                )
 
             # Map transaction type regardless of symbol lookup result
             if order["trnsTp"] == "B":
                 order["trnsTp"] = "BUY"
             elif order["trnsTp"] == "S":
                 order["trnsTp"] = "SELL"
-    logger.info(f"{trade_data}")
+    logger.debug(f"Mapped Kotak tradebook: {trade_data}")
     return trade_data
 
 
@@ -259,8 +268,8 @@ def transform_positions_data(positions_data):
 
 def transform_holdings_data(holdings_data):
     transformed_data = []
-    logger.info("Holdings Data")
-    logger.info(f"{holdings_data}")
+    logger.debug("Holdings Data")
+    logger.debug(f"{holdings_data}")
     for holding in holdings_data:
         transformed_position = {
             "symbol": holding.get("displaySymbol", ""),
@@ -283,8 +292,8 @@ def transform_holdings_data(holdings_data):
         }
 
         transformed_data.append(transformed_position)
-    logger.info("Holdings Data")
-    logger.info(f"{transformed_data}")
+    logger.debug("Holdings Data")
+    logger.debug(f"{transformed_data}")
     return transformed_data
 
 
@@ -302,7 +311,7 @@ def map_portfolio_data(portfolio_data):
     """
     # Check if 'data' is None or doesn't contain 'holdings'
     if portfolio_data.get("data") is None:
-        logger.info("No data available.")
+        logger.debug("No data available.")
         # Return an empty structure or handle this scenario as needed
         return {}
 
@@ -324,7 +333,7 @@ def map_portfolio_data(portfolio_data):
         if portfolio["instrumentType"] == "Equity":
             portfolio["instrumentType"] = "CNC"  # Modify 'product' field
         else:
-            logger.info("Kotak Portfolio - Product Value for Delivery Not Found or Changed.")
+            logger.debug("Kotak Portfolio - Product Value for Delivery Not Found or Changed.")
 
     # The function already works with 'data', which includes 'holdings' and 'totalholding',
     # so we can return 'data' directly without additional modifications.
