@@ -329,6 +329,13 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
       color: 'bg-pink-500/10',
     },
     {
+      type: 'intervals',
+      label: 'Intervals',
+      description: 'Broker timeframes',
+      icon: <Clock className="h-3.5 w-3.5 text-pink-500" />,
+      color: 'bg-pink-500/10',
+    },
+    {
       type: 'multiQuotes',
       label: 'Multi Quotes',
       description: 'Multiple symbols',

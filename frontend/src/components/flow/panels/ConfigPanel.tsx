@@ -129,6 +129,7 @@ const NODE_TITLES: Record<string, string> = {
   strategyPnl: 'Strategy P&L',
   barOffset: 'Bar Offset',
   expiry: 'Get Expiry',
+  intervals: 'Intervals',
   multiQuotes: 'Multi Quotes',
   symbol: 'Symbol Info',
   optionSymbol: 'Option Symbol',
@@ -664,9 +665,9 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('orderId', e.target.value)}
                   />
                   <p className="text-[10px] text-muted-foreground">
-                    A literal broker order id. {'{{variable}}'} references are not supported
-                    here - a trigger has no upstream node to resolve them from. To react to
-                    an order this workflow placed, filter by Symbol instead.
+                    A literal broker order id. {'{{variable}}'} references are not supported here -
+                    a trigger has no upstream node to resolve them from. To react to an order this
+                    workflow placed, filter by Symbol instead.
                   </p>
                 </div>
                 <div className="space-y-2">
@@ -679,8 +680,8 @@ export function ConfigPanel() {
                   />
                 </div>
                 <p className="text-[10px] text-muted-foreground">
-                  Set at least one of Order ID / Symbol - an unfiltered watch would fire on
-                  every order in the account.
+                  Set at least one of Order ID / Symbol - an unfiltered watch would fire on every
+                  order in the account.
                 </p>
                 <div className="space-y-2">
                   <Label className="text-xs">Exchange (optional)</Label>
@@ -1001,10 +1002,12 @@ export function ConfigPanel() {
                       if (s) {
                         handleDataChange('exchange', s.exchange)
                       }
-                      const lotSize = getLotSizeFromDb(v)
-                      if (lotSize) {
-                        handleDataChange('quantity', lotSize)
-                      }
+                      // Deliberately does NOT write the lot size into quantity.
+                      // This field is a lot COUNT and the executor multiplies it
+                      // by the lot size, so storing the lot size here squared it
+                      // (NIFTY: 65 lots x 65 = 4,225 units instead of 65).
+                      // The lot count is the user's; only the resolved preview
+                      // below reflects the instrument's lot size.
                     }}
                   >
                     <SelectTrigger className="h-8">
@@ -1110,6 +1113,17 @@ export function ConfigPanel() {
                       handleDataChange('quantity', parseInt(e.target.value, 10) || 1)
                     }
                   />
+                  {(() => {
+                    const lotSize = getLotSizeFromDb((nodeData.underlying as string) || 'NIFTY')
+                    const lots = (nodeData.quantity as number) || 1
+                    if (!lotSize) return null
+                    return (
+                      <p className="text-[10px] text-muted-foreground">
+                        {lots} lot{lots === 1 ? '' : 's'} x {lotSize} ={' '}
+                        <span className="font-medium text-foreground">{lots * lotSize} units</span>
+                      </p>
+                    )
+                  })()}
                 </div>
                 <div className="space-y-2">
                   <Label className="text-xs">Product</Label>
@@ -1944,11 +1958,10 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('sourceSeries', e.target.value)}
                   />
                   <p className="text-[10px] text-muted-foreground">
-                    Set to compute this indicator over another Indicator node's output
-                    (e.g. SMA of RSI) instead of fetching fresh history. Accepts a raw
-                    History array too - {'{{h.data}}'} uses each row's close. Only
-                    single-series indicators (SMA, EMA, RSI, WMA, stdev, highest/lowest,
-                    ...) can be nested.
+                    Set to compute this indicator over another Indicator node's output (e.g. SMA of
+                    RSI) instead of fetching fresh history. Accepts a raw History array too -{' '}
+                    {'{{h.data}}'} uses each row's close. Only single-series indicators (SMA, EMA,
+                    RSI, WMA, stdev, highest/lowest, ...) can be nested.
                   </p>
                 </div>
                 {nodeData.sourceSeries ? (
@@ -2003,8 +2016,8 @@ export function ConfigPanel() {
                         onChange={(e) => handleDataChange('interval', e.target.value)}
                       />
                       <p className="text-[10px] text-muted-foreground">
-                        Any interval your connected broker supports (check the Intervals
-                        node) - not a fixed list.
+                        Any interval your connected broker supports (check the Intervals node) - not
+                        a fixed list.
                       </p>
                     </div>
                     <div className="space-y-2">
@@ -2061,8 +2074,8 @@ export function ConfigPanel() {
                   />
                   <p className="text-[10px] text-muted-foreground">
                     0 = latest closed bar. Read it via {'{{name.at_offset.value}}'} (or{' '}
-                    {'{{name.at_offset.out0}}'} for multi-output indicators). Prefer this
-                    over indexing {'{{name.series[N]}}'}, whose offsets shift with Tail Bars.
+                    {'{{name.at_offset.out0}}'} for multi-output indicators). Prefer this over
+                    indexing {'{{name.series[N]}}'}, whose offsets shift with Tail Bars.
                   </p>
                 </div>
                 <div className="space-y-2">
@@ -2092,8 +2105,8 @@ export function ConfigPanel() {
                   />
                   <p className="text-[10px] text-muted-foreground">
                     Access with {'{{name.latest.value}}'}, {'{{name.previous.value}}'}, or{' '}
-                    {'{{name.series[N]}}'}. Multi-output indicators (MACD, BBands, ADX, ...)
-                    expose out0, out1, ...
+                    {'{{name.series[N]}}'}. Multi-output indicators (MACD, BBands, ADX, ...) expose
+                    out0, out1, ...
                   </p>
                 </div>
               </>
@@ -2110,8 +2123,8 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('strategy', e.target.value)}
                   />
                   <p className="text-[10px] text-muted-foreground">
-                    Order nodes tag their orders with the workflow name, so leaving this
-                    blank reports this workflow's own P&amp;L.
+                    Order nodes tag their orders with the workflow name, so leaving this blank
+                    reports this workflow's own P&amp;L.
                   </p>
                 </div>
                 <div className="space-y-2">
@@ -2123,9 +2136,8 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('outputVariable', e.target.value)}
                   />
                   <p className="text-[10px] text-muted-foreground">
-                    Exposes {'{{spnl.realized}}'}, {'{{spnl.unrealized}}'},{' '}
-                    {'{{spnl.total}}'}, {'{{spnl.today_realized}}'},{' '}
-                    {'{{spnl.open_quantity}}'}.
+                    Exposes {'{{spnl.realized}}'}, {'{{spnl.unrealized}}'}, {'{{spnl.total}}'},{' '}
+                    {'{{spnl.today_realized}}'}, {'{{spnl.open_quantity}}'}.
                   </p>
                 </div>
               </>
@@ -2524,6 +2536,20 @@ export function ConfigPanel() {
               </>
             )}
 
+            {nodeType === 'intervals' && (
+              <div className="space-y-2">
+                <Label className="text-xs">Output Variable</Label>
+                <Input
+                  className="h-8"
+                  placeholder="intervals"
+                  value={(nodeData.outputVariable as string) || 'intervals'}
+                  onChange={(e) => handleDataChange('outputVariable', e.target.value)}
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Timeframes this broker supports. Use {`{{intervals.data.minutes}}`}
+                </p>
+              </div>
+            )}
             {nodeType === 'orderBook' && (
               <div className="space-y-2">
                 <Label className="text-xs">Output Variable</Label>
@@ -2957,32 +2983,32 @@ export function ConfigPanel() {
             {/* ===== UTILITY NODES ===== */}
             {nodeType === 'delay' && (
               <div className="space-y-2">
-                  <Label className="text-xs">Wait Duration</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      type="number"
-                      min={1}
-                      className="h-8 flex-1"
-                      value={(nodeData.delayValue as number) || 1}
-                      onChange={(e) =>
-                        handleDataChange('delayValue', parseInt(e.target.value, 10) || 1)
-                      }
-                    />
-                    <Select
-                      value={(nodeData.delayUnit as string) || 'seconds'}
-                      onValueChange={(v) => handleDataChange('delayUnit', v)}
-                    >
-                      <SelectTrigger className="h-8 w-28">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="seconds">Seconds</SelectItem>
-                        <SelectItem value="minutes">Minutes</SelectItem>
-                        <SelectItem value="hours">Hours</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                <Label className="text-xs">Wait Duration</Label>
+                <div className="flex gap-2">
+                  <Input
+                    type="number"
+                    min={1}
+                    className="h-8 flex-1"
+                    value={(nodeData.delayValue as number) || 1}
+                    onChange={(e) =>
+                      handleDataChange('delayValue', parseInt(e.target.value, 10) || 1)
+                    }
+                  />
+                  <Select
+                    value={(nodeData.delayUnit as string) || 'seconds'}
+                    onValueChange={(v) => handleDataChange('delayUnit', v)}
+                  >
+                    <SelectTrigger className="h-8 w-28">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="seconds">Seconds</SelectItem>
+                      <SelectItem value="minutes">Minutes</SelectItem>
+                      <SelectItem value="hours">Hours</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
+              </div>
             )}
 
             {nodeType === 'waitUntil' && (
@@ -3507,8 +3533,8 @@ export function ConfigPanel() {
                   />
                 </div>
                 <p className="text-[10px] text-muted-foreground">
-                  Compares any two values after {'{{...}}'} interpolation - an indicator
-                  output, a prior-period level, a workflow variable, or a literal number.
+                  Compares any two values after {'{{...}}'} interpolation - an indicator output, a
+                  prior-period level, a workflow variable, or a literal number.
                 </p>
               </>
             )}
