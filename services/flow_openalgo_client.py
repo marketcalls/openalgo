@@ -269,8 +269,16 @@ class FlowOpenAlgoClient:
         interval: str,
         start_date: str = None,
         end_date: str = None,
+        source: str = "api",
     ) -> dict[str, Any]:
-        """Get historical data for a symbol"""
+        """Get historical data for a symbol.
+
+        interval accepts any value the connected broker's `/api/v1/intervals`
+        reports (not a fixed enum) - use the Intervals node to discover them.
+        source="db" routes to the local Historify DuckDB store instead of the
+        broker API, which additionally supports custom research intervals
+        (2m, 4m, W, M, Q) the live broker feed doesn't offer.
+        """
         from services.history_service import get_history
 
         success, response, status_code = get_history(
@@ -280,6 +288,7 @@ class FlowOpenAlgoClient:
             start_date=start_date,
             end_date=end_date,
             api_key=self.api_key,
+            source=source,
         )
         return self._handle_response(success, response, status_code)
 
@@ -524,6 +533,45 @@ class FlowOpenAlgoClient:
         return self._handle_response(success, response, status_code)
 
     # --- Alerts ---
+
+    def whatsapp(self, message: str, to: str | None = None) -> dict[str, Any]:
+        """Send a WhatsApp text message via the paired bot device.
+
+        `to` is E.164-style digits (e.g. "919876543210"); empty/None sends
+        to the paired device's own number (self). Mirrors `telegram()`'s
+        shape but calls WhatsAppBotService directly since /api/v1/whatsapp
+        has no single service-layer facade function (see
+        docs/prompt/services_documentation.md — whatsapp is REST-only).
+        """
+        from services.whatsapp_bot_service import (
+            normalize_phone,
+            phone_to_jid,
+            whatsapp_bot_service,
+        )
+
+        try:
+            if not whatsapp_bot_service.is_ready():
+                return {
+                    "status": "error",
+                    "error": "WhatsApp is not paired or not connected. Pair the device from /whatsapp.",
+                }
+
+            target = None
+            if to:
+                digits = normalize_phone(to)
+                if not digits:
+                    return {"status": "error", "error": f"Invalid WhatsApp phone number: {to}"}
+                target = [phone_to_jid(digits)]
+
+            report = whatsapp_bot_service.send_sync(to=target, text=message)
+            if report.get("failed"):
+                return {"status": "error", "error": report["failed"][0].get("error", "send failed"),
+                        "data": report}
+            return {"status": "success", "data": report}
+
+        except Exception as e:
+            logger.exception(f"Error sending WhatsApp alert: {e}")
+            return {"status": "error", "error": str(e)}
 
     def telegram(self, message: str) -> dict[str, Any]:
         """Send a Telegram alert using existing telegram_alert_service"""

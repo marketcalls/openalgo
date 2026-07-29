@@ -187,6 +187,7 @@ def activate_workflow(workflow_id):
     """Activate a workflow"""
     from database.flow_db import activate_workflow as db_activate
     from database.flow_db import get_workflow, set_schedule_job_id
+    from services.flow_order_update_monitor_service import get_flow_order_update_monitor
     from services.flow_price_monitor_service import get_flow_price_monitor
     from services.flow_scheduler_service import get_flow_scheduler
 
@@ -205,7 +206,12 @@ def activate_workflow(workflow_id):
 
     # Find trigger node to determine activation type
     trigger_node = next(
-        (n for n in nodes if n.get("type") in ["start", "webhookTrigger", "priceAlert"]), None
+        (
+            n
+            for n in nodes
+            if n.get("type") in ["start", "webhookTrigger", "priceAlert", "orderUpdateTrigger"]
+        ),
+        None,
     )
     if not trigger_node:
         return jsonify({"error": "No trigger node found in workflow"}), 400
@@ -246,6 +252,18 @@ def activate_workflow(workflow_id):
                 api_key=api_key,
             )
 
+        elif trigger_type == "orderUpdateTrigger":
+            order_monitor = get_flow_order_update_monitor()
+            order_monitor.add_watch(
+                workflow_id=workflow_id,
+                api_key=api_key,
+                order_id=trigger_data.get("orderId") or None,
+                symbol=trigger_data.get("symbol") or None,
+                exchange=trigger_data.get("exchange") or None,
+                status=trigger_data.get("status", "complete"),
+                trigger=trigger_data.get("trigger", "once"),
+            )
+
         # Update workflow as active and store API key for webhook execution
         db_activate(workflow_id, api_key=api_key)
 
@@ -264,6 +282,7 @@ def deactivate_workflow(workflow_id):
     """Deactivate a workflow"""
     from database.flow_db import deactivate_workflow as db_deactivate
     from database.flow_db import get_workflow, set_schedule_job_id
+    from services.flow_order_update_monitor_service import get_flow_order_update_monitor
     from services.flow_price_monitor_service import get_flow_price_monitor
     from services.flow_scheduler_service import get_flow_scheduler
 
@@ -284,6 +303,10 @@ def deactivate_workflow(workflow_id):
         # Remove price alert if any
         price_monitor = get_flow_price_monitor()
         price_monitor.remove_alert(workflow_id)
+
+        # Remove order-update watch if any
+        order_monitor = get_flow_order_update_monitor()
+        order_monitor.remove_watch(workflow_id)
 
         # Update workflow as inactive
         db_deactivate(workflow_id)
@@ -629,11 +652,14 @@ def trigger_webhook_with_symbol(token, symbol):
 @flow_bp.route("/api/monitor/status", methods=["GET"])
 @check_session_validity
 def get_monitor_status():
-    """Get price monitor status"""
+    """Get price monitor and order-update monitor status"""
+    from services.flow_order_update_monitor_service import get_flow_order_update_monitor
     from services.flow_price_monitor_service import get_flow_price_monitor
 
     monitor = get_flow_price_monitor()
-    return jsonify(monitor.get_status())
+    status = monitor.get_status()
+    status["order_updates"] = get_flow_order_update_monitor().get_status()
+    return jsonify(status)
 
 
 # === Export/Import Routes ===
