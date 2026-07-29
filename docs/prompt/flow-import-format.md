@@ -316,6 +316,17 @@ A workflow must contain exactly one trigger node, and that node must be one
 of: `start`, `priceAlert`, `webhookTrigger`, `orderUpdateTrigger`. Every
 other path of execution flows from there.
 
+> **A second trigger is silently ignored.** The executor takes the *first*
+> trigger node it finds and walks the graph from there, so any additional
+> trigger - and every node downstream of it - never runs, with no error. If a
+> strategy needs two schedules (say entries each minute and a square-off at
+> 14:00), either express the second as a `timeWindow`-gated branch on the
+> same trigger, or split it into a second workflow.
+>
+> Note that splitting costs broker calls: branches sharing one trigger also
+> share their data nodes, whereas separate workflows each re-fetch. Quotes and
+> the order book are **not** de-duplicated by the history cache.
+
 #### start — Schedule Trigger
 
 Fires on a clock schedule.
