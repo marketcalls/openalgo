@@ -48,10 +48,30 @@ _history_cache: TTLCache = TTLCache(
 )
 _history_cache_lock = threading.Lock()
 
-# One lock per in-flight cache key, so concurrent misses for the same request
-# collapse into a single broker call instead of racing past the cache and
-# each hitting the rate limiter (single-flight).
-_history_inflight: dict[tuple, threading.Lock] = {}
+
+# Single-flight: concurrent misses for the same request collapse into one
+# broker call, and every waiter receives that call's outcome - success or
+# failure alike. Sharing the failure matters as much as sharing the success:
+# error responses are intentionally not cached, so a lock-and-retry scheme
+# would let each waiter issue its own call exactly when the broker is
+# already rate limiting.
+class _Flight:
+    """One in-progress history fetch whose result is published to waiters."""
+
+    __slots__ = ("event", "result", "error")
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.result: dict[str, Any] | None = None
+        self.error: BaseException | None = None
+
+
+# Upper bound on how long a waiter blocks for the leader before fetching on
+# its own. The leader always sets the event in a finally block, so this only
+# guards against a thread dying outright.
+_FLIGHT_WAIT_TIMEOUT = float(os.getenv("FLOW_HISTORY_FLIGHT_TIMEOUT", "60"))
+
+_history_inflight: dict[tuple, "_Flight"] = {}
 _history_inflight_lock = threading.Lock()
 
 
@@ -114,24 +134,39 @@ def fetch_history_cached(
         return hit
 
     with _history_inflight_lock:
-        inflight = _history_inflight.get(key)
-        leader = inflight is None
+        flight = _history_inflight.get(key)
+        leader = flight is None
         if leader:
-            inflight = threading.Lock()
-            _history_inflight[key] = inflight
+            flight = _Flight()
+            _history_inflight[key] = flight
 
-    with inflight:
-        # A follower waited on the leader's lock; by now the cache is warm.
-        hit = _cached()
-        if hit is not None:
-            logger.debug(f"History cache hit after wait: {symbol} {interval} ({source})")
-            return hit
-        try:
+    if not leader:
+        # Share the leader's outcome instead of re-fetching. Waiting on a
+        # plain lock and retrying would fan out on failure - error responses
+        # are deliberately not cached, so every waiter would issue its own
+        # call precisely when the broker is already rate limiting.
+        if not flight.event.wait(timeout=_FLIGHT_WAIT_TIMEOUT):
+            logger.warning(
+                f"History single-flight wait timed out for {symbol} {interval}; fetching directly"
+            )
             return _fetch()
-        finally:
-            if leader:
-                with _history_inflight_lock:
-                    _history_inflight.pop(key, None)
+        if flight.error is not None:
+            raise flight.error
+        return flight.result
+
+    try:
+        result = _fetch()
+        flight.result = result
+        return result
+    except BaseException as exc:  # noqa: BLE001 - propagated to waiters verbatim
+        flight.error = exc
+        raise
+    finally:
+        # Release waiters first, then retire the flight so the next caller
+        # starts a fresh one.
+        flight.event.set()
+        with _history_inflight_lock:
+            _history_inflight.pop(key, None)
 
 
 def clear_history_cache() -> None:
