@@ -64,6 +64,12 @@ import { UnsubscribeNode } from './UnsubscribeNode'
 import { VariableNode } from './VariableNode'
 import { WaitUntilNode } from './WaitUntilNode'
 import { WebhookTriggerNode } from './WebhookTriggerNode'
+import { IndicatorNode } from './IndicatorNode'
+import { VarConditionNode } from './VarConditionNode'
+import { PriorPeriodOhlcNode } from './PriorPeriodOhlcNode'
+import { BarOffsetNode } from './BarOffsetNode'
+import { OrderUpdateTriggerNode } from './OrderUpdateTriggerNode'
+import { WhatsappAlertNode } from './WhatsappAlertNode'
 
 // Base Components
 export { BaseNode, NodeBadge, NodeDataRow, NodeInfoRow } from './BaseNode'
@@ -75,6 +81,7 @@ export {
   PriceAlertNode,
   WebhookTriggerNode,
   HttpRequestNode,
+  OrderUpdateTriggerNode,
   // Actions
   PlaceOrderNode,
   SmartOrderNode,
@@ -92,6 +99,7 @@ export {
   TimeWindowNode,
   TimeConditionNode,
   PriceConditionNode,
+  VarConditionNode,
   // Logic Gates
   AndGateNode,
   OrGateNode,
@@ -101,6 +109,9 @@ export {
   GetDepthNode,
   GetOrderStatusNode,
   HistoryNode,
+  IndicatorNode,
+  PriorPeriodOhlcNode,
+  BarOffsetNode,
   OpenPositionNode,
   ExpiryNode,
   IntervalsNode,
@@ -123,6 +134,7 @@ export {
   MarginNode,
   // Utilities
   TelegramAlertNode,
+  WhatsappAlertNode,
   DelayNode,
   WaitUntilNode,
   GroupNode,
@@ -143,6 +155,7 @@ export const nodeTypes = {
   priceAlert: PriceAlertNode,
   webhookTrigger: WebhookTriggerNode,
   httpRequest: HttpRequestNode,
+  orderUpdateTrigger: OrderUpdateTriggerNode,
 
   // Actions
   placeOrder: PlaceOrderNode,
@@ -162,6 +175,7 @@ export const nodeTypes = {
   timeWindow: TimeWindowNode,
   timeCondition: TimeConditionNode,
   priceCondition: PriceConditionNode,
+  varCondition: VarConditionNode,
 
   // Logic Gates
   andGate: AndGateNode,
@@ -173,6 +187,9 @@ export const nodeTypes = {
   getDepth: GetDepthNode,
   getOrderStatus: GetOrderStatusNode,
   history: HistoryNode,
+  indicator: IndicatorNode,
+  priorPeriodOhlc: PriorPeriodOhlcNode,
+  barOffset: BarOffsetNode,
   openPosition: OpenPositionNode,
   expiry: ExpiryNode,
   intervals: IntervalsNode,
@@ -198,6 +215,7 @@ export const nodeTypes = {
 
   // Utilities
   telegramAlert: TelegramAlertNode,
+  whatsappAlert: WhatsappAlertNode,
   delay: DelayNode,
   waitUntil: WaitUntilNode,
   group: GroupNode,
