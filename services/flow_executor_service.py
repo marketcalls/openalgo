@@ -2570,30 +2570,33 @@ def execute_node_chain(
         result = executor.execute_subscribe_depth(node_data)
     elif node_type == "unsubscribe":
         result = executor.execute_unsubscribe(node_data)
-    elif node_type == "andGate":
+    elif node_type in ("andGate", "orGate", "notGate"):
+        # Gates must wait until every wired input has actually been evaluated.
+        # The graph walk is depth-first, so the first input to finish would
+        # otherwise reach the gate while the others are still unevaluated:
+        # the gate fired on partial inputs ("A AND B" firing on A alone) AND
+        # fired again for each remaining input, duplicating whatever is
+        # downstream - two orders from one crossover. Skipping here is safe
+        # because the later input's own traversal reaches this gate again,
+        # by which point every source has a stored result.
         incoming_edges = incoming_edge_map.get(node_id, [])
         input_results = []
+        pending = 0
         for edge in incoming_edges:
             source_result = context.get_condition_result(edge.get("source"))
-            if source_result is not None:
+            if source_result is None:
+                pending += 1
+            else:
                 input_results.append(source_result)
-        result = executor.execute_and_gate(node_data, input_results)
-    elif node_type == "orGate":
-        incoming_edges = incoming_edge_map.get(node_id, [])
-        input_results = []
-        for edge in incoming_edges:
-            source_result = context.get_condition_result(edge.get("source"))
-            if source_result is not None:
-                input_results.append(source_result)
-        result = executor.execute_or_gate(node_data, input_results)
-    elif node_type == "notGate":
-        incoming_edges = incoming_edge_map.get(node_id, [])
-        input_results = []
-        for edge in incoming_edges:
-            source_result = context.get_condition_result(edge.get("source"))
-            if source_result is not None:
-                input_results.append(source_result)
-        result = executor.execute_not_gate(node_data, input_results)
+        if pending:
+            executor.log(f"{node_type}: waiting for {pending} more input(s) before evaluating")
+            return
+        if node_type == "andGate":
+            result = executor.execute_and_gate(node_data, input_results)
+        elif node_type == "orGate":
+            result = executor.execute_or_gate(node_data, input_results)
+        else:
+            result = executor.execute_not_gate(node_data, input_results)
     else:
         executor.log(f"Unknown node type: {node_type}", "warning")
 
