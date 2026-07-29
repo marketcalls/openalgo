@@ -1944,10 +1944,26 @@ export function ConfigPanel() {
                   />
                   <p className="text-[10px] text-muted-foreground">
                     Set to compute this indicator over another Indicator node's output
-                    (e.g. SMA of RSI) instead of fetching fresh history. Only single-series
-                    indicators (SMA, EMA, RSI, WMA, stdev, highest/lowest, ...) can be nested.
+                    (e.g. SMA of RSI) instead of fetching fresh history. Accepts a raw
+                    History array too - {'{{h.data}}'} uses each row's close. Only
+                    single-series indicators (SMA, EMA, RSI, WMA, stdev, highest/lowest,
+                    ...) can be nested.
                   </p>
                 </div>
+                {nodeData.sourceSeries ? (
+                  <div className="space-y-2">
+                    <Label className="text-xs">Source Field (optional)</Label>
+                    <Input
+                      className="h-8"
+                      placeholder="blank = auto (value, out0, close)"
+                      value={(nodeData.sourceField as string) || ''}
+                      onChange={(e) => handleDataChange('sourceField', e.target.value)}
+                    />
+                    <p className="text-[10px] text-muted-foreground">
+                      Which field to read from each row, e.g. high, low, out1.
+                    </p>
+                  </div>
+                ) : null}
                 {!nodeData.sourceSeries && (
                   <>
                     <div className="space-y-2">
@@ -2031,10 +2047,29 @@ export function ConfigPanel() {
                   />
                 </div>
                 <div className="space-y-2">
+                  <Label className="text-xs">Value N Bars Back</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={200}
+                    className="h-8"
+                    value={(nodeData.offsetBars as number) ?? 0}
+                    onChange={(e) =>
+                      handleDataChange('offsetBars', parseInt(e.target.value, 10) || 0)
+                    }
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    0 = latest closed bar. Read it via {'{{name.at_offset.value}}'} (or{' '}
+                    {'{{name.at_offset.out0}}'} for multi-output indicators). Prefer this
+                    over indexing {'{{name.series[N]}}'}, whose offsets shift with Tail Bars.
+                  </p>
+                </div>
+                <div className="space-y-2">
                   <Label className="text-xs">Tail Bars</Label>
                   <Input
                     type="number"
                     min={1}
+                    max={200}
                     className="h-8"
                     value={(nodeData.tailBars as number) || 5}
                     onChange={(e) =>

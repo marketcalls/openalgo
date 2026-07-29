@@ -782,7 +782,9 @@ export const DEFAULT_NODE_DATA = {
     params: '{"period": 14}',
     lookbackBars: 100,
     tailBars: 5,
+    offsetBars: 0,
     sourceSeries: '',
+    sourceField: '',
     outputVariable: '',
   },
   priorPeriodOhlc: {
