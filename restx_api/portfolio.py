@@ -15,7 +15,11 @@ from marshmallow import Schema, ValidationError, fields, validate
 
 from database.auth_db import get_auth_token_broker, verify_api_key
 from limiter import limiter
-from services.portfolio_service import MAX_SYMBOLS, run_portfolio_backtest
+from services.portfolio_service import (
+    MAX_SYMBOLS,
+    generate_tearsheet,
+    run_portfolio_backtest,
+)
 from utils.logging import get_logger
 
 # Heavier than a quote: a run loads full history for every holding and
@@ -166,3 +170,65 @@ class PortfolioBacktest(Resource):
             )
 
         return make_response(jsonify(payload), status)
+
+
+@api.route("/tearsheet", strict_slashes=False)
+class PortfolioTearsheet(Resource):
+    # Heavier than a backtest: openstatz renders a megabyte of embedded charts
+    # with matplotlib, which takes a few seconds.
+    @limiter.limit(os.getenv("PORTFOLIO_TEARSHEET_RATE_LIMIT", "5 per minute"))
+    def post(self):
+        """Render the full openstatz tearsheet as a downloadable HTML file."""
+        try:
+            data = backtest_schema.load(request.json or {})
+        except ValidationError as err:
+            return make_response(
+                jsonify({"status": "error", "message": err.messages}), 400
+            )
+
+        api_key = data.pop("apikey")
+        if verify_api_key(api_key) is None:
+            return make_response(
+                jsonify({"status": "error", "message": "Invalid openalgo apikey"}), 403
+            )
+
+        auth_token = broker = None
+        if data["source"] == "api":
+            auth_token, broker = get_auth_token_broker(api_key)
+            if auth_token is None:
+                return make_response(
+                    jsonify(
+                        {
+                            "status": "error",
+                            "message": "No broker session for source='api'.",
+                        }
+                    ),
+                    403,
+                )
+
+        ok, payload, status = generate_tearsheet(
+            holdings=data["holdings"],
+            start_date=data["start_date"],
+            end_date=data["end_date"],
+            benchmark=data["benchmark"],
+            benchmark_exchange=data["benchmark_exchange"],
+            rebalance=data["rebalance"],
+            drift_band=data["drift_band"],
+            initial_capital=data["initial_capital"],
+            risk_free_rate=data["risk_free_rate"],
+            source=data["source"],
+            api_key=api_key,
+            auth_token=auth_token,
+            broker=broker,
+        )
+        if not ok:
+            return make_response(jsonify(payload), status)
+
+        # Served as an attachment: it is a self-contained report a user keeps,
+        # not a page the app renders.
+        response = make_response(payload, 200)
+        response.headers["Content-Type"] = "text/html; charset=utf-8"
+        response.headers["Content-Disposition"] = (
+            'attachment; filename="portfolio-tearsheet.html"'
+        )
+        return response
