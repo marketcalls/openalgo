@@ -283,8 +283,12 @@ export function useLivePrice<T extends PriceableItem>(
         // Total P&L = today's realized (from partial closes) + current unrealized
         calculatedPnl = todayRealizedPnl + unrealizedPnl
 
-        // P&L% based on total P&L and investment
-        const investment = Math.abs(avgPrice * qty)
+        // P&L% based on total P&L and investment.
+        // The investment must carry the same lotSize the P&L above was scaled by,
+        // or the ratio is off by exactly that multiplier: 100x too large for an
+        // MCX CRUDEOIL contract (lot_size 100), 100x too small for a Delta
+        // ETHUSD.P (lot_size 0.01).
+        const investment = Math.abs(avgPrice * qty * lotSize)
         calculatedPnlPercent = investment > 0 ? (calculatedPnl / investment) * 100 : 0
       }
 
