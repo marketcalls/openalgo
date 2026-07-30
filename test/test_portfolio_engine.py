@@ -434,3 +434,33 @@ class TestCostDragExactness:
         free = run_backtest(prices, {"A": 50, "B": 50}, **kw)
         paid = run_backtest(prices, {"A": 50, "B": 50}, costs=Costs(bps=75), **kw)
         assert paid.cost_drag == pytest.approx(free.total_return - paid.total_return, abs=1e-12)
+
+
+class TestCaptureRatioStability:
+    """
+    Capture must not depend on how long the window is. Compounding only the
+    sessions that went one way diverges with length: over five years of real
+    data the benchmark's up-days-only product reached five figures and every
+    ratio against it collapsed to zero.
+    """
+
+    def _pair(self, n: int, seed: int = 3):
+        rng = np.random.default_rng(seed)
+        index = pd.bdate_range("2015-01-01", periods=n)
+        bench = pd.Series(rng.normal(0.0005, 0.011, n), index=index)
+        port = pd.Series(bench.to_numpy() * 0.8 + rng.normal(0, 0.002, n), index=index)
+        return port, bench
+
+    def test_capture_is_stable_as_the_window_grows(self):
+        short = capture_ratios(*self._pair(120))
+        long = capture_ratios(*self._pair(2500))
+        assert short["up_capture"] == pytest.approx(long["up_capture"], abs=0.25)
+        # A beta-0.8 portfolio should land near 0.8, not near 0.
+        assert 0.5 < long["up_capture"] < 1.1
+        assert long["up_capture"] > 0.01
+
+    def test_a_full_capture_portfolio_reports_one(self):
+        _, bench = self._pair(400)
+        caps = capture_ratios(bench.copy(), bench)
+        assert caps["up_capture"] == pytest.approx(1.0)
+        assert caps["down_capture"] == pytest.approx(1.0)

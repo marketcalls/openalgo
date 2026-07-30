@@ -99,9 +99,12 @@ def capture_ratios(returns: pd.Series, benchmark: pd.Series) -> dict[str, float]
     caught, and how much of its losses it took. Up 90 / down 60 is a very
     different product from up 110 / down 115 even at identical CAGR.
 
-    Computed on compounded returns over the up and down sessions separately,
-    which is the standard definition and the one that survives a period
-    containing both.
+    Computed as the ratio of *mean* returns over the up and down sessions, not
+    of compounded ones. Compounding only the sessions that went one way
+    diverges with the length of the window -- over five years a benchmark's
+    up-days-only product reaches five figures, and every ratio against it
+    collapses toward zero regardless of how the portfolio actually behaved.
+    The mean-ratio form is scale-stable and is what fund analysts report.
     """
     joined = pd.concat([returns, benchmark], axis=1, join="inner").dropna()
     if joined.empty:
@@ -111,11 +114,10 @@ def capture_ratios(returns: pd.Series, benchmark: pd.Series) -> dict[str, float]
     def _capture(mask: pd.Series) -> float:
         if not mask.any():
             return float("nan")
-        b = float((1.0 + bench[mask]).prod() - 1.0)
+        b = float(bench[mask].mean())
         if b == 0:
             return float("nan")
-        p = float((1.0 + port[mask]).prod() - 1.0)
-        return p / b
+        return float(port[mask].mean()) / b
 
     return {
         "up_capture": _capture(bench > 0),
