@@ -24,7 +24,7 @@ import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 import { DrawingStyleBar } from './DrawingStyleBar'
-import { DrawingTextDialog } from './DrawingTextDialog'
+import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
 import { IndicatorSettingsDialog } from './IndicatorSettingsDialog'
 import { SymbolSearchDialog } from './SymbolSearchDialog'
 
@@ -186,7 +186,7 @@ export function ChartPane({
   const [volumeOn, setVolumeOn] = useState(true)
   const [drawSel, setDrawSel] = useState<DrawSelection | null>(null)
   const [indSettings, setIndSettings] = useState<IndicatorSettingsRequest | null>(null)
-  const [textReq, setTextReq] = useState<{ id: string; tool: string; text: string } | null>(null)
+  const [textReq, setTextReq] = useState<TextRequest | null>(null)
 
   // right-click menu: order entry, then the view actions
   const [ctx, setCtx] = useState<{ x: number; y: number; items: CtxItem[] } | null>(null)
@@ -223,7 +223,13 @@ export function ChartPane({
       onIndicatorsChange: (list) => aliveRef.current && setIndicators(list),
       onIndicatorSettings: (req) => aliveRef.current && setIndSettings(req),
       onDrawSelect: (sel) => aliveRef.current && setDrawSel(sel),
-      onDrawTextEdit: (r) => aliveRef.current && setTextReq(r),
+      onDrawTextEdit: (r) => {
+        if (!aliveRef.current) return
+        // The ref, not the local: `terminal` is still unassigned while this
+        // object literal is being built. Callbacks only fire after construction.
+        const style = terminalRef.current?.drawTextStyle(r.id)
+        if (style) setTextReq({ id: r.id, tool: r.tool, style })
+      },
     }
 
     if (chartRef.current && legendRef.current) {
@@ -613,7 +619,7 @@ export function ChartPane({
         />
         <DrawingTextDialog
           req={textReq}
-          onSubmit={(id, text) => terminalRef.current?.setDrawingText(id, text)}
+          onSubmit={(id, value) => terminalRef.current?.applyDrawText(id, value)}
           onClose={() => setTextReq(null)}
         />
         <IndicatorSettingsDialog

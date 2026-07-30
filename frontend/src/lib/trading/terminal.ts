@@ -187,6 +187,24 @@ export interface DrawSelection {
   locked: boolean
 }
 
+/**
+ * Everything a text-bearing drawing's settings dialog edits. The engine renders
+ * all of it already (`TEXT`'s style keys); it ships no DOM, so the form is the
+ * host's and needs the current values to open populated rather than blank.
+ */
+export interface DrawTextStyle {
+  text: string
+  color: string
+  fontSize: number
+  bold: boolean
+  italic: boolean
+  background: boolean
+  backgroundColor: string
+  border: boolean
+  borderColor: string
+  wrap: boolean
+}
+
 export interface TerminalOptions {
   apiKey: string
   wsUrl: string
@@ -1020,6 +1038,58 @@ export class TradingTerminal {
     const d = this.draw?.get(id)
     if (!d || !TEXT_TOOLS.has(d.tool)) return
     this.cb.onDrawTextEdit?.({ id: d.id, tool: d.tool, text: d.style.text ?? '' })
+  }
+
+  /**
+   * The current text style of a drawing, for opening its settings populated.
+   * Background and border default OFF, matching the engine's own defaults —
+   * text dropped on a chart should be the words, not a filled plate.
+   */
+  drawTextStyle(id: string): DrawTextStyle | null {
+    const d = this.draw?.get(id)
+    if (!d) return null
+    const st = (d.style ?? {}) as Record<string, unknown>
+    return {
+      text: (st.text as string) ?? '',
+      color: (st.color as string) ?? '#e4e8f4',
+      fontSize: (st.fontSize as number) ?? 14,
+      bold: st.fontWeight === 'bold',
+      italic: st.fontStyle === 'italic',
+      background: st.background === true,
+      backgroundColor: (st.backgroundColor as string) ?? '#131722',
+      border: st.border === true,
+      borderColor: (st.borderColor as string) ?? ((st.color as string) ?? '#e4e8f4'),
+      wrap: st.wrap === true,
+    }
+  }
+
+  /**
+   * Apply the text dialog's result. Empty text removes the drawing rather than
+   * leaving an invisible box behind, the same rule `setDrawingText` follows.
+   */
+  applyDrawText(id: string, v: DrawTextStyle): void {
+    if (!this.draw) return
+    const trimmed = v.text.trim()
+    if (trimmed === '') {
+      this.draw.remove(id)
+      this.afterDrawChange()
+      return
+    }
+    this.draw.update(id, {
+      style: {
+        text: trimmed,
+        color: v.color,
+        fontSize: v.fontSize,
+        fontWeight: v.bold ? 'bold' : 'normal',
+        fontStyle: v.italic ? 'italic' : 'normal',
+        background: v.background,
+        backgroundColor: v.backgroundColor,
+        border: v.border,
+        borderColor: v.borderColor,
+        wrap: v.wrap,
+      },
+    })
+    this.afterDrawChange()
   }
 
   /** Set a drawing's text. Empty text removes it rather than leaving a blank. */
