@@ -29,6 +29,7 @@ from portfolio.crisis import crisis_analysis
 from portfolio.engine import Costs, run_backtest
 from portfolio.health import portfolio_health
 from portfolio.rebalance import RebalancePolicy
+from portfolio.walkforward import monte_carlo, walk_forward
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -290,6 +291,9 @@ def run_portfolio_backtest(
     cost_exchange: str = "NSE",
     charge_overrides: dict[str, dict] | None = None,
     gst_rate: float | None = None,
+    walk_window_years: float = 1.0,
+    walk_step_years: float = 0.5,
+    mc_simulations: int = 1000,
     cost_bps: float = 0.0,
     slippage: float = 0.0,
     initial_capital: float = 100_000.0,
@@ -335,6 +339,7 @@ def run_portfolio_backtest(
 
     try:
         prices = load_prices(symbols, exchanges, start_date, end_date, **fetch)
+        policy_used = RebalancePolicy(rule=rebalance, drift_band=drift_band)
         # The real delivery-equity schedule by default: STT on both legs, stamp
         # duty on the buy only, GST on fees but not on taxes. A flat rate cannot
         # express that asymmetry, so it is offered only for comparison.
@@ -351,7 +356,7 @@ def run_portfolio_backtest(
         result = run_backtest(
             prices,
             weights,
-            policy=RebalancePolicy(rule=rebalance, drift_band=drift_band),
+            policy=policy_used,
             costs=charged,
             initial_capital=initial_capital,
         )
@@ -434,6 +439,16 @@ def run_portfolio_backtest(
         # The grade with its working attached, so it can be argued with rather
         # than merely believed.
         "series": _series_analytics(returns, risk_free_rate, bench_returns),
+        # Does the result survive doubt? A single window answers "what
+        # happened"; these answer whether it would have held on windows the
+        # user did not pick, and how much of it was sequence luck.
+        "walk_forward": _clean(
+            walk_forward(
+                prices, weights, policy=policy_used, costs=charged,
+                window_years=walk_window_years, step_years=walk_step_years,
+            )
+        ),
+        "monte_carlo": _clean(monte_carlo(returns, simulations=mc_simulations)),
         # The weight path, for the allocation-over-time chart. Sampled weekly:
         # 2,500 sessions x N holdings is a lot of JSON to describe a shape that
         # only changes on rebalance dates and drifts smoothly between them.

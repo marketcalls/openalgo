@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from portfolio.data import PriceMatrix
+from portfolio.costs import CostSchedule
 from portfolio.engine import Costs, run_backtest
 from portfolio.rebalance import RebalancePolicy
 
@@ -39,7 +40,7 @@ def walk_forward(
     weights: dict[str, float],
     *,
     policy: RebalancePolicy | None = None,
-    costs: Costs | None = None,
+    costs: Costs | CostSchedule | None = None,
     window_years: float = 1.0,
     step_years: float = 0.5,
 ) -> dict:
