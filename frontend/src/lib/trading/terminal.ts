@@ -45,6 +45,12 @@ export interface DrawStats {
   hasSelection: boolean
   magnet: boolean
   tool: string | null
+  /**
+   * Tool id -> keyboard chord, from the draw tier. Empty until the tier has
+   * loaded; the rail simply renders no chord until then, rather than the rail
+   * having to import the tier and undo its lazy loading.
+   */
+  shortcuts: Record<string, string>
 }
 
 import type { AppMode, ThemeMode } from '@/stores/themeStore'
@@ -241,6 +247,8 @@ export class TradingTerminal {
   private noMoreHistory = false
   private gridV = true
   private gridH = true
+  private drawShortcuts: Record<string, string> = {}
+  private matchShortcut: ((e: { key: string; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => string | null) | null = null
   private ltpLine: PriceLine | null = null
   private posLine: PriceLine | null = null
   private tradeBtns: BuySellButtonsInstance | null = null
@@ -934,7 +942,7 @@ export class TradingTerminal {
    */
   private async attachDrawing(): Promise<void> {
     if (this.draw || !this.chart) return
-    const { DrawingController } = await import('openalgo-charts/draw')
+    const { DrawingController, drawingShortcuts, matchDrawingShortcut } = await import('openalgo-charts/draw')
     // The await is a real suspension point: the pane can be destroyed, or the
     // chart rebuilt again, while the tier is in flight.
     if (this.destroyed || !this.chart || this.draw) return
@@ -943,6 +951,8 @@ export class TradingTerminal {
       stayInDrawingMode: false,
     })
     this.draw = draw
+    this.drawShortcuts = drawingShortcuts()
+    this.matchShortcut = matchDrawingShortcut
     if (this.drawJson.length) {
       try {
         draw.fromJSON(this.drawJson)
@@ -1039,6 +1049,18 @@ export class TradingTerminal {
   }
 
   /** Toolbar state: counts and what is currently possible. */
+  /**
+   * Arm the tool bound to this key event, reporting whether one matched so the
+   * caller can swallow the key. The tier owns the chord table, so this is a
+   * no-op until drawing has been attached.
+   */
+  armByShortcut(e: { key: string; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }): boolean {
+    const id = this.matchShortcut?.(e) ?? null
+    if (id === null) return false
+    void this.setDrawTool(id)
+    return true
+  }
+
   drawStats(): DrawStats {
     const d = this.draw
     return {
@@ -1048,6 +1070,7 @@ export class TradingTerminal {
       hasSelection: d ? d.selected() !== null : false,
       magnet: this.drawMagnet,
       tool: this.drawTool,
+      shortcuts: this.drawShortcuts,
     }
   }
 
