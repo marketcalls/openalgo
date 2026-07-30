@@ -941,7 +941,7 @@ schemas.
 
 #### indicator — Technical Indicator
 
-Runs any of 118 `openalgo.ta` indicators over a symbol's history, or over
+Runs any of 116 `openalgo.ta` indicators over a symbol's history, or over
 another indicator's output series.
 
 | Field | Type | Default | Notes |
