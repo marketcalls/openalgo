@@ -381,6 +381,8 @@ def deactivate_workflow(workflow_id):
         # Remove scheduler job if any
         if workflow.schedule_job_id:
             scheduler = get_flow_scheduler()
+            # An already-gone job is expected after a restart or a double click;
+            # remove_job treats that as a no-op.
             scheduler.remove_job(workflow.schedule_job_id)
             set_schedule_job_id(workflow_id, None)
 
