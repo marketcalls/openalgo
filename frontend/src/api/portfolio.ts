@@ -218,6 +218,50 @@ export interface PortfolioAllocation {
   average: Record<string, number>
 }
 
+interface Band {
+  p05: number
+  p25: number
+  median: number
+  p75: number
+  p95: number
+}
+
+/** The same allocation re-run over rolling sub-windows. */
+export interface WalkForward {
+  windows: {
+    start: string
+    end: string
+    total_return: number
+    cagr: number
+    max_drawdown: number
+    sessions: number
+  }[]
+  summary: {
+    count: number
+    window_years: number
+    step_years: number
+    best: number
+    worst: number
+    median: number
+    positive_share: number
+    spread: number
+  } | null
+  note: string | null
+}
+
+/** Block-bootstrap resampling: how much of the outcome was sequence luck. */
+export interface MonteCarlo {
+  paths: number
+  block?: number
+  seed?: number
+  total_return?: Band
+  cagr?: Band
+  max_drawdown?: Band
+  probability_of_loss?: number
+  worst_drawdown_seen?: number
+  note: string | null
+}
+
 export interface BacktestResponse {
   status: 'success' | 'error'
   message?: string
@@ -257,6 +301,8 @@ export interface BacktestResponse {
     holdings: number
     diversification_ratio: number | null
   }
+  walk_forward: WalkForward
+  monte_carlo: MonteCarlo
   allocation: PortfolioAllocation
   crisis: PortfolioCrisis
   costs: PortfolioCosts

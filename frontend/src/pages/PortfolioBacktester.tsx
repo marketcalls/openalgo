@@ -484,6 +484,7 @@ export default function PortfolioBacktester() {
               <TabsTrigger value="drawdown">Drawdown</TabsTrigger>
               <TabsTrigger value="monthly">Monthly Returns</TabsTrigger>
               <TabsTrigger value="rolling">Rolling Stats</TabsTrigger>
+              <TabsTrigger value="robustness">Robustness</TabsTrigger>
               <TabsTrigger value="allocation">Allocation</TabsTrigger>
               <TabsTrigger value="crisis">Crisis</TabsTrigger>
               <TabsTrigger value="health">Health</TabsTrigger>
@@ -1026,6 +1027,162 @@ export default function PortfolioBacktester() {
                 <Card>
                   <CardContent className="p-4 text-sm text-muted-foreground">
                     Not enough history for a rolling window over this period.
+                  </CardContent>
+                </Card>
+              )}
+            </TabsContent>
+
+            <TabsContent value="robustness" className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                A single backtest answers “what happened”. These answer whether it
+                would have held on windows you did not pick, and how much was luck.
+              </p>
+
+              {result.walk_forward.summary ? (
+                <>
+                  <div className="grid gap-3 md:grid-cols-4">
+                    <Stat
+                      label="Windows Positive"
+                      value={pct(result.walk_forward.summary.positive_share, 0)}
+                      sub={`of ${result.walk_forward.summary.count} rolling windows`}
+                      tone={
+                        result.walk_forward.summary.positive_share > 0.7 ? 'good' : undefined
+                      }
+                    />
+                    <Stat
+                      label="Median Window"
+                      value={pct(result.walk_forward.summary.median)}
+                      sub={`${result.walk_forward.summary.window_years}y windows`}
+                    />
+                    <Stat label="Best" value={pct(result.walk_forward.summary.best)} tone="good" />
+                    <Stat label="Worst" value={pct(result.walk_forward.summary.worst)} tone="bad" />
+                  </div>
+
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">Walk-Forward Windows</CardTitle>
+                      <p className="text-sm text-muted-foreground">
+                        The spread is the point, not the average. A strategy whose whole
+                        result came from one exceptional stretch looks very different
+                        here from one that worked repeatedly.
+                      </p>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <div className="max-h-80 overflow-y-auto">
+                        <table className="w-full text-sm">
+                          <thead className="sticky top-0 border-b bg-card text-xs text-muted-foreground">
+                            <tr>
+                              <th className="p-3 text-left">Window</th>
+                              <th className="p-3 text-right">Return</th>
+                              <th className="p-3 text-right">CAGR</th>
+                              <th className="p-3 text-right">Max DD</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {result.walk_forward.windows.map((w) => (
+                              <tr key={w.start} className="border-b last:border-0">
+                                <td className="p-3 text-xs text-muted-foreground">
+                                  {w.start} → {w.end}
+                                </td>
+                                <td
+                                  className={cn(
+                                    'p-3 text-right tabular-nums',
+                                    w.total_return >= 0 ? 'text-emerald-500' : 'text-rose-500'
+                                  )}
+                                >
+                                  {pct(w.total_return)}
+                                </td>
+                                <td className="p-3 text-right tabular-nums">{pct(w.cagr)}</td>
+                                <td className="p-3 text-right tabular-nums text-rose-500">
+                                  {pct(w.max_drawdown)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </>
+              ) : (
+                <Card>
+                  <CardContent className="p-4 text-sm text-muted-foreground">
+                    {result.walk_forward.note ?? 'Not enough history for walk-forward.'}
+                  </CardContent>
+                </Card>
+              )}
+
+              {result.monte_carlo.paths > 0 && result.monte_carlo.cagr ? (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base">
+                      Monte Carlo — {result.monte_carlo.paths.toLocaleString()} paths
+                    </CardTitle>
+                    <p className="text-sm text-muted-foreground">
+                      Block bootstrap, not independent days: drawing single days
+                      destroys volatility clustering and makes drawdowns look far
+                      milder than markets produce. Seeded, so the risk numbers do not
+                      change each time you look at them.
+                    </p>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="grid gap-3 md:grid-cols-3">
+                      <Stat
+                        label="Probability of Loss"
+                        value={pct(result.monte_carlo.probability_of_loss, 1)}
+                        sub="of resampled paths ended down"
+                      />
+                      <Stat
+                        label="Median CAGR"
+                        value={pct(result.monte_carlo.cagr.median)}
+                        sub={`5th–95th: ${pct(result.monte_carlo.cagr.p05)} to ${pct(result.monte_carlo.cagr.p95)}`}
+                      />
+                      <Stat
+                        label="Worst Drawdown Seen"
+                        value={pct(result.monte_carlo.worst_drawdown_seen)}
+                        sub="across all paths"
+                        tone="bad"
+                      />
+                    </div>
+
+                    <table className="w-full text-sm">
+                      <thead className="border-b text-xs text-muted-foreground">
+                        <tr>
+                          <th className="p-3 text-left">Outcome</th>
+                          <th className="p-3 text-right">5%</th>
+                          <th className="p-3 text-right">25%</th>
+                          <th className="p-3 text-right">Median</th>
+                          <th className="p-3 text-right">75%</th>
+                          <th className="p-3 text-right">95%</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(
+                          [
+                            { label: 'Total return', band: result.monte_carlo.total_return },
+                            { label: 'CAGR', band: result.monte_carlo.cagr },
+                            { label: 'Max drawdown', band: result.monte_carlo.max_drawdown },
+                          ] as const
+                        ).map(({ label, band }) =>
+                          band ? (
+                            <tr key={label} className="border-b last:border-0">
+                              <td className="p-3">{label}</td>
+                              {(['p05', 'p25', 'median', 'p75', 'p95'] as const).map((k) => (
+                                <td key={k} className="p-3 text-right tabular-nums">
+                                  {pct(band[k])}
+                                </td>
+                              ))}
+                            </tr>
+                          ) : null
+                        )}
+                      </tbody>
+                    </table>
+                  </CardContent>
+                </Card>
+              ) : (
+                <Card>
+                  <CardContent className="p-4 text-sm text-muted-foreground">
+                    {result.monte_carlo.note ?? 'Not enough history for Monte Carlo.'}
                   </CardContent>
                 </Card>
               )}
