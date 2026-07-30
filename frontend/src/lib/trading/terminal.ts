@@ -245,6 +245,7 @@ export class TradingTerminal {
   /** History paging: in-flight guard, and whether the broker ran out. */
   private loadingOlder = false
   private noMoreHistory = false
+  private volumeOn = true
   private gridV = true
   private gridH = true
   private drawShortcuts: Record<string, string> = {}
@@ -684,6 +685,9 @@ export class TradingTerminal {
       priceFormat: { type: 'volume' },
     })
     this.volume.priceScale().setOptions({ marginTop: 0.82, marginBottom: 0 })
+    // A rebuild makes a fresh series, so the preference has to be re-applied
+    // rather than assumed -- switching chart type or theme would show it again.
+    if (!this.volumeOn) this.volume.applyOptions({ visible: false })
     this.setPriceData()
 
     // Default zoom: a FIXED number of recent bars, so the visible price range
@@ -855,6 +859,9 @@ export class TradingTerminal {
       this.gridV = grid[0] === '1'
       this.gridH = grid[1] === '1'
     }
+    // Absent means shown: only an explicit '0' hides it, so existing panes and
+    // a first visit both keep volume.
+    this.volumeOn = this.lsGet('vol') !== '0'
   }
 
   /**
@@ -1248,6 +1255,23 @@ export class TradingTerminal {
 
   gridState(): { vertical: boolean; horizontal: boolean } {
     return { vertical: this.gridV, horizontal: this.gridH }
+  }
+
+  /**
+   * Show or hide the built-in volume histogram, remembered per pane.
+   *
+   * Hidden rather than removed: the series keeps taking data, so toggling back
+   * is instant and no history has to be refetched. It also keeps the overlay
+   * price scale in place, which is what the bars are measured against.
+   */
+  setVolumeVisible(on: boolean): void {
+    this.volumeOn = on
+    this.volume?.applyOptions({ visible: on })
+    this.lsSet('vol', on ? '1' : '0')
+  }
+
+  volumeVisible(): boolean {
+    return this.volumeOn
   }
 
   /* ── WS-down fallback: poll quotes so LTP + the forming candle stay live ─ */

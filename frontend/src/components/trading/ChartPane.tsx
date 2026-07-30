@@ -70,6 +70,15 @@ function PencilIcon({ className }: { className?: string }) {
   )
 }
 
+/** Three rising bars — the volume histogram in miniature. */
+function VolumeIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden="true">
+      <path d="M5 20v-6M12 20V8M19 20v-9" />
+    </svg>
+  )
+}
+
 function GridIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" {...glyph} className={className} aria-hidden="true">
@@ -174,6 +183,7 @@ export function ChartPane({
   const [grid, setGrid] = useState({ vertical: true, horizontal: true })
   const [fullscreen, setFullscreen] = useState(false)
   const [gridSub, setGridSub] = useState(false)
+  const [volumeOn, setVolumeOn] = useState(true)
   const [drawSel, setDrawSel] = useState<DrawSelection | null>(null)
   const [indSettings, setIndSettings] = useState<IndicatorSettingsRequest | null>(null)
   const [textReq, setTextReq] = useState<{ id: string; tool: string; text: string } | null>(null)
@@ -233,6 +243,7 @@ export function ChartPane({
       terminal.init()
       statsCbRef.current?.(terminal.drawStats())
       setGrid(terminal.gridState())
+      setVolumeOn(terminal.volumeVisible())
     }
 
     return () => {
@@ -675,6 +686,20 @@ export function ChartPane({
                 {railVisible ? 'Hide drawing tools' : 'Show drawing tools'}
               </button>
             )}
+            <button
+              type="button"
+              className={ctxRow}
+              onClick={() =>
+                run(() => {
+                  const next = !volumeOn
+                  terminalRef.current?.setVolumeVisible(next)
+                  setVolumeOn(next)
+                })
+              }
+            >
+              <VolumeIcon className="h-3.5 w-3.5 opacity-70" />
+              {volumeOn ? 'Hide volume' : 'Show volume'}
+            </button>
             <div className="relative" onMouseLeave={() => setGridSub(false)}>
               <button
                 type="button"
