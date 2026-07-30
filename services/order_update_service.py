@@ -66,6 +66,7 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
         "broker.flattrade.streaming.flattrade_order_adapter",
         "create_flattrade_order_adapter",
     ),
+    "zebu": ("broker.zebu.streaming.zebu_order_adapter", "create_zebu_order_adapter"),
 }
 
 # Brokers with no push mechanism fall back to REST-orderbook polling.
