@@ -128,7 +128,7 @@ def run_backtest(
     sleeve = target * float(initial_capital)
     price_pnl = np.zeros(len(symbols), dtype=float)   # made or lost on price
     cost_paid = np.zeros(len(symbols), dtype=float)   # costs charged to it
-    gross_value = float(initial_capital)  # same run, costs off, for the drag
+    gross_sleeve = sleeve.copy()  # the same run with costs off, for the drag
 
     for i, stamp in enumerate(index):
         if i > 0:
@@ -138,7 +138,7 @@ def run_backtest(
             price_pnl += grown - sleeve
             sleeve = grown
             value = sleeve.sum()
-            gross_value *= growth[i] @ (weight_path[i - 1])
+            gross_sleeve = gross_sleeve * growth[i]
 
             held = sleeve / value
             if stamp in scheduled or drifted(held, target, policy.drift_band):
@@ -156,6 +156,9 @@ def run_backtest(
                     value -= charge
                     turnover_at[stamp] = traded
                 sleeve = target * value
+                # The cost-free twin rebalances on the same sessions; only the
+                # charge is skipped, so the difference is costs and nothing else.
+                gross_sleeve = target * gross_sleeve.sum()
         else:
             value = sleeve.sum()
 
@@ -163,7 +166,7 @@ def run_backtest(
         weight_path[i] = sleeve / value
 
     equity_series = pd.Series(equity, index=index, name="equity")
-    gross_total = gross_value / float(initial_capital) - 1.0
+    gross_total = gross_sleeve.sum() / float(initial_capital) - 1.0
     net_total = equity[-1] / float(initial_capital) - 1.0
 
     # Itemised P&L. `contribution_pct` is each holding's share of the total

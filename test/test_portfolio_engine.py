@@ -416,3 +416,21 @@ class TestAnalytics:
         out = summary(r["A"], r["C"])
         for key in ("alpha", "beta", "information_ratio", "up_capture", "excess_cagr"):
             assert key in out
+
+
+class TestCostDragExactness:
+    def test_buy_and_hold_drag_is_exactly_zero(self):
+        # Reconstructing the gross path from weights left rounding error, so
+        # a run that never traded reported a tiny non-zero drag.
+        prices = matrix({"A": [100.0, 137.0, 92.0, 118.0], "B": [55.0, 51.0, 63.0, 60.0]})
+        r = run_backtest(
+            prices, {"A": 35, "B": 65}, costs=Costs(bps=250, slippage=0.02)
+        )
+        assert r.cost_drag == 0.0
+
+    def test_drag_equals_the_gap_to_an_uncharged_run(self):
+        prices = matrix({"A": [100.0] * 21 + [180.0], "B": [100.0] * 22})
+        kw = dict(policy=RebalancePolicy("monthly"), initial_capital=10_000.0)
+        free = run_backtest(prices, {"A": 50, "B": 50}, **kw)
+        paid = run_backtest(prices, {"A": 50, "B": 50}, costs=Costs(bps=75), **kw)
+        assert paid.cost_drag == pytest.approx(free.total_return - paid.total_return, abs=1e-12)
