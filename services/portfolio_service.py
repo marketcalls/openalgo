@@ -23,6 +23,7 @@ from portfolio.analytics import (
 )
 from portfolio.data import DataError, load_prices
 from portfolio.engine import Costs, run_backtest
+from portfolio.health import portfolio_health
 from portfolio.rebalance import RebalancePolicy
 from utils.logging import get_logger
 
@@ -155,6 +156,7 @@ def run_portfolio_backtest(
     target_weights = pd.Series(result.meta["target_weights"])
 
     corr = correlation_matrix(holding_returns)
+    metrics = _clean(summary(returns, bench_returns, rf=risk_free_rate))
     payload = {
         "status": "success",
         "meta": {
@@ -171,7 +173,7 @@ def run_portfolio_backtest(
         },
         "equity": _curve(result.equity),
         "benchmark_equity": bench_curve,
-        "metrics": _clean(summary(returns, bench_returns, rf=risk_free_rate)),
+        "metrics": metrics,
         "items": _clean(
             [
                 {"symbol": symbol, **{k: v for k, v in row.items()}}
@@ -190,6 +192,18 @@ def run_portfolio_backtest(
                     target_weights, holding_returns
                 ),
             }
+        ),
+        # The grade with its working attached, so it can be argued with rather
+        # than merely believed.
+        "health": portfolio_health(
+            weights=target_weights,
+            returns=holding_returns,
+            closes=prices.closes,
+            sharpe=metrics.get("sharpe", float("nan")) or float("nan"),
+            sortino=metrics.get("sortino", float("nan")) or float("nan"),
+            max_drawdown=metrics.get("max_drawdown", float("nan")) or float("nan"),
+            cost_drag=result.cost_drag,
+            turnover=float(result.turnover.sum()),
         ),
         "rebalancing": {
             "rule": rebalance,
