@@ -200,6 +200,12 @@ def react_tradingview():
     return serve_react_app()
 
 
+# Portfolio Backtester
+@react_bp.route("/portfolio")
+def react_portfolio():
+    return serve_react_app()
+
+
 # GoCharting webhook configuration
 @react_bp.route("/gocharting")
 def react_gocharting():

@@ -27,6 +27,8 @@ logger = get_logger(__name__)
 
 # Cash equity and ETFs only, matching the engine's own allow-list.
 PORTFOLIO_EXCHANGES = ["NSE", "BSE"]
+# Benchmarks live on the index exchanges.
+BENCHMARK_EXCHANGES = ["NSE_INDEX", "BSE_INDEX"]
 
 
 class HoldingSchema(Schema):
@@ -47,8 +49,10 @@ class PortfolioBacktestSchema(Schema):
     end_date = fields.Str(required=True)
 
     benchmark = fields.Str(load_default=None, allow_none=True)
+    # Indices, not the cash exchanges: a benchmark cannot be held, and alpha
+    # or beta measured against a single stock would not mean anything.
     benchmark_exchange = fields.Str(
-        load_default="NSE", validate=validate.OneOf(PORTFOLIO_EXCHANGES)
+        load_default="NSE_INDEX", validate=validate.OneOf(BENCHMARK_EXCHANGES)
     )
     rebalance = fields.Str(
         load_default="never",
@@ -57,6 +61,28 @@ class PortfolioBacktestSchema(Schema):
     # Percentage points of drift that force a rebalance regardless of the
     # calendar. Capped below 1.0 because a band of 100% can never trigger.
     drift_band = fields.Float(load_default=0.0, validate=validate.Range(min=0, max=0.99))
+    # The itemised Indian delivery-equity schedule by default; flat bps is
+    # kept only so a user can compare against a theoretical rate.
+    cost_model = fields.Str(
+        load_default="indian_equity",
+        validate=validate.OneOf(["indian_equity", "flat_bps"]),
+    )
+    brokerage_pct = fields.Float(load_default=0.0, validate=validate.Range(min=0, max=0.05))
+    # Which exchange's transaction charge applies. Explicit rather than taken
+    # from the first holding, since a mixed NSE/BSE book has no single answer.
+    cost_exchange = fields.Str(
+        load_default="NSE", validate=validate.OneOf(PORTFOLIO_EXCHANGES)
+    )
+    # Per-charge overrides, so every rate is the caller's to set. Statutory
+    # rates change with the budget and differ by market; baking them into the
+    # server would mean a release every time one moves.
+    charges = fields.Dict(
+        keys=fields.Str(),
+        values=fields.Dict(keys=fields.Str(), values=fields.Float(allow_none=True)),
+        load_default=dict,
+    )
+    gst_rate = fields.Float(load_default=None, allow_none=True,
+                            validate=validate.Range(min=0, max=1))
     cost_bps = fields.Float(load_default=0.0, validate=validate.Range(min=0, max=1000))
     slippage = fields.Float(load_default=0.0, validate=validate.Range(min=0, max=0.1))
     initial_capital = fields.Float(load_default=100000.0, validate=validate.Range(min=1))
@@ -119,6 +145,11 @@ class PortfolioBacktest(Resource):
                 benchmark_exchange=data["benchmark_exchange"],
                 rebalance=data["rebalance"],
                 drift_band=data["drift_band"],
+                cost_model=data["cost_model"],
+                brokerage_pct=data["brokerage_pct"],
+                cost_exchange=data["cost_exchange"],
+                charge_overrides=data["charges"],
+                gst_rate=data["gst_rate"],
                 cost_bps=data["cost_bps"],
                 slippage=data["slippage"],
                 initial_capital=data["initial_capital"],
