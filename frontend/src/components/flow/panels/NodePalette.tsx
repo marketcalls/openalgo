@@ -2,11 +2,14 @@
 // Left sidebar with draggable node items organized by category
 
 import {
+  Activity,
   BarChart3,
   Bell,
   Briefcase,
   Calculator,
   Calendar,
+  CalendarClock,
+  CalendarRange,
   CalendarX,
   ClipboardList,
   Clock,
@@ -15,10 +18,13 @@ import {
   Globe,
   Grid3X3,
   Group,
+  History,
   Hourglass,
   Layers,
   Layers3,
+  MessageCircle,
   Package,
+  PackageCheck,
   Pencil,
   Radio,
   RadioTower,
@@ -27,6 +33,7 @@ import {
   Shield,
   ShoppingCart,
   Sigma,
+  SlidersHorizontal,
   Split,
   Square,
   Tag,
@@ -101,6 +108,13 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
       label: 'Webhook',
       description: 'External trigger',
       icon: <Webhook className="h-3.5 w-3.5 text-orange-500" />,
+      color: 'bg-orange-500/10',
+    },
+    {
+      type: 'orderUpdateTrigger',
+      label: 'Order Update',
+      description: 'Trigger on fill/reject',
+      icon: <PackageCheck className="h-3.5 w-3.5 text-orange-500" />,
       color: 'bg-orange-500/10',
     },
   ]
@@ -235,6 +249,13 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
       icon: <span className="text-[9px] font-bold text-purple-500">NOT</span>,
       color: 'bg-purple-500/10',
     },
+    {
+      type: 'varCondition',
+      label: 'Var Condition',
+      description: 'Compare any two values',
+      icon: <SlidersHorizontal className="h-3.5 w-3.5 text-purple-500" />,
+      color: 'bg-purple-500/10',
+    },
   ]
 
   const data = [
@@ -267,6 +288,34 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
       color: 'bg-cyan-500/10',
     },
     {
+      type: 'indicator',
+      label: 'Indicator',
+      description: 'Any technical indicator',
+      icon: <Activity className="h-3.5 w-3.5 text-cyan-500" />,
+      color: 'bg-cyan-500/10',
+    },
+    {
+      type: 'strategyPnl',
+      label: 'Strategy P&L',
+      description: 'Per-strategy realized/unrealized',
+      icon: <Wallet className="h-3.5 w-3.5 text-cyan-500" />,
+      color: 'bg-cyan-500/10',
+    },
+    {
+      type: 'priorPeriodOhlc',
+      label: 'Prior Period OHLC',
+      description: 'Prev hour/day/week/month',
+      icon: <CalendarClock className="h-3.5 w-3.5 text-cyan-500" />,
+      color: 'bg-cyan-500/10',
+    },
+    {
+      type: 'barOffset',
+      label: 'Bar Offset',
+      description: 'OHLCV N bars back',
+      icon: <History className="h-3.5 w-3.5 text-cyan-500" />,
+      color: 'bg-cyan-500/10',
+    },
+    {
       type: 'openPosition',
       label: 'Open Position',
       description: 'Get position',
@@ -279,6 +328,20 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
       description: 'F&O expiry',
       icon: <Calendar className="h-3.5 w-3.5 text-pink-500" />,
       color: 'bg-pink-500/10',
+    },
+    {
+      type: 'intervals',
+      label: 'Intervals',
+      description: 'Broker timeframes',
+      icon: <Clock className="h-3.5 w-3.5 text-pink-500" />,
+      color: 'bg-pink-500/10',
+    },
+    {
+      type: 'calendar',
+      label: 'Calendar',
+      description: 'New day / week / month',
+      icon: <CalendarRange className="h-3.5 w-3.5 text-purple-400" />,
+      color: 'bg-purple-400/10',
     },
     {
       type: 'multiQuotes',
@@ -418,6 +481,13 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
       description: 'Send alert',
       icon: <Send className="h-3.5 w-3.5 text-[#0088cc]" />,
       color: 'bg-[#0088cc]/10',
+    },
+    {
+      type: 'whatsappAlert',
+      label: 'WhatsApp',
+      description: 'Send alert',
+      icon: <MessageCircle className="h-3.5 w-3.5 text-[#25D366]" />,
+      color: 'bg-[#25D366]/10',
     },
     {
       type: 'delay',

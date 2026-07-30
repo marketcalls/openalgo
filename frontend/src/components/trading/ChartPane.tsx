@@ -28,7 +28,7 @@ import { DrawingTextDialog } from './DrawingTextDialog'
 import { IndicatorSettingsDialog } from './IndicatorSettingsDialog'
 import { SymbolSearchDialog } from './SymbolSearchDialog'
 
-/** TradingView-style camera (screenshot) glyph. */
+/** Camera (screenshot) glyph. */
 function CameraIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -66,6 +66,15 @@ function PencilIcon({ className }: { className?: string }) {
     <svg viewBox="0 0 24 24" {...glyph} className={className} aria-hidden="true">
       <path d="M4 20.5h4L20 8.5a2.4 2.4 0 0 0-3.4-3.4L4.5 17z" />
       <path d="M15.5 6.5 18.5 9.5" />
+    </svg>
+  )
+}
+
+/** Three rising bars — the volume histogram in miniature. */
+function VolumeIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden="true">
+      <path d="M5 20v-6M12 20V8M19 20v-9" />
     </svg>
   )
 }
@@ -174,6 +183,7 @@ export function ChartPane({
   const [grid, setGrid] = useState({ vertical: true, horizontal: true })
   const [fullscreen, setFullscreen] = useState(false)
   const [gridSub, setGridSub] = useState(false)
+  const [volumeOn, setVolumeOn] = useState(true)
   const [drawSel, setDrawSel] = useState<DrawSelection | null>(null)
   const [indSettings, setIndSettings] = useState<IndicatorSettingsRequest | null>(null)
   const [textReq, setTextReq] = useState<{ id: string; tool: string; text: string } | null>(null)
@@ -233,6 +243,7 @@ export function ChartPane({
       terminal.init()
       statsCbRef.current?.(terminal.drawStats())
       setGrid(terminal.gridState())
+      setVolumeOn(terminal.volumeVisible())
     }
 
     return () => {
@@ -385,7 +396,7 @@ export function ChartPane({
           so the view actions stay beside the instrument controls instead of
           dropping to a second row and eating chart height. */}
       <div className="flex flex-nowrap items-center gap-1.5 no-scrollbar overflow-x-auto border-b bg-background/60 px-2 py-1.5">
-        {/* Symbol pill — opens the TradingView-style search modal for this pane */}
+        {/* Symbol pill — opens the search modal for this pane */}
         <Button
           variant="outline"
           size="sm"
@@ -675,6 +686,20 @@ export function ChartPane({
                 {railVisible ? 'Hide drawing tools' : 'Show drawing tools'}
               </button>
             )}
+            <button
+              type="button"
+              className={ctxRow}
+              onClick={() =>
+                run(() => {
+                  const next = !volumeOn
+                  terminalRef.current?.setVolumeVisible(next)
+                  setVolumeOn(next)
+                })
+              }
+            >
+              <VolumeIcon className="h-3.5 w-3.5 opacity-70" />
+              {volumeOn ? 'Hide volume' : 'Show volume'}
+            </button>
             <div className="relative" onMouseLeave={() => setGridSub(false)}>
               <button
                 type="button"
