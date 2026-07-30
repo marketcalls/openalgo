@@ -27,6 +27,7 @@ VALID_NODE_TYPES: frozenset[str] = frozenset(
         "andGate",
         "barOffset",
         "basketOrder",
+        "calendar",
         "cancelAllOrders",
         "cancelOrder",
         "closePositions",
@@ -818,3 +819,57 @@ def migrate_legacy_node_data(nodes: list) -> tuple[list, list[str]]:
 
         migrated.append({**node, "data": data})
     return migrated, notes
+
+
+# Trigger fields that are registered with the scheduler or a monitor at
+# activation rather than read per run. A change to any of them needs a
+# deactivate/reactivate cycle, which comparing node *types* alone would miss:
+# editing an interval from 1m to 5m keeps the same trigger type.
+TRIGGER_CONFIG_FIELDS: tuple[str, ...] = (
+    # start
+    "scheduleType",
+    "time",
+    "days",
+    "executeAt",
+    "intervalMinutes",
+    "intervalValue",
+    "intervalUnit",
+    "marketHoursOnly",
+    # priceAlert - every field add_alert() captures, including the channel
+    # bounds and percentage that only some conditions use
+    "symbol",
+    "exchange",
+    "condition",
+    "price",
+    "priceLower",
+    "priceUpper",
+    "percentage",
+    "expiration",
+    # orderUpdateTrigger
+    "orderId",
+    "status",
+    # shared
+    "trigger",
+)
+
+
+def trigger_config(nodes: list) -> dict:
+    """The activation-relevant configuration of a graph's trigger node(s).
+
+    Two graphs with equal trigger_config can be swapped under a running
+    workflow; anything else needs the workflow reactivated so the scheduler and
+    monitors pick the change up.
+    """
+    config: dict = {}
+    if not isinstance(nodes, list):
+        return config
+    for node in nodes:
+        if not isinstance(node, dict) or node.get("type") not in TRIGGER_NODE_TYPES:
+            continue
+        data = node.get("data") or {}
+        if not isinstance(data, dict):
+            continue
+        config[str(node.get("type"))] = {
+            field: data.get(field) for field in TRIGGER_CONFIG_FIELDS if field in data
+        }
+    return config

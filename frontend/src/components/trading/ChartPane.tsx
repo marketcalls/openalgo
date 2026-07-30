@@ -24,7 +24,7 @@ import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 import { DrawingStyleBar } from './DrawingStyleBar'
-import { DrawingTextDialog } from './DrawingTextDialog'
+import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
 import { IndicatorSettingsDialog } from './IndicatorSettingsDialog'
 import { SymbolSearchDialog } from './SymbolSearchDialog'
 
@@ -66,6 +66,15 @@ function PencilIcon({ className }: { className?: string }) {
     <svg viewBox="0 0 24 24" {...glyph} className={className} aria-hidden="true">
       <path d="M4 20.5h4L20 8.5a2.4 2.4 0 0 0-3.4-3.4L4.5 17z" />
       <path d="M15.5 6.5 18.5 9.5" />
+    </svg>
+  )
+}
+
+/** Three rising bars — the volume histogram in miniature. */
+function VolumeIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden="true">
+      <path d="M5 20v-6M12 20V8M19 20v-9" />
     </svg>
   )
 }
@@ -174,9 +183,10 @@ export function ChartPane({
   const [grid, setGrid] = useState({ vertical: true, horizontal: true })
   const [fullscreen, setFullscreen] = useState(false)
   const [gridSub, setGridSub] = useState(false)
+  const [volumeOn, setVolumeOn] = useState(true)
   const [drawSel, setDrawSel] = useState<DrawSelection | null>(null)
   const [indSettings, setIndSettings] = useState<IndicatorSettingsRequest | null>(null)
-  const [textReq, setTextReq] = useState<{ id: string; tool: string; text: string } | null>(null)
+  const [textReq, setTextReq] = useState<TextRequest | null>(null)
 
   // right-click menu: order entry, then the view actions
   const [ctx, setCtx] = useState<{ x: number; y: number; items: CtxItem[] } | null>(null)
@@ -213,7 +223,13 @@ export function ChartPane({
       onIndicatorsChange: (list) => aliveRef.current && setIndicators(list),
       onIndicatorSettings: (req) => aliveRef.current && setIndSettings(req),
       onDrawSelect: (sel) => aliveRef.current && setDrawSel(sel),
-      onDrawTextEdit: (r) => aliveRef.current && setTextReq(r),
+      onDrawTextEdit: (r) => {
+        if (!aliveRef.current) return
+        // The ref, not the local: `terminal` is still unassigned while this
+        // object literal is being built. Callbacks only fire after construction.
+        const style = terminalRef.current?.drawTextStyle(r.id)
+        if (style) setTextReq({ id: r.id, tool: r.tool, style })
+      },
     }
 
     if (chartRef.current && legendRef.current) {
@@ -233,6 +249,7 @@ export function ChartPane({
       terminal.init()
       statsCbRef.current?.(terminal.drawStats())
       setGrid(terminal.gridState())
+      setVolumeOn(terminal.volumeVisible())
     }
 
     return () => {
@@ -602,7 +619,7 @@ export function ChartPane({
         />
         <DrawingTextDialog
           req={textReq}
-          onSubmit={(id, text) => terminalRef.current?.setDrawingText(id, text)}
+          onSubmit={(id, value) => terminalRef.current?.applyDrawText(id, value)}
           onClose={() => setTextReq(null)}
         />
         <IndicatorSettingsDialog
@@ -675,6 +692,20 @@ export function ChartPane({
                 {railVisible ? 'Hide drawing tools' : 'Show drawing tools'}
               </button>
             )}
+            <button
+              type="button"
+              className={ctxRow}
+              onClick={() =>
+                run(() => {
+                  const next = !volumeOn
+                  terminalRef.current?.setVolumeVisible(next)
+                  setVolumeOn(next)
+                })
+              }
+            >
+              <VolumeIcon className="h-3.5 w-3.5 opacity-70" />
+              {volumeOn ? 'Hide volume' : 'Show volume'}
+            </button>
             <div className="relative" onMouseLeave={() => setGridSub(false)}>
               <button
                 type="button"

@@ -9,6 +9,7 @@ import {
   Calculator,
   Calendar,
   CalendarClock,
+  CalendarRange,
   CalendarX,
   ClipboardList,
   Clock,
@@ -334,6 +335,13 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
       description: 'Broker timeframes',
       icon: <Clock className="h-3.5 w-3.5 text-pink-500" />,
       color: 'bg-pink-500/10',
+    },
+    {
+      type: 'calendar',
+      label: 'Calendar',
+      description: 'New day / week / month',
+      icon: <CalendarRange className="h-3.5 w-3.5 text-purple-400" />,
+      color: 'bg-purple-400/10',
     },
     {
       type: 'multiQuotes',

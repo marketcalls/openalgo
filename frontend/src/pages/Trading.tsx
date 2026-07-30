@@ -20,10 +20,11 @@ const NO_DRAW: DrawStats = {
   hasSelection: false,
   magnet: false,
   tool: null,
+  shortcuts: {},
 }
 
 /**
- * Grid layout presets (a la Sahi / TradingView multi-chart). Each preset is a
+ * Grid layout presets. Each preset is a
  * CSS grid: `areas` names the cells, `cells` maps each pane (in order) to a named
  * area — so a pane can span (e.g. the big left chart in "1 + 2").
  */
@@ -118,7 +119,7 @@ export default function Trading() {
   const [wsUrl, setWsUrl] = useState<string | null>(null)
   const [noApiKey, setNoApiKey] = useState(false)
 
-  /* ── one drawing rail for every pane (a la TradingView's multi-chart) ──── */
+  /* ── one drawing rail for every pane ─────────────────────────────────── */
   const [tool, setTool] = useState<string | null>(null)
   const [magnet, setMagnet] = useState(false)
   const [showRail, setShowRail] = useState(true)
@@ -132,6 +133,19 @@ export default function Trading() {
     if (t) setStats(t.drawStats())
   }, [])
   const railStats: DrawStats = { ...stats, tool, magnet }
+  /**
+   * Hand a key event to the focused pane; it reports whether a tool claimed it.
+   * The chord table ships with the lazily loaded draw tier, so the terminal --
+   * not this page and not the rail -- is what can answer.
+   */
+  const armByShortcut = useCallback((e: KeyboardEvent) => {
+    const t = activeRef.current
+    if (!t || !t.armByShortcut(e)) return false
+    setTool(t.drawStats().tool)
+    setStats(t.drawStats())
+    return true
+  }, [])
+
   const act = (fn: (t: TradingTerminal) => void) => {
     const t = activeRef.current
     if (!t) return
@@ -174,7 +188,7 @@ export default function Trading() {
     <>
       <Navbar />
       <div className="flex flex-1 flex-col overflow-hidden">
-        {/* Layout selector (Sahi-style visual presets) */}
+        {/* Layout selector (visual presets) */}
         <div className="flex items-center gap-2 border-b bg-background/95 px-3 py-1.5">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -218,6 +232,7 @@ export default function Trading() {
               onRedo={() => act((t) => t.redoDraw())}
               onRemove={(all) => act((t) => t.removeDrawings(all))}
               onMagnet={(v) => setMagnet(v)}
+              onShortcut={armByShortcut}
             />
           )}
           <div className="min-h-0 flex-1">

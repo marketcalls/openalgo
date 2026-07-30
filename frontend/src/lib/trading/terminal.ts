@@ -45,6 +45,12 @@ export interface DrawStats {
   hasSelection: boolean
   magnet: boolean
   tool: string | null
+  /**
+   * Tool id -> keyboard chord, from the draw tier. Empty until the tier has
+   * loaded; the rail simply renders no chord until then, rather than the rail
+   * having to import the tier and undo its lazy loading.
+   */
+  shortcuts: Record<string, string>
 }
 
 import type { AppMode, ThemeMode } from '@/stores/themeStore'
@@ -181,6 +187,24 @@ export interface DrawSelection {
   locked: boolean
 }
 
+/**
+ * Everything a text-bearing drawing's settings dialog edits. The engine renders
+ * all of it already (`TEXT`'s style keys); it ships no DOM, so the form is the
+ * host's and needs the current values to open populated rather than blank.
+ */
+export interface DrawTextStyle {
+  text: string
+  color: string
+  fontSize: number
+  bold: boolean
+  italic: boolean
+  background: boolean
+  backgroundColor: string
+  border: boolean
+  borderColor: string
+  wrap: boolean
+}
+
 export interface TerminalOptions {
   apiKey: string
   wsUrl: string
@@ -239,8 +263,11 @@ export class TradingTerminal {
   /** History paging: in-flight guard, and whether the broker ran out. */
   private loadingOlder = false
   private noMoreHistory = false
+  private volumeOn = true
   private gridV = true
   private gridH = true
+  private drawShortcuts: Record<string, string> = {}
+  private matchShortcut: ((e: { key: string; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => string | null) | null = null
   private ltpLine: PriceLine | null = null
   private posLine: PriceLine | null = null
   private tradeBtns: BuySellButtonsInstance | null = null
@@ -676,6 +703,9 @@ export class TradingTerminal {
       priceFormat: { type: 'volume' },
     })
     this.volume.priceScale().setOptions({ marginTop: 0.82, marginBottom: 0 })
+    // A rebuild makes a fresh series, so the preference has to be re-applied
+    // rather than assumed -- switching chart type or theme would show it again.
+    if (!this.volumeOn) this.volume.applyOptions({ visible: false })
     this.setPriceData()
 
     // Default zoom: a FIXED number of recent bars, so the visible price range
@@ -847,6 +877,9 @@ export class TradingTerminal {
       this.gridV = grid[0] === '1'
       this.gridH = grid[1] === '1'
     }
+    // Absent means shown: only an explicit '0' hides it, so existing panes and
+    // a first visit both keep volume.
+    this.volumeOn = this.lsGet('vol') !== '0'
   }
 
   /**
@@ -934,7 +967,7 @@ export class TradingTerminal {
    */
   private async attachDrawing(): Promise<void> {
     if (this.draw || !this.chart) return
-    const { DrawingController } = await import('openalgo-charts/draw')
+    const { DrawingController, drawingShortcuts, matchDrawingShortcut } = await import('openalgo-charts/draw')
     // The await is a real suspension point: the pane can be destroyed, or the
     // chart rebuilt again, while the tier is in flight.
     if (this.destroyed || !this.chart || this.draw) return
@@ -943,6 +976,8 @@ export class TradingTerminal {
       stayInDrawingMode: false,
     })
     this.draw = draw
+    this.drawShortcuts = drawingShortcuts()
+    this.matchShortcut = matchDrawingShortcut
     if (this.drawJson.length) {
       try {
         draw.fromJSON(this.drawJson)
@@ -963,6 +998,12 @@ export class TradingTerminal {
     })
     this.chart.on('draw:add', () => this.afterDrawChange())
     this.chart.on('draw:remove', () => this.afterDrawChange())
+    // Double-click a text drawing to open its settings. The chart's own
+    // double-click resets the view, which it must not do when the gesture was
+    // aimed at a drawing -- editSelectedText() reports whether it claimed it.
+    this.chart.on('dblclick', () => {
+      this.editSelectedText()
+    })
     this.chart.on('draw:update', () => this.afterDrawChange())
   }
 
@@ -998,11 +1039,81 @@ export class TradingTerminal {
     return d !== undefined && TEXT_TOOLS.has(d.tool)
   }
 
+  /**
+   * Open the selected drawing's text settings, if it is a text-bearing one.
+   * Returns whether it did, so a double-click handler knows not to also reset
+   * the view. The engine's `dblclick` carries no id -- a press selects first,
+   * so the selection is the target.
+   */
+  editSelectedText(): boolean {
+    const id = this.draw?.selected()
+    if (!id) return false
+    const d = this.draw?.get(id)
+    if (!d || !TEXT_TOOLS.has(d.tool)) return false
+    this.requestDrawTextEdit(id)
+    return true
+  }
+
   /** Ask the host to edit a drawing's text — the style bar's T button. */
   requestDrawTextEdit(id: string): void {
     const d = this.draw?.get(id)
     if (!d || !TEXT_TOOLS.has(d.tool)) return
     this.cb.onDrawTextEdit?.({ id: d.id, tool: d.tool, text: d.style.text ?? '' })
+  }
+
+  /**
+   * The current text style of a drawing, for opening its settings populated.
+   * Background and border default OFF, matching the engine's own defaults —
+   * text dropped on a chart should be the words, not a filled plate.
+   */
+  drawTextStyle(id: string): DrawTextStyle | null {
+    const d = this.draw?.get(id)
+    if (!d) return null
+    const st = (d.style ?? {}) as Record<string, unknown>
+    return {
+      text: (st.text as string) ?? '',
+      color: (st.color as string) ?? '#e4e8f4',
+      fontSize: (st.fontSize as number) ?? 14,
+      bold: st.fontWeight === 'bold',
+      italic: st.fontStyle === 'italic',
+      background: st.background === true,
+      // Never the chart's own background: a plate in that colour is invisible,
+      // which reads as "Background does nothing". A neutral grey shows on both
+      // the dark and light themes.
+      backgroundColor: (st.backgroundColor as string) ?? '#434651',
+      border: st.border === true,
+      borderColor: (st.borderColor as string) ?? ((st.color as string) ?? '#e4e8f4'),
+      wrap: st.wrap === true,
+    }
+  }
+
+  /**
+   * Apply the text dialog's result. Empty text removes the drawing rather than
+   * leaving an invisible box behind, the same rule `setDrawingText` follows.
+   */
+  applyDrawText(id: string, v: DrawTextStyle): void {
+    if (!this.draw) return
+    const trimmed = v.text.trim()
+    if (trimmed === '') {
+      this.draw.remove(id)
+      this.afterDrawChange()
+      return
+    }
+    this.draw.update(id, {
+      style: {
+        text: trimmed,
+        color: v.color,
+        fontSize: v.fontSize,
+        fontWeight: v.bold ? 'bold' : 'normal',
+        fontStyle: v.italic ? 'italic' : 'normal',
+        background: v.background,
+        backgroundColor: v.backgroundColor,
+        border: v.border,
+        borderColor: v.borderColor,
+        wrap: v.wrap,
+      },
+    })
+    this.afterDrawChange()
   }
 
   /** Set a drawing's text. Empty text removes it rather than leaving a blank. */
@@ -1039,6 +1150,18 @@ export class TradingTerminal {
   }
 
   /** Toolbar state: counts and what is currently possible. */
+  /**
+   * Arm the tool bound to this key event, reporting whether one matched so the
+   * caller can swallow the key. The tier owns the chord table, so this is a
+   * no-op until drawing has been attached.
+   */
+  armByShortcut(e: { key: string; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }): boolean {
+    const id = this.matchShortcut?.(e) ?? null
+    if (id === null) return false
+    void this.setDrawTool(id)
+    return true
+  }
+
   drawStats(): DrawStats {
     const d = this.draw
     return {
@@ -1048,6 +1171,7 @@ export class TradingTerminal {
       hasSelection: d ? d.selected() !== null : false,
       magnet: this.drawMagnet,
       tool: this.drawTool,
+      shortcuts: this.drawShortcuts,
     }
   }
 
@@ -1225,6 +1349,23 @@ export class TradingTerminal {
 
   gridState(): { vertical: boolean; horizontal: boolean } {
     return { vertical: this.gridV, horizontal: this.gridH }
+  }
+
+  /**
+   * Show or hide the built-in volume histogram, remembered per pane.
+   *
+   * Hidden rather than removed: the series keeps taking data, so toggling back
+   * is instant and no history has to be refetched. It also keeps the overlay
+   * price scale in place, which is what the bars are measured against.
+   */
+  setVolumeVisible(on: boolean): void {
+    this.volumeOn = on
+    this.volume?.applyOptions({ visible: on })
+    this.lsSet('vol', on ? '1' : '0')
+  }
+
+  volumeVisible(): boolean {
+    return this.volumeOn
   }
 
   /* ── WS-down fallback: poll quotes so LTP + the forming candle stay live ─ */
