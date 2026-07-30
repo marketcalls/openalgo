@@ -626,6 +626,12 @@ export const NODE_DEFINITIONS = {
       category: 'data' as const,
     },
     {
+      type: 'calendar',
+      label: 'Calendar',
+      description: 'New day, week, month or quarter',
+      category: 'data' as const,
+    },
+    {
       type: 'subscribeLtp',
       label: 'Subscribe LTP',
       description: 'Stream last traded price',
@@ -1066,6 +1072,11 @@ export const DEFAULT_NODE_DATA = {
     // The calendar service takes a date (YYYY-MM-DD). Blank = today.
     date: '',
     outputVariable: '',
+  },
+  calendar: {
+    // Blank = the current trading session date.
+    date: '',
+    outputVariable: 'cal',
   },
   mathExpression: {
     expression: '',

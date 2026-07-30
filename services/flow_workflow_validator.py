@@ -27,6 +27,7 @@ VALID_NODE_TYPES: frozenset[str] = frozenset(
         "andGate",
         "barOffset",
         "basketOrder",
+        "calendar",
         "cancelAllOrders",
         "cancelOrder",
         "closePositions",
