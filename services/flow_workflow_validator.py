@@ -94,15 +94,16 @@ TRIGGER_NODE_TYPES: frozenset[str] = frozenset(
 # Fields required only for particular option values. A channel alert is
 # configured with priceLower/priceUpper and has no single `price`, so requiring
 # one unconditionally rejected a documented, working alert.
+# Fields required only for particular option values, keyed on the *canonical*
+# condition the price monitor uses. The editor and the monitor keep separate
+# spellings for the same conditions, so the selector is normalized through the
+# monitor's own alias table before lookup - keying on the editor's spellings let
+# an alias such as `price_above` activate with no target price at all.
 CONDITIONAL_REQUIRED_FIELDS: dict[str, dict[str, dict[str, tuple[str, ...]]]] = {
     "priceAlert": {
         "condition": {
-            "above": ("price",),
-            "below": ("price",),
             "greater_than": ("price",),
             "less_than": ("price",),
-            "crosses_above": ("price",),
-            "crosses_below": ("price",),
             "crossing": ("price",),
             "crossing_up": ("price",),
             "crossing_down": ("price",),
@@ -112,9 +113,79 @@ CONDITIONAL_REQUIRED_FIELDS: dict[str, dict[str, dict[str, tuple[str, ...]]]] = 
             "outside_channel": ("priceLower", "priceUpper"),
             "moving_up_percent": ("percentage",),
             "moving_down_percent": ("percentage",),
+            "moving_up": (),
+            "moving_down": (),
         }
     },
 }
+
+
+def _positive_number(value: object) -> float | None:
+    """The value as a positive number, or None when it is not one."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _alert_threshold_errors(
+    base: str, data: dict, condition: str, required: tuple[str, ...]
+) -> list[dict]:
+    """Sanity-check the numbers a price alert compares against.
+
+    A zero or negative level is never reached by a real instrument price, and an
+    inverted channel is empty, so either would leave the alert registered and
+    unable to fire - the same silent non-firing this node has had before.
+    """
+    errors: list[dict] = []
+    for field in required:
+        if field not in data:
+            continue  # absence is reported as a missing required field
+        if _positive_number(data.get(field)) is None:
+            errors.append(
+                _err(
+                    f"{base}/data/{field}",
+                    "invalid_threshold",
+                    f"{field} must be a positive number for a '{condition}' alert; "
+                    f"{data.get(field)!r} can never be reached.",
+                    "a positive number",
+                    data.get(field),
+                )
+            )
+    lower = _positive_number(data.get("priceLower"))
+    upper = _positive_number(data.get("priceUpper"))
+    if "priceLower" in required and lower is not None and upper is not None and lower >= upper:
+        errors.append(
+            _err(
+                f"{base}/data/priceLower",
+                "invalid_threshold",
+                f"priceLower ({lower}) must be below priceUpper ({upper}); "
+                "an inverted channel contains no prices.",
+                "priceLower < priceUpper",
+                [lower, upper],
+            )
+        )
+    return errors
+
+
+def _canonical_condition(value: object) -> str:
+    """Resolve a condition to the name the price monitor compares on.
+
+    Delegated to the monitor so the two cannot drift; falls back to a plain
+    normalization if it cannot be imported (docs builds, lint environments).
+    """
+    try:
+        from services.flow_price_monitor_service import FlowPriceMonitor
+
+        return FlowPriceMonitor.normalize_condition(str(value))
+    except Exception:
+        return str(value or "").strip().lower().replace("-", "_")
+
+
+# Nodes that exist only in the editor. They are never dispatched, so they are
+# exempt from reachability.
+DECORATIVE_NODE_TYPES: frozenset[str] = frozenset({"group"})
 
 MAX_NODES = 500
 MAX_EDGES = 1000
@@ -333,8 +404,22 @@ def validate_workflow(
         if strict and isinstance(data, dict) and isinstance(node_type, str):
             required = list(REQUIRED_NODE_FIELDS.get(node_type, ()))
             for selector, options in CONDITIONAL_REQUIRED_FIELDS.get(node_type, {}).items():
-                chosen = str(data.get(selector, "")).strip().lower()
+                chosen = _canonical_condition(data.get(selector, ""))
+                if chosen and chosen not in options:
+                    # An unrecognized condition can never evaluate true, so the
+                    # trigger would sit registered and silently never fire.
+                    errors.append(
+                        _err(
+                            f"{base}/data/{selector}",
+                            "unknown_condition",
+                            f"'{data.get(selector)}' is not a condition the price "
+                            "monitor can evaluate, so this alert could never fire.",
+                            sorted(options),
+                            data.get(selector),
+                        )
+                    )
                 required.extend(options.get(chosen, ()))
+                errors.extend(_alert_threshold_errors(base, data, chosen, options.get(chosen, ())))
             for field in required:
                 value = data.get(field)
                 if value is None or (isinstance(value, str) and not value.strip()):
@@ -631,7 +716,15 @@ def _graph_errors(nodes: list, edges: list, node_ids: set[str], triggers: list[s
                 continue
             seen.add(nid)
             stack.extend(adjacency.get(nid, ()))
-        unreachable = sorted(node_ids - seen)
+        # `group` is a visual container with no execution behaviour, so it is
+        # legitimately unconnected while the nodes drawn inside it run through
+        # their own edges.
+        decorative = {
+            n.get("id")
+            for n in nodes
+            if isinstance(n, dict) and n.get("type") in DECORATIVE_NODE_TYPES
+        }
+        unreachable = sorted(node_ids - seen - decorative)
         if unreachable:
             errors.append(
                 _err(

@@ -165,7 +165,14 @@ class FlowScheduler:
             func,
             trigger=trigger,
             id=job_id,
-            args=[workflow_id, self._api_key, market_hours_only],
+            # Only the default executor takes the market-hours flag. A custom
+            # callback still receives the documented (workflow_id, api_key)
+            # pair, which passing a third positional argument would break.
+            args=(
+                [workflow_id, self._api_key, market_hours_only]
+                if func is execute_workflow_scheduled
+                else [workflow_id, self._api_key]
+            ),
             replace_existing=True,
             name=f"Workflow {workflow_id}",
         )
