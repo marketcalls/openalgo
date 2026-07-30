@@ -67,13 +67,33 @@ def create_workflow():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    # Structural validation only: the editor saves while a graph is still being
-    # wired, so completeness (required fields, one trigger, reachability) is
-    # enforced at import and activation instead of blocking every save.
+    # Structural validation only, and only over what was actually sent. A new
+    # workflow is created from the editor with just a name - no graph yet - so
+    # requiring nodes/edges here rejected every "New Strategy" click.
+    # Completeness (required fields, one trigger, reachability) is enforced at
+    # import, activation, and execution instead of blocking a save.
     from services.flow_workflow_validator import validate_workflow
 
-    errors = validate_workflow(data, require_name=False, strict=False)
+    errors = (
+        validate_workflow(
+            {
+                "name": data.get("name") or "",
+                "nodes": data.get("nodes") or [],
+                "edges": data.get("edges") or [],
+            },
+            require_name=False,
+            strict=False,
+        )
+        if ("nodes" in data or "edges" in data)
+        else []
+    )
     if errors:
+        # Logged, not just returned: a bare 400 in the browser gives no reason,
+        # which made this class of rejection hard to diagnose.
+        logger.warning(
+            f"Rejected workflow save: {errors[0]['path']} {errors[0]['code']} - "
+            f"{errors[0]['message']}"
+        )
         return jsonify(
             {
                 "status": "error",
@@ -402,6 +422,10 @@ def _execution_blocked(workflow):
     )
     if not errors:
         return None
+    logger.warning(
+        f"Workflow {getattr(workflow, 'id', '?')} ({getattr(workflow, 'name', '?')}) "
+        f"blocked: {errors[0]['path']} {errors[0]['code']} - {errors[0]['message']}"
+    )
     return {
         "status": "error",
         "error": "Workflow cannot be executed",
