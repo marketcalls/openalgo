@@ -389,3 +389,55 @@ export async function downloadTearsheet(req: BacktestRequest): Promise<void> {
   // enough for it to have started.
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
+
+export interface HoldingRow {
+  symbol: string
+  exchange: string
+  quantity: number
+  average_price: number
+  last_price: number
+  invested: number
+  current: number
+  pnl: number
+  pnl_pct: number
+  weight: number
+  product: string
+}
+
+export interface HoldingsAnalysis {
+  status: 'success' | 'error'
+  message?: string
+  summary: {
+    holdings: HoldingRow[]
+    weights: Record<string, number>
+    invested: number
+    current: number
+    pnl: number
+    pnl_pct: number
+    count: number
+  }
+  /** The full backtest report over the current weights, or null if unavailable. */
+  analysis: BacktestResponse | null
+  analysis_error: string | null
+  /** Held, but on an exchange the backtester cannot price. */
+  skipped: string[]
+  meta: {
+    lookback_days: number
+    start: string
+    end: string
+    /** Says plainly that this is today's holdings run over past prices. */
+    basis: string
+  }
+}
+
+/** Analyse the portfolio actually held at the broker. */
+export async function analyseHoldings(req: {
+  apikey: string
+  lookback_days?: number
+  benchmark?: string | null
+  risk_free_rate?: number
+  source?: PriceSource
+}): Promise<HoldingsAnalysis> {
+  const { data } = await apiClient.post<HoldingsAnalysis>('/portfolio/holdings', req)
+  return data
+}
