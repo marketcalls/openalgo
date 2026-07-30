@@ -6,6 +6,42 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+# Shoonya (Noren) order statuses arrive with underscores ("TRIGGER_PENDING") and
+# inconsistent casing ("Open" / "OPEN", "REJECT" / "REJECTED"), so normalize the
+# separator and case before matching.
+_COMPLETE_STATUSES = {"COMPLETE"}
+_REJECTED_STATUSES = {"REJECTED", "REJECT"}
+_CANCELLED_STATUSES = {"CANCELED", "CANCELLED"}
+# Still working at the exchange, i.e. modifiable/cancellable. A stop-loss order
+# waiting for its trigger sits in TRIGGER_PENDING and must surface as "open" so
+# the order book offers Modify/Cancel.
+_OPEN_STATUSES = {
+    "OPEN",
+    "PENDING",
+    "TRIGGER PENDING",
+    "NEW",
+    "REPLACED",
+    "OPEN PENDING",
+    "MODIFY PENDING",
+    "CANCEL PENDING",
+    "AFTER MARKET ORDER REQ RECEIVED",
+}
+
+
+def normalize_order_status(raw_status):
+    """Map a Shoonya status to an OpenAlgo status (open/complete/cancelled/rejected)."""
+    status = str(raw_status or "").strip().upper().replace("_", " ")
+    if status in _COMPLETE_STATUSES:
+        return "complete"
+    if status in _OPEN_STATUSES:
+        return "open"
+    if status in _REJECTED_STATUSES:
+        return "rejected"
+    if status in _CANCELLED_STATUSES:
+        return "cancelled"
+    return status.lower()
+
+
 def map_order_data(order_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
@@ -40,28 +76,32 @@ def map_order_data(order_data):
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
                 order["tsym"] = symbol_from_db
-                if (order["exch"] == "NSE" or order["exch"] == "BSE") and order["prd"] == "C":
-                    order["prd"] = "CNC"
-
-                elif order["prd"] == "I":
-                    order["prd"] = "MIS"
-
-                elif order["exch"] in ["NFO", "MCX", "BFO", "CDS"] and order["prd"] == "M":
-                    order["prd"] = "NRML"
-
-                if order["prctyp"] == "MKT":
-                    order["prctyp"] = "MARKET"
-                elif order["prctyp"] == "LMT":
-                    order["prctyp"] = "LIMIT"
-                elif order["prctyp"] == "SL-MKT":
-                    order["prctyp"] = "SL-M"
-                elif order["prctyp"] == "SL-LMT":
-                    order["prctyp"] = "SL"
-
             else:
                 logger.info(
                     f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol."
                 )
+
+            # Product and price type are independent of the symbol lookup, so map them
+            # unconditionally - otherwise a lookup miss leaves raw Shoonya values
+            # (e.g. "SL-LMT") that the order book's Modify dialog cannot match.
+            if (order["exch"] == "NSE" or order["exch"] == "BSE") and order["prd"] == "C":
+                order["prd"] = "CNC"
+
+            elif order["prd"] == "I":
+                order["prd"] = "MIS"
+
+            elif order["exch"] in ["NFO", "MCX", "BFO", "CDS"] and order["prd"] == "M":
+                order["prd"] = "NRML"
+
+            price_type = str(order.get("prctyp") or "").upper()
+            if price_type == "MKT":
+                order["prctyp"] = "MARKET"
+            elif price_type == "LMT":
+                order["prctyp"] = "LIMIT"
+            elif price_type in ("SL-MKT", "SLMKT"):
+                order["prctyp"] = "SL-M"
+            elif price_type in ("SL-LMT", "SLLMT"):
+                order["prctyp"] = "SL"
 
     return order_data
 
@@ -92,12 +132,12 @@ def calculate_order_statistics(order_data):
                 total_sell_orders += 1
 
             # Count orders based on their status
-            status = str(order.get("status") or "").upper()
-            if status == "COMPLETE":
+            status = normalize_order_status(order.get("status"))
+            if status == "complete":
                 total_completed_orders += 1
-            elif status in ("OPEN", "TRIGGER PENDING", "PENDING"):
+            elif status == "open":
                 total_open_orders += 1
-            elif status == "REJECTED":
+            elif status == "rejected":
                 total_rejected_orders += 1
 
     # Compile and return the statistics
@@ -122,17 +162,7 @@ def transform_order_data(orders):
             continue
 
         # Map Shoonya status to OpenAlgo status
-        raw_status = str(order.get("status") or "").upper()
-        status_map = {
-            "COMPLETE": "complete",
-            "OPEN": "open",
-            "REJECTED": "rejected",
-            "CANCELED": "cancelled",
-            "CANCELLED": "cancelled",
-            "TRIGGER PENDING": "open",
-            "PENDING": "open",
-        }
-        mapped_status = status_map.get(raw_status, raw_status.lower())
+        mapped_status = normalize_order_status(order.get("status"))
 
         transformed_order = {
             "symbol": order.get("tsym", ""),
