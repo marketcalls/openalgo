@@ -30,6 +30,7 @@ from portfolio.analytics import (
     diversification_ratio,
     summary,
 )
+from portfolio.costs import EquityCosts, schedule_for
 from portfolio.engine import Costs, normalise_weights, run_backtest
 from portfolio.health import portfolio_health
 from portfolio.rebalance import RebalancePolicy, calendar_dates, drifted
@@ -551,3 +552,112 @@ class TestPortfolioHealth:
         assert grade_for(90) == "A"
         assert grade_for(89.9) == "B"
         assert grade_for(0) == "F"
+
+
+class TestIndianEquityCosts:
+    """
+    Pinned against a public brokerage calculator: delivery equity, NSE, buy and
+    sell 5,000 shares at 1,000 each -- turnover 1,00,00,000 -- costs 11,124.06.
+    """
+
+    def test_matches_the_published_calculator_line_by_line(self):
+        c = EquityCosts(exchange="NSE")
+        b = c.breakdown(buy_value=50_00_000, sell_value=50_00_000)
+        assert b["brokerage"] == pytest.approx(0.0)
+        assert b["stt"] == pytest.approx(10_000.0)
+        assert b["exchange_txn"] == pytest.approx(307.0, abs=0.5)
+        assert b["sebi"] == pytest.approx(10.0, abs=0.01)
+        # Named `tax` in the generic schedule: a market may levy VAT or none.
+        assert b["tax"] == pytest.approx(57.06, abs=0.1)
+        assert b["stamp_duty"] == pytest.approx(750.0)
+        assert b["total"] == pytest.approx(11_124.06, abs=0.5)
+
+    def test_stamp_duty_is_charged_on_the_buy_leg_only(self):
+        c = EquityCosts()
+        buy_only = c.breakdown(1_00_000, 0)["stamp_duty"]
+        sell_only = c.breakdown(0, 1_00_000)["stamp_duty"]
+        assert buy_only > 0
+        assert sell_only == 0
+        # The asymmetry a flat bps rate cannot express.
+        assert c.charge(1_00_000, 0) > c.charge(0, 1_00_000)
+
+    def test_gst_applies_to_fees_not_to_taxes(self):
+        c = EquityCosts()
+        b = c.breakdown(50_00_000, 50_00_000)
+        assert b["tax"] == pytest.approx((b["brokerage"] + b["exchange_txn"] + b["sebi"]) * 0.18)
+        # If GST were charged on STT it would dwarf every other line.
+        assert b["tax"] < b["stt"] / 100
+
+    def test_bse_costs_more_to_transact_than_nse(self):
+        nse = EquityCosts("NSE").charge(50_00_000, 50_00_000)
+        bse = EquityCosts("BSE").charge(50_00_000, 50_00_000)
+        assert bse > nse
+
+    def test_stt_dominates_so_turnover_is_what_hurts(self):
+        b = EquityCosts().breakdown(50_00_000, 50_00_000)
+        assert b["stt"] / b["total"] > 0.85
+
+    def test_effective_rate_is_about_11_bps_each_way(self):
+        rate = EquityCosts().effective_rate(50_00_000, 50_00_000)
+        assert rate == pytest.approx(0.001112, abs=1e-5)
+
+    def test_no_trade_costs_nothing(self):
+        assert EquityCosts().charge(0, 0) == pytest.approx(0.0)
+        assert EquityCosts().effective_rate(0, 0) == 0.0
+
+
+class TestGenericCostSchedule:
+    """
+    Charges are data, not code. The India preset must reproduce the published
+    calculator exactly, and a different market must work through the same
+    machinery -- otherwise "configurable" is just relocated hardcoding.
+    """
+
+    def test_india_preset_reproduces_the_calculator(self):
+        b = schedule_for("india_delivery_nse").breakdown(50_00_000, 50_00_000, orders=0)
+        assert b["stt"] == pytest.approx(10_000.0)
+        assert b["exchange_txn"] == pytest.approx(307.0, abs=0.5)
+        assert b["sebi"] == pytest.approx(10.0, abs=0.01)
+        assert b["tax"] == pytest.approx(57.06, abs=0.1)
+        assert b["stamp_duty"] == pytest.approx(750.0)
+        assert b["total"] == pytest.approx(11_124.06, abs=0.5)
+
+    def test_every_rate_is_overridable(self):
+        # A budget changes STT: no release should be needed.
+        s = schedule_for("india_delivery_nse", {"stt": {"rate": 0.00125}})
+        assert s.breakdown(50_00_000, 50_00_000)["stt"] == pytest.approx(12_500.0)
+
+    def test_flat_brokerage_scales_with_orders_not_value(self):
+        s = schedule_for("india_delivery_nse", {"brokerage": {"flat": 20.0}})
+        assert s.breakdown(1_00_000, 1_00_000, orders=4)["brokerage"] == pytest.approx(80.0)
+        # Ten times the value, same order count, same brokerage.
+        assert s.breakdown(10_00_000, 10_00_000, orders=4)["brokerage"] == pytest.approx(80.0)
+
+    def test_percent_brokerage_is_capped_per_order(self):
+        s = schedule_for(
+            "india_delivery_nse", {"brokerage": {"flat": 0.0, "rate": 0.0003, "cap": 20.0}}
+        )
+        # 2 orders of 5,00,000 each -> 150 uncapped, so the cap binds at 20.
+        assert s.breakdown(5_00_000, 5_00_000, orders=2)["brokerage"] == pytest.approx(40.0)
+
+    def test_bse_carries_its_own_transaction_rate(self):
+        nse = schedule_for("india_delivery_nse").breakdown(50_00_000, 50_00_000)
+        bse = schedule_for("india_delivery_bse").breakdown(50_00_000, 50_00_000)
+        assert bse["exchange_txn"] > nse["exchange_txn"]
+
+    def test_a_different_market_needs_no_new_code(self):
+        us = schedule_for("us_equity").breakdown(50_000, 50_000, orders=2)
+        # Sell-side only, which an India-shaped model could not express.
+        assert us["sec_fee"] == pytest.approx(50_000 * 0.0000278)
+        assert us["tax"] == pytest.approx(0.0)
+        buy_only = schedule_for("us_equity").breakdown(50_000, 0, orders=1)
+        assert buy_only["sec_fee"] == pytest.approx(0.0)
+
+    def test_unknown_override_keys_are_ignored_not_fatal(self):
+        # A saved portfolio must not break when a schedule gains or loses a line.
+        s = schedule_for("india_delivery_nse", {"nonexistent": {"rate": 1.0}})
+        assert s.breakdown(1_000, 1_000)["total"] > 0
+
+    def test_unknown_preset_is_refused(self):
+        with pytest.raises(ValueError, match="unknown cost schedule"):
+            schedule_for("mars_equity")

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from portfolio.costs import CostSchedule, EquityCosts
 from portfolio.data import PriceMatrix
 from portfolio.rebalance import RebalancePolicy, calendar_dates, drifted
 
@@ -92,7 +93,7 @@ def run_backtest(
     weights: dict[str, float],
     *,
     policy: RebalancePolicy | None = None,
-    costs: Costs | None = None,
+    costs: Costs | EquityCosts | CostSchedule | None = None,
     initial_capital: float = 100_000.0,
 ) -> BacktestResult:
     """
@@ -120,6 +121,7 @@ def run_backtest(
     equity = np.empty(len(index), dtype=float)
     weight_path = np.empty((len(index), len(symbols)), dtype=float)
     turnover_at: dict[pd.Timestamp, float] = {}
+    order_count = 0
 
     # Held in currency per symbol rather than as weights. Weights are a ratio
     # and cannot answer "how much did this holding actually make", which is the
@@ -147,7 +149,21 @@ def run_backtest(
                 # to change hands to get back to target.
                 traded = float(np.abs(desired - sleeve).sum()) / 2.0 / value
                 if traded > 0:
-                    charge = traded * value * costs.total
+                    traded_value = traded * value
+                    # A rebalance conserves value, so the rupees bought equal
+                    # the rupees sold. That split matters: stamp duty is charged
+                    # on the buy leg only, which a single blended rate cannot
+                    # express.
+                    # One order per holding whose position actually changed --
+                    # a flat per-order brokerage depends on that count, not on
+                    # the value.
+                    orders = int((np.abs(desired - sleeve) > 1e-9).sum())
+                    order_count += orders
+                    charge = (
+                        costs.charge(traded_value, traded_value, orders)
+                        if isinstance(costs, (EquityCosts, CostSchedule))
+                        else traded_value * costs.total
+                    )
                     # Attributed by each symbol's share of the traded value, so
                     # the holding that forced the trade carries the cost.
                     moved = np.abs(desired - sleeve)
@@ -207,8 +223,15 @@ def run_backtest(
             "target_weights": dict(zip(symbols, target.tolist())),
             "rule": policy.rule,
             "drift_band": policy.drift_band,
-            "cost_bps": costs.bps,
-            "slippage": costs.slippage,
+            "cost_model": (
+                {"kind": "schedule", "name": costs.name}
+                if isinstance(costs, CostSchedule)
+                else {"kind": "indian_equity", "exchange": costs.exchange}
+                if isinstance(costs, EquityCosts)
+                else {"kind": "flat_bps", "bps": costs.bps}
+            ),
+            "orders": order_count,
+            "slippage": getattr(costs, "slippage", 0.0),
             "initial_capital": initial_capital,
             "sessions": len(index),
         },
