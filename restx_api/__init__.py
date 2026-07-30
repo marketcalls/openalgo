@@ -23,6 +23,7 @@ from .expiry import api as expiry_ns
 from .funds import api as funds_ns
 from .gtt_orderbook import api as gtt_orderbook_ns
 from .history import api as history_ns
+from .portfolio import api as portfolio_ns
 from .holdings import api as holdings_ns
 from .instruments import api as instruments_ns
 from .intervals import api as intervals_ns
@@ -67,6 +68,7 @@ api.add_namespace(cancel_all_order_ns, path="/cancelallorder")
 api.add_namespace(quotes_ns, path="/quotes")
 api.add_namespace(multiquotes_ns, path="/multiquotes")
 api.add_namespace(history_ns, path="/history")
+api.add_namespace(portfolio_ns, path="/portfolio")
 api.add_namespace(depth_ns, path="/depth")
 api.add_namespace(option_chain_ns, path="/optionchain")
 api.add_namespace(intervals_ns, path="/intervals")
