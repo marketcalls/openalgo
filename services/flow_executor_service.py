@@ -103,8 +103,27 @@ class WorkflowContext:
             "second": now.strftime("%S"),
             "weekday": now.strftime("%A"),
             "iso_timestamp": now.isoformat(),
+            # Numeric weekday, because varCondition compares numbers and
+            # "Thursday" cannot be used in a range test.
+            "weekday_num": str(now.isoweekday()),  # 1 = Monday
+            "quarter": str((now.month - 1) // 3 + 1),
+            "week_of_year": str(now.isocalendar().week),
+            "day_of_year": str(now.timetuple().tm_yday),
+            # The trading session date, which differs from `date` between
+            # midnight and the 03:00 IST rollover. `date` is left as the plain
+            # calendar date for back-compatibility.
+            "session_date": self._session_date(),
         }
         return builtins.get(name)
+
+    @staticmethod
+    def _session_date() -> str:
+        try:
+            from utils.session import get_trading_session_date
+
+            return get_trading_session_date()
+        except Exception:
+            return datetime.now().date().isoformat()
 
     # Path segment: either a dotted key ([^.[\]]+) or a bracketed integer index (\[\d+\])
     _PATH_SEGMENT_RE = re.compile(r"([^\.\[\]]+)|\[(\d+)\]")
@@ -1477,6 +1496,45 @@ class NodeExecutor:
         self.store_output(node_data, result)
         return result
 
+    def execute_calendar(self, node_data: dict) -> dict:
+        """Execute Calendar node - trading-day facts for a date.
+
+        Answers "has a new day/week/month/quarter/year started" without any
+        cross-run state, by asking whether today is the first trading day of
+        that period. Correct where the obvious tests are not: the 1st of a
+        month falling on a Sunday, or a week whose Monday is a holiday.
+        """
+        from datetime import date as _date
+
+        from utils.trading_calendar import describe
+
+        raw = self.get_str(node_data, "date", "")
+        if raw:
+            try:
+                day = _date.fromisoformat(raw[:10])
+            except ValueError:
+                error_result = {
+                    "status": "error",
+                    "message": f"Calendar date must be YYYY-MM-DD, got {raw!r}",
+                }
+                self.log(f"Calendar failed: {error_result['message']}", "error")
+                return error_result
+        else:
+            # Session date, not the server's calendar date: between midnight and
+            # the 03:00 IST rollover those differ, and a strategy asking "is a
+            # new day" means the trading day.
+            day = _date.fromisoformat(self.context._session_date())
+
+        info = describe(day)
+        result = {"status": "success", **info}
+        self.log(
+            f"Calendar {info['date']} ({info['weekday']}): trading={info['is_trading_day']} "
+            f"newWeek={info['is_new_week']} newMonth={info['is_new_month']} "
+            f"newQuarter={info['is_new_quarter']}"
+        )
+        self.store_output(node_data, result)
+        return result
+
     def execute_holidays(self, node_data: dict) -> dict:
         """Execute Holidays node - get market holidays for a year."""
         year = self.get_int(node_data, "year", 0)
@@ -2789,6 +2847,8 @@ def execute_node_chain(
         result = executor.execute_option_chain(node_data)
     elif node_type == "syntheticFuture":
         result = executor.execute_synthetic_future(node_data)
+    elif node_type == "calendar":
+        result = executor.execute_calendar(node_data)
     elif node_type == "holidays":
         result = executor.execute_holidays(node_data)
     elif node_type == "timings":

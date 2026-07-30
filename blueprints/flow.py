@@ -74,6 +74,19 @@ def create_workflow():
     # import, activation, and execution instead of blocking a save.
     from services.flow_workflow_validator import validate_workflow
 
+    if not isinstance(data, dict):
+        # A JSON array or string is truthy but has no fields, so the
+        # "was a graph sent?" check below would pass it straight through to
+        # .get() and a 500. Reject it as the malformed payload it is.
+        return jsonify(
+            {
+                "status": "error",
+                "error": "Invalid workflow structure",
+                "message": "Workflow must be a JSON object",
+                "errors": validate_workflow(data),
+            }
+        ), 400
+
     errors = (
         validate_workflow(
             {
@@ -169,6 +182,18 @@ def update_workflow(workflow_id):
     data = request.get_json()
     if not data:
         return jsonify({"error": "No data provided"}), 400
+
+    if not isinstance(data, dict):
+        from services.flow_workflow_validator import validate_workflow as _validate
+
+        return jsonify(
+            {
+                "status": "error",
+                "error": "Invalid workflow structure",
+                "message": "Workflow must be a JSON object",
+                "errors": _validate(data),
+            }
+        ), 400
 
     # Partial updates (rename, toggle) carry no graph, and the API also accepts
     # nodes without edges or vice versa. Validate the merged graph so a partial
