@@ -22,6 +22,7 @@ import {
   BarChart3,
   BookOpen,
   Download,
+  FileJson,
   Home,
   Keyboard,
   Loader2,
@@ -43,6 +44,7 @@ import {
   exportWorkflow,
   flowQueryKeys,
   getWorkflow,
+  replaceWorkflow,
   updateWorkflow,
 } from '@/api/flow'
 import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
@@ -58,6 +60,14 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -65,6 +75,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
 import { DEFAULT_NODE_DATA } from '@/lib/flow/constants'
 import { cn } from '@/lib/utils'
@@ -334,6 +345,59 @@ function FlowEditorContent() {
     [selectEdge]
   )
 
+  // Replace-from-JSON: the editor could export a workflow but had no way to
+  // bring an edited file back into the same workflow. Importing created a copy
+  // with a new webhook URL, so iterating on a strategy as JSON meant deleting
+  // the old one every time.
+  const [showReplaceDialog, setShowReplaceDialog] = useState(false)
+  const [replaceJson, setReplaceJson] = useState('')
+  const [replaceError, setReplaceError] = useState<string | null>(null)
+  const [replaceBusy, setReplaceBusy] = useState(false)
+
+  const handleReplaceFromJson = useCallback(async () => {
+    setReplaceError(null)
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(replaceJson)
+    } catch {
+      setReplaceError('That is not valid JSON.')
+      return
+    }
+    const graph = parsed as { nodes?: unknown; edges?: unknown }
+    if (!graph || typeof graph !== 'object' || !Array.isArray(graph.nodes)) {
+      setReplaceError('Workflow JSON needs a nodes array.')
+      return
+    }
+
+    setReplaceBusy(true)
+    try {
+      const result = await replaceWorkflow(Number(id), parsed as never)
+      // Reload the canvas from the database rather than trusting the payload,
+      // so what is shown is what was actually stored.
+      await queryClient.invalidateQueries({ queryKey: flowQueryKeys.workflow(Number(id)) })
+      setShowReplaceDialog(false)
+      setReplaceJson('')
+      const notes = result.migrations?.length
+        ? ` ${result.migrations.length} legacy field(s) upgraded.`
+        : ''
+      if (result.needs_reactivate) {
+        showToast.warning(
+          `Workflow replaced.${notes} The trigger changed - deactivate and reactivate it.`,
+          'flow'
+        )
+      } else {
+        showToast.success(`Workflow replaced.${notes}`, 'flow')
+      }
+    } catch (error) {
+      const detail =
+        (error as { response?: { data?: { message?: string } } })?.response?.data?.message ??
+        (error instanceof Error ? error.message : 'Replace failed')
+      setReplaceError(detail)
+    } finally {
+      setReplaceBusy(false)
+    }
+  }, [id, replaceJson, queryClient])
+
   const handleExport = useCallback(async () => {
     try {
       const exportData = await exportWorkflow(Number(id))
@@ -513,6 +577,56 @@ function FlowEditorContent() {
         </div>
       </div>
 
+      <Dialog open={showReplaceDialog} onOpenChange={setShowReplaceDialog}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Replace from JSON</DialogTitle>
+            <DialogDescription>
+              Replaces this workflow's nodes and edges in place. The workflow id, webhook URL and
+              active state are kept, so nothing pointing at this workflow breaks. Export first if
+              you want a copy of the current version.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <input
+              type="file"
+              accept="application/json,.json"
+              className="text-xs"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (!file) return
+                file.text().then((text) => {
+                  setReplaceJson(text)
+                  setReplaceError(null)
+                })
+              }}
+            />
+            <Textarea
+              className="h-64 font-mono text-xs"
+              placeholder='{ "name": "...", "nodes": [...], "edges": [...] }'
+              value={replaceJson}
+              onChange={(e) => {
+                setReplaceJson(e.target.value)
+                setReplaceError(null)
+              }}
+            />
+            {replaceError && <p className="text-xs text-destructive">{replaceError}</p>}
+            <p className="text-[10px] text-muted-foreground">
+              Validated the same way as Import: a graph that could not run is rejected with the
+              reason, rather than saved to fail later.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowReplaceDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleReplaceFromJson} disabled={replaceBusy || !replaceJson.trim()}>
+              {replaceBusy ? 'Replacing...' : 'Replace'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <LogoutConfirmDialog
         open={showLogoutDialog}
         onOpenChange={setShowLogoutDialog}
@@ -599,6 +713,10 @@ function FlowEditorContent() {
               <DropdownMenuItem onClick={handleExport}>
                 <Download className="mr-2 h-4 w-4" />
                 Export Workflow
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setShowReplaceDialog(true)}>
+                <FileJson className="mr-2 h-4 w-4" />
+                Replace from JSON
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
                 <Link to="/flow/shortcuts">

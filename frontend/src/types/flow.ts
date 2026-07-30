@@ -517,6 +517,12 @@ export interface HolidaysNodeData {
 }
 
 /** Timings Node - Get market timings */
+export interface CalendarNodeData {
+  label?: string
+  date?: string // Optional: YYYY-MM-DD, defaults to the trading session date
+  outputVariable?: string
+}
+
 export interface TimingsNodeData {
   label?: string
   date?: string // Optional: YYYY-MM-DD format, defaults to today
