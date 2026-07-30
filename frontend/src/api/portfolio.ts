@@ -298,6 +298,26 @@ export interface RebalancingSweep {
   end: string
 }
 
+/** Where the out- or under-performance came from. */
+export interface PortfolioAttribution {
+  available: boolean
+  reason?: string
+  portfolio_return?: number
+  equal_weight_return?: number
+  benchmark_return?: number
+  excess_return?: number
+  selection_effect?: number
+  allocation_effect?: number
+  holdings?: {
+    symbol: string
+    weight: number
+    return: number
+    vs_benchmark: number
+    contribution: number
+  }[]
+  method?: string
+}
+
 export interface BacktestResponse {
   status: 'success' | 'error'
   message?: string
@@ -340,6 +360,7 @@ export interface BacktestResponse {
   walk_forward: WalkForward
   monte_carlo: MonteCarlo
   rebalancing_sweep: RebalancingSweep
+  attribution: PortfolioAttribution
   structure: PortfolioStructure
   allocation: PortfolioAllocation
   crisis: PortfolioCrisis

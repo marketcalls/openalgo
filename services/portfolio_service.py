@@ -33,6 +33,7 @@ from portfolio.data import (
     load_prices,
 )
 from portfolio.costs import CostSchedule, schedule_for
+from portfolio.attribution import attribution
 from portfolio.compare import rebalancing_sweep
 from portfolio.crisis import crisis_analysis
 from portfolio.grouping import structure
@@ -579,6 +580,12 @@ def run_portfolio_backtest(
         "rebalancing_sweep": _clean(
             rebalancing_sweep(prices, weights, costs=charged,
                               initial_capital=initial_capital, rf=risk_free_rate)
+        ),
+        # Where the out- or under-performance came from. Weighted by the
+        # average weight actually held, not the target: a portfolio that
+        # drifted was not the one the targets describe.
+        "attribution": _clean(
+            attribution(holding_returns, result.weights.mean(), bench_returns)
         ),
         # What the portfolio is made of. Not a sector pie: the symbol master
         # has no sector field, so co-movement clustering answers the same

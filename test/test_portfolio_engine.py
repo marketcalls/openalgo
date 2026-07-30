@@ -30,6 +30,7 @@ from portfolio.analytics import (
     diversification_ratio,
     summary,
 )
+from portfolio.attribution import attribution
 from portfolio.compare import rebalancing_sweep
 from portfolio.costs import EquityCosts, schedule_for
 from portfolio.engine import Costs, normalise_weights, run_backtest
@@ -781,3 +782,62 @@ class TestLiveHoldings:
     def test_empty_holdings_do_not_divide_by_zero(self):
         s = holdings_summary([])
         assert s["count"] == 0 and s["pnl_pct"] == 0.0
+
+
+class TestAttribution:
+    """
+    An attribution that does not reconcile is two numbers, not a decomposition.
+    """
+
+    def _kit(self, n=500, seed=9):
+        rng = np.random.default_rng(seed)
+        idx = pd.bdate_range("2022-01-03", periods=n)
+        holdings = pd.DataFrame(
+            {
+                "GOOD": rng.normal(0.0010, 0.011, n),
+                "BAD": rng.normal(-0.0002, 0.011, n),
+            },
+            index=idx,
+        )
+        bench = pd.Series(rng.normal(0.0004, 0.009, n), index=idx)
+        return holdings, bench
+
+    def test_effects_sum_to_the_excess(self):
+        h, b = self._kit()
+        a = attribution(h, pd.Series({"GOOD": 0.7, "BAD": 0.3}), b)
+        assert a["available"]
+        assert a["selection_effect"] + a["allocation_effect"] == pytest.approx(
+            a["excess_return"], abs=1e-6
+        )
+
+    def test_equal_weights_leave_no_allocation_effect(self):
+        h, b = self._kit()
+        a = attribution(h, pd.Series({"GOOD": 0.5, "BAD": 0.5}), b)
+        # Nothing was decided by sizing, so all of it is selection.
+        assert a["allocation_effect"] == pytest.approx(0.0, abs=1e-9)
+        assert a["selection_effect"] == pytest.approx(a["excess_return"], abs=1e-9)
+
+    def test_overweighting_the_winner_earns_a_positive_allocation_effect(self):
+        h, b = self._kit()
+        good = attribution(h, pd.Series({"GOOD": 0.9, "BAD": 0.1}), b)
+        bad = attribution(h, pd.Series({"GOOD": 0.1, "BAD": 0.9}), b)
+        assert good["allocation_effect"] > 0
+        assert bad["allocation_effect"] < 0
+
+    def test_per_holding_contributions_are_signed_correctly(self):
+        h, b = self._kit()
+        a = attribution(h, pd.Series({"GOOD": 0.5, "BAD": 0.5}), b)
+        by = {r["symbol"]: r for r in a["holdings"]}
+        assert by["GOOD"]["contribution"] > 0
+        assert by["BAD"]["contribution"] < 0
+
+    def test_refuses_without_a_benchmark(self):
+        h, _ = self._kit()
+        out = attribution(h, pd.Series({"GOOD": 1.0}), None)
+        assert out["available"] is False
+        assert "benchmark" in out["reason"]
+
+    def test_refuses_when_nothing_overlaps(self):
+        h, _ = self._kit()
+        far = pd.Series([0.01, 0.02], index=pd.bdate_range("2030-01-01", periods=2))
+        assert attribution(h, pd.Series({"GOOD": 1.0}), far)["available"] is False
