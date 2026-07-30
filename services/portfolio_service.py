@@ -26,6 +26,7 @@ from portfolio.analytics import (
 from portfolio.data import BENCHMARK_EXCHANGES, DataError, load_prices
 from portfolio.costs import CostSchedule, schedule_for
 from portfolio.crisis import crisis_analysis
+from portfolio.grouping import structure
 from portfolio.engine import Costs, run_backtest
 from portfolio.health import portfolio_health
 from portfolio.rebalance import RebalancePolicy
@@ -63,6 +64,22 @@ def _clean(value: Any) -> Any:
     if isinstance(value, list):
         return [_clean(v) for v in value]
     return value
+
+
+def _symbol_names(symbols: list[str]) -> dict[str, str]:
+    """Listing names, for the instrument-class heuristic. Best effort."""
+    try:
+        from database.symbol import SymToken, db_session
+
+        rows = (
+            db_session.query(SymToken.symbol, SymToken.name)
+            .filter(SymToken.symbol.in_(symbols))
+            .all()
+        )
+        return {r[0]: r[1] or "" for r in rows}
+    except Exception:  # noqa: BLE001 -- a label is not worth failing a run over
+        logger.debug("symbol names unavailable", exc_info=True)
+        return {}
 
 
 def _allocation_path(weights: pd.DataFrame, max_points: int = 400) -> dict[str, Any]:
@@ -449,6 +466,10 @@ def run_portfolio_backtest(
             )
         ),
         "monte_carlo": _clean(monte_carlo(returns, simulations=mc_simulations)),
+        # What the portfolio is made of. Not a sector pie: the symbol master
+        # has no sector field, so co-movement clustering answers the same
+        # question from data that exists.
+        "structure": _clean(structure(target_weights, holding_returns, _symbol_names(symbols))),
         # The weight path, for the allocation-over-time chart. Sampled weekly:
         # 2,500 sessions x N holdings is a lot of JSON to describe a shape that
         # only changes on rebalance dates and drifts smoothly between them.
