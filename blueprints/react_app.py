@@ -206,6 +206,12 @@ def react_portfolio():
     return serve_react_app()
 
 
+# Portfolio Analyzer (live broker holdings)
+@react_bp.route("/portfolio-analyzer")
+def react_portfolio_analyzer():
+    return serve_react_app()
+
+
 # GoCharting webhook configuration
 @react_bp.route("/gocharting")
 def react_gocharting():
