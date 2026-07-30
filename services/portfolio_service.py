@@ -25,6 +25,7 @@ from portfolio.analytics import (
 )
 from portfolio.data import BENCHMARK_EXCHANGES, DataError, load_prices
 from portfolio.costs import CostSchedule, schedule_for
+from portfolio.compare import rebalancing_sweep
 from portfolio.crisis import crisis_analysis
 from portfolio.grouping import structure
 from portfolio.engine import Costs, run_backtest
@@ -466,6 +467,12 @@ def run_portfolio_backtest(
             )
         ),
         "monte_carlo": _clean(monte_carlo(returns, simulations=mc_simulations)),
+        # The same allocation under every rebalancing rule. One decision, and
+        # the cost of getting it wrong is paid quietly in turnover.
+        "rebalancing_sweep": _clean(
+            rebalancing_sweep(prices, weights, costs=charged,
+                              initial_capital=initial_capital, rf=risk_free_rate)
+        ),
         # What the portfolio is made of. Not a sector pie: the symbol master
         # has no sector field, so co-movement clustering answers the same
         # question from data that exists.

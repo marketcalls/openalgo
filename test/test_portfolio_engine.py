@@ -30,6 +30,7 @@ from portfolio.analytics import (
     diversification_ratio,
     summary,
 )
+from portfolio.compare import rebalancing_sweep
 from portfolio.costs import EquityCosts, schedule_for
 from portfolio.engine import Costs, normalise_weights, run_backtest
 from portfolio.health import portfolio_health
@@ -661,3 +662,63 @@ class TestGenericCostSchedule:
     def test_unknown_preset_is_refused(self):
         with pytest.raises(ValueError, match="unknown cost schedule"):
             schedule_for("mars_equity")
+
+
+class TestRebalancingSweep:
+    """
+    The comparison has to be on identical prices and identical costs, or it is
+    measuring two strategies rather than one decision.
+    """
+
+    def _prices(self):
+        rng = np.random.default_rng(5)
+        index = pd.bdate_range("2020-01-01", periods=800)
+        closes = pd.DataFrame(
+            {
+                "A": 100 * np.cumprod(1 + rng.normal(0.0006, 0.012, 800)),
+                "B": 100 * np.cumprod(1 + rng.normal(0.0003, 0.008, 800)),
+            },
+            index=index,
+        )
+        return PriceMatrix(closes=closes, source="db",
+                           start=index[0].date(), end=index[-1].date())
+
+    def test_covers_every_rule_plus_drift(self):
+        out = rebalancing_sweep(self._prices(), {"A": 50, "B": 50})
+        labels = [v["label"] for v in out["variants"]]
+        assert labels[:4] == ["Never", "Yearly", "Quarterly", "Monthly"]
+        assert any(l.startswith("Drift") for l in labels)
+
+    def test_never_is_the_only_one_that_cannot_incur_cost(self):
+        out = rebalancing_sweep(
+            self._prices(), {"A": 50, "B": 50}, costs=schedule_for("india_delivery_nse")
+        )
+        never = next(v for v in out["variants"] if v["label"] == "Never")
+        monthly = next(v for v in out["variants"] if v["label"] == "Monthly")
+        assert never["cost_drag"] == 0.0
+        assert never["rebalances"] == 0
+        assert monthly["cost_drag"] > 0
+        assert monthly["rebalances"] > monthly_expected_min()
+
+    def test_more_trading_costs_more(self):
+        out = rebalancing_sweep(
+            self._prices(), {"A": 50, "B": 50}, costs=schedule_for("india_delivery_nse")
+        )
+        by = {v["label"]: v for v in out["variants"]}
+        assert by["Monthly"]["turnover"] > by["Quarterly"]["turnover"]
+        assert by["Monthly"]["cost_drag"] > by["Quarterly"]["cost_drag"]
+
+    def test_ranks_on_sharpe_not_on_raw_return(self):
+        out = rebalancing_sweep(self._prices(), {"A": 50, "B": 50})
+        best = next(v for v in out["variants"] if v["label"] == out["best_by_sharpe"])
+        assert best["sharpe"] == max(v["sharpe"] for v in out["variants"])
+
+    def test_every_variant_shares_one_window(self):
+        out = rebalancing_sweep(self._prices(), {"A": 50, "B": 50})
+        # Two results computed over different periods are not a comparison.
+        assert len({len(c) for c in out["curves"].values()}) == 1
+
+
+def monthly_expected_min() -> int:
+    """800 business days is about 38 months, so monthly must rebalance often."""
+    return 30

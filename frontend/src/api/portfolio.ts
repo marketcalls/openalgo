@@ -273,6 +273,31 @@ export interface PortfolioStructure {
   sector_note: string
 }
 
+/** The same allocation under every rebalancing rule. */
+export interface RebalancingSweep {
+  variants: {
+    label: string
+    rule: string
+    drift_band: number
+    total_return: number
+    cagr: number
+    volatility: number
+    sharpe: number
+    sortino: number
+    max_drawdown: number
+    calmar: number
+    cost_drag: number
+    turnover: number
+    rebalances: number
+  }[]
+  curves: Record<string, CurvePoint[]>
+  best_by_sharpe: string | null
+  best_by_return: string | null
+  sessions: number
+  start: string
+  end: string
+}
+
 export interface BacktestResponse {
   status: 'success' | 'error'
   message?: string
@@ -314,6 +339,7 @@ export interface BacktestResponse {
   }
   walk_forward: WalkForward
   monte_carlo: MonteCarlo
+  rebalancing_sweep: RebalancingSweep
   structure: PortfolioStructure
   allocation: PortfolioAllocation
   crisis: PortfolioCrisis

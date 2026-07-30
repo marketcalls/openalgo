@@ -484,6 +484,7 @@ export default function PortfolioBacktester() {
               <TabsTrigger value="drawdown">Drawdown</TabsTrigger>
               <TabsTrigger value="monthly">Monthly Returns</TabsTrigger>
               <TabsTrigger value="rolling">Rolling Stats</TabsTrigger>
+              <TabsTrigger value="compare">Compare</TabsTrigger>
               <TabsTrigger value="robustness">Robustness</TabsTrigger>
               <TabsTrigger value="allocation">Allocation</TabsTrigger>
               <TabsTrigger value="structure">Structure</TabsTrigger>
@@ -1031,6 +1032,113 @@ export default function PortfolioBacktester() {
                   </CardContent>
                 </Card>
               )}
+            </TabsContent>
+
+            <TabsContent value="compare" className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <Stat
+                  label="Best Risk-Adjusted"
+                  value={result.rebalancing_sweep.best_by_sharpe ?? '—'}
+                  sub="highest Sharpe"
+                  tone="good"
+                />
+                <Stat
+                  label="Highest Return"
+                  value={result.rebalancing_sweep.best_by_return ?? '—'}
+                  sub="often not the same thing"
+                />
+              </div>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Rebalancing Comparison</CardTitle>
+                  <p className="text-sm text-muted-foreground">
+                    The same holdings under every rule. Trading more is not better —
+                    watch the cost drag column against what the extra trades bought.
+                  </p>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="border-b text-xs text-muted-foreground">
+                        <tr>
+                          <th className="p-3 text-left">Rule</th>
+                          <th className="p-3 text-right">Total</th>
+                          <th className="p-3 text-right">CAGR</th>
+                          <th className="p-3 text-right">Sharpe</th>
+                          <th className="p-3 text-right">Max DD</th>
+                          <th className="p-3 text-right">Cost drag</th>
+                          <th className="p-3 text-right">Turnover</th>
+                          <th className="p-3 text-right">Rebalances</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.rebalancing_sweep.variants.map((v) => {
+                          const bestSharpe = v.label === result.rebalancing_sweep.best_by_sharpe
+                          return (
+                            <tr
+                              key={v.label}
+                              className={cn(
+                                'border-b last:border-0',
+                                bestSharpe && 'bg-emerald-500/5'
+                              )}
+                            >
+                              <td className="p-3 font-medium">
+                                {v.label}
+                                {bestSharpe && (
+                                  <span className="ml-2 text-xs text-emerald-500">best</span>
+                                )}
+                              </td>
+                              <td className="p-3 text-right tabular-nums">
+                                {pct(v.total_return)}
+                              </td>
+                              <td className="p-3 text-right tabular-nums">{pct(v.cagr)}</td>
+                              <td className="p-3 text-right font-medium tabular-nums">
+                                {num(v.sharpe)}
+                              </td>
+                              <td className="p-3 text-right tabular-nums text-rose-500">
+                                {pct(v.max_drawdown)}
+                              </td>
+                              <td className="p-3 text-right tabular-nums text-amber-500">
+                                {pct(v.cost_drag, 3)}
+                              </td>
+                              <td className="p-3 text-right tabular-nums text-muted-foreground">
+                                {pct(v.turnover, 0)}
+                              </td>
+                              <td className="p-3 text-right tabular-nums text-muted-foreground">
+                                {v.rebalances}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Equity Curves</CardTitle>
+                  <p className="text-sm text-muted-foreground">
+                    On one axis, because the difference between two schedules is
+                    usually invisible in their headline returns.
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  <PortfolioLineChart
+                    height={320}
+                    format={money}
+                    series={Object.entries(result.rebalancing_sweep.curves).map(
+                      ([label, data], i) => ({
+                        name: label,
+                        color: ['#3b82f6', '#22c55e', '#f59e0b', '#a855f7', '#ef4444'][i % 5],
+                        data,
+                      })
+                    )}
+                  />
+                </CardContent>
+              </Card>
             </TabsContent>
 
             <TabsContent value="robustness" className="space-y-4">
