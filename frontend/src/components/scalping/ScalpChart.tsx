@@ -4,7 +4,7 @@
  *
  * Given a symbol/exchange/interval it:
  *   - loads history from /scalping/api/history (1m=1d, 5m=3d, 15m=9d lookback),
- *   - draws candles + a volume histogram with a TradingView-style OHLC legend,
+ *   - draws candles + a volume histogram with an OHLC legend,
  *   - streams the forming candle live via the shared useMarketData feed, and
  *   - reconciles completed bars to the broker's official OHLC on a staggered
  *     20-30s timer (so multiple charts never hit the API at the same instant).
