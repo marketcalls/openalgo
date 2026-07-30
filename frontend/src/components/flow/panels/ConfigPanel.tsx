@@ -129,6 +129,7 @@ const NODE_TITLES: Record<string, string> = {
   strategyPnl: 'Strategy P&L',
   barOffset: 'Bar Offset',
   expiry: 'Get Expiry',
+  calendar: 'Calendar',
   intervals: 'Intervals',
   multiQuotes: 'Multi Quotes',
   symbol: 'Symbol Info',
@@ -2568,6 +2569,35 @@ export function ConfigPanel() {
               </>
             )}
 
+            {nodeType === 'calendar' && (
+              <>
+                <div className="space-y-2">
+                  <Label className="text-xs">Date</Label>
+                  <Input
+                    type="date"
+                    className="h-8"
+                    value={(nodeData.date as string) || ''}
+                    onChange={(e) => handleDataChange('date', e.target.value)}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Leave blank for the current trading session date.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Output Variable</Label>
+                  <Input
+                    className="h-8"
+                    placeholder="cal"
+                    value={(nodeData.outputVariable as string) || 'cal'}
+                    onChange={(e) => handleDataChange('outputVariable', e.target.value)}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    {`{{cal.is_new_week}}`}, {`{{cal.is_new_month}}`}, {`{{cal.is_new_quarter}}`},{' '}
+                    {`{{cal.is_trading_day}}`}
+                  </p>
+                </div>
+              </>
+            )}
             {nodeType === 'intervals' && (
               <div className="space-y-2">
                 <Label className="text-xs">Output Variable</Label>
