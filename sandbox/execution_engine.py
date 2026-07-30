@@ -390,11 +390,19 @@ class ExecutionEngine:
                 else:  # SELL
                     execution_price = bid if bid > 0 else ltp
 
-            elif order.price_type == "LIMIT":
+            elif order.price_type in ("LIMIT", "SL"):
                 # Limit BUY: Execute if LTP <= Limit Price, fill at limit price
                 # Limit SELL: Execute if LTP >= Limit Price, fill at limit price
                 # In real exchanges, limit orders sit on the book at the limit price
                 # and fill at that price when the market crosses through
+                #
+                # An SL order only ever reaches "open" AFTER its trigger has fired:
+                # place_order starts an untriggered SL as "trigger pending", and
+                # _process_trigger_pending_order is the only other writer of "open".
+                # Once released from the Stop-Loss book it IS a plain limit order, so
+                # it must not be re-tested against its trigger -- doing so strands it
+                # whenever the price retreats back past the trigger without ever
+                # printing inside the trigger..limit band.
                 if order.action == "BUY" and ltp <= order.price:
                     should_execute = True
                     execution_price = order.price  # Fill at limit price
@@ -402,29 +410,13 @@ class ExecutionEngine:
                     should_execute = True
                     execution_price = order.price  # Fill at limit price
 
-            elif order.price_type == "SL":
-                # Stop Loss Limit order
-                # SL BUY: When LTP >= trigger price, order activates. Execute at LTP if LTP <= limit price
-                # SL SELL: When LTP <= trigger price, order activates. Execute at LTP if LTP >= limit price
-                if order.action == "BUY" and ltp >= order.trigger_price:
-                    if ltp <= order.price:
-                        should_execute = True
-                        execution_price = ltp  # Execute at current market price (LTP)
-                elif order.action == "SELL" and ltp <= order.trigger_price:
-                    if ltp >= order.price:
-                        should_execute = True
-                        execution_price = ltp  # Execute at current market price (LTP)
-
             elif order.price_type == "SL-M":
-                # Stop Loss Market order
-                # BUY: Execute at market when LTP >= trigger price
-                # SELL: Execute at market when LTP <= trigger price
-                if order.action == "BUY" and ltp >= order.trigger_price:
-                    should_execute = True
-                    execution_price = ltp
-                elif order.action == "SELL" and ltp <= order.trigger_price:
-                    should_execute = True
-                    execution_price = ltp
+                # Stop Loss Market order. Same invariant as SL above: reaching "open"
+                # means the trigger already fired (normally SL-M goes straight to
+                # "complete", but the stale-quote guard can defer that fill), so it is
+                # now an unconditional market order.
+                should_execute = True
+                execution_price = ltp
 
             # Execute the order if conditions are met
             if should_execute:
@@ -446,11 +438,9 @@ class ExecutionEngine:
         path in order_manager.py's place_order - both places treat a
         simultaneous trigger+limit match as an instant fill rather than an
         observable middle state). Otherwise it transitions to "open" - now
-        resting live in the regular order book, unfilled - and the unmodified
-        SL branch in _process_order picks it up on subsequent ticks exactly
-        like any other open SL order (re-checking the trigger condition there
-        is safe: once crossed, BUY prices staying at/above trigger, or SELL
-        prices staying at/below it, keep satisfying the same comparison).
+        resting live in the regular order book, unfilled - and _process_order
+        handles it as a plain limit order from then on, because reaching "open"
+        is itself the record that the trigger has fired.
         """
         try:
             trigger_met = False
