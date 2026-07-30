@@ -367,3 +367,25 @@ export async function runPortfolioBacktest(
   const { data } = await apiClient.post<BacktestResponse>('/portfolio/backtest', req)
   return data
 }
+
+/**
+ * Download the full openstatz tearsheet as a self-contained HTML file.
+ *
+ * Returned as a blob rather than rendered in-app: it is a report a user keeps
+ * and shares, roughly a megabyte with every chart embedded.
+ */
+export async function downloadTearsheet(req: BacktestRequest): Promise<void> {
+  const { data } = await apiClient.post('/portfolio/tearsheet', req, {
+    responseType: 'blob',
+  })
+  const url = URL.createObjectURL(new Blob([data], { type: 'text/html' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'portfolio-tearsheet.html'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  // Revoking immediately can cancel the download in some browsers; a tick is
+  // enough for it to have started.
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}

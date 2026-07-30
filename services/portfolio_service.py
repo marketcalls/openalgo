@@ -11,6 +11,8 @@ those become 4xx responses with the reason attached.
 from __future__ import annotations
 
 import dataclasses
+import os
+import tempfile
 
 from typing import Any
 
@@ -65,6 +67,104 @@ def _clean(value: Any) -> Any:
     if isinstance(value, list):
         return [_clean(v) for v in value]
     return value
+
+
+def generate_tearsheet(
+    holdings: list[dict[str, Any]],
+    start_date: str,
+    end_date: str,
+    *,
+    benchmark: str | None = None,
+    benchmark_exchange: str = "NSE_INDEX",
+    rebalance: str = "never",
+    drift_band: float = 0.0,
+    initial_capital: float = 100_000.0,
+    risk_free_rate: float = 0.0,
+    source: str = "db",
+    title: str = "Portfolio Tearsheet",
+    api_key: str | None = None,
+    auth_token: str | None = None,
+    feed_token: str | None = None,
+    broker: str | None = None,
+) -> tuple[bool, str | dict[str, Any], int]:
+    """
+    Render openstatz's full HTML tearsheet for this portfolio.
+
+    Returns the HTML as a string for the caller to serve as a download. The
+    report is openstatz's own, not a reimplementation, so an exported sheet and
+    the on-screen numbers come from the same code.
+
+    Matplotlib is forced onto the Agg backend first: openstatz draws the report
+    with it, and on a server there is no display to draw into -- without this it
+    can try to open one and hang the request.
+    """
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import openstatz.reports as reports
+
+    try:
+        symbols = [str(h["symbol"]).strip().upper() for h in holdings]
+        exchanges = [str(h.get("exchange", "NSE")).strip().upper() for h in holdings]
+        weights = {s: float(h.get("weight", 0)) for s, h in zip(symbols, holdings)}
+    except (KeyError, TypeError, ValueError) as exc:
+        return False, {"status": "error", "message": f"malformed holding: {exc}"}, 400
+
+    fetch = dict(
+        source=source, api_key=api_key, auth_token=auth_token,
+        feed_token=feed_token, broker=broker,
+    )
+
+    try:
+        prices = load_prices(symbols, exchanges, start_date, end_date, **fetch)
+        result = run_backtest(
+            prices,
+            weights,
+            policy=RebalancePolicy(rule=rebalance, drift_band=drift_band),
+            initial_capital=initial_capital,
+        )
+    except DataError as exc:
+        return False, {"status": "error", "message": str(exc)}, 422
+    except ValueError as exc:
+        return False, {"status": "error", "message": str(exc)}, 400
+
+    bench_returns = None
+    if benchmark:
+        try:
+            bench_prices = load_prices(
+                [benchmark.strip().upper()], benchmark_exchange, start_date, end_date,
+                allowed_exchanges=BENCHMARK_EXCHANGES, **fetch,
+            )
+            aligned = bench_prices.closes.iloc[:, 0].reindex(prices.closes.index).ffill()
+            if aligned.notna().sum() > 1:
+                bench_returns = aligned.pct_change().dropna()
+        except DataError as exc:
+            logger.warning("tearsheet benchmark %s unavailable: %s", benchmark, exc)
+
+    # `output` takes a path, not a buffer, despite the module importing
+    # StringIO -- passing one raises. A temp file it is, removed either way.
+    handle, path = tempfile.mkstemp(suffix=".html", prefix="openalgo-tearsheet-")
+    os.close(handle)
+    try:
+        reports.html(
+            result.returns,
+            benchmark=bench_returns,
+            rf=risk_free_rate,
+            title=title,
+            output=path,
+        )
+        with open(path, encoding="utf-8") as fh:
+            return True, fh.read(), 200
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("tearsheet generation failed")
+        return False, {"status": "error", "message": f"tearsheet failed: {exc}"}, 500
+    finally:
+        # The report is a megabyte of embedded images; leaving these behind
+        # would fill the temp directory over a long-running install.
+        try:
+            os.unlink(path)
+        except OSError:
+            logger.debug("could not remove %s", path, exc_info=True)
 
 
 def _symbol_names(symbols: list[str]) -> dict[str, str]:

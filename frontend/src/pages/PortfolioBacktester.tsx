@@ -7,10 +7,12 @@
  */
 import { useMemo, useState } from 'react'
 import {
+  type BacktestRequest,
   type BacktestResponse,
   type PortfolioHolding,
   type PriceSource,
   type RebalanceRule,
+  downloadTearsheet,
   runPortfolioBacktest,
 } from '@/api/portfolio'
 import {
@@ -181,6 +183,7 @@ export default function PortfolioBacktester() {
 
   const [result, setResult] = useState<BacktestResponse | null>(null)
   const [busy, setBusy] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const totalWeight = useMemo(
@@ -195,6 +198,38 @@ export default function PortfolioBacktester() {
     setHoldings((prev) =>
       prev.map((h) => ({ ...h, weight: Number((100 / prev.length).toFixed(2)) }))
     )
+
+  const buildRequest = (): BacktestRequest => ({
+    apikey: apiKey ?? '',
+    holdings: holdings
+      .filter((h) => h.symbol.trim() !== '')
+      .map((h) => ({ ...h, symbol: h.symbol.trim().toUpperCase() })),
+    start_date: startDate,
+    end_date: endDate,
+    benchmark: benchmark === 'none' ? null : benchmark,
+    benchmark_exchange:
+      BENCHMARKS.find((b) => b.symbol === benchmark)?.exchange ?? 'NSE_INDEX',
+    rebalance,
+    risk_free_rate: riskFree / 100,
+    source,
+  })
+
+  const exportTearsheet = async () => {
+    if (!apiKey) {
+      setError('No API key found. Generate one on the API Key page.')
+      return
+    }
+    setExporting(true)
+    setError(null)
+    try {
+      await downloadTearsheet(buildRequest())
+    } catch (err: unknown) {
+      const e = err as { message?: string }
+      setError(e.message ?? 'tearsheet export failed')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const analyse = async () => {
     if (!apiKey) {
@@ -434,6 +469,14 @@ export default function PortfolioBacktester() {
                 >
                   Total {totalWeight.toFixed(1)}%
                 </span>
+                <Button
+                  variant="outline"
+                  onClick={exportTearsheet}
+                  disabled={exporting || busy}
+                  title="Full openstatz tearsheet as a self-contained HTML file"
+                >
+                  {exporting ? 'Building…' : 'Tearsheet'}
+                </Button>
                 <Button onClick={analyse} disabled={busy}>
                   {busy ? 'Analysing…' : 'Analyze Portfolio'}
                 </Button>
