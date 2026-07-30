@@ -55,8 +55,14 @@ export function DrawingTextDialog({ req, onSubmit, onClose }: Props) {
     setV((p) => (p ? { ...p, [k]: val } : p))
 
   const commit = () => {
-    onSubmit(req.id, v)
-    onClose()
+    // finally: this dialog is a full-pane overlay, so if onSubmit throws and
+    // onClose is skipped, an invisible overlay swallows every subsequent chart
+    // click and the chart looks dead.
+    try {
+      onSubmit(req.id, v)
+    } finally {
+      onClose()
+    }
   }
 
   const tog =
@@ -96,16 +102,30 @@ export function DrawingTextDialog({ req, onSubmit, onClose }: Props) {
               aria-label="Font colour"
               className={swatch}
             />
-            <select
-              value={v.fontSize}
-              onChange={(e) => set('fontSize', Number(e.target.value))}
-              aria-label="Font size"
-              className="h-7 rounded border border-border bg-background px-1.5 text-[13px] outline-none focus:border-primary"
-            >
-              {SIZES.map((n) => (
-                <option key={n} value={n}>{n}</option>
-              ))}
-            </select>
+            <div className="relative">
+              <select
+                value={v.fontSize}
+                onChange={(e) => set('fontSize', Number(e.target.value))}
+                aria-label="Font size"
+                className="h-7 w-[68px] appearance-none rounded border border-border bg-background pl-2 pr-6 text-[13px] outline-none transition-colors hover:bg-accent focus:border-primary"
+              >
+                {SIZES.map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+              <svg
+                viewBox="0 0 24 24"
+                className="pointer-events-none absolute right-1.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </div>
             <button
               type="button"
               aria-label="Bold"
