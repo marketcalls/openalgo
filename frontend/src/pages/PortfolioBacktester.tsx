@@ -13,6 +13,17 @@ import {
   type RebalanceRule,
   runPortfolioBacktest,
 } from '@/api/portfolio'
+import {
+  ChargeControls,
+  DEFAULT_CHARGES,
+  type ChargeState,
+} from '@/components/portfolio/ChargeControls'
+import { AllocationChart } from '@/components/portfolio/AllocationChart'
+import { CrisisChart } from '@/components/portfolio/CrisisChart'
+import { MonthlyReturnsHeatmap } from '@/components/portfolio/MonthlyReturnsHeatmap'
+import { SymbolSearchInput } from '@/components/portfolio/SymbolSearchInput'
+import { WeeklyReturnsHeatmap } from '@/components/portfolio/WeeklyReturnsHeatmap'
+import { PortfolioLineChart } from '@/components/portfolio/PortfolioLineChart'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -27,6 +38,23 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useAuthStore } from '@/stores/authStore'
 import { cn } from '@/lib/utils'
+
+/**
+ * Benchmarks are indices, not stocks: you cannot hold an index, but it is the
+ * right thing to measure a portfolio against. A stock benchmark makes alpha
+ * and beta meaningless.
+ */
+const BENCHMARKS = [
+  { symbol: 'NIFTY', exchange: 'NSE_INDEX', label: 'NIFTY 50' },
+  { symbol: 'NIFTYNXT50', exchange: 'NSE_INDEX', label: 'NIFTY Next 50' },
+  { symbol: 'NIFTY100', exchange: 'NSE_INDEX', label: 'NIFTY 100' },
+  { symbol: 'NIFTY500', exchange: 'NSE_INDEX', label: 'NIFTY 500' },
+  { symbol: 'NIFTYMIDCAP100', exchange: 'NSE_INDEX', label: 'NIFTY Midcap 100' },
+  { symbol: 'NIFTYSMLCAP100', exchange: 'NSE_INDEX', label: 'NIFTY Smallcap 100' },
+  { symbol: 'BANKNIFTY', exchange: 'NSE_INDEX', label: 'Bank NIFTY' },
+  { symbol: 'NIFTYIT', exchange: 'NSE_INDEX', label: 'NIFTY IT' },
+  { symbol: 'SENSEX', exchange: 'BSE_INDEX', label: 'SENSEX' },
+]
 
 const REBALANCE: { value: RebalanceRule; label: string; note: string }[] = [
   { value: 'never', label: 'Never', note: 'Buy & Hold' },
@@ -76,77 +104,6 @@ function Stat({
         {sub && <div className="mt-0.5 text-xs text-muted-foreground">{sub}</div>}
       </CardContent>
     </Card>
-  )
-}
-
-/**
- * Equity curve, drawn as an inline SVG.
- *
- * A chart library would be a heavier dependency than this needs: two series,
- * no interaction beyond a hover readout, and the shape is what matters.
- */
-function EquityChart({
-  portfolio,
-  benchmark,
-  height = 300,
-}: {
-  portfolio: { date: string; value: number }[]
-  benchmark: { date: string; value: number }[]
-  height?: number
-}) {
-  const path = (points: { value: number }[], lo: number, hi: number) => {
-    if (points.length < 2) return ''
-    const span = hi - lo || 1
-    return points
-      .map((p, i) => {
-        const x = (i / (points.length - 1)) * 100
-        const y = 100 - ((p.value - lo) / span) * 100
-        return `${i === 0 ? 'M' : 'L'}${x.toFixed(3)},${y.toFixed(3)}`
-      })
-      .join(' ')
-  }
-
-  const all = [...portfolio, ...benchmark].map((p) => p.value)
-  if (!all.length) return null
-  const lo = Math.min(...all)
-  const hi = Math.max(...all)
-
-  return (
-    <div className="w-full" style={{ height }}>
-      <svg
-        viewBox="0 0 100 100"
-        preserveAspectRatio="none"
-        className="h-full w-full"
-        role="img"
-        aria-label="Equity curve"
-      >
-        <title>Portfolio versus benchmark growth</title>
-        {benchmark.length > 1 && (
-          <path
-            d={path(benchmark, lo, hi)}
-            fill="none"
-            stroke="#22c55e"
-            strokeWidth="0.4"
-            vectorEffect="non-scaling-stroke"
-          />
-        )}
-        <path
-          d={path(portfolio, lo, hi)}
-          fill="none"
-          stroke="#3b82f6"
-          strokeWidth="0.6"
-          vectorEffect="non-scaling-stroke"
-        />
-      </svg>
-      <div className="mt-2 flex justify-between text-xs text-muted-foreground">
-        <span>{portfolio[0]?.date}</span>
-        <span className="flex gap-4">
-          <span className="text-blue-500">■ Portfolio</span>
-          {benchmark.length > 1 && <span className="text-emerald-500">■ Benchmark</span>}
-        </span>
-        <span>{portfolio[portfolio.length - 1]?.date}</span>
-      </div>
-    </div>
   )
 }
 
@@ -213,12 +170,13 @@ export default function PortfolioBacktester() {
     { symbol: 'NIFTYBEES', exchange: 'NSE', weight: 60 },
     { symbol: 'GOLDBEES', exchange: 'NSE', weight: 40 },
   ])
-  const [benchmark, setBenchmark] = useState('NIFTYBEES')
+  const [benchmark, setBenchmark] = useState('NIFTY')
   const [rebalance, setRebalance] = useState<RebalanceRule>('quarterly')
   const [source, setSource] = useState<PriceSource>('db')
   const [startDate, setStartDate] = useState(todayISO(5))
   const [endDate, setEndDate] = useState(todayISO(0))
-  const [costBps, setCostBps] = useState(20)
+  const [charges, setCharges] = useState<ChargeState>(DEFAULT_CHARGES)
+  const [costExchange, setCostExchange] = useState<'NSE' | 'BSE'>('NSE')
   const [riskFree, setRiskFree] = useState(0)
 
   const [result, setResult] = useState<BacktestResponse | null>(null)
@@ -253,9 +211,25 @@ export default function PortfolioBacktester() {
           .map((h) => ({ ...h, symbol: h.symbol.trim().toUpperCase() })),
         start_date: startDate,
         end_date: endDate,
-        benchmark: benchmark.trim() || null,
+        benchmark: benchmark === 'none' ? null : benchmark,
+        benchmark_exchange:
+          BENCHMARKS.find((b) => b.symbol === benchmark)?.exchange ?? 'NSE_INDEX',
         rebalance,
-        cost_bps: costBps,
+        cost_model: 'indian_equity',
+        cost_exchange: costExchange,
+        // Percent in the form, fractions on the wire.
+        charges: {
+          brokerage:
+            charges.brokerageMode === 'flat'
+              ? { flat: charges.brokerageFlat, rate: 0 }
+              : { flat: 0, rate: charges.brokeragePct / 100, cap: charges.brokerageCap },
+          stt: { rate: charges.stt / 100 },
+          exchange_txn: { rate: charges.exchangeTxn / 100 },
+          stamp_duty: { rate: charges.stampDuty / 100 },
+          sebi: { rate: charges.sebiPerCrore / 1_00_00_000 },
+        },
+        gst_rate: charges.gst / 100,
+        slippage: charges.slippage / 100,
         risk_free_rate: riskFree / 100,
         source,
       })
@@ -291,13 +265,22 @@ export default function PortfolioBacktester() {
             <CardTitle className="text-sm">Benchmark</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            <Input
-              value={benchmark}
-              onChange={(e) => setBenchmark(e.target.value)}
-              placeholder="NIFTYBEES"
-            />
+            <Select value={benchmark} onValueChange={setBenchmark}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">None</SelectItem>
+                {BENCHMARKS.map((b) => (
+                  <SelectItem key={b.symbol} value={b.symbol}>
+                    {b.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <p className="text-xs text-muted-foreground">
-              Compared against your portfolio. Leave blank to skip.
+              NSE and BSE indices only — alpha and beta against a single stock
+              would not mean anything.
             </p>
           </CardContent>
         </Card>
@@ -353,119 +336,123 @@ export default function PortfolioBacktester() {
         </Card>
       </div>
 
-      <Card>
-        <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
-          <div>
-            <CardTitle className="text-base">Portfolio Holdings</CardTitle>
-            <p className="text-sm text-muted-foreground">
-              NSE and BSE cash equity and ETFs.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                setHoldings((p) => [...p, { symbol: '', exchange: 'NSE', weight: 0 }])
-              }
-            >
-              Add Stock
-            </Button>
-            <Button variant="outline" size="sm" onClick={distributeEqually}>
-              Distribute Equally
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {holdings.map((h, i) => (
-            <div key={`row-${i}-${h.symbol}`} className="flex items-center gap-2">
-              <Input
-                className="flex-1"
-                value={h.symbol}
-                placeholder="Symbol"
-                onChange={(e) => setHolding(i, { symbol: e.target.value.toUpperCase() })}
-              />
-              <Select
-                value={h.exchange}
-                onValueChange={(v) => setHolding(i, { exchange: v })}
-              >
-                <SelectTrigger className="w-24">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="NSE">NSE</SelectItem>
-                  <SelectItem value="BSE">BSE</SelectItem>
-                </SelectContent>
-              </Select>
-              <Input
-                className="w-28"
-                type="number"
-                value={h.weight}
-                onChange={(e) => setHolding(i, { weight: Number(e.target.value) })}
-              />
+      <div className="grid gap-4 lg:grid-cols-4">
+        {/* Left: holdings and run controls */}
+        <Card className="lg:col-span-3">
+          <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+            <div>
+              <CardTitle className="text-base">Portfolio Holdings</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                NSE and BSE cash equity and ETFs.
+              </p>
+            </div>
+            <div className="flex gap-2">
               <Button
-                variant="ghost"
+                variant="outline"
                 size="sm"
-                disabled={holdings.length <= 1}
-                onClick={() => setHoldings((p) => p.filter((_, n) => n !== i))}
+                onClick={() =>
+                  setHoldings((p) => [...p, { symbol: '', exchange: 'NSE', weight: 0 }])
+                }
               >
-                Remove
+                Add Stock
+              </Button>
+              <Button variant="outline" size="sm" onClick={distributeEqually}>
+                Distribute Equally
               </Button>
             </div>
-          ))}
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {holdings.map((h, i) => (
+              <div key={`row-${i}-${h.symbol}`} className="flex items-center gap-2">
+                <SymbolSearchInput
+                  className="w-56"
+                  value={h.symbol}
+                  exchange={h.exchange as 'NSE' | 'BSE'}
+                  onSelect={(sym) => setHolding(i, { symbol: sym })}
+                />
+                <Select
+                  value={h.exchange}
+                  onValueChange={(v) => setHolding(i, { exchange: v })}
+                >
+                  <SelectTrigger className="w-20">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="NSE">NSE</SelectItem>
+                    <SelectItem value="BSE">BSE</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Input
+                  className="w-20"
+                  type="number"
+                  value={h.weight}
+                  onChange={(e) => setHolding(i, { weight: Number(e.target.value) })}
+                />
+                <span className="text-xs text-muted-foreground">%</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={holdings.length <= 1}
+                  onClick={() => setHoldings((p) => p.filter((_, n) => n !== i))}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
 
-          <div className="flex flex-wrap items-end gap-4 border-t pt-3">
-            <div>
-              <Label className="text-xs">Cost (bps)</Label>
-              <Input
-                className="w-24"
-                type="number"
-                value={costBps}
-                onChange={(e) => setCostBps(Number(e.target.value))}
-              />
+            <div className="flex flex-wrap items-end gap-4 border-t pt-3">
+              <div>
+                <Label className="text-xs">Data source</Label>
+                <Select value={source} onValueChange={(v) => setSource(v as PriceSource)}>
+                  <SelectTrigger className="w-40">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="db">Historify (local)</SelectItem>
+                    <SelectItem value="api">Broker API</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Risk-free rate (%)</Label>
+                <Input
+                  className="w-28"
+                  type="number"
+                  step="0.1"
+                  value={riskFree}
+                  onChange={(e) => setRiskFree(Number(e.target.value))}
+                />
+              </div>
+              <div className="ml-auto flex items-center gap-3">
+                <span
+                  className={cn(
+                    'text-sm tabular-nums',
+                    Math.abs(totalWeight - 100) < 0.01
+                      ? 'text-emerald-500'
+                      : 'text-muted-foreground'
+                  )}
+                >
+                  Total {totalWeight.toFixed(1)}%
+                </span>
+                <Button onClick={analyse} disabled={busy}>
+                  {busy ? 'Analysing…' : 'Analyze Portfolio'}
+                </Button>
+              </div>
             </div>
-            <div>
-              <Label className="text-xs">Risk-free rate (%)</Label>
-              <Input
-                className="w-28"
-                type="number"
-                value={riskFree}
-                onChange={(e) => setRiskFree(Number(e.target.value))}
-              />
-            </div>
-            <div>
-              <Label className="text-xs">Data source</Label>
-              <Select value={source} onValueChange={(v) => setSource(v as PriceSource)}>
-                <SelectTrigger className="w-40">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="db">Historify (local)</SelectItem>
-                  <SelectItem value="api">Broker API</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="ml-auto flex items-center gap-3">
-              <span
-                className={cn(
-                  'text-sm tabular-nums',
-                  Math.abs(totalWeight - 100) < 0.01
-                    ? 'text-emerald-500'
-                    : 'text-muted-foreground'
-                )}
-              >
-                Total {totalWeight.toFixed(1)}%
-              </span>
-              <Button onClick={analyse} disabled={busy}>
-                {busy ? 'Analysing…' : 'Analyze Portfolio'}
-              </Button>
-            </div>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Weights are normalised, so they need not total 100.
-          </p>
-        </CardContent>
-      </Card>
+            <p className="text-xs text-muted-foreground">
+              Weights are normalised, so they need not total 100.
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Right: every charge, editable */}
+        <ChargeControls
+          value={charges}
+          onChange={setCharges}
+          exchange={costExchange}
+          onExchange={setCostExchange}
+        />
+      </div>
 
       {error && (
         <Card className="border-rose-500/40">
@@ -494,6 +481,12 @@ export default function PortfolioBacktester() {
               <TabsTrigger value="stats">Performance Stats</TabsTrigger>
               <TabsTrigger value="pnl">Itemised P&amp;L</TabsTrigger>
               <TabsTrigger value="correlation">Correlation</TabsTrigger>
+              <TabsTrigger value="drawdown">Drawdown</TabsTrigger>
+              <TabsTrigger value="monthly">Monthly Returns</TabsTrigger>
+              <TabsTrigger value="rolling">Rolling Stats</TabsTrigger>
+              <TabsTrigger value="allocation">Allocation</TabsTrigger>
+              <TabsTrigger value="crisis">Crisis</TabsTrigger>
+              <TabsTrigger value="health">Health</TabsTrigger>
             </TabsList>
 
             <TabsContent value="overview" className="space-y-4">
@@ -532,6 +525,55 @@ export default function PortfolioBacktester() {
                   sub={`${result.rebalancing.count} rebalances`}
                 />
               </div>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">What the trading cost</CardTitle>
+                  <p className="text-sm text-muted-foreground">
+                    The real schedule, itemised. Note which line dominates — it is
+                    not brokerage, which is why zero-brokerage does not make
+                    rebalancing free.
+                  </p>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <table className="w-full text-sm">
+                    <tbody>
+                      {[
+                        ['Brokerage', result.costs.brokerage],
+                        ['STT', result.costs.stt],
+                        ['Exchange txn charge', result.costs.exchange_txn],
+                        ['GST', result.costs.gst],
+                        ['SEBI charges', result.costs.sebi],
+                        ['Stamp duty', result.costs.stamp_duty],
+                        ['Slippage', result.costs.slippage],
+                      ]
+                        .filter(([, v]) => v !== undefined)
+                        .map(([k, v]) => (
+                          <tr key={k as string} className="border-b">
+                            <td className="p-2.5 pl-4">{k}</td>
+                            <td className="p-2.5 pr-4 text-right tabular-nums">
+                              {money(v as number)}
+                            </td>
+                          </tr>
+                        ))}
+                      <tr className="font-semibold">
+                        <td className="p-2.5 pl-4">Total tax and charges</td>
+                        <td className="p-2.5 pr-4 text-right tabular-nums">
+                          {money(result.costs.total)}
+                        </td>
+                      </tr>
+                      <tr className="text-muted-foreground">
+                        <td className="p-2.5 pl-4">
+                          Return given up ({(result.costs.turnover * 100).toFixed(1)}%
+                          turnover)
+                        </td>
+                        <td className="p-2.5 pr-4 text-right tabular-nums">
+                          {pct(result.costs.drag)}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </CardContent>
+              </Card>
               <p className="text-xs text-muted-foreground">
                 Returns are price-only — broker history excludes dividends, so income
                 is not counted here.
@@ -548,9 +590,21 @@ export default function PortfolioBacktester() {
                   </p>
                 </CardHeader>
                 <CardContent>
-                  <EquityChart
-                    portfolio={result.equity}
-                    benchmark={result.benchmark_equity}
+                  <PortfolioLineChart
+                    height={340}
+                    format={money}
+                    series={[
+                      { name: 'Portfolio', color: '#3b82f6', data: result.equity },
+                      ...(result.benchmark_equity.length > 1
+                        ? [
+                            {
+                              name: result.meta.benchmark ?? 'Benchmark',
+                              color: '#22c55e',
+                              data: result.benchmark_equity,
+                            },
+                          ]
+                        : []),
+                    ]}
                   />
                 </CardContent>
               </Card>
@@ -691,6 +745,560 @@ export default function PortfolioBacktester() {
                     symbols={result.correlation.symbols}
                     matrix={result.correlation.matrix}
                   />
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="drawdown" className="space-y-4">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Drawdown</CardTitle>
+                  <p className="text-sm text-muted-foreground">
+                    How far below the previous peak, and for how long. The shape
+                    matters more than the worst number.
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  <PortfolioLineChart
+                    height={260}
+                    format={(v) => `${v.toFixed(2)}%`}
+                    series={[
+                      {
+                        name: 'Drawdown',
+                        color: '#ef4444',
+                        data: result.series.drawdown,
+                        area: true,
+                      },
+                    ]}
+                  />
+                </CardContent>
+              </Card>
+              {result.series.drawdown_episodes &&
+                result.series.drawdown_episodes.length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">Worst Episodes</CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <table className="w-full text-sm">
+                        <thead className="border-b text-xs text-muted-foreground">
+                          <tr>
+                            <th className="p-3 text-left">Start</th>
+                            <th className="p-3 text-left">Valley</th>
+                            <th className="p-3 text-left">Recovered</th>
+                            <th className="p-3 text-right">Days</th>
+                            <th className="p-3 text-right">Depth</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {result.series.drawdown_episodes.map((d) => (
+                            <tr
+                              key={`${d.start}-${d.valley}`}
+                              className="border-b last:border-0"
+                            >
+                              <td className="p-3">{d.start}</td>
+                              <td className="p-3">{d.valley}</td>
+                              <td className="p-3">{d.end}</td>
+                              <td className="p-3 text-right tabular-nums">{d.days}</td>
+                              <td className="p-3 text-right tabular-nums text-rose-500">
+                                {pct(d.depth)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </CardContent>
+                  </Card>
+                )}
+            </TabsContent>
+
+            <TabsContent value="monthly" className="space-y-4">
+              {result.series.yearly_returns &&
+                result.series.yearly_returns.length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">Yearly Returns</CardTitle>
+                      <p className="text-sm text-muted-foreground">
+                        An investor lives through calendar years, not annualised
+                        averages — "did it beat the index this year" is the question
+                        actually asked of a portfolio.
+                      </p>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <table className="w-full text-sm">
+                        <thead className="border-b text-xs text-muted-foreground">
+                          <tr>
+                            <th className="p-3 text-left">Year</th>
+                            <th className="p-3 text-right">Portfolio</th>
+                            <th className="p-3 text-right">Benchmark</th>
+                            <th className="p-3 text-right">Difference</th>
+                            <th className="p-3 text-right">Multiplier</th>
+                            <th className="p-3 text-center">Won</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {result.series.yearly_returns.map((y) => (
+                            <tr key={y.year} className="border-b last:border-0">
+                              <td className="p-3 font-medium">{y.year}</td>
+                              <td
+                                className={cn(
+                                  'p-3 text-right tabular-nums',
+                                  (y.portfolio ?? 0) >= 0
+                                    ? 'text-emerald-500'
+                                    : 'text-rose-500'
+                                )}
+                              >
+                                {pct(y.portfolio)}
+                              </td>
+                              <td className="p-3 text-right tabular-nums text-muted-foreground">
+                                {pct(y.benchmark)}
+                              </td>
+                              <td
+                                className={cn(
+                                  'p-3 text-right font-medium tabular-nums',
+                                  (y.difference ?? 0) >= 0
+                                    ? 'text-emerald-500'
+                                    : 'text-rose-500'
+                                )}
+                              >
+                                {y.difference === null || y.difference === undefined
+                                  ? '—'
+                                  : `${y.difference >= 0 ? '+' : ''}${(y.difference * 100).toFixed(2)}%`}
+                              </td>
+                              <td className="p-3 text-right tabular-nums text-muted-foreground">
+                                {y.multiplier === null || y.multiplier === undefined
+                                  ? '—'
+                                  : `${y.multiplier.toFixed(2)}x`}
+                              </td>
+                              <td
+                                className={cn(
+                                  'p-3 text-center font-semibold',
+                                  y.won ? 'text-emerald-500' : 'text-rose-500'
+                                )}
+                              >
+                                {y.won === undefined ? '' : y.won ? '+' : '-'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </CardContent>
+                  </Card>
+                )}
+              {result.series.monthly_returns && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base">Monthly Returns</CardTitle>
+                    <p className="text-sm text-muted-foreground">
+                      A run of bad months is what makes people abandon a strategy, and
+                      an annualised number cannot show one.
+                    </p>
+                  </CardHeader>
+                  <CardContent>
+                    <MonthlyReturnsHeatmap
+                      years={result.series.monthly_returns.years}
+                      columns={result.series.monthly_returns.columns}
+                      values={result.series.monthly_returns.values}
+                    />
+                  </CardContent>
+                </Card>
+              )}
+              {result.series.weekly_grid && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base">Weekly Returns</CardTitle>
+                    <p className="text-sm text-muted-foreground">
+                      Years down, ISO weeks across. Pick a year to read it on its own.
+                    </p>
+                  </CardHeader>
+                  <CardContent>
+                    <WeeklyReturnsHeatmap
+                      years={result.series.weekly_grid.years}
+                      weeks={result.series.weekly_grid.weeks}
+                      values={result.series.weekly_grid.values}
+                    />
+                  </CardContent>
+                </Card>
+              )}
+              {result.series.return_quantiles &&
+                result.series.return_quantiles.length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">Return Quantiles</CardTitle>
+                      <p className="text-sm text-muted-foreground">
+                        How the spread narrows with holding period — the share of
+                        periods that ended down is the practical read.
+                      </p>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead className="border-b text-xs text-muted-foreground">
+                            <tr>
+                              <th className="p-3 text-left">Period</th>
+                              <th className="p-3 text-right">n</th>
+                              <th className="p-3 text-right">Worst</th>
+                              <th className="p-3 text-right">25%</th>
+                              <th className="p-3 text-right">Median</th>
+                              <th className="p-3 text-right">75%</th>
+                              <th className="p-3 text-right">Best</th>
+                              <th className="p-3 text-right">Ended down</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {result.series.return_quantiles.map((q) => (
+                              <tr key={q.period} className="border-b last:border-0">
+                                <td className="p-3 font-medium">{q.period}</td>
+                                <td className="p-3 text-right tabular-nums text-muted-foreground">
+                                  {q.count}
+                                </td>
+                                <td className="p-3 text-right tabular-nums text-rose-500">
+                                  {pct(q.min)}
+                                </td>
+                                <td className="p-3 text-right tabular-nums">{pct(q.q1)}</td>
+                                <td className="p-3 text-right font-medium tabular-nums">
+                                  {pct(q.median)}
+                                </td>
+                                <td className="p-3 text-right tabular-nums">{pct(q.q3)}</td>
+                                <td className="p-3 text-right tabular-nums text-emerald-500">
+                                  {pct(q.max)}
+                                </td>
+                                <td className="p-3 text-right tabular-nums">
+                                  {pct(q.negative_share, 0)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+            </TabsContent>
+
+            <TabsContent value="rolling" className="space-y-4">
+              {result.series.rolling ? (
+                <>
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">
+                        Rolling Sharpe ({result.series.rolling.window} sessions)
+                      </CardTitle>
+                      <p className="text-sm text-muted-foreground">
+                        A flattering full-period Sharpe can hide one that has been
+                        deteriorating for a year.
+                      </p>
+                    </CardHeader>
+                    <CardContent>
+                      <PortfolioLineChart
+                        height={240}
+                        format={(v) => v.toFixed(2)}
+                        series={[
+                          {
+                            name: 'Rolling Sharpe',
+                            color: '#8b5cf6',
+                            data: result.series.rolling.sharpe,
+                          },
+                        ]}
+                      />
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">Rolling Volatility</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <PortfolioLineChart
+                        height={240}
+                        format={(v) => `${(v * 100).toFixed(1)}%`}
+                        series={[
+                          {
+                            name: 'Rolling Volatility',
+                            color: '#f59e0b',
+                            data: result.series.rolling.volatility,
+                          },
+                        ]}
+                      />
+                    </CardContent>
+                  </Card>
+                </>
+              ) : (
+                <Card>
+                  <CardContent className="p-4 text-sm text-muted-foreground">
+                    Not enough history for a rolling window over this period.
+                  </CardContent>
+                </Card>
+              )}
+            </TabsContent>
+
+            <TabsContent value="allocation" className="space-y-4">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">
+                    Portfolio Allocation Over Time
+                  </CardTitle>
+                  <p className="text-sm text-muted-foreground">
+                    What you actually held, session by session. Bands widen as winners
+                    run and snap back on each rebalance — a portfolio left alone stops
+                    being the one you chose.
+                  </p>
+                </CardHeader>
+                <CardContent className="pl-12">
+                  <AllocationChart
+                    dates={result.allocation.dates}
+                    symbols={result.allocation.symbols}
+                    series={result.allocation.series}
+                    average={result.allocation.average}
+                    height={320}
+                  />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Target versus Realised</CardTitle>
+                  <p className="text-sm text-muted-foreground">
+                    The average weight actually held differs from the target whenever
+                    the portfolio was allowed to drift.
+                  </p>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <table className="w-full text-sm">
+                    <thead className="border-b text-xs text-muted-foreground">
+                      <tr>
+                        <th className="p-3 text-left">Symbol</th>
+                        <th className="p-3 text-right">Target</th>
+                        <th className="p-3 text-right">Average held</th>
+                        <th className="p-3 text-right">Final</th>
+                        <th className="p-3 text-right">Drift</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.items.map((it) => {
+                        const avg = result.allocation.average[it.symbol] ?? 0
+                        return (
+                          <tr key={it.symbol} className="border-b last:border-0">
+                            <td className="p-3 font-medium">{it.symbol}</td>
+                            <td className="p-3 text-right tabular-nums text-muted-foreground">
+                              {pct(it.weight_target, 1)}
+                            </td>
+                            <td className="p-3 text-right tabular-nums">{pct(avg, 1)}</td>
+                            <td className="p-3 text-right tabular-nums">
+                              {pct(it.weight_final, 1)}
+                            </td>
+                            <td
+                              className={cn(
+                                'p-3 text-right font-medium tabular-nums',
+                                Math.abs(it.weight_final - it.weight_target) > 0.05
+                                  ? 'text-amber-500'
+                                  : 'text-muted-foreground'
+                              )}
+                            >
+                              {`${it.weight_final - it.weight_target >= 0 ? '+' : ''}${((it.weight_final - it.weight_target) * 100).toFixed(1)}pp`}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="crisis" className="space-y-4">
+              {result.crisis.summary && (
+                <div className="grid gap-3 md:grid-cols-4">
+                  <Stat
+                    label="Average Return"
+                    value={pct(result.crisis.summary.average_return)}
+                    sub={`across ${result.crisis.summary.count} periods`}
+                  />
+                  <Stat
+                    label="Hit Rate"
+                    value={pct(result.crisis.summary.hit_rate, 0)}
+                    sub="beat the benchmark"
+                  />
+                  <Stat
+                    label="Worst Crisis"
+                    value={pct(result.crisis.summary.worst)}
+                    tone="bad"
+                  />
+                  <Stat
+                    label="Best Period"
+                    value={pct(result.crisis.summary.best)}
+                    tone="good"
+                  />
+                </div>
+              )}
+
+              {result.crisis.summary?.by_scope && (
+                <div className="grid gap-3 md:grid-cols-2">
+                  {Object.entries(result.crisis.summary.by_scope).map(([scope, v]) => (
+                    <Card key={scope}>
+                      <CardContent className="p-4">
+                        <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                          {scope === 'india' ? 'Domestic events' : 'Global shocks'}
+                        </div>
+                        <div className="mt-1 flex items-baseline gap-4">
+                          <span className="text-2xl font-semibold tabular-nums">
+                            {pct(v.average_return)}
+                          </span>
+                          <span className="text-sm text-muted-foreground">
+                            hit rate {pct(v.hit_rate, 0)} over {v.count}
+                          </span>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Crisis Period Summary</CardTitle>
+                  <p className="text-sm text-muted-foreground">
+                    How the portfolio held up when it mattered, against the benchmark
+                    over the same window. Recoveries are included on purpose — a
+                    crashes-only view flatters anything defensive.
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  <CrisisChart periods={result.crisis.periods} />
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="p-0">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="border-b text-xs text-muted-foreground">
+                        <tr>
+                          <th className="p-3 text-left">Period</th>
+                          <th className="p-3 text-left">Scope</th>
+                          <th className="p-3 text-left">Window</th>
+                          <th className="p-3 text-right">Portfolio</th>
+                          <th className="p-3 text-right">Benchmark</th>
+                          <th className="p-3 text-right">Excess</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.crisis.periods.map((c) => (
+                          <tr key={c.key} className="border-b last:border-0">
+                            <td className="p-3">
+                              <div className="font-medium">{c.label}</div>
+                              {c.note && (
+                                <div className="text-xs text-muted-foreground">{c.note}</div>
+                              )}
+                            </td>
+                            <td className="p-3 text-xs text-muted-foreground">
+                              {c.scope === 'india' ? 'Domestic' : 'Global'}
+                              {c.partial && (
+                                <span className="ml-1 text-amber-500">partial</span>
+                              )}
+                            </td>
+                            <td className="p-3 text-xs text-muted-foreground">
+                              {c.start} → {c.end}
+                            </td>
+                            <td
+                              className={cn(
+                                'p-3 text-right tabular-nums',
+                                (c.portfolio ?? 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'
+                              )}
+                            >
+                              {pct(c.portfolio)}
+                            </td>
+                            <td className="p-3 text-right tabular-nums text-muted-foreground">
+                              {pct(c.benchmark)}
+                            </td>
+                            <td
+                              className={cn(
+                                'p-3 text-right font-medium tabular-nums',
+                                (c.excess ?? 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'
+                              )}
+                            >
+                              {c.excess === null ? '—' : `${c.excess >= 0 ? '+' : ''}${(c.excess * 100).toFixed(2)}%`}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="health" className="space-y-4">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Portfolio Health</CardTitle>
+                  <p className="text-sm text-muted-foreground">
+                    Every pillar shows the inputs it read, the formula it applied and
+                    the weight it carried — so you can disagree with the grade and see
+                    exactly where.
+                  </p>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex items-baseline gap-4">
+                    <div
+                      className={cn(
+                        'text-5xl font-bold tabular-nums',
+                        (result.health.score ?? 0) >= 70
+                          ? 'text-emerald-500'
+                          : (result.health.score ?? 0) >= 50
+                            ? 'text-amber-500'
+                            : 'text-rose-500'
+                      )}
+                    >
+                      {result.health.grade ?? '—'}
+                    </div>
+                    <div className="text-2xl tabular-nums text-muted-foreground">
+                      {result.health.score ?? '—'}/100
+                    </div>
+                    {result.health.unmeasured.length > 0 && (
+                      <div className="text-xs text-muted-foreground">
+                        {result.health.unmeasured.join(', ')} could not be measured and
+                        were left out rather than scored zero
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-3">
+                    {result.health.pillars.map((p) => (
+                      <div key={p.key} className="rounded-md border p-3">
+                        <div className="flex items-center justify-between gap-4">
+                          <span className="font-medium">{p.label}</span>
+                          <span className="tabular-nums text-muted-foreground">
+                            {p.score === null ? 'not measured' : `${p.score}/100`}
+                            {p.effective_weight > 0 &&
+                              ` · ${(p.effective_weight * 100).toFixed(0)}% of grade`}
+                          </span>
+                        </div>
+                        {p.score !== null && (
+                          <div className="mt-2 h-1.5 w-full overflow-hidden rounded bg-muted">
+                            <div
+                              className={cn(
+                                'h-full rounded',
+                                p.score >= 70
+                                  ? 'bg-emerald-500'
+                                  : p.score >= 40
+                                    ? 'bg-amber-500'
+                                    : 'bg-rose-500'
+                              )}
+                              style={{ width: `${p.score}%` }}
+                            />
+                          </div>
+                        )}
+                        <p className="mt-2 text-sm">{p.comment}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          <span className="font-medium">Formula: </span>
+                          {p.formula}
+                        </p>
+                        <p className="mt-0.5 font-mono text-xs text-muted-foreground">
+                          {JSON.stringify(p.inputs)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
                 </CardContent>
               </Card>
             </TabsContent>

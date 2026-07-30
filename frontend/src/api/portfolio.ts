@@ -21,7 +21,14 @@ export interface BacktestRequest {
   benchmark_exchange?: string
   rebalance?: RebalanceRule
   drift_band?: number
+  cost_model?: 'indian_equity' | 'flat_bps'
+  brokerage_pct?: number
   cost_bps?: number
+  cost_exchange?: string
+  /** Per-charge overrides, keyed by charge id. Rates are fractions. */
+  charges?: Record<string, { rate?: number; flat?: number; cap?: number }>
+  /** Consumption tax on the taxable charges, as a fraction. */
+  gst_rate?: number
   slippage?: number
   initial_capital?: number
   risk_free_rate?: number
@@ -78,6 +85,139 @@ export interface PortfolioMetrics {
   down_capture?: number | null
 }
 
+/**
+ * One scored dimension of portfolio health, with its working attached so the
+ * grade can be argued with rather than merely believed.
+ */
+export interface HealthPillar {
+  key: string
+  label: string
+  /** 0-100, or null when the pillar could not be measured. */
+  score: number | null
+  /** Its share of the total as designed. */
+  weight: number
+  /** Its share after renormalising around any unmeasured pillar. */
+  effective_weight: number
+  formula: string
+  inputs: Record<string, unknown>
+  comment: string
+}
+
+export interface PortfolioHealth {
+  score: number | null
+  grade: string | null
+  pillars: HealthPillar[]
+  /** Pillars dropped for want of data, rather than scored zero. */
+  unmeasured: string[]
+}
+
+/** Series-level data: what a table of headline numbers cannot convey. */
+export interface PortfolioSeries {
+  drawdown: CurvePoint[]
+  drawdown_episodes?: {
+    start: string
+    valley: string
+    end: string
+    days: number
+    depth: number | null
+  }[]
+  rolling?: {
+    window: number
+    sharpe: CurvePoint[]
+    volatility: CurvePoint[]
+  }
+  monthly_returns?: {
+    years: string[]
+    columns: string[]
+    values: (number | null)[][]
+  }
+  weekly_returns: CurvePoint[]
+  /** Weekly returns as years x ISO weeks, for the heatmap. */
+  weekly_grid?: {
+    years: string[]
+    weeks: number[]
+    values: (number | null)[][]
+  }
+  /** Spread of returns at each holding period. */
+  return_quantiles?: {
+    period: string
+    count: number
+    min: number | null
+    q1: number | null
+    median: number | null
+    q3: number | null
+    max: number | null
+    mean: number | null
+    negative_share: number | null
+  }[]
+  /** Calendar-year returns, against the benchmark where there is one. */
+  yearly_returns?: {
+    year: string
+    portfolio: number | null
+    benchmark?: number | null
+    difference?: number | null
+    /** Straight from openstatz, so the verdict matches its tearsheet. */
+    won?: boolean
+    /** Omitted when the benchmark fell — a negative denominator is unreadable. */
+    multiplier?: number | null
+  }[]
+}
+
+/**
+ * What the trading actually cost, itemised the way a contract note is.
+ * STT dominates and brokerage is usually zero — which is why "zero brokerage"
+ * does not make rebalancing free.
+ */
+export interface PortfolioCosts {
+  model: string
+  brokerage?: number
+  stt?: number
+  exchange_txn?: number
+  sebi?: number
+  gst?: number
+  stamp_duty?: number
+  slippage?: number
+  total: number
+  drag: number
+  turnover: number
+}
+
+/** How the portfolio behaved across named historical stress windows. */
+export interface PortfolioCrisis {
+  periods: {
+    key: string
+    label: string
+    note?: string
+    start: string
+    end: string
+    scope?: 'india' | 'global'
+    portfolio: number | null
+    benchmark: number | null
+    excess: number | null
+    coverage?: number
+    partial?: boolean
+  }[]
+  summary: {
+    count: number
+    average_return: number
+    hit_rate: number | null
+    worst: number
+    best: number
+    by_scope?: Record<
+      string,
+      { count: number; average_return: number; hit_rate: number | null }
+    >
+  } | null
+}
+
+/** Weights over time, for the allocation chart. No cash band: long-only. */
+export interface PortfolioAllocation {
+  dates: string[]
+  symbols: string[]
+  series: Record<string, number[]>
+  average: Record<string, number>
+}
+
 export interface BacktestResponse {
   status: 'success' | 'error'
   message?: string
@@ -117,6 +257,11 @@ export interface BacktestResponse {
     holdings: number
     diversification_ratio: number | null
   }
+  allocation: PortfolioAllocation
+  crisis: PortfolioCrisis
+  costs: PortfolioCosts
+  series: PortfolioSeries
+  health: PortfolioHealth
   rebalancing: {
     rule: RebalanceRule
     drift_band: number
