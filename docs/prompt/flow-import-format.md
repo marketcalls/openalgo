@@ -46,7 +46,7 @@ Data       getQuote · multiQuotes · getDepth · history · indicator ·
            getOrderStatus ·
            orderBook · tradeBook · positionBook · holdings · funds · margin ·
            symbol · optionSymbol · expiry · intervals · optionChain ·
-           syntheticFuture · holidays · timings
+           syntheticFuture · holidays · timings · calendar
 Streaming  subscribeLtp · subscribeQuote · subscribeDepth · unsubscribe
 Utility    log · telegramAlert · whatsappAlert · variable · mathExpression ·
            httpRequest · delay · waitUntil · group
@@ -99,6 +99,29 @@ Do not emit nodes for these; restructure the strategy instead.
 { "name": "x", "nodes": [ { "type": "Decision" } ] }        // invented type, and no id/position/data
 { "name": "x", "nodes": [], "edges": [], }                  // trailing comma
 ```
+
+---
+
+## 0.1 Updating a workflow that already exists
+
+Importing always creates a **new** workflow, so iterating on a strategy as JSON
+leaves a trail of copies and a new webhook URL each time.
+
+To replace an existing workflow's graph in place, keeping its id, webhook token
+and active state:
+
+* **In the editor** - the workflow menu, **Replace from JSON**. Paste or pick a
+  file.
+* **From a terminal** - `uv run python scripts/update_flow_workflow.py --id <id> --file strategy.json`
+  (add `--dry-run` to see what would change first).
+* **Over HTTP** - `POST /flow/api/workflows/<id>/replace` with the same body an
+  import takes.
+
+All three apply the rules in this document, so a graph that would be rejected at
+import is not written through a side door. If the **trigger** configuration
+changes on an active workflow, deactivate and reactivate it: the schedule and any
+price or order watch are registered at activation, not read per run. Node changes
+apply from the next run without any action.
 
 ---
 
@@ -227,6 +250,13 @@ the node fires:
 | `{{weekday}}` | `Wednesday` |
 | `{{iso_timestamp}}` | `2026-04-29T09:15:42.123456` |
 
+Calendar built-ins: `{{weekday_num}}` (1 = Monday, for numeric comparison -
+`{{weekday}}` is a name like `"Thursday"`), `{{quarter}}`, `{{week_of_year}}`,
+`{{day_of_year}}`, and `{{session_date}}` (the trading session date, which
+differs from `{{date}}` between midnight and the 03:00 IST rollover).
+
+For "has a new period started", use the `calendar` node rather than comparing
+these - see 7.4.
 ### Output variables
 
 Most data and action nodes accept an `outputVariable` field in their `data`
@@ -934,7 +964,7 @@ schemas.
 
 #### indicator — Technical Indicator
 
-Runs any of 118 `openalgo.ta` indicators over a symbol's history, or over
+Runs any of 116 `openalgo.ta` indicators over a symbol's history, or over
 another indicator's output series.
 
 | Field | Type | Default | Notes |
@@ -996,6 +1026,35 @@ Exposes `{{name.open/high/low/close/volume}}` plus aliases `{{name.pdh}}`,
   "type": "priorPeriodOhlc",
   "position": { "x": 100, "y": 100 },
   "data": { "symbol": "NIFTY", "exchange": "NSE_INDEX", "period": "previous_day", "source": "api", "outputVariable": "pd" }
+}
+```
+
+#### calendar — Calendar
+
+Trading-day facts for a date, and the stateless answer to "has a new day,
+week, month, quarter or year started". Flow keeps no state between runs, so a
+workflow cannot remember the last run's date - it does not need to, because
+"a new month started" is the same statement as "today is the first trading day
+of this month", which the exchange calendar answers on its own.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `date` | `"YYYY-MM-DD"` | current trading session date | Blank uses the session date, which differs from the calendar date between midnight and the 03:00 IST rollover. |
+| `outputVariable` | string | — | |
+
+Not exchange-aware: a date is a trading holiday if the exchange calendar lists
+one. MCX differs from NSE on a few days a year.
+
+Use `{{cal.is_new_month}}` rather than `{{month}}`-based arithmetic or
+`{{day}} == 1`. The 1st can fall on a Sunday, and a week's Monday can be a
+holiday; the flags handle both, those tests do not.
+
+```json
+{
+  "id": "node_2",
+  "type": "calendar",
+  "position": { "x": 100, "y": 100 },
+  "data": { "outputVariable": "cal" }
 }
 ```
 
@@ -1435,6 +1494,7 @@ resolve. Shapes below were captured from live responses, not inferred.
 | `indicator` | `{status, indicator, nested, inputs, params, outputs, latest, previous, at_offset, series, offset_bars, bars_used}` | `{{r.latest.value}}`, `{{r.previous.value}}`, `{{r.at_offset.out0}}`, `{{r.series[0].value}}` |
 | `priorPeriodOhlc` | `{status, symbol, exchange, period, date, open, high, low, close, volume, pdh, pdl, pdc}` | `{{pd.pdh}}`, `{{pd.pdl}}`, `{{pd.close}}` |
 | `barOffset` | `{status, symbol, exchange, offsetBars, timestamp, open, high, low, close, volume}` | `{{b.close}}`, `{{b.high}}` |
+| `calendar` | `{status, date, is_trading_day, is_trading_holiday, is_weekend, weekday, weekday_num, day, month, quarter, year, week_of_year, day_of_year, is_new_day, is_new_week, is_new_month, is_new_quarter, is_new_year, is_last_day_of_week, is_last_day_of_month, is_last_day_of_quarter, is_last_day_of_year, prev_trading_day, next_trading_day, first_trading_day_of_week, first_trading_day_of_month, first_trading_day_of_quarter, last_trading_day_of_week, last_trading_day_of_month, last_trading_day_of_quarter}` | `{{cal.is_new_month}}`, `{{cal.is_trading_day}}`, `{{cal.prev_trading_day}}` |
 | `strategyPnl` | `{status, strategy, realized, today_realized, unrealized, total, today_total, open_quantity, unpriced_legs, legs: [{symbol, exchange, product, quantity, average_price, ltp, realized, today_realized, unrealized}]}` | `{{pnl.total}}`, `{{pnl.today_total}}`, `{{pnl.today_realized}}`, `{{pnl.open_quantity}}` |
 
 `strategyPnl` reports **only this strategy's** legs, not the account's. It
