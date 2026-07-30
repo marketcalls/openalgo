@@ -531,6 +531,7 @@ export default function PortfolioBacktester() {
               <TabsTrigger value="robustness">Robustness</TabsTrigger>
               <TabsTrigger value="allocation">Allocation</TabsTrigger>
               <TabsTrigger value="structure">Structure</TabsTrigger>
+              <TabsTrigger value="attribution">Attribution</TabsTrigger>
               <TabsTrigger value="crisis">Crisis</TabsTrigger>
               <TabsTrigger value="health">Health</TabsTrigger>
             </TabsList>
@@ -1484,6 +1485,123 @@ export default function PortfolioBacktester() {
                   {result.structure.sector_note}
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            <TabsContent value="attribution" className="space-y-4">
+              {result.attribution.available ? (
+                <>
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <Stat
+                      label="Excess vs Benchmark"
+                      value={pct(result.attribution.excess_return)}
+                      sub="what has to be explained"
+                      tone={(result.attribution.excess_return ?? 0) >= 0 ? 'good' : 'bad'}
+                    />
+                    <Stat
+                      label="Selection"
+                      value={pct(result.attribution.selection_effect)}
+                      sub="were these the right things to own"
+                    />
+                    <Stat
+                      label="Allocation"
+                      value={pct(result.attribution.allocation_effect)}
+                      sub="did the weighting help"
+                    />
+                  </div>
+
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">How it splits</CardTitle>
+                      <p className="text-sm text-muted-foreground">
+                        Selection is an equal-weighted basket of the same holdings
+                        against the benchmark — the picks, with sizing removed.
+                        Allocation is the actual portfolio against that basket. They
+                        sum to the excess.
+                      </p>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <table className="w-full text-sm">
+                        <tbody>
+                          {[
+                            ['Portfolio', result.attribution.portfolio_return],
+                            ['Equal-weighted basket', result.attribution.equal_weight_return],
+                            ['Benchmark', result.attribution.benchmark_return],
+                          ].map(([label, v]) => (
+                            <tr key={label as string} className="border-b">
+                              <td className="p-3">{label}</td>
+                              <td className="p-3 text-right tabular-nums">
+                                {pct(v as number)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">Contribution by Holding</CardTitle>
+                      <p className="text-sm text-muted-foreground">
+                        Each holding's share of the out- or under-performance, not its
+                        standalone result — the column sums to the excess.
+                      </p>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <table className="w-full text-sm">
+                        <thead className="border-b text-xs text-muted-foreground">
+                          <tr>
+                            <th className="p-3 text-left">Symbol</th>
+                            <th className="p-3 text-right">Weight</th>
+                            <th className="p-3 text-right">Own return</th>
+                            <th className="p-3 text-right">vs benchmark</th>
+                            <th className="p-3 text-right">Contribution</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(result.attribution.holdings ?? []).map((h) => (
+                            <tr key={h.symbol} className="border-b last:border-0">
+                              <td className="p-3 font-medium">{h.symbol}</td>
+                              <td className="p-3 text-right tabular-nums text-muted-foreground">
+                                {pct(h.weight, 1)}
+                              </td>
+                              <td className="p-3 text-right tabular-nums">{pct(h.return)}</td>
+                              <td
+                                className={cn(
+                                  'p-3 text-right tabular-nums',
+                                  h.vs_benchmark >= 0 ? 'text-emerald-500' : 'text-rose-500'
+                                )}
+                              >
+                                {h.vs_benchmark >= 0 ? '+' : ''}
+                                {(h.vs_benchmark * 100).toFixed(2)}%
+                              </td>
+                              <td
+                                className={cn(
+                                  'p-3 text-right font-medium tabular-nums',
+                                  h.contribution >= 0 ? 'text-emerald-500' : 'text-rose-500'
+                                )}
+                              >
+                                {h.contribution >= 0 ? '+' : ''}
+                                {(h.contribution * 100).toFixed(2)}%
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </CardContent>
+                  </Card>
+
+                  <p className="text-xs text-muted-foreground">
+                    {result.attribution.method}
+                  </p>
+                </>
+              ) : (
+                <Card>
+                  <CardContent className="p-4 text-sm text-muted-foreground">
+                    {result.attribution.reason ?? 'Attribution needs a benchmark.'}
+                  </CardContent>
+                </Card>
+              )}
             </TabsContent>
 
             <TabsContent value="crisis" className="space-y-4">
