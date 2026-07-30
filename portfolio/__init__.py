@@ -32,3 +32,24 @@ __all__ = [
     "load_prices",
     "split_artifacts",
 ]
+
+
+def warm_analytics() -> None:
+    """
+    Import openstatz ahead of the first request, in the background.
+
+    Importing it costs about 1.4 seconds -- almost all of it matplotlib and
+    seaborn, pulled in by openstatz's plotting module, which this feature never
+    uses because every chart is rendered in the browser. Left lazy, the first
+    user to open a report pays that; imported at module scope, every Flask boot
+    pays it even if nobody opens one. A daemon thread at startup costs neither.
+    """
+    import threading
+
+    def _load() -> None:
+        try:
+            import openstatz.stats  # noqa: F401
+        except Exception:  # noqa: BLE001 -- warming is best-effort
+            pass
+
+    threading.Thread(target=_load, name="portfolio-warm-analytics", daemon=True).start()
