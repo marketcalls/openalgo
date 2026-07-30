@@ -13,6 +13,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import tempfile
+from datetime import date, timedelta
 
 from typing import Any
 
@@ -25,11 +26,17 @@ from portfolio.analytics import (
     diversification_ratio,
     summary,
 )
-from portfolio.data import BENCHMARK_EXCHANGES, DataError, load_prices
+from portfolio.data import (
+    BENCHMARK_EXCHANGES,
+    SUPPORTED_EXCHANGES,
+    DataError,
+    load_prices,
+)
 from portfolio.costs import CostSchedule, schedule_for
 from portfolio.compare import rebalancing_sweep
 from portfolio.crisis import crisis_analysis
 from portfolio.grouping import structure
+from portfolio.holdings import holdings_summary, parse_holdings
 from portfolio.engine import Costs, run_backtest
 from portfolio.health import portfolio_health
 from portfolio.rebalance import RebalancePolicy
@@ -626,3 +633,105 @@ def run_portfolio_backtest(
         },
     }
     return True, payload, 200
+
+
+def analyse_live_holdings(
+    *,
+    lookback_days: int = 365,
+    benchmark: str | None = "NIFTY",
+    benchmark_exchange: str = "NSE_INDEX",
+    risk_free_rate: float = 0.0,
+    source: str = "db",
+    api_key: str | None = None,
+    auth_token: str | None = None,
+    broker: str | None = None,
+) -> tuple[bool, dict[str, Any], int]:
+    """
+    Analyse the portfolio the user actually holds at their broker.
+
+    Live positions give the weights; past prices give the behaviour. Note what
+    that means: it answers "how would what I hold today have behaved", not "how
+    did my account perform", because a holdings payload says what is held now
+    and not when any of it was bought. Stated in the response rather than left
+    for the user to assume the stronger claim.
+    """
+    from services.holdings_service import get_holdings
+
+    ok, payload, status = get_holdings(
+        api_key=api_key, auth_token=auth_token, broker=broker
+    )
+    if not ok:
+        message = payload.get("message", "could not fetch holdings") if isinstance(payload, dict) else "could not fetch holdings"
+        return False, {"status": "error", "message": message}, status
+
+    rows = []
+    if isinstance(payload, dict):
+        data = payload.get("data", payload)
+        rows = data.get("holdings", []) if isinstance(data, dict) else []
+
+    holdings = parse_holdings(rows)
+    if not holdings:
+        return (
+            False,
+            {"status": "error", "message": "no holdings with a usable quantity and price"},
+            422,
+        )
+
+    summary = holdings_summary(holdings)
+
+    # Only what the backtester can price. Anything else is still reported in
+    # the holdings table -- it is real money the user owns -- but excluded from
+    # the historical analysis rather than silently weighted into it.
+    tradable = [
+        {"symbol": h["symbol"], "exchange": h["exchange"], "weight": h["weight"] * 100}
+        for h in summary["holdings"]
+        if h["exchange"] in SUPPORTED_EXCHANGES
+    ]
+    skipped = [h["symbol"] for h in summary["holdings"] if h["exchange"] not in SUPPORTED_EXCHANGES]
+
+    end = date.today()
+    start = end - timedelta(days=lookback_days)
+
+    analysis: dict[str, Any] | None = None
+    analysis_error: str | None = None
+    if tradable:
+        ok2, result, _ = run_portfolio_backtest(
+            tradable,
+            start.isoformat(),
+            end.isoformat(),
+            benchmark=benchmark,
+            benchmark_exchange=benchmark_exchange,
+            rebalance="never",
+            risk_free_rate=risk_free_rate,
+            source=source,
+            api_key=api_key,
+            auth_token=auth_token,
+            broker=broker,
+        )
+        if ok2:
+            analysis = result
+        else:
+            analysis_error = str(result.get("message", "analysis unavailable"))
+
+    return (
+        True,
+        {
+            "status": "success",
+            "summary": _clean(summary),
+            "analysis": analysis,
+            "analysis_error": analysis_error,
+            "skipped": skipped,
+            "meta": {
+                "lookback_days": lookback_days,
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "basis": (
+                    "Current holdings weighted by market value, run over past "
+                    "prices. This shows how today's portfolio would have "
+                    "behaved, not how the account performed -- a holdings "
+                    "payload does not say when each lot was bought."
+                ),
+            },
+        },
+        200,
+    )

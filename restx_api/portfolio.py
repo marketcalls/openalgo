@@ -17,6 +17,7 @@ from database.auth_db import get_auth_token_broker, verify_api_key
 from limiter import limiter
 from services.portfolio_service import (
     MAX_SYMBOLS,
+    analyse_live_holdings,
     generate_tearsheet,
     run_portfolio_backtest,
 )
@@ -232,3 +233,72 @@ class PortfolioTearsheet(Resource):
             'attachment; filename="portfolio-tearsheet.html"'
         )
         return response
+
+
+class HoldingsAnalysisSchema(Schema):
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))
+    # How much history to judge the current holdings against. A year is the
+    # shortest window that contains a full seasonal cycle.
+    lookback_days = fields.Int(load_default=365, validate=validate.Range(min=60, max=3650))
+    benchmark = fields.Str(load_default="NIFTY", allow_none=True)
+    benchmark_exchange = fields.Str(
+        load_default="NSE_INDEX", validate=validate.OneOf(BENCHMARK_EXCHANGES)
+    )
+    risk_free_rate = fields.Float(load_default=0.0, validate=validate.Range(min=0, max=0.5))
+    source = fields.Str(load_default="db", validate=validate.OneOf(["db", "api"]))
+
+
+holdings_schema = HoldingsAnalysisSchema()
+
+
+@api.route("/holdings", strict_slashes=False)
+class PortfolioHoldings(Resource):
+    @limiter.limit(API_RATE_LIMIT)
+    def post(self):
+        """Analyse the portfolio actually held at the broker."""
+        try:
+            data = holdings_schema.load(request.json or {})
+        except ValidationError as err:
+            return make_response(
+                jsonify({"status": "error", "message": err.messages}), 400
+            )
+
+        api_key = data.pop("apikey")
+        if verify_api_key(api_key) is None:
+            return make_response(
+                jsonify({"status": "error", "message": "Invalid openalgo apikey"}), 403
+            )
+
+        # Holdings always need a broker session -- unlike a backtest, there is
+        # no local copy of what someone owns.
+        auth_token, broker = get_auth_token_broker(api_key)
+        if auth_token is None:
+            return make_response(
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "No broker session. Log in to your broker to "
+                        "analyse live holdings.",
+                    }
+                ),
+                403,
+            )
+
+        try:
+            _, payload, status = analyse_live_holdings(
+                lookback_days=data["lookback_days"],
+                benchmark=data["benchmark"],
+                benchmark_exchange=data["benchmark_exchange"],
+                risk_free_rate=data["risk_free_rate"],
+                source=data["source"],
+                api_key=api_key,
+                auth_token=auth_token,
+                broker=broker,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("holdings analysis failed")
+            return make_response(
+                jsonify({"status": "error", "message": f"analysis failed: {exc}"}), 500
+            )
+
+        return make_response(jsonify(payload), status)
