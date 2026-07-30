@@ -31,6 +31,7 @@ from portfolio.analytics import (
     summary,
 )
 from portfolio.engine import Costs, normalise_weights, run_backtest
+from portfolio.health import portfolio_health
 from portfolio.rebalance import RebalancePolicy, calendar_dates, drifted
 
 
@@ -464,3 +465,89 @@ class TestCaptureRatioStability:
         caps = capture_ratios(bench.copy(), bench)
         assert caps["up_capture"] == pytest.approx(1.0)
         assert caps["down_capture"] == pytest.approx(1.0)
+
+
+class TestPortfolioHealth:
+    """
+    The grade must be arguable, not merely believable: every pillar publishes
+    its inputs, its formula and the weight it actually carried.
+    """
+
+    def _kit(self, n=300, seed=11):
+        rng = np.random.default_rng(seed)
+        index = pd.bdate_range("2023-01-02", periods=n)
+        closes = pd.DataFrame(
+            {
+                "A": 100 * np.cumprod(1 + rng.normal(0.0006, 0.01, n)),
+                "B": 100 * np.cumprod(1 + rng.normal(0.0004, 0.012, n)),
+            },
+            index=index,
+        )
+        return closes, closes.pct_change().iloc[1:], pd.Series({"A": 0.5, "B": 0.5})
+
+    def _health(self, **over):
+        closes, rets, w = self._kit()
+        kw = dict(
+            weights=w, returns=rets, closes=closes, sharpe=1.0, sortino=1.2,
+            max_drawdown=-0.15, cost_drag=0.001, turnover=0.4,
+        )
+        kw.update(over)
+        return portfolio_health(**kw)
+
+    def test_every_pillar_shows_its_working(self):
+        h = self._health()
+        assert len(h["pillars"]) == 6
+        for p in h["pillars"]:
+            assert p["formula"] and isinstance(p["formula"], str)
+            assert "inputs" in p and "effective_weight" in p
+            assert p["comment"]
+
+    def test_grade_tracks_the_score(self):
+        good = self._health(sharpe=2.5, max_drawdown=-0.05, cost_drag=0.0)
+        bad = self._health(sharpe=-0.5, max_drawdown=-0.55, cost_drag=0.08)
+        assert good["score"] > bad["score"]
+        assert good["grade"] < bad["grade"]  # 'A' sorts before 'F'
+
+    def test_concentration_pillar_sees_through_holding_count(self):
+        closes, rets, _ = self._kit()
+        lopsided = pd.Series({"A": 0.97, "B": 0.03})
+        even = pd.Series({"A": 0.5, "B": 0.5})
+        base = dict(returns=rets, closes=closes, sharpe=1.0, sortino=1.2,
+                    max_drawdown=-0.15, cost_drag=0.0, turnover=0.0)
+        lo = portfolio_health(weights=lopsided, **base)
+        ev = portfolio_health(weights=even, **base)
+        pick = lambda h: next(p for p in h["pillars"] if p["key"] == "concentration")
+        assert pick(lo)["score"] < pick(ev)["score"]
+
+    def test_an_unmeasurable_pillar_is_dropped_not_scored_zero(self):
+        # 300 sessions is short of the 200-day filter for a *dropna* series?
+        # No -- force it: 50 sessions cannot have a 200-session average.
+        closes, rets, w = self._kit(n=50)
+        h = portfolio_health(
+            weights=w, returns=rets, closes=closes, sharpe=1.0, sortino=1.2,
+            max_drawdown=-0.15, cost_drag=0.0, turnover=0.0,
+        )
+        assert "trend" in h["unmeasured"]
+        trend = next(p for p in h["pillars"] if p["key"] == "trend")
+        assert trend["score"] is None
+        assert trend["effective_weight"] == 0.0
+        # The rest renormalise to a full weighting rather than being diluted.
+        # Tolerance, not exactness: effective_weight is rounded for display, so
+        # five pillars sum to 0.9999. Renormalisation is the property here.
+        assert sum(p["effective_weight"] for p in h["pillars"]) == pytest.approx(1.0, abs=1e-3)
+
+    def test_effective_weights_sum_to_one_when_all_measured(self):
+        h = self._health()
+        assert sum(p["effective_weight"] for p in h["pillars"]) == pytest.approx(1.0, abs=1e-3)
+
+    def test_cost_drag_penalises_the_score(self):
+        cheap = self._health(cost_drag=0.0)
+        pricey = self._health(cost_drag=0.05)
+        assert cheap["score"] > pricey["score"]
+
+    def test_grade_boundaries(self):
+        from portfolio.health import grade_for
+        assert grade_for(95) == "A"
+        assert grade_for(90) == "A"
+        assert grade_for(89.9) == "B"
+        assert grade_for(0) == "F"
