@@ -287,6 +287,9 @@ def activate_workflow(workflow_id):
                     execute_at=trigger_data.get("executeAt"),
                     interval_value=trigger_data.get("intervalValue"),
                     interval_unit=trigger_data.get("intervalUnit"),
+                    # Offered by the editor and defaulted on, but never read
+                    # before, so schedules kept firing overnight and at weekends.
+                    market_hours_only=bool(trigger_data.get("marketHoursOnly", False)),
                 )
                 set_schedule_job_id(workflow_id, job_id)
 

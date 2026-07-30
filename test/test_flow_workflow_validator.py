@@ -291,3 +291,58 @@ def test_fund_check_migration_never_reverses_the_guard():
     )
     assert "minAvailable" not in migrated[0]["data"]
     assert any("no equivalent" in note for note in notes)
+
+
+@pytest.mark.parametrize(
+    "condition,data,expect_error",
+    [
+        ("above", {"price": 100}, False),
+        ("above", {}, True),
+        ("entering_channel", {"priceLower": 90, "priceUpper": 110}, False),
+        ("entering_channel", {"price": 100}, True),
+        ("moving_up_percent", {"percentage": 2}, False),
+    ],
+)
+def test_price_alert_requirements_follow_the_condition(condition, data, expect_error):
+    """A channel alert has no single price, so requiring one rejected a valid alert."""
+    wf = _wf(
+        [
+            _node("t", "priceAlert", symbol="X", exchange="NSE", condition=condition, **data),
+            _node("a", "log", message="hi"),
+        ],
+        [{"id": "e1", "source": "t", "target": "a"}],
+    )
+    errors = [e for e in validate_workflow(wf) if e["code"] == "missing_required_field"]
+    assert bool(errors) is expect_error
+
+
+@pytest.mark.parametrize(
+    "condition",
+    ["above", "price_above", "crosses_above", "cross_above", "crosses", "ABOVE", " above "],
+)
+def test_every_level_alias_requires_a_price(condition):
+    """The monitor accepts several spellings; each must still need a target.
+
+    Keying the requirement on the editor's spellings alone let an alias such as
+    `price_above` activate with no price and then run against a zero target.
+    """
+    wf = _wf(
+        [
+            _node("t", "priceAlert", symbol="X", exchange="NSE", condition=condition),
+            _node("a", "log", message="hi"),
+        ],
+        [{"id": "e1", "source": "t", "target": "a"}],
+    )
+    assert any(e["code"] == "missing_required_field" for e in validate_workflow(wf))
+
+
+def test_unknown_alert_condition_is_rejected():
+    """A condition the monitor cannot evaluate would sit registered and never fire."""
+    wf = _wf(
+        [
+            _node("t", "priceAlert", symbol="X", exchange="NSE", condition="abov", price=100),
+            _node("a", "log", message="hi"),
+        ],
+        [{"id": "e1", "source": "t", "target": "a"}],
+    )
+    assert any(e["code"] == "unknown_condition" for e in validate_workflow(wf))
