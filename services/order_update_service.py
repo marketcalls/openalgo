@@ -62,6 +62,10 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
         "broker.shoonya.streaming.shoonya_order_adapter",
         "create_shoonya_order_adapter",
     ),
+    "flattrade": (
+        "broker.flattrade.streaming.flattrade_order_adapter",
+        "create_flattrade_order_adapter",
+    ),
 }
 
 # Brokers with no push mechanism fall back to REST-orderbook polling.
