@@ -107,7 +107,8 @@ class FlowScheduler:
         """
         job_id = f"flow_workflow_{workflow_id}"
 
-        # Remove existing job if any
+        # Clear any previous job for this workflow. A brand-new workflow has
+        # none, which remove_job treats as a normal no-op.
         self.remove_job(job_id)
 
         # Use default function if not provided
@@ -181,17 +182,29 @@ class FlowScheduler:
         return job_id
 
     def remove_job(self, job_id: str) -> bool:
-        """Remove a job from the scheduler"""
+        """Remove a job from the scheduler. Returns False if there was none.
+
+        A job that does not exist is not an error for any caller: activating a
+        workflow clears any prior job first (a new workflow has none), and
+        deactivating may find it already gone after a restart. Logging that as
+        an ERROR with a traceback made a perfectly normal activation look
+        broken. A real jobstore failure is still logged with its traceback.
+        """
+        from apscheduler.jobstores.base import JobLookupError
+
         try:
             self.scheduler.remove_job(job_id)
             logger.info(f"Removed job {job_id}")
             return True
-        except Exception as e:
-            logger.exception(f"Failed to remove job {job_id}: {e}")
+        except JobLookupError:
+            logger.debug(f"No scheduler job {job_id} to remove")
+            return False
+        except Exception:
+            logger.exception(f"Failed to remove job {job_id}")
             return False
 
     def remove_workflow_job(self, workflow_id: int) -> bool:
-        """Remove a workflow job"""
+        """Remove a workflow job. A job that is already gone is not a failure."""
         job_id = f"flow_workflow_{workflow_id}"
         return self.remove_job(job_id)
 

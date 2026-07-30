@@ -346,3 +346,58 @@ def test_unknown_alert_condition_is_rejected():
         [{"id": "e1", "source": "t", "target": "a"}],
     )
     assert any(e["code"] == "unknown_condition" for e in validate_workflow(wf))
+
+
+def test_creating_a_new_workflow_needs_no_graph():
+    """The editor creates a strategy with only a name, before any nodes exist.
+
+    Requiring nodes/edges here rejected every "New Strategy" click with a 400.
+    Mirrors blueprints.flow.create_workflow: validate only what was sent.
+    """
+
+    def create_route(data):
+        if "nodes" in data or "edges" in data:
+            return validate_workflow(
+                {
+                    "name": data.get("name") or "",
+                    "nodes": data.get("nodes") or [],
+                    "edges": data.get("edges") or [],
+                },
+                require_name=False,
+                strict=False,
+            )
+        return []
+
+    assert create_route({"name": "My Strategy"}) == []
+    assert create_route({"name": "My Strategy", "description": "x"}) == []
+    assert create_route({"name": "My Strategy", "nodes": [], "edges": []}) == []
+    # A graph that is sent is still checked.
+    corrupt = {
+        "name": "S",
+        "nodes": [{"id": "a", "type": "Nope", "position": {"x": 0, "y": 0}, "data": {}}],
+        "edges": [],
+    }
+    assert any(e["code"] == "unknown_node_type" for e in create_route(corrupt))
+
+
+def test_a_complete_editor_built_strategy_activates():
+    """End-to-end shape the editor produces, including a true-branch edge."""
+    nodes = [
+        _node("n1", "start", scheduleType="interval", intervalValue=1, intervalUnit="minutes"),
+        _node("n2", "getQuote", symbol="RELIANCE", exchange="NSE", outputVariable="q"),
+        _node("n3", "varCondition", leftValue="{{q.data.ltp}}", operator=">", rightValue="1000"),
+        _node(
+            "n4",
+            "placeOrder",
+            symbol="RELIANCE",
+            exchange="NSE",
+            action="BUY",
+            quantity=1,
+        ),
+    ]
+    edges = [
+        {"id": "e1", "source": "n1", "target": "n2"},
+        {"id": "e2", "source": "n2", "target": "n3"},
+        {"id": "e3", "source": "n3", "target": "n4", "sourceHandle": "true"},
+    ]
+    assert validate_workflow(_wf(nodes, edges)) == []
