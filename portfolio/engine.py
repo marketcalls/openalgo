@@ -50,6 +50,8 @@ class BacktestResult:
     turnover: pd.Series
     cost_drag: float
     source: str
+    #: One row per holding: what it made, what it cost, what it contributed.
+    items: pd.DataFrame = field(default_factory=pd.DataFrame)
     meta: dict = field(default_factory=dict)
 
     @property
@@ -119,38 +121,77 @@ def run_backtest(
     weight_path = np.empty((len(index), len(symbols)), dtype=float)
     turnover_at: dict[pd.Timestamp, float] = {}
 
-    value = float(initial_capital)
-    held = target.copy()
-    gross_value = value  # the same run with costs switched off, for the drag
+    # Held in currency per symbol rather than as weights. Weights are a ratio
+    # and cannot answer "how much did this holding actually make", which is the
+    # question an investor asks first; currency can, and weights divide back
+    # out of it exactly.
+    sleeve = target * float(initial_capital)
+    price_pnl = np.zeros(len(symbols), dtype=float)   # made or lost on price
+    cost_paid = np.zeros(len(symbols), dtype=float)   # costs charged to it
+    gross_value = float(initial_capital)  # same run, costs off, for the drag
 
     for i, stamp in enumerate(index):
         if i > 0:
             # Drift: each sleeve grows by its own bar return, so the weights
             # move on their own between rebalances.
-            grown = held * growth[i]
-            step = grown.sum()
-            value *= step
-            gross_value *= step
-            held = grown / step
+            grown = sleeve * growth[i]
+            price_pnl += grown - sleeve
+            sleeve = grown
+            value = sleeve.sum()
+            gross_value *= growth[i] @ (weight_path[i - 1])
 
+            held = sleeve / value
             if stamp in scheduled or drifted(held, target, policy.drift_band):
-                # Turnover is one-way: the fraction of the portfolio that had to
-                # change hands to get back to target.
-                traded = float(np.abs(held - target).sum()) / 2.0
+                desired = target * value
+                # Turnover is one-way: the fraction of the portfolio that had
+                # to change hands to get back to target.
+                traded = float(np.abs(desired - sleeve).sum()) / 2.0 / value
                 if traded > 0:
-                    value *= 1.0 - traded * costs.total
+                    charge = traded * value * costs.total
+                    # Attributed by each symbol's share of the traded value, so
+                    # the holding that forced the trade carries the cost.
+                    moved = np.abs(desired - sleeve)
+                    share = moved / moved.sum() if moved.sum() > 0 else moved
+                    cost_paid += charge * share
+                    value -= charge
                     turnover_at[stamp] = traded
-                held = target.copy()
+                sleeve = target * value
+        else:
+            value = sleeve.sum()
 
         equity[i] = value
-        weight_path[i] = held
+        weight_path[i] = sleeve / value
 
     equity_series = pd.Series(equity, index=index, name="equity")
     gross_total = gross_value / float(initial_capital) - 1.0
     net_total = equity[-1] / float(initial_capital) - 1.0
 
+    # Itemised P&L. `contribution_pct` is each holding's share of the total
+    # return in percentage points, so the column sums to the portfolio return --
+    # which is the property that makes it an attribution rather than a list of
+    # individual performances. A holding's own return and its contribution
+    # differ whenever its weight is not 100%, and diverge further under
+    # rebalancing, where capital is added to laggards and taken from winners.
+    net_pnl = price_pnl - cost_paid
+    first_close = closes.iloc[0].to_numpy()
+    last_close = closes.iloc[-1].to_numpy()
+    items = pd.DataFrame(
+        {
+            "weight_target": target,
+            "weight_final": weight_path[-1],
+            "invested": target * float(initial_capital),
+            "price_pnl": price_pnl,
+            "costs": cost_paid,
+            "net_pnl": net_pnl,
+            "contribution_pct": net_pnl / float(initial_capital),
+            "symbol_return": (last_close / first_close) - 1.0,
+        },
+        index=pd.Index(symbols, name="symbol"),
+    )
+
     return BacktestResult(
         equity=equity_series,
+        items=items,
         weights=pd.DataFrame(weight_path, index=index, columns=symbols),
         rebalance_dates=pd.DatetimeIndex(sorted(turnover_at)),
         turnover=pd.Series(turnover_at, dtype=float).sort_index(),
