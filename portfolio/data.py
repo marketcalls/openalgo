@@ -19,7 +19,7 @@ talks to a broker directly and inherits whatever auth mode the caller is in.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 
 import pandas as pd
@@ -68,6 +68,10 @@ class PriceMatrix:
     source: str
     start: date
     end: date
+    #: symbol -> [(date, return)] for moves large enough to look like an
+    #: unadjusted corporate action. Empty for well-adjusted data, which is the
+    #: normal case; non-empty means treat the run's numbers with suspicion.
+    warnings: dict = field(default_factory=dict)
 
     @property
     def symbols(self) -> list[str]:
@@ -86,6 +90,38 @@ class PriceMatrix:
         flatter every risk metric computed from it.
         """
         return self.closes.pct_change().iloc[1:]
+
+
+def split_artifacts(
+    closes: pd.DataFrame, threshold: float = 0.35
+) -> dict[str, list[tuple[str, float]]]:
+    """
+    Sessions where a price moved so far it is more likely a data artifact than
+    a market move — an unadjusted split, bonus or consolidation.
+
+    Broker feeds are normally already adjusted, so this does not adjust
+    anything; it reports. The case it catches is a series stored *before* a
+    corporate action and not re-ingested after, which leaves a step in the
+    history that no amount of downstream maths can distinguish from a real
+    -50% day. Silently backtesting through one produces a confident, wrong
+    answer, so the run should say so.
+
+    ``threshold`` is an absolute daily return. It has to sit *below* the
+    smallest common split ratio, not at it: a 1:2 split is exactly -50%, so a
+    0.5 threshold misses the very case it exists for. 0.35 clears the 20%
+    circuit that caps a real NSE/BSE session with room to spare, while still
+    catching 1:2.
+    """
+    out: dict[str, list[tuple[str, float]]] = {}
+    moves = closes.pct_change()
+    for symbol in closes.columns:
+        hits = moves[symbol][moves[symbol].abs() > threshold]
+        if not hits.empty:
+            out[symbol] = [
+                (stamp.date().isoformat(), float(value))
+                for stamp, value in hits.items()
+            ]
+    return out
 
 
 def _normalise_exchange(exchange: str) -> str:
@@ -228,9 +264,18 @@ def load_prices(
             "a shorter window or a symbol with a later listing date is likely"
         )
 
+    artifacts = split_artifacts(closes)
+    if artifacts:
+        logger.warning(
+            "portfolio.data: %d symbol(s) show moves consistent with an "
+            "unadjusted corporate action: %s",
+            len(artifacts), ", ".join(artifacts),
+        )
+
     return PriceMatrix(
         closes=closes,
         source=source,
         start=closes.index[0].date(),
         end=closes.index[-1].date(),
+        warnings=artifacts,
     )

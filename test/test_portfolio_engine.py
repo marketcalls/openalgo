@@ -20,6 +20,7 @@ from portfolio.data import (
     UnsupportedExchange,
     _frame_from_payload,
     _normalise_exchange,
+    split_artifacts,
 )
 from portfolio.engine import Costs, normalise_weights, run_backtest
 from portfolio.rebalance import RebalancePolicy, calendar_dates, drifted
@@ -235,3 +236,47 @@ class TestPriceMatrix:
         prices = matrix({"A": [1.0, 2.0], "B": [3.0, 4.0]})
         assert prices.symbols == ["A", "B"]
         assert prices.sessions == 2
+
+
+class TestCorporateActionGuard:
+    """
+    Broker feeds arrive already adjusted, so the engine does not adjust.
+    What it must not do is stay silent when a series clearly was not — a
+    stored history that missed a split has a step in it that is
+    indistinguishable downstream from a real -50% session.
+    """
+
+    def test_clean_data_raises_no_warning(self):
+        closes = pd.DataFrame(
+            {"A": [100.0, 102.0, 99.0, 105.0], "B": [50.0, 51.0, 49.0, 52.0]},
+            index=pd.bdate_range("2024-01-01", periods=4),
+        )
+        assert split_artifacts(closes) == {}
+
+    def test_an_unadjusted_1_for_2_split_is_flagged(self):
+        closes = pd.DataFrame(
+            {"A": [100.0, 101.0, 50.5, 51.0]},
+            index=pd.bdate_range("2024-01-01", periods=4),
+        )
+        found = split_artifacts(closes)
+        assert "A" in found
+        assert found["A"][0][1] < -0.4
+
+    def test_a_hard_but_real_session_is_not_flagged(self):
+        # A 20% circuit is the practical single-session ceiling; it must pass.
+        closes = pd.DataFrame(
+            {"A": [100.0, 80.0, 96.0]},
+            index=pd.bdate_range("2024-01-01", periods=3),
+        )
+        assert split_artifacts(closes) == {}
+
+    def test_a_bonus_issue_upward_step_is_flagged_too(self):
+        closes = pd.DataFrame(
+            {"A": [50.0, 51.0, 153.0]},
+            index=pd.bdate_range("2024-01-01", periods=3),
+        )
+        assert "A" in split_artifacts(closes)
+
+    def test_the_matrix_carries_warnings_so_a_run_can_surface_them(self):
+        clean = matrix({"A": [100.0, 101.0]})
+        assert clean.warnings == {}

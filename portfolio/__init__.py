@@ -20,6 +20,7 @@ from portfolio.data import (
     UnsupportedExchange,
     SUPPORTED_EXCHANGES,
     load_prices,
+    split_artifacts,
 )
 
 __all__ = [
@@ -29,4 +30,5 @@ __all__ = [
     "UnsupportedExchange",
     "SUPPORTED_EXCHANGES",
     "load_prices",
+    "split_artifacts",
 ]
