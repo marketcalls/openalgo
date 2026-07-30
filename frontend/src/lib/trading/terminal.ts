@@ -45,6 +45,12 @@ export interface DrawStats {
   hasSelection: boolean
   magnet: boolean
   tool: string | null
+  /**
+   * Tool id -> keyboard chord, from the draw tier. Empty until the tier has
+   * loaded; the rail simply renders no chord until then, rather than the rail
+   * having to import the tier and undo its lazy loading.
+   */
+  shortcuts: Record<string, string>
 }
 
 import type { AppMode, ThemeMode } from '@/stores/themeStore'
@@ -197,6 +203,11 @@ const DERIVATIVE_EXCHANGES = new Set(['NFO', 'BFO', 'CDS', 'BCD', 'MCX', 'NCO', 
 const QUOTE_ONLY = new Set(['NSE_INDEX', 'BSE_INDEX', 'MCX_INDEX', 'GLOBAL_INDEX'])
 const STRATEGY = 'chart-trading'
 const VISIBLE_BARS = 120
+/** Candle direction colours, shared by the OHLC legend and the last-price line. */
+const UP = '#26a69a'
+const DN = '#ef5350'
+/** Last-price line before any bar exists to take a direction from. */
+const LTP_NEUTRAL = '#e0b020'
 
 const nowSec = () => Math.floor(Date.now() / 1000)
 const esc = (s: unknown) =>
@@ -234,8 +245,11 @@ export class TradingTerminal {
   /** History paging: in-flight guard, and whether the broker ran out. */
   private loadingOlder = false
   private noMoreHistory = false
+  private volumeOn = true
   private gridV = true
   private gridH = true
+  private drawShortcuts: Record<string, string> = {}
+  private matchShortcut: ((e: { key: string; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => string | null) | null = null
   private ltpLine: PriceLine | null = null
   private posLine: PriceLine | null = null
   private tradeBtns: BuySellButtonsInstance | null = null
@@ -420,8 +434,8 @@ export class TradingTerminal {
       return
     }
     const lots = this.sym.lots ? ` · lot ${this.sym.lotsize}` : ''
-    const up = '#26a69a'
-    const dn = '#ef5350'
+    const up = UP
+    const dn = DN
     const col = bar && bar.close >= bar.open ? up : dn
     const chg =
       this.lastLtp != null && this.prevClose
@@ -671,6 +685,9 @@ export class TradingTerminal {
       priceFormat: { type: 'volume' },
     })
     this.volume.priceScale().setOptions({ marginTop: 0.82, marginBottom: 0 })
+    // A rebuild makes a fresh series, so the preference has to be re-applied
+    // rather than assumed -- switching chart type or theme would show it again.
+    if (!this.volumeOn) this.volume.applyOptions({ visible: false })
     this.setPriceData()
 
     // Default zoom: a FIXED number of recent bars, so the visible price range
@@ -691,7 +708,7 @@ export class TradingTerminal {
     this.ltpLine =
       lp != null
         ? this.chart.addPriceLine(
-            { price: lp, color: '#e0b020', lineWidth: 1, dashed: true, id: 'ltp' },
+            { price: lp, color: this.ltpColor(lp), lineWidth: 1, dashed: true, id: 'ltp' },
             0
           )
         : null
@@ -842,6 +859,9 @@ export class TradingTerminal {
       this.gridV = grid[0] === '1'
       this.gridH = grid[1] === '1'
     }
+    // Absent means shown: only an explicit '0' hides it, so existing panes and
+    // a first visit both keep volume.
+    this.volumeOn = this.lsGet('vol') !== '0'
   }
 
   /**
@@ -929,7 +949,7 @@ export class TradingTerminal {
    */
   private async attachDrawing(): Promise<void> {
     if (this.draw || !this.chart) return
-    const { DrawingController } = await import('openalgo-charts/draw')
+    const { DrawingController, drawingShortcuts, matchDrawingShortcut } = await import('openalgo-charts/draw')
     // The await is a real suspension point: the pane can be destroyed, or the
     // chart rebuilt again, while the tier is in flight.
     if (this.destroyed || !this.chart || this.draw) return
@@ -938,6 +958,8 @@ export class TradingTerminal {
       stayInDrawingMode: false,
     })
     this.draw = draw
+    this.drawShortcuts = drawingShortcuts()
+    this.matchShortcut = matchDrawingShortcut
     if (this.drawJson.length) {
       try {
         draw.fromJSON(this.drawJson)
@@ -1034,6 +1056,18 @@ export class TradingTerminal {
   }
 
   /** Toolbar state: counts and what is currently possible. */
+  /**
+   * Arm the tool bound to this key event, reporting whether one matched so the
+   * caller can swallow the key. The tier owns the chord table, so this is a
+   * no-op until drawing has been attached.
+   */
+  armByShortcut(e: { key: string; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }): boolean {
+    const id = this.matchShortcut?.(e) ?? null
+    if (id === null) return false
+    void this.setDrawTool(id)
+    return true
+  }
+
   drawStats(): DrawStats {
     const d = this.draw
     return {
@@ -1043,6 +1077,7 @@ export class TradingTerminal {
       hasSelection: d ? d.selected() !== null : false,
       magnet: this.drawMagnet,
       tool: this.drawTool,
+      shortcuts: this.drawShortcuts,
     }
   }
 
@@ -1222,6 +1257,23 @@ export class TradingTerminal {
     return { vertical: this.gridV, horizontal: this.gridH }
   }
 
+  /**
+   * Show or hide the built-in volume histogram, remembered per pane.
+   *
+   * Hidden rather than removed: the series keeps taking data, so toggling back
+   * is instant and no history has to be refetched. It also keeps the overlay
+   * price scale in place, which is what the bars are measured against.
+   */
+  setVolumeVisible(on: boolean): void {
+    this.volumeOn = on
+    this.volume?.applyOptions({ visible: on })
+    this.lsSet('vol', on ? '1' : '0')
+  }
+
+  volumeVisible(): boolean {
+    return this.volumeOn
+  }
+
   /* ── WS-down fallback: poll quotes so LTP + the forming candle stay live ─ */
   private startLtpFallback() {
     if (this.ltpPollTimer) return
@@ -1261,12 +1313,25 @@ export class TradingTerminal {
     }
   }
 
+  /**
+   * Colour for the last-price line: the direction of the bar it sits in, so it
+   * matches that candle and the OHLC legend. Amber only until a bar exists to
+   * compare against.
+   */
+  private ltpColor(price: number): string {
+    const bar = this.rawBars.length ? this.rawBars[this.rawBars.length - 1] : null
+    if (!bar) return LTP_NEUTRAL
+    return price >= bar.open ? UP : DN
+  }
+
   /* single tick path shared by WS pushes and the REST fallback */
   private onTick(e: { symbol?: string; ltp: number; ltq?: number; timeSec?: number }) {
     if (!this.sym || (e.symbol && e.symbol !== this.sym.symbol)) return
     this.lastLtp = e.ltp
     this.cb.onLtp(e.ltp)
-    if (this.ltpLine) this.ltpLine.setPrice(e.ltp)
+    // Recolour with the price: the line belongs to the forming candle, so it
+    // follows that candle's direction rather than sitting amber forever.
+    if (this.ltpLine) this.ltpLine.setOptions({ price: e.ltp, color: this.ltpColor(e.ltp) })
     if (this.position && this.posLine) this.posLine.setLeftLabel(this.posLabel())
     if (this.tradeBtns && !this.depthActive) this.tradeBtns.setMark(e.ltp)
     if (this.builder) {
