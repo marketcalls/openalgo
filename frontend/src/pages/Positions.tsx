@@ -56,7 +56,7 @@ import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
-import { onModeChange } from '@/stores/themeStore'
+import { onModeChange, useThemeStore } from '@/stores/themeStore'
 import type { Position } from '@/types/trading'
 import { showToast } from '@/utils/toast'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -146,6 +146,10 @@ const PRODUCT_COLORS: Record<string, string> = {
 
 export default function Positions() {
   const { apiKey, user } = useAuthStore()
+  // Sandbox P&L uses the same (ltp - avg) * qty * contract_value model this hook
+  // recomputes, so a live refresh is faithful. Live broker P&L comes from the
+  // exchange and must not be overwritten -- see the note in useLivePrice.
+  const { appMode } = useThemeStore()
   const { isCrypto } = useSupportedExchanges()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [positions, setPositions] = useState<Position[]>([])
@@ -178,6 +182,7 @@ export default function Positions() {
     isPaused,
   } = useLivePrice(positions, {
     enabled: positions.length > 0,
+    recalculatePnl: appMode === 'analyzer',
     useMultiQuotesFallback: true,
     staleThreshold: 5000,
     multiQuotesRefreshInterval: 30000,

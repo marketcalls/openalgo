@@ -34,6 +34,9 @@ export interface UseLivePriceOptions {
   multiQuotesRefreshInterval?: number
   /** Pause WebSocket and polling when tab is hidden (default: true) */
   pauseWhenHidden?: boolean
+  /** Recompute P&L from the live tick. Only correct when the caller's P&L
+   *  model matches this hook's (the sandbox). Live broker P&L is left alone. */
+  recalculatePnl?: boolean
   /** Time in ms to wait before pausing when hidden (default: 5000) */
   pauseDelay?: number
 }
@@ -86,6 +89,7 @@ export function useLivePrice<T extends PriceableItem>(
     useMultiQuotesFallback = true,
     multiQuotesRefreshInterval = 30000,
     pauseWhenHidden = true,
+    recalculatePnl = false,
   } = options
 
   const { apiKey } = useAuthStore()
@@ -265,7 +269,20 @@ export function useLivePrice<T extends PriceableItem>(
       // This ensures cumulative P&L (realized + unrealized) is shown correctly
       const todayRealizedPnl = item.today_realized_pnl || 0
 
-      if (currentLtp && avgPrice > 0) {
+      // Only recompute P&L when the caller owns the same P&L model we do.
+      //
+      // The sandbox does: it reports today_realized + unrealized computed as
+      // (ltp - avg) * qty * contract_value, which is exactly what this hook
+      // recomputes, so recomputing on every tick is a faithful live refresh.
+      //
+      // A live broker does not. Its P&L comes from the exchange and can follow
+      // completely different accounting -- Delta Exchange reports option
+      // unrealized P&L as the current buyback cost, tracking -(mark * contract_value)
+      // and ignoring entry_price entirely, so no (ltp - avg) formula reproduces it in
+      // sign or magnitude. Recomputing there overwrites a correct exchange figure with
+      // a wrong one; live positions instead keep the broker's number and only refresh
+      // the displayed LTP.
+      if (recalculatePnl && currentLtp && avgPrice > 0) {
         // Contract multiplier: e.g. 0.01 for Delta Exchange ETHUSD.P (1 lot = 0.01 ETH)
         // Defaults to 1 for all standard brokers where qty is already in underlying units
         const lotSize = item.lot_size ?? 1

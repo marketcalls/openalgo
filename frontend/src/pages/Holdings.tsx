@@ -30,7 +30,7 @@ import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
-import { onModeChange } from '@/stores/themeStore'
+import { onModeChange, useThemeStore } from '@/stores/themeStore'
 import type { Holding, HoldingsStats } from '@/types/trading'
 import { showToast } from '@/utils/toast'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -50,6 +50,8 @@ interface HoldingOrderIntent {
 
 export default function Holdings() {
   const { apiKey, user } = useAuthStore()
+  // Same rule as Positions: recompute only where we own the P&L model.
+  const { appMode } = useThemeStore()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [holdings, setHoldings] = useState<Holding[]>([])
   const [stats, setStats] = useState<HoldingsStats | null>(null)
@@ -71,6 +73,7 @@ export default function Holdings() {
     isPaused,
   } = useLivePrice(holdings, {
     enabled: holdings.length > 0,
+    recalculatePnl: appMode === 'analyzer',
     useMultiQuotesFallback: true,
     staleThreshold: 5000,
     multiQuotesRefreshInterval: 30000,
