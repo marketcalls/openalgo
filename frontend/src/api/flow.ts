@@ -266,6 +266,31 @@ export async function importWorkflow(
   }
 }
 
+/**
+ * Replace an existing workflow's graph from JSON, in place.
+ *
+ * Import always creates a new workflow, which leaves a trail of copies and a
+ * new webhook URL each time you iterate on a strategy as JSON. This keeps the
+ * workflow's id, webhook token and active state and swaps only the graph.
+ */
+export interface ReplaceWorkflowResult {
+  status: string
+  workflow_id: number
+  /** Legacy fields that were upgraded on the way in, if any. */
+  migrations?: string[]
+  /** True when the trigger changed on an active workflow, which needs a reactivate. */
+  needs_reactivate?: boolean
+  message?: string
+}
+
+export async function replaceWorkflow(
+  id: number,
+  data: WorkflowExportData
+): Promise<ReplaceWorkflowResult> {
+  const response = await webClient.post(`${FLOW_API_BASE}/workflows/${id}/replace`, data)
+  return response.data
+}
+
 // =============================================================================
 // Index Symbols Types & API
 // =============================================================================

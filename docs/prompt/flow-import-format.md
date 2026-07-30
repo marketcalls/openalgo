@@ -102,6 +102,29 @@ Do not emit nodes for these; restructure the strategy instead.
 
 ---
 
+## 0.1 Updating a workflow that already exists
+
+Importing always creates a **new** workflow, so iterating on a strategy as JSON
+leaves a trail of copies and a new webhook URL each time.
+
+To replace an existing workflow's graph in place, keeping its id, webhook token
+and active state:
+
+* **In the editor** - the workflow menu, **Replace from JSON**. Paste or pick a
+  file.
+* **From a terminal** - `uv run python scripts/update_flow_workflow.py --id <id> --file strategy.json`
+  (add `--dry-run` to see what would change first).
+* **Over HTTP** - `POST /flow/api/workflows/<id>/replace` with the same body an
+  import takes.
+
+All three apply the rules in this document, so a graph that would be rejected at
+import is not written through a side door. If the **trigger** configuration
+changes on an active workflow, deactivate and reactivate it: the schedule and any
+price or order watch are registered at activation, not read per run. Node changes
+apply from the next run without any action.
+
+---
+
 ## 1. Workflow shape
 
 A workflow is a JSON object with the following top-level keys (the snippet

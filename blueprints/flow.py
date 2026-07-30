@@ -890,6 +890,112 @@ def import_workflow():
     return jsonify({"error": "Failed to import workflow"}), 500
 
 
+@flow_bp.route("/api/workflows/<int:workflow_id>/replace", methods=["POST"])
+@check_session_validity
+def replace_workflow(workflow_id):
+    """Replace an existing workflow's graph from JSON, in place.
+
+    Import always creates a new workflow, which for someone iterating on a
+    strategy as JSON means a trail of copies and a new webhook URL each time.
+    This keeps the workflow's id, webhook token and secret, API key and active
+    state, and swaps only the graph.
+
+    Held to import's rules, not save's: a JSON pasted here is presented as a
+    finished workflow, so completeness is enforced.
+    """
+    from database.flow_db import get_workflow, update_workflow
+    from services.flow_workflow_validator import (
+        migrate_legacy_node_data,
+        trigger_config,
+        validate_workflow,
+    )
+
+    workflow = get_workflow(workflow_id)
+    if not workflow:
+        return jsonify({"error": "Workflow not found"}), 404
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+    if not isinstance(data, dict):
+        return jsonify(
+            {
+                "status": "error",
+                "error": "Invalid workflow structure",
+                "message": "Workflow must be a JSON object",
+            }
+        ), 400
+
+    # Same normalization the import endpoint applies, so a legacy export does
+    # not arrive here still carrying a field no reader honors.
+    migration_notes: list[str] = []
+    payload = dict(data)
+    if isinstance(payload.get("nodes"), list):
+        payload["nodes"], migration_notes = migrate_legacy_node_data(payload["nodes"])
+
+    # The name may legitimately be omitted when replacing only the graph.
+    errors = validate_workflow(
+        {
+            "name": payload.get("name") or workflow.name,
+            "nodes": payload.get("nodes") or [],
+            "edges": payload.get("edges") or [],
+        },
+        strict=True,
+    )
+    if errors:
+        logger.warning(
+            f"Rejected replace of workflow {workflow_id}: {errors[0]['path']} "
+            f"{errors[0]['code']} - {errors[0]['message']}"
+        )
+        return jsonify(
+            {
+                "status": "error",
+                "error": "Invalid workflow format",
+                "message": errors[0]["message"],
+                "errors": errors,
+            }
+        ), 400
+
+    # Captured before the write: reading the row afterwards would compare the
+    # new graph against itself.
+    trigger_changed = trigger_config(workflow.nodes or []) != trigger_config(payload["nodes"])
+    was_active = bool(workflow.is_active)
+
+    fields = {"nodes": payload["nodes"], "edges": payload.get("edges") or []}
+    if payload.get("name"):
+        fields["name"] = payload["name"]
+    if payload.get("description") is not None:
+        fields["description"] = payload["description"]
+
+    updated = update_workflow(workflow_id, **fields)
+    if not updated:
+        return jsonify({"error": "Failed to replace workflow"}), 500
+
+    # The graph is re-read on every run, so node edits apply immediately. The
+    # trigger's schedule and any price/order watch are registered at activation,
+    # so a trigger change needs the workflow reactivated.
+    needs_reactivate = was_active and trigger_changed
+    logger.info(
+        f"Replaced workflow {workflow_id} from JSON "
+        f"(nodes={len(fields['nodes'])} edges={len(fields['edges'])} "
+        f"reactivate={needs_reactivate})"
+    )
+    return jsonify(
+        {
+            "status": "success",
+            "workflow_id": workflow_id,
+            "migrations": migration_notes,
+            "needs_reactivate": needs_reactivate,
+            "message": (
+                "Trigger configuration changed. Deactivate and reactivate so the "
+                "schedule is re-registered."
+                if needs_reactivate
+                else "Workflow replaced. Changes apply from the next run."
+            ),
+        }
+    )
+
+
 # === Index Symbols Lot Size Routes ===
 
 

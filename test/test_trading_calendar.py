@@ -16,15 +16,26 @@ from utils import trading_calendar as tc
 
 
 @pytest.fixture(autouse=True)
-def fixed_holidays(monkeypatch):
-    """A known calendar, so these tests do not depend on the live holiday feed."""
-    holidays = {
+def fixed_calendar(monkeypatch):
+    """A known calendar, so these tests do not depend on the live holiday feed.
+
+    Includes a Sunday special session, because the real feed has one every year
+    (Diwali Muhurat trading) and it is the case that breaks a naive
+    "weekend means closed" rule.
+    """
+    closed = {
         date(2026, 1, 26),  # Republic Day, a Monday
         date(2026, 3, 31),  # a Tuesday, month end
         date(2026, 4, 1),   # a Wednesday, quarter start
     }
+    special = {date(2026, 11, 8)}  # a Sunday - Muhurat trading
     monkeypatch.setattr(
-        tc, "trading_holidays", lambda year: frozenset(d for d in holidays if d.year == year)
+        tc,
+        "_calendar_entries",
+        lambda year: (
+            frozenset(d for d in closed if d.year == year),
+            frozenset(d for d in special if d.year == year),
+        ),
     )
 
 
@@ -120,3 +131,30 @@ def test_a_trading_holiday_is_distinguished_from_a_weekend():
 def test_unknown_period_is_rejected():
     with pytest.raises(ValueError):
         tc.is_first_trading_day_of(date(2026, 8, 3), "fortnight")
+
+
+def test_a_special_session_trades_even_on_a_sunday():
+    """Diwali Muhurat trading is held on a Sunday.
+
+    Flattening it into the holiday set, or short-circuiting on the weekend,
+    hides a real session and shifts every adjacent-day answer around it.
+    """
+    muhurat = date(2026, 11, 8)
+    assert tc.is_trading_day(muhurat)
+    info = tc.describe(muhurat)
+    assert info["is_special_session"]
+    # `is_weekend` stays a calendar property: it is a Sunday, and it trades.
+    assert info["is_weekend"]
+    assert not info["is_trading_holiday"]
+
+
+def test_a_special_session_is_reachable_by_navigation():
+    assert tc.next_trading_day(date(2026, 11, 7)) == date(2026, 11, 8)
+    assert tc.prev_trading_day(date(2026, 11, 9)) == date(2026, 11, 8)
+
+
+def test_a_trading_holiday_is_not_a_special_session():
+    info = tc.describe(date(2026, 1, 26))
+    assert info["is_trading_holiday"]
+    assert not info["is_special_session"]
+    assert not info["is_trading_day"]
