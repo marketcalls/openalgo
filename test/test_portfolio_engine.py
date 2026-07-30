@@ -34,6 +34,7 @@ from portfolio.compare import rebalancing_sweep
 from portfolio.costs import EquityCosts, schedule_for
 from portfolio.engine import Costs, normalise_weights, run_backtest
 from portfolio.health import portfolio_health
+from portfolio.holdings import holdings_summary, parse_holdings
 from portfolio.rebalance import RebalancePolicy, calendar_dates, drifted
 
 
@@ -722,3 +723,61 @@ class TestRebalancingSweep:
 def monthly_expected_min() -> int:
     """800 business days is about 38 months, so monthly must rebalance often."""
     return 30
+
+
+class TestLiveHoldings:
+    """
+    Parsing a broker payload: brokers disagree on types, some omit last_price,
+    and a fabricated number here would flow into every downstream metric.
+    """
+
+    def test_coerces_string_numerics(self):
+        h = parse_holdings([
+            {"symbol": "itc", "exchange": "nse", "quantity": "4",
+             "average_price": "296.14", "pnl": "-39.55"}
+        ])
+        assert len(h) == 1
+        assert h[0].symbol == "ITC" and h[0].exchange == "NSE"
+        assert h[0].quantity == 4.0
+
+    def test_recovers_last_price_from_pnl_when_absent(self):
+        # 4 shares bought at 100, P&L -40 -> the market is at 90.
+        h = parse_holdings([
+            {"symbol": "X", "quantity": 4, "average_price": 100, "pnl": -40}
+        ])
+        assert h[0].last_price == pytest.approx(90.0)
+
+    def test_drops_rows_it_cannot_weight(self):
+        rows = [
+            {"symbol": "A", "quantity": 0, "average_price": 10},
+            {"symbol": "B", "quantity": 5, "average_price": 0},
+            {"symbol": "C", "quantity": "junk", "average_price": 10},
+            {"symbol": "D", "quantity": 5, "average_price": 10, "pnl": 0},
+        ]
+        assert [h.symbol for h in parse_holdings(rows)] == ["D"]
+
+    def test_weights_by_current_value_not_cost(self):
+        # Equal cost, but A doubled: exposure is what it is worth now.
+        h = parse_holdings([
+            {"symbol": "A", "quantity": 10, "average_price": 100, "pnl": 1000},
+            {"symbol": "B", "quantity": 10, "average_price": 100, "pnl": 0},
+        ])
+        s = holdings_summary(h)
+        by = {r["symbol"]: r for r in s["holdings"]}
+        # Weights are rounded to 5dp for transport, so approx's default 1e-6
+        # relative tolerance is tighter than the value can be.
+        assert by["A"]["weight"] == pytest.approx(2 / 3, abs=1e-4)
+        assert by["B"]["weight"] == pytest.approx(1 / 3, abs=1e-4)
+
+    def test_summary_totals_reconcile(self):
+        h = parse_holdings([
+            {"symbol": "A", "quantity": 7, "average_price": 282.96, "pnl": -50.01},
+            {"symbol": "B", "quantity": 4, "average_price": 296.14, "pnl": -39.55},
+        ])
+        s = holdings_summary(h)
+        assert s["current"] == pytest.approx(s["invested"] + s["pnl"], abs=0.02)
+        assert sum(r["weight"] for r in s["holdings"]) == pytest.approx(1.0, abs=1e-4)
+
+    def test_empty_holdings_do_not_divide_by_zero(self):
+        s = holdings_summary([])
+        assert s["count"] == 0 and s["pnl_pct"] == 0.0
