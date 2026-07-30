@@ -22,6 +22,14 @@ from portfolio.data import (
     _normalise_exchange,
     split_artifacts,
 )
+from portfolio.analytics import (
+    average_pairwise_correlation,
+    capture_ratios,
+    concentration,
+    correlation_matrix,
+    diversification_ratio,
+    summary,
+)
 from portfolio.engine import Costs, normalise_weights, run_backtest
 from portfolio.rebalance import RebalancePolicy, calendar_dates, drifted
 
@@ -280,3 +288,131 @@ class TestCorporateActionGuard:
     def test_the_matrix_carries_warnings_so_a_run_can_surface_them(self):
         clean = matrix({"A": [100.0, 101.0]})
         assert clean.warnings == {}
+
+
+class TestItemisedPnl:
+    """
+    Per-symbol P&L has to be an attribution, not a list of performances: the
+    contributions must sum to the portfolio's own return, which is exactly what
+    a naive weight x symbol-return table fails to do once weights drift.
+    """
+
+    def test_contributions_sum_to_the_portfolio_return(self):
+        prices = matrix({"A": [100.0, 130.0], "B": [100.0, 90.0]})
+        r = run_backtest(prices, {"A": 50, "B": 50}, initial_capital=1000.0)
+        assert r.items["contribution_pct"].sum() == pytest.approx(r.total_return)
+
+    def test_it_reports_currency_made_per_holding(self):
+        prices = matrix({"A": [100.0, 200.0], "B": [100.0, 100.0]})
+        r = run_backtest(prices, {"A": 50, "B": 50}, initial_capital=1000.0)
+        # 500 into A which doubled -> +500; B flat -> 0.
+        assert r.items.loc["A", "net_pnl"] == pytest.approx(500.0)
+        assert r.items.loc["B", "net_pnl"] == pytest.approx(0.0)
+
+    def test_symbol_return_is_distinct_from_contribution(self):
+        prices = matrix({"A": [100.0, 200.0], "B": [100.0, 100.0]})
+        r = run_backtest(prices, {"A": 50, "B": 50})
+        # A doubled on its own, but contributed half of that to the portfolio.
+        assert r.items.loc["A", "symbol_return"] == pytest.approx(1.0)
+        assert r.items.loc["A", "contribution_pct"] == pytest.approx(0.5)
+
+    def test_contributions_still_reconcile_under_rebalancing_and_costs(self):
+        prices = matrix({"A": [100.0] * 21 + [200.0], "B": [100.0] * 22})
+        r = run_backtest(
+            prices,
+            {"A": 50, "B": 50},
+            policy=RebalancePolicy("monthly"),
+            costs=Costs(bps=100, slippage=0.01),
+            initial_capital=5000.0,
+        )
+        assert r.items["contribution_pct"].sum() == pytest.approx(r.total_return)
+        # Costs were charged, and to the holdings that actually traded.
+        assert r.items["costs"].sum() > 0
+
+    def test_a_loser_carries_a_negative_contribution(self):
+        prices = matrix({"A": [100.0, 50.0], "B": [100.0, 100.0]})
+        r = run_backtest(prices, {"A": 50, "B": 50}, initial_capital=1000.0)
+        assert r.items.loc["A", "net_pnl"] == pytest.approx(-250.0)
+        assert r.items.loc["A", "contribution_pct"] < 0
+
+
+class TestAnalytics:
+    def _returns(self, n: int = 260, seed: int = 7) -> pd.DataFrame:
+        rng = np.random.default_rng(seed)
+        index = pd.bdate_range("2023-01-02", periods=n)
+        base = rng.normal(0.0004, 0.01, n)
+        return pd.DataFrame(
+            {
+                "A": base + rng.normal(0, 0.002, n),   # nearly identical to B
+                "B": base + rng.normal(0, 0.002, n),
+                "C": rng.normal(0.0004, 0.01, n),      # independent
+            },
+            index=index,
+        )
+
+    def test_correlation_matrix_is_square_and_unit_diagonal(self):
+        corr = correlation_matrix(self._returns())
+        assert corr.shape == (3, 3)
+        assert np.allclose(np.diag(corr), 1.0)
+
+    def test_thin_overlap_is_nan_rather_than_a_confident_number(self):
+        r = self._returns(n=5)
+        corr = correlation_matrix(r, min_overlap=20)
+        assert corr.isna().to_numpy().any()
+
+    def test_average_pairwise_correlation_sees_through_names(self):
+        avg = average_pairwise_correlation(self._returns())
+        # A and B share a driver, C does not: the mean must land between.
+        assert 0.0 < avg < 1.0
+
+    def test_average_correlation_undefined_for_a_single_holding(self):
+        one = self._returns()[["A"]]
+        assert np.isnan(average_pairwise_correlation(one))
+
+    def test_concentration_reports_effective_holdings(self):
+        even = concentration({"A": 25, "B": 25, "C": 25, "D": 25})
+        assert even["effective_holdings"] == pytest.approx(4.0)
+        # Twenty names but one dominates: nowhere near twenty real bets.
+        lopsided = concentration({"A": 80, **{f"S{i}": 20 / 19 for i in range(19)}})
+        assert lopsided["holdings"] == 20
+        assert lopsided["effective_holdings"] < 2.0
+
+    def test_concentration_rejects_empty_weights(self):
+        with pytest.raises(ValueError):
+            concentration({"A": 0.0})
+
+    def test_diversification_ratio_is_higher_for_uncorrelated_holdings(self):
+        r = self._returns()
+        w = pd.Series({"A": 0.5, "B": 0.5, "C": 0.5})
+        twins = diversification_ratio(w[["A", "B"]], r[["A", "B"]])
+        mixed = diversification_ratio(w[["A", "C"]], r[["A", "C"]])
+        assert mixed > twins
+
+    def test_capture_ratios_split_up_and_down_markets(self):
+        index = pd.bdate_range("2024-01-01", periods=6)
+        bench = pd.Series([0.02, -0.02, 0.02, -0.02, 0.01, -0.01], index=index)
+        # Takes all the upside, half the downside.
+        port = pd.Series([0.02, -0.01, 0.02, -0.01, 0.01, -0.005], index=index)
+        caps = capture_ratios(port, bench)
+        assert caps["up_capture"] == pytest.approx(1.0, rel=0.02)
+        assert caps["down_capture"] < 0.6
+
+    def test_capture_is_nan_when_a_regime_never_occurred(self):
+        index = pd.bdate_range("2024-01-01", periods=3)
+        bench = pd.Series([0.01, 0.02, 0.01], index=index)  # never fell
+        caps = capture_ratios(pd.Series([0.01, 0.01, 0.01], index=index), bench)
+        assert np.isnan(caps["down_capture"])
+
+    def test_summary_covers_the_headline_metrics(self):
+        r = self._returns()["A"]
+        out = summary(r)
+        for key in ("cagr", "volatility", "sharpe", "sortino", "max_drawdown", "cvar"):
+            assert key in out and np.isfinite(out[key])
+        # No benchmark supplied, so relative figures are absent, not faked.
+        assert "beta" not in out
+
+    def test_summary_adds_relative_metrics_with_a_benchmark(self):
+        r = self._returns()
+        out = summary(r["A"], r["C"])
+        for key in ("alpha", "beta", "information_ratio", "up_capture", "excess_cagr"):
+            assert key in out
