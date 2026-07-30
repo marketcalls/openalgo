@@ -58,6 +58,13 @@ class FlowPriceMonitor:
     _instance: Optional["FlowPriceMonitor"] = None
     _lock = threading.Lock()
 
+    # Class-level defaults. _trigger_workflow relies on these, and an instance
+    # can exist without __init__ having run (the singleton is created in
+    # __new__, and test harnesses build one directly), so they must never be
+    # merely instance attributes.
+    _pending: set[int] = set()
+    _pending_lock = threading.Lock()
+
     def __new__(cls):
         with cls._lock:
             if cls._instance is None:
@@ -75,6 +82,11 @@ class FlowPriceMonitor:
         self._monitor_thread: threading.Thread | None = None
         self._poll_interval = 5  # seconds
         self._stop_event = threading.Event()
+        # Workflows with a queued or running price-alert execution, so a tick
+        # cannot stack another one behind it. Class-level defaults above cover
+        # an instance built without __init__.
+        self._pending = set()
+        self._pending_lock = threading.Lock()
         logger.info("FlowPriceMonitor initialized")
 
     # The editor and this monitor grew separate vocabularies for the same four
@@ -165,9 +177,15 @@ class FlowPriceMonitor:
         if self._running:
             return
 
-        self._stop_event.clear()
+        # A fresh event per generation. Sharing one and clearing it on restart
+        # revived a previous loop that had been told to stop but had not yet
+        # exited, leaving two loops polling and double-submitting every_time
+        # executions.
+        self._stop_event = threading.Event()
         self._running = True
-        self._monitor_thread = threading.Thread(target=self._monitoring_loop, daemon=True)
+        self._monitor_thread = threading.Thread(
+            target=self._monitoring_loop, args=(self._stop_event,), daemon=True
+        )
         self._monitor_thread.start()
         logger.info(f"Price monitoring started with {len(self._alerts)} alerts")
 
@@ -176,6 +194,8 @@ class FlowPriceMonitor:
         if not self._running:
             return
 
+        # Signals only this generation. A later start creates its own event, so
+        # this loop can never be un-stopped by a restart.
         self._stop_event.set()
         self._running = False
 
@@ -189,16 +209,21 @@ class FlowPriceMonitor:
 
         logger.info("Price monitoring stopped")
 
-    def _monitoring_loop(self):
-        """Main monitoring loop that polls prices"""
-        while not self._stop_event.is_set():
+    def _monitoring_loop(self, stop_event: threading.Event | None = None):
+        """Main monitoring loop that polls prices.
+
+        Watches the event it was started with, not whatever the instance
+        currently holds, so a restart cannot resurrect it.
+        """
+        stop_event = stop_event or self._stop_event
+        while not stop_event.is_set():
             try:
                 self._check_all_alerts()
             except Exception as e:
                 logger.exception(f"Error in monitoring loop: {e}")
 
             # Wait for next poll interval
-            self._stop_event.wait(timeout=self._poll_interval)
+            stop_event.wait(timeout=self._poll_interval)
 
     def _check_all_alerts(self):
         """Check all active alerts against current prices"""
@@ -348,10 +373,42 @@ class FlowPriceMonitor:
         return False
 
     def _trigger_workflow(self, workflow_id: int, trigger_price: float, api_key: str):
-        """Trigger workflow execution"""
+        """Queue one execution for this workflow, at most one at a time.
+
+        Coalesced deliberately. The pool's queue is unbounded, so an every_time
+        alert whose workflow runs slower than the poll interval would stack a
+        task per tick and execute long after the price that caused it. One
+        pending run per workflow keeps the alert responsive without a backlog.
+        """
+        with self._pending_lock:
+            if workflow_id in self._pending:
+                logger.debug(
+                    f"Price alert for workflow {workflow_id} already has a run queued; "
+                    "skipping this tick."
+                )
+                return
+            self._pending.add(workflow_id)
 
         def run_workflow():
             try:
+                # Re-checked here, not only at submit time: a queued run can sit
+                # behind a slow execution while the alert is removed, the watch
+                # expires, or the workflow is deactivated. execute_workflow does
+                # not require the workflow to be active, so without this a stale
+                # price event could still place orders.
+                if workflow_id not in self._alerts:
+                    logger.info(
+                        f"Dropping queued price-alert run for workflow {workflow_id}: "
+                        "the alert is no longer registered."
+                    )
+                    return
+                if not self._workflow_is_active(workflow_id):
+                    logger.info(
+                        f"Dropping queued price-alert run for workflow {workflow_id}: "
+                        "the workflow is no longer active."
+                    )
+                    return
+
                 from services.flow_executor_service import execute_workflow
 
                 webhook_data = {
@@ -366,6 +423,8 @@ class FlowPriceMonitor:
             except Exception as e:
                 logger.exception(f"Failed to execute workflow {workflow_id}: {e}")
             finally:
+                with self._pending_lock:
+                    self._pending.discard(workflow_id)
                 # No Flask app context on a pool thread, so teardown_appcontext
                 # never fires and every session the run touched would stay bound
                 # to the thread holding its connection.
@@ -373,7 +432,24 @@ class FlowPriceMonitor:
 
                 remove_all_scoped_sessions()
 
-        _WORKFLOW_POOL.submit(run_workflow)
+        try:
+            _WORKFLOW_POOL.submit(run_workflow)
+        except Exception:
+            with self._pending_lock:
+                self._pending.discard(workflow_id)
+            raise
+
+    @staticmethod
+    def _workflow_is_active(workflow_id: int) -> bool:
+        """Whether the workflow is still active. Fails closed on error."""
+        try:
+            from database.flow_db import get_workflow
+
+            workflow = get_workflow(workflow_id)
+            return bool(workflow and workflow.is_active)
+        except Exception:
+            logger.exception(f"Could not confirm workflow {workflow_id} is active")
+            return False
 
     def is_running(self) -> bool:
         """Check if monitoring is active"""
