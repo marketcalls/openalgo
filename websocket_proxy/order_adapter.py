@@ -30,6 +30,12 @@ from utils.logging import get_logger
 # feed.py::_reconnect_loop pattern for consistency across the codebase.
 _RECONNECT_BACKOFFS = [1, 2, 5, 10, 30, 60]
 
+# A session that stayed connected at least this long counts as healthy, and its
+# disconnect starts a fresh backoff ladder rather than continuing the old one.
+# Comfortably longer than the whole ladder's early rungs, so a genuine
+# connect-fail-retry streak cannot accidentally qualify.
+_HEALTHY_SESSION_SECONDS = 60
+
 
 def to_openalgo_symbol(broker_symbol: str, exchange: str, token=None) -> str:
     """Best-effort mapping of a broker symbol to OpenAlgo symbol format.
@@ -167,12 +173,26 @@ class BaseOrderUpdateAdapter(ABC):
     def _run_forever(self) -> None:
         attempt = 0
         while not self._shutting_down:
+            started = time.monotonic()
             try:
                 self._connect_once()
             except Exception as e:
                 self.logger.warning(
                     f"Order-update connection error ({self.broker_name}/{self.user_id}): {e}"
                 )
+            # A session that stayed up this long was not part of a failure streak,
+            # so it must not inherit the previous backoff. Without this, `attempt`
+            # only ever grows: six unrelated disconnects over the adapter's
+            # lifetime pin every later recovery at the 60s ceiling, even though
+            # the connection has been healthy in between.
+            #
+            # Deliberately gated on session DURATION rather than on the socket
+            # opening. A broker that accepts the TCP/WebSocket handshake and only
+            # then rejects at the application layer (bad or expired token) would
+            # reset the counter on every attempt, turning the backoff into a hot
+            # reconnect loop against a dead credential.
+            if time.monotonic() - started >= _HEALTHY_SESSION_SECONDS:
+                attempt = 0
             if self._shutting_down:
                 break
             delay = _RECONNECT_BACKOFFS[min(attempt, len(_RECONNECT_BACKOFFS) - 1)]
