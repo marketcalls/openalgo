@@ -270,6 +270,14 @@ def create_app():
 
     app.register_blueprint(api_v1_bp)
 
+    # Pull openstatz in on a background thread. It costs about 1.4s, almost all
+    # of it matplotlib and seaborn behind its plotting module, which the
+    # portfolio feature never uses -- every chart is drawn in the browser.
+    # Warming here means the first backtest does not pay it and boot does not
+    # block on it.
+    from portfolio import warm_analytics
+    warm_analytics()
+
     # Exempt API endpoints from CSRF protection (they use API key authentication)
     csrf.exempt(api_v1_bp)
 
