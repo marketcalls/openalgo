@@ -41,39 +41,13 @@ load_dotenv(pathlib.Path(__file__).resolve().parents[1] / ".env")
 from database.flow_db import get_all_workflows, get_workflow, update_workflow  # noqa: E402
 from services.flow_workflow_validator import (  # noqa: E402
     migrate_legacy_node_data,
+    trigger_config,
     validate_workflow,
 )
 
-# Fields registered at activation rather than read per run. A change to any of
-# them needs a deactivate/reactivate cycle, which comparing node *types* alone
-# would miss - editing an interval from 1m to 5m keeps the same trigger type.
-_TRIGGER_TYPES = ("start", "webhookTrigger", "priceAlert", "orderUpdateTrigger")
-_TRIGGER_CONFIG_FIELDS = (
-    # start
-    "scheduleType", "time", "days", "executeAt", "intervalMinutes", "intervalValue",
-    "intervalUnit", "marketHoursOnly",
-    # priceAlert - every field add_alert() captures at activation, including the
-    # channel bounds and percentage that only some conditions use
-    "symbol", "exchange", "condition", "price", "priceLower", "priceUpper",
-    "percentage", "expiration",
-    # orderUpdateTrigger
-    "orderId", "status",
-    # shared
-    "trigger",
-)
-
-
-def _trigger_config(nodes: list) -> dict:
-    """The activation-relevant configuration of a graph's trigger node(s)."""
-    config: dict = {}
-    for node in nodes:
-        if not isinstance(node, dict) or node.get("type") not in _TRIGGER_TYPES:
-            continue
-        data = node.get("data") or {}
-        config[str(node.get("type"))] = {
-            field: data.get(field) for field in _TRIGGER_CONFIG_FIELDS if field in data
-        }
-    return config
+# Trigger comparison lives with the validator so this script, the replace
+# endpoint and the audit all answer "does this need a reactivate" the same way.
+_trigger_config = trigger_config
 
 
 def show_list() -> int:
