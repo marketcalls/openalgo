@@ -1,0 +1,236 @@
+"""
+Price-matrix loader for the portfolio backtester.
+
+Turns a list of symbols into one calendar-aligned close-price DataFrame, which
+is the only input the engine needs. Everything downstream (returns, weights,
+rebalancing, metrics) is a transformation of that matrix, so the correctness of
+a backtest is mostly decided here.
+
+Two sources, chosen by the caller rather than guessed:
+
+- ``db``  -- the local DuckDB/Historify store. Deterministic and rate-limit
+  free, so it is what a long multi-symbol backtest should use.
+- ``api`` -- the broker's history API. Always current, but rate limited and
+  broker dependent; a 20-symbol 5-year run is 20 sequential calls.
+
+Both go through ``services.history_service.get_history``, so this module never
+talks to a broker directly and inherits whatever auth mode the caller is in.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date
+
+import pandas as pd
+
+from services.history_service import get_history
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+# Equity and ETF cash markets only. Derivatives have expiries and rolls, which
+# a weight-based buy-and-hold portfolio has no meaning for; currency and
+# commodity carry their own settlement conventions. Widening this set means
+# answering those questions first, so it is an explicit allow-list.
+SUPPORTED_EXCHANGES = ("NSE", "BSE")
+
+
+class DataError(Exception):
+    """Base for anything that makes a backtest unsafe to run."""
+
+
+class UnsupportedExchange(DataError):
+    """A symbol was requested on an exchange the backtester does not model."""
+
+
+class MissingHistory(DataError):
+    """
+    A symbol has no usable history for the requested window.
+
+    Raised rather than silently dropping the symbol or forward-filling from
+    nothing: a portfolio quietly backtested on 4 of its 5 holdings reports a
+    return that was never achievable, and nothing in the output would show it.
+    """
+
+
+@dataclass(frozen=True)
+class PriceMatrix:
+    """
+    Calendar-aligned closes for a set of symbols.
+
+    ``closes`` is indexed by date, one column per symbol, sorted ascending with
+    no duplicate dates. ``source`` records where the bars came from so a result
+    can say which data produced it.
+    """
+
+    closes: pd.DataFrame
+    source: str
+    start: date
+    end: date
+
+    @property
+    def symbols(self) -> list[str]:
+        return list(self.closes.columns)
+
+    @property
+    def sessions(self) -> int:
+        return len(self.closes.index)
+
+    def returns(self) -> pd.DataFrame:
+        """
+        Simple daily returns.
+
+        The first row is dropped rather than zero-filled: there is no return on
+        the first observation, and a leading 0 would understate volatility and
+        flatter every risk metric computed from it.
+        """
+        return self.closes.pct_change().iloc[1:]
+
+
+def _normalise_exchange(exchange: str) -> str:
+    ex = (exchange or "").strip().upper()
+    if ex not in SUPPORTED_EXCHANGES:
+        raise UnsupportedExchange(
+            f"{ex or '(blank)'} is not supported; the backtester covers "
+            f"{' and '.join(SUPPORTED_EXCHANGES)} only"
+        )
+    return ex
+
+
+def _frame_from_payload(payload: object, symbol: str) -> pd.DataFrame:
+    """
+    Coerce one history response into a [timestamp, close] frame.
+
+    The service returns either a list of bar dicts or a dict wrapping one under
+    ``data``; brokers also disagree on whether numerics arrive as numbers or
+    strings, so values are coerced rather than trusted.
+    """
+    rows = payload
+    if isinstance(payload, dict):
+        rows = payload.get("data", payload.get("bars", []))
+    if not isinstance(rows, list) or not rows:
+        raise MissingHistory(f"{symbol}: history response contained no bars")
+
+    frame = pd.DataFrame(rows)
+    time_col = next(
+        (c for c in ("timestamp", "time", "date", "datetime") if c in frame.columns),
+        None,
+    )
+    if time_col is None or "close" not in frame.columns:
+        raise MissingHistory(
+            f"{symbol}: history rows lack a timestamp or close column "
+            f"(got {sorted(frame.columns)})"
+        )
+
+    stamps = frame[time_col]
+    # Epoch seconds vs an ISO string: decide on dtype, not on a guess, because
+    # a misread epoch silently lands every bar in 1970.
+    if pd.api.types.is_numeric_dtype(stamps):
+        index = pd.to_datetime(stamps, unit="s", utc=True).dt.tz_localize(None)
+    else:
+        index = pd.to_datetime(stamps, errors="coerce")
+
+    # `.to_numpy()`, not the Series: a Series carries its own 0..n index, and
+    # pandas would align it against the DatetimeIndex and produce all-NaN.
+    out = pd.DataFrame(
+        {"close": pd.to_numeric(frame["close"], errors="coerce").to_numpy()},
+        index=pd.DatetimeIndex(index).normalize(),
+    )
+    out = out[out["close"].notna() & out.index.notna()]
+    if out.empty:
+        raise MissingHistory(f"{symbol}: no rows survived timestamp/close parsing")
+    # A duplicated session (a re-ingested day) would otherwise make the join
+    # explode combinatorially; the last write wins.
+    return out[~out.index.duplicated(keep="last")].sort_index()
+
+
+def load_prices(
+    symbols: list[str],
+    exchanges: list[str] | str,
+    start_date: str,
+    end_date: str,
+    *,
+    source: str = "db",
+    interval: str = "D",
+    api_key: str | None = None,
+    auth_token: str | None = None,
+    feed_token: str | None = None,
+    broker: str | None = None,
+    min_sessions: int = 2,
+) -> PriceMatrix:
+    """
+    Load closes for ``symbols`` into one aligned matrix.
+
+    ``exchanges`` is either one exchange for all symbols or one per symbol.
+    ``source`` is ``'db'`` (Historify/DuckDB) or ``'api'`` (broker) and is the
+    caller's choice, never inferred -- the two answer differently and a result
+    has to be able to say which it used.
+
+    Raises ``MissingHistory`` if any symbol is empty for the window, and
+    ``UnsupportedExchange`` for anything outside NSE/BSE.
+    """
+    if not symbols:
+        raise DataError("no symbols requested")
+    if source not in ("db", "api"):
+        raise DataError(f"source must be 'db' or 'api', got {source!r}")
+
+    if isinstance(exchanges, str):
+        exchanges = [exchanges] * len(symbols)
+    if len(exchanges) != len(symbols):
+        raise DataError(
+            f"{len(symbols)} symbols but {len(exchanges)} exchanges; pass one "
+            "exchange or one per symbol"
+        )
+
+    series: dict[str, pd.Series] = {}
+    for symbol, exchange in zip(symbols, exchanges):
+        ex = _normalise_exchange(exchange)
+        ok, payload, status = get_history(
+            symbol=symbol,
+            exchange=ex,
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date,
+            api_key=api_key,
+            auth_token=auth_token,
+            feed_token=feed_token,
+            broker=broker,
+            source=source,
+        )
+        if not ok:
+            message = ""
+            if isinstance(payload, dict):
+                message = str(payload.get("message", ""))
+            raise MissingHistory(
+                f"{symbol} ({ex}): history request failed [{status}] {message}".strip()
+            )
+        frame = _frame_from_payload(payload, symbol)
+        if symbol in series:
+            raise DataError(f"{symbol} requested more than once")
+        series[symbol] = frame["close"]
+        logger.info(
+            "portfolio.data: loaded %s bars for %s (%s) from %s",
+            len(frame), symbol, ex, source,
+        )
+
+    # Inner join: a portfolio return needs every holding priced on the same
+    # session. An outer join plus forward-fill would invent prices on days a
+    # symbol did not trade and understate the portfolio's true volatility.
+    closes = pd.concat(series, axis=1, join="inner").sort_index()
+    closes.columns = list(series.keys())
+
+    if len(closes.index) < min_sessions:
+        overlap = closes.index
+        raise MissingHistory(
+            f"only {len(overlap)} session(s) are common to all "
+            f"{len(symbols)} symbols between {start_date} and {end_date}; "
+            "a shorter window or a symbol with a later listing date is likely"
+        )
+
+    return PriceMatrix(
+        closes=closes,
+        source=source,
+        start=closes.index[0].date(),
+        end=closes.index[-1].date(),
+    )
