@@ -39,17 +39,30 @@ def quarter_of(day: date) -> int:
     return (day.month - 1) // 3 + 1
 
 
-def trading_holidays(year: int) -> frozenset[date]:
-    """Trading holidays for a year. Empty on failure, never raising.
+def _calendar_entries(year: int) -> tuple[frozenset[date], frozenset[date]]:
+    """(dates the exchange is closed, dates it holds a special session).
 
-    An empty set degrades to "weekends only", which errs toward treating a day
-    as tradable rather than skipping a real session.
+    The feed mixes three kinds of entry and they mean opposite things:
+
+    * ``TRADING_HOLIDAY`` closes equity trading. Most carry an open MCX
+      session, which this module ignores by design (not exchange-aware).
+    * ``SPECIAL_SESSION`` is the reverse - a session held on a day the market
+      would otherwise be shut, such as Diwali Muhurat trading, which falls on a
+      Sunday. Treating it as a closure would hide a real trading day and shift
+      every adjacent-day and new-period answer around it.
+    * Anything else (for example a settlement-only holiday) does not stop
+      trading, so it is not a closure either.
+
+    Empty sets on failure, never raising: that degrades to "weekends only",
+    which errs toward treating a day as tradable rather than skipping a real
+    session.
     """
     cached = _HOLIDAY_CACHE.get(year)
     if cached is not None:
         return cached
 
-    holidays: set[date] = set()
+    closed: set[date] = set()
+    special: set[date] = set()
     try:
         from services.market_calendar_service import get_holidays
 
@@ -60,24 +73,46 @@ def trading_holidays(year: int) -> frozenset[date]:
                 if not raw:
                     continue
                 try:
-                    holidays.add(date.fromisoformat(str(raw)[:10]))
+                    day = date.fromisoformat(str(raw)[:10])
                 except ValueError:
                     continue
+                kind = str(entry.get("holiday_type") or "").upper()
+                if kind == "SPECIAL_SESSION" or not (entry.get("closed_exchanges") or []):
+                    special.add(day)
+                elif kind == "TRADING_HOLIDAY":
+                    closed.add(day)
+                # Other entry types leave trading open, so they are neither.
         else:
             logger.warning(f"Holiday list for {year} unavailable; assuming weekends only")
     except Exception:
         logger.exception(f"Could not load holidays for {year}; assuming weekends only")
 
-    result = frozenset(holidays)
+    result = (frozenset(closed), frozenset(special))
     _HOLIDAY_CACHE[year] = result
     return result
 
 
+def trading_holidays(year: int) -> frozenset[date]:
+    """Dates the exchange is closed for trading in `year`."""
+    return _calendar_entries(year)[0]
+
+
+def special_sessions(year: int) -> frozenset[date]:
+    """Dates with a session the calendar would otherwise not have, e.g. Muhurat."""
+    return _calendar_entries(year)[1]
+
+
 def is_trading_day(day: date) -> bool:
-    """Whether the exchange trades on this date."""
-    if day.weekday() >= 5:  # Saturday, Sunday
+    """Whether the exchange trades on this date.
+
+    A special session wins over the weekend rule: Muhurat trading is held on a
+    Sunday, and returning False for it would hide a real session.
+    """
+    if day in special_sessions(day.year):
+        return True
+    if day in trading_holidays(day.year):
         return False
-    return day not in trading_holidays(day.year)
+    return day.weekday() < 5
 
 
 def prev_trading_day(day: date) -> date:
@@ -171,9 +206,12 @@ def describe(day: date) -> dict:
     return {
         "date": day.isoformat(),
         "is_trading_day": is_trading_day(day),
-        # A weekday the exchange is closed - distinct from a weekend.
-        "is_trading_holiday": day.weekday() < 5 and not is_trading_day(day),
+        # Closed by the calendar rather than by the weekend.
+        "is_trading_holiday": day in trading_holidays(day.year),
+        # A pure calendar property: a special session can fall on a weekend, so
+        # this does not imply the market is shut.
         "is_weekend": day.weekday() >= 5,
+        "is_special_session": day in special_sessions(day.year),
         "weekday": day.strftime("%A"),
         "weekday_num": day.isoweekday(),  # 1 = Monday
         "day": day.day,

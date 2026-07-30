@@ -118,11 +118,21 @@ class WorkflowContext:
 
     @staticmethod
     def _session_date() -> str:
+        """The trading session date, falling back to the local calendar date.
+
+        The fallback is wrong by up to three hours of session labelling, so it
+        is logged rather than swallowed: silently returning a different date
+        than the method promises is the kind of failure that only shows up as a
+        strategy acting on the wrong day.
+        """
         try:
             from utils.session import get_trading_session_date
 
             return get_trading_session_date()
         except Exception:
+            logger.exception(
+                "Could not resolve the trading session date; using the local calendar date"
+            )
             return datetime.now().date().isoformat()
 
     # Path segment: either a dotted key ([^.[\]]+) or a bracketed integer index (\[\d+\])
