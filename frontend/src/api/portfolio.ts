@@ -262,6 +262,17 @@ export interface MonteCarlo {
   note: string | null
 }
 
+/** What the portfolio is made of, from data that actually exists. */
+export interface PortfolioStructure {
+  instrument_classes: Record<string, number>
+  instrument_class_basis: string
+  clusters: { id: number; members: string[]; weight: number; independent: boolean }[]
+  threshold: number
+  effective_bets: number
+  largest_cluster_weight: number
+  sector_note: string
+}
+
 export interface BacktestResponse {
   status: 'success' | 'error'
   message?: string
@@ -303,6 +314,7 @@ export interface BacktestResponse {
   }
   walk_forward: WalkForward
   monte_carlo: MonteCarlo
+  structure: PortfolioStructure
   allocation: PortfolioAllocation
   crisis: PortfolioCrisis
   costs: PortfolioCosts

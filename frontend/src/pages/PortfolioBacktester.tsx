@@ -486,6 +486,7 @@ export default function PortfolioBacktester() {
               <TabsTrigger value="rolling">Rolling Stats</TabsTrigger>
               <TabsTrigger value="robustness">Robustness</TabsTrigger>
               <TabsTrigger value="allocation">Allocation</TabsTrigger>
+              <TabsTrigger value="structure">Structure</TabsTrigger>
               <TabsTrigger value="crisis">Crisis</TabsTrigger>
               <TabsTrigger value="health">Health</TabsTrigger>
             </TabsList>
@@ -1258,6 +1259,78 @@ export default function PortfolioBacktester() {
                       })}
                     </tbody>
                   </table>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="structure" className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-3">
+                <Stat
+                  label="Effective Bets"
+                  value={String(result.structure.effective_bets)}
+                  sub={`from ${result.items.length} holdings`}
+                />
+                <Stat
+                  label="Largest Cluster"
+                  value={pct(result.structure.largest_cluster_weight, 1)}
+                  sub="moves as one position"
+                  tone={result.structure.largest_cluster_weight > 0.5 ? 'bad' : undefined}
+                />
+                <Stat
+                  label="Funds vs Stocks"
+                  value={`${pct(result.structure.instrument_classes.fund ?? 0, 0)} / ${pct(
+                    result.structure.instrument_classes.stock ?? 0,
+                    0
+                  )}`}
+                  sub={result.structure.instrument_class_basis}
+                />
+              </div>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Co-movement Clusters</CardTitle>
+                  <p className="text-sm text-muted-foreground">
+                    Holdings correlated above {result.structure.threshold} are grouped:
+                    they behave as one position, whatever their names or sectors say.
+                    A shock to any member hits the whole cluster.
+                  </p>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  {result.structure.clusters.map((c) => (
+                    <div key={c.id} className="rounded-md border p-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium">
+                          {c.independent ? 'Independent holding' : `Cluster ${c.id}`}
+                        </span>
+                        <span className="tabular-nums text-sm">{pct(c.weight, 1)}</span>
+                      </div>
+                      <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded bg-muted">
+                        <div
+                          className={cn(
+                            'h-full rounded',
+                            c.independent ? 'bg-emerald-500' : 'bg-amber-500'
+                          )}
+                          style={{ width: `${Math.min(c.weight * 100, 100)}%` }}
+                        />
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {c.members.map((m) => (
+                          <span
+                            key={m}
+                            className="rounded bg-muted px-1.5 py-0.5 text-xs"
+                          >
+                            {m}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardContent className="p-4 text-sm text-muted-foreground">
+                  {result.structure.sector_note}
                 </CardContent>
               </Card>
             </TabsContent>
