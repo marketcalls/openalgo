@@ -73,6 +73,28 @@ def on_batch_completed(event) -> None:
     for leg in results:
         if not isinstance(leg, dict):
             continue
+
+        # A leg placed with splitsize reports its children under split_results
+        # and carries no orderid of its own, so the children were never tagged
+        # and their fills went unattributed. They inherit the leg's identity.
+        children = leg.get("split_results")
+        if isinstance(children, list) and children:
+            for child in children:
+                if not isinstance(child, dict):
+                    continue
+                child_orderid = child.get("orderid") or child.get("order_id") or ""
+                if not child_orderid:
+                    continue
+                record_order_tag(
+                    orderid=str(child_orderid),
+                    user_id=user_id,
+                    strategy=strategy,
+                    symbol=leg.get("symbol") or default_symbol,
+                    exchange=leg.get("exchange") or default_exchange,
+                    product=leg.get("product") or default_product,
+                )
+            continue
+
         orderid = leg.get("orderid") or leg.get("order_id") or ""
         if not orderid:
             continue  # a rejected leg has no id

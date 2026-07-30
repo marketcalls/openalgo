@@ -91,6 +91,7 @@ class FlowScheduler:
         interval_value: int | None = None,
         interval_unit: str | None = None,
         func: Callable = None,
+        market_hours_only: bool = False,
     ) -> str:
         """Add a workflow job to the scheduler
 
@@ -164,7 +165,14 @@ class FlowScheduler:
             func,
             trigger=trigger,
             id=job_id,
-            args=[workflow_id, self._api_key],
+            # Only the default executor takes the market-hours flag. A custom
+            # callback still receives the documented (workflow_id, api_key)
+            # pair, which passing a third positional argument would break.
+            args=(
+                [workflow_id, self._api_key, market_hours_only]
+                if func is execute_workflow_scheduled
+                else [workflow_id, self._api_key]
+            ),
             replace_existing=True,
             name=f"Workflow {workflow_id}",
         )
@@ -235,7 +243,25 @@ class FlowScheduler:
             logger.info("Flow Scheduler shutdown")
 
 
-def execute_workflow_scheduled(workflow_id: int, api_key: str = None):
+def is_within_market_hours(now: datetime | None = None) -> bool:
+    """Whether now falls inside NSE equity hours on a weekday (IST).
+
+    The editor offers a "market hours only" switch on the schedule trigger and
+    defaults it on, but nothing read it, so an interval schedule kept firing
+    overnight and at weekends.
+    """
+    import pytz
+
+    now = now or datetime.now(pytz.timezone("Asia/Kolkata"))
+    if now.weekday() >= 5:  # Saturday, Sunday
+        return False
+    minutes = now.hour * 60 + now.minute
+    return (9 * 60 + 15) <= minutes <= (15 * 60 + 30)
+
+
+def execute_workflow_scheduled(
+    workflow_id: int, api_key: str = None, market_hours_only: bool = False
+):
     """Execute a workflow from scheduler (synchronous)"""
     from services.flow_executor_service import execute_workflow
 
@@ -245,6 +271,12 @@ def execute_workflow_scheduled(workflow_id: int, api_key: str = None):
         logger.error(f"No API key available for workflow {workflow_id}")
         return
 
+    if market_hours_only and not is_within_market_hours():
+        logger.debug(
+            f"Skipping scheduled workflow {workflow_id}: outside market hours"
+        )
+        return
+
     try:
         result = execute_workflow(workflow_id, api_key=api_key)
         logger.info(
@@ -252,6 +284,13 @@ def execute_workflow_scheduled(workflow_id: int, api_key: str = None):
         )
     except Exception as e:
         logger.exception(f"Scheduled execution failed for workflow {workflow_id}: {e}")
+    finally:
+        # APScheduler runs this on its own worker thread with no Flask app
+        # context, so teardown_appcontext never fires and the sessions this run
+        # touched would stay bound to that thread.
+        from utils.db_sessions import remove_all_scoped_sessions
+
+        remove_all_scoped_sessions()
 
 
 # Global scheduler instance
