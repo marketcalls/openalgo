@@ -191,6 +191,73 @@ def calculate_protected_price(
     return protected_price
 
 
+def protected_limit_from_trigger(symbol: str, exchange: str, action: str, trigger_price) -> str:
+    """
+    Limit price for an SL-M converted to SL-LMT when no quote is available.
+
+    The Noren OMSes (Shoonya, Flattrade, TradeSmart, Zebu) reject SL-MKT for
+    API orders, so an SL-M must go out as SL-LMT even when the quote-based MPP
+    path could not run - no auth token, LTP 0, or a quote exception. There is
+    no LTP to price off in that case, but the caller's trigger price is a
+    reference the exchange already accepted, so it serves as the basis.
+
+    Two rejections sit one line apart here, which is why this lives in one
+    place rather than in each broker's transform_data:
+      * falling through as SL-MKT, the price type the broker refuses
+      * emitting an off-tick limit - calculate_protected_price rounds to two
+        decimals when it has no tick size, which a 0.05-tick instrument rejects
+
+    So the trigger itself is the baseline limit (tick-valid by construction),
+    and the protection buffer goes on top only when the master contract yields
+    a tick size to align to. Without a quote there is no tick size from the
+    API, so it comes from SymToken.
+
+    Args:
+        symbol: OpenAlgo symbol
+        exchange: OpenAlgo exchange code
+        action: 'BUY' or 'SELL'
+        trigger_price: The order's trigger price
+
+    Returns:
+        str: The limit price to send as ``prc``
+    """
+    trigger = float(trigger_price or 0)
+    if trigger <= 0:
+        return str(trigger_price or "0")
+
+    price = str(trigger)
+    try:
+        # Lazy import: mpp_slab is pure policy and is imported by every broker
+        # mapping module: keep the database dependency out of import time.
+        from database.token_db import get_symbol_info
+
+        info = get_symbol_info(symbol, exchange)
+        tick_size = getattr(info, "tick_size", None)
+        if tick_size:
+            price = str(
+                calculate_protected_price(
+                    price=trigger,
+                    action=action,
+                    symbol=symbol,
+                    instrument_type=get_instrument_type_from_symbol(symbol),
+                    tick_size=tick_size,
+                )
+            )
+        else:
+            logger.warning(
+                f"MPP Fallback: no tick size for Symbol={symbol}, Exchange={exchange}; "
+                f"using the trigger price {trigger} as the limit"
+            )
+    except Exception as e:
+        logger.error(
+            f"MPP Fallback Error: could not protect off the trigger for Symbol={symbol}, "
+            f"Error={str(e)}. Using the trigger price as-is."
+        )
+        price = str(trigger)
+
+    return price
+
+
 def get_mpp_info(
     price: float, symbol: str = None, instrument_type: str = None, tick_size: float = None
 ) -> dict:
