@@ -17,6 +17,7 @@ account perform", because the broker does not expose when each lot was bought.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 
 
 @dataclass(frozen=True)
@@ -68,14 +69,19 @@ def parse_holdings(rows: list[dict]) -> list[Holding]:
     """
     out: list[Holding] = []
     for row in rows or []:
+        symbol = str(row.get("symbol", "")).strip().upper()
+        if not symbol:
+            continue
+
         quantity = _number(row.get("quantity"))
+        average = _number(row.get("average_price"))
+        pnl = _number(row.get("pnl"))
+        last_price = _number(row.get("last_price") or row.get("ltp"))
+        if not all(isfinite(value) for value in (quantity, average, pnl, last_price)):
+            continue
         if quantity <= 0:
             continue
 
-        average = _number(row.get("average_price"))
-        pnl = _number(row.get("pnl"))
-
-        last_price = _number(row.get("last_price") or row.get("ltp"))
         if last_price <= 0 and average > 0:
             # No live price, but average and P&L pin it down.
             last_price = average + pnl / quantity
@@ -84,7 +90,7 @@ def parse_holdings(rows: list[dict]) -> list[Holding]:
 
         out.append(
             Holding(
-                symbol=str(row.get("symbol", "")).strip().upper(),
+                symbol=symbol,
                 exchange=str(row.get("exchange", "NSE")).strip().upper(),
                 quantity=quantity,
                 average_price=average,
@@ -112,6 +118,7 @@ def holdings_summary(holdings: list[Holding]) -> dict:
             "current": 0.0,
             "pnl": 0.0,
             "pnl_pct": 0.0,
+            "has_cost_basis": False,
             "count": 0,
         }
 
@@ -119,7 +126,7 @@ def holdings_summary(holdings: list[Holding]) -> dict:
     current = sum(h.current for h in holdings)
     # A feed with no average price gives no cost basis. Report the P&L the
     # broker states rather than a percentage of zero.
-    has_cost = invested > 0
+    has_cost = all(h.average_price > 0 for h in holdings)
     rows = []
     weights: dict[str, float] = {}
 

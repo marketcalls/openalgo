@@ -38,7 +38,7 @@ DRAWDOWN_CEIL = -0.10             # a normal correction
 COST_DRAG_FLOOR = 0.05            # 5% of capital lost to trading
 TREND_LOOKBACK = 200              # sessions, the conventional long-term filter
 
-GRADES = ((90, "A"), (80, "B"), (70, "C"), (60, "D"), (0, "F"))
+GRADES = ((80, "A"), (65, "B"), (50, "C"), (35, "D"), (0, "F"))
 
 
 def _scale(value: float, low: float, high: float) -> float:
