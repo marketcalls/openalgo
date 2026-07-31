@@ -166,7 +166,11 @@ def generate_tearsheet(
             return True, fh.read(), 200
     except Exception as exc:  # noqa: BLE001
         logger.exception("tearsheet generation failed")
-        return False, {"status": "error", "message": f"tearsheet failed: {exc}"}, 500
+        return (
+            False,
+            {"status": "error", "message": "Tearsheet generation failed."},
+            500,
+        )
     finally:
         # The report is a megabyte of embedded images; leaving these behind
         # would fill the temp directory over a long-running install.
@@ -495,7 +499,11 @@ def run_portfolio_backtest(
         return False, {"status": "error", "message": str(exc)}, 400
     except Exception as exc:  # noqa: BLE001 - the facade must not leak a 500 body
         logger.exception("portfolio backtest failed")
-        return False, {"status": "error", "message": f"backtest failed: {exc}"}, 500
+        return (
+            False,
+            {"status": "error", "message": "Backtest failed."},
+            500,
+        )
 
     bench_returns = None
     bench_curve: list[dict[str, Any]] = []
