@@ -16,6 +16,7 @@ import {
   type HoldingsAnalysis,
   type PriceSource,
 } from '@/api/portfolio'
+import { CrisisChart } from '@/components/portfolio/CrisisChart'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -457,37 +458,46 @@ export default function PortfolioAnalyzer() {
           )}
 
           {result.analysis?.crisis?.periods?.length ? (
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base">In Past Crises</CardTitle>
-                <p className="text-sm text-muted-foreground">
-                  How these same weights would have fared. Only windows inside the
-                  lookback appear, widen it to see more.
-                </p>
-              </CardHeader>
-              <CardContent className="p-0">
-                <table className="w-full text-sm">
-                  <tbody>
-                    {result.analysis.crisis.periods.map((c) => (
-                      <tr key={c.key} className="border-b last:border-0">
-                        <td className="p-3">{c.label}</td>
-                        <td
-                          className={cn(
-                            'p-3 text-right tabular-nums',
-                            (c.portfolio ?? 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'
-                          )}
-                        >
-                          {pct(c.portfolio)}
-                        </td>
-                        <td className="p-3 text-right tabular-nums text-muted-foreground">
-                          benchmark {pct(c.benchmark)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </CardContent>
-            </Card>
+            <>
+              {result.analysis.crisis.summary && (
+                <div className="grid gap-3 md:grid-cols-3">
+                  <Metric
+                    label="Crises Covered"
+                    value={String(result.analysis.crisis.summary.count)}
+                    sub={`inside the ${lookback}-day lookback`}
+                  />
+                  <Metric
+                    label="Beat the Benchmark"
+                    value={pct(result.analysis.crisis.summary.hit_rate, 0)}
+                    sub="of those periods"
+                    tone={
+                      (result.analysis.crisis.summary.hit_rate ?? 0) >= 0.5
+                        ? 'good'
+                        : 'bad'
+                    }
+                  />
+                  <Metric
+                    label="Worst Crisis"
+                    value={pct(result.analysis.crisis.summary.worst)}
+                    tone="bad"
+                  />
+                </div>
+              )}
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">In Past Crises</CardTitle>
+                  <p className="text-sm text-muted-foreground">
+                    How these same weights would have fared, with the window each one
+                    ran over and how long it lasted. Only crises inside the lookback
+                    appear, widen it to see more.
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  <CrisisChart periods={result.analysis.crisis.periods} />
+                </CardContent>
+              </Card>
+            </>
           ) : null}
 
           <p className="text-xs text-muted-foreground">{result.meta.basis}</p>
