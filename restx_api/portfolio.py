@@ -15,10 +15,12 @@ from marshmallow import Schema, ValidationError, fields, validate
 
 from database.auth_db import get_auth_token_broker, verify_api_key
 from limiter import limiter
+from portfolio.data import BENCHMARK_EXCHANGES
 from services.portfolio_service import (
     MAX_SYMBOLS,
     analyse_live_holdings,
     generate_tearsheet,
+    list_benchmarks,
     run_portfolio_backtest,
 )
 from utils.logging import get_logger
@@ -32,8 +34,6 @@ logger = get_logger(__name__)
 
 # Cash equity and ETFs only, matching the engine's own allow-list.
 PORTFOLIO_EXCHANGES = ["NSE", "BSE"]
-# Benchmarks live on the index exchanges.
-BENCHMARK_EXCHANGES = ["NSE_INDEX", "BSE_INDEX"]
 
 
 class HoldingSchema(Schema):
@@ -104,6 +104,28 @@ class PortfolioBacktestSchema(Schema):
 
 
 backtest_schema = PortfolioBacktestSchema()
+
+
+@api.route("/benchmarks", strict_slashes=False)
+class PortfolioBenchmarks(Resource):
+    @limiter.limit(os.getenv("API_RATE_LIMIT", "10 per second"))
+    def get(self):
+        """List index symbols usable as a benchmark, from the instrument master."""
+        api_key = request.args.get("apikey")
+        if not api_key or verify_api_key(api_key) is None:
+            return make_response(
+                jsonify({"status": "error", "message": "Invalid openalgo apikey"}), 403
+            )
+
+        try:
+            _, payload, status = list_benchmarks()
+        except Exception:  # noqa: BLE001
+            logger.exception("portfolio benchmarks endpoint failed")
+            return make_response(
+                jsonify({"status": "error", "message": "Could not list benchmarks."}), 500
+            )
+
+        return make_response(jsonify(payload), status)
 
 
 @api.route("/backtest", strict_slashes=False)

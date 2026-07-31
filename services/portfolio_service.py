@@ -11,8 +11,6 @@ those become 4xx responses with the reason attached.
 from __future__ import annotations
 
 import dataclasses
-import os
-import tempfile
 from datetime import date, timedelta
 from typing import Any
 
@@ -50,6 +48,30 @@ logger = get_logger(__name__)
 # A backtest holds every symbol's full history in memory and is synchronous.
 # The cap is about keeping one request bounded, not about the maths.
 MAX_SYMBOLS = 50
+
+
+def list_benchmarks() -> tuple[bool, dict[str, Any], int]:
+    """
+    Index symbols usable as a portfolio benchmark, read from the instrument
+    master rather than hardcoded.
+
+    Which indices exist depends on which broker's master contract was
+    downloaded -- GLOBAL_INDEX rows only appear for a broker that supports
+    them (Zerodha), and even NSE_INDEX/BSE_INDEX coverage differs by broker.
+    A fixed list would offer choices the current install cannot actually
+    price.
+    """
+    from database.symbol import SymToken
+
+    rows = (
+        SymToken.query.filter(SymToken.exchange.in_(BENCHMARK_EXCHANGES))
+        .order_by(SymToken.exchange, SymToken.symbol)
+        .all()
+    )
+    benchmarks = [
+        {"symbol": r.symbol, "exchange": r.exchange, "name": r.name} for r in rows
+    ]
+    return True, {"status": "success", "data": benchmarks}, 200
 
 
 def _curve(series: pd.Series) -> list[dict[str, Any]]:
@@ -137,20 +159,13 @@ def generate_tearsheet(
     broker: str | None = None,
 ) -> tuple[bool, str | dict[str, Any], int]:
     """
-    Render openstatz's full HTML tearsheet for this portfolio.
+    Render openstatz's modern dashboard tearsheet for this portfolio.
 
     Returns the HTML as a string for the caller to serve as a download. The
     report is openstatz's own, not a reimplementation, so an exported sheet and
     the on-screen numbers come from the same code.
-
-    Matplotlib is forced onto the Agg backend first: openstatz draws the report
-    with it, and on a server there is no display to draw into -- without this it
-    can try to open one and hang the request.
     """
-    import matplotlib
-
-    matplotlib.use("Agg", force=True)
-    import openstatz.reports as reports
+    import openstatz
 
     try:
         symbols = [str(h["symbol"]).strip().upper() for h in holdings]
@@ -206,20 +221,15 @@ def generate_tearsheet(
         except DataError as exc:
             logger.warning("tearsheet benchmark %s unavailable: %s", benchmark, exc)
 
-    # `output` takes a path, not a buffer, despite the module importing
-    # StringIO -- passing one raises. A temp file it is, removed either way.
-    handle, path = tempfile.mkstemp(suffix=".html", prefix="openalgo-tearsheet-")
-    os.close(handle)
     try:
-        reports.html(
+        html = openstatz.dashboard(
             result.returns,
             benchmark=bench_returns,
             rf=risk_free_rate,
             title=title,
-            output=path,
+            output=None,
         )
-        with open(path, encoding="utf-8") as fh:
-            return True, fh.read(), 200
+        return True, html, 200
     except Exception:  # noqa: BLE001
         logger.exception("tearsheet generation failed")
         return (
@@ -227,13 +237,6 @@ def generate_tearsheet(
             {"status": "error", "message": "Tearsheet generation failed."},
             500,
         )
-    finally:
-        # The report is a megabyte of embedded images; leaving these behind
-        # would fill the temp directory over a long-running install.
-        try:
-            os.unlink(path)
-        except OSError:
-            logger.debug("could not remove %s", path, exc_info=True)
 
 
 def _asset_returns(prices: PriceMatrix) -> list[dict[str, Any]]:
@@ -368,9 +371,10 @@ def _series_analytics(
             "volatility": _curve(st.rolling_volatility(returns, rolling_period=window).dropna()),
         }
 
-    # The month-by-month grid, years down and months across.
+    # The month-by-month grid, years down and months across. No EOY column --
+    # the yearly_returns table below already carries the annual figure.
     try:
-        grid = st.monthly_returns(returns)
+        grid = st.monthly_returns(returns, eoy=False)
         out["monthly_returns"] = {
             "years": [str(y) for y in grid.index],
             "columns": [str(c) for c in grid.columns],
@@ -378,6 +382,23 @@ def _series_analytics(
         }
     except Exception:  # noqa: BLE001
         logger.debug("monthly_returns unavailable", exc_info=True)
+
+    # Seasonality summary: best/worst single month, the typical size of an up
+    # or down month, and how often the portfolio won at the month/quarter
+    # horizon. "eom"/"eoq" (not "month"/"quarter") so each calendar month or
+    # quarter is its own period -- the bare period strings group all Januaries
+    # across every year into one bucket, which is not what a reader expects.
+    try:
+        out["seasonality"] = {
+            "best_month": _clean(st.best(returns, aggregate="eom", prepare_returns=False)),
+            "worst_month": _clean(st.worst(returns, aggregate="eom", prepare_returns=False)),
+            "avg_up_month": _clean(st.avg_win(returns, aggregate="eom", prepare_returns=False)),
+            "avg_down_month": _clean(st.avg_loss(returns, aggregate="eom", prepare_returns=False)),
+            "win_months": _clean(st.win_rate(returns, aggregate="eom", prepare_returns=False)),
+            "win_quarters": _clean(st.win_rate(returns, aggregate="eoq", prepare_returns=False)),
+        }
+    except Exception:  # noqa: BLE001
+        logger.debug("seasonality unavailable", exc_info=True)
 
     # Return quantiles: the spread of returns at each holding period, which is
     # how openstatz presents this and what QuantStats calls "Return Quantiles".
