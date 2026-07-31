@@ -104,6 +104,37 @@ def transform_data(data, token, auth_token=None):
                 f"Exchange={data['exchange']}, Error={str(e)}. Proceeding with regular {original_type} order."
             )
 
+        # A missing auth token, a zero LTP or a quote exception must NOT leave an
+        # SL-M falling through as SL-MKT — that is the exact price type Shoonya
+        # rejects for API orders, so the order would be dead on arrival. Unlike
+        # MARKET (which has no reference price without a quote), an SL-M always
+        # carries a trigger price, so derive the protective limit from the
+        # trigger and still send SL-LMT. Same fallback as
+        # broker/tradesmart/mapping/transform_data.py::_apply_mpp.
+        if original_type == "SL-M" and order_type != "SL-LMT":
+            order_type = "SL-LMT"
+            trigger = float(data.get("trigger_price") or 0)
+            if trigger > 0:
+                try:
+                    price = str(
+                        calculate_protected_price(
+                            price=trigger,
+                            action=action,
+                            symbol=data["symbol"],
+                            instrument_type=get_instrument_type_from_symbol(data["symbol"]),
+                        )
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"MPP Fallback Error: could not protect off the trigger for "
+                        f"Symbol={data['symbol']}, Error={str(e)}. Using the trigger price as-is."
+                    )
+                    price = str(trigger)
+            logger.warning(
+                f"MPP Fallback: quote-based conversion did not run for Symbol={data['symbol']}; "
+                f"sending SL-M->SL-LMT priced off the trigger ({trigger}) at {price}"
+            )
+
     # Basic mapping
     transformed = {
         "uid": userid,
