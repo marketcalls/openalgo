@@ -51,6 +51,7 @@ class BacktestResult:
     turnover: pd.Series
     cost_drag: float
     source: str
+    cost_breakdown: dict[str, float] = field(default_factory=dict)
     #: One row per holding: what it made, what it cost, what it contributed.
     items: pd.DataFrame = field(default_factory=pd.DataFrame)
     meta: dict = field(default_factory=dict)
@@ -125,6 +126,12 @@ def run_backtest(
     weight_path = np.empty((len(index), len(symbols)), dtype=float)
     turnover_at: dict[pd.Timestamp, float] = {}
     order_count = 0
+    if isinstance(costs, (EquityCosts, CostSchedule)):
+        cost_breakdown = {
+            key: 0.0 for key in costs.breakdown(0.0, 0.0, orders=0)
+        }
+    else:
+        cost_breakdown = {"total": 0.0, "orders": 0.0}
 
     # Held in currency per symbol rather than as weights. Weights are a ratio
     # and cannot answer "how much did this holding actually make", which is the
@@ -162,11 +169,15 @@ def run_backtest(
                     # the value.
                     orders = int((np.abs(desired - sleeve) > 1e-9).sum())
                     order_count += orders
-                    charge = (
-                        costs.charge(traded_value, traded_value, orders)
-                        if isinstance(costs, (EquityCosts, CostSchedule))
-                        else traded_value * costs.total
-                    )
+                    if isinstance(costs, (EquityCosts, CostSchedule)):
+                        lines = costs.breakdown(traded_value, traded_value, orders)
+                        for key, amount in lines.items():
+                            cost_breakdown[key] = cost_breakdown.get(key, 0.0) + amount
+                        charge = lines["total"]
+                    else:
+                        charge = traded_value * costs.total
+                        cost_breakdown["total"] += charge
+                        cost_breakdown["orders"] += float(orders)
                     # Attributed by each symbol's share of the traded value, so
                     # the holding that forced the trade carries the cost.
                     moved = np.abs(desired - sleeve)
@@ -221,6 +232,7 @@ def run_backtest(
         # nothing traded, which is the buy-and-hold case.
         cost_drag=float(gross_total - net_total),
         source=prices.source,
+        cost_breakdown=cost_breakdown,
         meta={
             "symbols": symbols,
             "target_weights": dict(zip(symbols, target.tolist())),

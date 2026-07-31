@@ -617,6 +617,7 @@ def run_portfolio_backtest(
         "walk_forward": _clean(
             walk_forward(
                 prices, weights, policy=policy_used, costs=charged,
+                initial_capital=initial_capital,
                 window_years=walk_window_years, step_years=walk_step_years,
             )
         ),
@@ -662,15 +663,10 @@ def run_portfolio_backtest(
         "costs": _clean(
             {
                 "model": cost_model,
-                **(
-                    charged.breakdown(
-                        buy_value=float(result.turnover.sum()) * initial_capital,
-                        sell_value=float(result.turnover.sum()) * initial_capital,
-                        orders=int(result.meta.get("orders", 0)),
-                    )
-                    if isinstance(charged, CostSchedule)
-                    else {"total": float(result.turnover.sum()) * initial_capital * charged.total}
-                ),
+                **{
+                    ("gst" if key == "tax" else key): value
+                    for key, value in result.cost_breakdown.items()
+                },
                 "schedule": (
                     charged.name if isinstance(charged, CostSchedule) else "flat bps"
                 ),
