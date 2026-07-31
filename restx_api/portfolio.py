@@ -167,7 +167,7 @@ class PortfolioBacktest(Resource):
         except Exception as exc:  # noqa: BLE001
             logger.exception("portfolio backtest endpoint failed")
             return make_response(
-                jsonify({"status": "error", "message": f"backtest failed: {exc}"}), 500
+                jsonify({"status": "error", "message": "Backtest failed."}), 500
             )
 
         return make_response(jsonify(payload), status)
@@ -298,7 +298,7 @@ class PortfolioHoldings(Resource):
         except Exception as exc:  # noqa: BLE001
             logger.exception("holdings analysis failed")
             return make_response(
-                jsonify({"status": "error", "message": f"analysis failed: {exc}"}), 500
+                jsonify({"status": "error", "message": "Analysis failed."}), 500
             )
 
         return make_response(jsonify(payload), status)
