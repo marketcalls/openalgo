@@ -73,7 +73,7 @@ export function PortfolioLineChart({ series, height = 320, format }: Props) {
         label: longest.data[i]?.date ?? '',
         values: series.map((s) => {
           const v = s.data[i]?.value
-          return v === undefined ? '—' : format ? format(v) : v.toFixed(2)
+          return v === undefined ? '-' : format ? format(v) : v.toFixed(2)
         }),
       })
     })
