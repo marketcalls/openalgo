@@ -172,6 +172,12 @@ def crisis_analysis(
         port = _window_return(returns, covered_start, covered_end)
         if port is None:
             continue
+        # Sessions, not calendar days: how long a crisis *felt* is measured in
+        # trading days, and a two-week window spanning a long weekend is a
+        # shorter ordeal than the calendar suggests.
+        sessions = int(
+            ((returns.index >= covered_start) & (returns.index <= covered_end)).sum()
+        )
         bench = (
             _window_return(benchmark, covered_start, covered_end)
             if benchmark is not None
@@ -188,6 +194,8 @@ def crisis_analysis(
                 "portfolio": port,
                 "benchmark": bench,
                 "excess": None if bench is None else port - bench,
+                "days": int((covered_end - covered_start).days),
+                "sessions": sessions,
                 "coverage": round(min(coverage, 1.0), 3),
                 "partial": coverage < min_coverage,
             }

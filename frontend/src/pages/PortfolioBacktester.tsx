@@ -1697,6 +1697,12 @@ export default function PortfolioBacktester() {
                             </td>
                             <td className="p-3 text-xs text-muted-foreground">
                               {c.start} → {c.end}
+                              {c.days ? (
+                                <div>
+                                  {c.days} days
+                                  {c.sessions ? ` · ${c.sessions} sessions` : ''}
+                                </div>
+                              ) : null}
                             </td>
                             <td
                               className={cn(

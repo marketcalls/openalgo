@@ -191,6 +191,9 @@ export interface PortfolioCrisis {
     start: string
     end: string
     scope?: 'india' | 'global'
+    /** Calendar days and trading sessions the window actually covered. */
+    days?: number
+    sessions?: number
     portfolio: number | null
     benchmark: number | null
     excess: number | null
