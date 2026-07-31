@@ -610,6 +610,12 @@ class WebSocketProxy:
 
             self.subscriptions.pop(client_id, None)
 
+        # Defensive sweep: ensure client_id is completely purged from subscription_index
+        for sub_key, client_set in list(self.subscription_index.items()):
+            client_set.discard(client_id)
+            if not client_set:
+                self.subscription_index.pop(sub_key, None)
+
         # Remove from user mapping safely
         if client_id in self.user_mapping:
             user_id = self.user_mapping[client_id]
@@ -626,25 +632,28 @@ class WebSocketProxy:
                 adapter = self.broker_adapters[user_id]
                 broker_name = self.user_broker_mapping.get(user_id)
 
-                try:
-                    # For Flattrade and Shoonya, keep the connection alive and just unsubscribe from data
-                    if broker_name in ["flattrade", "shoonya"] and hasattr(adapter, "unsubscribe_all"):
-                        logger.info(
-                            f"{broker_name.title()} adapter for user {user_id}: last client disconnected. Unsubscribing all symbols instead of disconnecting."
-                        )
+                # For Flattrade and Shoonya, keep the connection alive and just unsubscribe from data
+                if broker_name in ["flattrade", "shoonya"] and hasattr(adapter, "unsubscribe_all"):
+                    logger.info(
+                        f"{broker_name.title()} adapter for user {user_id}: last client disconnected. Unsubscribing all symbols instead of disconnecting."
+                    )
+                    try:
                         adapter.unsubscribe_all()
-                    else:
-                        # For all other brokers, disconnect the adapter completely
-                        logger.info(
-                            f"Last client for user {user_id} disconnected. Disconnecting {broker_name or 'unknown broker'} adapter."
-                        )
+                    except Exception as e:
+                        logger.exception(f"Error unsubscribing all symbols for user {user_id}: {e}")
+                else:
+                    # For all other brokers, disconnect the adapter completely
+                    logger.info(
+                        f"Last client for user {user_id} disconnected. Disconnecting {broker_name or 'unknown broker'} adapter."
+                    )
+                    try:
                         adapter.disconnect()
-                except Exception as e:
-                    logger.exception(f"Error cleaning up adapter state for user {user_id}: {e}")
-                finally:
-                    # Guarantee removal from adapter mappings even if disconnect/unsubscribe raised an exception
-                    self.broker_adapters.pop(user_id, None)
-                    self.user_broker_mapping.pop(user_id, None)
+                    except Exception as e:
+                        logger.exception(f"Error cleaning up adapter state for user {user_id}: {e}")
+                    finally:
+                        # Guarantee removal from adapter mappings only for full disconnect branch
+                        self.broker_adapters.pop(user_id, None)
+                        self.user_broker_mapping.pop(user_id, None)
 
             self.user_mapping.pop(client_id, None)
 
@@ -1097,6 +1106,32 @@ class WebSocketProxy:
         logger.debug(f"Sending pong to client {client_id}: {response}")
         await self.send_message(client_id, response)
 
+    def _parse_subscriptions(self, sub_json_set):
+        """
+        Parse a set or list of raw subscription JSON strings into structured subscription dictionaries.
+
+        Args:
+            sub_json_set: Iterable of JSON formatted subscription strings
+
+        Returns:
+            List of dictionaries containing symbol, exchange, mode (label), and depth.
+        """
+        parsed = []
+        for sub_json in sub_json_set:
+            try:
+                sub = json.loads(sub_json)
+                mode_num = sub.get("mode", 2)
+                mode_label = MODE_CANONICAL.get(mode_num, "Quote")
+                parsed.append({
+                    "symbol": sub.get("symbol", ""),
+                    "exchange": sub.get("exchange", ""),
+                    "mode": mode_label,
+                    "depth": sub.get("depth_level", 5),
+                })
+            except (json.JSONDecodeError, TypeError):
+                continue
+        return parsed
+
     async def get_subscriptions(self, client_id, data):
         """
         Return the requesting client's own subscriptions with detail and summary.
@@ -1113,26 +1148,15 @@ class WebSocketProxy:
         broker_name = self.user_broker_mapping.get(user_id, "unknown")
 
         client_subs = self.subscriptions.get(client_id, set())
-        parsed = []
+        parsed = self._parse_subscriptions(client_subs)
         by_mode = {}
         by_exchange = {}
 
-        for sub_json in client_subs:
-            try:
-                sub = json.loads(sub_json)
-                mode_num = sub.get("mode", 2)
-                mode_label = MODE_CANONICAL.get(mode_num, "Quote")
-                exchange = sub.get("exchange", "")
-                parsed.append({
-                    "symbol": sub.get("symbol", ""),
-                    "exchange": exchange,
-                    "mode": mode_label,
-                    "depth": sub.get("depth_level", 5),
-                })
-                by_mode[mode_label] = by_mode.get(mode_label, 0) + 1
-                by_exchange[exchange] = by_exchange.get(exchange, 0) + 1
-            except (json.JSONDecodeError, TypeError):
-                continue
+        for sub in parsed:
+            mode_label = sub["mode"]
+            exchange = sub["exchange"]
+            by_mode[mode_label] = by_mode.get(mode_label, 0) + 1
+            by_exchange[exchange] = by_exchange.get(exchange, 0) + 1
 
         await self.send_message(
             client_id,
@@ -1165,6 +1189,7 @@ class WebSocketProxy:
         broker_name = self.user_broker_mapping.get(user_id, "unknown")
 
         # Global stats from subscription_index
+        # Note: subscriptions_count represents unique broker-level subscriptions (distinct (symbol, exchange, mode) entries), not a sum of per-client counts
         subscriptions_count = 0
         by_mode = {}
         by_exchange = {}
@@ -1178,20 +1203,7 @@ class WebSocketProxy:
         # Per-client detail from self.user_mapping (only active, authenticated clients)
         clients_list = []
         for cid in sorted(self.user_mapping.keys()):
-            subs = []
-            for sub_json in self.subscriptions.get(cid, set()):
-                try:
-                    sub = json.loads(sub_json)
-                    mode_num = sub.get("mode", 2)
-                    mode_label = MODE_CANONICAL.get(mode_num, "Quote")
-                    subs.append({
-                        "symbol": sub.get("symbol", ""),
-                        "exchange": sub.get("exchange", ""),
-                        "mode": mode_label,
-                        "depth": sub.get("depth_level", 5),
-                    })
-                except (json.JSONDecodeError, TypeError):
-                    continue
+            subs = self._parse_subscriptions(self.subscriptions.get(cid, set()))
             clients_list.append({
                 "client_id": cid,
                 "subscription_count": len(subs),
