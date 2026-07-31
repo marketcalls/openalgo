@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from threading import Lock
 
+import numpy as np
 import pandas as pd
 
 from services.history_service import get_history
@@ -323,14 +324,14 @@ def load_prices(
         tuple(symbols), tuple(checked), start_date, end_date, source, interval,
         min_sessions,
     )
-    with _cache_lock:
-        hit = _cache.get(key)
-        if hit is not None:
-            _cache.move_to_end(key)
-            logger.debug("portfolio.data: cache hit for %s", ",".join(symbols))
-            return hit
-
     if source == "db":
+        with _cache_lock:
+            hit = _cache.get(key)
+            if hit is not None:
+                _cache.move_to_end(key)
+                logger.debug("portfolio.data: cache hit for %s", ",".join(symbols))
+                return hit
+
         # One query, all symbols. See the module docstring for why this does
         # not go through the history service.
         series = _closes_from_duckdb(symbols, checked, start_date, end_date, interval)
@@ -370,7 +371,7 @@ def load_prices(
             len(frame), symbol, ex, source,
         )
 
-    return _remember(key, _assemble(series, symbols, start_date, end_date, source, min_sessions))
+    return _assemble(series, symbols, start_date, end_date, source, min_sessions)
 
 
 def _remember(key: tuple, matrix: "PriceMatrix") -> "PriceMatrix":
@@ -397,6 +398,10 @@ def _assemble(
     # symbol did not trade and understate the portfolio's true volatility.
     closes = pd.concat(series, axis=1, join="inner").sort_index()
     closes.columns = list(series.keys())
+
+    values = closes.to_numpy(dtype=float)
+    if not np.isfinite(values).all() or (values <= 0).any():
+        raise DataError("price matrix must contain only positive finite closes")
 
     if len(closes.index) < min_sessions:
         overlap = closes.index

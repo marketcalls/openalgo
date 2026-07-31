@@ -83,7 +83,13 @@ class PortfolioBacktestSchema(Schema):
     # server would mean a release every time one moves.
     charges = fields.Dict(
         keys=fields.Str(),
-        values=fields.Dict(keys=fields.Str(), values=fields.Float(allow_none=True)),
+        values=fields.Dict(
+            keys=fields.Str(),
+            values=fields.Float(
+                allow_none=True,
+                validate=validate.Range(min=0),
+            ),
+        ),
         load_default=dict,
     )
     gst_rate = fields.Float(load_default=None, allow_none=True,
