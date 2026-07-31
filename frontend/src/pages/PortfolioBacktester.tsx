@@ -23,6 +23,7 @@ import {
 import { AllocationChart } from '@/components/portfolio/AllocationChart'
 import { CrisisChart } from '@/components/portfolio/CrisisChart'
 import { EoyChart } from '@/components/portfolio/EoyChart'
+import { MetricGuide } from '@/components/portfolio/MetricGuide'
 import { MonthlyReturnsHeatmap } from '@/components/portfolio/MonthlyReturnsHeatmap'
 import { SymbolSearchInput } from '@/components/portfolio/SymbolSearchInput'
 import { WeeklyReturnsHeatmap } from '@/components/portfolio/WeeklyReturnsHeatmap'
@@ -658,7 +659,15 @@ export default function PortfolioBacktester() {
               </Card>
             </TabsContent>
 
-            <TabsContent value="stats">
+            <TabsContent value="stats" className="space-y-4">
+              <div>
+                <h3 className="text-base font-semibold">Understanding your results</h3>
+                <p className="text-sm text-muted-foreground">
+                  What each number means, what good looks like, and where this
+                  portfolio landed.
+                </p>
+              </div>
+              <MetricGuide metrics={m as unknown as Record<string, number | null>} />
               <Card>
                 <CardContent className="p-0">
                   <table className="w-full text-sm">
