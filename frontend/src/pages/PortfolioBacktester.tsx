@@ -526,7 +526,7 @@ export default function PortfolioBacktester() {
               <TabsTrigger value="pnl">Itemised P&amp;L</TabsTrigger>
               <TabsTrigger value="correlation">Correlation</TabsTrigger>
               <TabsTrigger value="drawdown">Drawdown</TabsTrigger>
-              <TabsTrigger value="monthly">Monthly Returns</TabsTrigger>
+              <TabsTrigger value="periodreturns">Returns</TabsTrigger>
               <TabsTrigger value="rolling">Rolling Stats</TabsTrigger>
               <TabsTrigger value="compare">Compare</TabsTrigger>
               <TabsTrigger value="robustness">Robustness</TabsTrigger>
@@ -860,7 +860,7 @@ export default function PortfolioBacktester() {
                 )}
             </TabsContent>
 
-            <TabsContent value="monthly" className="space-y-4">
+            <TabsContent value="periodreturns" className="space-y-4">
               {result.series.yearly_returns &&
                 result.series.yearly_returns.length > 0 && (
                   <>
