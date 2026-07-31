@@ -628,11 +628,18 @@ def run_portfolio_backtest(
             rebalancing_sweep(prices, weights, costs=charged,
                               initial_capital=initial_capital, rf=risk_free_rate)
         ),
-        # Where the out- or under-performance came from. Weighted by the
-        # average weight actually held, not the target: a portfolio that
-        # drifted was not the one the targets describe.
+        # Where the net out- or under-performance came from. The gross path
+        # uses lagged realized weights; the difference to the engine's net
+        # return is the trading-cost effect.
         "attribution": _clean(
-            attribution(holding_returns, result.weights.mean(), bench_returns)
+            attribution(
+                holding_returns,
+                result.weights,
+                target_weights,
+                result.returns,
+                bench_returns,
+                result.items["contribution_pct"],
+            )
         ),
         # What the portfolio is made of. Not a sector pie: the symbol master
         # has no sector field, so co-movement clustering answers the same
