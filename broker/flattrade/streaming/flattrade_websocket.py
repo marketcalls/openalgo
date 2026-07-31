@@ -78,6 +78,7 @@ class FlattradeWebSocket:
         # The adapter checks this after _on_close/_on_error to route into a
         # tighter-bounded auth-retry path instead of the generic reconnect loop.
         self.auth_failed = False
+        self.auth_ok = False
         self.auth_failure_message = ""
 
         # Set by stop() to interrupt any in-progress sleep/wait loop immediately
@@ -125,6 +126,7 @@ class FlattradeWebSocket:
         # Reset auth failure state so a stale flag from a previous failed
         # attempt doesn't block this fresh connection attempt.
         self.auth_failed = False
+        self.auth_ok = False
         self.auth_failure_message = ""
 
         self.ws = websocket.WebSocketApp(
@@ -148,9 +150,19 @@ class FlattradeWebSocket:
         start_time = time.time()
 
         while time.time() - start_time < self.CONNECTION_TIMEOUT:
-            if self.connected:
-                self.logger.info("WebSocket connected successfully")
+            # Wait for the broker's 'ak' acknowledgement, not merely the socket
+            # opening. _on_open sets self.connected before authentication is even
+            # sent, so returning on that would report success for a rejected
+            # token -- and the caller resets its bounded auth-retry counter on
+            # success, so the bound would never be reached.
+            if self.auth_ok:
+                self.logger.info("WebSocket connected and authenticated successfully")
                 return True
+            if self.auth_failed:
+                self.logger.error(
+                    f"Broker rejected authentication: {self.auth_failure_message}"
+                )
+                return False
             if self._stop_event.wait(0.1):
                 self.logger.info("Wait for connection interrupted by stop()")
                 return False
@@ -291,6 +303,7 @@ class FlattradeWebSocket:
             bool: True (message handled)
         """
         if data.get("s") == self.AUTH_SUCCESS:
+            self.auth_ok = True
             self.logger.info("Authentication successful")
         else:
             self.logger.error(f"Authentication failed: {data}")
