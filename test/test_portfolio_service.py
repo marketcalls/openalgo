@@ -93,3 +93,48 @@ def test_service_serializes_realized_costs_and_names_gst(monkeypatch):
     assert payload["costs"]["gst"] == 2.0
     assert payload["costs"]["slippage"] == 10.0
     assert payload["costs"]["total"] == 37.0
+
+
+def test_live_holdings_passes_feed_token_to_history_analysis(monkeypatch):
+    monkeypatch.setattr(
+        "services.holdings_service.get_holdings",
+        lambda **_kwargs: (
+            True,
+            {
+                "data": {
+                    "holdings": [
+                        {
+                            "symbol": "INFY",
+                            "exchange": "NSE",
+                            "quantity": 2,
+                            "average_price": 100,
+                            "ltp": 120,
+                            "pnl": 40,
+                        }
+                    ]
+                }
+            },
+            200,
+        ),
+    )
+    captured = {}
+
+    def backtest(*_args, **kwargs):
+        captured.update(kwargs)
+        return False, {"message": "stop after capture"}, 422
+
+    monkeypatch.setattr(portfolio_service, "run_portfolio_backtest", backtest)
+
+    ok, _payload, status = portfolio_service.analyse_live_holdings(
+        api_key="key",
+        auth_token="auth",
+        feed_token="feed",
+        broker="xts-broker",
+        source="api",
+    )
+
+    assert ok is True
+    assert status == 200
+    assert captured["auth_token"] == "auth"
+    assert captured["feed_token"] == "feed"
+    assert captured["broker"] == "xts-broker"

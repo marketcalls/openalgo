@@ -703,6 +703,7 @@ def analyse_live_holdings(
     source: str = "db",
     api_key: str | None = None,
     auth_token: str | None = None,
+    feed_token: str | None = None,
     broker: str | None = None,
 ) -> tuple[bool, dict[str, Any], int]:
     """
@@ -765,6 +766,7 @@ def analyse_live_holdings(
             source=source,
             api_key=api_key,
             auth_token=auth_token,
+            feed_token=feed_token,
             broker=broker,
         )
         if ok2:
