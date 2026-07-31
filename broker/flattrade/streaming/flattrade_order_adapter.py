@@ -133,6 +133,17 @@ class FlattradeOrderUpdateAdapter(BaseOrderUpdateAdapter):
     def send_heartbeat(self, ws) -> None:
         ws.send(json.dumps({"t": "h"}))
 
+    def _close_after_failed_ack(self) -> None:
+        """Drop a socket the broker refused to authenticate, so the base class'
+        reconnect loop takes over instead of the adapter idling forever."""
+        ws = self._ws
+        if ws is None:
+            return
+        try:
+            ws.close()
+        except Exception:
+            self.logger.debug("Closing the un-acked Flattrade socket failed", exc_info=True)
+
     def normalize(self, raw_message):
         try:
             data = json.loads(raw_message)
@@ -149,7 +160,15 @@ class FlattradeOrderUpdateAdapter(BaseOrderUpdateAdapter):
             # auth verdict and the socket check separate so the log says which
             # one failed.
             if _noren_text(data.get("s") or data.get("stat")) != "ok":
+                # A rejected Noren auth does not always drop the socket —
+                # Flattrade can hold it open, which would leave this adapter
+                # reporting `connected` while subscribed to nothing and silent
+                # forever. Close it so run_forever returns and
+                # BaseOrderUpdateAdapter's backoff loop retries with a fresh
+                # handshake (same reasoning as kotak_order_adapter's connect-ack
+                # watchdog).
                 self.logger.error(f"Flattrade connect ack not OK: {data}")
+                self._close_after_failed_ack()
             elif self._ws is None:
                 self.logger.warning(
                     "Flattrade connect acked but the socket is already gone; "
