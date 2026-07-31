@@ -17,6 +17,20 @@ const tools = [
     color: 'bg-violet-500',
   },
   {
+    title: 'Portfolio Backtester',
+    description:
+      'Backtest a weighted portfolio against an index with real delivery costs, rebalancing rules, crisis periods and a full tearsheet',
+    href: '/portfolio-backtester',
+    color: 'bg-emerald-500',
+  },
+  {
+    title: 'Portfolio Analyzer',
+    description:
+      'Grade the holdings you actually own: concentration, co-movement, drawdown resilience and behaviour in past crises',
+    href: '/portfolio-analyzer',
+    color: 'bg-sky-500',
+  },
+  {
     title: 'Option Chain',
     description: 'Real-time option chain with live Greeks, OI data, and quick order placement',
     href: '/optionchain',
