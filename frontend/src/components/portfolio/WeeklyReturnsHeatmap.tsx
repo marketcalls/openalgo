@@ -1,101 +1,85 @@
 /**
- * Weekly returns grid — years down, ISO weeks across, with a year selector.
+ * Weekly returns as a chip grid for one year at a time, each chip carrying its
+ * own week-ending date.
  *
- * Fifty-two columns is a lot to read at once, so a year can be picked out of
- * it. The colour scale stays fixed to the whole dataset when filtering, so a
- * quiet year does not repaint itself as dramatic simply because it is being
- * viewed alone.
+ * Fifty-two weeks across a table is unreadable at a glance; picking one year
+ * and showing its actual calendar dates is what lets a reader place a bad
+ * week against an event they remember, rather than against an ISO week
+ * number nobody thinks in.
  */
-import { useState } from 'react'
-import { cn } from '@/lib/utils'
+import { useMemo, useState } from 'react'
+import type { CurvePoint } from '@/api/portfolio'
 
 interface Props {
-  years: string[]
-  weeks: number[]
-  /** Fractions (0.026 = 2.6%), null where that week has no data. */
-  values: (number | null)[][]
+  /** Week-ending return points, one per calendar week, across the whole backtest. */
+  series: CurvePoint[]
 }
 
-export function WeeklyReturnsHeatmap({ years, weeks, values }: Props) {
-  const [selected, setSelected] = useState<string>('All')
+const formatWeekEnding = (iso: string) =>
+  new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-US', {
+    month: 'short',
+    day: '2-digit',
+    timeZone: 'UTC',
+  })
 
-  const flat = values.flat().filter((v): v is number => v !== null)
-  // Fixed to the full dataset, not the visible slice.
-  const extent = Math.max(...flat.map(Math.abs), 0.005)
+export function WeeklyReturnsHeatmap({ series }: Props) {
+  const years = useMemo(
+    () => Array.from(new Set(series.map((p) => p.date.slice(0, 4)))).sort(),
+    [series]
+  )
+  const [year, setYear] = useState(years[years.length - 1] ?? '')
 
-  const cell = (v: number | null) => {
-    if (v === null || Number.isNaN(v)) return 'transparent'
-    const a = Math.min(Math.abs(v) / extent, 1) * 0.8
+  // Fixed to the full dataset, not the visible year, so switching years does
+  // not repaint a quiet year as dramatic simply because it is being viewed alone.
+  const extent = Math.max(...series.map((p) => Math.abs(p.value)), 0.005)
+
+  const cell = (v: number) => {
+    const a = Math.min(Math.abs(v) / extent, 1) * 0.85
     return v >= 0 ? `rgba(34,197,94,${a})` : `rgba(239,68,68,${a})`
   }
 
-  const rows = years
-    .map((y, i) => ({ year: y, row: values[i] ?? [] }))
-    .filter((r) => selected === 'All' || r.year === selected)
+  const rows = series.filter((p) => p.date.slice(0, 4) === year)
+
+  if (years.length === 0) {
+    return <p className="text-sm text-muted-foreground">Not enough history for weekly returns.</p>
+  }
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap gap-1.5">
-        {['All', ...years].map((y) => (
-          <button
-            key={y}
-            type="button"
-            onClick={() => setSelected(y)}
-            className={cn(
-              'rounded px-2.5 py-1 text-xs transition-colors',
-              selected === y
-                ? 'bg-primary/15 text-primary ring-1 ring-primary/40'
-                : 'text-muted-foreground hover:bg-accent'
-            )}
-          >
-            {y}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          {rows.length} weeks &middot; week-ending return
+        </p>
+        <select
+          value={year}
+          onChange={(e) => setYear(e.target.value)}
+          className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+        >
+          {years.map((y) => (
+            <option key={y} value={y}>
+              {y}
+            </option>
+          ))}
+        </select>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="border-separate border-spacing-px text-[10px]">
-          <thead>
-            <tr>
-              <th className="sticky left-0 bg-background p-1 text-left font-medium text-muted-foreground">
-                Year
-              </th>
-              {weeks.map((w) => (
-                <th key={w} className="p-1 text-center font-medium text-muted-foreground">
-                  {w}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(({ year, row }) => (
-              <tr key={year}>
-                <td className="sticky left-0 bg-background p-1 font-medium text-muted-foreground">
-                  {year}
-                </td>
-                {weeks.map((w, j) => {
-                  const v = row[j] ?? null
-                  return (
-                    <td
-                      key={w}
-                      title={
-                        v === null ? `W${w}: no data` : `${year} W${w}: ${(v * 100).toFixed(2)}%`
-                      }
-                      className="min-w-7 rounded-sm p-1 text-center tabular-nums"
-                      style={{ background: cell(v) }}
-                    >
-                      {v === null || Number.isNaN(v) ? '' : (v * 100).toFixed(1)}
-                    </td>
-                  )
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="flex flex-wrap gap-1.5">
+        {rows.map((p) => (
+          <div
+            key={p.date}
+            title={`Week ending ${p.date}: ${(p.value * 100).toFixed(2)}%`}
+            className="w-20 rounded-md border border-border/40 p-2 text-center"
+            style={{ background: cell(p.value) }}
+          >
+            <div className="text-sm font-semibold tabular-nums">
+              {(p.value * 100).toFixed(1)}
+            </div>
+            <div className="mt-0.5 text-[10px] text-muted-foreground">
+              {formatWeekEnding(p.date)}
+            </div>
+          </div>
+        ))}
       </div>
-      <p className="text-xs text-muted-foreground">
-        ISO week numbers. Values are percent; hover a cell for the exact figure.
-      </p>
     </div>
   )
 }

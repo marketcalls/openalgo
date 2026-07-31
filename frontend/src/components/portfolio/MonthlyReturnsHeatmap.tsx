@@ -1,5 +1,5 @@
 /**
- * Month-by-month returns grid — years down, months across.
+ * Month-by-month returns grid — years down, months across, one chip per cell.
  *
  * This is how an investor actually reads a track record: not "CAGR 18%" but
  * "which months hurt, and did the bad ones cluster". A single annualised
@@ -25,50 +25,46 @@ export function MonthlyReturnsHeatmap({ years, columns, values }: Props) {
 
   const cell = (v: number | null) => {
     if (v === null || Number.isNaN(v)) return 'transparent'
-    const a = Math.min(Math.abs(v) / extent, 1) * 0.8
+    const a = Math.min(Math.abs(v) / extent, 1) * 0.85
     return v >= 0 ? `rgba(34,197,94,${a})` : `rgba(239,68,68,${a})`
   }
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full border-separate border-spacing-0.5 text-xs">
-        <thead>
-          <tr>
-            <th className="p-1 text-left font-medium text-muted-foreground">Year</th>
-            {columns.map((c) => (
-              <th
-                key={c}
-                className={`p-1 text-center font-medium text-muted-foreground ${
-                  c === 'EOY' ? 'border-l' : ''
-                }`}
-              >
-                {c}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {years.map((y, i) => (
-            <tr key={y}>
-              <td className="p-1 font-medium text-muted-foreground">{y}</td>
-              {columns.map((c, j) => {
-                const v = values[i]?.[j] ?? null
-                return (
-                  <td
-                    key={c}
-                    className={`min-w-12 rounded p-1.5 text-center tabular-nums ${
-                      c === 'EOY' ? 'font-semibold' : ''
-                    }`}
-                    style={{ background: cell(v) }}
-                  >
-                    {v === null || Number.isNaN(v) ? '' : `${(v * 100).toFixed(1)}%`}
-                  </td>
-                )
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div
+        className="grid gap-1"
+        style={{ gridTemplateColumns: `3rem repeat(${columns.length}, minmax(2.5rem, 1fr))` }}
+      >
+        <div />
+        {columns.map((c, i) => (
+          <div
+            key={`${c}-${i}`}
+            className="pb-1 text-center text-xs font-medium text-muted-foreground"
+          >
+            {c.charAt(0)}
+          </div>
+        ))}
+
+        {years.map((y, i) => (
+          <div key={y} className="contents">
+            <div className="flex items-center text-xs font-medium text-muted-foreground">
+              {y}
+            </div>
+            {columns.map((c, j) => {
+              const v = values[i]?.[j] ?? null
+              return (
+                <div
+                  key={`${y}-${c}-${j}`}
+                  className="rounded-md border border-border/40 p-2 text-center text-xs tabular-nums"
+                  style={{ background: cell(v) }}
+                >
+                  {v === null || Number.isNaN(v) ? '' : (v * 100).toFixed(1)}
+                </div>
+              )
+            })}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

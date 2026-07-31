@@ -150,10 +150,9 @@ def test_tearsheet_uses_the_same_nondefault_costs_as_backtest(monkeypatch):
 
     def render(returns, **kwargs):
         captured["returns"] = returns.copy()
-        with open(kwargs["output"], "w", encoding="utf-8") as report:
-            report.write("<html>charged report</html>")
+        return "<html>charged report</html>"
 
-    monkeypatch.setattr("openstatz.reports.html", render)
+    monkeypatch.setattr("openstatz.dashboard", render)
 
     ok, html, status = portfolio_service.generate_tearsheet(
         [

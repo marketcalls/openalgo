@@ -12,6 +12,7 @@ import { useBrokerStore } from '@/stores/brokerStore'
 // Public pages
 const Home = lazy(() => import('@/pages/Home'))
 const PortfolioBacktester = lazy(() => import('@/pages/PortfolioBacktester'))
+const PortfolioBacktesterResults = lazy(() => import('@/pages/PortfolioBacktesterResults'))
 const PortfolioAnalyzer = lazy(() => import('@/pages/PortfolioAnalyzer'))
 const Faq = lazy(() => import('@/pages/Faq'))
 const Setup = lazy(() => import('@/pages/Setup'))
@@ -194,6 +195,10 @@ function App() {
                 <Route path="/platforms" element={<Platforms />} />
                 <Route path="/tradingview" element={<TradingView />} />
                 <Route path="/portfolio-backtester" element={<PortfolioBacktester />} />
+                <Route
+                  path="/portfolio-backtester/results"
+                  element={<PortfolioBacktesterResults />}
+                />
                 {/* The page moved: /portfolio was ambiguous next to the
                     analyzer. Redirect rather than 404 an existing bookmark. */}
                 <Route

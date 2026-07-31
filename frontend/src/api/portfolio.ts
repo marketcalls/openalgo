@@ -131,6 +131,15 @@ export interface PortfolioSeries {
     columns: string[]
     values: (number | null)[][]
   }
+  /** Best/worst single month, typical up/down month, win rate by month and quarter. */
+  seasonality?: {
+    best_month: number | null
+    worst_month: number | null
+    avg_up_month: number | null
+    avg_down_month: number | null
+    win_months: number | null
+    win_quarters: number | null
+  }
   weekly_returns: CurvePoint[]
   /** Weekly returns as years x ISO weeks, for the heatmap. */
   weekly_grid?: {
@@ -403,6 +412,26 @@ export async function runPortfolioBacktest(
 ): Promise<BacktestResponse> {
   const { data } = await apiClient.post<BacktestResponse>('/portfolio/backtest', req)
   return data
+}
+
+export interface Benchmark {
+  symbol: string
+  exchange: string
+  name: string | null
+}
+
+/**
+ * Index symbols usable as a benchmark, read from the instrument master.
+ *
+ * Not hardcoded: which indices exist depends on which broker's master
+ * contract was downloaded, and brokers differ on this (GLOBAL_INDEX rows
+ * only appear for a broker that supports them).
+ */
+export async function listBenchmarks(apiKey: string): Promise<Benchmark[]> {
+  const { data } = await apiClient.get<{ data: Benchmark[] }>('/portfolio/benchmarks', {
+    params: { apikey: apiKey },
+  })
+  return data.data
 }
 
 /**

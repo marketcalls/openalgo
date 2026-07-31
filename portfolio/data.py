@@ -65,8 +65,9 @@ def clear_price_cache() -> None:
 
 # Benchmarks are indices, which live on their own exchanges and cannot be
 # held. They are allowed as the comparison series only -- never as a holding,
-# since you cannot buy an index, only a fund tracking it.
-BENCHMARK_EXCHANGES = ("NSE_INDEX", "BSE_INDEX")
+# since you cannot buy an index, only a fund tracking it. GLOBAL_INDEX is
+# quote-only and Zerodha-only, but still fair game as a comparison series.
+BENCHMARK_EXCHANGES = ("NSE_INDEX", "BSE_INDEX", "GLOBAL_INDEX")
 
 
 class DataError(Exception):
