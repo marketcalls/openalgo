@@ -10,6 +10,12 @@ differ by market, they get added to as history happens, and a user may want
 their own. The Indian set below is the default; a global set can sit beside it
 without touching the logic.
 
+The set spans 1995 to date -- from the earliest window NSE equities can be
+measured over -- but most installs hold far less history than that, and any
+window with no overlap is simply dropped. A list reaching back further than the
+data does costs nothing and becomes useful the moment deeper history is
+ingested.
+
 Windows that fall outside the backtest are dropped rather than clipped to
 nothing, and a window only partly covered is reported as partial -- a portfolio
 that existed for three days of the COVID crash did not "survive" it, and
@@ -42,6 +48,24 @@ class CrisisPeriod:
 # event) spans; a few are recoveries rather than crashes, because how a
 # portfolio participates in the rebound matters as much as how it falls.
 INDIA_CRISES: tuple[CrisisPeriod, ...] = (
+    # ── 1995-1999 ──────────────────────────────────────────────────────────
+    #
+    # NSE equities began trading in November 1994, so these are the earliest
+    # windows the Indian market can be measured over at all. Treat them with
+    # more caution than the rest: several were BSE-centric, index continuity
+    # and corporate-action adjustment before about 2000 are poor, and few data
+    # vendors carry clean daily history that far back.
+    CrisisPeriod("bear_1995", "1995-96 Bear Market", "1995-01-02", "1996-01-31",
+                 "The long slide after the 1994 peak", "india"),
+    CrisisPeriod("asian_crisis", "Asian Financial Crisis", "1997-07-02", "1998-09-30",
+                 "Baht float and the contagion that followed", "global"),
+    CrisisPeriod("pokhran", "Pokhran-II Sanctions", "1998-05-11", "1998-06-30",
+                 "Nuclear tests and the sanctions that followed", "india"),
+    CrisisPeriod("russia_ltcm", "Russia Default / LTCM", "1998-08-03", "1998-10-30",
+                 "Sovereign default and a hedge-fund collapse", "global"),
+    CrisisPeriod("kargil", "Kargil Conflict", "1999-05-03", "1999-07-26",
+                 "Border conflict; the market recovered before it ended", "india"),
+
     # ── Global shocks that reached Indian markets ──────────────────────────
     CrisisPeriod("dotcom", "Dot-com Crash", "2000-02-14", "2001-09-21",
                  "Global technology unwind", "global"),
@@ -49,6 +73,12 @@ INDIA_CRISES: tuple[CrisisPeriod, ...] = (
                  "Nifty fell around 60% peak to trough", "global"),
     CrisisPeriod("gfc_recovery", "GFC Recovery", "2009-03-10", "2009-12-31",
                  "The snap-back off the March 2009 low", "global"),
+    CrisisPeriod("nine_eleven", "9/11 Attacks", "2001-09-11", "2001-09-21",
+                 "Markets shut worldwide; a sharp risk-off on reopening", "global"),
+    CrisisPeriod("may_2006", "May 2006 EM Correction", "2006-05-11", "2006-06-14",
+                 "Emerging markets sold off about 30% in a month", "global"),
+    CrisisPeriod("subprime_2007", "2007 Subprime Tremor", "2007-07-24", "2007-08-17",
+                 "The first crack before the crisis proper", "global"),
     CrisisPeriod("euro_debt", "European Debt Crisis", "2011-07-01", "2011-12-20",
                  "Sovereign contagion and a global risk-off", "global"),
     CrisisPeriod("taper_tantrum", "Taper Tantrum", "2013-05-22", "2013-08-28",
@@ -75,6 +105,10 @@ INDIA_CRISES: tuple[CrisisPeriod, ...] = (
                  "Global tariff escalation", "global"),
 
     # ── Domestic events ────────────────────────────────────────────────────
+    CrisisPeriod("ketan_parekh", "Ketan Parekh / UTI Crisis", "2001-03-01", "2001-04-30",
+                 "Broker default and the freezing of US-64", "india"),
+    CrisisPeriod("election_2004", "2004 Election Crash", "2004-05-14", "2004-05-28",
+                 "17 May 2004: trading halted twice in one session", "india"),
     CrisisPeriod("satyam", "Satyam Scandal", "2009-01-07", "2009-01-30",
                  "Corporate governance shock", "india"),
     CrisisPeriod("demonetisation", "Demonetisation", "2016-11-08", "2016-12-26",
