@@ -32,6 +32,7 @@ from portfolio.analytics import (
 )
 from portfolio.attribution import attribution
 from portfolio.compare import rebalancing_sweep
+from portfolio.crisis import INDIA_CRISES, crisis_analysis
 from portfolio.costs import EquityCosts, schedule_for
 from portfolio.engine import Costs, normalise_weights, run_backtest
 from portfolio.health import portfolio_health
@@ -841,3 +842,40 @@ class TestAttribution:
         h, _ = self._kit()
         far = pd.Series([0.01, 0.02], index=pd.bdate_range("2030-01-01", periods=2))
         assert attribution(h, pd.Series({"GOOD": 1.0}), far)["available"] is False
+
+
+class TestCrisisPeriodSet:
+    """
+    The set is data, so the things that can silently rot are structural: a
+    reversed window, a duplicate key, an untagged scope.
+    """
+
+    def test_spans_from_the_start_of_nse_equities(self):
+        assert min(p.start for p in INDIA_CRISES) < "1996"
+        assert len(INDIA_CRISES) >= 30
+
+    def test_every_window_is_ordered_and_uniquely_keyed(self):
+        assert all(p.start < p.end for p in INDIA_CRISES)
+        keys = [p.key for p in INDIA_CRISES]
+        assert len(keys) == len(set(keys))
+
+    def test_every_period_is_scoped(self):
+        assert all(p.scope in ("india", "global") for p in INDIA_CRISES)
+        assert {p.scope for p in INDIA_CRISES} == {"india", "global"}
+
+    def test_periods_outside_the_data_are_dropped_not_zeroed(self):
+        # A 2024 portfolio never lived through the Asian crisis; reporting 0%
+        # would read as "unaffected" rather than "not applicable".
+        idx = pd.bdate_range("2024-01-01", periods=200)
+        r = pd.Series(np.random.default_rng(2).normal(0.0004, 0.01, 200), index=idx)
+        out = crisis_analysis(r)
+        keys = {p["key"] for p in out["periods"]}
+        assert "asian_crisis" not in keys
+        assert "kargil" not in keys
+
+    def test_a_long_history_reaches_the_old_windows(self):
+        idx = pd.bdate_range("1995-01-02", periods=8000)
+        r = pd.Series(np.random.default_rng(3).normal(0.0003, 0.01, 8000), index=idx)
+        keys = {p["key"] for p in crisis_analysis(r)["periods"]}
+        for old in ("bear_1995", "asian_crisis", "kargil", "election_2004"):
+            assert old in keys
