@@ -235,7 +235,7 @@ def transform_holdings_data(holdings_data):
             # dash for every average and an investment value of zero: the data
             # was in the Upstox response and never reached the payload.
             "average_price": average_price,
-            "last_price": last_price,
+            "ltp": last_price,
             "pnl": round(float(holdings.get("pnl") or 0.0), 2),
             "pnlpercent": pnlpercent,
         }

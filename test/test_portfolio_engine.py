@@ -35,8 +35,8 @@ from portfolio.compare import rebalancing_sweep
 from portfolio.crisis import INDIA_CRISES, crisis_analysis
 from portfolio.costs import EquityCosts, schedule_for
 from portfolio.engine import Costs, normalise_weights, run_backtest
-from portfolio.health import portfolio_health
-from portfolio.holdings import holdings_summary, parse_holdings
+from portfolio.health import grade_for, portfolio_health
+from portfolio.holdings import Holding, holdings_summary, parse_holdings
 from portfolio.rebalance import RebalancePolicy, calendar_dates, drifted
 
 
@@ -550,12 +550,21 @@ class TestPortfolioHealth:
         pricey = self._health(cost_drag=0.05)
         assert cheap["score"] > pricey["score"]
 
-    def test_grade_boundaries(self):
-        from portfolio.health import grade_for
-        assert grade_for(95) == "A"
-        assert grade_for(90) == "A"
-        assert grade_for(89.9) == "B"
-        assert grade_for(0) == "F"
+    @pytest.mark.parametrize(
+        ("score", "grade"),
+        [
+            (80, "A"),
+            (79.9, "B"),
+            (65, "B"),
+            (64.9, "C"),
+            (50, "C"),
+            (49.9, "D"),
+            (35, "D"),
+            (34.9, "F"),
+        ],
+    )
+    def test_grade_boundaries(self, score, grade):
+        assert grade_for(score) == grade
 
 
 class TestIndianEquityCosts:
@@ -758,6 +767,15 @@ class TestLiveHoldings:
         ]
         assert [h.symbol for h in parse_holdings(rows)] == ["D"]
 
+    def test_drops_blank_symbols_and_non_finite_numerics(self):
+        rows = [
+            {"symbol": "", "quantity": 1, "last_price": 100},
+            {"symbol": "NAN_PRICE", "quantity": 1, "last_price": float("nan")},
+            {"symbol": "INF_QTY", "quantity": float("inf"), "last_price": 100},
+            {"symbol": "GOOD", "quantity": 1, "last_price": 100},
+        ]
+        assert [h.symbol for h in parse_holdings(rows)] == ["GOOD"]
+
     def test_weights_by_current_value_not_cost(self):
         # Equal cost, but A doubled: exposure is what it is worth now.
         h = parse_holdings([
@@ -936,3 +954,15 @@ class TestHoldingsWithoutCostBasis:
         assert s["has_cost_basis"] is True
         assert s["invested"] == pytest.approx(1000.0)
         assert s["pnl_pct"] == pytest.approx(10.0)
+
+    def test_partial_cost_basis_never_fabricates_total_return(self):
+        summary = holdings_summary(
+            [
+                Holding("KNOWN", "NSE", 2, 100, 120, 40),
+                Holding("UNKNOWN", "NSE", 1, 0, 200, 25),
+            ]
+        )
+        assert summary["invested"] is None
+        assert summary["pnl"] == 65
+        assert summary["pnl_pct"] is None
+        assert summary["has_cost_basis"] is False
