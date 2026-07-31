@@ -89,7 +89,7 @@ class FlowOrderUpdateMonitor:
         self._watches: dict[int, OrderUpdateWatch] = {}
         self._watches_lock = threading.Lock()
         bus.subscribe("order.update", self._on_order_update, name="FlowOrderUpdateMonitor")
-        logger.info("FlowOrderUpdateMonitor initialized (subscribed to order.update)")
+        logger.debug("FlowOrderUpdateMonitor initialized (subscribed to order.update)")
 
     def add_watch(
         self,
