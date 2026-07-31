@@ -136,6 +136,15 @@ produce a user-correctable 400 response, not negative transaction costs or a
 500. Price matrices must reject non-finite or non-positive closes before
 simulation.
 
+### Dependency manifest parity
+
+`requirements.txt` pins `openstatz==0.4.1`, but `pyproject.toml` and `uv.lock`
+omit it. A clean `uv sync`, which is the repository-mandated setup path, leaves
+the portfolio metrics dependency unavailable and causes seven portfolio tests
+to fail at import time. Add the same exact pin to the project metadata and lock
+file so clean installs and deployed environments contain the package the
+feature imports.
+
 ## API and Data Flow
 
 For an authenticated request:
@@ -185,6 +194,7 @@ Add regression tests that fail against the current branch for:
 - no process-wide cache reuse for broker-source prices;
 - negative or non-finite charge and price inputs;
 - Upstox `ltp`, average price, and zero-cost-basis behavior.
+- a clean `uv sync` environment importing `openstatz==0.4.1`.
 
 ## Validation and Commit
 
