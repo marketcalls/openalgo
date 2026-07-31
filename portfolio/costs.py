@@ -28,7 +28,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from math import isfinite
 
-
 _CHARGE_BASES = frozenset({"turnover", "buy", "sell", "order"})
 
 
@@ -133,7 +132,7 @@ class CostSchedule:
             return 0.0
         return self.charge(buy_value, sell_value, orders) / turnover
 
-    def with_overrides(self, overrides: dict[str, dict]) -> "CostSchedule":
+    def with_overrides(self, overrides: dict[str, dict]) -> CostSchedule:
         """
         Apply per-charge edits from a form: ``{"stt": {"rate": 0.00125}}``.
 

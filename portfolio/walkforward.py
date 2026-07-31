@@ -18,8 +18,8 @@ from math import ceil
 import numpy as np
 import pandas as pd
 
-from portfolio.data import PriceMatrix
 from portfolio.costs import CostSchedule
+from portfolio.data import PriceMatrix
 from portfolio.engine import Costs, run_backtest
 from portfolio.rebalance import RebalancePolicy
 

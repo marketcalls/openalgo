@@ -14,11 +14,11 @@ drift between this engine and the rest of the ecosystem.
 """
 
 from portfolio.data import (
-    PriceMatrix,
+    SUPPORTED_EXCHANGES,
     DataError,
     MissingHistory,
+    PriceMatrix,
     UnsupportedExchange,
-    SUPPORTED_EXCHANGES,
     load_prices,
     split_artifacts,
 )

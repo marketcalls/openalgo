@@ -54,7 +54,7 @@ SUPPORTED_EXCHANGES = ("NSE", "BSE")
 # roughly 200KB, but 50 x 20 years is not), and keyed on everything that
 # changes the answer, so no query can collide with a different one.
 _CACHE_MAX = 16
-_cache: "OrderedDict[tuple, PriceMatrix]" = OrderedDict()
+_cache: OrderedDict[tuple, PriceMatrix] = OrderedDict()
 _cache_lock = Lock()
 
 
@@ -174,7 +174,7 @@ def _closes_from_duckdb(
     """
     from database.historify_db import get_connection
 
-    pairs = list(dict.fromkeys(zip(symbols, exchanges)))
+    pairs = list(dict.fromkeys(zip(symbols, exchanges, strict=True)))
     where = " or ".join("(symbol = ? and exchange = ?)" for _ in pairs)
     params: list[object] = [interval, start_date, end_date]
     for symbol, exchange in pairs:
@@ -342,7 +342,7 @@ def load_prices(
         return _remember(key, _assemble(series, symbols, start_date, end_date, source, min_sessions))
 
     series = {}
-    for symbol, ex in zip(symbols, checked):
+    for symbol, ex in zip(symbols, checked, strict=True):
         ok, payload, status = get_history(
             symbol=symbol,
             exchange=ex,
@@ -374,7 +374,7 @@ def load_prices(
     return _assemble(series, symbols, start_date, end_date, source, min_sessions)
 
 
-def _remember(key: tuple, matrix: "PriceMatrix") -> "PriceMatrix":
+def _remember(key: tuple, matrix: PriceMatrix) -> PriceMatrix:
     """Store under the LRU cap, evicting the least recently used."""
     with _cache_lock:
         _cache[key] = matrix

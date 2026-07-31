@@ -14,7 +14,6 @@ import dataclasses
 import os
 import tempfile
 from datetime import date, timedelta
-
 from typing import Any
 
 import pandas as pd
@@ -26,21 +25,22 @@ from portfolio.analytics import (
     diversification_ratio,
     summary,
 )
+from portfolio.attribution import attribution
+from portfolio.compare import rebalancing_sweep
+from portfolio.costs import CostSchedule, schedule_for
+from portfolio.crisis import crisis_analysis
 from portfolio.data import (
     BENCHMARK_EXCHANGES,
     SUPPORTED_EXCHANGES,
     DataError,
+    PriceMatrix,
     load_prices,
 )
-from portfolio.costs import CostSchedule, schedule_for
-from portfolio.attribution import attribution
-from portfolio.compare import rebalancing_sweep
-from portfolio.crisis import crisis_analysis
+from portfolio.engine import Costs, run_backtest
 from portfolio.grouping import structure
+from portfolio.health import portfolio_health
 from portfolio.holdings import holdings_summary, parse_holdings
 from portfolio.insights import build_findings
-from portfolio.engine import Costs, run_backtest
-from portfolio.health import portfolio_health
 from portfolio.rebalance import RebalancePolicy
 from portfolio.walkforward import monte_carlo, walk_forward
 from utils.logging import get_logger
@@ -155,14 +155,20 @@ def generate_tearsheet(
     try:
         symbols = [str(h["symbol"]).strip().upper() for h in holdings]
         exchanges = [str(h.get("exchange", "NSE")).strip().upper() for h in holdings]
-        weights = {s: float(h.get("weight", 0)) for s, h in zip(symbols, holdings)}
+        weights = {
+            symbol: float(holding.get("weight", 0))
+            for symbol, holding in zip(symbols, holdings, strict=True)
+        }
     except (KeyError, TypeError, ValueError) as exc:
         return False, {"status": "error", "message": f"malformed holding: {exc}"}, 400
 
-    fetch = dict(
-        source=source, api_key=api_key, auth_token=auth_token,
-        feed_token=feed_token, broker=broker,
-    )
+    fetch = {
+        "source": source,
+        "api_key": api_key,
+        "auth_token": auth_token,
+        "feed_token": feed_token,
+        "broker": broker,
+    }
 
     try:
         prices = load_prices(symbols, exchanges, start_date, end_date, **fetch)
@@ -214,7 +220,7 @@ def generate_tearsheet(
         )
         with open(path, encoding="utf-8") as fh:
             return True, fh.read(), 200
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         logger.exception("tearsheet generation failed")
         return (
             False,
@@ -543,17 +549,23 @@ def run_portfolio_backtest(
     try:
         symbols = [str(h["symbol"]).strip().upper() for h in holdings]
         exchanges = [str(h.get("exchange", "NSE")).strip().upper() for h in holdings]
-        weights = {s: float(h.get("weight", 0)) for s, h in zip(symbols, holdings)}
+        weights = {
+            symbol: float(holding.get("weight", 0))
+            for symbol, holding in zip(symbols, holdings, strict=True)
+        }
     except (KeyError, TypeError, ValueError) as exc:
         return False, {"status": "error", "message": f"malformed holding: {exc}"}, 400
 
     if len(set(symbols)) != len(symbols):
         return False, {"status": "error", "message": "duplicate symbol in holdings"}, 400
 
-    fetch = dict(
-        source=source, api_key=api_key, auth_token=auth_token,
-        feed_token=feed_token, broker=broker,
-    )
+    fetch = {
+        "source": source,
+        "api_key": api_key,
+        "auth_token": auth_token,
+        "feed_token": feed_token,
+        "broker": broker,
+    }
 
     try:
         prices = load_prices(symbols, exchanges, start_date, end_date, **fetch)
@@ -580,7 +592,7 @@ def run_portfolio_backtest(
         return False, {"status": "error", "message": str(exc)}, 422
     except ValueError as exc:
         return False, {"status": "error", "message": str(exc)}, 400
-    except Exception as exc:  # noqa: BLE001 - the facade must not leak a 500 body
+    except Exception:  # noqa: BLE001 - the facade must not leak a 500 body
         logger.exception("portfolio backtest failed")
         return (
             False,
@@ -637,7 +649,7 @@ def run_portfolio_backtest(
         "metrics": metrics,
         "items": _clean(
             [
-                {"symbol": symbol, **{k: v for k, v in row.items()}}
+                {"symbol": symbol, **row}
                 for symbol, row in result.items.to_dict(orient="index").items()
             ]
         ),
