@@ -38,6 +38,7 @@ from portfolio.compare import rebalancing_sweep
 from portfolio.crisis import crisis_analysis
 from portfolio.grouping import structure
 from portfolio.holdings import holdings_summary, parse_holdings
+from portfolio.insights import build_findings
 from portfolio.engine import Costs, run_backtest
 from portfolio.health import portfolio_health
 from portfolio.rebalance import RebalancePolicy
@@ -639,6 +640,7 @@ def run_portfolio_backtest(
             "dates": [d.date().isoformat() for d in result.rebalance_dates],
         },
     }
+    payload["insights"] = _clean(build_findings(payload))
     return True, payload, 200
 
 
