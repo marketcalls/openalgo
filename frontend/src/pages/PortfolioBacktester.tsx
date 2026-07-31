@@ -22,6 +22,7 @@ import {
 } from '@/components/portfolio/ChargeControls'
 import { AllocationChart } from '@/components/portfolio/AllocationChart'
 import { CrisisChart } from '@/components/portfolio/CrisisChart'
+import { EoyChart } from '@/components/portfolio/EoyChart'
 import { MonthlyReturnsHeatmap } from '@/components/portfolio/MonthlyReturnsHeatmap'
 import { SymbolSearchInput } from '@/components/portfolio/SymbolSearchInput'
 import { WeeklyReturnsHeatmap } from '@/components/portfolio/WeeklyReturnsHeatmap'
@@ -862,6 +863,27 @@ export default function PortfolioBacktester() {
             <TabsContent value="monthly" className="space-y-4">
               {result.series.yearly_returns &&
                 result.series.yearly_returns.length > 0 && (
+                  <>
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">
+                        EOY Returns vs Benchmark
+                      </CardTitle>
+                      <p className="text-sm text-muted-foreground">
+                        One pair of bars per calendar year. The dashed red line is the
+                        portfolio's own average year — a run of ordinary years beside
+                        one spectacular one should read as exactly that.
+                      </p>
+                    </CardHeader>
+                    <CardContent>
+                      <EoyChart
+                        rows={result.series.yearly_returns}
+                        benchmarkLabel={result.meta.benchmark ?? 'Benchmark'}
+                        height={300}
+                      />
+                    </CardContent>
+                  </Card>
+
                   <Card>
                     <CardHeader className="pb-2">
                       <CardTitle className="text-base">Yearly Returns</CardTitle>
@@ -931,6 +953,7 @@ export default function PortfolioBacktester() {
                       </table>
                     </CardContent>
                   </Card>
+                  </>
                 )}
               {result.series.monthly_returns && (
                 <Card>
