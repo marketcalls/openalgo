@@ -38,34 +38,49 @@ class Holding:
         return self.quantity * self.last_price
 
 
+def _number(value: object) -> float:
+    """Coerce a broker's numeric, which may arrive as a string or be absent."""
+    try:
+        return float(value) if value not in (None, "", "-") else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def parse_holdings(rows: list[dict]) -> list[Holding]:
     """
     Normalise a broker holdings payload.
 
     Brokers agree on the field names the service exposes but not on their
     types -- quantities and prices arrive as strings from several of them -- so
-    every numeric is coerced rather than trusted. A row without a usable
-    quantity or price is dropped: it cannot be weighted, and guessing a price
-    would put a fabricated number into every downstream metric.
+    every numeric is coerced rather than trusted.
+
+    The only fields a row genuinely needs are **quantity and a current price**,
+    because every weight is `quantity x last_price`. Average price is not
+    required: several brokers (Upstox among them) return holdings with no
+    average at all, and gating on it discarded entire accounts that were
+    perfectly analysable. When it is missing, cost and P&L-percent are simply
+    unavailable for that row; weights, exposure and the whole analysis are not.
+
+    A current price is recovered from average plus P&L per share when the feed
+    omits `last_price` but supplies both. Failing that the row is dropped --
+    a position with no price cannot be weighted, and inventing one would put a
+    fabricated number into every downstream metric.
     """
     out: list[Holding] = []
     for row in rows or []:
-        try:
-            quantity = float(row.get("quantity") or 0)
-            average = float(row.get("average_price") or 0)
-        except (TypeError, ValueError):
-            continue
-        if quantity <= 0 or average <= 0:
+        quantity = _number(row.get("quantity"))
+        if quantity <= 0:
             continue
 
-        pnl = float(row.get("pnl") or 0)
-        # `last_price` is not in every broker's holdings payload, but P&L is,
-        # so the current price can be recovered from it rather than dropped.
-        last = row.get("last_price")
-        try:
-            last_price = float(last) if last not in (None, "") else average + pnl / quantity
-        except (TypeError, ValueError):
+        average = _number(row.get("average_price"))
+        pnl = _number(row.get("pnl"))
+
+        last_price = _number(row.get("last_price") or row.get("ltp"))
+        if last_price <= 0 and average > 0:
+            # No live price, but average and P&L pin it down.
             last_price = average + pnl / quantity
+        if last_price <= 0:
+            continue
 
         out.append(
             Holding(
@@ -102,6 +117,9 @@ def holdings_summary(holdings: list[Holding]) -> dict:
 
     invested = sum(h.invested for h in holdings)
     current = sum(h.current for h in holdings)
+    # A feed with no average price gives no cost basis. Report the P&L the
+    # broker states rather than a percentage of zero.
+    has_cost = invested > 0
     rows = []
     weights: dict[str, float] = {}
 
@@ -118,7 +136,9 @@ def holdings_summary(holdings: list[Holding]) -> dict:
                 "invested": round(h.invested, 2),
                 "current": round(h.current, 2),
                 "pnl": round(h.pnl, 2),
-                "pnl_pct": round((h.current / h.invested - 1.0) * 100, 2) if h.invested else 0.0,
+                "pnl_pct": (
+                    round((h.current / h.invested - 1.0) * 100, 2) if h.invested else None
+                ),
                 "weight": round(weight, 5),
                 "product": h.product,
             }
@@ -128,9 +148,12 @@ def holdings_summary(holdings: list[Holding]) -> dict:
     return {
         "holdings": rows,
         "weights": weights,
-        "invested": round(invested, 2),
+        "invested": round(invested, 2) if has_cost else None,
         "current": round(current, 2),
-        "pnl": round(current - invested, 2),
-        "pnl_pct": round((current / invested - 1.0) * 100, 2) if invested else 0.0,
+        # Without a cost basis the only honest total is the P&L the broker
+        # itself reports, summed.
+        "pnl": round(current - invested, 2) if has_cost else round(sum(h.pnl for h in holdings), 2),
+        "pnl_pct": round((current / invested - 1.0) * 100, 2) if has_cost else None,
+        "has_cost_basis": has_cost,
         "count": len(rows),
     }

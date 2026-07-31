@@ -128,12 +128,24 @@ export default function PortfolioAnalyzer() {
       {result && s && (
         <>
           <div className="grid gap-3 md:grid-cols-5">
-            <Metric label="Invested" value={inr(s.invested)} sub={`${s.count} holdings`} />
-            <Metric label="Worth Today" value={inr(s.current)} />
             <Metric
-              label="Total Returns"
+              label="Worth Today"
+              value={inr(s.current)}
+              sub={`${s.count} holdings`}
+            />
+            <Metric
+              label="Invested"
+              value={s.invested === null ? '—' : inr(s.invested)}
+              sub={s.invested === null ? 'broker reports no average price' : undefined}
+            />
+            <Metric
+              label="Total P&L"
               value={inr(s.pnl)}
-              sub={`${s.pnl_pct.toFixed(2)}%`}
+              sub={
+                s.pnl_pct === null
+                  ? 'percent needs a cost basis'
+                  : `${s.pnl_pct.toFixed(2)}%`
+              }
               tone={s.pnl >= 0 ? 'good' : 'bad'}
             />
             <Metric
@@ -152,6 +164,19 @@ export default function PortfolioAnalyzer() {
               sub={`from ${s.count} names`}
             />
           </div>
+
+          {s.has_cost_basis === false && (
+            <Card className="border-amber-500/40">
+              <CardContent className="p-4 text-sm">
+                <span className="font-medium text-amber-500">No cost basis: </span>
+                your broker returns holdings without an average price, so invested
+                value and return percentages cannot be computed. Everything that
+                depends on current value — weights, concentration, co-movement,
+                health and risk — is unaffected, and the P&amp;L shown is the
+                broker's own figure.
+              </CardContent>
+            </Card>
+          )}
 
           {result.skipped.length > 0 && (
             <Card className="border-amber-500/40">
@@ -206,13 +231,13 @@ export default function PortfolioAnalyzer() {
                         </td>
                         <td className="p-3 text-right tabular-nums">{h.quantity}</td>
                         <td className="p-3 text-right tabular-nums text-muted-foreground">
-                          {h.average_price.toFixed(2)}
+                          {h.average_price > 0 ? h.average_price.toFixed(2) : '—'}
                         </td>
                         <td className="p-3 text-right tabular-nums">
                           {h.last_price.toFixed(2)}
                         </td>
                         <td className="p-3 text-right tabular-nums text-muted-foreground">
-                          {inr(h.invested)}
+                          {h.invested > 0 ? inr(h.invested) : '—'}
                         </td>
                         <td className="p-3 text-right tabular-nums">{inr(h.current)}</td>
                         <td
@@ -222,7 +247,9 @@ export default function PortfolioAnalyzer() {
                           )}
                         >
                           {inr(h.pnl)}
-                          <div className="text-xs">{h.pnl_pct.toFixed(2)}%</div>
+                          {h.pnl_pct !== null && (
+                            <div className="text-xs">{h.pnl_pct.toFixed(2)}%</div>
+                          )}
                         </td>
                       </tr>
                     ))}

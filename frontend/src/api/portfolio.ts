@@ -423,7 +423,8 @@ export interface HoldingRow {
   invested: number
   current: number
   pnl: number
-  pnl_pct: number
+  /** Null when the broker reports no average price for this holding. */
+  pnl_pct: number | null
   weight: number
   product: string
 }
@@ -434,10 +435,12 @@ export interface HoldingsAnalysis {
   summary: {
     holdings: HoldingRow[]
     weights: Record<string, number>
-    invested: number
+    /** Null when the feed carries no average price at all. */
+    invested: number | null
     current: number
     pnl: number
-    pnl_pct: number
+    pnl_pct: number | null
+    has_cost_basis?: boolean
     count: number
   }
   /** The full backtest report over the current weights, or null if unavailable. */
