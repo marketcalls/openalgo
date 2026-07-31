@@ -995,45 +995,151 @@ class TestAttribution:
         bench = pd.Series(rng.normal(0.0004, 0.009, n), index=idx)
         return holdings, bench
 
-    def test_effects_sum_to_the_excess(self):
-        h, b = self._kit()
-        a = attribution(h, pd.Series({"GOOD": 0.7, "BAD": 0.3}), b)
-        assert a["available"]
-        assert a["selection_effect"] + a["allocation_effect"] == pytest.approx(
-            a["excess_return"], abs=1e-6
+    def _attribute(
+        self,
+        weights=None,
+        *,
+        holding_returns=None,
+        benchmark=None,
+        costs=None,
+        policy=None,
+    ):
+        generated, generated_benchmark = self._kit()
+        holding_returns = (
+            generated if holding_returns is None else holding_returns
+        )
+        benchmark = generated_benchmark if benchmark is None else benchmark
+        weights = weights or {"GOOD": 70, "BAD": 30}
+        closes = 100.0 * (1.0 + holding_returns).cumprod()
+        prices = PriceMatrix(
+            closes=closes,
+            source="db",
+            start=closes.index[0].date(),
+            end=closes.index[-1].date(),
+        )
+        result = run_backtest(
+            prices,
+            weights,
+            policy=policy,
+            costs=costs,
+            initial_capital=10_000.0,
+        )
+        daily = prices.returns()
+        aligned_benchmark = benchmark.reindex(daily.index)
+        return result, attribution(
+            daily,
+            result.weights,
+            pd.Series(result.meta["target_weights"]),
+            result.returns,
+            aligned_benchmark,
+            result.items["contribution_pct"],
         )
 
-    def test_equal_weights_leave_no_allocation_effect(self):
+    def test_effects_sum_to_the_net_excess(self):
+        _, out = self._attribute()
+        assert out["available"]
+        assert (
+            out["selection_effect"]
+            + out["allocation_effect"]
+            + out["cost_effect"]
+        ) == pytest.approx(out["excess_return"], abs=1e-6)
+
+    def test_identical_holdings_leave_no_allocation_effect(self):
         h, b = self._kit()
-        a = attribution(h, pd.Series({"GOOD": 0.5, "BAD": 0.5}), b)
-        # Nothing was decided by sizing, so all of it is selection.
-        assert a["allocation_effect"] == pytest.approx(0.0, abs=1e-9)
-        assert a["selection_effect"] == pytest.approx(a["excess_return"], abs=1e-9)
+        h["BAD"] = h["GOOD"]
+        _, out = self._attribute(
+            {"GOOD": 90, "BAD": 10},
+            holding_returns=h,
+            benchmark=b,
+        )
+        assert out["allocation_effect"] == pytest.approx(0.0, abs=1e-9)
 
     def test_overweighting_the_winner_earns_a_positive_allocation_effect(self):
-        h, b = self._kit()
-        good = attribution(h, pd.Series({"GOOD": 0.9, "BAD": 0.1}), b)
-        bad = attribution(h, pd.Series({"GOOD": 0.1, "BAD": 0.9}), b)
+        _, good = self._attribute({"GOOD": 90, "BAD": 10})
+        _, bad = self._attribute({"GOOD": 10, "BAD": 90})
         assert good["allocation_effect"] > 0
         assert bad["allocation_effect"] < 0
 
     def test_per_holding_contributions_are_signed_correctly(self):
-        h, b = self._kit()
-        a = attribution(h, pd.Series({"GOOD": 0.5, "BAD": 0.5}), b)
-        by = {r["symbol"]: r for r in a["holdings"]}
+        _, out = self._attribute({"GOOD": 50, "BAD": 50})
+        by = {r["symbol"]: r for r in out["holdings"]}
         assert by["GOOD"]["contribution"] > 0
         assert by["BAD"]["contribution"] < 0
 
+    def test_dynamic_path_and_costs_reconcile_to_the_engine(self):
+        index = pd.bdate_range("2024-01-01", periods=22)
+        holding_returns = pd.DataFrame(
+            {
+                "GOOD": [0.0] * 21 + [1.0],
+                "BAD": [0.0] * 22,
+            },
+            index=index,
+        )
+        benchmark = pd.Series(0.0, index=index)
+        schedule = CostSchedule(
+            "test",
+            charges=(Charge("brokerage", "Brokerage", "order", flat=10.0),),
+        )
+        result, out = self._attribute(
+            {"GOOD": 50, "BAD": 50},
+            holding_returns=holding_returns,
+            benchmark=benchmark,
+            costs=schedule,
+            policy=RebalancePolicy("monthly"),
+        )
+
+        assert out["portfolio_return"] == pytest.approx(result.total_return)
+        assert (
+            out["selection_effect"]
+            + out["allocation_effect"]
+            + out["cost_effect"]
+        ) == pytest.approx(out["excess_return"])
+        assert sum(row["contribution"] for row in out["holdings"]) == pytest.approx(
+            out["excess_return"]
+        )
+        assert out["cost_effect"] < 0
+
     def test_refuses_without_a_benchmark(self):
         h, _ = self._kit()
-        out = attribution(h, pd.Series({"GOOD": 1.0}), None)
+        closes = 100.0 * (1.0 + h).cumprod()
+        prices = PriceMatrix(
+            closes=closes,
+            source="db",
+            start=closes.index[0].date(),
+            end=closes.index[-1].date(),
+        )
+        result = run_backtest(prices, {"GOOD": 50, "BAD": 50})
+        out = attribution(
+            prices.returns(),
+            result.weights,
+            pd.Series(result.meta["target_weights"]),
+            result.returns,
+            None,
+            result.items["contribution_pct"],
+        )
         assert out["available"] is False
         assert "benchmark" in out["reason"]
 
     def test_refuses_when_nothing_overlaps(self):
         h, _ = self._kit()
+        closes = 100.0 * (1.0 + h).cumprod()
+        prices = PriceMatrix(
+            closes=closes,
+            source="db",
+            start=closes.index[0].date(),
+            end=closes.index[-1].date(),
+        )
+        result = run_backtest(prices, {"GOOD": 50, "BAD": 50})
         far = pd.Series([0.01, 0.02], index=pd.bdate_range("2030-01-01", periods=2))
-        assert attribution(h, pd.Series({"GOOD": 1.0}), far)["available"] is False
+        out = attribution(
+            prices.returns(),
+            result.weights,
+            pd.Series(result.meta["target_weights"]),
+            result.returns,
+            far,
+            result.items["contribution_pct"],
+        )
+        assert out["available"] is False
 
 
 class TestCrisisPeriodSet:

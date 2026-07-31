@@ -1522,7 +1522,7 @@ export default function PortfolioBacktester() {
             <TabsContent value="attribution" className="space-y-4">
               {result.attribution.available ? (
                 <>
-                  <div className="grid gap-3 md:grid-cols-3">
+                  <div className="grid gap-3 md:grid-cols-4">
                     <Stat
                       label="Excess vs Benchmark"
                       value={pct(result.attribution.excess_return)}
@@ -1539,6 +1539,11 @@ export default function PortfolioBacktester() {
                       value={pct(result.attribution.allocation_effect)}
                       sub="did the weighting help"
                     />
+                    <Stat
+                      label="Trading costs"
+                      value={pct(result.attribution.cost_effect)}
+                      sub="net return versus gross"
+                    />
                   </div>
 
                   <Card>
@@ -1547,8 +1552,9 @@ export default function PortfolioBacktester() {
                       <p className="text-sm text-muted-foreground">
                         Selection is an equal-weighted basket of the same holdings
                         against the benchmark: the picks, with sizing removed.
-                        Allocation is the actual portfolio against that basket. They
-                        sum to the excess.
+                        Allocation is the realized gross portfolio against that
+                        basket. Trading costs bridge gross to net. Together they
+                        sum to the net excess.
                       </p>
                     </CardHeader>
                     <CardContent className="p-0">
@@ -1580,7 +1586,8 @@ export default function PortfolioBacktester() {
                       </p>
                     </CardHeader>
                     <CardContent className="p-0">
-                      <table className="w-full text-sm">
+                      {(result.attribution.holdings ?? []).length > 0 ? (
+                        <table className="w-full text-sm">
                         <thead className="border-b text-xs text-muted-foreground">
                           <tr>
                             <th className="p-3 text-left">Symbol</th>
@@ -1619,7 +1626,12 @@ export default function PortfolioBacktester() {
                             </tr>
                           ))}
                         </tbody>
-                      </table>
+                        </table>
+                      ) : (
+                        <p className="p-4 text-sm text-muted-foreground">
+                          {result.attribution.holdings_reason}
+                        </p>
+                      )}
                     </CardContent>
                   </Card>
 

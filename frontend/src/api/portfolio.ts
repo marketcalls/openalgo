@@ -311,6 +311,7 @@ export interface PortfolioAttribution {
   excess_return?: number
   selection_effect?: number
   allocation_effect?: number
+  cost_effect?: number
   holdings?: {
     symbol: string
     weight: number
@@ -318,6 +319,7 @@ export interface PortfolioAttribution {
     vs_benchmark: number
     contribution: number
   }[]
+  holdings_reason?: string | null
   method?: string
 }
 
