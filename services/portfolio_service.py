@@ -180,6 +180,43 @@ def generate_tearsheet(
             logger.debug("could not remove %s", path, exc_info=True)
 
 
+def _asset_returns(prices: PriceMatrix) -> list[dict[str, Any]]:
+    """
+    Trailing return per holding over standard windows.
+
+    Close to close throughout, which is the only basis the data supports:
+    Historify and the broker history API both give a close per session, and
+    every figure in this report is built from that single column. No intraday
+    high, low or open enters any calculation.
+
+    A window longer than the available history returns null rather than the
+    since-inception figure, which would otherwise read as a 5-year return on
+    eighteen months of data.
+    """
+    closes = prices.closes
+    if closes.empty:
+        return []
+
+    # Approximate trading sessions per window. Calendar-exact dates would drift
+    # against holidays; a session count is what the data is actually indexed by.
+    windows = {"1W": 5, "1M": 21, "3M": 63, "1Y": 252, "3Y": 756, "5Y": 1260}
+    rows: list[dict[str, Any]] = []
+
+    for symbol in closes.columns:
+        series = closes[symbol].dropna()
+        row: dict[str, Any] = {"symbol": symbol, "last": round(float(series.iloc[-1]), 2)}
+        for label, sessions in windows.items():
+            if len(series) > sessions:
+                start = float(series.iloc[-(sessions + 1)])
+                row[label] = round(float(series.iloc[-1]) / start - 1.0, 6) if start else None
+            else:
+                row[label] = None
+        rows.append(row)
+
+    rows.sort(key=lambda r: (r.get("1Y") is None, -(r.get("1Y") or 0)))
+    return rows
+
+
 def _symbol_names(symbols: list[str]) -> dict[str, str]:
     """Listing names, for the instrument-class heuristic. Best effort."""
     try:
@@ -599,6 +636,8 @@ def run_portfolio_backtest(
         # What the portfolio is made of. Not a sector pie: the symbol master
         # has no sector field, so co-movement clustering answers the same
         # question from data that exists.
+        # Per-holding trailing returns, close to close.
+        "asset_returns": _clean(_asset_returns(prices)),
         "structure": _clean(structure(target_weights, holding_returns, _symbol_names(symbols))),
         # The weight path, for the allocation-over-time chart. Sampled weekly:
         # 2,500 sessions x N holdings is a lot of JSON to describe a shape that
