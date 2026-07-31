@@ -131,9 +131,11 @@ class PortfolioBacktest(Resource):
                 jsonify({"status": "error", "message": "Invalid openalgo apikey"}), 403
             )
 
-        auth_token = broker = None
+        auth_token = feed_token = broker = None
         if data["source"] == "api":
-            auth_token, broker = get_auth_token_broker(api_key)
+            auth_token, feed_token, broker = get_auth_token_broker(
+                api_key, include_feed_token=True
+            )
             if auth_token is None:
                 return make_response(
                     jsonify(
@@ -168,6 +170,7 @@ class PortfolioBacktest(Resource):
                 source=data["source"],
                 api_key=api_key,
                 auth_token=auth_token,
+                feed_token=feed_token,
                 broker=broker,
             )
         except Exception as exc:  # noqa: BLE001
@@ -199,9 +202,11 @@ class PortfolioTearsheet(Resource):
                 jsonify({"status": "error", "message": "Invalid openalgo apikey"}), 403
             )
 
-        auth_token = broker = None
+        auth_token = feed_token = broker = None
         if data["source"] == "api":
-            auth_token, broker = get_auth_token_broker(api_key)
+            auth_token, feed_token, broker = get_auth_token_broker(
+                api_key, include_feed_token=True
+            )
             if auth_token is None:
                 return make_response(
                     jsonify(
@@ -213,21 +218,34 @@ class PortfolioTearsheet(Resource):
                     403,
                 )
 
-        ok, payload, status = generate_tearsheet(
-            holdings=data["holdings"],
-            start_date=data["start_date"],
-            end_date=data["end_date"],
-            benchmark=data["benchmark"],
-            benchmark_exchange=data["benchmark_exchange"],
-            rebalance=data["rebalance"],
-            drift_band=data["drift_band"],
-            initial_capital=data["initial_capital"],
-            risk_free_rate=data["risk_free_rate"],
-            source=data["source"],
-            api_key=api_key,
-            auth_token=auth_token,
-            broker=broker,
-        )
+        try:
+            ok, payload, status = generate_tearsheet(
+                holdings=data["holdings"],
+                start_date=data["start_date"],
+                end_date=data["end_date"],
+                benchmark=data["benchmark"],
+                benchmark_exchange=data["benchmark_exchange"],
+                rebalance=data["rebalance"],
+                drift_band=data["drift_band"],
+                initial_capital=data["initial_capital"],
+                risk_free_rate=data["risk_free_rate"],
+                source=data["source"],
+                api_key=api_key,
+                auth_token=auth_token,
+                feed_token=feed_token,
+                broker=broker,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("portfolio tearsheet endpoint failed")
+            return make_response(
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "Tearsheet generation failed.",
+                    }
+                ),
+                500,
+            )
         if not ok:
             return make_response(jsonify(payload), status)
 
@@ -277,7 +295,9 @@ class PortfolioHoldings(Resource):
 
         # Holdings always need a broker session -- unlike a backtest, there is
         # no local copy of what someone owns.
-        auth_token, broker = get_auth_token_broker(api_key)
+        auth_token, feed_token, broker = get_auth_token_broker(
+            api_key, include_feed_token=True
+        )
         if auth_token is None:
             return make_response(
                 jsonify(
@@ -299,6 +319,7 @@ class PortfolioHoldings(Resource):
                 source=data["source"],
                 api_key=api_key,
                 auth_token=auth_token,
+                feed_token=feed_token,
                 broker=broker,
             )
         except Exception as exc:  # noqa: BLE001
