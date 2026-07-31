@@ -110,6 +110,9 @@ def run_backtest(
     symbols = prices.symbols
     target = normalise_weights(weights, symbols)
     closes = prices.closes
+    close_values = closes.to_numpy(dtype=float)
+    if not np.isfinite(close_values).all() or (close_values <= 0).any():
+        raise ValueError("price matrix must contain only positive finite closes")
     index = closes.index
 
     # Bar-over-bar growth per holding. Row i is the move from i-1 to i, so the

@@ -20,6 +20,8 @@ from portfolio.data import (
     UnsupportedExchange,
     _frame_from_payload,
     _normalise_exchange,
+    clear_price_cache,
+    load_prices,
     split_artifacts,
 )
 from portfolio.analytics import (
@@ -33,7 +35,7 @@ from portfolio.analytics import (
 from portfolio.attribution import attribution
 from portfolio.compare import rebalancing_sweep
 from portfolio.crisis import INDIA_CRISES, crisis_analysis
-from portfolio.costs import EquityCosts, schedule_for
+from portfolio.costs import Charge, CostSchedule, EquityCosts, schedule_for
 from portfolio.engine import Costs, normalise_weights, run_backtest
 from portfolio.health import grade_for, portfolio_health
 from portfolio.holdings import Holding, holdings_summary, parse_holdings
@@ -239,6 +241,15 @@ class TestEngine:
         r = run_backtest(prices, {"A": 100})
         assert r.source == "db"
         assert r.meta["rule"] == "never"
+
+    @pytest.mark.parametrize(
+        "bad_close",
+        [0.0, -1.0, float("nan"), float("inf")],
+    )
+    def test_rejects_non_positive_or_non_finite_prices(self, bad_close):
+        prices = matrix({"A": [100.0, bad_close]})
+        with pytest.raises(ValueError, match="positive finite"):
+            run_backtest(prices, {"A": 100})
 
 
 class TestPriceMatrix:
@@ -674,6 +685,74 @@ class TestGenericCostSchedule:
     def test_unknown_preset_is_refused(self):
         with pytest.raises(ValueError, match="unknown cost schedule"):
             schedule_for("mars_equity")
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"rate": -0.01},
+            {"flat": float("nan")},
+            {"cap": float("inf")},
+        ],
+    )
+    def test_charge_values_are_finite_and_non_negative(self, kwargs):
+        with pytest.raises(ValueError, match="finite and non-negative"):
+            Charge("bad", "Bad", "turnover", **kwargs)
+
+    def test_charge_basis_is_validated_at_construction(self):
+        with pytest.raises(ValueError, match="basis"):
+            Charge("bad", "Bad", "portfolio", rate=0.01)
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [{"tax_rate": -0.1}, {"slippage": float("nan")}],
+    )
+    def test_schedule_values_are_finite_and_non_negative(self, kwargs):
+        with pytest.raises(ValueError, match="finite and non-negative"):
+            CostSchedule("bad", **kwargs)
+
+
+class TestPriceCache:
+    def setup_method(self):
+        clear_price_cache()
+
+    def teardown_method(self):
+        clear_price_cache()
+
+    def test_broker_history_is_never_reused_across_calls(self, monkeypatch):
+        calls = 0
+
+        def fake_history(**_kwargs):
+            nonlocal calls
+            calls += 1
+            base = calls * 100.0
+            return True, [
+                {"date": "2024-01-01", "close": base},
+                {"date": "2024-01-02", "close": base + 1},
+            ], 200
+
+        monkeypatch.setattr("portfolio.data.get_history", fake_history)
+        args = (["A"], ["NSE"], "2024-01-01", "2024-01-02")
+        first = load_prices(*args, source="api", broker="first")
+        second = load_prices(*args, source="api", broker="second")
+
+        assert calls == 2
+        assert second.closes.iloc[0, 0] != first.closes.iloc[0, 0]
+
+    def test_historify_history_remains_cached(self, monkeypatch):
+        calls = 0
+        index = pd.to_datetime(["2024-01-01", "2024-01-02"])
+
+        def fake_duckdb(*_args):
+            nonlocal calls
+            calls += 1
+            return {"A": pd.Series([100.0, 101.0], index=index, name="A")}
+
+        monkeypatch.setattr("portfolio.data._closes_from_duckdb", fake_duckdb)
+        args = (["A"], ["NSE"], "2024-01-01", "2024-01-02")
+        load_prices(*args, source="db")
+        load_prices(*args, source="db")
+
+        assert calls == 1
 
 
 class TestRebalancingSweep:

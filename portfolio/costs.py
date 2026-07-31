@@ -26,6 +26,10 @@ because taxing a tax is not a thing any regime does.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from math import isfinite
+
+
+_CHARGE_BASES = frozenset({"turnover", "buy", "sell", "order"})
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,17 @@ class Charge:
     taxed: bool = False
     #: Shown in the UI so a user knows what they are editing.
     note: str = ""
+
+    def __post_init__(self) -> None:
+        if self.basis not in _CHARGE_BASES:
+            raise ValueError(
+                f"unknown charge basis {self.basis!r}; expected one of "
+                f"{sorted(_CHARGE_BASES)}"
+            )
+        for name in ("rate", "flat", "cap"):
+            value = getattr(self, name)
+            if not isfinite(value) or value < 0:
+                raise ValueError(f"charge {name} must be finite and non-negative")
 
     def amount(self, buy_value: float, sell_value: float, orders: int) -> float:
         if self.basis == "turnover":
@@ -82,6 +97,12 @@ class CostSchedule:
     #: Execution gap, as a fraction of turnover. Not a charge anyone bills, but
     #: it is a real cost of trading and belongs in the same total.
     slippage: float = 0.0
+
+    def __post_init__(self) -> None:
+        for name in ("tax_rate", "slippage"):
+            value = getattr(self, name)
+            if not isfinite(value) or value < 0:
+                raise ValueError(f"cost schedule {name} must be finite and non-negative")
 
     def breakdown(
         self, buy_value: float, sell_value: float, orders: int = 0
