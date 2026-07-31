@@ -153,7 +153,7 @@ export function ChargeControls({ value, onChange, exchange, onExchange }: Props)
           </>
         )}
         <p className="text-[11px] leading-tight text-muted-foreground">
-          Delivery is free at most discount brokers — set 0 for a true delivery
+          Delivery is free at most discount brokers, set 0 for a true delivery
           portfolio.
         </p>
       </div>

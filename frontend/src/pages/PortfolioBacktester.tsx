@@ -67,9 +67,9 @@ const REBALANCE: { value: RebalanceRule; label: string; note: string }[] = [
 ]
 
 const pct = (v: number | null | undefined, dp = 2) =>
-  v === null || v === undefined ? '—' : `${(v * 100).toFixed(dp)}%`
+  v === null || v === undefined ? '-' : `${(v * 100).toFixed(dp)}%`
 const num = (v: number | null | undefined, dp = 2) =>
-  v === null || v === undefined ? '—' : v.toFixed(dp)
+  v === null || v === undefined ? '-' : v.toFixed(dp)
 const money = (v: number) =>
   `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
 
@@ -154,7 +154,7 @@ function CorrelationHeatmap({
                     style={{ background: colour(v) }}
                     title={v === null ? 'too little overlap to measure' : `${row} vs ${col}`}
                   >
-                    {v === null ? '—' : v.toFixed(2)}
+                    {v === null ? '-' : v.toFixed(2)}
                   </td>
                 )
               })}
@@ -315,7 +315,7 @@ export default function PortfolioBacktester() {
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              NSE and BSE indices only — alpha and beta against a single stock
+              NSE and BSE indices only, alpha and beta against a single stock
               would not mean anything.
             </p>
           </CardContent>
@@ -342,7 +342,7 @@ export default function PortfolioBacktester() {
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              More often is not better — it costs turnover.
+              More often is not better, it costs turnover.
             </p>
           </CardContent>
         </Card>
@@ -577,7 +577,7 @@ export default function PortfolioBacktester() {
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base">What the trading cost</CardTitle>
                   <p className="text-sm text-muted-foreground">
-                    The real schedule, itemised. Note which line dominates — it is
+                    The real schedule, itemised. Note which line dominates, it is
                     not brokerage, which is why zero-brokerage does not make
                     rebalancing free.
                   </p>
@@ -623,7 +623,7 @@ export default function PortfolioBacktester() {
                 </CardContent>
               </Card>
               <p className="text-xs text-muted-foreground">
-                Returns are price-only — broker history excludes dividends, so income
+                Returns are price-only: broker history excludes dividends, so income
                 is not counted here.
               </p>
             </TabsContent>
@@ -871,7 +871,7 @@ export default function PortfolioBacktester() {
                       </CardTitle>
                       <p className="text-sm text-muted-foreground">
                         One pair of bars per calendar year. The dashed red line is the
-                        portfolio's own average year — a run of ordinary years beside
+                        portfolio's own average year. A run of ordinary years beside
                         one spectacular one should read as exactly that.
                       </p>
                     </CardHeader>
@@ -889,7 +889,7 @@ export default function PortfolioBacktester() {
                       <CardTitle className="text-base">Yearly Returns</CardTitle>
                       <p className="text-sm text-muted-foreground">
                         An investor lives through calendar years, not annualised
-                        averages — "did it beat the index this year" is the question
+                        averages, "did it beat the index this year" is the question
                         actually asked of a portfolio.
                       </p>
                     </CardHeader>
@@ -931,12 +931,12 @@ export default function PortfolioBacktester() {
                                 )}
                               >
                                 {y.difference === null || y.difference === undefined
-                                  ? '—'
+                                  ? '-'
                                   : `${y.difference >= 0 ? '+' : ''}${(y.difference * 100).toFixed(2)}%`}
                               </td>
                               <td className="p-3 text-right tabular-nums text-muted-foreground">
                                 {y.multiplier === null || y.multiplier === undefined
-                                  ? '—'
+                                  ? '-'
                                   : `${y.multiplier.toFixed(2)}x`}
                               </td>
                               <td
@@ -996,7 +996,7 @@ export default function PortfolioBacktester() {
                     <CardHeader className="pb-2">
                       <CardTitle className="text-base">Return Quantiles</CardTitle>
                       <p className="text-sm text-muted-foreground">
-                        How the spread narrows with holding period — the share of
+                        How the spread narrows with holding period. The share of
                         periods that ended down is the practical read.
                       </p>
                     </CardHeader>
@@ -1105,13 +1105,13 @@ export default function PortfolioBacktester() {
               <div className="grid gap-3 md:grid-cols-2">
                 <Stat
                   label="Best Risk-Adjusted"
-                  value={result.rebalancing_sweep.best_by_sharpe ?? '—'}
+                  value={result.rebalancing_sweep.best_by_sharpe ?? '-'}
                   sub="highest Sharpe"
                   tone="good"
                 />
                 <Stat
                   label="Highest Return"
-                  value={result.rebalancing_sweep.best_by_return ?? '—'}
+                  value={result.rebalancing_sweep.best_by_return ?? '-'}
                   sub="often not the same thing"
                 />
               </div>
@@ -1120,7 +1120,7 @@ export default function PortfolioBacktester() {
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base">Rebalancing Comparison</CardTitle>
                   <p className="text-sm text-muted-foreground">
-                    The same holdings under every rule. Trading more is not better —
+                    The same holdings under every rule. Trading more is not better -
                     watch the cost drag column against what the extra trades bought.
                   </p>
                 </CardHeader>
@@ -1292,7 +1292,7 @@ export default function PortfolioBacktester() {
                 <Card>
                   <CardHeader className="pb-2">
                     <CardTitle className="text-base">
-                      Monte Carlo — {result.monte_carlo.paths.toLocaleString()} paths
+                      Monte Carlo, {result.monte_carlo.paths.toLocaleString()} paths
                     </CardTitle>
                     <p className="text-sm text-muted-foreground">
                       Block bootstrap, not independent days: drawing single days
@@ -1311,7 +1311,7 @@ export default function PortfolioBacktester() {
                       <Stat
                         label="Median CAGR"
                         value={pct(result.monte_carlo.cagr.median)}
-                        sub={`5th–95th: ${pct(result.monte_carlo.cagr.p05)} to ${pct(result.monte_carlo.cagr.p95)}`}
+                        sub={`5th-95th: ${pct(result.monte_carlo.cagr.p05)} to ${pct(result.monte_carlo.cagr.p95)}`}
                       />
                       <Stat
                         label="Worst Drawdown Seen"
@@ -1372,7 +1372,7 @@ export default function PortfolioBacktester() {
                   </CardTitle>
                   <p className="text-sm text-muted-foreground">
                     What you actually held, session by session. Bands widen as winners
-                    run and snap back on each rebalance — a portfolio left alone stops
+                    run and snap back on each rebalance. A portfolio left alone stops
                     being the one you chose.
                   </p>
                 </CardHeader>
@@ -1537,7 +1537,7 @@ export default function PortfolioBacktester() {
                       <CardTitle className="text-base">How it splits</CardTitle>
                       <p className="text-sm text-muted-foreground">
                         Selection is an equal-weighted basket of the same holdings
-                        against the benchmark — the picks, with sizing removed.
+                        against the benchmark: the picks, with sizing removed.
                         Allocation is the actual portfolio against that basket. They
                         sum to the excess.
                       </p>
@@ -1567,7 +1567,7 @@ export default function PortfolioBacktester() {
                       <CardTitle className="text-base">Contribution by Holding</CardTitle>
                       <p className="text-sm text-muted-foreground">
                         Each holding's share of the out- or under-performance, not its
-                        standalone result — the column sums to the excess.
+                        standalone result, the column sums to the excess.
                       </p>
                     </CardHeader>
                     <CardContent className="p-0">
@@ -1680,7 +1680,7 @@ export default function PortfolioBacktester() {
                   <CardTitle className="text-base">Crisis Period Summary</CardTitle>
                   <p className="text-sm text-muted-foreground">
                     How the portfolio held up when it mattered, against the benchmark
-                    over the same window. Recoveries are included on purpose — a
+                    over the same window. Recoveries are included on purpose, a
                     crashes-only view flatters anything defensive.
                   </p>
                 </CardHeader>
@@ -1744,7 +1744,7 @@ export default function PortfolioBacktester() {
                                 (c.excess ?? 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'
                               )}
                             >
-                              {c.excess === null ? '—' : `${c.excess >= 0 ? '+' : ''}${(c.excess * 100).toFixed(2)}%`}
+                              {c.excess === null ? '-' : `${c.excess >= 0 ? '+' : ''}${(c.excess * 100).toFixed(2)}%`}
                             </td>
                           </tr>
                         ))}
@@ -1761,7 +1761,7 @@ export default function PortfolioBacktester() {
                   <CardTitle className="text-base">Portfolio Health</CardTitle>
                   <p className="text-sm text-muted-foreground">
                     Every pillar shows the inputs it read, the formula it applied and
-                    the weight it carried — so you can disagree with the grade and see
+                    the weight it carried, so you can disagree with the grade and see
                     exactly where.
                   </p>
                 </CardHeader>
@@ -1777,10 +1777,10 @@ export default function PortfolioBacktester() {
                             : 'text-rose-500'
                       )}
                     >
-                      {result.health.grade ?? '—'}
+                      {result.health.grade ?? '-'}
                     </div>
                     <div className="text-2xl tabular-nums text-muted-foreground">
-                      {result.health.score ?? '—'}/100
+                      {result.health.score ?? '-'}/100
                     </div>
                     {result.health.unmeasured.length > 0 && (
                       <div className="text-xs text-muted-foreground">

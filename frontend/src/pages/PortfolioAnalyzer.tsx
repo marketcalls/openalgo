@@ -33,9 +33,9 @@ import { cn } from '@/lib/utils'
 const inr = (v: number) =>
   `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
 const pct = (v: number | null | undefined, dp = 2) =>
-  v === null || v === undefined ? '—' : `${(v * 100).toFixed(dp)}%`
+  v === null || v === undefined ? '-' : `${(v * 100).toFixed(dp)}%`
 const num = (v: number | null | undefined, dp = 2) =>
-  v === null || v === undefined ? '—' : v.toFixed(dp)
+  v === null || v === undefined ? '-' : v.toFixed(dp)
 
 function Metric({
   label,
@@ -111,7 +111,7 @@ export default function PortfolioAnalyzer() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Portfolio Analyzer</h1>
           <p className="text-sm text-muted-foreground">
-            Your live holdings, graded — concentration, co-movement, drawdown
+            Your live holdings, graded: concentration, co-movement, drawdown
             resilience and how they behaved in past crises.
           </p>
         </div>
@@ -159,7 +159,7 @@ export default function PortfolioAnalyzer() {
             />
             <Metric
               label="Invested"
-              value={s.invested === null ? '—' : inr(s.invested)}
+              value={s.invested === null ? '-' : inr(s.invested)}
               sub={s.invested === null ? 'broker reports no average price' : undefined}
             />
             <Metric
@@ -174,7 +174,7 @@ export default function PortfolioAnalyzer() {
             />
             <Metric
               label="Health"
-              value={health?.grade ? `${health.score}/100 (${health.grade})` : '—'}
+              value={health?.grade ? `${health.score}/100 (${health.grade})` : '-'}
               sub={health ? `${health.pillars.length} pillars, formulas shown` : undefined}
               tone={(health?.score ?? 0) >= 60 ? 'good' : 'bad'}
             />
@@ -183,7 +183,7 @@ export default function PortfolioAnalyzer() {
               value={
                 result.analysis
                   ? String(result.analysis.structure.effective_bets)
-                  : '—'
+                  : '-'
               }
               sub={`from ${s.count} names`}
             />
@@ -195,8 +195,8 @@ export default function PortfolioAnalyzer() {
                 <span className="font-medium text-amber-500">No cost basis: </span>
                 your broker returns holdings without an average price, so invested
                 value and return percentages cannot be computed. Everything that
-                depends on current value — weights, concentration, co-movement,
-                health and risk — is unaffected, and the P&amp;L shown is the
+                depends on current value, weights, concentration, co-movement,
+                health and risk, is unaffected, and the P&amp;L shown is the
                 broker's own figure.
               </CardContent>
             </Card>
@@ -206,7 +206,7 @@ export default function PortfolioAnalyzer() {
             <Card className="border-amber-500/40">
               <CardContent className="p-4 text-sm">
                 <span className="font-medium text-amber-500">Not analysed: </span>
-                {result.skipped.join(', ')} — held on an exchange this tool does not
+                {result.skipped.join(', ')}, held on an exchange this tool does not
                 price. They are listed below but excluded from the figures above.
               </CardContent>
             </Card>
@@ -255,13 +255,13 @@ export default function PortfolioAnalyzer() {
                         </td>
                         <td className="p-3 text-right tabular-nums">{h.quantity}</td>
                         <td className="p-3 text-right tabular-nums text-muted-foreground">
-                          {h.average_price > 0 ? h.average_price.toFixed(2) : '—'}
+                          {h.average_price > 0 ? h.average_price.toFixed(2) : '-'}
                         </td>
                         <td className="p-3 text-right tabular-nums">
                           {h.last_price.toFixed(2)}
                         </td>
                         <td className="p-3 text-right tabular-nums text-muted-foreground">
-                          {h.invested > 0 ? inr(h.invested) : '—'}
+                          {h.invested > 0 ? inr(h.invested) : '-'}
                         </td>
                         <td className="p-3 text-right tabular-nums">{inr(h.current)}</td>
                         <td
@@ -340,7 +340,7 @@ export default function PortfolioAnalyzer() {
                 <CardTitle className="text-base">In Past Crises</CardTitle>
                 <p className="text-sm text-muted-foreground">
                   How these same weights would have fared. Only windows inside the
-                  lookback appear — widen it to see more.
+                  lookback appear, widen it to see more.
                 </p>
               </CardHeader>
               <CardContent className="p-0">
@@ -382,7 +382,7 @@ export default function PortfolioAnalyzer() {
                   <div className="text-xs text-muted-foreground">
                     A real account usually holds something nobody has ingested.
                     Switch the data source to <strong>Broker API</strong> and run
-                    again — slower and rate limited, but it covers every symbol you
+                    again, slower and rate limited, but it covers every symbol you
                     own. The figures above do not depend on this and are unaffected.
                   </div>
                 )}
