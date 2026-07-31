@@ -10,44 +10,8 @@
  */
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import type { ChargeState } from '@/lib/portfolioRequest'
 import { cn } from '@/lib/utils'
-
-export type BrokerageMode = 'flat' | 'percent'
-
-export interface ChargeState {
-  /** Rupees per order when mode is flat. */
-  brokerageFlat: number
-  /** Percent of order value when mode is percent. */
-  brokeragePct: number
-  /** Per-order ceiling for the percent mode. */
-  brokerageCap: number
-  brokerageMode: BrokerageMode
-  /** Percent, both legs. */
-  stt: number
-  /** Percent of turnover. */
-  exchangeTxn: number
-  /** Rupees per crore. */
-  sebiPerCrore: number
-  /** Percent, on brokerage + txn + SEBI only. */
-  gst: number
-  /** Percent, buy leg only. */
-  stampDuty: number
-  /** Percent of turnover. */
-  slippage: number
-}
-
-export const DEFAULT_CHARGES: ChargeState = {
-  brokerageMode: 'flat',
-  brokerageFlat: 20,
-  brokeragePct: 0.03,
-  brokerageCap: 20,
-  stt: 0.1,
-  exchangeTxn: 0.00307,
-  sebiPerCrore: 10,
-  gst: 18,
-  stampDuty: 0.015,
-  slippage: 0,
-}
 
 interface Props {
   value: ChargeState

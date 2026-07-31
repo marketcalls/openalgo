@@ -30,6 +30,7 @@ import {
 } from '@/components/ui/select'
 import { useAuthStore } from '@/stores/authStore'
 import { cn } from '@/lib/utils'
+import { healthGradeTone } from '@/lib/portfolioRequest'
 
 const inr = (v: number) =>
   `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
@@ -177,7 +178,7 @@ export default function PortfolioAnalyzer() {
               label="Health"
               value={health?.grade ? `${health.score}/100 (${health.grade})` : '-'}
               sub={health ? `${health.pillars.length} pillars, formulas shown` : undefined}
-              tone={(health?.score ?? 0) >= 60 ? 'good' : 'bad'}
+              tone={healthGradeTone(health?.grade)}
             />
             <Metric
               label="Effective Bets"

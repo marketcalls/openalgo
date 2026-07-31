@@ -99,13 +99,25 @@ def test_tearsheet_propagates_feed_token(client, monkeypatch):
 
     response = client.post(
         "/portfolio/tearsheet",
-        json=backtest_body(source="api"),
+        json=backtest_body(
+            source="api",
+            cost_model="indian_equity",
+            cost_exchange="BSE",
+            charges={"brokerage": {"flat": 12.0}},
+            gst_rate=0.2,
+            slippage=0.001,
+        ),
     )
 
     assert response.status_code == 200
     assert captured["auth_token"] == "auth"
     assert captured["feed_token"] == "feed"
     assert captured["broker"] == "xts-broker"
+    assert captured["cost_model"] == "indian_equity"
+    assert captured["cost_exchange"] == "BSE"
+    assert captured["charge_overrides"] == {"brokerage": {"flat": 12.0}}
+    assert captured["gst_rate"] == 0.2
+    assert captured["slippage"] == 0.001
 
 
 def test_holdings_history_propagates_feed_token(client, monkeypatch):

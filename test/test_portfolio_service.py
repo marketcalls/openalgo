@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from portfolio.data import PriceMatrix
 from services import portfolio_service
@@ -138,3 +139,45 @@ def test_live_holdings_passes_feed_token_to_history_analysis(monkeypatch):
     assert captured["auth_token"] == "auth"
     assert captured["feed_token"] == "feed"
     assert captured["broker"] == "xts-broker"
+
+
+def test_tearsheet_uses_the_same_nondefault_costs_as_backtest(monkeypatch):
+    prices = matrix({"A": [100.0] * 21 + [200.0], "B": [100.0] * 22})
+    monkeypatch.setattr(
+        portfolio_service, "load_prices", lambda *_args, **_kwargs: prices
+    )
+    captured = {}
+
+    def render(returns, **kwargs):
+        captured["returns"] = returns.copy()
+        with open(kwargs["output"], "w", encoding="utf-8") as report:
+            report.write("<html>charged report</html>")
+
+    monkeypatch.setattr("openstatz.reports.html", render)
+
+    ok, html, status = portfolio_service.generate_tearsheet(
+        [
+            {"symbol": "A", "exchange": "NSE", "weight": 50},
+            {"symbol": "B", "exchange": "NSE", "weight": 50},
+        ],
+        "2024-01-01",
+        "2024-01-30",
+        rebalance="monthly",
+        initial_capital=1_000.0,
+        charge_overrides={
+            "brokerage": {"flat": 10.0},
+            "stt": {"rate": 0.01},
+            "exchange_txn": {"rate": 0.0},
+            "sebi": {"rate": 0.0},
+            "stamp_duty": {"rate": 0.0},
+        },
+        gst_rate=0.10,
+        slippage=0.02,
+    )
+
+    assert ok is True
+    assert status == 200
+    assert html == "<html>charged report</html>"
+    assert float((1.0 + captured["returns"]).prod() - 1.0) == pytest.approx(
+        0.463
+    )
