@@ -879,3 +879,60 @@ class TestCrisisPeriodSet:
         keys = {p["key"] for p in crisis_analysis(r)["periods"]}
         for old in ("bear_1995", "asian_crisis", "kargil", "election_2004"):
             assert old in keys
+
+
+class TestHoldingsWithoutCostBasis:
+    """
+    Upstox (among others) returns holdings with no average price at all.
+    Gating on it discarded whole accounts that were perfectly analysable --
+    weights need the *current* price, never the cost.
+    """
+
+    def _rows(self):
+        return [
+            {"symbol": "NHPC", "exchange": "NSE", "quantity": 24,
+             "average_price": 0, "last_price": 78.07, "pnl": 2.05},
+            {"symbol": "SBICARD", "exchange": "NSE", "quantity": 1,
+             "average_price": 0, "last_price": 657.80, "pnl": -232.95},
+            {"symbol": "NIFTYBEES", "exchange": "NSE", "quantity": 2,
+             "average_price": 0, "last_price": 276.49, "pnl": 1.56},
+        ]
+
+    def test_parses_holdings_that_carry_no_average_price(self):
+        h = parse_holdings(self._rows())
+        assert len(h) == 3
+
+    def test_weights_come_from_current_value(self):
+        s = holdings_summary(parse_holdings(self._rows()))
+        by = {r["symbol"]: r for r in s["holdings"]}
+        total = 24 * 78.07 + 657.80 + 2 * 276.49
+        assert by["NHPC"]["weight"] == pytest.approx(24 * 78.07 / total, abs=1e-4)
+        assert s["current"] == pytest.approx(total, abs=0.01)
+
+    def test_cost_and_percentages_are_null_not_zero(self):
+        s = holdings_summary(parse_holdings(self._rows()))
+        # Zero would read as "invested nothing"; null reads as "not reported".
+        assert s["invested"] is None
+        assert s["pnl_pct"] is None
+        assert s["has_cost_basis"] is False
+        assert all(r["pnl_pct"] is None for r in s["holdings"])
+
+    def test_pnl_falls_back_to_the_brokers_own_figure(self):
+        s = holdings_summary(parse_holdings(self._rows()))
+        assert s["pnl"] == pytest.approx(2.05 - 232.95 + 1.56, abs=0.01)
+
+    def test_a_row_with_neither_price_is_still_dropped(self):
+        rows = [{"symbol": "X", "quantity": 5, "average_price": 0, "pnl": 0}]
+        assert parse_holdings(rows) == []
+
+    def test_ltp_is_accepted_as_an_alias(self):
+        h = parse_holdings([{"symbol": "X", "quantity": 2, "ltp": 50}])
+        assert h[0].last_price == 50.0
+
+    def test_cost_basis_is_used_when_the_broker_does_supply_it(self):
+        s = holdings_summary(parse_holdings([
+            {"symbol": "A", "quantity": 10, "average_price": 100, "last_price": 110, "pnl": 100}
+        ]))
+        assert s["has_cost_basis"] is True
+        assert s["invested"] == pytest.approx(1000.0)
+        assert s["pnl_pct"] == pytest.approx(10.0)
