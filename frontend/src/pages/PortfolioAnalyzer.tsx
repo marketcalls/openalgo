@@ -11,11 +11,22 @@
  * Stated plainly rather than left for the reader to assume the stronger claim.
  */
 import { useState } from 'react'
-import { analyseHoldings, type HoldingsAnalysis } from '@/api/portfolio'
+import {
+  analyseHoldings,
+  type HoldingsAnalysis,
+  type PriceSource,
+} from '@/api/portfolio'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { useAuthStore } from '@/stores/authStore'
 import { cn } from '@/lib/utils'
 
@@ -59,6 +70,7 @@ function Metric({
 export default function PortfolioAnalyzer() {
   const { apiKey } = useAuthStore()
   const [lookback, setLookback] = useState(365)
+  const [source, setSource] = useState<PriceSource>('db')
   const [result, setResult] = useState<HoldingsAnalysis | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -75,7 +87,7 @@ export default function PortfolioAnalyzer() {
         apikey: apiKey,
         lookback_days: lookback,
         benchmark: 'NIFTY',
-        source: 'db',
+        source,
       })
       if (res.status !== 'success') throw new Error(res.message || 'analysis failed')
       setResult(res)
@@ -112,6 +124,18 @@ export default function PortfolioAnalyzer() {
               value={lookback}
               onChange={(e) => setLookback(Number(e.target.value))}
             />
+          </div>
+          <div>
+            <Label className="text-xs">Data source</Label>
+            <Select value={source} onValueChange={(v) => setSource(v as PriceSource)}>
+              <SelectTrigger className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="db">Historify (local)</SelectItem>
+                <SelectItem value="api">Broker API</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <Button onClick={run} disabled={busy}>
             {busy ? 'Analysing…' : 'Analyse Holdings'}
@@ -346,9 +370,24 @@ export default function PortfolioAnalyzer() {
 
           <p className="text-xs text-muted-foreground">{result.meta.basis}</p>
           {result.analysis_error && (
-            <p className="text-xs text-amber-500">
-              Historical analysis unavailable: {result.analysis_error}
-            </p>
+            <Card className="border-amber-500/40">
+              <CardContent className="space-y-1 p-4 text-sm">
+                <div>
+                  <span className="font-medium text-amber-500">
+                    Historical analysis unavailable:{' '}
+                  </span>
+                  {result.analysis_error}
+                </div>
+                {source === 'db' && (
+                  <div className="text-xs text-muted-foreground">
+                    A real account usually holds something nobody has ingested.
+                    Switch the data source to <strong>Broker API</strong> and run
+                    again — slower and rate limited, but it covers every symbol you
+                    own. The figures above do not depend on this and are unaffected.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           )}
         </>
       )}
