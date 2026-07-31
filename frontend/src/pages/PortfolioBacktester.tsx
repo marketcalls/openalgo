@@ -7,7 +7,6 @@
  */
 import { useMemo, useState } from 'react'
 import {
-  type BacktestRequest,
   type BacktestResponse,
   type PortfolioHolding,
   type PriceSource,
@@ -15,11 +14,7 @@ import {
   downloadTearsheet,
   runPortfolioBacktest,
 } from '@/api/portfolio'
-import {
-  ChargeControls,
-  DEFAULT_CHARGES,
-  type ChargeState,
-} from '@/components/portfolio/ChargeControls'
+import { ChargeControls } from '@/components/portfolio/ChargeControls'
 import { AllocationChart } from '@/components/portfolio/AllocationChart'
 import { CrisisChart } from '@/components/portfolio/CrisisChart'
 import { EoyChart } from '@/components/portfolio/EoyChart'
@@ -42,6 +37,12 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useAuthStore } from '@/stores/authStore'
 import { cn } from '@/lib/utils'
+import {
+  DEFAULT_CHARGES,
+  buildPortfolioRequest,
+  type ChargeState,
+  healthGradeTone,
+} from '@/lib/portfolioRequest'
 
 /**
  * Benchmarks are indices, not stocks: you cannot hold an index, but it is the
@@ -201,20 +202,21 @@ export default function PortfolioBacktester() {
       prev.map((h) => ({ ...h, weight: Number((100 / prev.length).toFixed(2)) }))
     )
 
-  const buildRequest = (): BacktestRequest => ({
-    apikey: apiKey ?? '',
-    holdings: holdings
-      .filter((h) => h.symbol.trim() !== '')
-      .map((h) => ({ ...h, symbol: h.symbol.trim().toUpperCase() })),
-    start_date: startDate,
-    end_date: endDate,
-    benchmark: benchmark === 'none' ? null : benchmark,
-    benchmark_exchange:
-      BENCHMARKS.find((b) => b.symbol === benchmark)?.exchange ?? 'NSE_INDEX',
-    rebalance,
-    risk_free_rate: riskFree / 100,
-    source,
-  })
+  const buildRequest = () =>
+    buildPortfolioRequest({
+      apiKey: apiKey ?? '',
+      holdings,
+      startDate,
+      endDate,
+      benchmark: benchmark === 'none' ? null : benchmark,
+      benchmarkExchange:
+        BENCHMARKS.find((item) => item.symbol === benchmark)?.exchange ?? 'NSE_INDEX',
+      rebalance,
+      source,
+      charges,
+      costExchange,
+      riskFree,
+    })
 
   const exportTearsheet = async () => {
     if (!apiKey) {
@@ -241,35 +243,7 @@ export default function PortfolioBacktester() {
     setBusy(true)
     setError(null)
     try {
-      const res = await runPortfolioBacktest({
-        apikey: apiKey,
-        holdings: holdings
-          .filter((h) => h.symbol.trim() !== '')
-          .map((h) => ({ ...h, symbol: h.symbol.trim().toUpperCase() })),
-        start_date: startDate,
-        end_date: endDate,
-        benchmark: benchmark === 'none' ? null : benchmark,
-        benchmark_exchange:
-          BENCHMARKS.find((b) => b.symbol === benchmark)?.exchange ?? 'NSE_INDEX',
-        rebalance,
-        cost_model: 'indian_equity',
-        cost_exchange: costExchange,
-        // Percent in the form, fractions on the wire.
-        charges: {
-          brokerage:
-            charges.brokerageMode === 'flat'
-              ? { flat: charges.brokerageFlat, rate: 0 }
-              : { flat: 0, rate: charges.brokeragePct / 100, cap: charges.brokerageCap },
-          stt: { rate: charges.stt / 100 },
-          exchange_txn: { rate: charges.exchangeTxn / 100 },
-          stamp_duty: { rate: charges.stampDuty / 100 },
-          sebi: { rate: charges.sebiPerCrore / 1_00_00_000 },
-        },
-        gst_rate: charges.gst / 100,
-        slippage: charges.slippage / 100,
-        risk_free_rate: riskFree / 100,
-        source,
-      })
+      const res = await runPortfolioBacktest(buildRequest())
       if (res.status !== 'success') throw new Error(res.message || 'backtest failed')
       setResult(res)
     } catch (err: unknown) {
@@ -1791,11 +1765,11 @@ export default function PortfolioBacktester() {
                     <div
                       className={cn(
                         'text-5xl font-bold tabular-nums',
-                        (result.health.score ?? 0) >= 70
+                        healthGradeTone(result.health.grade) === 'good'
                           ? 'text-emerald-500'
-                          : (result.health.score ?? 0) >= 50
-                            ? 'text-amber-500'
-                            : 'text-rose-500'
+                          : healthGradeTone(result.health.grade) === 'bad'
+                            ? 'text-rose-500'
+                            : 'text-muted-foreground'
                       )}
                     >
                       {result.health.grade ?? '-'}

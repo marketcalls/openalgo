@@ -78,6 +78,39 @@ def _clean(value: Any) -> Any:
     return value
 
 
+def _build_costs(
+    *,
+    cost_model: str,
+    brokerage_pct: float,
+    cost_exchange: str,
+    charge_overrides: dict[str, dict] | None,
+    gst_rate: float | None,
+    cost_bps: float,
+    slippage: float,
+) -> Costs | CostSchedule:
+    """Build the one cost model shared by analysis and HTML exports."""
+    if cost_model == "flat_bps":
+        return Costs(bps=cost_bps, slippage=slippage)
+
+    overrides = {
+        key: dict(values) for key, values in (charge_overrides or {}).items()
+    }
+    if brokerage_pct and "brokerage" not in overrides:
+        overrides["brokerage"] = {
+            "flat": 0.0,
+            "rate": brokerage_pct,
+            "cap": 20.0,
+        }
+    schedule = schedule_for(
+        f"india_delivery_{cost_exchange.lower()}",
+        overrides,
+    )
+    patch: dict[str, float] = {"slippage": slippage}
+    if gst_rate is not None:
+        patch["tax_rate"] = gst_rate
+    return dataclasses.replace(schedule, **patch)
+
+
 def generate_tearsheet(
     holdings: list[dict[str, Any]],
     start_date: str,
@@ -87,6 +120,13 @@ def generate_tearsheet(
     benchmark_exchange: str = "NSE_INDEX",
     rebalance: str = "never",
     drift_band: float = 0.0,
+    cost_model: str = "indian_equity",
+    brokerage_pct: float = 0.0,
+    cost_exchange: str = "NSE",
+    charge_overrides: dict[str, dict] | None = None,
+    gst_rate: float | None = None,
+    cost_bps: float = 0.0,
+    slippage: float = 0.0,
     initial_capital: float = 100_000.0,
     risk_free_rate: float = 0.0,
     source: str = "db",
@@ -126,10 +166,20 @@ def generate_tearsheet(
 
     try:
         prices = load_prices(symbols, exchanges, start_date, end_date, **fetch)
+        charged = _build_costs(
+            cost_model=cost_model,
+            brokerage_pct=brokerage_pct,
+            cost_exchange=cost_exchange,
+            charge_overrides=charge_overrides,
+            gst_rate=gst_rate,
+            cost_bps=cost_bps,
+            slippage=slippage,
+        )
         result = run_backtest(
             prices,
             weights,
             policy=RebalancePolicy(rule=rebalance, drift_band=drift_band),
+            costs=charged,
             initial_capital=initial_capital,
         )
     except DataError as exc:
@@ -508,19 +558,15 @@ def run_portfolio_backtest(
     try:
         prices = load_prices(symbols, exchanges, start_date, end_date, **fetch)
         policy_used = RebalancePolicy(rule=rebalance, drift_band=drift_band)
-        # The real delivery-equity schedule by default: STT on both legs, stamp
-        # duty on the buy only, GST on fees but not on taxes. A flat rate cannot
-        # express that asymmetry, so it is offered only for comparison.
-        if cost_model == "indian_equity":
-            preset = f"india_delivery_{cost_exchange.lower()}"
-            schedule = schedule_for(preset, charge_overrides or {})
-            # Tax and slippage sit on the schedule rather than on a charge.
-            patch: dict = {"slippage": slippage}
-            if gst_rate is not None:
-                patch["tax_rate"] = gst_rate
-            charged: Costs | CostSchedule = dataclasses.replace(schedule, **patch)
-        else:
-            charged = Costs(bps=cost_bps, slippage=slippage)
+        charged = _build_costs(
+            cost_model=cost_model,
+            brokerage_pct=brokerage_pct,
+            cost_exchange=cost_exchange,
+            charge_overrides=charge_overrides,
+            gst_rate=gst_rate,
+            cost_bps=cost_bps,
+            slippage=slippage,
+        )
         result = run_backtest(
             prices,
             weights,
