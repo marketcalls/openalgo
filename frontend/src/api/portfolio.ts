@@ -364,6 +364,17 @@ export interface BacktestResponse {
   monte_carlo: MonteCarlo
   rebalancing_sweep: RebalancingSweep
   attribution: PortfolioAttribution
+  /** Trailing return per holding, close to close. */
+  asset_returns: {
+    symbol: string
+    last: number
+    '1W': number | null
+    '1M': number | null
+    '3M': number | null
+    '1Y': number | null
+    '3Y': number | null
+    '5Y': number | null
+  }[]
   structure: PortfolioStructure
   allocation: PortfolioAllocation
   crisis: PortfolioCrisis

@@ -293,6 +293,128 @@ export default function PortfolioAnalyzer() {
             </div>
           )}
 
+          {result.analysis?.asset_returns?.length ? (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Asset Returns</CardTitle>
+                <p className="text-sm text-muted-foreground">
+                  Each holding on its own, close to close. A window longer than the
+                  available history shows n/a rather than a since-inception figure
+                  dressed up as a five-year return.
+                </p>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="border-b text-xs text-muted-foreground">
+                      <tr>
+                        <th className="p-3 text-left">Symbol</th>
+                        {(['1W', '1M', '3M', '1Y', '3Y', '5Y'] as const).map((w) => (
+                          <th key={w} className="p-3 text-right">
+                            {w}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.analysis.asset_returns.map((a) => (
+                        <tr key={a.symbol} className="border-b last:border-0">
+                          <td className="p-3 font-medium">{a.symbol}</td>
+                          {(['1W', '1M', '3M', '1Y', '3Y', '5Y'] as const).map((w) => {
+                            const v = a[w]
+                            return (
+                              <td key={w} className="p-1.5 text-right">
+                                {v === null ? (
+                                  <span className="text-xs text-muted-foreground">n/a</span>
+                                ) : (
+                                  <span
+                                    className={cn(
+                                      'inline-block w-full rounded px-2 py-1 text-right tabular-nums',
+                                      v >= 0
+                                        ? 'bg-emerald-500/15 text-emerald-400'
+                                        : 'bg-rose-500/15 text-rose-400'
+                                    )}
+                                    style={{
+                                      // Stronger colour for a bigger move, so the
+                                      // eye lands on what actually moved.
+                                      opacity: Math.min(1, 0.45 + Math.abs(v) * 1.2),
+                                    }}
+                                  >
+                                    {v >= 0 ? '+' : ''}
+                                    {(v * 100).toFixed(1)}%
+                                  </span>
+                                )}
+                              </td>
+                            )
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          {result.analysis?.correlation?.symbols?.length ? (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Asset Correlation Matrix</CardTitle>
+                <p className="text-sm text-muted-foreground">
+                  How each pair moved together over the lookback. Holdings that move
+                  as one are a single bet however many names they carry.
+                </p>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="border-separate border-spacing-0.5 text-xs">
+                    <thead>
+                      <tr>
+                        <th className="p-2" />
+                        {result.analysis.correlation.symbols.map((c) => (
+                          <th key={c} className="p-2 font-medium text-muted-foreground">
+                            {c}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.analysis.correlation.symbols.map((row, i) => (
+                        <tr key={row}>
+                          <td className="whitespace-nowrap p-2 font-medium text-muted-foreground">
+                            {row}
+                          </td>
+                          {result.analysis?.correlation.symbols.map((col, j) => {
+                            const v = result.analysis?.correlation.matrix[i]?.[j] ?? null
+                            return (
+                              <td
+                                key={col}
+                                title={
+                                  v === null
+                                    ? 'too little overlap to measure'
+                                    : `${row} vs ${col}: ${v.toFixed(2)}`
+                                }
+                                className="min-w-16 rounded p-2 text-center tabular-nums"
+                                style={{
+                                  background:
+                                    v === null
+                                      ? 'transparent'
+                                      : `rgba(34,197,94,${Math.min(Math.abs(v), 1) * 0.7})`,
+                                }}
+                              >
+                                {v === null ? '-' : v.toFixed(2)}
+                              </td>
+                            )
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
+
           {health && (
             <Card>
               <CardHeader className="pb-2">
