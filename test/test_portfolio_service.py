@@ -36,3 +36,60 @@ def test_negative_charge_override_is_a_client_error(monkeypatch):
     assert ok is False
     assert status == 400
     assert "non-negative" in payload["message"]
+
+
+def test_service_serializes_realized_costs_and_names_gst(monkeypatch):
+    prices = matrix({"A": [100.0] * 21 + [200.0], "B": [100.0] * 22})
+    monkeypatch.setattr(
+        portfolio_service, "load_prices", lambda *_args, **_kwargs: prices
+    )
+    monkeypatch.setattr(
+        portfolio_service,
+        "summary",
+        lambda *_args, **_kwargs: {
+            "sharpe": 1.0,
+            "sortino": 1.0,
+            "max_drawdown": -0.1,
+        },
+    )
+    monkeypatch.setattr(portfolio_service, "_series_analytics", lambda *_args: {})
+    monkeypatch.setattr(portfolio_service, "walk_forward", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(portfolio_service, "monte_carlo", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        portfolio_service, "rebalancing_sweep", lambda *_args, **_kwargs: {}
+    )
+    monkeypatch.setattr(portfolio_service, "structure", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(portfolio_service, "crisis_analysis", lambda *_args: {})
+    monkeypatch.setattr(portfolio_service, "build_findings", lambda *_args: [])
+    monkeypatch.setattr(
+        portfolio_service, "_symbol_names", lambda symbols: dict.fromkeys(symbols, "")
+    )
+
+    ok, payload, status = portfolio_service.run_portfolio_backtest(
+        [
+            {"symbol": "A", "exchange": "NSE", "weight": 50},
+            {"symbol": "B", "exchange": "NSE", "weight": 50},
+        ],
+        "2024-01-01",
+        "2024-01-30",
+        rebalance="monthly",
+        initial_capital=1_000.0,
+        charge_overrides={
+            "brokerage": {"flat": 10.0},
+            "stt": {"rate": 0.01},
+            "exchange_txn": {"rate": 0.0},
+            "sebi": {"rate": 0.0},
+            "stamp_duty": {"rate": 0.0},
+        },
+        gst_rate=0.10,
+        slippage=0.02,
+    )
+
+    assert ok is True
+    assert status == 200
+    assert "tax" not in payload["costs"]
+    assert payload["costs"]["brokerage"] == 20.0
+    assert payload["costs"]["stt"] == 5.0
+    assert payload["costs"]["gst"] == 2.0
+    assert payload["costs"]["slippage"] == 10.0
+    assert payload["costs"]["total"] == 37.0

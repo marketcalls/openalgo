@@ -13,6 +13,7 @@ here is the portfolio-shaped framing around it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import ceil
 
 import numpy as np
 import pandas as pd
@@ -41,6 +42,7 @@ def walk_forward(
     *,
     policy: RebalancePolicy | None = None,
     costs: Costs | CostSchedule | None = None,
+    initial_capital: float = 100_000.0,
     window_years: float = 1.0,
     step_years: float = 0.5,
 ) -> dict:
@@ -79,7 +81,13 @@ def walk_forward(
             start=chunk.index[0].date(),
             end=chunk.index[-1].date(),
         )
-        r = run_backtest(sub, weights, policy=policy, costs=costs)
+        r = run_backtest(
+            sub,
+            weights,
+            policy=policy,
+            costs=costs,
+            initial_capital=initial_capital,
+        )
         equity = r.equity
         years = len(chunk) / TRADING_DAYS
         total = float(equity.iloc[-1] / equity.iloc[0] - 1.0)
@@ -115,6 +123,19 @@ def walk_forward(
     }
 
 
+def _bootstrap_path(
+    values: np.ndarray,
+    block: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Sample full blocks, then trim to exactly the source-series length."""
+    blocks = max(1, ceil(len(values) / block))
+    starts = rng.integers(0, len(values) - block + 1, size=blocks)
+    return np.concatenate([values[start : start + block] for start in starts])[
+        : len(values)
+    ]
+
+
 def monte_carlo(
     returns: pd.Series,
     *,
@@ -141,13 +162,11 @@ def monte_carlo(
         return {"note": f"{n} sessions is too few for {block}-session blocks", "paths": 0}
 
     rng = np.random.default_rng(seed)
-    blocks = max(1, n // block)
     finals = np.empty(simulations, dtype=float)
     drawdowns = np.empty(simulations, dtype=float)
 
     for i in range(simulations):
-        starts = rng.integers(0, n - block, size=blocks)
-        path = np.concatenate([values[s : s + block] for s in starts])
+        path = _bootstrap_path(values, block, rng)
         curve = np.cumprod(1.0 + path)
         finals[i] = curve[-1] - 1.0
         drawdowns[i] = float((curve / np.maximum.accumulate(curve) - 1.0).min())

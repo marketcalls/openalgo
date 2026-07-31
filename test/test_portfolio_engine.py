@@ -40,6 +40,7 @@ from portfolio.engine import Costs, normalise_weights, run_backtest
 from portfolio.health import grade_for, portfolio_health
 from portfolio.holdings import Holding, holdings_summary, parse_holdings
 from portfolio.rebalance import RebalancePolicy, calendar_dates, drifted
+from portfolio.walkforward import _bootstrap_path, walk_forward
 
 
 def matrix(data: dict[str, list[float]], start: str = "2024-01-01") -> PriceMatrix:
@@ -208,6 +209,34 @@ class TestEngine:
         assert r.cost_drag > 0
         free = run_backtest(prices, {"A": 50, "B": 50}, policy=RebalancePolicy("monthly"))
         assert r.cost_drag == pytest.approx(free.total_return - r.total_return, rel=1e-6)
+
+    def test_cost_breakdown_uses_realized_rebalance_value(self):
+        prices = matrix({"A": [100.0] * 21 + [200.0], "B": [100.0] * 22})
+        schedule = CostSchedule(
+            "test",
+            charges=(
+                Charge("brokerage", "Brokerage", "order", flat=10.0, taxed=True),
+                Charge("fee", "Fee", "turnover", rate=0.01, taxed=True),
+            ),
+            tax_rate=0.10,
+            slippage=0.02,
+        )
+
+        result = run_backtest(
+            prices,
+            {"A": 50, "B": 50},
+            policy=RebalancePolicy("monthly"),
+            costs=schedule,
+            initial_capital=1_000.0,
+        )
+
+        # The rebalance occurs after the book grows to 1,500. It trades 250
+        # each way with two orders: 20 brokerage + 5 fee + 2.5 tax + 10 slip.
+        assert result.cost_breakdown["brokerage"] == pytest.approx(20.0)
+        assert result.cost_breakdown["fee"] == pytest.approx(5.0)
+        assert result.cost_breakdown["tax"] == pytest.approx(2.5)
+        assert result.cost_breakdown["slippage"] == pytest.approx(10.0)
+        assert result.cost_breakdown["total"] == pytest.approx(37.5)
 
     def test_drift_band_can_trigger_without_a_calendar(self):
         prices = matrix({"A": [100.0, 200.0], "B": [100.0, 100.0]})
@@ -753,6 +782,72 @@ class TestPriceCache:
         load_prices(*args, source="db")
 
         assert calls == 1
+
+
+class TestRobustnessCalculations:
+    def test_walk_forward_uses_requested_initial_capital(self):
+        index = pd.bdate_range("2023-01-02", periods=300)
+        prices = PriceMatrix(
+            closes=pd.DataFrame(
+                {
+                    "A": np.linspace(100.0, 220.0, len(index)),
+                    "B": np.full(len(index), 100.0),
+                },
+                index=index,
+            ),
+            source="db",
+            start=index[0].date(),
+            end=index[-1].date(),
+        )
+        schedule = CostSchedule(
+            "flat orders",
+            charges=(Charge("brokerage", "Brokerage", "order", flat=20.0),),
+        )
+        policy = RebalancePolicy("monthly")
+
+        out = walk_forward(
+            prices,
+            {"A": 50, "B": 50},
+            policy=policy,
+            costs=schedule,
+            initial_capital=1_000.0,
+        )
+        chunk = prices.closes.iloc[:252]
+        direct = run_backtest(
+            PriceMatrix(
+                closes=chunk,
+                source="db",
+                start=chunk.index[0].date(),
+                end=chunk.index[-1].date(),
+            ),
+            {"A": 50, "B": 50},
+            policy=policy,
+            costs=schedule,
+            initial_capital=1_000.0,
+        )
+
+        assert out["windows"][0]["total_return"] == pytest.approx(direct.total_return)
+
+    def test_block_bootstrap_keeps_full_length_and_last_start(self):
+        class FakeRng:
+            def __init__(self):
+                self.high = None
+                self.size = None
+
+            def integers(self, low, high, size):
+                assert low == 0
+                self.high = high
+                self.size = size
+                return np.full(size, high - 1, dtype=int)
+
+        values = np.arange(45, dtype=float)
+        rng = FakeRng()
+        path = _bootstrap_path(values, 20, rng)
+
+        assert len(path) == 45
+        assert rng.high == 26
+        assert rng.size == 3
+        assert path[0] == 25
 
 
 class TestRebalancingSweep:
