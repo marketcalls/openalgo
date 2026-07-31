@@ -10,6 +10,9 @@ one line apart:
   * emitting an off-tick limit price (calculate_protected_price rounds to two
     decimals when it has no tick size, which a 0.05-tick instrument rejects).
 
+Both brokers delegate to utils.mpp_slab.protected_limit_from_trigger, so every
+test here runs against both to prove they still share one implementation.
+
 No sockets, no broker HTTP: transform_data is exercised directly with the
 symbol lookups stubbed.
 """
@@ -48,12 +51,25 @@ class _SymbolInfo:
         self.tick_size = tick_size
 
 
+def _set_tick_size(monkeypatch, tick_size):
+    """Point the shared fallback's SymToken lookup at a known tick size.
+
+    protected_limit_from_trigger imports get_symbol_info lazily from
+    database.token_db, so patching it there covers both brokers at once —
+    which is the point of the shared helper.
+    """
+    import database.token_db as token_db
+
+    info = _SymbolInfo(tick_size) if tick_size else None
+    monkeypatch.setattr(token_db, "get_symbol_info", lambda s, e: info)
+
+
 @pytest.fixture(autouse=True)
 def _stub_symbol_lookups(monkeypatch):
     """Keep the master-contract DB out of it; each test sets its own tick size."""
     for _name, module in MODULES:
         monkeypatch.setattr(module, "get_br_symbol", lambda s, e: f"{s}-EQ")
-        monkeypatch.setattr(module, "get_symbol_info", lambda s, e: None)
+    _set_tick_size(monkeypatch, None)
 
 
 def _on_tick(price, tick_size):
@@ -83,7 +99,7 @@ def test_slm_fallback_limit_is_tick_valid_without_a_tick_size(name, module):
 def test_slm_fallback_buffers_and_aligns_when_the_tick_size_is_known(
     name, module, tick_size, monkeypatch
 ):
-    monkeypatch.setattr(module, "get_symbol_info", lambda s, e: _SymbolInfo(tick_size))
+    _set_tick_size(monkeypatch, tick_size)
 
     sell = module.transform_data({**BASE_ORDER, "pricetype": "SL-M"}, None, auth_token=None)
     buy = module.transform_data(
@@ -100,10 +116,12 @@ def test_slm_fallback_buffers_and_aligns_when_the_tick_size_is_known(
 
 @pytest.mark.parametrize("name,module", MODULES)
 def test_slm_survives_a_failing_symbol_lookup(name, module, monkeypatch):
+    import database.token_db as token_db
+
     def boom(symbol, exchange):
         raise RuntimeError("symbol cache cold")
 
-    monkeypatch.setattr(module, "get_symbol_info", boom)
+    monkeypatch.setattr(token_db, "get_symbol_info", boom)
     out = module.transform_data({**BASE_ORDER, "pricetype": "SL-M"}, None, auth_token=None)
     assert out["prctyp"] == "SL-LMT", name
     assert float(out["prc"]) == TRIGGER, name
@@ -116,6 +134,28 @@ def test_market_fallback_is_left_alone(name, module):
     # rejection is the honest outcome. Pinned so the SL-M fix does not creep.
     out = module.transform_data({**BASE_ORDER, "pricetype": "MARKET"}, None, auth_token=None)
     assert out["prctyp"] == "MKT", name
+
+
+def test_shared_helper_handles_a_missing_trigger(monkeypatch):
+    # Direct coverage of the utils/mpp_slab entry point both brokers call —
+    # an SL-M with no usable trigger has nothing to price off, so the caller's
+    # value passes through and the broker's own validation reports it.
+    from utils.mpp_slab import protected_limit_from_trigger
+
+    _set_tick_size(monkeypatch, 0.05)
+    for missing in (None, 0, "0", ""):
+        assert float(protected_limit_from_trigger("NHPC", "NSE", "SELL", missing)) == 0.0
+
+
+def test_shared_helper_uses_the_options_slab(monkeypatch):
+    # The slab is instrument-aware: options get a wider buffer than equity at
+    # the same price (5% under 10 vs 2% under 100), derived from the symbol.
+    from utils.mpp_slab import protected_limit_from_trigger
+
+    _set_tick_size(monkeypatch, 0.05)
+    option = float(protected_limit_from_trigger("NIFTY28MAR2420800CE", "NFO", "BUY", 8.0))
+    equity = float(protected_limit_from_trigger("NHPC", "NSE", "BUY", 8.0))
+    assert option > equity > 8.0
 
 
 @pytest.mark.parametrize("name,module", MODULES)
