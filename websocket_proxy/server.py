@@ -611,10 +611,29 @@ class WebSocketProxy:
             self.subscriptions.pop(client_id, None)
 
         # Defensive sweep: ensure client_id is completely purged from subscription_index
+        user_id = self.user_mapping.get(client_id)
         for sub_key, client_set in list(self.subscription_index.items()):
-            client_set.discard(client_id)
-            if not client_set:
-                self.subscription_index.pop(sub_key, None)
+            if client_id in client_set:
+                client_set.discard(client_id)
+                if not client_set:
+                    self.subscription_index.pop(sub_key, None)
+                    if (
+                        user_id
+                        and user_id in self.broker_adapters
+                        and isinstance(sub_key, tuple)
+                        and len(sub_key) == 3
+                    ):
+                        symbol, exchange, mode = sub_key
+                        try:
+                            adapter = self.broker_adapters[user_id]
+                            adapter.unsubscribe(symbol, exchange, mode)
+                            logger.debug(
+                                f"Defensive sweep: last client unsubscribed from {symbol}:{exchange}, unsubscribing from adapter"
+                            )
+                        except Exception as e:
+                            logger.exception(
+                                f"Error unsubscribing adapter in defensive sweep for {symbol}:{exchange}: {e}"
+                            )
 
         # Remove from user mapping safely
         if client_id in self.user_mapping:

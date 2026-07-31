@@ -142,8 +142,8 @@ def test_no_teardown_when_other_client_still_connected():
 # Defensive subscription_index sweep
 # ---------------------------------------------------------------------------
 
-def test_purges_subscription_index_for_unparseable_subscription():
-    """Stale index entries for a client with bad JSON subscriptions must be purged."""
+def test_purges_subscription_index_and_unsubscribes_adapter_for_unparseable_subscription():
+    """Stale index entries for unparseable subscriptions must be unsubscribed at adapter before purging."""
     proxy = _make_ws_proxy()
     adapter = Mock()
     _seed_client(proxy, "c1", "u1", "zerodha", adapter)
@@ -153,5 +153,22 @@ def test_purges_subscription_index_for_unparseable_subscription():
     asyncio.run(proxy.cleanup_client("c1"))
 
     assert ("SBIN", "NSE", 2) not in proxy.subscription_index
-    adapter.unsubscribe.assert_not_called()
+    adapter.unsubscribe.assert_called_once_with("SBIN", "NSE", 2)
     adapter.disconnect.assert_called_once()
+
+
+def test_defensive_sweep_unsubscribes_adapter_when_sibling_client_remains():
+    """Unparseable subscription dropped in defensive sweep must unsubscribe adapter even when another client stays connected."""
+    proxy = _make_ws_proxy()
+    adapter = Mock()
+    _seed_client(proxy, "c1", "u1", "zerodha", adapter)
+    proxy.user_mapping["c2"] = "u1"
+    proxy.subscriptions["c1"] = {"bad-json"}
+    proxy.subscription_index[("TATASTEEL", "NSE", 1)].add("c1")
+
+    asyncio.run(proxy.cleanup_client("c1"))
+
+    assert ("TATASTEEL", "NSE", 1) not in proxy.subscription_index
+    adapter.unsubscribe.assert_called_once_with("TATASTEEL", "NSE", 1)
+    adapter.disconnect.assert_not_called()
+
