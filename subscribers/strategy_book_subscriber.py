@@ -161,4 +161,4 @@ def register(bus) -> None:
         "options.completed",
     ):
         bus.subscribe(topic, on_batch_completed, name="StrategyBookBatchTagger")
-    logger.info("Strategy book subscriber registered")
+    logger.debug("Strategy book subscriber registered")
