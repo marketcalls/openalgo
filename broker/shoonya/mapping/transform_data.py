@@ -1,13 +1,9 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Shoonya Broking Parameters https://shoonya.com/api-documentation
 
-from database.token_db import get_br_symbol
+from database.token_db import get_br_symbol, get_symbol_info
 from utils.logging import get_logger
-from utils.mpp_slab import (
-    calculate_protected_price,
-    get_instrument_type_from_symbol,
-    protected_limit_from_trigger,
-)
+from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_symbol
 
 logger = get_logger(__name__)
 
@@ -117,15 +113,38 @@ def transform_data(data, token, auth_token=None):
         # broker/tradesmart/mapping/transform_data.py::_apply_mpp.
         if original_type == "SL-M" and order_type != "SL-LMT":
             order_type = "SL-LMT"
-            price = protected_limit_from_trigger(
-                symbol=data["symbol"],
-                exchange=data["exchange"],
-                action=action,
-                trigger_price=data.get("trigger_price"),
-            )
+            trigger = float(data.get("trigger_price") or 0)
+            if trigger > 0:
+                # The caller's trigger price is already tick-valid, so it is the
+                # safe limit. Add the MPP buffer on top only when the master
+                # contract yields a tick size: with tick_size=None,
+                # calculate_protected_price rounds to 2 decimals, which is
+                # off-tick on a 0.05-tick instrument — that would trade a
+                # rejection on price type for a rejection on price. No quote
+                # means no tick size from the API, so read it from SymToken.
+                price = str(trigger)
+                try:
+                    info = get_symbol_info(data["symbol"], data["exchange"])
+                    tick_size = getattr(info, "tick_size", None)
+                    if tick_size:
+                        price = str(
+                            calculate_protected_price(
+                                price=trigger,
+                                action=action,
+                                symbol=data["symbol"],
+                                instrument_type=get_instrument_type_from_symbol(data["symbol"]),
+                                tick_size=tick_size,
+                            )
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"MPP Fallback Error: could not protect off the trigger for "
+                        f"Symbol={data['symbol']}, Error={str(e)}. Using the trigger price as-is."
+                    )
+                    price = str(trigger)
             logger.warning(
                 f"MPP Fallback: quote-based conversion did not run for Symbol={data['symbol']}; "
-                f"sending SL-M->SL-LMT priced off the trigger at {price}"
+                f"sending SL-M->SL-LMT priced off the trigger ({trigger}) at {price}"
             )
 
     # Basic mapping
