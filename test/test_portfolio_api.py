@@ -1,12 +1,11 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
 from flask import Flask
 from flask_restx import Api
-import pytest
 
 from limiter import limiter
-
 
 _MODULE_PATH = Path(__file__).parents[1] / "restx_api" / "portfolio.py"
 _SPEC = importlib.util.spec_from_file_location("portfolio_api_under_test", _MODULE_PATH)

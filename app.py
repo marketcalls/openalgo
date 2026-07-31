@@ -81,8 +81,8 @@ from blueprints.oitracker import oitracker_bp  # Import the OI tracker blueprint
 from blueprints.orders import orders_bp
 from blueprints.platforms import platforms_bp
 from blueprints.playground import playground_bp  # Import the API playground blueprint
-from blueprints.postback import postback_bp  # Import broker postback (order updates) blueprint
 from blueprints.pnltracker import pnltracker_bp  # Import the pnl tracker blueprint
+from blueprints.postback import postback_bp  # Import broker postback (order updates) blueprint
 from blueprints.python_strategy import initialize_with_app_context as init_python_strategy
 from blueprints.python_strategy import python_strategy_bp  # Import the python strategy blueprint
 from blueprints.react_app import (  # Import React frontend blueprint
@@ -634,7 +634,7 @@ def create_app():
 
     @app.context_processor
     def inject_version():
-        return dict(version=get_version())
+        return {"version": get_version()}
 
     @app.route("/api/config/host")
     def get_host_config():

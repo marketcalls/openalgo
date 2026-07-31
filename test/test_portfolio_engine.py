@@ -13,6 +13,18 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from portfolio.analytics import (
+    average_pairwise_correlation,
+    capture_ratios,
+    concentration,
+    correlation_matrix,
+    diversification_ratio,
+    summary,
+)
+from portfolio.attribution import attribution
+from portfolio.compare import rebalancing_sweep
+from portfolio.costs import Charge, CostSchedule, EquityCosts, schedule_for
+from portfolio.crisis import INDIA_CRISES, crisis_analysis
 from portfolio.data import (
     DataError,
     MissingHistory,
@@ -24,18 +36,6 @@ from portfolio.data import (
     load_prices,
     split_artifacts,
 )
-from portfolio.analytics import (
-    average_pairwise_correlation,
-    capture_ratios,
-    concentration,
-    correlation_matrix,
-    diversification_ratio,
-    summary,
-)
-from portfolio.attribution import attribution
-from portfolio.compare import rebalancing_sweep
-from portfolio.crisis import INDIA_CRISES, crisis_analysis
-from portfolio.costs import Charge, CostSchedule, EquityCosts, schedule_for
 from portfolio.engine import Costs, normalise_weights, run_backtest
 from portfolio.health import grade_for, portfolio_health
 from portfolio.holdings import Holding, holdings_summary, parse_holdings
@@ -111,6 +111,11 @@ class TestWeights:
             normalise_weights({"A": 1.0, "Z": 1.0}, ["A"])
         with pytest.raises(ValueError, match="long-only"):
             normalise_weights({"A": -1.0, "B": 2.0}, ["A", "B"])
+
+    @pytest.mark.parametrize("bad_weight", [float("nan"), float("inf")])
+    def test_non_finite_weights_raise(self, bad_weight):
+        with pytest.raises(ValueError, match="finite"):
+            normalise_weights({"A": bad_weight}, ["A"])
 
 
 class TestRebalancePolicy:
@@ -270,6 +275,18 @@ class TestEngine:
         r = run_backtest(prices, {"A": 100})
         assert r.source == "db"
         assert r.meta["rule"] == "never"
+
+    @pytest.mark.parametrize(
+        "initial_capital",
+        [0.0, -1.0, float("nan"), float("inf")],
+    )
+    def test_initial_capital_must_be_positive_and_finite(self, initial_capital):
+        with pytest.raises(ValueError, match="initial capital must be positive and finite"):
+            run_backtest(
+                matrix({"A": [100.0, 101.0]}),
+                {"A": 100},
+                initial_capital=initial_capital,
+            )
 
     @pytest.mark.parametrize(
         "bad_close",
@@ -476,7 +493,10 @@ class TestCostDragExactness:
 
     def test_drag_equals_the_gap_to_an_uncharged_run(self):
         prices = matrix({"A": [100.0] * 21 + [180.0], "B": [100.0] * 22})
-        kw = dict(policy=RebalancePolicy("monthly"), initial_capital=10_000.0)
+        kw = {
+            "policy": RebalancePolicy("monthly"),
+            "initial_capital": 10_000.0,
+        }
         free = run_backtest(prices, {"A": 50, "B": 50}, **kw)
         paid = run_backtest(prices, {"A": 50, "B": 50}, costs=Costs(bps=75), **kw)
         assert paid.cost_drag == pytest.approx(free.total_return - paid.total_return, abs=1e-12)
@@ -532,10 +552,16 @@ class TestPortfolioHealth:
 
     def _health(self, **over):
         closes, rets, w = self._kit()
-        kw = dict(
-            weights=w, returns=rets, closes=closes, sharpe=1.0, sortino=1.2,
-            max_drawdown=-0.15, cost_drag=0.001, turnover=0.4,
-        )
+        kw = {
+            "weights": w,
+            "returns": rets,
+            "closes": closes,
+            "sharpe": 1.0,
+            "sortino": 1.2,
+            "max_drawdown": -0.15,
+            "cost_drag": 0.001,
+            "turnover": 0.4,
+        }
         kw.update(over)
         return portfolio_health(**kw)
 
@@ -557,11 +583,25 @@ class TestPortfolioHealth:
         closes, rets, _ = self._kit()
         lopsided = pd.Series({"A": 0.97, "B": 0.03})
         even = pd.Series({"A": 0.5, "B": 0.5})
-        base = dict(returns=rets, closes=closes, sharpe=1.0, sortino=1.2,
-                    max_drawdown=-0.15, cost_drag=0.0, turnover=0.0)
+        base = {
+            "returns": rets,
+            "closes": closes,
+            "sharpe": 1.0,
+            "sortino": 1.2,
+            "max_drawdown": -0.15,
+            "cost_drag": 0.0,
+            "turnover": 0.0,
+        }
         lo = portfolio_health(weights=lopsided, **base)
         ev = portfolio_health(weights=even, **base)
-        pick = lambda h: next(p for p in h["pillars"] if p["key"] == "concentration")
+
+        def pick(health):
+            return next(
+                pillar
+                for pillar in health["pillars"]
+                if pillar["key"] == "concentration"
+            )
+
         assert pick(lo)["score"] < pick(ev)["score"]
 
     def test_an_unmeasurable_pillar_is_dropped_not_scored_zero(self):
@@ -739,6 +779,14 @@ class TestGenericCostSchedule:
         with pytest.raises(ValueError, match="finite and non-negative"):
             CostSchedule("bad", **kwargs)
 
+    @pytest.mark.parametrize(
+        "kwargs",
+        [{"bps": -1.0}, {"slippage": float("nan")}],
+    )
+    def test_flat_cost_values_are_finite_and_non_negative(self, kwargs):
+        with pytest.raises(ValueError, match="finite and non-negative"):
+            Costs(**kwargs)
+
 
 class TestPriceCache:
     def setup_method(self):
@@ -873,7 +921,7 @@ class TestRebalancingSweep:
         out = rebalancing_sweep(self._prices(), {"A": 50, "B": 50})
         labels = [v["label"] for v in out["variants"]]
         assert labels[:4] == ["Never", "Yearly", "Quarterly", "Monthly"]
-        assert any(l.startswith("Drift") for l in labels)
+        assert any(label.startswith("Drift") for label in labels)
 
     def test_never_is_the_only_one_that_cannot_incur_cost(self):
         out = rebalancing_sweep(

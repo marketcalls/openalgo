@@ -81,7 +81,7 @@ export function PortfolioLineChart({ series, height = 320, format }: Props) {
     // The engine tracks its own container size, so there is no resize call to
     // make here; destroying it on unmount is the whole cleanup.
     return () => chart.destroy()
-  }, [series, height, format, mode, appMode])
+  }, [series, format, mode, appMode])
 
   return (
     <div className="space-y-2">

@@ -36,6 +36,12 @@ class Costs:
     bps: float = 0.0
     slippage: float = 0.0
 
+    def __post_init__(self) -> None:
+        for name in ("bps", "slippage"):
+            value = getattr(self, name)
+            if not np.isfinite(value) or value < 0:
+                raise ValueError(f"flat cost {name} must be finite and non-negative")
+
     @property
     def total(self) -> float:
         return (self.bps / 10_000.0) + self.slippage
@@ -81,6 +87,8 @@ def normalise_weights(weights: dict[str, float], symbols: list[str]) -> np.ndarr
         raise ValueError(f"weight given for unheld symbol(s): {', '.join(extra)}")
 
     vector = np.array([float(weights[s]) for s in symbols], dtype=float)
+    if not np.isfinite(vector).all():
+        raise ValueError("weights must be finite")
     if np.any(vector < 0):
         raise ValueError("negative weights are not supported; this is a long-only engine")
     total = vector.sum()
@@ -107,6 +115,8 @@ def run_backtest(
     """
     policy = policy or RebalancePolicy()
     costs = costs or Costs()
+    if not np.isfinite(initial_capital) or initial_capital <= 0:
+        raise ValueError("initial capital must be positive and finite")
 
     symbols = prices.symbols
     target = normalise_weights(weights, symbols)
@@ -127,9 +137,7 @@ def run_backtest(
     turnover_at: dict[pd.Timestamp, float] = {}
     order_count = 0
     if isinstance(costs, (EquityCosts, CostSchedule)):
-        cost_breakdown = {
-            key: 0.0 for key in costs.breakdown(0.0, 0.0, orders=0)
-        }
+        cost_breakdown = dict.fromkeys(costs.breakdown(0.0, 0.0, orders=0), 0.0)
     else:
         cost_breakdown = {"total": 0.0, "orders": 0.0}
 
@@ -235,7 +243,7 @@ def run_backtest(
         cost_breakdown=cost_breakdown,
         meta={
             "symbols": symbols,
-            "target_weights": dict(zip(symbols, target.tolist())),
+            "target_weights": dict(zip(symbols, target.tolist(), strict=True)),
             "rule": policy.rule,
             "drift_band": policy.drift_band,
             "cost_model": (

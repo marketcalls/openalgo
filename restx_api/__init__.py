@@ -23,7 +23,6 @@ from .expiry import api as expiry_ns
 from .funds import api as funds_ns
 from .gtt_orderbook import api as gtt_orderbook_ns
 from .history import api as history_ns
-from .portfolio import api as portfolio_ns
 from .holdings import api as holdings_ns
 from .instruments import api as instruments_ns
 from .intervals import api as intervals_ns
@@ -47,6 +46,7 @@ from .place_gtt_order import api as place_gtt_order_ns
 from .place_order import api as place_order_ns
 from .place_smart_order import api as place_smart_order_ns
 from .pnl_symbols import api as pnl_symbols_ns
+from .portfolio import api as portfolio_ns
 from .positionbook import api as positionbook_ns
 from .quotes import api as quotes_ns
 from .search import api as search_ns
