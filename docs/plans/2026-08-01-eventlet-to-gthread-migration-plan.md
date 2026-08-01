@@ -1,11 +1,11 @@
 # Eventlet to gthread — Migration Plan
 
 **Status:** Design — not yet built
-**Date:** 2026-08-01 (rev 9)
+**Date:** 2026-08-01 (rev 10)
 **Branch:** `gthread`
 **Scope:** Replace Gunicorn's `eventlet` worker with its `gthread` worker. Keep Flask, keep Flask-SocketIO, keep `-w 1`.
 **Evidence base:** [`audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md`](../../audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md), with the corrections in §10 applied.
-**Row-level tracking:** [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv) — 134 rows, each with decision, gate, test, rollback boundary and acceptance criterion.
+**Row-level tracking:** [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv) — 149 rows, each with decision, gate, test, rollback boundary and acceptance criterion.
 
 ---
 
@@ -150,19 +150,11 @@ Other surfaces: the auto-upgrade thread (`:284`), `sandbox/websocket_execution_e
 
 **Sandbox uses DB transactions, not process locks (rev 9).** A full sweep of all 11 `sandbox/` modules found 29 commit sites against only 5 locks and essentially no module-level mutable state. That is a coherent design — but it means correctness rests entirely on transaction boundaries, and eventlet has been silently supplying the atomicity that those boundaries do not.
 
-**The material defect is a check-then-act on the fund balance.** `sandbox/fund_manager.py:243-251`:
+**Retraction (rev 10).** Rev 9 reported a fund-balance double-spend at `sandbox/fund_manager.py:243-251`. **That was wrong.** `block_margin()` opens `with self._lock:` at `:234` — a class-level `RLock` declared at `:50` with 7 `with self._lock:` sites across the module — and the guard and the debit are both inside it. The fund path is correctly serialized.
 
-```python
-if funds.available_balance < amount:
-    return False, "Insufficient funds..."
-# Block the margin
-funds.available_balance -= amount
-funds.used_margin += amount
-```
+The error was methodological: the rev 9 sweep counted lock *definitions* per module and concluded "9 commits, 0 locks" for modules whose locking lives in `with self._lock:` blocks rather than in a count of `Lock()` calls. `scripts/gthread_check_then_act.py` now decides protection by asking whether the guard **and** the mutation are inside the same held lock in the same function, and it is what caught the mistake.
 
-There is no lock and no conditional UPDATE. Under eventlet nothing can interleave between the check and the debit. Under gthread **two concurrent orders can both pass the check and both debit**, driving `available_balance` negative — a double-spend of sandbox capital. `:219-225` has the same shape for the margin check, and `sandbox/position_manager.py` does read-then-write on `position.quantity` across 9 commit sites with zero locks (`GT-A9-05`, `GT-A9-06`).
-
-This also constrains A4: a retry that replays a **stale** read-modify-write corrupts balances. The retry helper must re-read state inside each attempt, never replay a computed delta (`GT-A9-11`).
+**What survives the correction.** Five other sandbox managers have neither a lock definition nor a `with`-lock site: `position_manager` (9 commits), `holdings_manager` (2), `order_manager` (4), `catch_up_processor` (3), `squareoff_manager`. The detector confirms a genuine unguarded check-then-act in `sandbox/holdings_manager.py:178-211` `process_t1_settlement()`, which guards and mutates `holding.quantity` (`GT-A9-12`), and `position_manager`'s read-then-write on `position.quantity` remains unguarded (`GT-A9-06`).
 
 **Pass/fail tests:** concurrent orders against remaining margin; concurrent fills on one symbol; stop during auto-upgrade; stale-feed fallback and recovery; repeated start/stop cycles; exactly-once simulated fills while polling and WebSocket engines overlap; clean session and thread teardown with no orphaned threads.
 
@@ -209,6 +201,19 @@ The real exposure is narrower and points the opposite way: the default **`misfir
 Flask's default session is a signed client-side cookie deserialized per request, so there is no shared server-side session store to race. `app.py:173` `CSRFProtect` binds tokens to that session. `utils/auth_utils.py:374` sets `PERMANENT_SESSION_LIFETIME` per login. **Both resolved as safe**; a concurrent multi-device login test is retained as regression only.
 
 The one open item is `MAX_SESSIONS_PER_USER` enforcement in `database/auth_db.py` — a check-then-insert cap that must hold under concurrent device logins (`GT-A14-03`).
+
+### A16. Check-then-act on persisted counters
+
+Generalised from the sandbox finding. [`scripts/gthread_check_then_act.py`](../../scripts/gthread_check_then_act.py) detects an `if <attr>` guard followed by an augmented assignment to the *same* attribute with no lock held. Five instances repo-wide, all unlocked — three in sandbox (A9), and two on the **security path**:
+
+- `database/traffic_db.py:331-342` `track_404()` — guards and mutates `tracker.error_count`, the counter behind the IP ban.
+- `database/traffic_db.py:444-458` `track_invalid_api_key()` — the brute-force lockout counter.
+
+Under eventlet neither can interleave. Under gthread a concurrent burst from one source can under-count, so the ban or lockout threshold fires late or not at all — the failure mode widens an attack window rather than breaking a feature, which is why no test would have caught it.
+
+Fix with a conditional UPDATE or a serialized counter; do not add a lock that is held across the DB write.
+
+**Re-run the detector after any change to a counter or balance path.** It found what the object-shaped sweeps could not, because these defects live in transaction boundaries, not in shared objects.
 
 ### A15. Windows SQLite locking
 
@@ -528,7 +533,7 @@ Qualitative gates that remain: no production process imports eventlet; MCP dispa
 
 "100% coverage" here means **every discovered runtime and deployment surface is classified, mapped to a gate, a test, a rollback boundary and a measurable acceptance criterion.** It does not mean static analysis guarantees production behaviour — that is what the §7 platform matrix and the 24-hour soak are for.
 
-By that definition, **discovery and classification are complete.** Every surface has a row in [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv): 134 rows, each carrying `decision`, `gate`, `test`, `rollback_boundary`, `acceptance_criterion` and `status`.
+By that definition, **discovery and classification are complete.** Every surface has a row in [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv): 149 rows, each carrying `decision`, `gate`, `test`, `rollback_boundary`, `acceptance_criterion` and `status`.
 
 | Area | Rows | Resolved (no work) | Open |
 | --- | ---: | ---: | ---: |
@@ -538,7 +543,7 @@ By that definition, **discovery and classification are complete.** Every surface
 | MCP (A6) | 4 | 0 | 4 |
 | Proxy (A7) | 3 | 0 | 3 |
 | EventBus (A8) | 1 | 0 | 1 |
-| Sandbox (A9) | 11 | 0 | 11 |
+| Sandbox (A9) | 12 | 1 | 11 |
 | HTTP client + limiter (A10) | 4 | 1 | 3 |
 | Registries (A12) | 15 | 3 | 12 |
 | Schedulers extra (A13) | 2 | 1 | 1 |
@@ -552,13 +557,25 @@ By that definition, **discovery and classification are complete.** Every surface
 | Platform (§7) | 16 | 0 | 16 |
 | Rollback (§8.2) | 6 | 0 | 6 |
 | Product surfaces (rev 8) | 7 | 5 | 2 |
-| **Total** | **134** | **19** | **115** |
+| Security counters (A16) | 2 | 0 | 2 |
+| Telegram / WhatsApp (rev 10) | 5 | 2 | 3 |
+| Flow (rev 10) | 4 | 2 | 2 |
+| Historify (rev 10) | 3 | 2 | 1 |
+| **Total** | **149** | **26** | **123** |
 
-Nineteen rows are **resolved with no work required** — each carries the evidence for why, so the exclusion is auditable rather than an omission: Flask-Limiter already holds per-key `RLock`s; flow and historify schedulers already set `max_instances: 1`; Flask session is a per-request signed cookie; 75 streaming and 5 download sleep sites are not request threads; four brokers' executors become dead branches; six broker files have guarded fallbacks.
+Twenty-six rows are **resolved with no work required** — each carries the evidence for why, so the exclusion is auditable rather than an omission: Flask-Limiter already holds per-key `RLock`s; flow and historify schedulers already set `max_instances: 1`; Flask session is a per-request signed cookie; 75 streaming and 5 download sleep sites are not request threads; four brokers' executors become dead branches; six broker files have guarded fallbacks.
 
 **What remains is execution, not discovery.** The gates are prose and the tracker rows are `open` because no code or test has been written yet. §9 now carries derived values for every engineering row and provisional values for every product row, so implementation is unblocked — the seven product rows can be amended without re-planning.
 
-**Rev 9 sweep — the sandbox package.** Rev 8's tracker referenced only 4 of 11 `sandbox/` modules; `catch_up_processor`, `fund_manager`, `holdings_manager`, `order_manager`, `position_manager`, `squareoff_manager` and `squareoff_thread` had no row at all. Sweeping all 11 found the fund-balance double-spend above — the most serious defect discovered since the four release blockers, and one that only manifests under real threads. Seven rows added.
+**Rev 10 sweeps — Flow, Historify, Telegram, WhatsApp, plus a generalised detector.**
+
+Flow and Historify are the **best-guarded subsystems in the codebase**: `flow_price_monitor` (3 locks), `flow_order_update_monitor` (2), `flow_executor` (2), `flow_scheduler` (1), and `historify_service`'s `_job_state_lock` covering `_running_jobs`/`_paused_jobs` at 6 sites. Six of eleven rows resolved with no work.
+
+Telegram and WhatsApp are structurally clean — no mutated module-level state anywhere — but the source audit's GT-10 and GT-11 had **never been given tracker rows**. They now are: the Telegram init path at `blueprints/telegram.py:113-145` starts an untracked thread and joins for 10s, then continues while that thread may still write service state (`GT-T-01`).
+
+The more valuable output was generalising the sandbox lesson into a detector (A16), which found two unlocked check-then-act counters on the **security path** that no object-shaped sweep would reach.
+
+**Rev 9 sweep — the sandbox package (one finding since retracted).** Rev 8's tracker referenced only 4 of 11 `sandbox/` modules; `catch_up_processor`, `fund_manager`, `holdings_manager`, `order_manager`, `position_manager`, `squareoff_manager` and `squareoff_thread` had no row at all. Sweeping all 11 added seven rows. Its headline finding — a fund-balance double-spend — was **retracted in rev 10** after a more precise detector showed the path is lock-guarded. The retraction is itself the useful outcome: a sweep that counts lock *definitions* cannot tell whether a specific sequence is protected, and two of the nine rows it produced were wrong in that direction.
 
 **Rev 8 sweep — product surfaces.** `/trading`, `/tools`, `/scalping` and `/websocket/test` swept directly: 24 modules, 26 module-level globals, **all constants, none mutated at runtime**. `services/scalping_risk_monitor_service.py` already holds three locks. The only open items are verifying the scalping monitor's thread lifecycle (`GT-S-04`) and confirming under load that tools pages reuse the shared notification socket (`GT-S-07`). Five of the seven rows resolved with no work — the analytics surfaces are the cleanest part of the codebase for this migration, because their live data never enters the WSGI pool.
 
