@@ -152,6 +152,29 @@ WantedBy=multi-user.target
 
 **Important:** Use `-w 1` (single worker) for WebSocket compatibility.
 
+**Worker class.** `install.sh` writes `--worker-class eventlet` by default and
+that remains the supported runtime. gthread is opt-in and **experimental**: set
+
+```
+OPENALGO_WORKER_CLASS = 'gthread'
+```
+
+in the instance's `.env`, then re-run `install/update.sh`. The updater rewrites
+`ExecStart`, **backs up the previous unit first**, verifies the new one before
+any dependency is touched, and restores the backup automatically if the service
+does not come up. Removing the line and re-running goes back.
+
+Selecting gthread always sets a thread count too (64 by default, floored at 16).
+That coupling is deliberate: Gunicorn's gthread worker defaults to one thread,
+and OpenAlgo holds a request thread for the whole life of each SSE stream, so a
+one-thread unit stops answering as soon as a strategy log or MCP stream opens.
+
+On a multi-instance host the cost is threads x instances; `install-multi.sh`
+prints the total so it can be divided against a per-host budget.
+
+Background and current status:
+[the migration progress notes](../../progress/gthread/README.md).
+
 ### 6. Set Permissions
 
 ```bash

@@ -314,6 +314,35 @@ exec /app/.venv/bin/gunicorn \
     app:app
 ```
 
+### Worker class: eventlet by default, gthread available to test
+
+`start.sh` no longer hard-codes the worker. It resolves one at boot via
+`install/lib/gunicorn_runtime.sh`, and **the default is eventlet** — an
+untouched container behaves exactly as it always has.
+
+gthread is opt-in and **experimental**. Because every Docker install
+bind-mounts `.env` into the container, opting in is one line in `.env`
+plus a restart, with no compose regeneration:
+
+```
+OPENALGO_WORKER_CLASS = 'gthread'
+```
+
+The setting lives on the host, so it **survives `docker pull`**. Removing the
+line and restarting goes back.
+
+Setting the worker class is sufficient — a thread count is chosen for you (64;
+values below 16 are raised, with a warning). Do not set
+`OPENALGO_GUNICORN_THREADS` on its own: it does nothing without the worker
+class, and Gunicorn's own default of one thread would let a single live
+strategy or MCP stream block the whole server.
+
+An unrecognised worker name or a non-numeric thread count falls back to
+eventlet and warns, naming the bad value, rather than failing to start.
+
+Background and current status:
+[the migration progress notes](../../progress/gthread/README.md).
+
 ### Key Differences from Simple Script
 
 | Feature | Old (6 lines) | Actual (246 lines) |
