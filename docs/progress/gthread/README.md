@@ -14,7 +14,7 @@ language: what was broken, what we changed, and how we know it works.
 | [PR-1](PR-01-systemd-unit-migration.md) | Make server upgrades able to change the worker safely | Done |
 | [PR-2](PR-02-proxy-supervisor.md) | Stop the market-data process from dying unnoticed | Done |
 | [PR-3](PR-03-emit-boundary.md) | Stop live updates from getting jumbled | Done |
-| PR-4 | Stop the symbol lookup going blank during its daily refresh | Not started |
+| [PR-4](PR-04-cache-snapshot-swap.md) | Stop the symbol lookup going blank during its daily refresh | Done |
 | PR-5 | Make shared memory caches safe for multiple threads | Not started |
 | PR-6 | Retry database writes that lose a race | Not started |
 | PR-7 | Make the MCP server's counters accurate | Not started |
@@ -29,8 +29,8 @@ language: what was broken, what we changed, and how we know it works.
 | --- | --- |
 | Total items tracked | 152 |
 | Already fine, no work needed | 27 |
-| Fixed and tested | 8 |
-| Still to do | 117 |
+| Fixed and tested | 11 |
+| Still to do | 114 |
 
 ## How we work
 

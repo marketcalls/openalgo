@@ -14,6 +14,7 @@ without an entry default to 1 (no splitting cap applied).
 
 import csv
 import os
+import threading
 
 from sqlalchemy import Column, Index, Integer, String, create_engine
 from sqlalchemy.ext.declarative import declarative_base
@@ -38,9 +39,21 @@ db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind
 Base = declarative_base()
 Base.query = db_session.query_property()
 
-# In-memory cache for freeze quantities - always warm
+# In-memory cache for freeze quantities - always warm.
+#
+# Readers must bind this global to a local before use and never mutate it in
+# place. A reload builds a brand-new dict and rebinds the name, which is atomic
+# in CPython, so every reader sees either the complete old snapshot or the
+# complete new one.
+#
+# The previous implementation called .clear() and refilled in place. During
+# that window _cache_loaded was still True, so a concurrent lookup found an
+# empty dict and silently returned the default freeze quantity of 1 -- which
+# changes how a live order is split. eventlet hid this because the rebuild
+# never yielded; real threads do not.
 _freeze_qty_cache: dict[str, int] = {}
 _cache_loaded: bool = False
+_cache_load_lock = threading.Lock()
 
 
 class QtyFreeze(Base):
@@ -134,24 +147,28 @@ def load_freeze_qty_cache() -> bool:
     """
     global _freeze_qty_cache, _cache_loaded
 
-    try:
-        _freeze_qty_cache.clear()
+    # Serialize writers so two concurrent reloads cannot interleave snapshots.
+    with _cache_load_lock:
+        try:
+            # Build the replacement off to the side; the live cache stays
+            # readable and complete for the whole rebuild.
+            new_cache: dict[str, int] = {}
+            for entry in QtyFreeze.query.all():
+                # Cache key: "EXCHANGE:SYMBOL" (e.g., "NFO:NIFTY")
+                new_cache[f"{entry.exchange}:{entry.symbol}"] = entry.freeze_qty
 
-        # Load all entries from database
-        entries = QtyFreeze.query.all()
+            # Single atomic rebind. Readers hold either the old dict or the new
+            # one, never a half-filled one.
+            _freeze_qty_cache = new_cache
+            _cache_loaded = True
+            logger.debug(f"Loaded {len(new_cache)} freeze quantities into cache")
+            return True
 
-        for entry in entries:
-            # Cache key: "EXCHANGE:SYMBOL" (e.g., "NFO:NIFTY")
-            cache_key = f"{entry.exchange}:{entry.symbol}"
-            _freeze_qty_cache[cache_key] = entry.freeze_qty
-
-        _cache_loaded = True
-        logger.debug(f"Loaded {len(_freeze_qty_cache)} freeze quantities into cache")
-        return True
-
-    except Exception as e:
-        logger.exception(f"Error loading freeze qty cache: {e}")
-        return False
+        except Exception as e:
+            # Keep serving the previous snapshot rather than dropping to an
+            # empty cache, which would silently default every freeze qty to 1.
+            logger.exception(f"Error loading freeze qty cache: {e}")
+            return False
 
 
 def get_freeze_qty(symbol: str, exchange: str) -> int:
@@ -176,9 +193,11 @@ def get_freeze_qty(symbol: str, exchange: str) -> int:
         load_freeze_qty_cache()
 
     # Look up the configured entry for this exchange+symbol; default to 1 if none.
+    # Bind once: a concurrent reload may rebind the global mid-lookup.
+    cache = _freeze_qty_cache
     cache_key = f"{exchange}:{symbol}"
-    if cache_key in _freeze_qty_cache:
-        return _freeze_qty_cache[cache_key]
+    if cache_key in cache:
+        return cache[cache_key]
 
     # If not found, return 1 as default
     return 1
@@ -243,15 +262,18 @@ def get_all_freeze_qty(exchange: str = None) -> dict[str, int]:
     if not _cache_loaded:
         load_freeze_qty_cache()
 
+    # Bind once: a concurrent reload may rebind the global mid-read.
+    cache = _freeze_qty_cache
+
     if exchange:
         prefix = f"{exchange}:"
         return {
             key.replace(prefix, ""): value
-            for key, value in _freeze_qty_cache.items()
+            for key, value in cache.items()
             if key.startswith(prefix)
         }
 
-    return dict(_freeze_qty_cache)
+    return dict(cache)
 
 
 def ensure_qty_freeze_tables_exists():

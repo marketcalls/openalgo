@@ -5,6 +5,7 @@ Optimized for zero-config deployment with configurable session reset time (SESSI
 
 import heapq
 import re
+import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -136,26 +137,32 @@ class SymbolData:
     contract_value: float | None = None  # Contract multiplier (e.g. 0.001 for BTCUSD.P)
 
 
-class BrokerSymbolCache:
+class _SymbolSnapshot:
+    """One complete generation of the symbol lookup structures.
+
+    Built off to the side during a reload, then published by a single atomic
+    rebind of ``BrokerSymbolCache._snap``. Never mutated after publication.
     """
-    High-performance in-memory cache for broker symbols
-    Designed to handle 100,000+ symbols with minimal memory footprint
-    """
+
+    __slots__ = (
+        "symbols",
+        "by_symbol_exchange",
+        "by_token_exchange",
+        "by_brsymbol_exchange",
+        "by_token",
+        "by_exchange",
+        "expiries_by_exchange",
+        "underlyings_by_exchange",
+        "tradable_underlyings_by_exchange",
+        "expiries_by_exchange_underlying",
+    )
 
     def __init__(self):
-        # Active broker context
-        self.active_broker: str | None = None
-        self.cache_loaded: bool = False
-
-        # Primary storage - all symbols in memory
         self.symbols: dict[str, SymbolData] = {}
-
-        # Multi-index maps for O(1) lookups
         self.by_symbol_exchange: dict[tuple[str, str], SymbolData] = {}
         self.by_token_exchange: dict[tuple[str, str], SymbolData] = {}
         self.by_brsymbol_exchange: dict[tuple[str, str], SymbolData] = {}
         self.by_token: dict[str, SymbolData] = {}
-
         # Pre-computed indexes for FNO filter performance (O(1) lookups)
         self.by_exchange: dict[str, list[SymbolData]] = defaultdict(list)
         self.expiries_by_exchange: dict[str, set[str]] = defaultdict(set)
@@ -170,6 +177,47 @@ class BrokerSymbolCache:
         self.tradable_underlyings_by_exchange: dict[str, set[str]] = defaultdict(set)
         self.expiries_by_exchange_underlying: dict[tuple[str, str], set[str]] = defaultdict(set)
 
+
+class BrokerSymbolCache:
+    """
+    High-performance in-memory cache for broker symbols
+    Designed to handle 100,000+ symbols with minimal memory footprint
+    """
+
+    # The nine lookup structures are grouped into one immutable-by-convention
+    # snapshot object, exposed through properties below. A reload builds a
+    # brand-new snapshot and rebinds ``self._snap`` once -- a single atomic
+    # assignment -- so a reader sees either the complete old generation or the
+    # complete new one, never a mix.
+    #
+    # The previous implementation cleared all nine in place and refilled them
+    # over ~150k rows. A concurrent lookup during that window found empty
+    # structures, and on the order path a symbol lookup that returns nothing is
+    # indistinguishable from "symbol does not exist". eventlet made the rebuild
+    # effectively atomic because it never yielded; real threads do not.
+    _SNAPSHOT_FIELDS = (
+        "symbols",
+        "by_symbol_exchange",
+        "by_token_exchange",
+        "by_brsymbol_exchange",
+        "by_token",
+        "by_exchange",
+        "expiries_by_exchange",
+        "underlyings_by_exchange",
+        "tradable_underlyings_by_exchange",
+        "expiries_by_exchange_underlying",
+    )
+
+    def __init__(self):
+        # Active broker context
+        self.active_broker: str | None = None
+        self.cache_loaded: bool = False
+
+        # Serializes writers; readers never take it, so a multi-second rebuild
+        # cannot block a live order lookup.
+        self._load_lock = threading.Lock()
+        self._snap = _SymbolSnapshot()
+
         # Cache statistics
         self.stats = CacheStats()
 
@@ -179,19 +227,67 @@ class BrokerSymbolCache:
 
         logger.debug("BrokerSymbolCache initialized")
 
+    @property
+    def symbols(self):
+        return self._snap.symbols
+
+    @property
+    def by_symbol_exchange(self):
+        return self._snap.by_symbol_exchange
+
+    @property
+    def by_token_exchange(self):
+        return self._snap.by_token_exchange
+
+    @property
+    def by_brsymbol_exchange(self):
+        return self._snap.by_brsymbol_exchange
+
+    @property
+    def by_token(self):
+        return self._snap.by_token
+
+    @property
+    def by_exchange(self):
+        return self._snap.by_exchange
+
+    @property
+    def expiries_by_exchange(self):
+        return self._snap.expiries_by_exchange
+
+    @property
+    def underlyings_by_exchange(self):
+        return self._snap.underlyings_by_exchange
+
+    @property
+    def tradable_underlyings_by_exchange(self):
+        return self._snap.tradable_underlyings_by_exchange
+
+    @property
+    def expiries_by_exchange_underlying(self):
+        return self._snap.expiries_by_exchange_underlying
+
     def load_all_symbols(self, broker: str) -> bool:
         """
         Load all symbols for the active broker into memory
         This is called once after master contract download
         """
+        # Serialize writers only. Readers never take this lock, so a
+        # multi-second rebuild cannot block a live order lookup.
+        with self._load_lock:
+            return self._load_all_symbols_locked(broker)
+
+    def _load_all_symbols_locked(self, broker: str) -> bool:
         try:
             from database.symbol import SymToken
 
             start_time = time.time()
             logger.debug(f"Loading all symbols for broker: {broker}")
 
-            # Clear existing cache
-            self.clear_cache()
+            # Build into a NEW snapshot. The live cache keeps serving the
+            # previous generation for the whole rebuild, so a concurrent order
+            # lookup never sees an empty structure.
+            snap = _SymbolSnapshot()
 
             # Query all symbols from database
             symbols = SymToken.query.all()
@@ -249,21 +345,21 @@ class BrokerSymbolCache:
                 )
 
                 # Store in primary dict
-                self.symbols[sym.token] = symbol_data
+                snap.symbols[sym.token] = symbol_data
 
                 # Build indexes
-                self.by_symbol_exchange[(sym.symbol, sym.exchange)] = symbol_data
-                self.by_token_exchange[(sym.token, sym.exchange)] = symbol_data
-                self.by_brsymbol_exchange[(sym.brsymbol, sym.exchange)] = symbol_data
-                self.by_token[sym.token] = symbol_data
+                snap.by_symbol_exchange[(sym.symbol, sym.exchange)] = symbol_data
+                snap.by_token_exchange[(sym.token, sym.exchange)] = symbol_data
+                snap.by_brsymbol_exchange[(sym.brsymbol, sym.exchange)] = symbol_data
+                snap.by_token[sym.token] = symbol_data
 
                 # Build FNO filter indexes for O(1) lookups
-                self.by_exchange[sym.exchange].append(symbol_data)
+                snap.by_exchange[sym.exchange].append(symbol_data)
                 if sym.expiry:
-                    self.expiries_by_exchange[sym.exchange].add(sym.expiry)
+                    snap.expiries_by_exchange[sym.exchange].add(sym.expiry)
                     # Use extracted underlying for index (more reliable than broker's name field)
                     if underlying:
-                        self.expiries_by_exchange_underlying[(sym.exchange, underlying)].add(sym.expiry)
+                        snap.expiries_by_exchange_underlying[(sym.exchange, underlying)].add(sym.expiry)
                 # Use extracted underlying for underlyings index.
                 # `underlyings_by_exchange` is options-only — option-chain/IV-chart
                 # dropdowns must not show futures-only commodities (dead-ends).
@@ -273,12 +369,16 @@ class BrokerSymbolCache:
                 sym_upper = sym.symbol.upper()
                 if underlying:
                     if sym_upper.endswith("CE") or sym_upper.endswith("PE"):
-                        self.underlyings_by_exchange[sym.exchange].add(underlying)
-                        self.tradable_underlyings_by_exchange[sym.exchange].add(underlying)
+                        snap.underlyings_by_exchange[sym.exchange].add(underlying)
+                        snap.tradable_underlyings_by_exchange[sym.exchange].add(underlying)
                     elif sym_upper.endswith("FUT"):
                         exp_date = _exp_to_date(sym.expiry)
                         if exp_date and exp_date >= ist_today:
-                            self.tradable_underlyings_by_exchange[sym.exchange].add(underlying)
+                            snap.tradable_underlyings_by_exchange[sym.exchange].add(underlying)
+
+            # Publish: one atomic rebind. Readers hold either the old
+            # snapshot or this one -- never a partially built structure.
+            self._snap = snap
 
             # Update cache metadata
             self.active_broker = broker
@@ -693,20 +793,15 @@ class BrokerSymbolCache:
         return matches[:limit]
 
     def clear_cache(self):
-        """Clear all cached data"""
-        self.symbols.clear()
-        self.by_symbol_exchange.clear()
-        self.by_token_exchange.clear()
-        self.by_brsymbol_exchange.clear()
-        self.by_token.clear()
-        # Clear FNO filter indexes
-        self.by_exchange.clear()
-        self.expiries_by_exchange.clear()
-        self.underlyings_by_exchange.clear()
-        self.tradable_underlyings_by_exchange.clear()
-        self.expiries_by_exchange_underlying.clear()
+        """Drop all cached data by publishing an empty snapshot.
+
+        Order matters: cache_loaded is cleared BEFORE the snapshot is swapped,
+        so a reader can never observe cache_loaded=True alongside empty
+        structures and mistake "reload in progress" for "symbol not found".
+        """
         self.cache_loaded = False
         self.active_broker = None
+        self._snap = _SymbolSnapshot()
         logger.debug("Cache cleared")
 
     def get_cache_info(self) -> dict:
