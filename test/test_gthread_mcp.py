@@ -60,15 +60,18 @@ def test_quota_admits_exactly_its_limit_under_a_thread_barrier():
 def test_unlocked_quota_really_does_over_admit():
     """The control. Without it, the test above could pass for the wrong reason.
 
-    Note this is intermittent -- a single run sometimes admits exactly the
-    limit. That is the point: the defect would not be caught reliably by a test
-    that runs once, which is why the locked version is asserted across trials.
+    The window between "is there room" and "record my slot" is held open with
+    a real sleep rather than relying on the scheduler to interleave. An earlier
+    version used time.sleep(0) and passed only intermittently -- under full
+    suite load it sometimes admitted exactly the limit and failed. A control
+    that fails at random is worse than no control: it trains people to re-run
+    the suite instead of reading it.
     """
     old = sys.getswitchinterval()
     sys.setswitchinterval(1e-6)
     try:
         over_admitted = False
-        for _ in range(5):
+        for _ in range(8):
             quota: dict[str, list[float]] = {}
             limit, window = 5, 60
 
@@ -79,7 +82,9 @@ def test_unlocked_quota_really_does_over_admit():
                     bucket.pop(0)
                 if len(bucket) >= limit:
                     return False
-                time.sleep(0)  # any work between the test and the admit
+                # Any real work between the test and the admit. Deterministic
+                # rather than scheduler-dependent.
+                time.sleep(0.01)
                 bucket.append(now)
                 return True
 

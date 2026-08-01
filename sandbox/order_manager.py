@@ -12,6 +12,7 @@ Features:
 
 import os
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -34,6 +35,19 @@ logger = get_logger(__name__)
 
 
 class OrderManager:
+    # Serializes order state transitions across the process.
+    #
+    # cancel_order and modify_order both read order_status, decide the order is
+    # still open, and then change it -- cancel_order additionally releases the
+    # blocked margin. Two concurrent cancels of one order therefore both passed
+    # the check and both released, inflating available balance. fund_manager's
+    # own lock does not help: each release is individually valid, there are
+    # simply two of them.
+    #
+    # Class-level because callers construct a fresh OrderManager per request,
+    # so a per-instance lock would guard nothing.
+    _state_lock = threading.RLock()
+
     """Manages sandbox orders for sandbox mode"""
 
     def __init__(self, user_id):
@@ -791,6 +805,10 @@ class OrderManager:
         Returns:
             tuple: (success: bool, response: dict, status_code: int)
         """
+        with self._state_lock:
+            return self._modify_order_locked(orderid, new_data)
+
+    def _modify_order_locked(self, orderid, new_data):
         try:
             # Get existing order
             order = SandboxOrders.query.filter_by(orderid=orderid, user_id=self.user_id).first()
@@ -902,12 +920,19 @@ class OrderManager:
         """
         Cancel an existing open order
 
+        Serialized: the status check, the status change and the margin release
+        are one unit. See OrderManager._state_lock.
+
         Args:
             orderid: str - Order ID to cancel
 
         Returns:
             tuple: (success: bool, response: dict, status_code: int)
         """
+        with self._state_lock:
+            return self._cancel_order_locked(orderid)
+
+    def _cancel_order_locked(self, orderid):
         try:
             # Get existing order
             order = SandboxOrders.query.filter_by(orderid=orderid, user_id=self.user_id).first()

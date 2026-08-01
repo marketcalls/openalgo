@@ -23,6 +23,7 @@ language: what was broken, what we changed, and how we know it works.
 | [PR-9](PR-09-diagnostics.md) | Report the running configuration correctly | Done |
 | [PR-10](PR-10-ci-gates.md) | Add tests that boot the real container | Done |
 | [PR-10b](PR-10b-registry-investigations.md) | Close the open registry questions | Done |
+| [PR-10c](PR-10c-sandbox-orders.md) | Order cancellation and the catch-up sweep | Done |
 | PR-11 | **The switch itself** — needs sign-off before starting | Awaiting sign-off |
 
 ## Numbers
@@ -31,8 +32,8 @@ language: what was broken, what we changed, and how we know it works.
 | --- | --- |
 | Total items tracked | 152 |
 | Already fine, no work needed | 31 |
-| Fixed and tested | 57 |
-| Still to do | 64 |
+| Fixed and tested | 59 |
+| Still to do | 62 |
 
 ## How we work
 

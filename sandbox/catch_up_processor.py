@@ -9,6 +9,7 @@ Features:
 """
 
 import os
+import threading
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -304,6 +305,22 @@ def catch_up_daily_pnl_snapshot():
         logger.exception(f"Error in catch-up daily P&L snapshot: {e}")
 
 
+# Single-flight guard for the catch-up sweep.
+#
+# run_catch_up_tasks() is reachable from two login paths in utils/auth_utils.py
+# (fresh master-contract download, and the cached-contract path), each on its
+# own background thread. OpenAlgo allows up to five concurrent device sessions,
+# so two logins landing together used to start two sweeps at once: MIS
+# square-off could close the same stale position twice, and the daily PnL reset
+# and snapshot could both fire. eventlet made the overlap unlikely; real
+# threads make it ordinary.
+#
+# Non-blocking on purpose. A second caller should SKIP, not queue -- queueing
+# would simply run the whole sweep again the moment the first one finished,
+# which is the outcome the guard exists to prevent.
+_catch_up_lock = threading.Lock()
+
+
 def run_catch_up_tasks():
     """
     Run all catch-up tasks after master contract download completes
@@ -311,7 +328,20 @@ def run_catch_up_tasks():
 
     Note: Runs regardless of sandbox mode - the sandbox database exists independently
     and positions need to be settled even if user is not in analyzer mode
+
+    Single-flight: if a sweep is already running, this returns immediately.
     """
+    if not _catch_up_lock.acquire(blocking=False):
+        logger.info("Catch-up tasks already running, skipping this trigger")
+        return
+
+    try:
+        _run_catch_up_tasks_locked()
+    finally:
+        _catch_up_lock.release()
+
+
+def _run_catch_up_tasks_locked():
     try:
         logger.info("Running catch-up tasks after master contract download...")
 
