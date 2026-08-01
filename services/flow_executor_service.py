@@ -33,11 +33,35 @@ _locks_mutex = threading.Lock()
 
 
 def get_workflow_lock(workflow_id: int) -> threading.Lock:
-    """Get or create a lock for a workflow"""
+    """Get or create a lock for a workflow.
+
+    Creation is guarded, but entries were never removed: the registry grew by
+    one Lock per distinct workflow id for the life of the process. Small, but
+    genuinely unbounded, and the worker never restarts.
+    """
     with _locks_mutex:
         if workflow_id not in _workflow_locks:
             _workflow_locks[workflow_id] = threading.Lock()
         return _workflow_locks[workflow_id]
+
+
+def release_workflow_lock(workflow_id: int) -> bool:
+    """Drop a workflow's lock entry once the workflow is gone.
+
+    Only removes it if the lock is not currently held, so a delete racing an
+    in-flight run cannot strand the runner without its mutex.
+    """
+    with _locks_mutex:
+        lock = _workflow_locks.get(workflow_id)
+        if lock is None:
+            return False
+        if not lock.acquire(blocking=False):
+            return False  # still executing; leave it in place
+        try:
+            del _workflow_locks[workflow_id]
+        finally:
+            lock.release()
+        return True
 
 
 def parse_time_string(

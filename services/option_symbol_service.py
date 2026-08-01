@@ -43,6 +43,7 @@ from database.symbol import SymToken, db_session
 from services.quotes_service import get_quotes
 from utils.constants import CRYPTO_EXCHANGES
 from utils.logging import get_logger
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
@@ -50,7 +51,12 @@ logger = get_logger(__name__)
 # STRIKES CACHE - In-Memory Cache for Ultra-Fast Lookups
 # ============================================================================
 # Cache structure: {(base_symbol, expiry, option_type, exchange): [sorted_strikes]}
-_STRIKES_CACHE: dict[tuple[str, str, str, str], list[float]] = {}
+# Bounded and locked. Keyed by (symbol, exchange, expiry, type), so the key
+# space grows with every distinct instrument ever queried -- unbounded in a
+# process that runs for weeks. Only one broker (paytm) ever invalidates it, so
+# nothing else would ever reclaim the memory. A TTL cache bounds both the size
+# and the staleness, and LockedTTLCache makes concurrent access safe.
+_STRIKES_CACHE: LockedTTLCache = LockedTTLCache(maxsize=4096, ttl=3600)
 _CACHE_STATS = {"hits": 0, "misses": 0, "total_queries": 0}
 
 

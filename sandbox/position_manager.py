@@ -12,6 +12,7 @@ Features:
 
 import os
 import sys
+import threading
 import time
 from datetime import datetime
 from datetime import time as dt_time
@@ -270,6 +271,19 @@ def get_expiry_settlement_price(position):
 
 
 class PositionManager:
+    # Serializes expired-contract settlement.
+    #
+    # _check_and_close_expired_positions runs as a side effect of
+    # get_open_positions -- i.e. on every positions page load and API call. It
+    # reads a position's quantity, releases the blocked margin and credits the
+    # settled P&L, then zeroes the quantity. Two concurrent reads therefore
+    # both saw a non-zero quantity and both settled: margin released twice.
+    #
+    # Same shape as the order-cancel defect fixed in PR-10c. Only the
+    # settlement is serialized, not the whole read, so ordinary position
+    # fetches are unaffected.
+    _settle_lock = threading.RLock()
+
     """Manages positions and MTM calculations"""
 
     def __init__(self, user_id):
@@ -288,6 +302,10 @@ class PositionManager:
         return Decimal("1.0")
 
     def _check_and_close_expired_positions(self, positions):
+        with self._settle_lock:
+            return self._check_and_close_expired_positions_locked(positions)
+
+    def _check_and_close_expired_positions_locked(self, positions):
         """
         Check for expired F&O contracts and auto-close them.
 

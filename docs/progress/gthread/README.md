@@ -26,6 +26,7 @@ language: what was broken, what we changed, and how we know it works.
 | [PR-10c](PR-10c-sandbox-orders.md) | Order cancellation and the catch-up sweep | Done |
 | [PR-10d](PR-10d-service-lifecycles.md) | Telegram start-up, scalping engine, rooms | Done |
 | [PR-10e](PR-10e-sandbox-fills.md) | Fills, square-off, and the last open questions | Done |
+| [PR-10f](PR-10f-bounded-registries.md) | Unbounded caches, a double-locking limiter, one last money path | Done |
 | PR-11 | **The switch itself** — needs sign-off before starting | Awaiting sign-off |
 
 ## Numbers
@@ -34,8 +35,8 @@ language: what was broken, what we changed, and how we know it works.
 | --- | --- |
 | Total items tracked | 152 |
 | Already fine, no work needed | 39 |
-| Fixed and tested | 62 |
-| Still to do | 51 |
+| Fixed and tested | 68 |
+| Still to do | 45 |
 
 ## Open questions: none left
 

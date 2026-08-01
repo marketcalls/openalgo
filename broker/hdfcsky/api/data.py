@@ -43,6 +43,7 @@ from broker.hdfcsky.mapping.transform_data import (
 from database.token_db import get_br_symbol
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
@@ -343,7 +344,12 @@ class BrokerData:
     # (exchange, symbol) -> the chart-data symbol form that actually returns
     # candles. Only indices are ambiguous; see _chart_symbols. Shared across
     # instances because it is a property of the broker, not of a session.
-    _CHART_SYMBOL_CACHE = {}
+    # Bounded and locked. This is a CLASS attribute, so every BrokerData
+    # instance shares it, and it is keyed by (exchange, symbol) -- unbounded
+    # over the life of a worker that never restarts. It is also the only
+    # class-level attribute in the codebase that is mutated at runtime without
+    # a guard, so two chart requests could write it concurrently.
+    _CHART_SYMBOL_CACHE = LockedTTLCache(maxsize=2048, ttl=86400)
 
     @staticmethod
     def _leg_error(item, message):

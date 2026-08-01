@@ -112,14 +112,29 @@ class RateLimiter:
         self.lock = threading.Lock()
 
     def wait(self):
-        """Wait if necessary to respect rate limit"""
+        """Block just long enough to respect the rate limit.
+
+        The slot is RESERVED while holding the lock, and the sleep happens
+        OUTSIDE it. Sleeping inside the lock serializes callers twice over:
+        each one waits for the lock and then waits again for its own interval,
+        so N callers take N x interval instead of finishing together after the
+        last reserved slot. Under gthread each of those waiters is also holding
+        a worker thread for the whole time.
+
+        See broker/angel/api/data.py:_apply_rate_limit for the same pattern.
+        """
         with self.lock:
-            current_time = time_module.time()
-            elapsed = current_time - self.last_call_time
-            if elapsed < self.min_interval:
-                sleep_time = self.min_interval - elapsed
-                time_module.sleep(sleep_time)
-            self.last_call_time = time_module.time()
+            now = time_module.time()
+            earliest = self.last_call_time + self.min_interval
+            if now < earliest:
+                sleep_for = earliest - now
+                self.last_call_time = earliest
+            else:
+                sleep_for = 0.0
+                self.last_call_time = now
+
+        if sleep_for > 0:
+            time_module.sleep(sleep_for)
 
 
 # Global rate limiter instance - 2 calls per second (conservative limit)
