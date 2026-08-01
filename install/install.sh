@@ -1120,6 +1120,20 @@ check_status "Failed to validate Nginx configuration"
 # Check and handle existing systemd service
 handle_existing "/etc/systemd/system/$SERVICE_NAME.service" "systemd service" "OpenAlgo service file"
 
+# Resolve the Gunicorn worker before writing ExecStart. Defaults to eventlet,
+# so a plain install is byte-identical to before; set OPENALGO_WORKER_CLASS=gthread
+# in the environment when running this script to opt a new install in.
+# The repo was cloned above, so the shared resolver is on disk by now.
+if [ -f "$OPENALGO_PATH/install/lib/gunicorn_runtime.sh" ]; then
+    # shellcheck source=lib/gunicorn_runtime.sh
+    . "$OPENALGO_PATH/install/lib/gunicorn_runtime.sh"
+    resolve_gunicorn_runtime "$OPENALGO_PATH/.env"
+else
+    # Older checkout without the resolver: keep the historical behaviour.
+    GUNICORN_WORKER_ARGS="--worker-class eventlet"
+fi
+log_message "Gunicorn worker: $GUNICORN_WORKER_ARGS" "$BLUE"
+
 # Create systemd service with unique name
 log_message "\nCreating systemd service..." "$BLUE"
 sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOL
@@ -1149,7 +1163,7 @@ Environment="NUMEXPR_NUM_THREADS=2"
 Environment="NUMBA_NUM_THREADS=2"
 # Simplified approach to ensure Python environment is properly loaded
 ExecStart=/bin/bash -c 'source $VENV_PATH/bin/activate && $VENV_PATH/bin/gunicorn \
-    --worker-class eventlet \
+    $GUNICORN_WORKER_ARGS \
     -w 1 \
     --bind unix:$SOCKET_FILE \
     --timeout 300 \

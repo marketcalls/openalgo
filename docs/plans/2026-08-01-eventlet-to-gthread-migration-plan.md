@@ -495,12 +495,22 @@ Each PR is independently revertible. **No PR depends on a later one.** PR-1 and 
 | **PR-8** | Sandbox lifecycle + APScheduler defaults (A9/A13) | eventlet | Prior lock-while-joining |
 | **PR-9** | Diagnostics that can *observe* the cutover (C5) — worker class, thread count, stream counts | eventlet | Cosmetic |
 | **PR-10** | Cross-platform CI + real-entrypoint boot (§7) — **must be green before PR-11** | eventlet | CI only |
-| **PR-11** | **The cutover** — worker class, `GUNICORN_THREADS`, all deploy surfaces (B3/C1/C3/C4) | gthread | Worker class + pin revert (§8.2) |
+| **PR-11a** | **Opt-in** — gthread selectable via `OPENALGO_WORKER_CLASS`, default unchanged | eventlet | Remove the variable |
+| **PR-11b** | **The cutover** — flip the default, repin Gunicorn, drop eventlet (B3/C1/C3/C4) | gthread | Worker class + pin revert (§8.2) |
 | **PR-12** | Docs (C3-docs) | gthread | Cosmetic |
 
 **Sequencing correction (rev 6).** Rev 4 placed CI validation (then PR-11) *after* the cutover (then PR-9). That is backwards: the cross-platform matrix and the diagnostics that report worker class and thread saturation are how a bad cutover is *detected*, so both must be green first. They are now PR-9 and PR-10, and both ship on eventlet.
 
-PR-1 through PR-10 are correctness, observability and validation work that carries no runtime risk. **PR-11 is the only one that changes the runtime**, and the only one whose revert requires the five-artefact procedure in §8.2.
+PR-1 through PR-10 are correctness, observability and validation work that carries no runtime risk. **PR-11b is the only one that changes the runtime**, and the only one whose revert requires the five-artefact procedure in §8.2.
+
+**Rollout correction (rev 13).** §8 previously called for a canary. That is not available for this product: OpenAlgo is self-hosted by roughly 290,000 users, about 80% of them on Docker or an Ubuntu server, each upgrading independently via `git pull` or `docker pull`. There is no traffic shifting and **no central rollback** — once a change is on `main` it cannot be recalled. The canary is therefore replaced by an explicit opt-in period (PR-11a), during which volunteers run gthread and report the §9 numbers that cannot be derived on a developer machine.
+
+**Two findings from PR-11a that reduce the remaining work:**
+
+1. **Gunicorn 25.3 — the version already pinned everywhere — ships both `eventlet` and `gthread`.** Making gthread available needs no dependency change, so `Dockerfile` and `requirements-nginx.txt` stay untouched until PR-11b. Verified directly against the pinned range.
+2. **`.env` is bind-mounted into the container on every Docker path** (`install-docker.sh:408`, `docker-run.sh:448`), and `start.sh` already reads keys from it. The B3 plan to inject the thread count through five compose generators is therefore unnecessary — the setting reaches the app from `.env`, survives `docker pull`, and needs no compose regeneration. `GT-C3-06` through `GT-C3-10` are resolved on that evidence.
+
+**The two settings are coupled, not independent.** Gunicorn's gthread worker defaults to one thread, and OpenAlgo holds a request thread for the life of each SSE stream. Measured: with one long-lived stream open, a `--threads 1` worker never served a second request (abandoned at 6s), while `--threads 64` served it in under 0.1s. Selecting gthread therefore always yields a thread count — 64 by default, floored at 16.
 
 Qualitative gates that remain: no production process imports eventlet; MCP dispatch completes without self-deadlock at maximum stream occupancy; concurrent sequence-event stress shows no loss, duplication, corruption or reordering; retry tests prove only local transactions repeat and broker orders remain exactly-once; symbol-cache refresh serves a complete old or complete new snapshot; API-key regeneration, logout and token rollover cannot return stale cache entries.
 

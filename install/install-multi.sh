@@ -575,6 +575,25 @@ EOL
     sudo nginx -t
     check_status "Failed to validate Nginx config"
 
+    # Resolve the Gunicorn worker for this instance. Defaults to eventlet, so a
+    # plain multi-instance install is unchanged; set OPENALGO_WORKER_CLASS=gthread
+    # in the environment when running this script to opt in.
+    if [ -f "$INSTANCE_DIR/install/lib/gunicorn_runtime.sh" ]; then
+        # shellcheck source=lib/gunicorn_runtime.sh
+        . "$INSTANCE_DIR/install/lib/gunicorn_runtime.sh"
+        resolve_gunicorn_runtime "$INSTANCE_DIR/.env"
+    else
+        GUNICORN_WORKER_ARGS="--worker-class eventlet"
+    fi
+
+    # Threads are per instance, so the host cost is threads x instances. On a
+    # small VPS the default budget is easy to exceed without noticing.
+    if [ "${GUNICORN_WORKER_CLASS:-eventlet}" = "gthread" ]; then
+        log_message "Gunicorn worker: $GUNICORN_WORKER_ARGS" "$BLUE"
+        log_message "  NOTE: ${GUNICORN_THREADS} threads x ${INSTANCES} instances = $((GUNICORN_THREADS * INSTANCES)) request threads on this host." "$YELLOW"
+        log_message "  Set OPENALGO_GUNICORN_THREADS to divide a per-host budget if that is too high." "$YELLOW"
+    fi
+
     # Create systemd service
     log_message "Creating systemd service..." "$BLUE"
     sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOL
@@ -603,7 +622,7 @@ Environment="MKL_NUM_THREADS=2"
 Environment="NUMEXPR_NUM_THREADS=2"
 Environment="NUMBA_NUM_THREADS=2"
 ExecStart=/bin/bash -c 'source $VENV_PATH/bin/activate && $VENV_PATH/bin/gunicorn \\
-    --worker-class eventlet \\
+    $GUNICORN_WORKER_ARGS \\
     -w 1 \\
     --bind unix:$SOCKET_FILE \\
     --timeout 300 \\

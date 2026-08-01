@@ -343,7 +343,21 @@ trap cleanup SIGTERM SIGINT
 # Use PORT env var if set (Railway/cloud), otherwise default to 5000
 APP_PORT="${PORT:-5000}"
 
-echo "[OpenAlgo] Starting application on port ${APP_PORT} with eventlet..."
+# Decide which Gunicorn worker to run. Defaults to eventlet; a user opts into
+# gthread by setting OPENALGO_WORKER_CLASS in the .env that every Docker install
+# already bind-mounts at /app/.env, so the choice survives `docker pull` and
+# needs no compose regeneration.
+# shellcheck source=install/lib/gunicorn_runtime.sh
+. /app/install/lib/gunicorn_runtime.sh
+resolve_gunicorn_runtime "$ENV_FILE"
+
+if [ "$GUNICORN_WORKER_CLASS" = "gthread" ]; then
+    echo "[OpenAlgo] Starting application on port ${APP_PORT} with gthread (${GUNICORN_THREADS} threads)..."
+    echo "[OpenAlgo] NOTE: gthread is opt-in and not yet the default. Report results at"
+    echo "[OpenAlgo]       https://github.com/marketcalls/openalgo/issues"
+else
+    echo "[OpenAlgo] Starting application on port ${APP_PORT} with eventlet..."
+fi
 
 # Create gunicorn worker temp directory (must be inside container, not mounted volume)
 mkdir -p /tmp/gunicorn_workers
@@ -357,8 +371,12 @@ mkdir -p /tmp/gunicorn_workers
 #
 # This shell stays alive as a minimal supervisor: it forwards signals to both
 # children, restarts the proxy if it dies, and exits when gunicorn exits.
+# $GUNICORN_WORKER_ARGS is deliberately unquoted so it splits into separate
+# arguments. Its contents are validated by the resolver (a fixed worker name
+# and a digits-only thread count), so there is nothing here to word-split on.
+# shellcheck disable=SC2086
 /app/.venv/bin/gunicorn \
-    --worker-class eventlet \
+    $GUNICORN_WORKER_ARGS \
     --workers 1 \
     --bind 0.0.0.0:${APP_PORT} \
     --timeout 300 \

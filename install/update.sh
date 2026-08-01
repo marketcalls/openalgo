@@ -55,11 +55,32 @@ check_status() {
 # removes a worker class would leave the unit pointing at a worker that no
 # longer exists, and the service would fail to start with no way back.
 #
-# TARGET_WORKER_CLASS is the desired worker. It stays "eventlet" until the
-# cutover flips it, so this function is a no-op on current installs while
-# still being exercised and testable on every upgrade.
-TARGET_WORKER_CLASS="${OPENALGO_WORKER_CLASS:-eventlet}"
-TARGET_GUNICORN_THREADS="${OPENALGO_GUNICORN_THREADS:-}"
+# The desired worker comes from the shared resolver, which defaults to
+# eventlet -- so this remains a no-op on current installs while still being
+# exercised and testable on every upgrade.
+#
+# Resolving through the library rather than reading the variables directly is
+# what guarantees that opting in also sets a thread count. Gunicorn's gthread
+# worker defaults to one thread, and a one-thread OpenAlgo deadlocks on its
+# first SSE stream; rewriting a unit to `--worker-class gthread` with no
+# `--threads` would hand the user a server that never finishes starting.
+if [ -f "$SCRIPT_DIR/lib/gunicorn_runtime.sh" ]; then
+    # shellcheck source=lib/gunicorn_runtime.sh
+    . "$SCRIPT_DIR/lib/gunicorn_runtime.sh"
+fi
+
+TARGET_WORKER_CLASS="eventlet"
+TARGET_GUNICORN_THREADS=""
+
+# Called once OPENALGO_PATH is known, so the instance's own .env is consulted.
+resolve_target_worker() {
+    if ! command -v resolve_gunicorn_runtime >/dev/null 2>&1; then
+        return 0
+    fi
+    resolve_gunicorn_runtime "${OPENALGO_PATH:-}/.env"
+    TARGET_WORKER_CLASS="$GUNICORN_WORKER_CLASS"
+    TARGET_GUNICORN_THREADS="$GUNICORN_THREADS"
+}
 
 UNIT_BACKUP_PATH=""
 
@@ -93,7 +114,13 @@ migrate_systemd_worker_class() {
         return 0
     fi
 
-    if [ "$current" = "$TARGET_WORKER_CLASS" ] && [ -z "$TARGET_GUNICORN_THREADS" ]; then
+    local current_threads
+    current_threads=$(grep -oE '\-\-threads[= ]+[0-9]+' "$unit_path" | head -n1 | grep -oE '[0-9]+$')
+
+    # Nothing to do when the unit already says exactly what we want. Comparing
+    # the thread count too keeps repeat upgrades from writing a fresh .bak file
+    # on every run once a user has opted in.
+    if [ "$current" = "$TARGET_WORKER_CLASS" ] && [ "$current_threads" = "$TARGET_GUNICORN_THREADS" ]; then
         log_message "  Worker class already '$current', no migration needed" "$GREEN"
         return 0
     fi
@@ -598,6 +625,9 @@ fi
 # ============================================
 if [ "$SERVER_MODE" = true ]; then
     log_message "\n[Step 7/7] Restarting services..." "$BLUE"
+
+    # OPENALGO_PATH is known by now, so the instance's own .env can be read.
+    resolve_target_worker
 
     # Migrate the unit's worker class before starting. This is what makes an
     # upgrade that changes the Gunicorn worker survivable: the unit is backed

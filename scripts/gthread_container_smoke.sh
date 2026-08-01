@@ -39,6 +39,16 @@ trap cleanup EXIT
 
 echo "== booting $IMAGE via its real entrypoint =="
 
+# Anything other than the shipped default has to be opted into explicitly --
+# that is the whole point of the switch, so the smoke test opts in the same way
+# a user would rather than assuming the image already defaults to it.
+OPTIN_ENV=()
+if [ "$EXPECTED_WORKER_CLASS" != "eventlet" ]; then
+    OPTIN_ENV+=(-e "OPENALGO_WORKER_CLASS=${EXPECTED_WORKER_CLASS}")
+    [ -n "$EXPECTED_THREADS" ] && OPTIN_ENV+=(-e "OPENALGO_GUNICORN_THREADS=${EXPECTED_THREADS}")
+    echo "  opting in with OPENALGO_WORKER_CLASS=${EXPECTED_WORKER_CLASS}"
+fi
+
 docker run -d --name "$NAME" \
     -p "127.0.0.1:${APP_PORT}:5000" \
     -p "127.0.0.1:${WS_PORT}:8765" \
@@ -46,6 +56,7 @@ docker run -d --name "$NAME" \
     -e API_KEY_PEPPER="$(printf '0%.0s' {1..64})" \
     -e HOST_SERVER="http://127.0.0.1:${APP_PORT}" \
     -e FLASK_PORT=5000 \
+    "${OPTIN_ENV[@]+"${OPTIN_ENV[@]}"}" \
     "$IMAGE" >/dev/null
 
 # Wait for Flask. start.sh runs migrations first, so allow a generous window.

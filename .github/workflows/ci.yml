@@ -358,6 +358,19 @@ jobs:
           echo "[boot] Testing openalgo-ci:$SUFFIX on ${{ matrix.platform }}"
           bash scripts/gthread_container_smoke.sh "openalgo-ci:$SUFFIX" "$EXPECTED_WORKER_CLASS"
 
+      # The opt-in path, exercised exactly as a user would: set
+      # OPENALGO_WORKER_CLASS and restart. This must keep working while the
+      # default above stays eventlet, otherwise the opt-in rots unnoticed
+      # between now and the cutover. A failure here does NOT affect the
+      # default runtime, only the experimental one.
+      - name: Container boot with gthread opt-in (experimental)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: |
+          SUFFIX="${{ matrix.suffix }}"
+          echo "[boot] Testing gthread opt-in on openalgo-ci:$SUFFIX"
+          bash scripts/gthread_container_smoke.sh "openalgo-ci:$SUFFIX" gthread 64
+
       - name: Kaleido + Chromium smoke test
         if: github.event_name == 'pull_request'
         run: |

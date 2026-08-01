@@ -62,19 +62,19 @@ GT-B2-02,capacity,Streaming-thread sleeps,78 sites in 34 files under broker/*/st
 GT-B2-03,capacity,Master-contract download sleeps,5 sites in 3 files under broker/*/database/master_contract_db.py,EXCLUDED - background thread,B2,n/a,n/a,Documented exclusion,resolved
 GT-B2-04,capacity,Per-call executors (live),broker: nubra iiflcapital tradesmart; services: basket_order_service:351 historify flow_price_monitor flow_order_update_monitor telegram_alert whatsapp_alert,Bound max_workers,B2,Concurrent fan-out requests,PR-11,Thread count bounded,open
 GT-B2-05,capacity,Per-call executors (dead after USE_ASYNC),shoonya definedge flattrade zebu,EXCLUDED - asyncio path replaces,B2,Covered by C4,n/a,Documented,resolved
-GT-B3-01,deploy,GUNICORN_THREADS variable,Dockerfile start.sh .sample.env,New var; not THREAD_LIMIT,B3,Boot asserts thread count,PR-11,Configured value observable at runtime,open
+GT-B3-01,deploy,GUNICORN_THREADS variable,Dockerfile start.sh .sample.env,OPENALGO_WORKER_CLASS/_GUNICORN_THREADS via shared resolver; Dockerfile needs no change (gunicorn 25 has both workers),B3,test/test_gthread_worker_optin.sh,PR-11a,Configured value observable at runtime,done
 GT-B3-02,deploy,Multi-instance aggregate budget,install/install-docker-multi-custom-ssl.sh:450-456,Per-host ceiling divided by instances,B3,Multi-instance boot,PR-11,Host thread total within ceiling,open
 GT-C2-01,deploy,update.sh systemd migration,install/update.sh:440-517,Backup rewrite validate restore,C2,test/test_gthread_unit_migration.sh (10 assertions),PR-1,Upgraded install starts; auto-restores on failure,done
 GT-C3-01,deploy,Dockerfile,Dockerfile:8-13,Repin gunicorn 26; drop eventlet,C3,Image boot,PR-11,gunicorn 26 gthread,open
-GT-C3-02,deploy,start.sh,start.sh:332-341,Worker class + threads + supervisor,C3+A7a,Container boot and stop,PR-2/PR-11,Both processes exit cleanly,open
-GT-C3-03,deploy,install.sh,install/install.sh:766-776;1151-1157,Deps + ExecStart,C3,Fresh native install,PR-11,Service starts on gthread,open
-GT-C3-04,deploy,install-multi.sh,install/install-multi.sh:310-311;605-611,Deps + per-instance ExecStart,C3,Multi-instance native install,PR-11,All instances start,open
+GT-C3-02,deploy,start.sh,start.sh:332-341,Worker class + threads resolved at boot from bind-mounted .env; supervisor done in PR-2,C3+A7a,test/test_gthread_worker_optin.sh,PR-11a,Both processes exit cleanly,done
+GT-C3-03,deploy,install.sh,install/install.sh:766-776;1151-1157,ExecStart uses resolved args; no dep change needed for opt-in,C3,test/test_gthread_worker_optin.sh,PR-11a,Service starts on gthread,done
+GT-C3-04,deploy,install-multi.sh,install/install-multi.sh:310-311;605-611,Per-instance ExecStart uses resolved args; aggregate thread warning added,C3,test/test_gthread_worker_optin.sh,PR-11a,All instances start,done
 GT-C3-05,deploy,requirements-nginx.txt,requirements-nginx.txt:148-149,Repin; remove eventlet,C3,Fresh install,PR-11,No eventlet present,open
-GT-C3-06,deploy,install-docker.sh,install/install-docker.sh,Inject GUNICORN_THREADS in compose,C3,Docker install,PR-11,Env reaches container,open
-GT-C3-07,deploy,install-docker-multi-custom-ssl.sh,install/install-docker-multi-custom-ssl.sh,Inject var; keep THREAD_LIMIT separate,C3,Multi-instance docker install,PR-11,Both vars distinct and correct,open
-GT-C3-08,deploy,enable-remote-mcp-docker.sh,install/enable-remote-mcp-docker.sh:67,Preserve env var on compose rewrite,C3,Enable MCP after install,PR-11,GUNICORN_THREADS survives rewrite,open
-GT-C3-09,deploy,docker-run.sh,install/docker-run.sh,Add -e GUNICORN_THREADS,C3,Script run,PR-11,Env reaches container,open
-GT-C3-10,deploy,docker-run.bat,install/docker-run.bat,Windows parity,C3,Script run on Windows,PR-11,Parity with docker-run.sh,open
+GT-C3-06,deploy,install-docker.sh,install/install-docker.sh,"Unnecessary: install-docker.sh bind-mounts .env into the container (:408) and start.sh reads it, so no compose env injection is required",C3,test/test_gthread_worker_optin.sh,PR-11a,Env reaches container,resolved
+GT-C3-07,deploy,install-docker-multi-custom-ssl.sh,install/install-docker-multi-custom-ssl.sh,Unnecessary for injection (.env is bind-mounted); THREAD_LIMIT separation satisfied by the distinct OPENALGO_ prefix,C3,test/test_gthread_worker_optin.sh,PR-11a,Both vars distinct and correct,resolved
+GT-C3-08,deploy,enable-remote-mcp-docker.sh,install/enable-remote-mcp-docker.sh:67,"Unnecessary: the setting lives in .env, not in compose, so a compose rewrite cannot drop it",C3,test/test_gthread_worker_optin.sh,PR-11a,GUNICORN_THREADS survives rewrite,resolved
+GT-C3-09,deploy,docker-run.sh,install/docker-run.sh,Unnecessary: docker-run.sh already bind-mounts .env (:448); start.sh reads the value from there,C3,test/test_gthread_worker_optin.sh,PR-11a,Env reaches container,resolved
+GT-C3-10,deploy,docker-run.bat,install/docker-run.bat,Unnecessary: same .env bind-mount applies on Windows; parity preserved with no change,C3,test/test_gthread_worker_optin.sh,PR-11a,Parity with docker-run.sh,resolved
 GT-C3-11,deploy,change-domain.sh,install/change-domain.sh:200-201;353-354;439;469-470,Re-validate after C2,C3,Domain change post-migration,PR-11,Service restarts; /socket.io/ intact,open
 GT-C3-12,deploy,update.bat,install/update.bat,Confirm no unit handling needed,C3,Windows update,PR-11,Documented no-op or fixed,open
 GT-C3-13,docs,Documentation surfaces,INSTALL.md:84; DISCOVERY_MAP.md:29; CONTRIBUTING.md:183;1059; CLAUDE.md:60-70; docs/docker/*; docs/design/*; docs/websocket-architecture.md:477; docs/prd/websocket-proxy.md:51; install/*.md,Update all,C3,Docs lint,PR-12,No stale eventlet runtime claims,open
