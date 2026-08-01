@@ -28,7 +28,7 @@ GT-A4-08,sqlite,Windows locking variance,all,Validate retry bounds on Windows,A1
 GT-A6-01,mcp,Scope quota lock + bound,blueprints/mcp_http.py:112-138,Lock and prune,A6,test/test_gthread_mcp.py::test_locked_quota_holds_across_repeated_trials,PR-7,Quota exact; key space bounded,done
 GT-A6-02,mcp,Audit log rotation,blueprints/mcp_http.py:344-368,Serialize append+rotate,A6,test/test_gthread_mcp.py::test_concurrent_audit_writes_lose_no_lines,PR-7,No lost audit lines,done
 GT-A6-03,mcp,Initialization guard,blueprints/mcp_http.py:198-269,Lock or pre-init at startup,A6,test/test_gthread_mcp.py::test_initialization_is_single_flight,PR-7,Single initialization,done
-GT-A6-04,mcp,SSE thread accounting,blueprints/mcp_http.py:671-709,Track and admit,A6,Max SSE + dispatch concurrently,PR-7,No self-deadlock,open
+GT-A6-04,mcp,SSE thread accounting,blueprints/mcp_http.py:671-709,utils/stream_registry tracks both SSE endpoints; active+peak counts exposed in runtime diagnostics,A6,test/test_gthread_stream_accounting.py::test_counts_are_accurate_under_concurrency,PR-7,No self-deadlock,done
 GT-A7-01,proxy,Docker supervisor,start.sh:303/319/332,Real supervisor (exec destroys trap),A7a,test/test_gthread_start_supervisor.sh (17 assertions),PR-2,Proxy exit detected <10s; health reflects it,done
 GT-A7-02,proxy,Explicit topology mode,websocket_proxy/app_integration.py:25-31,WEBSOCKET_PROXY_MODE env,A7b,test/test_gthread_proxy_mode.py (11 assertions),PR-2,No implicit topology change,done
 GT-A7-03,proxy,Health check covers 8765,Dockerfile/compose healthcheck,Probe both ports,A7a,test/test_gthread_start_supervisor.sh (health-check assertions),PR-2,Never healthy with feed dead,done
@@ -104,7 +104,7 @@ GT-R-01,rollback,Immutable image tag,deployment,Pin previous SHA not latest,8.2,
 GT-R-02,rollback,systemd unit backup,install/update.sh,Backup before rewrite,8.2,test/test_gthread_unit_migration.sh (10 assertions),PR-1,Prior unit restored,done
 GT-R-03,rollback,Dependency set restore,install scripts,Restore gunicorn 25 + eventlet,8.2,Rollback drill,PR-11,Prior deps restored,open
 GT-R-04,rollback,Proxy mode revert,WEBSOCKET_PROXY_MODE,Explicit revert,8.2,Rollback drill,PR-2,Prior topology restored,open
-GT-R-05,rollback,Phase A independent revert,PR-3..PR-8,Each PR revertible alone,8.2,Revert each in isolation,per PR,No cross-PR dependency,open
+GT-R-05,rollback,Phase A independent revert,PR-3..PR-8,Verified by experiment: 7 of 9 PRs revert with zero code conflicts; PR-9 and PR-10d conflict only because PR-10g later touched the same Telegram files. All doc conflicts are the shared tracker/README,8.2,test/test_gthread_stream_accounting.py::test_both_sse_endpoints_are_instrumented,per PR,No cross-PR dependency,done
 GT-R-06,rollback,Measured RTO,runbook,Define and measure,8.2,Rollback drill,all,RTO met with health verified,open
 GT-A2-03,cache,Freeze-qty cache clear-then-refill,database/qty_freeze_db.py:41-44;127-184,Snapshot swap (same defect class as A2 symbol cache),A2,test/test_gthread_cache_snapshot.py::test_freeze_qty_reload_never_exposes_an_empty_cache,PR-4,Order splitting never sees empty or partial freeze table,done
 GT-A12-08,registry,Historify module-level state,services/historify_service.py,SAFE - _running_jobs/_paused_jobs covered by _job_state_lock at 9 sites,A12,test/test_gthread_registries.py::test_historify_job_state_is_guarded,PR-5,No torn reads; registry bounded,resolved

@@ -40,6 +40,7 @@ from flask import Blueprint, Response, jsonify, request, stream_with_context
 from limiter import limiter
 from utils.logging import get_logger
 from utils.oauth_tokens import AccessTokenError, claims_have_scope, verify_access_token
+from utils.stream_registry import track_stream
 
 logger = get_logger(__name__)
 
@@ -746,6 +747,14 @@ def mcp_sse():
         return _unauthorized(str(e), "")
 
     def gen():
+        # Counted for the life of the generator. This stream is infinite and
+        # pins one worker thread per connected MCP client, which makes it the
+        # least predictable term in the thread budget -- so it has to be
+        # measurable rather than estimated.
+        with track_stream("mcp_sse"):
+            yield from _mcp_event_stream()
+
+    def _mcp_event_stream():
         # Initial comment so the client knows the stream is live.
         yield ": openalgo-mcp connected\n\n"
         last_keepalive = time.time()

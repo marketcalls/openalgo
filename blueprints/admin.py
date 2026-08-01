@@ -1225,6 +1225,7 @@ def _runtime_info():
         "configured_workers": None,
         "active_threads": _threading.active_count(),
         "websocket_proxy_mode": None,
+        "streams": None,
         "process_uptime_seconds": None,
     }
 
@@ -1257,6 +1258,15 @@ def _runtime_info():
         info["websocket_proxy_mode"] = resolve_proxy_mode()
     except Exception:
         pass
+
+    # Long-lived streams each pin one worker thread, so this is the number to
+    # compare against configured_threads when judging headroom.
+    try:
+        from utils.stream_registry import stream_counts
+
+        info["streams"] = stream_counts()
+    except Exception:
+        info["streams"] = None
 
     try:
         import psutil

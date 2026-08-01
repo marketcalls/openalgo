@@ -46,6 +46,7 @@ from database.market_calendar_db import (
 )
 from utils.constants import CRYPTO_EXCHANGES
 from utils.session import check_session_validity
+from utils.stream_registry import track_stream
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -2351,25 +2352,28 @@ def api_strategy_events():
         with SSE_LOCK:
             SSE_SUBSCRIBERS.append(q)
 
-        try:
-            # Send initial connection message
-            yield 'data: {"type": "connected"}\n\n'
+        # Counted for the whole life of the generator: under gthread this
+        # stream pins one worker thread until the client disconnects.
+        with track_stream("python_strategy_sse"):
+            try:
+                # Send initial connection message
+                yield 'data: {"type": "connected"}\n\n'
 
-            while True:
-                try:
-                    # Wait for events with timeout to detect disconnection
-                    event = q.get(timeout=30)
-                    yield event
-                except queue.Empty:
-                    # Send heartbeat to keep connection alive
-                    yield ": heartbeat\n\n"
-        except GeneratorExit:
-            pass
-        finally:
-            # Remove subscriber on disconnect
-            with SSE_LOCK:
-                if q in SSE_SUBSCRIBERS:
-                    SSE_SUBSCRIBERS.remove(q)
+                while True:
+                    try:
+                        # Wait for events with timeout to detect disconnection
+                        event = q.get(timeout=30)
+                        yield event
+                    except queue.Empty:
+                        # Send heartbeat to keep connection alive
+                        yield ": heartbeat\n\n"
+            except GeneratorExit:
+                pass
+            finally:
+                # Remove subscriber on disconnect
+                with SSE_LOCK:
+                    if q in SSE_SUBSCRIBERS:
+                        SSE_SUBSCRIBERS.remove(q)
 
     return Response(
         event_stream(),
