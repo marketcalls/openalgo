@@ -31,6 +31,7 @@ language: what was broken, what we changed, and how we know it works.
 | [PR-10h](PR-10h-stream-accounting.md) | Counting the streams that consume threads | Done |
 | [PR-10i](PR-10i-platform-and-evidence.md) | Windows database checks, and making the emit question answerable | Done |
 | [PR-10j](PR-10j-sandbox-concurrency-docs.md) | Writing down how the sandbox handles concurrency | Done |
+| [PR-10k](PR-10k-self-review.md) | Reviewing my own changes | Done |
 | PR-11 | **The switch itself** — needs sign-off before starting | Awaiting sign-off |
 
 ## Numbers

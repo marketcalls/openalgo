@@ -136,3 +136,34 @@ def _runtime_info_source():
     from blueprints.admin import _runtime_info
 
     return _runtime_info
+
+
+def test_kind_space_is_capped():
+    """`kind` names a CLASS of stream. Nothing in the signature stops a caller
+    passing something per-connection instead, which would make this registry
+    grow without bound -- the exact defect this migration removed elsewhere, so
+    it must not ship in the thing built to measure it."""
+    from utils.stream_registry import _OVERFLOW, MAX_KINDS
+
+    _reset()
+    for i in range(MAX_KINDS + 10):
+        with track_stream(f"synthetic-{i}"):
+            pass
+
+    peaks = stream_counts()["peak"]
+    assert len(peaks) <= MAX_KINDS + 1, f"kind space grew to {len(peaks)}"
+    assert _OVERFLOW in peaks, "excess kinds were dropped instead of folded"
+
+
+def test_overflow_folding_still_releases_its_count():
+    """Folding must not leak: the decrement has to target the bucket that was
+    actually incremented, not the caller's original kind."""
+    from utils.stream_registry import MAX_KINDS
+
+    _reset()
+    for i in range(MAX_KINDS + 5):
+        with track_stream(f"synthetic-{i}"):
+            pass
+
+    active = stream_counts()["active"]
+    assert all(v == 0 for v in active.values()), f"folded kinds leaked: {active}"
