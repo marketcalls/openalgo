@@ -153,7 +153,7 @@ def init_strategy_book_db() -> None:
     _migrate_add_columns()
     _prune_old_tags()
     _initialized = True
-    logger.info("Strategy book DB initialized")
+    logger.debug("Strategy book DB initialized")
 
 
 def is_initialized() -> bool:
