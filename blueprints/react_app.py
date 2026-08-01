@@ -200,6 +200,25 @@ def react_tradingview():
     return serve_react_app()
 
 
+# Portfolio Backtester
+@react_bp.route("/portfolio-backtester")
+def react_portfolio_backtester():
+    return serve_react_app()
+
+
+# The former path. Kept so an existing bookmark reaches the SPA, which
+# redirects it to the new one rather than showing a not-found.
+@react_bp.route("/portfolio")
+def react_portfolio_legacy():
+    return serve_react_app()
+
+
+# Portfolio Analyzer (live broker holdings)
+@react_bp.route("/portfolio-analyzer")
+def react_portfolio_analyzer():
+    return serve_react_app()
+
+
 # GoCharting webhook configuration
 @react_bp.route("/gocharting")
 def react_gocharting():
