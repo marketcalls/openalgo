@@ -24,6 +24,7 @@ language: what was broken, what we changed, and how we know it works.
 | [PR-10](PR-10-ci-gates.md) | Add tests that boot the real container | Done |
 | [PR-10b](PR-10b-registry-investigations.md) | Close the open registry questions | Done |
 | [PR-10c](PR-10c-sandbox-orders.md) | Order cancellation and the catch-up sweep | Done |
+| [PR-10d](PR-10d-service-lifecycles.md) | Telegram start-up, scalping engine, rooms | Done |
 | PR-11 | **The switch itself** — needs sign-off before starting | Awaiting sign-off |
 
 ## Numbers
@@ -31,9 +32,9 @@ language: what was broken, what we changed, and how we know it works.
 | | |
 | --- | --- |
 | Total items tracked | 152 |
-| Already fine, no work needed | 31 |
-| Fixed and tested | 59 |
-| Still to do | 62 |
+| Already fine, no work needed | 35 |
+| Fixed and tested | 60 |
+| Still to do | 57 |
 
 ## How we work
 

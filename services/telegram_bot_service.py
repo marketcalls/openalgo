@@ -56,6 +56,9 @@ class TelegramBotService:
         self.bot_loop = None  # Store the bot's event loop
         self.sdk_clients = {}  # Cache for OpenAlgo SDK clients per user
         self._stop_event = original_threading.Event()  # Thread-safe stop signal
+        # Serializes start_bot/stop_bot so two callers cannot both spawn a
+        # polling thread for the same token.
+        self._start_lock = original_threading.RLock()
 
     def _get_sdk_client(self, telegram_id: int) -> openalgo_api | None:
         """Get or create OpenAlgo SDK client for a user"""
@@ -794,10 +797,27 @@ class TelegramBotService:
                 logger.debug(f"Error stopping updater: {e}")
 
     def start_bot(self) -> tuple[bool, str]:
-        """Start the bot in a separate thread"""
+        """Start the bot in a separate thread.
+
+        Serialized: `is_running` is only set to True from inside the bot thread
+        once polling is live, so there is a window of up to five seconds
+        between calling this and the flag flipping. Two callers landing in that
+        window -- the app.py auto-start and a user pressing Start, say -- would
+        both pass the check and both spawn a bot thread. Two threads polling
+        one token makes Telegram reject them with 409 Conflict, and the bot
+        stops responding entirely.
+        """
+        with self._start_lock:
+            return self._start_bot_locked()
+
+    def _start_bot_locked(self) -> tuple[bool, str]:
         try:
             if self.is_running:
                 return False, "Bot is already running"
+
+            if self.bot_thread is not None and self.bot_thread.is_alive():
+                # Started but not yet flagged running: still a live thread.
+                return False, "Bot is already starting"
 
             config = get_bot_config()
             if not config or not config.get("bot_token"):
