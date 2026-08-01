@@ -1,0 +1,117 @@
+id,category,surface,location,decision,gate,test,rollback_boundary,acceptance_criterion,status
+GT-A1-01,socketio,Central emit boundary,extensions.py + new emit wrapper,Lock (default until evidence),A1,Concurrent sequence-emit stress; no loss/dup/reorder,PR-3 revert restores direct emit,Zero out-of-order sequences over 10k concurrent emits,open
+GT-A1-02,socketio,Wrong thread-safety comment,subscribers/socketio_subscriber.py:5-6,Correct the comment,A1,n/a (doc),PR-3,Comment matches socketio/server.py:157,open
+GT-A1-03,socketio,One-shot emit threads,services/orderstatus_service.py:40/124/173/267; openposition_service.py:39/114; order_router_service.py:120,Remove; route via boundary,A1,Thread count flat across event burst,PR-3,No native thread created per emit,open
+GT-A1-04,socketio,Packet-multiplicity evidence,socketio/manager.py:44-46,Instrument packet count/attachments/callbacks/destination,A1,Telemetry over 24h production-like load,n/a (observability),Evidence sufficient to keep or narrow the lock,open
+GT-A2-01,cache,Symbol cache snapshot swap,database/token_db_enhanced.py:181-309;695-708,Atomic reference swap + writer lock,A2,Concurrent reload vs lookup/search/expiry/bulk,PR-4,Complete old or complete new snapshot; never partial,open
+GT-A2-02,cache,Failed-load fallback,database/token_db_enhanced.py:181-309,Retain previous snapshot on failure,A2,Induced load failure keeps prior data,PR-4,Cache never empty after failed reload,open
+GT-A3-01,cache,auth_db TTLCaches (6),database/auth_db.py:145-159,RLock per coherent group,A3,Same-key concurrency; invalidation-during-read,PR-5,No stale auth/feed/broker/order-mode after rotation,open
+GT-A3-02,cache,settings_db TTLCache,database/settings_db.py:20-22,Lock,A3,Concurrent analyze-mode toggle,PR-5,Mode reads never tear,open
+GT-A3-03,cache,user_db TTLCache,database/user_db.py:57-58,Lock,A3,Concurrent login,PR-5,No stale user record,open
+GT-A3-04,cache,traffic_db TTLCache,database/traffic_db.py:55-58,Lock,A3,Concurrent request logging,PR-5,No lost counters,open
+GT-A3-05,cache,flow_db TTLCaches (2),database/flow_db.py:26-28,Lock,A3,Concurrent flow read/write,PR-5,No stale flow config,open
+GT-A3-06,cache,strategy_db TTLCaches (2),database/strategy_db.py:13-16,Lock,A3,Concurrent strategy lookup,PR-5,No stale strategy,open
+GT-A3-07,cache,market_calendar_db TTLCaches (2),database/market_calendar_db.py:32-34,Lock,A3,Concurrent calendar read,PR-5,No stale holiday data,open
+GT-A3-08,cache,leverage_db TTLCache,database/leverage_db.py:17,Lock,A3,Concurrent leverage read,PR-5,No stale leverage,open
+GT-A3-09,cache,latency_db TTLCache,database/latency_db.py:39-41,Lock,A3,Concurrent latency write,PR-5,No lost samples,open
+GT-A3-10,cache,telegram_db TTLCaches (4),database/telegram_db.py:37-42,Lock,A3,Concurrent bot command,PR-5,No stale telegram user,open
+GT-A3-11,cache,whatsapp_db TTLCaches (4),database/whatsapp_db.py:57-61,Lock,A3,Concurrent whatsapp command,PR-5,No stale whatsapp user,open
+GT-A3-12,cache,trading_calendar TTLCache,utils/trading_calendar.py:30-32,Lock,A3,Concurrent calendar read,PR-5,No stale session data,open
+GT-A4-01,sqlite,Retry helper,database/ (new module),Bounded jittered retry; fresh session per attempt,A4,Induced BUSY_SNAPSHOT,PR-6,Snapshot conflicts recover; BUSY not double-waited,open
+GT-A4-02,sqlite,openalgo.db writers,24 modules / ~140 commit sites,Retry where idempotent,A4,Concurrent write stress,PR-6,No unhandled locked errors,open
+GT-A4-03,sqlite,logs.db writers,database/traffic_db.py (10 sites),Keep serialized; no retry,A4,Request-log burst,PR-6,No thread parked >1s on log write,open
+GT-A4-04,sqlite,latency.db writers,database/latency_db.py,Keep serialized; no retry,A4,Latency-log burst,PR-6,As above,open
+GT-A4-05,sqlite,health.db writers,database/health_db.py (7 sites),Retry safe (idempotent samples),A4,Concurrent health write,PR-6,No unhandled locked errors,open
+GT-A4-06,sqlite,sandbox.db writers,sandbox/* (29 sites) + database/sandbox_db.py,Retry safe except fill-commit,A4,Concurrent simulated fills,PR-6,Exactly-once simulated fills,open
+GT-A4-07,sqlite,DO-NOT-RETRY set,order-placement post-broker writes,Never retry at a boundary enclosing a broker call,A4,Induced failure after broker ack,PR-6,Broker order placed exactly once,open
+GT-A4-08,sqlite,Windows locking variance,all,Validate retry bounds on Windows,A15,Windows concurrent-write suite,PR-6,Same guarantees as Linux,open
+GT-A6-01,mcp,Scope quota lock + bound,blueprints/mcp_http.py:112-138,Lock and prune,A6,Thread-barrier admits exactly N,PR-7,Quota exact; key space bounded,open
+GT-A6-02,mcp,Audit log rotation,blueprints/mcp_http.py:344-368,Serialize append+rotate,A6,Concurrent write during rotation,PR-7,No lost audit lines,open
+GT-A6-03,mcp,Initialization guard,blueprints/mcp_http.py:198-269,Lock or pre-init at startup,A6,Concurrent first request,PR-7,Single initialization,open
+GT-A6-04,mcp,SSE thread accounting,blueprints/mcp_http.py:671-709,Track and admit,A6,Max SSE + dispatch concurrently,PR-7,No self-deadlock,open
+GT-A7-01,proxy,Docker supervisor,start.sh:303/319/332,Real supervisor (exec destroys trap),A7a,Kill proxy; assert restart+unhealthy,PR-2,Proxy exit detected <10s; health reflects it,open
+GT-A7-02,proxy,Explicit topology mode,websocket_proxy/app_integration.py:25-31,WEBSOCKET_PROXY_MODE env,A7b,Each mode boots correctly,PR-2,No implicit topology change,open
+GT-A7-03,proxy,Health check covers 8765,Dockerfile/compose healthcheck,Probe both ports,A7a,Proxy down => container unhealthy,PR-2,Never healthy with feed dead,open
+GT-A8-01,eventbus,Scoped session cleanup,utils/event_bus.py:33-66,remove_all_scoped_sessions() in finally,A8,Success and exception paths,PR-5,FD count flat over 10k events,open
+GT-A9-01,sandbox,Lock-while-joining defect,sandbox/execution_thread.py:186 vs :250 vs :296,Release lock before join; or ownership queue,A9,Stop during auto-upgrade,PR-8,No stall; no orphaned watcher,open
+GT-A9-02,sandbox,Stale-feed fallback,sandbox/websocket_execution_engine.py:434/468,Review + test,A9,Feed stall then recover,PR-8,Fallback and recovery both clean,open
+GT-A9-03,sandbox,Exactly-once fills,sandbox/execution_engine.py,Review + test,A9,Polling and WS engines overlap,PR-8,No duplicate simulated fills,open
+GT-A9-04,sandbox,Teardown hygiene,sandbox/*,Review,A9,Repeated start/stop,PR-8,No orphaned threads or sessions,open
+GT-A10-01,http,httpx singleton race,utils/httpx_client.py:19-30,Lock construction and teardown,A10,Concurrent cold start,PR-5,Exactly one client; no leaked pool,open
+GT-A10-02,http,Pool acquisition timeout,utils/httpx_client.py,Bounded acquire timeout separate from 120s request timeout,A10,Saturate pool,PR-5,Saturation errors not hangs,open
+GT-A10-03,http,Pool saturation metrics,utils/httpx_client.py,Expose metrics,A10,Load test,PR-5,Saturation observable,open
+GT-A10-04,http,Flask-Limiter memory backend,limiter.py:7 / limits/storage/memory.py:37,SAFE - already per-key RLock,A10,Concurrency test only,n/a,No new locking design needed,resolved
+GT-A11-01,duckdb,Historify connection contract,database/historify_db.py:49-75,Define thread contract; bypasses engine_factory,A11,Concurrent scheduler+request reads/writes,PR-6,No corruption; bounded retries,open
+GT-A11-02,duckdb,Connection FD/arena cost,database/historify_db.py,Include in soak,A11,24h soak,PR-6,FD and RSS plateau,open
+GT-A12-01,registry,_POOLED_ADAPTERS,websocket_proxy/broker_factory.py,Lock only if thread mode ever enabled,A12,Mode-specific,PR-2,Documented safe under external/subprocess,open
+GT-A12-02,registry,_STRIKES_CACHE,services/option_symbol_service.py:49-75,Bound + lock; only paytm invalidates,A12,Concurrent strike lookup,PR-5,Bounded key space,open
+GT-A12-03,registry,Workflow lock registry,services/flow_executor_service.py:30-40,Add removal path,A12,Many workflow IDs,PR-5,Registry bounded,open
+GT-A12-04,registry,_ADAPTERS,services/order_update_service.py,Verify removal on disconnect,A12,Reconnect cycles,PR-5,No growth,open
+GT-A12-05,registry,Error404Tracker / banned IPs,utils/security_middleware.py,Lock or document safe,A12,Concurrent 404 burst,PR-5,No lost bans; no growth,open
+GT-A12-06,registry,Traffic/latency writers,traffic_logger.py; database/latency_db.py,Confirm serialization holds,A12,Request burst,PR-5,Design intact under real threads,open
+GT-A12-07,registry,Scalping risk monitor,services/scalping_risk_monitor_service.py,Review state ownership,A12,SL/target under load,PR-8,No missed or duplicate stop,open
+GT-A13-01,scheduler,python_strategy scheduler has no job_defaults,blueprints/python_strategy.py:110,Add max_instances/coalesce/misfire_grace,A13,Overlapping schedule triggers,PR-8,No concurrent duplicate strategy start,open
+GT-A13-02,scheduler,flow scheduler,services/flow_scheduler_service.py:57-59,SAFE - max_instances=1 coalesce=True,A13,Regression only,n/a,No overlap,resolved
+GT-A13-03,scheduler,historify scheduler,services/historify_scheduler_service.py:60-65,SAFE - max_instances=1 coalesce=True,A13,Regression only,n/a,No overlap,resolved
+GT-A14-01,session,Flask session model,app.py + utils/auth_utils.py:374,SAFE - signed cookie is per-request,A14,Concurrent multi-device login,n/a,Sessions isolated per request,resolved
+GT-A14-02,session,CSRF protection,app.py:173 CSRFProtect,SAFE - token bound to session,A14,Concurrent form POST,n/a,No cross-thread token bleed,resolved
+GT-A14-03,session,active_sessions cap,database/auth_db.py,Verify MAX_SESSIONS_PER_USER under threads,A14,Concurrent device logins,PR-5,Cap enforced exactly,open
+GT-B1-01,capacity,Thread budget formula,plan section 5,Derive from B2 + connection demand,B1,Load test at chosen value,PR-11,No saturation at target load,open
+GT-B2-01,capacity,Request-path sleeps,103 sites in 43 files under broker/*/api/{data|order_api|funds}.py,Count toward thread budget,B2,Burst history/quote requests,PR-11,Budget covers worst case,open
+GT-B2-02,capacity,Streaming-thread sleeps,75 sites under broker/*/streaming and api/*websocket*,EXCLUDED - not request threads,B2,n/a,n/a,Documented exclusion,resolved
+GT-B2-03,capacity,Master-contract download sleeps,5 sites in broker/*/database/master_contract_db.py,EXCLUDED - background thread,B2,n/a,n/a,Documented exclusion,resolved
+GT-B2-04,capacity,Per-call executors (live),broker: nubra iiflcapital tradesmart; services: basket_order_service:351 historify flow_price_monitor flow_order_update_monitor telegram_alert whatsapp_alert,Bound max_workers,B2,Concurrent fan-out requests,PR-11,Thread count bounded,open
+GT-B2-05,capacity,Per-call executors (dead after USE_ASYNC),shoonya definedge flattrade zebu,EXCLUDED - asyncio path replaces,B2,Covered by C4,n/a,Documented,resolved
+GT-B3-01,deploy,GUNICORN_THREADS variable,Dockerfile start.sh .sample.env,New var; not THREAD_LIMIT,B3,Boot asserts thread count,PR-11,Configured value observable at runtime,open
+GT-B3-02,deploy,Multi-instance aggregate budget,install/install-docker-multi-custom-ssl.sh:450-456,Per-host ceiling divided by instances,B3,Multi-instance boot,PR-11,Host thread total within ceiling,open
+GT-C2-01,deploy,update.sh systemd migration,install/update.sh:440-517,Backup rewrite validate restore,C2,Upgrade from eventlet install,PR-1,Upgraded install starts; auto-restores on failure,open
+GT-C3-01,deploy,Dockerfile,Dockerfile:8-13,Repin gunicorn 26; drop eventlet,C3,Image boot,PR-11,gunicorn 26 gthread,open
+GT-C3-02,deploy,start.sh,start.sh:332-341,Worker class + threads + supervisor,C3+A7a,Container boot and stop,PR-2/PR-11,Both processes exit cleanly,open
+GT-C3-03,deploy,install.sh,install/install.sh:766-776;1151-1157,Deps + ExecStart,C3,Fresh native install,PR-11,Service starts on gthread,open
+GT-C3-04,deploy,install-multi.sh,install/install-multi.sh:310-311;605-611,Deps + per-instance ExecStart,C3,Multi-instance native install,PR-11,All instances start,open
+GT-C3-05,deploy,requirements-nginx.txt,requirements-nginx.txt:148-149,Repin; remove eventlet,C3,Fresh install,PR-11,No eventlet present,open
+GT-C3-06,deploy,install-docker.sh,install/install-docker.sh,Inject GUNICORN_THREADS in compose,C3,Docker install,PR-11,Env reaches container,open
+GT-C3-07,deploy,install-docker-multi-custom-ssl.sh,install/install-docker-multi-custom-ssl.sh,Inject var; keep THREAD_LIMIT separate,C3,Multi-instance docker install,PR-11,Both vars distinct and correct,open
+GT-C3-08,deploy,enable-remote-mcp-docker.sh,install/enable-remote-mcp-docker.sh:67,Preserve env var on compose rewrite,C3,Enable MCP after install,PR-11,GUNICORN_THREADS survives rewrite,open
+GT-C3-09,deploy,docker-run.sh,install/docker-run.sh,Add -e GUNICORN_THREADS,C3,Script run,PR-11,Env reaches container,open
+GT-C3-10,deploy,docker-run.bat,install/docker-run.bat,Windows parity,C3,Script run on Windows,PR-11,Parity with docker-run.sh,open
+GT-C3-11,deploy,change-domain.sh,install/change-domain.sh:200-201;353-354;439;469-470,Re-validate after C2,C3,Domain change post-migration,PR-11,Service restarts; /socket.io/ intact,open
+GT-C3-12,deploy,update.bat,install/update.bat,Confirm no unit handling needed,C3,Windows update,PR-11,Documented no-op or fixed,open
+GT-C3-13,docs,Documentation surfaces,INSTALL.md:84; DISCOVERY_MAP.md:29; CONTRIBUTING.md:183;1059; CLAUDE.md:60-70; docs/docker/*; docs/design/*; docs/websocket-architecture.md:477; docs/prd/websocket-proxy.md:51; install/*.md,Update all,C3,Docs lint,PR-12,No stale eventlet runtime claims,open
+GT-C4-01,broker,USE_ASYNC flip,shoonya definedge flattrade zebu api/data.py:25-27,Validate asyncio path,C4,Batch quote + option chain per broker,PR-11,Parity with executor path; FD/RSS flat,open
+GT-C4-02,broker,Guarded fallbacks,zerodha hdfcsky arrow dhan_sandbox,SAFE - no-op under gthread,C4,Smoke only,n/a,Resolves to plain threading,resolved
+GT-C4-03,broker,Comment-only sites,upstox mstock dhan iiflcapital angel,SAFE - no code change,C4,n/a,n/a,Documented,resolved
+GT-C5-01,diag,Runtime info reports gthread,blueprints/admin.py:1205-1232,Report worker class/threads/counts,C5,Admin endpoint assertion,PR-9,Correct runtime reported,open
+GT-C5-02,diag,Frontend admin types,frontend/src/types/admin.ts:142,Match new fields,C5,Type check,PR-9,UI shows correct runtime,open
+GT-C5-03,diag,Eventlet-only startup test,test/test_telegram_startup.py,Replace with gthread path,C5,Test suite,PR-9,No eventlet monkeypatch in tests,open
+GT-P-01,platform,Linux amd64 full boot,.github/workflows/ci.yml,Real entrypoint boot,Section 7,CI job,PR-10,Asserts gunicorn 26 gthread 1 worker,open
+GT-P-02,platform,Linux arm64 full boot,.github/workflows/ci.yml,Real entrypoint boot,Section 7,CI job,PR-10,Same assertions as amd64,open
+GT-P-03,platform,CI smoke overrides entrypoint,.github/workflows/ci.yml:272,Replace with real boot,Section 7,CI job,PR-10,start.sh actually executed,open
+GT-P-04,platform,Socket.IO polling probe,CI,Probe,Section 7,CI job,PR-10,Polling connects,open
+GT-P-05,platform,Socket.IO websocket upgrade probe,CI,Probe,Section 7,CI job,PR-10,Upgrade succeeds on gthread,open
+GT-P-06,platform,Port 8765 probe,CI,Probe,Section 7,CI job,PR-10,Proxy reachable,open
+GT-P-07,platform,Clean shutdown both processes,CI,Stop container,Section 7,CI job,PR-10,Gunicorn and proxy exit within grace,open
+GT-P-08,platform,Native Ubuntu fresh install,CI or manual,Install test,Section 7,Job,PR-10,Service starts,open
+GT-P-09,platform,Native Ubuntu update.sh upgrade,CI or manual,Upgrade test,Section 7+C2,Job,PR-10,Unit migrated; service starts,open
+GT-P-10,platform,RHEL-family installer,manual,Render + boot,Section 7,Job,PR-10,Unit renders correctly,open
+GT-P-11,platform,Arch-family installer,manual,Render + boot,Section 7,Job,PR-10,Unit renders correctly,open
+GT-P-12,platform,Windows dev startup,CI,uv run app.py,Section 7,Job,PR-10,Dev server boots,open
+GT-P-13,platform,macOS dev startup,CI,uv run app.py,Section 7,Job,PR-10,Dev server boots,open
+GT-P-14,platform,Windows/macOS docker runner,manual,Script validation,Section 7,Job,PR-10,Scripts valid,open
+GT-P-15,platform,Multi-instance native,manual,Separate Flask/WS/ZMQ ports,Section 7,Job,PR-10,ZMQ_PORT invariant holds,open
+GT-P-16,platform,Multi-instance docker,manual,Separate ports,Section 7,Job,PR-10,No port drift,open
+GT-R-01,rollback,Immutable image tag,deployment,Pin previous SHA not latest,8.2,Rollback drill,all,Redeploy prior SHA succeeds,open
+GT-R-02,rollback,systemd unit backup,install/update.sh,Backup before rewrite,8.2,Rollback drill,PR-1,Prior unit restored,open
+GT-R-03,rollback,Dependency set restore,install scripts,Restore gunicorn 25 + eventlet,8.2,Rollback drill,PR-11,Prior deps restored,open
+GT-R-04,rollback,Proxy mode revert,WEBSOCKET_PROXY_MODE,Explicit revert,8.2,Rollback drill,PR-2,Prior topology restored,open
+GT-R-05,rollback,Phase A independent revert,PR-3..PR-8,Each PR revertible alone,8.2,Revert each in isolation,per PR,No cross-PR dependency,open
+GT-R-06,rollback,Measured RTO,runbook,Define and measure,8.2,Rollback drill,all,RTO met with health verified,open
+GT-A2-03,cache,Freeze-qty cache clear-then-refill,database/qty_freeze_db.py:41-44;127-184,Snapshot swap (same defect class as A2 symbol cache),A2,Concurrent reload vs order-split lookup,PR-4,Order splitting never sees empty or partial freeze table,open
+GT-A12-08,registry,Historify module-level state,services/historify_service.py,Classify: lock bound or document safe,A12,Concurrent historify fetch during scheduler run,PR-5,No torn reads; registry bounded,open
+GT-A12-09,registry,WebSocket client registry,services/websocket_client.py:543-582,Locked already - verify removal on API-key rotation,A12,Rotate key then reconnect,PR-5,Obsolete clients removed; no growth,open
+GT-A12-10,registry,Plugin loader registry,utils/plugin_loader.py,Startup-only population; confirm read-only after init,A12,Concurrent broker resolution,PR-5,No mutation after startup,open
+GT-A12-11,registry,SocketIO rooms in websocket_example,blueprints/websocket_example.py:331-342,Verify join/leave_room under real threads,A12,Concurrent connect/disconnect,PR-5,Room membership consistent,open
+GT-A12-12,registry,indicator_service caches,services/indicator_service.py,SAFE - TTLCache and single-flight registry already locked; A3 exemplar,A12,Regression only,n/a,No work required,resolved
+GT-A12-13,registry,hdfcsky class-level chart symbol cache,broker/hdfcsky/api/data.py:346,Lock + bound (class attr shared across all instances; mutated at runtime; unbounded),A12,Concurrent chart requests same broker,PR-5,Bounded and race-free,open
+GT-A12-14,registry,base_adapter bound ports,websocket_proxy/base_adapter.py:104-105,SAFE - guarded by _port_lock,A12,Regression only,n/a,No work required,resolved
+GT-A12-15,registry,flow price monitor pending set,services/flow_price_monitor_service.py:65-66,SAFE - guarded by _pending_lock,A12,Regression only,n/a,No work required,resolved
