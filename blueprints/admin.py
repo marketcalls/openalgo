@@ -1226,6 +1226,7 @@ def _runtime_info():
         "active_threads": _threading.active_count(),
         "websocket_proxy_mode": None,
         "streams": None,
+        "socketio_emits": None,
         "process_uptime_seconds": None,
     }
 
@@ -1267,6 +1268,18 @@ def _runtime_info():
         info["streams"] = stream_counts()
     except Exception:
         info["streams"] = None
+
+    # Evidence for the open question in the plan (GT-A1-04): the emit lock is
+    # only strictly needed for messages split across multiple packets, and
+    # multiplicity comes from binary attachments rather than payload size. If
+    # binary_emits stays at zero in production, the lock can be narrowed on
+    # evidence instead of guessed at.
+    try:
+        from extensions import SerializedSocketIO
+
+        info["socketio_emits"] = SerializedSocketIO.emit_stats()
+    except Exception:
+        info["socketio_emits"] = None
 
     try:
         import psutil

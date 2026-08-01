@@ -29,6 +29,7 @@ language: what was broken, what we changed, and how we know it works.
 | [PR-10f](PR-10f-bounded-registries.md) | Unbounded caches, a double-locking limiter, one last money path | Done |
 | [PR-10g](PR-10g-telegram-init.md) | Telegram start-up, and the last registry questions | Done |
 | [PR-10h](PR-10h-stream-accounting.md) | Counting the streams that consume threads | Done |
+| [PR-10i](PR-10i-platform-and-evidence.md) | Windows database checks, and making the emit question answerable | Done |
 | PR-11 | **The switch itself** — needs sign-off before starting | Awaiting sign-off |
 
 ## Numbers
@@ -37,8 +38,8 @@ language: what was broken, what we changed, and how we know it works.
 | --- | --- |
 | Total items tracked | 152 |
 | Already fine, no work needed | 43 |
-| Fixed and tested | 72 |
-| Still to do | 37 |
+| Fixed and tested | 74 |
+| Still to do | 35 |
 
 ## Open questions: none left
 

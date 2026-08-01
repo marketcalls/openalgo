@@ -252,6 +252,20 @@ jobs:
           print('dev startup OK on ${{ matrix.os }}:', info['python_version'])
           "
 
+      # CLAUDE.md records that SQLite locking is stricter on Windows. The A4
+      # retry budget is 3 attempts inside 2 seconds; if a platform needs longer
+      # than that to clear contention, the bound is wrong there and a worker
+      # thread is parked instead of failing cleanly. This is the only place
+      # that runs on Windows, so it is the only place that can find out.
+      - name: SQLite concurrency and retry budget on this platform
+        shell: bash
+        env:
+          APP_KEY: ci-dev-startup-key
+          API_KEY_PEPPER: "0000000000000000000000000000000000000000000000000000000000000000"
+          DATABASE_URL: "sqlite:///db/openalgo-ci.db"
+        run: |
+          uv run pytest test/test_gthread_sqlite_platform.py -v --timeout=120
+
   docker-build:
     needs: [backend-lint, backend-test, frontend-build, security-scan]
     # Skip for fork PRs (secrets not available)

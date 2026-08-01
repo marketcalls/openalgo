@@ -146,3 +146,25 @@ def test_gthread_suites_actually_run_in_ci(ci):
 def test_dev_startup_does_not_block_on_docker(ci):
     """It gates on lint only, so a Docker Hub outage cannot hide a platform break."""
     assert ci["jobs"]["dev-startup"]["needs"] == ["backend-lint"]
+
+
+def test_sqlite_platform_suite_runs_on_windows(ci):
+    """GT-A4-08: CLAUDE.md records that SQLite locking is stricter on Windows,
+    and the retry budget had only ever been exercised on one dev machine. The
+    dev-startup job is the only place that runs on Windows."""
+    job = ci["jobs"]["dev-startup"]
+    assert "windows-latest" in job["strategy"]["matrix"]["os"]
+    runs = " ".join(s.get("run", "") for s in job["steps"])
+    assert "test_gthread_sqlite_platform.py" in runs, (
+        "the platform SQLite suite does not run on Windows"
+    )
+
+
+def test_emit_evidence_is_reachable_from_diagnostics():
+    """GT-A1-04: the emit lock can only be narrowed on evidence, and evidence
+    needs to be collectable from a running server."""
+    from blueprints.admin import _runtime_info
+
+    info = _runtime_info()
+    assert "socketio_emits" in info
+    assert set(info["socketio_emits"]) >= {"emits", "binary_emits"}
