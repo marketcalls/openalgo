@@ -1,0 +1,1 @@
+import{t as e}from"./react-CBMccZbX.js";var t=e(e=>({activeSessionCount:0,setActiveSessionCount:t=>e({activeSessionCount:t})}));export{t};
