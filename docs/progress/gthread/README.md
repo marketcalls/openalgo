@@ -17,7 +17,7 @@ language: what was broken, what we changed, and how we know it works.
 | [PR-4](PR-04-cache-snapshot-swap.md) | Stop the symbol lookup going blank during its daily refresh | Done |
 | [PR-5a](PR-05a-shared-resources.md) | Shared HTTP client, event bus cleanup, abuse counters | Done |
 | [PR-5b](PR-05b-locked-caches.md) | Make shared memory caches safe for multiple threads | Done |
-| PR-6 | Retry database writes that lose a race | Not started |
+| [PR-6](PR-06-sqlite-retry.md) | Retry database writes that lose a race | Done |
 | PR-7 | Make the MCP server's counters accurate | Not started |
 | PR-8 | Fix sandbox shutdown and scheduler timing | Not started |
 | PR-9 | Report the running configuration correctly | Not started |
@@ -29,9 +29,9 @@ language: what was broken, what we changed, and how we know it works.
 | | |
 | --- | --- |
 | Total items tracked | 152 |
-| Already fine, no work needed | 27 |
-| Fixed and tested | 29 |
-| Still to do | 96 |
+| Already fine, no work needed | 28 |
+| Fixed and tested | 36 |
+| Still to do | 88 |
 
 ## How we work
 

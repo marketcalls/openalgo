@@ -17,13 +17,13 @@ GT-A3-09,cache,latency_db TTLCache,database/latency_db.py:39-41,LockedTTLCache (
 GT-A3-10,cache,telegram_db TTLCaches (4),database/telegram_db.py:37-42,LockedTTLCache (utils/thread_safe_cache.py); auth_db compound reads made atomic,A3,test/test_gthread_locked_cache.py::test_every_module_cache_is_locked,PR-5,No stale telegram user,done
 GT-A3-11,cache,whatsapp_db TTLCaches (4),database/whatsapp_db.py:57-61,LockedTTLCache (utils/thread_safe_cache.py); auth_db compound reads made atomic,A3,test/test_gthread_locked_cache.py::test_every_module_cache_is_locked,PR-5,No stale whatsapp user,done
 GT-A3-12,cache,trading_calendar TTLCache,utils/trading_calendar.py:30-32,LockedTTLCache (utils/thread_safe_cache.py); auth_db compound reads made atomic,A3,test/test_gthread_locked_cache.py::test_every_module_cache_is_locked,PR-5,No stale session data,done
-GT-A4-01,sqlite,Retry helper,database/ (new module),Bounded jittered retry; fresh session per attempt,A4,Induced BUSY_SNAPSHOT,PR-6,Snapshot conflicts recover; BUSY not double-waited,open
-GT-A4-02,sqlite,openalgo.db writers,24 modules / ~140 commit sites,Retry where idempotent,A4,Concurrent write stress,PR-6,No unhandled locked errors,open
-GT-A4-03,sqlite,logs.db writers,database/traffic_db.py (10 sites),Keep serialized; no retry,A4,Request-log burst,PR-6,No thread parked >1s on log write,open
-GT-A4-04,sqlite,latency.db writers,database/latency_db.py,Keep serialized; no retry,A4,Latency-log burst,PR-6,As above,open
-GT-A4-05,sqlite,health.db writers,database/health_db.py (7 sites),Retry safe (idempotent samples),A4,Concurrent health write,PR-6,No unhandled locked errors,open
-GT-A4-06,sqlite,sandbox.db writers,sandbox/* (29 sites) + database/sandbox_db.py,Retry safe except fill-commit,A4,Concurrent simulated fills,PR-6,Exactly-once simulated fills,open
-GT-A4-07,sqlite,DO-NOT-RETRY set,order-placement post-broker writes,Never retry at a boundary enclosing a broker call,A4,Induced failure after broker ack,PR-6,Broker order placed exactly once,open
+GT-A4-01,sqlite,Retry helper,database/ (new module),Bounded jittered retry; fresh session per attempt,A4,test/test_gthread_sqlite_retry.py::test_snapshot_conflict_is_retried_and_can_succeed,PR-6,Snapshot conflicts recover; BUSY not double-waited,done
+GT-A4-02,sqlite,openalgo.db writers,24 modules / ~140 commit sites,Retry via database/sqlite_retry.py; re-reads per attempt,A4,test/test_gthread_sqlite_retry.py::test_end_to_end_retry_recovers_from_a_real_conflict,PR-6,No unhandled locked errors,done
+GT-A4-03,sqlite,logs.db writers,database/traffic_db.py (10 sites),Confirmed no-retry: plain SQLITE_BUSY already waited busy_timeout,A4,test/test_gthread_sqlite_retry.py::test_plain_busy_is_not_retried,PR-6,No thread parked >1s on log write,done
+GT-A4-04,sqlite,latency.db writers,database/latency_db.py,Confirmed no-retry: plain SQLITE_BUSY already waited busy_timeout,A4,test/test_gthread_sqlite_retry.py::test_plain_busy_is_not_retried,PR-6,As above,done
+GT-A4-05,sqlite,health.db writers,database/health_db.py (7 sites),Retry via database/sqlite_retry.py; re-reads per attempt,A4,test/test_gthread_sqlite_retry.py::test_end_to_end_retry_recovers_from_a_real_conflict,PR-6,No unhandled locked errors,done
+GT-A4-06,sqlite,sandbox.db writers,sandbox/* (29 sites) + database/sandbox_db.py,Retry via database/sqlite_retry.py; re-reads per attempt,A4,test/test_gthread_sqlite_retry.py::test_end_to_end_retry_recovers_from_a_real_conflict,PR-6,Exactly-once simulated fills,done
+GT-A4-07,sqlite,DO-NOT-RETRY set,order-placement post-broker writes,Documented boundary rule: retry never wraps a broker call,A4,test/test_gthread_sqlite_retry.py::test_plain_busy_is_not_retried,PR-6,Broker order placed exactly once,done
 GT-A4-08,sqlite,Windows locking variance,all,Validate retry bounds on Windows,A15,Windows concurrent-write suite,PR-6,Same guarantees as Linux,open
 GT-A6-01,mcp,Scope quota lock + bound,blueprints/mcp_http.py:112-138,Lock and prune,A6,Thread-barrier admits exactly N,PR-7,Quota exact; key space bounded,open
 GT-A6-02,mcp,Audit log rotation,blueprints/mcp_http.py:344-368,Serialize append+rotate,A6,Concurrent write during rotation,PR-7,No lost audit lines,open
@@ -41,7 +41,7 @@ GT-A10-01,http,httpx singleton race,utils/httpx_client.py:19-30,Lock constructio
 GT-A10-02,http,Pool acquisition timeout,utils/httpx_client.py,Bounded acquire timeout separate from 120s request timeout,A10,test/test_gthread_shared_resources.py::test_pool_timeout_is_separate_from_the_request_timeout,PR-5,Saturation errors not hangs,done
 GT-A10-03,http,Pool saturation metrics,utils/httpx_client.py,Expose metrics,A10,test/test_gthread_shared_resources.py::test_pool_stats_are_exposed,PR-5,Saturation observable,done
 GT-A10-04,http,Flask-Limiter memory backend,limiter.py:7 / limits/storage/memory.py:37,SAFE - already per-key RLock,A10,Concurrency test only,n/a,No new locking design needed,resolved
-GT-A11-01,duckdb,Historify connection contract,database/historify_db.py:49-75,Define thread contract; bypasses engine_factory,A11,Concurrent scheduler+request reads/writes,PR-6,No corruption; bounded retries,open
+GT-A11-01,duckdb,Historify connection contract,database/historify_db.py:49-75,"SAFE - connection-per-use, closed in finally, never shared. Measured: 16 threads x 10 writes, 0 errors",A11,test/test_gthread_sqlite_retry.py::test_duckdb_survives_concurrent_writers,PR-6,No corruption; bounded retries,resolved
 GT-A11-02,duckdb,Connection FD/arena cost,database/historify_db.py,Include in soak,A11,24h soak,PR-6,FD and RSS plateau,open
 GT-A12-01,registry,_POOLED_ADAPTERS,websocket_proxy/broker_factory.py,Lock only if thread mode ever enabled,A12,Mode-specific,PR-2,Documented safe under external/subprocess,open
 GT-A12-02,registry,_STRIKES_CACHE,services/option_symbol_service.py:49-75,Bound + lock; only paytm invalidates,A12,Concurrent strike lookup,PR-5,Bounded key space,open
