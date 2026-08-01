@@ -29,7 +29,6 @@ import os
 from datetime import datetime
 from typing import Any
 
-from cachetools import TTLCache
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -51,14 +50,15 @@ from sqlalchemy.sql import func
 
 from database.auth_db import PEPPER
 from utils.logging import get_logger
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
 # 30-minute TTL caches — same as telegram_db, reduces DB hits in command paths.
-_wa_user_cache: TTLCache = TTLCache(maxsize=10000, ttl=1800)
-_wa_username_cache: TTLCache = TTLCache(maxsize=10000, ttl=1800)
-_wa_preferences_cache: TTLCache = TTLCache(maxsize=10000, ttl=1800)
-_wa_credentials_cache: TTLCache = TTLCache(maxsize=10000, ttl=1800)
+_wa_user_cache: LockedTTLCache = LockedTTLCache(maxsize=10000, ttl=1800)
+_wa_username_cache: LockedTTLCache = LockedTTLCache(maxsize=10000, ttl=1800)
+_wa_preferences_cache: LockedTTLCache = LockedTTLCache(maxsize=10000, ttl=1800)
+_wa_credentials_cache: LockedTTLCache = LockedTTLCache(maxsize=10000, ttl=1800)
 
 # Tables live in the main openalgo.db by default. DATABASE_URL is whatever
 # the operator configured in .env — we never carve out a separate sqlite file.

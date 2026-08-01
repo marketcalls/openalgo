@@ -1,19 +1,19 @@
 import logging
 import os
 
-from cachetools import TTLCache
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Time, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = logging.getLogger(__name__)
 
 # Strategy caches - 5 minute TTL for webhook lookups (high frequency)
 # Webhook lookups happen on every webhook trigger, caching significantly reduces DB load
-_strategy_webhook_cache = TTLCache(maxsize=5000, ttl=300)  # 5 minutes TTL
-_user_strategies_cache = TTLCache(maxsize=1000, ttl=600)  # 10 minutes TTL
+_strategy_webhook_cache = LockedTTLCache(maxsize=5000, ttl=300)  # 5 minutes TTL
+_user_strategies_cache = LockedTTLCache(maxsize=1000, ttl=600)  # 10 minutes TTL
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 

@@ -5,7 +5,6 @@ import os
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from cachetools import TTLCache
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -26,6 +25,7 @@ from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
 
 from utils.logging import get_logger
+from utils.thread_safe_cache import LockedTTLCache
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -142,21 +142,21 @@ def get_session_based_cache_ttl():
 
 
 # Define auth token cache with TTL until session expiry to minimize DB hits
-auth_cache = TTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
+auth_cache = LockedTTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
 # Define feed token cache with same TTL
-feed_token_cache = TTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
+feed_token_cache = LockedTTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
 # Define a cache for broker names with a 5-minute TTL (longer since broker rarely changes)
-broker_cache = TTLCache(maxsize=1024, ttl=3000)
+broker_cache = LockedTTLCache(maxsize=1024, ttl=3000)
 # Define a cache for verified API keys with 24-hour TTL
 # Security: Only caches user_id (not sensitive), invalidated on key regeneration
 # Long TTL is safe because cache is invalidated when keys are regenerated
-verified_api_key_cache = TTLCache(maxsize=1024, ttl=36000)  # 10 hours
+verified_api_key_cache = LockedTTLCache(maxsize=1024, ttl=36000)  # 10 hours
 # Define a cache for invalid API keys with shorter 5-minute TTL (prevent cache poisoning)
-invalid_api_key_cache = TTLCache(maxsize=512, ttl=300)  # 5 minutes
+invalid_api_key_cache = LockedTTLCache(maxsize=512, ttl=300)  # 5 minutes
 # Order mode (auto/semi_auto) is checked on every order request; cache it to
 # avoid a DB query per order. Invalidated by update_order_mode via
 # invalidate_user_cache, so the TTL is only a backstop.
-order_mode_cache = TTLCache(maxsize=128, ttl=60)
+order_mode_cache = LockedTTLCache(maxsize=128, ttl=60)
 
 # Conditionally create engine based on DB type
 if DATABASE_URL and "sqlite" in DATABASE_URL:
@@ -656,8 +656,9 @@ def get_auth_token(name, bypass_cache: bool = False):
     if bypass_cache:
         logger.debug(f"Bypassing cache for user: {name} (fresh token requested)")
         # Clear stale cache entry
-        if cache_key in auth_cache:
-            del auth_cache[cache_key]
+        # pop() is atomic; `in` then `del` can raise if another thread
+        # invalidates the same key first.
+        auth_cache.pop(cache_key, None)
         # Query database directly
         auth_obj = get_auth_token_dbquery(name)
         if isinstance(auth_obj, Auth) and not auth_obj.is_revoked:
@@ -667,8 +668,8 @@ def get_auth_token(name, bypass_cache: bool = False):
         return None
 
     # Normal cache-first lookup
-    if cache_key in auth_cache:
-        auth_obj = auth_cache[cache_key]
+    auth_obj = auth_cache.get(cache_key)
+    if auth_obj is not None:
         if isinstance(auth_obj, Auth) and not auth_obj.is_revoked:
             return decrypt_token(auth_obj.auth)
         else:
@@ -742,8 +743,8 @@ def get_feed_token(name):
         return None
 
     cache_key = f"feed-{name}"
-    if cache_key in feed_token_cache:
-        auth_obj = feed_token_cache[cache_key]
+    auth_obj = feed_token_cache.get(cache_key)
+    if auth_obj is not None:
         if isinstance(auth_obj, Auth) and not auth_obj.is_revoked:
             return decrypt_token(auth_obj.feed_token) if auth_obj.feed_token else None
         else:
@@ -921,8 +922,8 @@ def verify_api_key(provided_api_key):
         return None
 
     # Step 2: Check valid cache (fast path for legitimate requests)
-    if cache_key in verified_api_key_cache:
-        user_id = verified_api_key_cache[cache_key]
+    user_id = verified_api_key_cache.get(cache_key)
+    if user_id is not None:
         logger.debug(f"API key verified from cache for user_id: {user_id}")
         return user_id
 
@@ -979,8 +980,9 @@ def get_username_by_apikey(provided_api_key):
 def get_broker_name(provided_api_key):
     """Get only the broker name for a valid API key with caching"""
     # Check if broker name is in cache
-    if provided_api_key in broker_cache:
-        return broker_cache[provided_api_key]
+    cached_broker = broker_cache.get(provided_api_key)
+    if cached_broker is not None:
+        return cached_broker
 
     # Not in cache, need to look it up
     user_id = verify_api_key(provided_api_key)
@@ -1016,8 +1018,8 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
     cache_key = f"{hashlib.sha256(provided_api_key.encode()).hexdigest()}_{include_feed_token}"
 
     # Check cache first (but still verify revocation status)
-    if cache_key in auth_cache:
-        cached_result = auth_cache[cache_key]
+    cached_result = auth_cache.get(cache_key)
+    if cached_result is not None:
         # Security: Still check if auth is revoked even with cached data
         user_id = verify_api_key(provided_api_key)
         if user_id:

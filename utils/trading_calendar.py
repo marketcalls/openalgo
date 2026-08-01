@@ -21,15 +21,15 @@ All dates are IST trading-session dates - see ``utils.session``.
 
 from datetime import date, timedelta
 
-from cachetools import TTLCache
 
 from utils.logging import get_logger
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
 # One entry per year, refreshed daily. The holiday list for a year changes only
 # when the exchange publishes a revision, and the key space is years.
-_HOLIDAY_CACHE: TTLCache = TTLCache(maxsize=8, ttl=60 * 60 * 24)
+_HOLIDAY_CACHE: LockedTTLCache = LockedTTLCache(maxsize=8, ttl=60 * 60 * 24)
 
 PERIODS = ("day", "week", "month", "quarter", "year")
 

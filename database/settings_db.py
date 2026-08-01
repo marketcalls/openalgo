@@ -3,7 +3,6 @@
 import base64
 import os
 
-from cachetools import TTLCache
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -14,12 +13,13 @@ from sqlalchemy.pool import NullPool
 
 from database.auth_db import PEPPER
 from utils.logging import get_logger
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
 # Settings cache - 1 hour TTL (settings rarely change)
 # This cache significantly reduces DB queries since get_analyze_mode() is called on every request
-_settings_cache = TTLCache(maxsize=10, ttl=3600)  # 1 hour TTL
+_settings_cache = LockedTTLCache(maxsize=10, ttl=3600)  # 1 hour TTL
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 

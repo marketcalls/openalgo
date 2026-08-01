@@ -8,7 +8,6 @@ import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from cachetools import TTLCache
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -31,15 +30,16 @@ from sqlalchemy.sql import func
 
 from database.auth_db import PEPPER
 from utils.logging import get_logger
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
 # Telegram caches - 30 minute TTL for user lookups
 # These reduce DB queries significantly for bot message handling
-_telegram_user_cache = TTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
-_telegram_username_cache = TTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
-_user_preferences_cache = TTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
-_user_credentials_cache = TTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
+_telegram_user_cache = LockedTTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
+_telegram_username_cache = LockedTTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
+_user_preferences_cache = LockedTTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
+_user_credentials_cache = LockedTTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
 
 # Database configuration
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///db/telegram.db")

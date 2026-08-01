@@ -16,7 +16,7 @@ language: what was broken, what we changed, and how we know it works.
 | [PR-3](PR-03-emit-boundary.md) | Stop live updates from getting jumbled | Done |
 | [PR-4](PR-04-cache-snapshot-swap.md) | Stop the symbol lookup going blank during its daily refresh | Done |
 | [PR-5a](PR-05a-shared-resources.md) | Shared HTTP client, event bus cleanup, abuse counters | Done |
-| PR-5b | Make shared memory caches safe for multiple threads | Not started |
+| [PR-5b](PR-05b-locked-caches.md) | Make shared memory caches safe for multiple threads | Done |
 | PR-6 | Retry database writes that lose a race | Not started |
 | PR-7 | Make the MCP server's counters accurate | Not started |
 | PR-8 | Fix sandbox shutdown and scheduler timing | Not started |
@@ -30,8 +30,8 @@ language: what was broken, what we changed, and how we know it works.
 | --- | --- |
 | Total items tracked | 152 |
 | Already fine, no work needed | 27 |
-| Fixed and tested | 17 |
-| Still to do | 108 |
+| Fixed and tested | 29 |
+| Still to do | 96 |
 
 ## How we work
 

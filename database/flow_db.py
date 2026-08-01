@@ -4,7 +4,6 @@ import logging
 import os
 import secrets
 
-from cachetools import TTLCache
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -20,12 +19,13 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = logging.getLogger(__name__)
 
 # Flow workflow caches - 5 minute TTL for webhook lookups (high frequency)
-_workflow_webhook_cache = TTLCache(maxsize=5000, ttl=300)  # 5 minutes TTL
-_workflow_cache = TTLCache(maxsize=1000, ttl=600)  # 10 minutes TTL
+_workflow_webhook_cache = LockedTTLCache(maxsize=5000, ttl=300)  # 5 minutes TTL
+_workflow_cache = LockedTTLCache(maxsize=1000, ttl=600)  # 10 minutes TTL
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 

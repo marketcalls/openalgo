@@ -5,18 +5,18 @@ GT-A1-03,socketio,One-shot emit threads,services/orderstatus_service.py:40/124/1
 GT-A1-04,socketio,Packet-multiplicity evidence,socketio/manager.py:44-46,Instrumented: SerializedSocketIO.emit_stats() counts emits and binary emits; narrow the lock only on production evidence,A1,test/test_gthread_emit_boundary.py::test_binary_detection_for_packet_evidence,n/a (observability),Evidence sufficient to keep or narrow the lock,open
 GT-A2-01,cache,Symbol cache snapshot swap,database/token_db_enhanced.py:181-309;695-708,Atomic reference swap + writer lock,A2,test/test_gthread_cache_snapshot.py::test_readers_never_observe_a_partial_snapshot,PR-4,Complete old or complete new snapshot; never partial,done
 GT-A2-02,cache,Failed-load fallback,database/token_db_enhanced.py:181-309,Retain previous snapshot on failure,A2,test/test_gthread_cache_snapshot.py::test_clear_cache_lowers_the_flag_before_emptying,PR-4,Cache never empty after failed reload,done
-GT-A3-01,cache,auth_db TTLCaches (6),database/auth_db.py:145-159,RLock per coherent group,A3,Same-key concurrency; invalidation-during-read,PR-5,No stale auth/feed/broker/order-mode after rotation,open
-GT-A3-02,cache,settings_db TTLCache,database/settings_db.py:20-22,Lock,A3,Concurrent analyze-mode toggle,PR-5,Mode reads never tear,open
-GT-A3-03,cache,user_db TTLCache,database/user_db.py:57-58,Lock,A3,Concurrent login,PR-5,No stale user record,open
-GT-A3-04,cache,traffic_db TTLCache,database/traffic_db.py:55-58,Lock,A3,Concurrent request logging,PR-5,No lost counters,open
-GT-A3-05,cache,flow_db TTLCaches (2),database/flow_db.py:26-28,Lock,A3,Concurrent flow read/write,PR-5,No stale flow config,open
-GT-A3-06,cache,strategy_db TTLCaches (2),database/strategy_db.py:13-16,Lock,A3,Concurrent strategy lookup,PR-5,No stale strategy,open
-GT-A3-07,cache,market_calendar_db TTLCaches (2),database/market_calendar_db.py:32-34,Lock,A3,Concurrent calendar read,PR-5,No stale holiday data,open
-GT-A3-08,cache,leverage_db TTLCache,database/leverage_db.py:17,Lock,A3,Concurrent leverage read,PR-5,No stale leverage,open
-GT-A3-09,cache,latency_db TTLCache,database/latency_db.py:39-41,Lock,A3,Concurrent latency write,PR-5,No lost samples,open
-GT-A3-10,cache,telegram_db TTLCaches (4),database/telegram_db.py:37-42,Lock,A3,Concurrent bot command,PR-5,No stale telegram user,open
-GT-A3-11,cache,whatsapp_db TTLCaches (4),database/whatsapp_db.py:57-61,Lock,A3,Concurrent whatsapp command,PR-5,No stale whatsapp user,open
-GT-A3-12,cache,trading_calendar TTLCache,utils/trading_calendar.py:30-32,Lock,A3,Concurrent calendar read,PR-5,No stale session data,open
+GT-A3-01,cache,auth_db TTLCaches (6),database/auth_db.py:145-159,LockedTTLCache (utils/thread_safe_cache.py); auth_db compound reads made atomic,A3,test/test_gthread_locked_cache.py::test_every_module_cache_is_locked,PR-5,No stale auth/feed/broker/order-mode after rotation,done
+GT-A3-02,cache,settings_db TTLCache,database/settings_db.py:20-22,LockedTTLCache (utils/thread_safe_cache.py); auth_db compound reads made atomic,A3,test/test_gthread_locked_cache.py::test_every_module_cache_is_locked,PR-5,Mode reads never tear,done
+GT-A3-03,cache,user_db TTLCache,database/user_db.py:57-58,LockedTTLCache (utils/thread_safe_cache.py); auth_db compound reads made atomic,A3,test/test_gthread_locked_cache.py::test_every_module_cache_is_locked,PR-5,No stale user record,done
+GT-A3-04,cache,traffic_db TTLCache,database/traffic_db.py:55-58,LockedTTLCache (utils/thread_safe_cache.py); auth_db compound reads made atomic,A3,test/test_gthread_locked_cache.py::test_every_module_cache_is_locked,PR-5,No lost counters,done
+GT-A3-05,cache,flow_db TTLCaches (2),database/flow_db.py:26-28,LockedTTLCache (utils/thread_safe_cache.py); auth_db compound reads made atomic,A3,test/test_gthread_locked_cache.py::test_every_module_cache_is_locked,PR-5,No stale flow config,done
+GT-A3-06,cache,strategy_db TTLCaches (2),database/strategy_db.py:13-16,LockedTTLCache (utils/thread_safe_cache.py); auth_db compound reads made atomic,A3,test/test_gthread_locked_cache.py::test_every_module_cache_is_locked,PR-5,No stale strategy,done
+GT-A3-07,cache,market_calendar_db TTLCaches (2),database/market_calendar_db.py:32-34,LockedTTLCache (utils/thread_safe_cache.py); auth_db compound reads made atomic,A3,test/test_gthread_locked_cache.py::test_every_module_cache_is_locked,PR-5,No stale holiday data,done
+GT-A3-08,cache,leverage_db TTLCache,database/leverage_db.py:17,LockedTTLCache (utils/thread_safe_cache.py); auth_db compound reads made atomic,A3,test/test_gthread_locked_cache.py::test_every_module_cache_is_locked,PR-5,No stale leverage,done
+GT-A3-09,cache,latency_db TTLCache,database/latency_db.py:39-41,LockedTTLCache (utils/thread_safe_cache.py); auth_db compound reads made atomic,A3,test/test_gthread_locked_cache.py::test_every_module_cache_is_locked,PR-5,No lost samples,done
+GT-A3-10,cache,telegram_db TTLCaches (4),database/telegram_db.py:37-42,LockedTTLCache (utils/thread_safe_cache.py); auth_db compound reads made atomic,A3,test/test_gthread_locked_cache.py::test_every_module_cache_is_locked,PR-5,No stale telegram user,done
+GT-A3-11,cache,whatsapp_db TTLCaches (4),database/whatsapp_db.py:57-61,LockedTTLCache (utils/thread_safe_cache.py); auth_db compound reads made atomic,A3,test/test_gthread_locked_cache.py::test_every_module_cache_is_locked,PR-5,No stale whatsapp user,done
+GT-A3-12,cache,trading_calendar TTLCache,utils/trading_calendar.py:30-32,LockedTTLCache (utils/thread_safe_cache.py); auth_db compound reads made atomic,A3,test/test_gthread_locked_cache.py::test_every_module_cache_is_locked,PR-5,No stale session data,done
 GT-A4-01,sqlite,Retry helper,database/ (new module),Bounded jittered retry; fresh session per attempt,A4,Induced BUSY_SNAPSHOT,PR-6,Snapshot conflicts recover; BUSY not double-waited,open
 GT-A4-02,sqlite,openalgo.db writers,24 modules / ~140 commit sites,Retry where idempotent,A4,Concurrent write stress,PR-6,No unhandled locked errors,open
 GT-A4-03,sqlite,logs.db writers,database/traffic_db.py (10 sites),Keep serialized; no retry,A4,Request-log burst,PR-6,No thread parked >1s on log write,open

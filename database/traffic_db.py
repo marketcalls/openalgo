@@ -4,7 +4,6 @@ import os
 import threading
 from datetime import datetime, timedelta
 
-from cachetools import TTLCache
 from sqlalchemy import (
     Boolean,
     Column,
@@ -23,6 +22,7 @@ from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
 
 from database.settings_db import get_security_settings
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ LogBase.query = logs_session.query_property()
 # which with NullPool means a fresh SQLite connection per request. Cache the
 # verdict per IP; ban_ip/unban_ip invalidate so enforcement stays immediate
 # (bans are only mutated in-process — single-instance deployment).
-_ip_ban_cache = TTLCache(maxsize=2048, ttl=60)
+_ip_ban_cache = LockedTTLCache(maxsize=2048, ttl=60)
 
 
 class TrafficLog(LogBase):

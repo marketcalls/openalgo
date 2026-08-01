@@ -5,7 +5,6 @@ import os
 import pyotp
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from cachetools import TTLCache
 from sqlalchemy import Boolean, Column, Integer, String, create_engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
@@ -13,6 +12,7 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
 
 from utils.logging import get_logger
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
@@ -55,7 +55,7 @@ Base = declarative_base()
 Base.query = db_session.query_property()
 
 # Define a cache for the usernames with a max size and a 30-second TTL
-username_cache = TTLCache(maxsize=1024, ttl=30)
+username_cache = LockedTTLCache(maxsize=1024, ttl=30)
 
 
 class User(Base):

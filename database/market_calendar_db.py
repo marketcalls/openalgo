@@ -15,7 +15,6 @@ from datetime import date, datetime, time
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytz
-from cachetools import TTLCache
 from sqlalchemy import BigInteger, Boolean, Column, Date, Index, Integer, String, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -23,6 +22,7 @@ from sqlalchemy.pool import NullPool
 
 from utils.constants import CRYPTO_EXCHANGES, EXCHANGE_CRYPTO
 from utils.logging import get_logger
+from utils.thread_safe_cache import LockedTTLCache
 
 # IST Timezone
 IST = pytz.timezone("Asia/Kolkata")
@@ -30,8 +30,8 @@ IST = pytz.timezone("Asia/Kolkata")
 logger = get_logger(__name__)
 
 # Cache for market timings - 1 hour TTL
-_timings_cache = TTLCache(maxsize=500, ttl=3600)
-_holidays_cache = TTLCache(maxsize=50, ttl=3600)
+_timings_cache = LockedTTLCache(maxsize=500, ttl=3600)
+_holidays_cache = LockedTTLCache(maxsize=50, ttl=3600)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 

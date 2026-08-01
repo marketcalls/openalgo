@@ -2,12 +2,12 @@ import logging
 import os
 from datetime import datetime, timedelta
 
-from cachetools import TTLCache
 from sqlalchemy import JSON, Column, DateTime, Float, Integer, String, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import func
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ PERCENTILE_WINDOW_DAYS = 30
 
 # The dashboard polls stats; cache the computed result briefly so polling
 # does not re-scan the table on every request.
-_stats_cache = TTLCache(maxsize=1, ttl=60)
+_stats_cache = LockedTTLCache(maxsize=1, ttl=60)
 LatencyBase = declarative_base()
 LatencyBase.query = latency_session.query_property()
 

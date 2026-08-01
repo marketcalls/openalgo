@@ -4,17 +4,17 @@
 
 import os
 
-from cachetools import TTLCache
 from sqlalchemy import Column, DateTime, Float, Integer, create_engine, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
 
 from utils.logging import get_logger
+from utils.thread_safe_cache import LockedTTLCache
 
 logger = get_logger(__name__)
 
-_leverage_cache = TTLCache(maxsize=1, ttl=3600)
+_leverage_cache = LockedTTLCache(maxsize=1, ttl=3600)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
