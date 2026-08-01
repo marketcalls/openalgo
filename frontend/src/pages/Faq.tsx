@@ -9,7 +9,7 @@ import {
   Sun,
 } from 'lucide-react'
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { Footer } from '@/components/layout/Footer'
 import {
   Accordion,
