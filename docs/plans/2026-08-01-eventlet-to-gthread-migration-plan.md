@@ -1,10 +1,10 @@
 # Eventlet to gthread — Migration Plan
 
 **Status:** Design — not yet built
-**Date:** 2026-08-01
+**Date:** 2026-08-01 (rev 2)
 **Branch:** `gthread`
 **Scope:** Replace Gunicorn's `eventlet` worker with its `gthread` worker. Keep Flask, keep Flask-SocketIO, keep `-w 1`.
-**Evidence base:** [`audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md`](../../audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md), with the corrections in §8 of this plan applied.
+**Evidence base:** [`audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md`](../../audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md), with the corrections in §10 applied.
 
 ---
 
@@ -19,12 +19,12 @@ What it buys:
 3. **The "no asyncio in production" invariant disappears.** Today async work must be shunted onto real OS threads or subprocesses. That entire workaround category goes away.
 4. **The dev/prod gap closes.** CLAUDE.md calls asyncio-works-locally-breaks-on-deploy "the single most common way a change passes locally and fails on deploy." Dev already uses threading; gthread makes production match.
 5. **A class of bugs is eliminated, not mitigated** — `greenlet.error` cross-thread crashes (#1421), the heartbeat starvation behind #1419, psutil's patched-`select` breakage.
-6. **CPU-bound work stops freezing everything.** The 150k-row symbol cache build and Plotly rendering have no yield points, so under eventlet they stall the whole hub. Under gthread they block one thread.
+6. **CPU-bound work stops monopolising the process.** Under eventlet the 150k-row symbol cache build and Plotly rendering have no yield points and stall the whole hub. Under gthread they occupy one thread — though the GIL means heavy pure-Python CPU work still degrades every concurrent request. This is an improvement, not an escape from the GIL.
 7. **WebSocket transport becomes available** for Socket.IO, currently disabled at all four frontend call sites.
 
 What it does **not** buy: no throughput gain, no multi-worker scaling (still `-w 1`), and SQLite contention gets *worse* before the hardening makes it better.
 
-**Independent justification for Phase A:** the hardening items below (unlocked TTL caches, non-atomic symbol-cache reload, missing SQLite retry) are latent correctness bugs that exist *today* and are merely masked by eventlet's cooperative serialization. That work has value even if the flag is never flipped.
+**Independent justification for Phase A:** the hardening items below are latent defects that exist *today*, merely masked by eventlet's cooperative scheduling. That work has value even if the flag is never flipped. Note however that Phase A is **not behaviour-preserving** — emit serialization, quota locking, cache replacement and SQLite retry all change observable behaviour. Each must ship and revert independently.
 
 ### 1.1 Rejected alternatives
 
@@ -32,7 +32,7 @@ What it does **not** buy: no throughput gain, no multi-worker scaling (still `-w
 | --- | --- | --- |
 | Granian (WSGI) | Rejected — issue #1722 closed | No WebSocket support on WSGI; logs `Websockets are not supported on WSGI, ignoring`. `simple-websocket` can only obtain a socket from `werkzeug.socket`, `gunicorn.socket`, `eventlet.input`, or gevent. gthread works because Gunicorn sets `gunicorn.socket`. |
 | uvicorn `--interface wsgi` | Rejected | Same dead end — verified polling-only, no WebSocket. |
-| uvicorn ASGI | Deferred | Verified working (`WsgiToAsgi` + `socketio.AsyncServer`, with a sync `.emit()` shim so the 123 emit sites need not change), but requires dropping Flask-SocketIO. That is the FastAPI-shaped re-architecture in [`docs/migration/flask-to-fastapi-migration-plan.md`](../migration/flask-to-fastapi-migration-plan.md). |
+| uvicorn ASGI | Deferred | Verified working (`WsgiToAsgi` + `socketio.AsyncServer` with a sync `.emit()` shim), but requires dropping Flask-SocketIO. That is the re-architecture in [`docs/migration/flask-to-fastapi-migration-plan.md`](../migration/flask-to-fastapi-migration-plan.md). |
 | gevent | Not evaluated | Still a monkey-patching runtime; trades one green-thread foundation for another. |
 
 ---
@@ -43,15 +43,15 @@ What it does **not** buy: no throughput gain, no multi-worker scaling (still `-w
 - No `-w > 1`. In-process Socket.IO state makes that a separate project requiring a Redis backplane and sticky sessions.
 - No conversion of broker or service paths to `async def`.
 - No SQLite-to-Postgres migration. In scope only if Phase C measurement proves write contention is the ceiling *after* correct transaction boundaries.
-- No frontend transport change during the initial cutover (see §6, Phase C).
+- No frontend transport change during the initial cutover (§8.1).
 
 ---
 
 ## 3. The governing constraint
 
-**Under eventlet, non-yielding code is implicitly atomic. Under gthread it is not.**
+**Under eventlet, non-yielding code is atomic *relative to other greenlets*. Under gthread it is not.**
 
-Every finding in this plan descends from that one sentence. Green threads switch only at yield points, so a read-modify-write with no I/O in the middle can never be interleaved. Real OS threads preempt anywhere. Code that was correct by accident becomes racy.
+The qualifier matters: OpenAlgo already runs real OS threads under eventlet (the `eventlet.patcher.original("threading")` escape hatches, the Telegram bot, broker streaming adapters), so code touched by those paths is already exposed. What changes is that *request handlers and every green-thread-scheduled background task* join that exposed set.
 
 The second-order constraint: **every long-lived request holds a real thread.** Gunicorn's gthread worker defaults to `--threads 1`. SSE streams, Socket.IO transports, internal loopbacks, and sleeping broker rate limiters each occupy one for their full lifetime.
 
@@ -59,208 +59,284 @@ The second-order constraint: **every long-lived request holds a real thread.** G
 
 ## 4. Phase A — correctness gates (blocking)
 
-None of these may be deferred past cutover.
-
 ### A1. Serialize server-originated Socket.IO emits
 
-`socketio/server.py:157` in the installed library states: *"this method is not thread safe. If multiple threads are emitting at the same time to the same client, then messages composed of multiple packets may end up being sent in an incorrect sequence. Use standard concurrency solutions (such as a Lock object)."*
+`socketio/server.py:157` states: *"this method is not thread safe. If multiple threads are emitting at the same time to the same client, then messages composed of multiple packets may end up being sent in an incorrect sequence."* `subscribers/socketio_subscriber.py:5-6` asserts the opposite; that comment is wrong.
 
-`subscribers/socketio_subscriber.py:5-6` currently asserts the opposite. That comment is wrong and must be corrected.
-
-- Introduce one central emit boundary guarded by a process-wide `RLock`, route background/subscriber/request emits through it.
+- Introduce one central emit boundary guarded by a process-wide `RLock`; route background, subscriber and request emits through it. **The lock is the default and stays until evidence says otherwise.**
 - Remove the 7 `socketio.start_background_task(socketio.emit, ...)` sites (`services/orderstatus_service.py:40,124,173,267`, `services/openposition_service.py:39,114`, `services/order_router_service.py:120`) — they spawn a native thread solely to call `emit()`.
-- **Measure first.** The library warning is specific to *multi-packet* messages. Most OpenAlgo payloads are single-packet JSON. Instrument payload sizes before refactoring all 123 call sites; scope the change to what is actually exposed.
+- **Scoping evidence — measure the right thing.** Packet count is *not* a function of JSON byte size. `socketio/manager.py:44-46` shows multiplicity comes from `pkt.encode()` returning a list, which happens for **binary attachments**. Instrument encoded packet count, presence of binary attachments, callback use, destination (broadcast vs `to=`/room), and concurrent-sender identity. Byte size is not a proxy for any of these.
 
 ### A2. Make symbol-cache reload atomic
 
 `database/token_db_enhanced.py:181-309` and `:695-708`. `clear_cache()` empties nine structures then sets `cache_loaded = False`.
 
-Merely reordering the flag is **insufficient** — a reader can pass the `cache_loaded` check and then iterate while another thread clears. Required: build the new state off to the side and atomically swap a single reference; serialize writers with a load lock; retain the previous snapshot on failure. Readers must see the complete old snapshot or the complete new one, never a mix.
-
-This is on the live-order symbol lookup path.
+Merely reordering the flag is **insufficient** — a reader can pass the `cache_loaded` check and then iterate while another thread clears. Required: build the new state off to the side and atomically swap a single reference; serialize writers with a load lock; retain the previous snapshot on failure. Readers must see the complete old snapshot or the complete new one, never a mix. This is on the live-order symbol lookup path.
 
 ### A3. Protect shared `TTLCache` objects
 
-cachetools does not make its mappings thread-safe. Verified: 12 active modules hold `TTLCache` instances with zero locks — `auth_db` (6 caches), `settings_db`, `user_db`, `traffic_db`, `flow_db`, `strategy_db`, `market_calendar_db`, `leverage_db`, `latency_db`, `telegram_db` (4), `whatsapp_db` (4), `utils/trading_calendar.py`.
+cachetools does not make its mappings thread-safe. Verified: 12 active modules hold `TTLCache` instances with zero locks — `auth_db` (6), `settings_db`, `user_db`, `traffic_db`, `flow_db`, `strategy_db`, `market_calendar_db`, `leverage_db`, `latency_db`, `telegram_db` (4), `whatsapp_db` (4), `utils/trading_calendar.py`.
 
-`auth_db` is the priority: it holds auth records, feed tokens, broker selection, API-key verification results, and order mode — all on the live-order path.
+`auth_db` is the priority: auth records, feed tokens, broker selection, API-key verification, order mode — all on the live-order path. `services/indicator_service.py` is the in-repo exemplar. Protect compound `if key in cache` / get / delete / write sequences, not just individual operations; keep DB, Argon2 and network work outside the lock.
 
-`services/indicator_service.py` is the correct in-repo exemplar (TTLCache + single-flight registry, each with its own lock).
+### A4. Bounded SQLite transaction retry — with a per-transaction work list
 
-Protect compound `if key in cache` / get / delete / write sequences, not just individual operations. Keep DB, Argon2, and network work outside the lock.
+WAL, `synchronous=NORMAL`, `busy_timeout=15000` (`658d44830`) and `NullPool` are in place. Missing is retry for `SQLITE_BUSY_SNAPSHOT`, which returns immediately and cannot be waited out.
 
-### A4. Add bounded SQLite transaction retry
+**"Apply to auth, order-log, settings…" is too broad to implement safely.** Produce a table before writing code, with one row per retryable mutation:
 
-WAL, `synchronous=NORMAL`, `busy_timeout=15000` (landed in `658d44830`), and `NullPool` are in place. What is missing is retry for `SQLITE_BUSY_SNAPSHOT`, which returns immediately and cannot be waited out — only a restarted transaction fixes it.
+| Column | Requirement |
+| --- | --- |
+| Function + database | Exact target |
+| Idempotent? | If no, it does not get retried |
+| Broker/network side effect before commit? | If yes, the retry boundary is wrong — restructure |
+| Retryable error codes | `SQLITE_BUSY_SNAPSHOT` restarts immediately with a fresh session |
+| Max attempts + total latency budget | Must be bounded and stated |
 
-- Bounded, jittered retry with a **fresh session per attempt**.
-- Apply to idempotent local mutations on auth, order-log, settings, strategy, OAuth/MCP, and session paths.
-- **The retry boundary must surround only the local transaction.** A broker order must never be placed twice because a post-order local write was retried at too broad a level.
+**Do not layer retries on top of the 15s `busy_timeout` for generic `SQLITE_BUSY`.** Three attempts × 15s parks a request thread for ~45 seconds — a thread-pool outage dressed as resilience. Generic `SQLITE_BUSY` is what `busy_timeout` is for; retry is for the snapshot conflict it cannot fix.
+
+The retry boundary must surround only the local transaction. A broker order must never be placed twice because a post-order local write was retried too broadly.
 
 ### A5. Extend Python Strategy lock coverage to readers
 
-`blueprints/python_strategy.py:64` already defines `PROCESS_LOCK = threading.RLock()`, and it guards the lifecycle entry points — `start_strategy_process` (line 423), stop (606), and three more sites. **The registries are not unsynchronized**, contrary to the audit's GT-07.
+`blueprints/python_strategy.py:64` already defines `PROCESS_LOCK = threading.RLock()`, guarding the lifecycle entry points — start (`:423`), stop (`:606`), plus three more. **The registries are not unsynchronized**, contrary to the audit's GT-07.
 
-The real gap is coverage: 106 references to `RUNNING_STRATEGIES` / `STRATEGY_CONFIGS` against 6 lock sites, so read and iteration paths (line 215, status/list endpoints) run unguarded while writers mutate — risking dict-changed-size-during-iteration. Extend coverage to readers; do not hold the lock while waiting for a child process to exit.
+The gap is coverage: 106 references to `RUNNING_STRATEGIES` / `STRATEGY_CONFIGS` against 6 lock sites, so readers (line 215, status/list endpoints) run unguarded while writers mutate. Extend coverage to readers; never hold the lock while waiting for a child process to exit (see A9 for why that rule matters).
 
 ### A6. Harden MCP (`MCP_HTTP_ENABLED=TRUE` only)
 
 `blueprints/mcp_http.py`:
 
-- `_scope_quota` (line 115) — unlocked read-modify-write, with the comment *"Single eventlet worker, so no shared-state concerns"* stating the premise that this migration invalidates. Add a lock and bound the key space; entries are pruned only when the same `(jti, scope)` recurs.
-- `_audit_log` (line 344) — appends then size-triggered trims with no lock; concurrent requests can lose audit lines during rotation.
+- `_scope_quota` (`:115`) — unlocked read-modify-write, with the comment *"Single eventlet worker, so no shared-state concerns"* stating the premise this migration invalidates. Add a lock and bound the key space; entries prune only when the same `(jti, scope)` recurs.
+- `_audit_log` (`:344`) — appends then size-trims with no lock; concurrent requests can lose audit lines during rotation.
 - `_initialized` — unlocked check-then-act, first exercised by the first MCP request rather than at startup.
 
-### A7. Make WebSocket-proxy topology explicit
+### A7. Give the WebSocket proxy a real owner and an explicit topology
 
-`websocket_proxy/app_integration.py:25` `_eventlet_active()` returns False under gthread, silently moving the proxy from a subprocess into the Gunicorn worker on native installs. The `greenlet.error` motivation (#1421) genuinely disappears, but production topology must not change as a side effect of a worker-class flag.
+Two distinct defects.
 
-Replace eventlet detection with an explicit `WEBSOCKET_PROXY_MODE=external|subprocess|thread`: `external` in Docker (`start.sh:303` already runs it separately), `subprocess` in native Gunicorn production, `thread` for the dev server only. Preserve the SUB-binds/PUBs-connect invariant.
+**A7a — Docker has no supervisor.** `start.sh:303` backgrounds the proxy and `start.sh:319` installs `trap cleanup SIGTERM SIGINT`, but `start.sh:332` then `exec`s Gunicorn. **`exec` replaces the shell, so the trap ceases to exist.** Consequences: the proxy is never gracefully stopped; an unexpected proxy exit is never noticed or restarted; and the container health check probes only Flask, so Docker reports healthy with market data dead.
+
+Required: a real owner — a separate Compose service, a minimal PID-1 supervisor, or a supervising shell that forwards signals, monitors both processes and reaps children. Health check must cover port 8765.
+
+**A7b — native topology must not flip silently.** `websocket_proxy/app_integration.py:25` `_eventlet_active()` returns False under gthread, moving the proxy from subprocess into the Gunicorn worker on native installs. The `greenlet.error` motivation (#1421) genuinely disappears, but topology must not change as a side effect of a worker-class flag.
+
+Replace eventlet detection with explicit `WEBSOCKET_PROXY_MODE=external|subprocess|thread`: `external` in Docker, `subprocess` in native Gunicorn production, `thread` for the dev server only. Preserve the SUB-binds/PUBs-connect invariant.
 
 ### A8. EventBus scoped-session cleanup
 
 `utils/event_bus.py:60` `_safe_call()` has `try`/`except` but no `finally`. Ten persistent native workers query and write scoped SQLAlchemy sessions; `utils/db_sessions.py` states background threads must call `remove_all_scoped_sessions()`. Add it in a `finally`.
 
-### A9. Sandbox / Analyzer engine review
+### A9. Sandbox / Analyzer engine — named lifecycle defect
 
-**Not covered by the audit** — it must not ship unreviewed. The engine executes simulated orders and one known production instance runs Analyzer mode full-time.
+Not covered by the audit. The engine executes simulated orders and at least one production instance runs Analyzer mode full-time.
 
-Surfaces: `sandbox/execution_thread.py:33` (`ExecutionEngineThread`), the auto-upgrade thread at `:284`, `sandbox/websocket_execution_engine.py:434,468`, the squareoff thread, the startup `ThreadPoolExecutor` at `app.py:846-865`, and `sandbox.db`. Apply the same shared-state and thread-budget review as the Python Strategy host.
+**Concrete defect:** `sandbox/execution_thread.py:186` `stop_execution_engine()` acquires `_thread_lock`, then calls `_stop_websocket_upgrade_watcher()`, which `join(timeout=5)`s the watcher at `:296`. The watcher loop at `:250` acquires the *same* `_thread_lock`. If the watcher is blocked there, the stopper waits the full 5s, the join times out, and `_auto_upgrade_thread = None` is set **while the thread is still alive** — it then acquires the lock and mutates engine state after being declared stopped. Bounded by the timeout, so a stall plus an orphaned mutator rather than a permanent deadlock — but it is exactly the "hold a lock while joining" pattern A5 forbids, and gthread widens the window.
 
-### A10. Assess shared HTTP client and rate-limiter state
+Other surfaces: the auto-upgrade thread (`:284`), `sandbox/websocket_execution_engine.py:434,468`, the squareoff thread, the startup `ThreadPoolExecutor` (`app.py:846-865`), and `sandbox.db`.
 
-Also uncovered by the audit:
+**Pass/fail tests:** stop during auto-upgrade; stale-feed fallback and recovery; repeated start/stop cycles; exactly-once simulated fills while polling and WebSocket engines overlap; clean session and thread teardown with no orphaned threads.
 
-- `utils/httpx_client.py` — shared client pool limits under N concurrent real threads.
-- `limiter.py:7` — `Limiter(storage_uri="memory://", strategy="moving-window")`, in-process mutable rate-limit state on the API surface fronting order placement.
+### A10. Shared HTTP client singleton
+
+`utils/httpx_client.py:19-30` — `_httpx_client = None` with an unlocked `if _httpx_client is None:` check-then-create. Concurrent first calls construct **competing connection pools**; the losers are never closed, which is both a correctness issue and an FD leak under CLAUDE.md's own hygiene rule. Cleanup is likewise unsynchronized with active users.
+
+Required: guard construction and teardown; add a bounded pool-acquisition timeout separate from the 120s request timeout (a saturated 100-connection pool currently manifests as a hang, not an error); expose saturation metrics.
+
+**Correction — Flask-Limiter needs no locking work.** `limiter.py:7` uses `storage_uri="memory://"`, and the installed backend already holds `defaultdict[str, threading.RLock]` per key (`limits/storage/memory.py:37`). A concurrency test is appropriate; a new locking design is not justified.
 
 ---
 
-## 5. Phase B — thread budget and deployment
+## 5. Phase B — thread budget
 
-### B1. Size the thread pool from connection demand
+### B1. Size from connection demand
 
 `--worker-class gthread` without `--threads` is a one-request worker. Size from demand, not CPU count:
 
 ```text
 required threads >=
-    active Socket.IO transports
-  + active Python Strategy SSE streams        (blueprints/python_strategy.py:2335, infinite)
-  + active MCP SSE streams                    (blueprints/mcp_http.py:695, infinite)
-  + internal loopback reserve (>=2 when MCP HTTP is enabled — dispatch re-enters this server)
-  + requests parked in broker rate limiters   (see B2)
+    active Socket.IO clients x 2          (polling can hold an outstanding GET and POST simultaneously)
+  + active Python Strategy SSE streams    (blueprints/python_strategy.py:2335, infinite)
+  + active MCP SSE streams                (blueprints/mcp_http.py:695, infinite)
+  + internal loopback reserve             (MCP, Telegram AND WhatsApp all re-enter this server via the SDK; >=2)
+  + requests parked in broker rate limiters   (B2)
+  + basket-order fan-out                  (services/basket_order_service.py:351, up to BATCH_SIZE threads per request)
   + peak ordinary HTTP concurrency
   + failure/reconnect reserve
 ```
 
-Canary at 32; evaluate 64 only if measurement demands it. Neither value is approved until the §7 gates pass.
+Budget **native application threads separately from request threads** — EventBus (10), API/analyzer/traffic/latency writers, bot threads, APScheduler executors, order-update adapters, broker SDK threads. The shared HTTP pool (A10) is consumed by all of them, not only Gunicorn threads.
 
-### B2. Account for broker rate limiters and per-call executors
+Canary at 32; evaluate 64 only if measurement demands it. Neither value is approved until §9 passes.
 
-**Missing from the audit's formula.** Under eventlet a sleeping caller yields the hub for free. Under gthread it **holds a worker thread for the full sleep**.
+### B2. Blocking-sleep inventory
 
-Eight modules sleep-throttle: `angel/api/data.py`, `definedge/api/data.py`, `definedge/api/rate_limiter.py`, `dhan/api/data.py`, `flattrade/api/data.py`, `fyers/api/rate_limiter.py`, `iiflcapital/api/rate_limiter.py`, `tradesmart/api/data.py`. Angel's history limiter is 0.5s at ~2 req/s, so N concurrent history requests serialize into N × 0.5s of occupied threads. On a history-heavy workload this may be the largest term in B1.
+Under eventlet a sleeping caller yields the hub for free. Under gthread it **holds a worker thread for the full sleep**.
 
-Separately, per-call `ThreadPoolExecutor` in broker request paths multiplies with concurrent requests. Live under gthread: **nubra, iiflcapital, tradesmart**. For shoonya, definedge, flattrade and zebu the `USE_ASYNC` flip (§B4) makes the executor a dead branch.
+Eight modules are known steady-state throttles: `angel/api/data.py`, `definedge/api/data.py`, `definedge/api/rate_limiter.py`, `dhan/api/data.py`, `flattrade/api/data.py`, `fyers/api/rate_limiter.py`, `iiflcapital/api/rate_limiter.py`, `tradesmart/api/data.py`. Angel's history limiter is 0.5s at ~2 req/s, so N concurrent history requests serialize into N × 0.5s of occupied threads.
 
-### B3. Deployment surfaces
+**This list is not complete.** 40+ further broker API files contain retry, throttle or batching sleeps. Categorize the full set by: normal-path throttle, error backoff, streaming-thread sleep, request-path sleep. Only the first and last consume request threads; the categorization is the deliverable.
+
+Separately, per-call `ThreadPoolExecutor` in broker request paths multiplies with concurrent requests. Live under gthread: **nubra, iiflcapital, tradesmart**. For shoonya, definedge, flattrade and zebu the `USE_ASYNC` flip (§6.3) makes the executor a dead branch.
+
+### B3. `GUNICORN_THREADS` must be plumbed end to end
+
+The target command is configurable, but the variable must reach every surface that launches Gunicorn:
+
+`Dockerfile` · `start.sh` · `docker-compose.yaml` (all generated variants) · `.sample.env` · `install/install.sh` · `install/install-multi.sh` · `install/update.sh` · `install/install-docker.sh` · `install/install-docker-multi-custom-ssl.sh` · `install/docker-run.sh` · `install/docker-run.bat`
+
+**Do not reuse `THREAD_LIMIT`.** It sets `OPENBLAS_NUM_THREADS` / `OMP` / `MKL` / `NUMEXPR` / `NUMBA` and is deliberately capped at 1–4 (`install/install-docker-multi-custom-ssl.sh:450-456`). Gunicorn needs its own variable.
+
+**Multi-instance needs an aggregate host budget.** 32 threads × instance count, plus application executors and numerical-library threads, is not safe to assume on a small VPS. Derive a per-host ceiling and divide.
+
+---
+
+## 6. Phase C — deployment surfaces
+
+### C1. Target shape
 
 ```text
 gunicorn>=26.0,<27
 gunicorn --worker-class gthread --workers 1 --threads ${GUNICORN_THREADS:-32} ... app:app
 ```
 
-Files to change — the audit's GT-16 list **plus nine it omits**:
+### C2. Existing native installs must have their systemd unit migrated
 
-| In GT-16 | Omitted by GT-16 |
-| --- | --- |
-| `Dockerfile:8-13` | `install/enable-remote-mcp-docker.sh` |
-| `requirements-nginx.txt:148-149` | `install/Remote-MCP-readme.md` |
-| `start.sh:327-341` | `docs/design/11-docker/README.md` (9 refs) |
-| `install/install.sh:766-776,1151-1157` | `docs/design/12-ubuntu-server/README.md` (4 refs) |
-| `install/install-multi.sh:310-311,605-611` | `docs/design/06-websockets/README.md` |
-| `install/update.sh:445-453` | `docs/design/34-app-startup/README.md` |
-| `CONTRIBUTING.md:183,1059` | `docs/design/02-backend/README.md` |
-| `CLAUDE.md:60-70` | `docs/design/20-design-principles/README.md` |
-| | `docs/design/30-upgrade-procedure/README.md` |
+**Release blocker.** `install/update.sh` updates dependencies and restarts the service, and runs `systemctl daemon-reload` at `:517` "in case service file changed" — but **it never rewrites `ExecStart`**. An upgraded install would receive Gunicorn 26 with eventlet removed while its unit still says `--worker-class eventlet`, and fail to start.
 
-`docs/` is the single source of truth per CLAUDE.md, so the design docs are a rollout requirement, not cosmetic.
+`update.sh` must: inspect and back up the current unit; rewrite `--worker-class eventlet` to `gthread` and add the thread count; `daemon-reload`; validate the new `ExecStart` **before** removing eventlet; and automatically restore the previous unit and dependency set if startup fails.
 
-Also: remove eventlet from `requirements-nginx.txt` and fresh-install commands; `uv pip install -r` does not prune an extraneous eventlet, so uninstall it explicitly. Keep `simple-websocket` pinned. Preserve nginx's `/socket.io/` upgrade locations. Keep `--timeout 300` initially and verify against both infinite SSE endpoints.
+### C3. File inventory
 
-### B4. Broker validation matrix
+Confirmed active configuration surfaces:
 
-`broker/` needs **one** genuine change. 19 files across 13 of 36 brokers reference eventlet:
+`Dockerfile:8-13` · `requirements-nginx.txt:148-149` · `start.sh:332-341` · `install/install.sh:766-776,1151-1157` · `install/install-multi.sh:310-311,605-611` · `install/update.sh:445-453` · `CONTRIBUTING.md:183,1059` · `CLAUDE.md:60-70`
 
-- **No change (6 files):** zerodha (adapter + websocket), hdfcsky (websocket + api/data), arrow, dhan_sandbox — all guarded `else: _real_threading = threading` fallbacks that become no-ops.
-- **Behaviour change (4 brokers):** `USE_ASYNC = not _is_eventlet_patched()` in shoonya, definedge, flattrade, zebu flips batch quotes from `ThreadPoolExecutor` to `asyncio.run()` + per-call `httpx.AsyncClient`. Requires live batch-quote, option-chain, timeout, rate-limit, exception-aggregation, and repeated-call FD/RSS tests per broker.
-- **Comment-only (9 files):** upstox, mstock, dhan, shoonya, iiflcapital, angel — design rationale becomes void, code unaffected.
+Documentation surfaces (CLAUDE.md makes `docs/` the source of truth):
 
-The `broker/*/streaming/` adapters were written for real OS threads from the start and are the best-prepared part of the codebase.
+`INSTALL.md:84` · `DISCOVERY_MAP.md:29` · `docs/docker/docker.md:28` · `docs/docker/DOCKER_BUILD_GUIDE.md:74` · `docs/websocket-architecture.md:477` · `docs/prd/websocket-proxy.md:51` · `docs/design/11-docker/README.md` (9 refs) · `docs/design/12-ubuntu-server/README.md` (4) · `docs/design/06-websockets/README.md` · `docs/design/34-app-startup/README.md` · `docs/design/02-backend/README.md` · `docs/design/20-design-principles/README.md` · `docs/design/30-upgrade-procedure/README.md`
 
-### B5. Diagnostics
+**Excluded (rev 1 error):** `install/enable-remote-mcp-docker.sh:207` and `install/Remote-MCP-readme.md:89` mention gunicorn only in prose about `migrate_all.py` ordering. They configure nothing.
 
-`blueprints/admin.py:1206-1232` `_runtime_info()` defaults `wsgi_hint="flask-dev"` and only flips on active eventlet, so gthread would be misreported in production. Report Gunicorn version, worker class, configured and active threads, active Socket.IO and SSE counts, and proxy mode. Update `frontend/src/types/admin.ts:142`.
+`install/change-domain.sh` regenerates nginx's `/socket.io/` configuration and therefore belongs in WebSocket regression coverage even though it sets no worker class.
 
-Replace the eventlet-monkeypatching `test/test_telegram_startup.py` with gthread-path tests.
+Also: remove eventlet from `requirements-nginx.txt` and fresh-install commands; `uv pip install -r` does not prune an extraneous eventlet, so uninstall explicitly. Keep `simple-websocket` pinned. Keep `--timeout 300` initially and verify against both infinite SSE endpoints.
+
+### C4. Broker validation
+
+19 files across 13 of 36 brokers reference eventlet. **One genuine change:**
+
+- **No change (6 files):** zerodha (adapter + websocket), hdfcsky (websocket + api/data), arrow, dhan_sandbox — guarded `else: _real_threading = threading` fallbacks that become no-ops.
+- **Behaviour change (4 brokers):** `USE_ASYNC = not _is_eventlet_patched()` in shoonya, definedge, flattrade, zebu flips batch quotes from `ThreadPoolExecutor` to `asyncio.run()` + per-call `httpx.AsyncClient`. Requires live batch-quote, option-chain, timeout, rate-limit, exception-aggregation and repeated-call FD/RSS tests per broker.
+- **Comment-only (9 files):** upstox, mstock, dhan, shoonya, iiflcapital, angel — rationale void, code unaffected.
+
+### C5. Diagnostics
+
+`blueprints/admin.py:1206-1232` `_runtime_info()` defaults `wsgi_hint="flask-dev"` and only flips on active eventlet, so gthread is misreported in production. Report Gunicorn version, worker class, configured and active threads, active Socket.IO and SSE counts, and proxy mode. Update `frontend/src/types/admin.ts:142`. Replace the eventlet-monkeypatching `test/test_telegram_startup.py` with gthread-path tests.
 
 ---
 
-## 6. Phase C — cutover, validation, rollback
+## 7. Cross-platform validation
 
-1. Run the full suite with **no eventlet imported**.
+CI today is Linux-only, and the Docker smoke test at `.github/workflows/ci.yml:272` **overrides the entrypoint** — it never starts `start.sh`, Gunicorn, Flask, Socket.IO or the proxy. It cannot detect any defect in this plan.
+
+Required before declaring readiness:
+
+- Full-container boot on linux/amd64 **and** linux/arm64 using the real entrypoint.
+- Assert Gunicorn 26, worker class `gthread`, one worker, configured thread count; assert eventlet absent.
+- Probe Flask health, Socket.IO polling, Socket.IO WebSocket upgrade, and port 8765.
+- Stop the container; prove Gunicorn **and** the proxy exit cleanly (the A7a gate).
+- Native Ubuntu fresh install **and** `update.sh` upgrade-path test (the C2 gate).
+- RHEL-family and Arch-family installer and unit rendering.
+- Windows and macOS dev startup via `uv run app.py`.
+- Windows/macOS Docker runner tests, or at minimum platform-native script validation.
+- Multi-instance native and Docker with separate Flask, WebSocket and ZMQ ports.
+
+---
+
+## 8. Cutover and rollback
+
+1. Full suite with **no eventlet imported**.
 2. Canary at 32 threads **with the frontend still pinned to polling** — isolate runtime correctness from transport change.
-3. Exercise MCP, both SSE endpoints, both bots, strategies, and live Socket.IO events concurrently.
-4. 24-hour soak: FD count, RSS, OS-thread count, executor queue depths, SQLite busy retries. Record baseline and final; static review is not completion evidence.
-5. Only then stage the WebSocket transport change (§6.1).
+3. Exercise MCP, both SSE endpoints, both bots, strategies and live Socket.IO concurrently.
+4. 24-hour soak against the §9 numbers.
+5. Only then stage the transport change.
 
-### 6.1 Frontend transport (separate change)
+### 8.1 Frontend transport (separate change)
 
-All four Socket.IO constructors force `transports: ['polling'], upgrade: false` — `useSocket.ts:149`, `useOrderEventRefresh.ts`, `ActionCenter.tsx`, `WhatsAppIndex.tsx`. The comment claims WebSocket upgrade fails in threading mode; that is false on Gunicorn gthread with `simple-websocket`, which we verified directly.
+All four Socket.IO constructors force `transports: ['polling'], upgrade: false` — `useSocket.ts:149`, `useOrderEventRefresh.ts`, `ActionCenter.tsx`, `WhatsAppIndex.tsx`. The comment claiming WebSocket upgrade fails in threading mode is false on Gunicorn gthread with `simple-websocket`; verified directly.
 
-Do not remove the pins in the same deployment as the worker change. Add nginx WebSocket-upgrade coverage first, unpin one representative client, observe, then migrate the rest.
+Do not unpin in the same deployment as the worker change. Add nginx upgrade coverage across every official topology first (including post-`change-domain.sh`), unpin one representative client, observe, then migrate the rest.
 
-### 6.2 Rollback
+### 8.2 Rollback
 
-**Absent from the audit and mandatory here** — this is a runtime cutover on a platform placing live orders.
+**Rollback is not a one-line revert.** It spans five artefacts:
 
-- Phase A is behaviour-preserving under eventlet and ships independently. It is not rolled back.
-- The cutover itself is a one-line worker-class revert plus the `gunicorn<26` pin. Keep the previous pin reachable for the duration of the canary.
-- **Abort criteria:** any unhandled `database is locked` in live-order paths; Socket.IO reconnect loops; thread-pool saturation causing `/health` timeouts; FD or RSS failing to plateau in soak; any broker batch-quote regression in the four `USE_ASYNC` brokers.
-- Rehearse the revert on a non-production instance before the canary, not after an incident.
+| Artefact | Rollback requirement |
+| --- | --- |
+| Docker image | Redeploy an **immutable previous SHA tag**, never `latest` |
+| systemd unit | Restore the backup taken in C2 |
+| Dependencies | Restore the previous Gunicorn + eventlet set explicitly |
+| Proxy mode | Explicit `WEBSOCKET_PROXY_MODE` revert |
+| Phase A changes | Each independently revertible — they are **not** behaviour-preserving |
 
----
+**Abort criteria:** any unhandled `database is locked` on live-order paths; Socket.IO reconnect loops; thread saturation causing `/health` timeouts; FD or RSS failing to plateau in soak; any batch-quote regression in the four `USE_ASYNC` brokers; proxy exit undetected by the supervisor.
 
-## 7. Acceptance gates
-
-Ready only when all applicable gates pass. Full matrix in the audit §10; the load-bearing ones:
-
-- Docker, native single, multi-instance, and updater all run Gunicorn 26 gthread, one worker, configured threads. No production process imports eventlet.
-- With maximum expected Socket.IO + both SSE stream types connected, `/health`, login, and an ordinary API request hold defined p95/p99. MCP dispatch completes without self-deadlock.
-- Concurrent sequence-event stress shows no loss, duplication, corruption, or reordering.
-- No unhandled `database is locked` or `SQLITE_BUSY_SNAPSHOT`. Retry tests prove only local transactions repeat and broker orders remain exactly-once.
-- Symbol-cache refresh serves a complete old or complete new snapshot, never a mix.
-- API-key regeneration, logout, and token rollover cannot return stale auth/feed/broker/order-mode cache entries.
-- FDs, RSS, thread count, queue depths, and registries plateau across repeated connect/disconnect cycles.
+Define and measure a **rollback RTO** with post-rollback health verification. Rehearse the revert on a non-production instance before the canary, not after an incident.
 
 ---
 
-## 8. Corrections applied to the source audit
+## 9. Acceptance gates — numbers required
 
-The audit was independently validated. 15 of 18 findings confirmed as stated. Corrections folded into this plan:
+The rev-1 gates used unmeasurable terms ("maximum expected", "defined p95/p99", "plateau"). Fill these in **before** implementation begins; the migration is not ready to start until they are numbers:
+
+| Parameter | Value |
+| --- | --- |
+| Client mix and request rate | TBD |
+| Max concurrent Socket.IO clients | TBD |
+| Max concurrent SSE streams (each endpoint) | TBD |
+| p95 / p99 latency thresholds for `/health`, login, ordinary API | TBD |
+| Max acceptable thread-pool utilization | TBD |
+| Max acceptable SQLite retry count per interval | TBD |
+| FD and RSS slope, and final bound, over 24h | TBD |
+| Proxy restart and recovery time | TBD |
+| Graceful shutdown and client reconnect deadline | TBD |
+
+Qualitative gates that remain: no production process imports eventlet; MCP dispatch completes without self-deadlock at maximum stream occupancy; concurrent sequence-event stress shows no loss, duplication, corruption or reordering; retry tests prove only local transactions repeat and broker orders remain exactly-once; symbol-cache refresh serves a complete old or complete new snapshot; API-key regeneration, logout and token rollover cannot return stale cache entries.
+
+---
+
+## 10. Review corrections
+
+### 10.1 Applied to the source audit (rev 1)
 
 | Audit finding | Correction |
 | --- | --- |
-| GT-07 — "registries have no lifecycle synchronization boundary" | **Overstated.** `PROCESS_LOCK = threading.RLock()` exists at `python_strategy.py:64` and guards start (423), stop (606) and three more sites. Rescoped to reader coverage; severity P0 → P1 (§A5). |
-| GT-14 — "no caller of `clear_strikes_cache()` was found" | **Factually wrong.** `broker/paytm/database/master_contract_db.py:395` calls it. The unbounded-key-space concern survives. |
-| Inventory — "132 `socketio.emit` across 49 files" | Actual is **123 across 46** excluding tests. |
-| GT-02 severity | Valid, but the library warning is specific to *multi-packet* messages. Measure payload sizes before refactoring 123 sites (§A1). |
-| GT-16 — "every deploy surface" | Misses nine files (§B3). |
-| Coverage | Sandbox engine (§A9), httpx/limiter (§A10), rollback (§6.2), broker rate limiters and per-call executors (§B2) were absent. |
+| GT-07 — "no lifecycle synchronization boundary" | **Overstated.** `PROCESS_LOCK` exists at `python_strategy.py:64` and guards start/stop. Rescoped to reader coverage, P0 → P1 (A5). |
+| GT-14 — "no caller of `clear_strikes_cache()`" | **Wrong.** `broker/paytm/database/master_contract_db.py:395` calls it. |
+| "132 emits across 49 files" | Actual **123 across 46** excluding tests. |
+| GT-16 "every deploy surface" | Incomplete (C3). |
+| Coverage | Sandbox engine, httpx client, rollback, broker sleep costs absent. |
+
+### 10.2 Applied to this plan (rev 1 → rev 2)
+
+| Rev 1 error | Correction |
+| --- | --- |
+| A1 proposed measuring **payload byte size** to find multi-packet emits | Wrong mechanism. `socketio/manager.py:44-46` shows multiplicity comes from binary attachments via `pkt.encode()` returning a list. Instrument packet count, attachments, callbacks, destination, concurrent senders. Lock stays default. |
+| A10 proposed a Flask-Limiter locking design | Unjustified. `limits/storage/memory.py:37` already holds per-key `RLock`s. Replaced with the real defect: `utils/httpx_client.py:19` unlocked singleton. |
+| §6.2 called rollback "a one-line worker-class revert" | Wrong. Five artefacts (8.2). Phase A is not behaviour-preserving. |
+| A7 covered only native topology | Missed that `start.sh:332` `exec` destroys the `:319` trap — Docker has no proxy supervisor (A7a). |
+| No `update.sh` systemd migration | Release blocker; existing installs would fail to start (C2). |
+| No `GUNICORN_THREADS` plumbing | 11 surfaces, and `THREAD_LIMIT` must not be reused (B3). |
+| B3 listed `enable-remote-mcp-docker.sh`, `Remote-MCP-readme.md` | Misclassified — prose only, configure nothing. Six real surfaces were missing (C3). |
+| A9/A10 were reviews, not gates | Now carry a named defect and pass/fail tests. |
+| Governing sentence said "implicitly atomic" | Narrowed: atomic *relative to other greenlets*. Real OS threads already exist under eventlet. |
+| "CPU work blocks one thread" | Softened — GIL contention still degrades concurrent requests. |
+| Acceptance criteria unmeasurable | §9 now requires numbers before implementation. |
 
 ---
 
-## 9. Exit conditions
+## 11. Exit conditions
 
 gthread remains correct while: one user and broker session per deployment; one worker; moderate browser/webhook/MCP/strategy concurrency; broker latency dominating; market ticks flowing through the separate asyncio/ZMQ proxy rather than the WSGI pool.
 
