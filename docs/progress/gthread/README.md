@@ -30,6 +30,7 @@ language: what was broken, what we changed, and how we know it works.
 | [PR-10g](PR-10g-telegram-init.md) | Telegram start-up, and the last registry questions | Done |
 | [PR-10h](PR-10h-stream-accounting.md) | Counting the streams that consume threads | Done |
 | [PR-10i](PR-10i-platform-and-evidence.md) | Windows database checks, and making the emit question answerable | Done |
+| [PR-10j](PR-10j-sandbox-concurrency-docs.md) | Writing down how the sandbox handles concurrency | Done |
 | PR-11 | **The switch itself** — needs sign-off before starting | Awaiting sign-off |
 
 ## Numbers
@@ -38,8 +39,8 @@ language: what was broken, what we changed, and how we know it works.
 | --- | --- |
 | Total items tracked | 152 |
 | Already fine, no work needed | 43 |
-| Fixed and tested | 74 |
-| Still to do | 35 |
+| Fixed and tested | 75 |
+| Still to do | 34 |
 
 ## Open questions: none left
 
@@ -53,8 +54,10 @@ all of the rest need something a developer machine does not have: a real Ubuntu
 server, a RHEL or Arch box, a running Docker daemon, a multi-instance host, or a
 24-hour soak.
 
-The code work that can be done ahead of the switch is, as far as these sweeps
-can tell, complete.
+The code work that can be done ahead of the switch is complete. Of the 34
+remaining items, 21 are the switch or its deployment files, and the other 13
+each need a real server, a Docker daemon, a multi-instance host, a 24-hour soak,
+a browser session, or a rollback rehearsal against a deployed instance.
 
 ## How we work
 

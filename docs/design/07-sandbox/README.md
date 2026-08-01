@@ -1855,6 +1855,85 @@ Service       API
 
 ---
 
+## Concurrency Model
+
+The sandbox is reached from several threads at once: request threads serving the
+positions and orders pages, the execution engine thread, the WebSocket execution
+engine, APScheduler jobs for square-off and settlement, and login-triggered
+catch-up. Under eventlet these were cooperatively scheduled and rarely
+interleaved; under `gthread` they run genuinely in parallel.
+
+### The model: database transactions, plus targeted locks on money paths
+
+Most sandbox state lives in `sandbox.db` and is protected by ordinary
+transaction boundaries. That is deliberate and mostly sufficient.
+
+It is **not** sufficient wherever a decision is read, acted on, and written back
+— a check-then-act. Those sequences are not atomic, and where the action moves
+money or quantity, running twice is not a slow path but a **wrong** one.
+Those paths carry an explicit process-wide lock.
+
+| Lock | Guards | What two overlapping runs would do |
+| --- | --- | --- |
+| `fund_manager.FundManager._lock` | Balance and margin arithmetic | Debit the same balance twice |
+| `order_manager.OrderManager._state_lock` | Cancel and modify | Release blocked margin twice |
+| `execution_engine.ExecutionEngine._fill_lock` | Duplicate-trade check then fill | Create two trades for one order, doubling the position |
+| `position_manager.PositionManager._settle_lock` | Expired-contract settlement | Release margin twice for one expired contract |
+| `holdings_manager.HoldingsManager._settlement_lock` | T+1 settlement | Lose one settlement and transfer margin twice |
+| `squareoff_manager.SquareOffManager._squareoff_lock` | The square-off sweep | Close the same positions twice |
+| `catch_up_processor._catch_up_lock` | The post-login catch-up sweep | Square off and reset P&L twice |
+| `execution_thread._thread_lock` | Engine start/stop and polling↔WebSocket handover | Run both engines at once |
+| `squareoff_thread._scheduler_lock` | Scheduler start/stop | Register the square-off jobs twice |
+| `websocket_execution_engine._engine_lock` | Singleton construction | Build two WebSocket engines, each consuming the feed |
+| `websocket_execution_engine.WebSocketExecutionEngine._lock` | That engine's own in-memory state | Interleave engine state updates |
+
+Two conventions matter:
+
+**The locks are class-level, not per-instance.** Callers construct a fresh
+`OrderManager`, `PositionManager` or `HoldingsManager` per request, so a
+per-instance lock would guard nothing at all. If you add a manager, put its lock
+on the class.
+
+**`catch_up_processor` acquires non-blocking and skips.** A second trigger that
+*waited* would simply run the whole sweep again the moment the first finished,
+which is the outcome the guard exists to prevent. Prefer skip over queue for
+idempotent sweeps.
+
+### Rules for changes here
+
+1. **Never hold a lock across a `join()`.** `stop_execution_engine` used to take
+   `_thread_lock` and then join the upgrade watcher, which needs that same lock.
+   The join could never succeed: it burned its full timeout and then cleared the
+   thread reference while the thread was still alive, leaving an orphan that
+   went on mutating engine state. Signal first, release, then join.
+
+2. **A retry must re-read, never replay.** `database/sqlite_retry.py` re-runs the
+   whole read-modify-write on a snapshot conflict. If a retried function replays
+   a delta computed from its first, stale read, it corrupts the value the retry
+   was meant to protect. Put the whole sequence inside the retried callable.
+
+3. **No broker or network call inside a retry boundary.** A retry re-runs
+   everything in the callable. If that includes placing an order, the order is
+   placed twice.
+
+4. **Serialize the decision, not the read.** Expired-contract settlement is a
+   side effect of `get_open_positions`, which every positions page load calls.
+   Only the settlement is locked; the surrounding read stays parallel. Locking
+   the whole function would trade a rare double-credit for a routine slow page.
+
+### Where the guarantee is not a lock
+
+`SandboxTrades.orderid` is indexed but **not unique**, so nothing at the database
+level prevents two trades for one order — the in-process lock is the only thing
+that does. A `UNIQUE` constraint would hold across processes too and is the
+stronger fix; it needs a migration and a sweep for pre-existing duplicates, so it
+is recorded here rather than done silently.
+
+Migration background: [`docs/plans/2026-08-01-eventlet-to-gthread-migration-plan.md`](../../plans/2026-08-01-eventlet-to-gthread-migration-plan.md),
+gate A9.
+
+---
+
 ## Key Files Reference
 
 | File | Purpose |
