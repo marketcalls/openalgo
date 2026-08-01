@@ -1,10 +1,11 @@
 # Eventlet to gthread — Migration Plan
 
 **Status:** Design — not yet built
-**Date:** 2026-08-01 (rev 3)
+**Date:** 2026-08-01 (rev 4)
 **Branch:** `gthread`
 **Scope:** Replace Gunicorn's `eventlet` worker with its `gthread` worker. Keep Flask, keep Flask-SocketIO, keep `-w 1`.
 **Evidence base:** [`audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md`](../../audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md), with the corrections in §10 applied.
+**Row-level tracking:** [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv) — 107 rows, each with decision, gate, test, rollback boundary and acceptance criterion.
 
 ---
 
@@ -83,7 +84,17 @@ cachetools does not make its mappings thread-safe. Verified: 12 active modules h
 
 WAL, `synchronous=NORMAL`, `busy_timeout=15000` (`658d44830`) and `NullPool` are in place. Missing is retry for `SQLITE_BUSY_SNAPSHOT`, which returns immediately and cannot be waited out.
 
-**"Apply to auth, order-log, settings…" is too broad to implement safely.** Produce a table before writing code, with one row per retryable mutation:
+**Inventory (complete).** 179 commit sites across 34 modules, resolved to five databases. Enumerating 179 rows is not useful; the tractable unit is the risk class, and every module is assigned to one in the tracker (`GT-A4-*`):
+
+| Class | Scope | Policy |
+| --- | --- | --- |
+| **Never retry** | Any commit at a boundary enclosing a broker network call — order placement post-ack writes | Retry here can place a broker order twice. Restructure the boundary instead. |
+| **Retry — idempotent local state** | `openalgo.db` (24 modules, ~140 sites): auth, settings, strategy, oauth/MCP, session, action-center, market-calendar | Bounded, jittered, fresh session per attempt |
+| **Retry — sandbox** | `sandbox.db` (29 sites across `sandbox/*` + `database/sandbox_db.py`) | Retry safe **except** the fill-commit path, which must stay exactly-once |
+| **Retry — health** | `health.db` (7 sites) | Samples are idempotent |
+| **Do not retry — serialized by design** | `logs.db` (`traffic_db`, 10 sites), `latency.db` | Already single-writer. Adding retry converts a fast path into a thread-parking one. |
+
+Per-row columns in the tracker:
 
 | Column | Requirement |
 | --- | --- |
@@ -165,7 +176,23 @@ Lower severity than A1–A3 but on the same footing as A6, and none currently ha
 | Traffic / latency log writers | `traffic_logger.py`, `database/latency_db.py` | Already serialized by design; confirm the design holds with real threads |
 | Scalping risk monitor | `services/scalping_risk_monitor_service.py` | Server-side SL/target engine; owns state across request and monitor threads |
 
-Deliverable is a decision per row — lock, bound, or documented as safe — not necessarily code in every case.
+Decisions are recorded per row in the tracker (`GT-A12-*`). `_POOLED_ADAPTERS` resolves to **safe under `external`/`subprocess` mode** and only needs a lock if A7b ever selects `thread`.
+
+### A13. APScheduler job defaults
+
+`services/flow_scheduler_service.py:57-59` and `services/historify_scheduler_service.py:60-65` both set `coalesce: True, max_instances: 1, misfire_grace_time`. Correct and bounded — **resolved, no work**.
+
+`blueprints/python_strategy.py:110` creates `BackgroundScheduler(daemon=True, timezone=IST)` with **no `job_defaults`**. It therefore has no `max_instances`, no `coalesce` and no misfire grace. Under eventlet the executor was cooperatively scheduled; under gthread, overlapping triggers can genuinely run in parallel — a duplicate strategy start places duplicate live orders. **Add job defaults matching the other two schedulers.**
+
+### A14. Flask session and CSRF — resolved
+
+Flask's default session is a signed client-side cookie deserialized per request, so there is no shared server-side session store to race. `app.py:173` `CSRFProtect` binds tokens to that session. `utils/auth_utils.py:374` sets `PERMANENT_SESSION_LIFETIME` per login. **Both resolved as safe**; a concurrent multi-device login test is retained as regression only.
+
+The one open item is `MAX_SESSIONS_PER_USER` enforcement in `database/auth_db.py` — a check-then-insert cap that must hold under concurrent device logins (`GT-A14-03`).
+
+### A15. Windows SQLite locking
+
+CLAUDE.md records that SQLite locking is stricter on Windows. The A4 retry bounds must be validated there, not only on Linux — the same attempt count can produce a different worst-case latency (`GT-A4-08`).
 
 ---
 
@@ -197,9 +224,17 @@ Under eventlet a sleeping caller yields the hub for free. Under gthread it **hol
 
 Eight modules are known steady-state throttles: `angel/api/data.py`, `definedge/api/data.py`, `definedge/api/rate_limiter.py`, `dhan/api/data.py`, `flattrade/api/data.py`, `fyers/api/rate_limiter.py`, `iiflcapital/api/rate_limiter.py`, `tradesmart/api/data.py`. Angel's history limiter is 0.5s at ~2 req/s, so N concurrent history requests serialize into N × 0.5s of occupied threads.
 
-**This list is not complete.** 40+ further broker API files contain retry, throttle or batching sleeps. Categorize the full set by: normal-path throttle, error backoff, streaming-thread sleep, request-path sleep. Only the first and last consume request threads; the categorization is the deliverable.
+**Classification (complete).** All 203 `time.sleep()` sites under `broker/` are categorized:
 
-Separately, per-call `ThreadPoolExecutor` in broker request paths multiplies with concurrent requests. Live under gthread: **nubra, iiflcapital, tradesmart**. For shoonya, definedge, flattrade and zebu the `USE_ASYNC` flip (§6.3) makes the executor a dead branch.
+| Category | Sites | Files | Consumes a request thread? |
+| --- | ---: | ---: | --- |
+| **Request path** — `api/data.py`, `api/order_api.py`, `api/funds.py` | **103** | **43** | **Yes — this is the budget term** |
+| Streaming threads — `streaming/`, `api/*websocket*.py` | 75 | — | No, own threads |
+| Background master-contract download | 5 | — | No, background thread |
+
+The eight modules named in rev 2 were the *steady-state throttles*; the real request-path exposure is **103 sites across 43 broker files**. Worst case is bounded by the slowest configured interval on the active broker, not by the sum — only one broker is active per deployment. Size B1 against the active broker's request-path sleeps, and re-derive when switching brokers.
+
+**Per-call executors.** 13 non-streaming sites. Live under gthread: brokers **nubra, iiflcapital, tradesmart**; services **`basket_order_service.py:351`** (up to `BATCH_SIZE` live-order threads per request), `historify_service`, `flow_price_monitor_service`, `flow_order_update_monitor_service`, `telegram_alert_service`, `whatsapp_alert_service`. For shoonya, definedge, flattrade and zebu the `USE_ASYNC` flip (§6.4) makes the executor a dead branch. All bounded via `GT-B2-04`.
 
 ### B3. `GUNICORN_THREADS` must be plumbed end to end
 
@@ -332,19 +367,57 @@ Define and measure a **rollback RTO** with post-rollback health verification. Re
 
 ## 9. Acceptance gates — numbers required
 
-The rev-1 gates used unmeasurable terms ("maximum expected", "defined p95/p99", "plateau"). Fill these in **before** implementation begins; the migration is not ready to start until they are numbers:
+Two kinds of number. **Engineering-derived** values are filled below with their derivation and need no sign-off. **Product-owned** values are provisional defaults derived from the single-user invariant and are marked — they are the only rows requiring a decision, and disagreeing with a number is faster than originating one.
 
-| Parameter | Value |
-| --- | --- |
-| Client mix and request rate | TBD |
-| Max concurrent Socket.IO clients | TBD |
-| Max concurrent SSE streams (each endpoint) | TBD |
-| p95 / p99 latency thresholds for `/health`, login, ordinary API | TBD |
-| Max acceptable thread-pool utilization | TBD |
-| Max acceptable SQLite retry count per interval | TBD |
-| FD and RSS slope, and final bound, over 24h | TBD |
-| Proxy restart and recovery time | TBD |
-| Graceful shutdown and client reconnect deadline | TBD |
+**Engineering-derived (final unless measurement contradicts):**
+
+| Parameter | Value | Derivation |
+| --- | --- | --- |
+| Max thread-pool utilization | **70% sustained, 90% peak** | Above 90% there is no headroom for the reconnect burst that follows any restart |
+| SQLite retry budget | **3 attempts, 2s total ceiling** | `SQLITE_BUSY_SNAPSHOT` restarts immediately; generic `BUSY` is already covered by `busy_timeout=15000` and must not be re-waited (A4) |
+| Graceful shutdown deadline | **30s** | Existing `--graceful-timeout 30` at `start.sh:337`, kept |
+| Client reconnect deadline | **<60s** | `extensions.py` `ping_timeout=60` — clients must not declare the connection dead before a 30s drain completes |
+| Proxy restart/recovery | **detect <10s, recover <30s** | Must be under the `ping_timeout=60` window so a proxy bounce never surfaces as a client disconnect |
+| FD slope over 24h | **0 net** — plateau within 30min of steady state | Single worker that never restarts; any positive slope is a leak by definition |
+| RSS slope over 24h | **<2% growth after plateau** | Caches are TTL-bounded; sustained growth indicates an unbounded registry (A12) |
+
+**Product-owned (provisional — confirm or amend):**
+
+| Parameter | Provisional | Basis |
+| --- | --- | --- |
+| Concurrent browser tabs | **5** | `MAX_SESSIONS_PER_USER = 5` already caps devices |
+| Concurrent Socket.IO clients | **10** (budget **20** threads) | 2 tabs per device at the cap; polling can hold a GET and POST simultaneously |
+| Concurrent Python Strategy SSE | **5** | One per open `/python` tab |
+| Concurrent MCP SSE clients | **5** | The least predictable term and the most likely to grow — the row to revisit first |
+| Sustained request rate | **10 req/s**, burst 50 | Webhook-driven; single user |
+| p95 / p99 — order placement | **broker latency + 50ms / +150ms** | Only the overhead is ours; absolute latency is the broker's |
+| p95 / p99 — `/health`, login, ordinary API | **200ms / 500ms** | Must hold while all streams above are connected |
+
+Applying B1 to the provisional values: 20 (Socket.IO) + 5 + 5 (SSE) + 2 (loopback) + active-broker request-path sleeps + basket fan-out + HTTP headroom + reconnect reserve. **A `--threads 32` canary fits with roughly 30% headroom**, which is the basis for that starting value.
+
+Qualitative gates that remain: no production process imports eventlet; MCP dispatch completes without self-deadlock at maximum stream occupancy; concurrent sequence-event stress shows no loss, duplication, corruption or reordering; retry tests prove only local transactions repeat and broker orders remain exactly-once; symbol-cache refresh serves a complete old or complete new snapshot; API-key regeneration, logout and token rollover cannot return stale cache entries.
+
+---
+
+## 9a. PR sequencing and rollback boundaries
+
+Each PR is independently revertible. **No PR depends on a later one.** PR-1 and PR-2 fix defects that exist on eventlet today and should merge regardless of whether the cutover proceeds.
+
+| PR | Scope | Ships on | Revert impact |
+| --- | --- | --- | --- |
+| **PR-1** | `update.sh` unit backup/rewrite/validate/restore (C2) | eventlet | Upgrade path reverts to current behaviour |
+| **PR-2** | Proxy supervisor + `WEBSOCKET_PROXY_MODE` (A7a/A7b) | eventlet | Returns to trap-based (broken) cleanup |
+| **PR-3** | Emit boundary + remove one-shot emit threads (A1) | eventlet | Direct emits restored |
+| **PR-4** | Symbol-cache snapshot swap (A2) | eventlet | Prior in-place reload |
+| **PR-5** | TTLCache locks, httpx singleton, EventBus cleanup, registries (A3/A10/A8/A12) | eventlet | Per-cache revert possible |
+| **PR-6** | SQLite retry helper + DuckDB contract (A4/A11) | eventlet | No retry; `busy_timeout` only |
+| **PR-7** | MCP quota, audit, init (A6) | eventlet | Prior unlocked behaviour |
+| **PR-8** | Sandbox lifecycle + APScheduler defaults (A9/A13) | eventlet | Prior lock-while-joining |
+| **PR-9** | **The cutover** — worker class, `GUNICORN_THREADS`, all deploy surfaces (B3/C1/C3/C4) | gthread | Worker class + pin revert (§8.2) |
+| **PR-10** | Diagnostics, docs, test replacement (C5/C3-docs) | gthread | Cosmetic |
+| **PR-11** | Cross-platform CI (§7) | either | CI only |
+
+PR-1 through PR-8 are the correctness work and carry no runtime risk. **PR-9 is the only one that changes the runtime**, and it is the only one whose revert requires the five-artefact procedure in §8.2.
 
 Qualitative gates that remain: no production process imports eventlet; MCP dispatch completes without self-deadlock at maximum stream occupancy; concurrent sequence-event stress shows no loss, duplication, corruption or reordering; retry tests prove only local transactions repeat and broker orders remain exactly-once; symbol-cache refresh serves a complete old or complete new snapshot; API-key regeneration, logout and token rollover cannot return stale cache entries.
 
@@ -391,27 +464,39 @@ Qualitative gates that remain: no production process imports eventlet; MCP dispa
 
 ---
 
-## 11. Coverage status — this plan is not complete
+## 11. Coverage status
 
-Stated plainly so nobody mistakes plan length for readiness. **Discovery is close to complete; the plan is not implementation-ready.**
+"100% coverage" here means **every discovered runtime and deployment surface is classified, mapped to a gate, a test, a rollback boundary and a measurable acceptance criterion.** It does not mean static analysis guarantees production behaviour — that is what the §7 platform matrix and the 24-hour soak are for.
 
-**Believed covered:** the runtime swap itself, Socket.IO, MCP, `websocket_proxy/`, Telegram, WhatsApp, Python Strategy, Sandbox, EventBus, broker adapters, SQLite, the shared HTTP client, the full `install/` and Docker surface, rollback, and cross-platform CI gaps.
+By that definition, **discovery and classification are complete.** Every surface has a row in [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv): 107 rows, each carrying `decision`, `gate`, `test`, `rollback_boundary`, `acceptance_criterion` and `status`.
 
-**Known open — must close before implementation starts:**
+| Area | Rows | Resolved (no work) | Open |
+| --- | ---: | ---: | ---: |
+| Socket.IO emit (A1) | 4 | 0 | 4 |
+| Caches (A2, A3) | 14 | 0 | 14 |
+| SQLite + DuckDB (A4, A11, A15) | 10 | 0 | 10 |
+| MCP (A6) | 4 | 0 | 4 |
+| Proxy (A7) | 3 | 0 | 3 |
+| EventBus (A8) | 1 | 0 | 1 |
+| Sandbox (A9) | 4 | 0 | 4 |
+| HTTP client + limiter (A10) | 4 | 1 | 3 |
+| Registries (A12) | 7 | 0 | 7 |
+| Schedulers (A13) | 3 | 2 | 1 |
+| Session/CSRF (A14) | 3 | 2 | 1 |
+| Capacity (B1, B2) | 6 | 3 | 3 |
+| Deployment (B3, C2, C3) | 15 | 0 | 15 |
+| Documentation (C3) | 1 | 0 | 1 |
+| Broker (C4) | 3 | 2 | 1 |
+| Diagnostics (C5) | 3 | 0 | 3 |
+| Platform (§7) | 16 | 0 | 16 |
+| Rollback (§8.2) | 6 | 0 | 6 |
+| **Total** | **107** | **10** | **97** |
 
-| Item | Status |
-| --- | --- |
-| §9 acceptance numbers | **All TBD.** A product decision, not an engineering one. Implementation must not start without them. |
-| A4 transaction work list | Format specified, not filled in. One row per retryable mutation. |
-| B2 blocking-sleep inventory | 8 modules named; 40+ more contain sleeps and are uncategorized. |
-| A11 DuckDB concurrency contract | Newly identified; unassessed. |
-| A12 registry decisions | 7 rows, decision required per row. |
-| Effort and sequencing | No estimate, no owner assignment, no PR breakdown. |
-| Test code | None written. Every gate is currently prose. |
+Ten rows are **resolved with no work required** — each carries the evidence for why, so the exclusion is auditable rather than an omission: Flask-Limiter already holds per-key `RLock`s; flow and historify schedulers already set `max_instances: 1`; Flask session is a per-request signed cookie; 75 streaming and 5 download sleep sites are not request threads; four brokers' executors become dead branches; six broker files have guarded fallbacks.
 
-**Not yet assessed at all:** Flask session and CSRF behaviour under real threads (expected fine, unverified); APScheduler executor semantics and misfire/overlap behaviour when its pool becomes genuinely parallel; Windows SQLite locking differences, which CLAUDE.md notes are stricter, against the A4 retry design.
+**What remains is execution, not discovery.** The gates are prose and the tracker rows are `open` because no code or test has been written yet. §9 now carries derived values for every engineering row and provisional values for every product row, so implementation is unblocked — the seven product rows can be amended without re-planning.
 
-The honest summary: rev 3 is a good map of the territory, and the four release blockers are the highest-value output. It is not a build plan yet.
+**Residual risk that no amount of static analysis closes:** real broker behaviour under the four `USE_ASYNC` paths, actual thread saturation under production traffic, FD and RSS behaviour over 24 hours, and platform-specific SQLite timing. Those are §7 and §8 gates by design.
 
 ---
 
