@@ -1,11 +1,11 @@
 # Eventlet to gthread — Migration Plan
 
 **Status:** Design — not yet built
-**Date:** 2026-08-01 (rev 7)
+**Date:** 2026-08-01 (rev 8)
 **Branch:** `gthread`
 **Scope:** Replace Gunicorn's `eventlet` worker with its `gthread` worker. Keep Flask, keep Flask-SocketIO, keep `-w 1`.
 **Evidence base:** [`audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md`](../../audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md), with the corrections in §10 applied.
-**Row-level tracking:** [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv) — 120 rows, each with decision, gate, test, rollback boundary and acceptance criterion.
+**Row-level tracking:** [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv) — 127 rows, each with decision, gate, test, rollback boundary and acceptance criterion.
 
 ---
 
@@ -217,6 +217,10 @@ required threads >=
   + peak ordinary HTTP concurrency
   + failure/reconnect reserve
 ```
+
+**Market data does not touch the Gunicorn pool (rev 8).** `/tools` (15 tools), `/trading`, `/scalping` and `/websocket/test` all stream via **raw WebSocket direct to the proxy on 8765** — `frontend/src/lib/MarketDataManager.ts:380`, `hooks/useWebSocketTester.ts:164`, `pages/WebSocketTest.tsx:316`, `pages/WebSocketOrder.tsx:254`. `MarketDataManager` is a `getInstance()` singleton (`:137-142`), so N open tool pages share **one** proxy socket, not one each.
+
+Flask Socket.IO is opened at only four sites (`useSocket.ts:151`, `useOrderEventRefresh.ts:130`, `ActionCenter.tsx`, `WhatsAppIndex.tsx`) and carries notifications only. **Opening the entire options suite therefore adds zero Gunicorn threads.** The B1 Socket.IO term is per tab, not per tool — this is why the budget is dominated by SSE and loopbacks rather than by the analytics surfaces.
 
 **Persistent native-thread census (rev 7): 47 threads before a single request** — `apilog_db:58` (10), `analyzer_db:89` (10), `event_bus:36` (10), `telegram_alert:30` (5), `whatsapp_alert:35` (5), `historify_service:1305` (5), `traffic_logger:16` (1), `latency_monitor:19` (1). This is on top of `GUNICORN_THREADS`, so a 64-thread canary implies ~111 OS threads at rest before broker SDK and bot threads (`GT-B1-02`).
 
@@ -508,7 +512,7 @@ Qualitative gates that remain: no production process imports eventlet; MCP dispa
 
 "100% coverage" here means **every discovered runtime and deployment surface is classified, mapped to a gate, a test, a rollback boundary and a measurable acceptance criterion.** It does not mean static analysis guarantees production behaviour — that is what the §7 platform matrix and the 24-hour soak are for.
 
-By that definition, **discovery and classification are complete.** Every surface has a row in [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv): 120 rows, each carrying `decision`, `gate`, `test`, `rollback_boundary`, `acceptance_criterion` and `status`.
+By that definition, **discovery and classification are complete.** Every surface has a row in [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv): 127 rows, each carrying `decision`, `gate`, `test`, `rollback_boundary`, `acceptance_criterion` and `status`.
 
 | Area | Rows | Resolved (no work) | Open |
 | --- | ---: | ---: | ---: |
@@ -531,11 +535,14 @@ By that definition, **discovery and classification are complete.** Every surface
 | Diagnostics (C5) | 3 | 0 | 3 |
 | Platform (§7) | 16 | 0 | 16 |
 | Rollback (§8.2) | 6 | 0 | 6 |
-| **Total** | **120** | **14** | **106** |
+| Product surfaces (rev 8) | 7 | 5 | 2 |
+| **Total** | **127** | **19** | **108** |
 
-Fourteen rows are **resolved with no work required** — each carries the evidence for why, so the exclusion is auditable rather than an omission: Flask-Limiter already holds per-key `RLock`s; flow and historify schedulers already set `max_instances: 1`; Flask session is a per-request signed cookie; 75 streaming and 5 download sleep sites are not request threads; four brokers' executors become dead branches; six broker files have guarded fallbacks.
+Nineteen rows are **resolved with no work required** — each carries the evidence for why, so the exclusion is auditable rather than an omission: Flask-Limiter already holds per-key `RLock`s; flow and historify schedulers already set `max_instances: 1`; Flask session is a per-request signed cookie; 75 streaming and 5 download sleep sites are not request threads; four brokers' executors become dead branches; six broker files have guarded fallbacks.
 
 **What remains is execution, not discovery.** The gates are prose and the tracker rows are `open` because no code or test has been written yet. §9 now carries derived values for every engineering row and provisional values for every product row, so implementation is unblocked — the seven product rows can be amended without re-planning.
+
+**Rev 8 sweep — product surfaces.** `/trading`, `/tools`, `/scalping` and `/websocket/test` swept directly: 24 modules, 26 module-level globals, **all constants, none mutated at runtime**. `services/scalping_risk_monitor_service.py` already holds three locks. The only open items are verifying the scalping monitor's thread lifecycle (`GT-S-04`) and confirming under load that tools pages reuse the shared notification socket (`GT-S-07`). Five of the seven rows resolved with no work — the analytics surfaces are the cleanest part of the codebase for this migration, because their live data never enters the WSGI pool.
 
 **Rev 7 sweep — module-level singleton instances.** The reviewer's item 5 named four sweeps; rev 6 ran only class-level attributes. Running the rest found 110 module-level singletons, of which four matter: a fourth and fifth `BackgroundScheduler` (one safe, one not), a rate limiter that sleeps inside its lock, and a persistent executor census of 47 threads that B1 had left unquantified.
 
