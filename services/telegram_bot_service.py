@@ -16,6 +16,9 @@ if "eventlet" in sys.modules:
 else:
     import threading as original_threading
 
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
+
 import base64
 import io
 import json
@@ -59,6 +62,12 @@ class TelegramBotService:
         # Serializes start_bot/stop_bot so two callers cannot both spawn a
         # polling thread for the same token.
         self._start_lock = original_threading.RLock()
+        # Single-flight guard + owned worker for threaded initialization.
+        # max_workers=1 so a queued retry cannot run alongside the first.
+        self._init_lock = original_threading.Lock()
+        self._init_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="telegram-init"
+        )
 
     def _get_sdk_client(self, telegram_id: int) -> openalgo_api | None:
         """Get or create OpenAlgo SDK client for a user"""
@@ -540,6 +549,61 @@ class TelegramBotService:
         except Exception as e:
             logger.exception(f"Failed to initialize bot: {e}")
             return False, str(e)
+
+    def initialize_bot_threaded(self, token: str, timeout: float = 10.0) -> tuple[bool, str]:
+        """Run the async initializer on a worker thread, single-flight.
+
+        The previous caller (blueprints/telegram.py) spawned a bare
+        threading.Thread, joined it for 10s and then carried on regardless.
+        Four problems followed:
+
+          * the result list was read while the thread could still be writing it;
+          * on timeout the thread kept running and went on to write bot_token
+            and the DB config -- after the route had already reported failure;
+          * an immediate retry started a SECOND initializer against the same
+            token;
+          * the thread was not a daemon, so a wedged initializer could hold up
+            interpreter shutdown.
+
+        This owns the future instead: one initializer at a time, a daemon
+        worker, and a timeout that reports honestly without leaving a caller
+        believing the work stopped.
+        """
+        if not self._init_lock.acquire(blocking=False):
+            return False, "Initialization already in progress"
+
+        try:
+            future = self._init_executor.submit(self._initialize_bot_blocking, token)
+            try:
+                return future.result(timeout=timeout)
+            except FuturesTimeout:
+                # Say so plainly. The work is still running and will finish or
+                # fail on its own; what must not happen is a second one.
+                logger.warning("Telegram initialization exceeded %.0fs; still running", timeout)
+                return False, (
+                    f"Initialization did not complete within {timeout:.0f}s. "
+                    "It is still running; retry once it settles."
+                )
+        finally:
+            self._init_lock.release()
+
+    def _initialize_bot_blocking(self, token: str) -> tuple[bool, str]:
+        """Drive the async initializer from a worker thread.
+
+        asyncio.get_event_loop() raises on a thread with no loop rather than
+        creating one, which is exactly the situation here, so asyncio.run is
+        the correct entry point.
+        """
+        try:
+            return asyncio.run(self.initialize_bot(token=token))
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                return loop.run_until_complete(self.initialize_bot(token=token))
+            finally:
+                asyncio.set_event_loop(None)
+                loop.close()
 
     def initialize_bot_sync(self, token: str) -> tuple[bool, str]:
         """Synchronous initialization for eventlet environments"""

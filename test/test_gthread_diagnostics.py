@@ -145,12 +145,23 @@ def test_eventlet_only_startup_test_skips_instead_of_erroring():
 def test_non_eventlet_init_is_defensive_about_the_event_loop():
     """Under gthread the else-branch becomes the production path. It runs on a
     worker thread, where asyncio.get_event_loop() raises rather than creating
-    a loop, so the RuntimeError fallback is load-bearing."""
-    src = (REPO / "blueprints" / "telegram.py").read_text(encoding="utf-8")
-    idx = src.index("def init_bot()")
-    body = src[idx : idx + 1200]
-    assert "except RuntimeError:" in body
-    assert "asyncio.run(" in body
+    a loop, so the RuntimeError fallback is load-bearing.
+
+    Moved out of blueprints/telegram.py in PR-10g: the route used to spawn its
+    own untracked thread, and that logic now lives in the service so it can be
+    single-flight. The guarantee is unchanged, only its home.
+    """
+    import inspect
+
+    from services.telegram_bot_service import TelegramBotService
+
+    src = inspect.getsource(TelegramBotService._initialize_bot_blocking)
+    assert "except RuntimeError:" in src
+    assert "asyncio.run(" in src
+
+    # And the route must no longer carry its own copy.
+    route = (REPO / "blueprints" / "telegram.py").read_text(encoding="utf-8")
+    assert "def init_bot()" not in route, "the inline initializer is back"
 
 
 def test_telegram_service_falls_back_to_plain_threading_without_eventlet():

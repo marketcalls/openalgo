@@ -27,6 +27,7 @@ language: what was broken, what we changed, and how we know it works.
 | [PR-10d](PR-10d-service-lifecycles.md) | Telegram start-up, scalping engine, rooms | Done |
 | [PR-10e](PR-10e-sandbox-fills.md) | Fills, square-off, and the last open questions | Done |
 | [PR-10f](PR-10f-bounded-registries.md) | Unbounded caches, a double-locking limiter, one last money path | Done |
+| [PR-10g](PR-10g-telegram-init.md) | Telegram start-up, and the last registry questions | Done |
 | PR-11 | **The switch itself** — needs sign-off before starting | Awaiting sign-off |
 
 ## Numbers
@@ -34,9 +35,9 @@ language: what was broken, what we changed, and how we know it works.
 | | |
 | --- | --- |
 | Total items tracked | 152 |
-| Already fine, no work needed | 39 |
-| Fixed and tested | 68 |
-| Still to do | 45 |
+| Already fine, no work needed | 43 |
+| Fixed and tested | 70 |
+| Still to do | 39 |
 
 ## Open questions: none left
 
@@ -44,10 +45,14 @@ Every one of the 152 items now carries a real decision — fixed, verified safe
 with evidence, or accepted with the reasoning recorded and a test pinning it.
 None were closed by assertion.
 
-That is **not** the same as the migration being finished. The 51 items still to
-do are known work: the switch itself, the deployment files it touches, the
-platform tests needing real infrastructure, and the soak measurements that can
-only happen afterwards.
+That is **not** the same as the migration being finished. Of the 39 items still
+to do, **21 are the switch itself or the deployment files it touches**. Almost
+all of the rest need something a developer machine does not have: a real Ubuntu
+server, a RHEL or Arch box, a running Docker daemon, a multi-instance host, or a
+24-hour soak.
+
+The code work that can be done ahead of the switch is, as far as these sweeps
+can tell, complete.
 
 ## How we work
 

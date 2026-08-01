@@ -107,42 +107,16 @@ def start_bot():
             # Use synchronous initialization for eventlet
             success, message = telegram_bot_service.initialize_bot_sync(token=config["bot_token"])
         else:
-            # Non-eventlet environment - use threaded async initialization
-            logger.info("Standard environment - using async initialization")
-
-            def init_bot():
-                try:
-                    # Try to get the current event loop
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        # If there's a running loop (e.g., in Docker),
-                        # schedule the coroutine in that loop
-                        future = asyncio.run_coroutine_threadsafe(
-                            telegram_bot_service.initialize_bot(token=config["bot_token"]), loop
-                        )
-                        return future.result(timeout=10)
-                    else:
-                        # No running loop, create a new one
-                        return asyncio.run(
-                            telegram_bot_service.initialize_bot(token=config["bot_token"])
-                        )
-                except RuntimeError:
-                    # No event loop exists, create one
-                    return asyncio.run(
-                        telegram_bot_service.initialize_bot(token=config["bot_token"])
-                    )
-
-            import threading
-
-            result = [None]
-
-            def run_init():
-                result[0] = init_bot()
-
-            thread = threading.Thread(target=run_init)
-            thread.start()
-            thread.join(timeout=10)
-            success, message = result[0] if result[0] else (False, "Initialization failed")
+            # Non-eventlet environment. Delegated to the service so it is
+            # single-flight: the previous inline version spawned a bare thread,
+            # joined it for 10s and continued regardless, so a timed-out
+            # initializer went on writing bot_token and the DB config after
+            # this route had already returned an error -- and an immediate
+            # retry started a second one against the same token.
+            logger.info("Standard environment - using threaded initialization")
+            success, message = telegram_bot_service.initialize_bot_threaded(
+                token=config["bot_token"]
+            )
 
         if not success:
             return jsonify({"status": "error", "message": message}), 500
