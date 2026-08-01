@@ -3,6 +3,8 @@ Shared httpx client module with connection pooling support for all broker APIs
 with automatic protocol negotiation (HTTP/2 when available, HTTP/1.1 fallback)
 """
 
+import os
+import threading
 from typing import Optional
 
 import httpx
@@ -14,6 +16,21 @@ logger = get_logger(__name__)
 
 # Global httpx client for connection pooling
 _httpx_client = None
+
+# Guards creation and teardown of the shared client.
+#
+# The previous `if _httpx_client is None: _httpx_client = _create_http_client()`
+# is a check-then-act. Under eventlet it could not interleave, so the first
+# caller always won. With real threads, two cold callers can both see None and
+# both build a client with its own 100-connection pool -- the loser's pool is
+# then unreachable and never closed, which is a file-descriptor leak in a
+# worker that never restarts.
+_httpx_client_lock = threading.RLock()
+
+# Pool-acquisition timeout, kept separate from the 120s request timeout.
+# A scalar timeout applies to pool waits too, so a saturated pool used to
+# surface as a two-minute hang rather than an error. Seconds.
+POOL_TIMEOUT = float(os.getenv("HTTPX_POOL_TIMEOUT", "10"))
 
 
 def get_httpx_client() -> httpx.Client:
@@ -27,12 +44,42 @@ def get_httpx_client() -> httpx.Client:
     """
     global _httpx_client
 
-    if _httpx_client is None:
-        _httpx_client = _create_http_client()
-        logger.debug(
-            "Created HTTP client with automatic protocol negotiation (HTTP/2 preferred, HTTP/1.1 fallback)"
-        )
-    return _httpx_client
+    # Fast path: already built, no lock needed for a plain attribute read.
+    client = _httpx_client
+    if client is not None:
+        return client
+
+    with _httpx_client_lock:
+        # Re-check inside the lock: another thread may have built it while we
+        # waited, and we must not replace a client others are already using.
+        if _httpx_client is None:
+            _httpx_client = _create_http_client()
+            logger.debug(
+                "Created HTTP client with automatic protocol negotiation "
+                "(HTTP/2 preferred, HTTP/1.1 fallback)"
+            )
+        return _httpx_client
+
+
+def get_pool_stats() -> dict:
+    """Connection-pool saturation, for the thread-budget work in B1.
+
+    The shared pool is consumed by Gunicorn request threads *and* by bot,
+    keepalive, streaming and scheduler threads, so its saturation is not
+    predictable from the worker thread count alone -- it has to be measured.
+    """
+    client = _httpx_client
+    if client is None:
+        return {"created": False}
+
+    stats = {"created": True, "max_connections": None, "in_use": None, "pool_timeout": POOL_TIMEOUT}
+    try:
+        pool = client._transport._pool
+        stats["max_connections"] = pool._max_connections
+        stats["in_use"] = len(pool.connections)
+    except Exception:  # pragma: no cover - httpx internals are not a contract
+        logger.debug("Could not read httpx pool internals for saturation stats")
+    return stats
 
 
 def request(method: str, url: str, **kwargs) -> httpx.Response:
@@ -184,7 +231,11 @@ def _create_http_client() -> httpx.Client:
         client = httpx.Client(
             http2=http2_enabled,  # Disable HTTP/2 in standalone mode, enable in integrated mode
             http1=True,  # Always enable HTTP/1.1 for compatibility
-            timeout=120.0,  # Increased timeout for large historical data requests
+            # Explicit per-phase timeouts. A scalar timeout also governs pool
+            # acquisition, so a saturated pool surfaced as a 120s hang instead
+            # of a prompt PoolTimeout. Keep the generous read budget for large
+            # historical downloads, but fail fast when no connection is free.
+            timeout=httpx.Timeout(120.0, pool=POOL_TIMEOUT),
             limits=httpx.Limits(
                 max_keepalive_connections=40,  # Increased from 20 for multi-strategy environments
                 max_connections=100,  # Increased from 50 for 10+ concurrent strategies
@@ -220,7 +271,10 @@ def cleanup_httpx_client() -> None:
     """
     global _httpx_client
 
-    if _httpx_client is not None:
-        _httpx_client.close()
-        _httpx_client = None
-        logger.info("Closed HTTP client")
+    # Same lock as construction: closing while another thread is mid-build
+    # would leave a live client bound to a closed transport.
+    with _httpx_client_lock:
+        if _httpx_client is not None:
+            _httpx_client.close()
+            _httpx_client = None
+            logger.info("Closed HTTP client")

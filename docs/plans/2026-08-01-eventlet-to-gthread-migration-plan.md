@@ -202,7 +202,22 @@ Flask's default session is a signed client-side cookie deserialized per request,
 
 The one open item is `MAX_SESSIONS_PER_USER` enforcement in `database/auth_db.py` — a check-then-insert cap that must hold under concurrent device logins (`GT-A14-03`).
 
-### A16. Check-then-act on persisted counters
+### A16. Lost updates on persisted abuse counters
+
+**Correction (PR-5).** Rev 10 described these as check-then-act, on the strength
+of detector output that turned out to be an artifact: the pairs it reported were
+*reversed* (guard after mutation), and the rev-11 ordering fix drops them
+entirely. Re-running the corrected detector against the original code reports
+**zero** pairs in `database/`.
+
+The underlying defect is real but differently shaped — a **lost update**, not a
+check-then-act. `track_404()` and `track_invalid_api_key()` load a row, compute
+`error_count + 1` in Python, and commit. Two threads can each load 5, each
+compute 6, and each commit: one increment vanishes, so the ban or lockout
+threshold is reached later than it should be. Serializing the decision is cheap
+because these paths only execute during abuse. An atomic `UPDATE ... SET
+error_count = error_count + 1` would be stronger still and is the better
+long-term shape.
 
 Generalised from the sandbox finding. [`scripts/gthread_check_then_act.py`](../../scripts/gthread_check_then_act.py) detects an `if <attr>` guard followed by an augmented assignment to the *same* attribute with no lock held. Five instances repo-wide, all unlocked — three in sandbox (A9), and two on the **security path**:
 

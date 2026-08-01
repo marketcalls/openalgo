@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timedelta
 
 from cachetools import TTLCache
@@ -46,6 +47,18 @@ if LOGS_DATABASE_URL and "sqlite" in LOGS_DATABASE_URL:
 else:
     # For other databases like PostgreSQL, use connection pooling
     logs_engine = create_engine(LOGS_DATABASE_URL, pool_size=50, max_overflow=100, pool_timeout=10)
+
+# Serializes the two abuse counters below (404s and invalid API keys).
+#
+# Both read a counter, decide whether a threshold is crossed, and then
+# increment it. Under eventlet that sequence could not interleave. With real
+# threads a concurrent burst from one source lets several requests read the
+# same pre-increment value, so the counter lands low and the IP ban or key
+# lockout fires late -- or not at all. The failure mode widens an attack
+# window rather than breaking a feature, which is why no test caught it.
+#
+# These paths are low-frequency (abuse only), so a single lock costs nothing.
+_abuse_counter_lock = threading.Lock()
 
 logs_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=logs_engine))
 LogBase = declarative_base()
@@ -306,67 +319,69 @@ class Error404Tracker(LogBase):
     @staticmethod
     def track_404(ip_address, path):
         """Track a 404 error for an IP"""
-        try:
-            # Check if already banned
-            if IPBan.is_ip_banned(ip_address):
-                return False
+        # Read-modify-write on the counter: serialize the whole decision.
+        with _abuse_counter_lock:
+            try:
+                # Check if already banned
+                if IPBan.is_ip_banned(ip_address):
+                    return False
 
-            # Get security settings from database
-            security_settings = get_security_settings()
-            threshold_404 = security_settings["404_threshold"]
-            ban_duration_404 = security_settings["404_ban_duration"]
+                # Get security settings from database
+                security_settings = get_security_settings()
+                threshold_404 = security_settings["404_threshold"]
+                ban_duration_404 = security_settings["404_ban_duration"]
 
-            now = datetime.utcnow()
-            tracker = Error404Tracker.query.filter_by(ip_address=ip_address).first()
+                now = datetime.utcnow()
+                tracker = Error404Tracker.query.filter_by(ip_address=ip_address).first()
 
-            if tracker:
-                # Check if tracking period expired (24 hours)
-                if (now - tracker.first_error_at.replace(tzinfo=None)).days >= 1:
-                    # Reset counter for new day
-                    tracker.error_count = 1
-                    tracker.first_error_at = now
-                    tracker.paths_attempted = json.dumps([path])
+                if tracker:
+                    # Check if tracking period expired (24 hours)
+                    if (now - tracker.first_error_at.replace(tzinfo=None)).days >= 1:
+                        # Reset counter for new day
+                        tracker.error_count = 1
+                        tracker.first_error_at = now
+                        tracker.paths_attempted = json.dumps([path])
+                    else:
+                        # Increment counter
+                        tracker.error_count += 1
+
+                        # Add path to attempted paths
+                        paths = json.loads(tracker.paths_attempted or "[]")
+                        if path not in paths:
+                            paths.append(path)
+                            tracker.paths_attempted = json.dumps(paths[-50:])  # Keep last 50 paths
+
+                    tracker.last_error_at = now
+
+                    # Auto-ban if enabled and threshold reached (configurable via Security Dashboard)
+                    if security_settings.get("auto_ban_enabled", False) and tracker.error_count >= threshold_404:
+                        # Don't ban localhost IPs
+                        if ip_address not in ['127.0.0.1', '::1', 'localhost']:
+                            # Ban the IP (duration 0 = permanent)
+                            IPBan.ban_ip(
+                                ip_address=ip_address,
+                                reason=f"Exceeded 404 threshold: {tracker.error_count} errors in 24 hours",
+                                duration_hours=ban_duration_404,
+                                permanent=(ban_duration_404 == 0),
+                                created_by='404_detector'
+                            )
+
+                            # Clean up tracker entry
+                            logs_session.delete(tracker)
                 else:
-                    # Increment counter
-                    tracker.error_count += 1
+                    # Create new tracker
+                    tracker = Error404Tracker(
+                        ip_address=ip_address, error_count=1, paths_attempted=json.dumps([path])
+                    )
+                    logs_session.add(tracker)
 
-                    # Add path to attempted paths
-                    paths = json.loads(tracker.paths_attempted or "[]")
-                    if path not in paths:
-                        paths.append(path)
-                        tracker.paths_attempted = json.dumps(paths[-50:])  # Keep last 50 paths
+                logs_session.commit()
+                return True
 
-                tracker.last_error_at = now
-
-                # Auto-ban if enabled and threshold reached (configurable via Security Dashboard)
-                if security_settings.get("auto_ban_enabled", False) and tracker.error_count >= threshold_404:
-                    # Don't ban localhost IPs
-                    if ip_address not in ['127.0.0.1', '::1', 'localhost']:
-                        # Ban the IP (duration 0 = permanent)
-                        IPBan.ban_ip(
-                            ip_address=ip_address,
-                            reason=f"Exceeded 404 threshold: {tracker.error_count} errors in 24 hours",
-                            duration_hours=ban_duration_404,
-                            permanent=(ban_duration_404 == 0),
-                            created_by='404_detector'
-                        )
-
-                        # Clean up tracker entry
-                        logs_session.delete(tracker)
-            else:
-                # Create new tracker
-                tracker = Error404Tracker(
-                    ip_address=ip_address, error_count=1, paths_attempted=json.dumps([path])
-                )
-                logs_session.add(tracker)
-
-            logs_session.commit()
-            return True
-
-        except Exception as e:
-            logger.exception(f"Error tracking 404: {e}")
-            logs_session.rollback()
-            return False
+            except Exception as e:
+                logger.exception(f"Error tracking 404: {e}")
+                logs_session.rollback()
+                return False
 
     @staticmethod
     def get_suspicious_ips(min_errors=5):
@@ -419,73 +434,75 @@ class InvalidAPIKeyTracker(LogBase):
     @staticmethod
     def track_invalid_api_key(ip_address, api_key_hash=None):
         """Track an invalid API key attempt"""
-        try:
-            # Check if already banned
-            if IPBan.is_ip_banned(ip_address):
-                return False
+        # Read-modify-write on the counter: serialize the whole decision.
+        with _abuse_counter_lock:
+            try:
+                # Check if already banned
+                if IPBan.is_ip_banned(ip_address):
+                    return False
 
-            # Get security settings from database
-            security_settings = get_security_settings()
-            threshold_api = security_settings["api_threshold"]
-            ban_duration_api = security_settings["api_ban_duration"]
+                # Get security settings from database
+                security_settings = get_security_settings()
+                threshold_api = security_settings["api_threshold"]
+                ban_duration_api = security_settings["api_ban_duration"]
 
-            now = datetime.utcnow()
-            tracker = InvalidAPIKeyTracker.query.filter_by(ip_address=ip_address).first()
+                now = datetime.utcnow()
+                tracker = InvalidAPIKeyTracker.query.filter_by(ip_address=ip_address).first()
 
-            if tracker:
-                # Check if tracking period expired (24 hours)
-                if (now - tracker.first_attempt_at.replace(tzinfo=None)).days >= 1:
-                    # Reset counter for new day
-                    tracker.attempt_count = 1
-                    tracker.first_attempt_at = now
-                    tracker.api_keys_tried = json.dumps([api_key_hash] if api_key_hash else [])
+                if tracker:
+                    # Check if tracking period expired (24 hours)
+                    if (now - tracker.first_attempt_at.replace(tzinfo=None)).days >= 1:
+                        # Reset counter for new day
+                        tracker.attempt_count = 1
+                        tracker.first_attempt_at = now
+                        tracker.api_keys_tried = json.dumps([api_key_hash] if api_key_hash else [])
+                    else:
+                        # Increment counter
+                        tracker.attempt_count += 1
+
+                        # Add API key hash to tried list
+                        if api_key_hash:
+                            keys_tried = json.loads(tracker.api_keys_tried or "[]")
+                            if api_key_hash not in keys_tried:
+                                keys_tried.append(api_key_hash)
+                                tracker.api_keys_tried = json.dumps(
+                                    keys_tried[-20:]
+                                )  # Keep last 20 keys
+
+                    tracker.last_attempt_at = now
+
+                    # Auto-ban if enabled and threshold reached (configurable via Security Dashboard)
+                    if security_settings.get("auto_ban_enabled", False) and tracker.attempt_count >= threshold_api:
+                        # Don't ban localhost IPs but keep tracking
+                        if ip_address not in ['127.0.0.1', '::1', 'localhost']:
+                            # Ban the IP (duration 0 = permanent)
+                            success = IPBan.ban_ip(
+                                ip_address=ip_address,
+                                reason=f"Exceeded invalid API key threshold: {tracker.attempt_count} attempts in 24 hours",
+                                duration_hours=ban_duration_api,
+                                permanent=(ban_duration_api == 0),
+                                created_by='api_key_detector'
+                            )
+
+                            # Only delete tracker if ban was successful
+                            if success:
+                                logs_session.delete(tracker)
                 else:
-                    # Increment counter
-                    tracker.attempt_count += 1
+                    # Create new tracker
+                    tracker = InvalidAPIKeyTracker(
+                        ip_address=ip_address,
+                        attempt_count=1,
+                        api_keys_tried=json.dumps([api_key_hash] if api_key_hash else []),
+                    )
+                    logs_session.add(tracker)
 
-                    # Add API key hash to tried list
-                    if api_key_hash:
-                        keys_tried = json.loads(tracker.api_keys_tried or "[]")
-                        if api_key_hash not in keys_tried:
-                            keys_tried.append(api_key_hash)
-                            tracker.api_keys_tried = json.dumps(
-                                keys_tried[-20:]
-                            )  # Keep last 20 keys
+                logs_session.commit()
+                return True
 
-                tracker.last_attempt_at = now
-
-                # Auto-ban if enabled and threshold reached (configurable via Security Dashboard)
-                if security_settings.get("auto_ban_enabled", False) and tracker.attempt_count >= threshold_api:
-                    # Don't ban localhost IPs but keep tracking
-                    if ip_address not in ['127.0.0.1', '::1', 'localhost']:
-                        # Ban the IP (duration 0 = permanent)
-                        success = IPBan.ban_ip(
-                            ip_address=ip_address,
-                            reason=f"Exceeded invalid API key threshold: {tracker.attempt_count} attempts in 24 hours",
-                            duration_hours=ban_duration_api,
-                            permanent=(ban_duration_api == 0),
-                            created_by='api_key_detector'
-                        )
-
-                        # Only delete tracker if ban was successful
-                        if success:
-                            logs_session.delete(tracker)
-            else:
-                # Create new tracker
-                tracker = InvalidAPIKeyTracker(
-                    ip_address=ip_address,
-                    attempt_count=1,
-                    api_keys_tried=json.dumps([api_key_hash] if api_key_hash else []),
-                )
-                logs_session.add(tracker)
-
-            logs_session.commit()
-            return True
-
-        except Exception as e:
-            logger.exception(f"Error tracking invalid API key: {e}")
-            logs_session.rollback()
-            return False
+            except Exception as e:
+                logger.exception(f"Error tracking invalid API key: {e}")
+                logs_session.rollback()
+                return False
 
     @staticmethod
     def get_suspicious_api_users(min_attempts=3):

@@ -58,12 +58,31 @@ class EventBus:
             self._executor.submit(self._safe_call, cb, event)
 
     def _safe_call(self, cb, event: Event) -> None:
-        """Execute a callback with error isolation."""
+        """Execute a callback with error isolation and session cleanup.
+
+        These worker threads are long-lived and have no Flask app context, so
+        the ``app.py`` ``teardown_appcontext`` handler never runs for them.
+        Subscribers query and write scoped SQLAlchemy sessions
+        (``strategy_book_subscriber``, ``wsproxy_subscriber``), and a scoped
+        session left open on a persistent thread keeps a connection and its
+        identity map alive indefinitely -- the exact lifecycle
+        ``utils/db_sessions.py`` says background threads must clean up.
+
+        The cleanup is in ``finally`` because a subscriber that raises is
+        precisely when a session is most likely to be left mid-transaction.
+        """
         try:
             cb(event)
         except Exception:
             cb_name = getattr(cb, "__name__", str(cb))
             logger.exception(f"EventBus subscriber '{cb_name}' failed on '{event.topic}'")
+        finally:
+            try:
+                from utils.db_sessions import remove_all_scoped_sessions
+
+                remove_all_scoped_sessions()
+            except Exception:
+                logger.exception("EventBus failed to release scoped sessions")
 
 
 # Global singleton
