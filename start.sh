@@ -307,11 +307,30 @@ echo "[OpenAlgo] WebSocket proxy server started with PID $WEBSOCKET_PID"
 # ============================================
 # CLEANUP HANDLER
 # ============================================
+# Forward the signal to both children and wait for them to exit, rather than
+# killing the proxy and exiting immediately. Gunicorn needs its graceful
+# window to drain in-flight requests.
+GUNICORN_PID=""
+SHUTTING_DOWN=0
+
 cleanup() {
+    SHUTTING_DOWN=1
     echo "[OpenAlgo] Shutting down..."
-    if [ ! -z "$WEBSOCKET_PID" ]; then
-        kill $WEBSOCKET_PID 2>/dev/null
+    if [ -n "$GUNICORN_PID" ]; then
+        kill -TERM "$GUNICORN_PID" 2>/dev/null
     fi
+    if [ -n "$WEBSOCKET_PID" ]; then
+        kill -TERM "$WEBSOCKET_PID" 2>/dev/null
+    fi
+    # Give gunicorn its --graceful-timeout (30s) plus a small margin.
+    for _ in $(seq 1 35); do
+        kill -0 "$GUNICORN_PID" 2>/dev/null || break
+        sleep 1
+    done
+    kill -KILL "$GUNICORN_PID" 2>/dev/null
+    kill -KILL "$WEBSOCKET_PID" 2>/dev/null
+    wait 2>/dev/null
+    echo "[OpenAlgo] Shutdown complete"
     exit 0
 }
 
@@ -329,7 +348,16 @@ echo "[OpenAlgo] Starting application on port ${APP_PORT} with eventlet..."
 # Create gunicorn worker temp directory (must be inside container, not mounted volume)
 mkdir -p /tmp/gunicorn_workers
 
-exec /app/.venv/bin/gunicorn \
+# NOTE: gunicorn runs in the BACKGROUND, not via exec.
+#
+# `exec` replaces this shell, which destroys the trap installed above. The
+# result was that SIGTERM never reached the WebSocket proxy, an unexpected
+# proxy exit was never noticed, and the container health check only probed
+# Flask -- so a container could report healthy with market data dead.
+#
+# This shell stays alive as a minimal supervisor: it forwards signals to both
+# children, restarts the proxy if it dies, and exits when gunicorn exits.
+/app/.venv/bin/gunicorn \
     --worker-class eventlet \
     --workers 1 \
     --bind 0.0.0.0:${APP_PORT} \
@@ -338,4 +366,47 @@ exec /app/.venv/bin/gunicorn \
     --worker-tmp-dir /tmp/gunicorn_workers \
     --no-control-socket \
     --log-level warning \
-    app:app
+    app:app &
+GUNICORN_PID=$!
+echo "[OpenAlgo] Gunicorn started with PID $GUNICORN_PID"
+
+# ============================================
+# SUPERVISOR LOOP
+# ============================================
+# Bounded proxy restarts: a proxy that cannot stay up is a real failure and
+# should surface as a container exit, not an infinite restart spin.
+WS_RESTARTS=0
+WS_MAX_RESTARTS="${WEBSOCKET_MAX_RESTARTS:-5}"
+
+while true; do
+    sleep 2
+
+    [ "$SHUTTING_DOWN" -eq 1 ] && break
+
+    # Gunicorn exiting is terminal: propagate its status and let the container
+    # restart policy decide what happens next.
+    if ! kill -0 "$GUNICORN_PID" 2>/dev/null; then
+        wait "$GUNICORN_PID"
+        GUNICORN_STATUS=$?
+        echo "[OpenAlgo] Gunicorn exited with status $GUNICORN_STATUS, stopping proxy"
+        kill -TERM "$WEBSOCKET_PID" 2>/dev/null
+        wait "$WEBSOCKET_PID" 2>/dev/null
+        exit "$GUNICORN_STATUS"
+    fi
+
+    # The proxy dying silently is the failure this supervisor exists to catch.
+    if ! kill -0 "$WEBSOCKET_PID" 2>/dev/null; then
+        wait "$WEBSOCKET_PID" 2>/dev/null
+        WS_RESTARTS=$((WS_RESTARTS + 1))
+        if [ "$WS_RESTARTS" -gt "$WS_MAX_RESTARTS" ]; then
+            echo "[OpenAlgo] WebSocket proxy failed $WS_RESTARTS times, giving up" >&2
+            kill -TERM "$GUNICORN_PID" 2>/dev/null
+            wait "$GUNICORN_PID" 2>/dev/null
+            exit 1
+        fi
+        echo "[OpenAlgo] WebSocket proxy died, restarting ($WS_RESTARTS/$WS_MAX_RESTARTS)..." >&2
+        /app/.venv/bin/python -m websocket_proxy.server &
+        WEBSOCKET_PID=$!
+        echo "[OpenAlgo] WebSocket proxy restarted with PID $WEBSOCKET_PID"
+    fi
+done

@@ -908,7 +908,7 @@ services:
       - STRATEGY_MEMORY_LIMIT_MB=${STRATEGY_MEM_LIMIT}
     shm_size: '${SHM_SIZE_MB}m'
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/auth/check-setup"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5000/auth/check-setup >/dev/null && /app/.venv/bin/python -c \"import socket,sys; s=socket.socket(); s.settimeout(3); sys.exit(s.connect_ex(('127.0.0.1', 8765)))\""]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -29,9 +29,9 @@ GT-A6-01,mcp,Scope quota lock + bound,blueprints/mcp_http.py:112-138,Lock and pr
 GT-A6-02,mcp,Audit log rotation,blueprints/mcp_http.py:344-368,Serialize append+rotate,A6,Concurrent write during rotation,PR-7,No lost audit lines,open
 GT-A6-03,mcp,Initialization guard,blueprints/mcp_http.py:198-269,Lock or pre-init at startup,A6,Concurrent first request,PR-7,Single initialization,open
 GT-A6-04,mcp,SSE thread accounting,blueprints/mcp_http.py:671-709,Track and admit,A6,Max SSE + dispatch concurrently,PR-7,No self-deadlock,open
-GT-A7-01,proxy,Docker supervisor,start.sh:303/319/332,Real supervisor (exec destroys trap),A7a,Kill proxy; assert restart+unhealthy,PR-2,Proxy exit detected <10s; health reflects it,open
-GT-A7-02,proxy,Explicit topology mode,websocket_proxy/app_integration.py:25-31,WEBSOCKET_PROXY_MODE env,A7b,Each mode boots correctly,PR-2,No implicit topology change,open
-GT-A7-03,proxy,Health check covers 8765,Dockerfile/compose healthcheck,Probe both ports,A7a,Proxy down => container unhealthy,PR-2,Never healthy with feed dead,open
+GT-A7-01,proxy,Docker supervisor,start.sh:303/319/332,Real supervisor (exec destroys trap),A7a,test/test_gthread_start_supervisor.sh (17 assertions),PR-2,Proxy exit detected <10s; health reflects it,done
+GT-A7-02,proxy,Explicit topology mode,websocket_proxy/app_integration.py:25-31,WEBSOCKET_PROXY_MODE env,A7b,test/test_gthread_proxy_mode.py (11 assertions),PR-2,No implicit topology change,done
+GT-A7-03,proxy,Health check covers 8765,Dockerfile/compose healthcheck,Probe both ports,A7a,test/test_gthread_start_supervisor.sh (health-check assertions),PR-2,Never healthy with feed dead,done
 GT-A8-01,eventbus,Scoped session cleanup,utils/event_bus.py:33-66,remove_all_scoped_sessions() in finally,A8,Success and exception paths,PR-5,FD count flat over 10k events,open
 GT-A9-01,sandbox,Lock-while-joining defect,sandbox/execution_thread.py:186 vs :250 vs :296,Release lock before join; or ownership queue,A9,Stop during auto-upgrade,PR-8,No stall; no orphaned watcher,open
 GT-A9-02,sandbox,Stale-feed fallback,sandbox/websocket_execution_engine.py:434/468,INVESTIGATE: Review + test,A9,Feed stall then recover,PR-8,Fallback and recovery both clean,open

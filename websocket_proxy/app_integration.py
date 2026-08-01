@@ -31,6 +31,39 @@ def _eventlet_active() -> bool:
         return False
 
 
+VALID_PROXY_MODES = ("external", "subprocess", "thread")
+
+
+def _under_gunicorn() -> bool:
+    """True when this process is a Gunicorn worker, for any worker class."""
+    return "gunicorn" in sys.modules
+
+
+def resolve_proxy_mode() -> str:
+    """Resolve where the WebSocket proxy runs.
+
+    ``WEBSOCKET_PROXY_MODE`` wins when set to one of ``external``,
+    ``subprocess`` or ``thread``. Otherwise the default is a subprocess under
+    any Gunicorn worker class, and a thread under the development server.
+
+    This deliberately does **not** key on eventlet. Topology keyed on the
+    worker class means changing the worker class silently relocates the proxy
+    from its own process into the Gunicorn worker — a production change nobody
+    asked for, arriving as a side effect of an unrelated flag. The subprocess
+    exists for isolation; that reason does not expire when eventlet does.
+    """
+    raw = os.getenv("WEBSOCKET_PROXY_MODE", "").strip().lower()
+    if raw in VALID_PROXY_MODES:
+        return raw
+    if raw:
+        logger.warning(
+            "Invalid WEBSOCKET_PROXY_MODE=%r (expected one of %s); falling back to the default",
+            raw,
+            ", ".join(VALID_PROXY_MODES),
+        )
+    return "subprocess" if _under_gunicorn() else "thread"
+
+
 # Set the correct event loop policy for Windows to avoid ZeroMQ warnings
 if platform.system() == "Windows":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -240,7 +273,16 @@ def start_websocket_server():
     """
     global _websocket_proxy_instance, _websocket_thread
 
-    if _eventlet_active():
+    mode = resolve_proxy_mode()
+    logger.debug("WebSocket proxy mode: %s", mode)
+
+    if mode == "external":
+        # Something outside this process owns the proxy (Docker start.sh, a
+        # separate Compose service, or an operator-managed unit).
+        logger.debug("WebSocket proxy is externally managed, not starting it here")
+        return None
+
+    if mode == "subprocess":
         _spawn_websocket_subprocess()
         # Register signal handlers so Ctrl+C in dev forwards cleanly. Under
         # systemd these are typically replaced by the unit's signal handling.
