@@ -37,8 +37,7 @@ def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dic
     log_executor.submit(async_log_analyzer, analyzer_request, error_response, "orderstatus")
 
     # Emit socket event asynchronously (non-blocking)
-    socketio.start_background_task(
-        socketio.emit, "analyzer_update", {"request": analyzer_request, "response": error_response}
+    socketio.emit("analyzer_update", {"request": analyzer_request, "response": error_response}
     )
 
     return error_response
@@ -121,9 +120,7 @@ def get_order_status_with_auth(
             # Log to analyzer database
             log_executor.submit(async_log_analyzer, request_data, error_response, "orderstatus")
             # Emit socket event asynchronously (non-blocking)
-            socketio.start_background_task(
-                socketio.emit,
-                "analyzer_update",
+            socketio.emit("analyzer_update",
                 {"request": request_data, "response": error_response},
             )
         else:
@@ -170,9 +167,7 @@ def get_order_status_with_auth(
             # Log to analyzer database
             log_executor.submit(async_log_analyzer, request_data, error_response, "orderstatus")
             # Emit socket event asynchronously (non-blocking)
-            socketio.start_background_task(
-                socketio.emit,
-                "analyzer_update",
+            socketio.emit("analyzer_update",
                 {"request": request_data, "response": error_response},
             )
         else:
@@ -264,9 +259,7 @@ def get_order_status_with_auth(
         logger.debug("[OrderStatus] Logged to analyzer database")
 
         # Emit socket event for toast notification asynchronously (non-blocking)
-        socketio.start_background_task(
-            socketio.emit,
-            "analyzer_update",
+        socketio.emit("analyzer_update",
             {"request": analyzer_request, "response": response_data},
         )
         logger.debug("[OrderStatus] Emitted socket event for analyzer update")

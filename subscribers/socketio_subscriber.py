@@ -2,8 +2,10 @@
 SocketIO subscriber — emits the correct socketio event for each order event.
 
 Reproduces the exact event names and payload structures from the original code.
-Called directly from the EventBus thread pool — socketio.emit() is thread-safe
-with async_mode="threading" and avoids greenlet errors under eventlet.
+Called directly from the EventBus thread pool. python-socketio's own emit() is
+NOT thread-safe — concurrent emits to one client can interleave a multi-packet
+message. Safety here comes from ``extensions.SerializedSocketIO``, which
+serializes every emit behind a process-wide reentrant lock.
 """
 
 from extensions import socketio

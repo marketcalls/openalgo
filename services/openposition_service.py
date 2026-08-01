@@ -36,8 +36,7 @@ def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dic
     log_executor.submit(async_log_analyzer, analyzer_request, error_response, "openposition")
 
     # Emit socket event asynchronously (non-blocking)
-    socketio.start_background_task(
-        socketio.emit, "analyzer_update", {"request": analyzer_request, "response": error_response}
+    socketio.emit("analyzer_update", {"request": analyzer_request, "response": error_response}
     )
 
     return error_response
@@ -111,9 +110,7 @@ def get_open_position_with_auth(
         analyzer_request["api_type"] = "openposition"
         log_executor.submit(async_log_analyzer, analyzer_request, response_data, "openposition")
         # Emit SocketIO event asynchronously (non-blocking)
-        socketio.start_background_task(
-            socketio.emit,
-            "analyzer_update",
+        socketio.emit("analyzer_update",
             {"request": analyzer_request, "response": response_data},
         )
 

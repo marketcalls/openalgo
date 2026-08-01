@@ -117,9 +117,7 @@ def queue_order(
             # The database row is authoritative. A notification failure must
             # not turn a committed queue operation into a false 500 response.
             try:
-                socketio.start_background_task(
-                    socketio.emit,
-                    "pending_order_created",
+                socketio.emit("pending_order_created",
                     {
                         "pending_order_id": pending_order_id,
                         "user_id": user_id,
