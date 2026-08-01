@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -109,10 +110,25 @@ def _parse_rate_spec(spec: str) -> tuple[int, int]:
     }.get(unit, (count, 60))
 
 
-# In-memory sliding window per (jti, scope). Single eventlet worker, so
-# no shared-state concerns. Cleaned opportunistically — a long-quiet
-# token's entries naturally expire on next access.
+# In-memory sliding window per (jti, scope).
+#
+# The previous comment here said "single eventlet worker, so no shared-state
+# concerns". That premise is exactly what the gthread migration removes: with
+# real threads, several write-scope requests can read the same bucket length
+# before any of them appends, so the quota over-admits — on the surface that
+# fronts live order placement.
+#
+# The registry is also pruned per-key on access, so a token that goes quiet
+# leaves its bucket behind forever. Bounded here by sweeping expired keys.
 _scope_quota: dict[str, list[float]] = {}
+_scope_quota_lock = threading.Lock()
+
+# Serializes audit append + rotation (see _audit_log).
+_audit_lock = threading.Lock()
+
+# Sweep the whole registry occasionally rather than on every call.
+_QUOTA_SWEEP_INTERVAL = 300.0
+_last_quota_sweep = 0.0
 
 
 def _within_scope_quota(*, jti: str | None, scope: str) -> bool:
@@ -128,14 +144,29 @@ def _within_scope_quota(*, jti: str | None, scope: str) -> bool:
     now = time.time()
     cutoff = now - window
     key = f"{jti}|{scope}"
-    bucket = _scope_quota.setdefault(key, [])
-    # Drop expired hits.
-    while bucket and bucket[0] < cutoff:
-        bucket.pop(0)
-    if len(bucket) >= count:
-        return False
-    bucket.append(now)
-    return True
+
+    # The whole decision -- prune, test, admit -- is one critical section.
+    # Splitting it lets two callers both see room and both admit.
+    global _last_quota_sweep
+    with _scope_quota_lock:
+        bucket = _scope_quota.setdefault(key, [])
+        # Drop expired hits.
+        while bucket and bucket[0] < cutoff:
+            bucket.pop(0)
+        if len(bucket) >= count:
+            return False
+        bucket.append(now)
+
+        # Bound the key space: drop buckets whose entries have all expired.
+        # Without this, every jti ever seen keeps a key for the process's life.
+        if now - _last_quota_sweep > _QUOTA_SWEEP_INTERVAL:
+            _last_quota_sweep = now
+            stale = [k for k, v in _scope_quota.items() if not v or v[-1] < cutoff]
+            for k in stale:
+                _scope_quota.pop(k, None)
+            if stale:
+                logger.debug(f"[MCP] swept {len(stale)} expired quota buckets")
+        return True
 
 
 def _apply_cors(response: Response, origin: str | None) -> Response:
@@ -198,6 +229,10 @@ def _rate_limit_key() -> str:
 # Pre-flight: HTTP transport refuses to register without a configured
 # api_key + loopback host. The init runs once at Flask boot from app.py.
 _initialized = False
+# Startup normally calls init once from app.py, but the first MCP requests can
+# reach it first. Unlocked check-then-act lets two of them both initialize,
+# building two SDK clients and running audit_registry twice.
+_init_lock = threading.Lock()
 
 
 def init_http_transport() -> None:
@@ -212,6 +247,17 @@ def init_http_transport() -> None:
     global _initialized
     if _initialized:
         return
+
+    with _init_lock:
+        # Re-check inside the lock: another thread may have finished while we
+        # waited on it.
+        if _initialized:
+            return
+        _init_http_transport_locked()
+
+
+def _init_http_transport_locked() -> None:
+    global _initialized
 
     # Make the legacy stdio module skip its argv check when the HTTP
     # transport boots it. MUST be set BEFORE loading mcp/mcpserver.py.
@@ -342,7 +388,18 @@ def _params_hash(params: Any) -> str:
 
 
 def _audit_log(entry: dict[str, Any]) -> None:
-    """Append a single line to log/mcp.jsonl. Best-effort."""
+    """Append a single line to log/mcp.jsonl. Best-effort.
+
+    Append and rotation share a lock. Rotation reads the whole file and writes
+    it back; a concurrent append lands in the copy that is about to be
+    overwritten, so audit lines vanish exactly when several requests arrive at
+    once -- which is when an audit trail matters most.
+    """
+    with _audit_lock:
+        _audit_log_locked(entry)
+
+
+def _audit_log_locked(entry: dict[str, Any]) -> None:
     try:
         _AUDIT_PATH.parent.mkdir(exist_ok=True)
         with _AUDIT_PATH.open("a", encoding="utf-8") as f:

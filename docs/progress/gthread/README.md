@@ -18,7 +18,7 @@ language: what was broken, what we changed, and how we know it works.
 | [PR-5a](PR-05a-shared-resources.md) | Shared HTTP client, event bus cleanup, abuse counters | Done |
 | [PR-5b](PR-05b-locked-caches.md) | Make shared memory caches safe for multiple threads | Done |
 | [PR-6](PR-06-sqlite-retry.md) | Retry database writes that lose a race | Done |
-| PR-7 | Make the MCP server's counters accurate | Not started |
+| [PR-7](PR-07-mcp-hardening.md) | Make the MCP server's counters and logs accurate | Done |
 | PR-8 | Fix sandbox shutdown and scheduler timing | Not started |
 | PR-9 | Report the running configuration correctly | Not started |
 | PR-10 | Add tests that boot the real container | Not started |
@@ -30,8 +30,8 @@ language: what was broken, what we changed, and how we know it works.
 | --- | --- |
 | Total items tracked | 152 |
 | Already fine, no work needed | 28 |
-| Fixed and tested | 36 |
-| Still to do | 88 |
+| Fixed and tested | 39 |
+| Still to do | 85 |
 
 ## How we work
 
