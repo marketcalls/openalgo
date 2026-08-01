@@ -13,6 +13,7 @@ Features:
 
 import os
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -68,6 +69,26 @@ def quote_looks_stale(quote) -> bool:
 
 
 class ExecutionEngine:
+    # Serializes the fill path across the process.
+    #
+    # _process_order checks whether the order already has a trade and, if not,
+    # _execute_order creates one. That check-then-insert is not atomic, and
+    # SandboxTrades.orderid is indexed but NOT unique, so the database will not
+    # reject a duplicate. Two fills of one order therefore create two trades and
+    # double the resulting position.
+    #
+    # Two engines can be live at once: the polling engine on its own thread and
+    # the WebSocket engine on another. They are meant to be mutually exclusive
+    # (see execution_thread._thread_lock), but the auto-upgrade handover leaves
+    # a window, and both were already real OS threads even under eventlet -- so
+    # this is a pre-existing risk that gthread does not create, only makes
+    # easier to hit.
+    #
+    # The stronger fix is a UNIQUE constraint on SandboxTrades.orderid, which
+    # would hold across processes too. That needs a migration and a check for
+    # pre-existing duplicates, so it is deliberately not bundled here.
+    _fill_lock = threading.RLock()
+
     """Executes pending orders based on market data"""
 
     def __init__(self):
@@ -304,6 +325,10 @@ class ExecutionEngine:
             logger.debug(f"Failed to publish SandboxOrderFilledEvent: {pub_err}")
 
     def _process_order(self, order, quote):
+        with self._fill_lock:
+            return self._process_order_locked(order, quote)
+
+    def _process_order_locked(self, order, quote):
         """
         Process a single order based on current quote
         Determines if order should be executed based on price type

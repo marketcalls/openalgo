@@ -12,6 +12,7 @@ Features:
 
 import os
 import sys
+import threading
 from datetime import datetime, time
 from decimal import Decimal
 
@@ -28,6 +29,19 @@ logger = get_logger(__name__)
 
 
 class SquareOffManager:
+    # Serializes the square-off sweep.
+    #
+    # Two scheduler jobs call check_and_square_off: the primary one at the
+    # configured time, and a backup that runs every minute as a safety net.
+    # APScheduler's max_instances=1 is per job id, so at the square-off minute
+    # both fire and can run at once -- each fetching the same open MIS
+    # positions and each placing closing orders, squaring off twice.
+    #
+    # Pre-existing: APScheduler already used a real thread pool under eventlet,
+    # so gthread does not create this. It is closed here because it is the same
+    # defect class as the rest of this migration and sits on a money path.
+    _squareoff_lock = threading.RLock()
+
     """Manages automatic square-off of MIS positions"""
 
     def __init__(self):
@@ -55,6 +69,10 @@ class SquareOffManager:
             return time(15, 15)  # Default to 3:15 PM
 
     def check_and_square_off(self):
+        with self._squareoff_lock:
+            return self._check_and_square_off_locked()
+
+    def _check_and_square_off_locked(self):
         """
         Check if it's time to square-off positions and execute
         Should be called frequently (e.g., every minute)

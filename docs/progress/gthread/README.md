@@ -25,6 +25,7 @@ language: what was broken, what we changed, and how we know it works.
 | [PR-10b](PR-10b-registry-investigations.md) | Close the open registry questions | Done |
 | [PR-10c](PR-10c-sandbox-orders.md) | Order cancellation and the catch-up sweep | Done |
 | [PR-10d](PR-10d-service-lifecycles.md) | Telegram start-up, scalping engine, rooms | Done |
+| [PR-10e](PR-10e-sandbox-fills.md) | Fills, square-off, and the last open questions | Done |
 | PR-11 | **The switch itself** — needs sign-off before starting | Awaiting sign-off |
 
 ## Numbers
@@ -32,9 +33,20 @@ language: what was broken, what we changed, and how we know it works.
 | | |
 | --- | --- |
 | Total items tracked | 152 |
-| Already fine, no work needed | 35 |
-| Fixed and tested | 60 |
-| Still to do | 57 |
+| Already fine, no work needed | 39 |
+| Fixed and tested | 62 |
+| Still to do | 51 |
+
+## Open questions: none left
+
+Every one of the 152 items now carries a real decision — fixed, verified safe
+with evidence, or accepted with the reasoning recorded and a test pinning it.
+None were closed by assertion.
+
+That is **not** the same as the migration being finished. The 51 items still to
+do are known work: the switch itself, the deployment files it touches, the
+platform tests needing real infrastructure, and the soak measurements that can
+only happen afterwards.
 
 ## How we work
 
