@@ -821,6 +821,26 @@ def invalidate_user_cache(user_id):
     logger.info(f"Cleared all caches for user_id: {user_id}")
 
 
+def _close_websocket_client_for_key(encrypted_key) -> None:
+    """Best-effort teardown of the websocket client for a superseded API key.
+
+    Never raises: an API key must still rotate if the socket cannot be closed,
+    and the decrypt can legitimately fail after a pepper rotation.
+    """
+    if not encrypted_key:
+        return
+    try:
+        old_key = decrypt_token(encrypted_key)
+        if not old_key:
+            return
+        from services.websocket_client import close_websocket_client
+
+        if close_websocket_client(old_key):
+            logger.info("Closed websocket client for the superseded API key")
+    except Exception:
+        logger.exception("Could not close websocket client for the superseded API key")
+
+
 def upsert_api_key(user_id, api_key):
     """Store both hashed and encrypted API key"""
     # Hash with Argon2 for verification
@@ -832,6 +852,11 @@ def upsert_api_key(user_id, api_key):
 
     api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
     if api_key_obj:
+        # Close the WebSocket client registered under the OUTGOING key before
+        # overwriting it. That registry is keyed by API key with no other
+        # removal path, so a rotation used to leave the previous client
+        # connected and unreachable for the life of the process.
+        _close_websocket_client_for_key(api_key_obj.api_key_encrypted)
         api_key_obj.api_key_hash = hashed_key
         api_key_obj.api_key_encrypted = encrypted_key
     else:

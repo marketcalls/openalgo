@@ -22,6 +22,7 @@ language: what was broken, what we changed, and how we know it works.
 | [PR-8](PR-08-sandbox-and-schedulers.md) | Fix sandbox shutdown and scheduler timing | Done |
 | [PR-9](PR-09-diagnostics.md) | Report the running configuration correctly | Done |
 | [PR-10](PR-10-ci-gates.md) | Add tests that boot the real container | Done |
+| [PR-10b](PR-10b-registry-investigations.md) | Close the open registry questions | Done |
 | PR-11 | **The switch itself** — needs sign-off before starting | Awaiting sign-off |
 
 ## Numbers
@@ -29,9 +30,9 @@ language: what was broken, what we changed, and how we know it works.
 | | |
 | --- | --- |
 | Total items tracked | 152 |
-| Already fine, no work needed | 28 |
-| Fixed and tested | 56 |
-| Still to do | 68 |
+| Already fine, no work needed | 31 |
+| Fixed and tested | 57 |
+| Still to do | 64 |
 
 ## How we work
 

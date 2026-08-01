@@ -561,7 +561,20 @@ def get_websocket_client(
         WebSocketClient instance
     """
     with _client_lock:
-        if api_key not in _client_instances:
+        existing = _client_instances.get(api_key)
+        if existing is not None and not existing.connected:
+            # A cached-but-dead client would be handed out forever: the
+            # registry only ever built a client when the key was absent, so a
+            # dropped connection was never noticed. Discard and rebuild.
+            logger.info("Discarding disconnected WebSocket client, rebuilding")
+            try:
+                existing.disconnect()
+            except Exception:
+                logger.exception("Error discarding stale WebSocket client")
+            _client_instances.pop(api_key, None)
+            existing = None
+
+        if existing is None:
             client = WebSocketClient(api_key, host, port)
             if client.connect():
                 _client_instances[api_key] = client
@@ -569,6 +582,27 @@ def get_websocket_client(
                 raise ConnectionError("Failed to connect to WebSocket server")
 
         return _client_instances[api_key]
+
+
+def close_websocket_client(api_key: str) -> bool:
+    """Close and forget the client for one API key.
+
+    The registry is keyed by API key and had no per-key removal, so rotating a
+    key left the previous client connected and in the dict for the life of the
+    process -- an orphaned socket plus a registry entry that nothing could
+    reach. close_all_clients() is all-or-nothing and would disconnect every
+    other live consumer, so it is not usable for a single rotation.
+    """
+    with _client_lock:
+        client = _client_instances.pop(api_key, None)
+
+    if client is None:
+        return False
+    try:
+        client.disconnect()
+    except Exception:
+        logger.exception("Error closing WebSocket client during removal")
+    return True
 
 
 def close_all_clients():
