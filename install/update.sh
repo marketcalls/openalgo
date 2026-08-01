@@ -46,6 +46,92 @@ check_status() {
     fi
 }
 
+# ============================================
+# Gunicorn worker-class migration (systemd)
+# ============================================
+# Existing installs carry a unit file whose ExecStart was written when the
+# service was created. This script updates dependencies and reloads systemd,
+# but historically never rewrote ExecStart -- so a dependency change that
+# removes a worker class would leave the unit pointing at a worker that no
+# longer exists, and the service would fail to start with no way back.
+#
+# TARGET_WORKER_CLASS is the desired worker. It stays "eventlet" until the
+# cutover flips it, so this function is a no-op on current installs while
+# still being exercised and testable on every upgrade.
+TARGET_WORKER_CLASS="${OPENALGO_WORKER_CLASS:-eventlet}"
+TARGET_GUNICORN_THREADS="${OPENALGO_GUNICORN_THREADS:-}"
+
+UNIT_BACKUP_PATH=""
+
+# Restore the unit file saved by migrate_systemd_worker_class and reload.
+restore_systemd_unit() {
+    local unit_path="$1"
+    if [ -n "$UNIT_BACKUP_PATH" ] && [ -f "$UNIT_BACKUP_PATH" ]; then
+        log_message "  Restoring previous unit from $UNIT_BACKUP_PATH" "$YELLOW"
+        sudo cp "$UNIT_BACKUP_PATH" "$unit_path"
+        sudo systemctl daemon-reload
+    fi
+}
+
+# Rewrite --worker-class (and --threads) in the unit, keeping a backup.
+# Returns 0 when the unit is already correct or was rewritten successfully.
+migrate_systemd_worker_class() {
+    # UNIT_PATH_OVERRIDE exists so the migration can be exercised against a
+    # temporary unit in tests without systemd or root.
+    local unit_path="${UNIT_PATH_OVERRIDE:-/etc/systemd/system/${SERVICE_NAME}.service}"
+
+    if [ ! -f "$unit_path" ]; then
+        log_message "  No unit at $unit_path, skipping worker-class migration" "$YELLOW"
+        return 0
+    fi
+
+    local current
+    current=$(grep -oE '\-\-worker-class[= ]+[a-z_]+' "$unit_path" | head -n1 | grep -oE '[a-z_]+$')
+
+    if [ -z "$current" ]; then
+        log_message "  Unit has no --worker-class, leaving it unchanged" "$YELLOW"
+        return 0
+    fi
+
+    if [ "$current" = "$TARGET_WORKER_CLASS" ] && [ -z "$TARGET_GUNICORN_THREADS" ]; then
+        log_message "  Worker class already '$current', no migration needed" "$GREEN"
+        return 0
+    fi
+
+    UNIT_BACKUP_PATH="${unit_path}.bak.$(date +%Y%m%d-%H%M%S)"
+    log_message "  Backing up unit to $UNIT_BACKUP_PATH" "$BLUE"
+    sudo cp "$unit_path" "$UNIT_BACKUP_PATH"
+    check_status "Failed to back up $unit_path"
+
+    log_message "  Rewriting --worker-class $current -> $TARGET_WORKER_CLASS" "$BLUE"
+    sudo sed -i -E "s/(--worker-class[= ]+)[a-z_]+/\1${TARGET_WORKER_CLASS}/" "$unit_path"
+    check_status "Failed to rewrite worker class"
+
+    # Add or update --threads only when a value was supplied.
+    if [ -n "$TARGET_GUNICORN_THREADS" ]; then
+        if grep -qE '\-\-threads' "$unit_path"; then
+            sudo sed -i -E "s/(--threads[= ]+)[0-9]+/\1${TARGET_GUNICORN_THREADS}/" "$unit_path"
+        else
+            sudo sed -i -E "s|(--worker-class[= ]+${TARGET_WORKER_CLASS})|\1 --threads ${TARGET_GUNICORN_THREADS}|" "$unit_path"
+        fi
+        check_status "Failed to set --threads"
+        log_message "  Set --threads ${TARGET_GUNICORN_THREADS}" "$BLUE"
+    fi
+
+    # Verify the rewrite actually produced the intended ExecStart before any
+    # dependency is pruned. A malformed unit is caught here, not at restart.
+    if ! grep -qE "\-\-worker-class[= ]+${TARGET_WORKER_CLASS}" "$unit_path"; then
+        log_message "  ExecStart verification failed after rewrite" "$RED"
+        restore_systemd_unit "$unit_path"
+        return 1
+    fi
+
+    sudo systemctl daemon-reload
+    check_status "Failed to reload systemd after unit rewrite"
+    log_message "  Unit migrated and systemd reloaded" "$GREEN"
+    return 0
+}
+
 # Start logging
 log_message "Starting OpenAlgo update log at: $LOG_FILE" "$BLUE"
 log_message "----------------------------------------" "$BLUE"
@@ -513,12 +599,29 @@ fi
 if [ "$SERVER_MODE" = true ]; then
     log_message "\n[Step 7/7] Restarting services..." "$BLUE"
 
+    # Migrate the unit's worker class before starting. This is what makes an
+    # upgrade that changes the Gunicorn worker survivable: the unit is backed
+    # up, rewritten and verified here, and restored below if the service will
+    # not come up on the new configuration.
+    if ! migrate_systemd_worker_class; then
+        log_message "Worker-class migration failed; previous unit restored" "$RED"
+        exit 1
+    fi
+
     # Reload systemd in case service file changed
     sudo systemctl daemon-reload
 
-    # Start the OpenAlgo service
-    sudo systemctl start "$SERVICE_NAME"
-    check_status "Failed to start $SERVICE_NAME"
+    # Start the OpenAlgo service. On failure, roll the unit back and retry
+    # once so an upgrade never leaves the operator with a dead service.
+    if ! sudo systemctl start "$SERVICE_NAME"; then
+        log_message "Service failed to start on the migrated unit" "$RED"
+        restore_systemd_unit "/etc/systemd/system/${SERVICE_NAME}.service"
+        sudo systemctl start "$SERVICE_NAME"
+        check_status "Failed to start $SERVICE_NAME even after restoring the previous unit"
+        log_message "Service started on the restored unit. The worker-class migration was rolled back." "$YELLOW"
+        log_message "Investigate before re-running the update." "$YELLOW"
+        exit 1
+    fi
 
     # Reload Nginx
     sudo systemctl reload nginx

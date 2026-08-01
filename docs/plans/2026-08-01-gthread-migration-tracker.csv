@@ -64,7 +64,7 @@ GT-B2-04,capacity,Per-call executors (live),broker: nubra iiflcapital tradesmart
 GT-B2-05,capacity,Per-call executors (dead after USE_ASYNC),shoonya definedge flattrade zebu,EXCLUDED - asyncio path replaces,B2,Covered by C4,n/a,Documented,resolved
 GT-B3-01,deploy,GUNICORN_THREADS variable,Dockerfile start.sh .sample.env,New var; not THREAD_LIMIT,B3,Boot asserts thread count,PR-11,Configured value observable at runtime,open
 GT-B3-02,deploy,Multi-instance aggregate budget,install/install-docker-multi-custom-ssl.sh:450-456,Per-host ceiling divided by instances,B3,Multi-instance boot,PR-11,Host thread total within ceiling,open
-GT-C2-01,deploy,update.sh systemd migration,install/update.sh:440-517,Backup rewrite validate restore,C2,Upgrade from eventlet install,PR-1,Upgraded install starts; auto-restores on failure,open
+GT-C2-01,deploy,update.sh systemd migration,install/update.sh:440-517,Backup rewrite validate restore,C2,test/test_gthread_unit_migration.sh (10 assertions),PR-1,Upgraded install starts; auto-restores on failure,done
 GT-C3-01,deploy,Dockerfile,Dockerfile:8-13,Repin gunicorn 26; drop eventlet,C3,Image boot,PR-11,gunicorn 26 gthread,open
 GT-C3-02,deploy,start.sh,start.sh:332-341,Worker class + threads + supervisor,C3+A7a,Container boot and stop,PR-2/PR-11,Both processes exit cleanly,open
 GT-C3-03,deploy,install.sh,install/install.sh:766-776;1151-1157,Deps + ExecStart,C3,Fresh native install,PR-11,Service starts on gthread,open
@@ -101,7 +101,7 @@ GT-P-14,platform,Windows/macOS docker runner,manual,Script validation,Section 7,
 GT-P-15,platform,Multi-instance native,manual,Separate Flask/WS/ZMQ ports,Section 7,Job,PR-10,ZMQ_PORT invariant holds,open
 GT-P-16,platform,Multi-instance docker,manual,Separate ports,Section 7,Job,PR-10,No port drift,open
 GT-R-01,rollback,Immutable image tag,deployment,Pin previous SHA not latest,8.2,Rollback drill,all,Redeploy prior SHA succeeds,open
-GT-R-02,rollback,systemd unit backup,install/update.sh,Backup before rewrite,8.2,Rollback drill,PR-1,Prior unit restored,open
+GT-R-02,rollback,systemd unit backup,install/update.sh,Backup before rewrite,8.2,test/test_gthread_unit_migration.sh (10 assertions),PR-1,Prior unit restored,done
 GT-R-03,rollback,Dependency set restore,install scripts,Restore gunicorn 25 + eventlet,8.2,Rollback drill,PR-11,Prior deps restored,open
 GT-R-04,rollback,Proxy mode revert,WEBSOCKET_PROXY_MODE,Explicit revert,8.2,Rollback drill,PR-2,Prior topology restored,open
 GT-R-05,rollback,Phase A independent revert,PR-3..PR-8,Each PR revertible alone,8.2,Revert each in isolation,per PR,No cross-PR dependency,open
