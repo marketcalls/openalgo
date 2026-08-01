@@ -107,7 +107,19 @@ def init_scheduler():
     """Initialize the APScheduler with IST timezone"""
     global SCHEDULER
     if SCHEDULER is None:
-        SCHEDULER = BackgroundScheduler(daemon=True, timezone=IST)
+        # Explicit job_defaults. APScheduler already defaults coalesce=True
+        # and max_instances=1, but misfire_grace_time defaults to 1 second --
+        # a loaded gthread worker can miss that window, and a missed strategy
+        # start is silently skipped rather than run late.
+        SCHEDULER = BackgroundScheduler(
+            daemon=True,
+            timezone=IST,
+            job_defaults={
+                "coalesce": True,
+                "max_instances": 1,
+                "misfire_grace_time": 300,
+            },
+        )
         SCHEDULER.start()
         logger.debug(f"Scheduler initialized with IST timezone on {OS_TYPE}")
 

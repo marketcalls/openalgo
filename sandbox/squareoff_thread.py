@@ -347,6 +347,11 @@ def start_squareoff_scheduler():
                 job_defaults={
                     "coalesce": True,  # Combine missed executions
                     "max_instances": 1,  # Only one instance of each job at a time
+                    # Auto square-off is exchange-aligned and must not be
+                    # skipped because the worker was briefly busy. APScheduler
+                    # defaults this to 1 second, which a loaded gthread worker
+                    # can miss; a missed job is skipped, not deferred.
+                    "misfire_grace_time": 300,
                 },
             )
 

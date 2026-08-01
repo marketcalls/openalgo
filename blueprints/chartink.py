@@ -55,7 +55,16 @@ STRATEGY_RATE_LIMIT = os.getenv("STRATEGY_RATE_LIMIT", "200 per minute")
 chartink_bp = Blueprint("chartink_bp", __name__, url_prefix="/chartink")
 
 # Initialize scheduler for time-based controls
-scheduler = BackgroundScheduler(timezone=pytz.timezone("Asia/Kolkata"))
+# Explicit job_defaults: APScheduler's 1-second misfire_grace_time default is
+# easy for a busy gthread worker to miss, and a missed job is skipped silently.
+scheduler = BackgroundScheduler(
+    timezone=pytz.timezone("Asia/Kolkata"),
+    job_defaults={
+        "coalesce": True,
+        "max_instances": 1,
+        "misfire_grace_time": 300,
+    },
+)
 scheduler.start()
 
 # Get base URL from environment or default to localhost

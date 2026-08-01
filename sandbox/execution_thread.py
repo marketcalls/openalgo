@@ -183,11 +183,18 @@ def stop_execution_engine():
     global _execution_thread, _websocket_engine, _current_engine_type
     global _auto_upgrade_thread, _auto_upgrade_enabled
 
+    # Stop the auto-upgrade watcher BEFORE taking _thread_lock.
+    #
+    # The watcher's loop acquires the same lock, so joining it while holding
+    # that lock cannot succeed: the watcher blocks waiting for us, our join
+    # burns its full 5s timeout, and we then clear the thread reference while
+    # the thread is still alive. It later acquires the lock and mutates engine
+    # state after having been declared stopped. eventlet made this improbable;
+    # real threads make it the normal case.
+    _stop_websocket_upgrade_watcher()
+
     with _thread_lock:
         stopped_any = False
-
-        # Stop auto-upgrade watcher
-        _stop_websocket_upgrade_watcher()
 
         # Stop WebSocket engine if running
         if _websocket_engine is not None:
@@ -248,6 +255,10 @@ def _start_websocket_upgrade_watcher():
             if not _is_websocket_proxy_healthy():
                 continue
             with _thread_lock:
+                # Re-check after acquiring: a stop may have been signalled
+                # while we were waiting for the lock.
+                if _auto_upgrade_stop_event.is_set():
+                    break
                 # Only upgrade if polling is running and websocket engine is not
                 if _execution_thread is None or not _execution_thread.is_alive():
                     continue
@@ -294,6 +305,14 @@ def _stop_websocket_upgrade_watcher():
     _auto_upgrade_stop_event.set()
     if _auto_upgrade_thread and _auto_upgrade_thread.is_alive():
         _auto_upgrade_thread.join(timeout=5)
+        if _auto_upgrade_thread.is_alive():
+            # Do not clear the reference: a live thread reported as stopped is
+            # how an orphan gets to keep mutating engine state unnoticed.
+            logger.error(
+                "Auto-upgrade watcher did not stop within 5s; leaving the "
+                "reference in place so it is not treated as stopped"
+            )
+            return
     _auto_upgrade_thread = None
 
 

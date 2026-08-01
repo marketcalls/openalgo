@@ -12,6 +12,7 @@ Features:
 
 import os
 import sys
+import threading
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -29,6 +30,10 @@ logger = get_logger(__name__)
 
 class HoldingsManager:
     """Manages holdings and T+1 settlement"""
+
+    # Class-level: settlement touches the whole portfolio, and callers build a
+    # fresh manager per invocation, so a per-instance lock would guard nothing.
+    _settlement_lock = threading.Lock()
 
     def __init__(self, user_id):
         self.user_id = user_id
@@ -125,7 +130,19 @@ class HoldingsManager:
         """
         Process T+1 settlement - move CNC positions to holdings
         Should be called daily after market close
+
+        Serialized across the process. Settlement reads every CNC position,
+        folds each into its holding by computing a new quantity and weighted
+        average price, and transfers margin. Two runs overlapping -- the
+        squareoff scheduler and a catch-up on login, say -- would each read the
+        same holding, each compute from the same starting quantity, and each
+        write: one settlement is silently lost, and the margin transfer happens
+        twice. eventlet could not interleave this; real threads can.
         """
+        with self._settlement_lock:
+            return self._process_t1_settlement_locked()
+
+    def _process_t1_settlement_locked(self):
         try:
             ist = pytz.timezone("Asia/Kolkata")
             today = datetime.now(ist).date()
