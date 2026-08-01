@@ -1,11 +1,11 @@
 # Eventlet to gthread — Migration Plan
 
 **Status:** Design — not yet built
-**Date:** 2026-08-01 (rev 10)
+**Date:** 2026-08-01 (rev 11)
 **Branch:** `gthread`
 **Scope:** Replace Gunicorn's `eventlet` worker with its `gthread` worker. Keep Flask, keep Flask-SocketIO, keep `-w 1`.
 **Evidence base:** [`audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md`](../../audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md), with the corrections in §10 applied.
-**Row-level tracking:** [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv) — 149 rows, each with decision, gate, test, rollback boundary and acceptance criterion.
+**Row-level tracking:** [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv) — 152 rows, each with decision, gate, test, rollback boundary and acceptance criterion.
 
 ---
 
@@ -194,7 +194,7 @@ Decisions are recorded per row in the tracker (`GT-A12-*`). `_POOLED_ADAPTERS` r
 
 The real exposure is narrower and points the opposite way: the default **`misfire_grace_time` is 1 second**, against `60` in `services/flow_scheduler_service.py:59` and `300` in `services/historify_scheduler_service.py:65`. Under gthread a busy worker can miss a one-second window, so a scheduled strategy start is **silently skipped**, not duplicated. Set an explicit grace consistent with the other schedulers and make skips observable.
 
-**Two more schedulers found in rev 7.** `blueprints/strategy.py:59-61` already sets `coalesce/misfire_grace_time=300/max_instances=1` — **safe**. `blueprints/chartink.py:58` sets only a timezone, so it inherits the 1-second default and has the same skip exposure (`GT-A13-04`). Five `BackgroundScheduler` instances exist in total; rev 4 analysed three.
+**Two more schedulers found in rev 7.** `blueprints/strategy.py:59-61` already sets `coalesce/misfire_grace_time=300/max_instances=1` — **safe**. `blueprints/chartink.py:58` sets only a timezone, so it inherits the 1-second default and has the same skip exposure (`GT-A13-04`). **Six** `BackgroundScheduler` instances exist: `python_strategy.py:110`, `chartink.py:58`, `strategy.py:59`, `flow_scheduler_service.py:57`, `historify_scheduler_service.py:60`, and `sandbox/squareoff_thread.py:344` — the sixth was missed until rev 11 (`GT-A13-06`). Rev 4 analysed three.
 
 ### A14. Flask session and CSRF — resolved
 
@@ -243,7 +243,9 @@ required threads >=
 
 Flask Socket.IO is opened at only four sites (`useSocket.ts:151`, `useOrderEventRefresh.ts:130`, `ActionCenter.tsx`, `WhatsAppIndex.tsx`) and carries notifications only. **Opening the entire options suite therefore adds zero Gunicorn threads.** The B1 Socket.IO term is per tab, not per tool — this is why the budget is dominated by SSE and loopbacks rather than by the analytics surfaces.
 
-**Persistent native-thread census (rev 7): 47 threads before a single request** — `apilog_db:58` (10), `analyzer_db:89` (10), `event_bus:36` (10), `telegram_alert:30` (5), `whatsapp_alert:35` (5), `historify_service:1305` (5), `traffic_logger:16` (1), `latency_monitor:19` (1). This is on top of `GUNICORN_THREADS`, so a 64-thread canary implies ~111 OS threads at rest before broker SDK and bot threads (`GT-B1-02`).
+**Executor capacity census — corrected in rev 11.** Rev 7 stated "47 threads before a single request" and "~111 at rest". **Both were wrong.** `ThreadPoolExecutor` spawns workers lazily: constructing `ThreadPoolExecutor(10)` creates **zero** threads, and one submit creates one. Verified directly.
+
+The correct reading is **47 threads of configured capacity**, not 47 live threads: `apilog_db:58` (10), `analyzer_db:89` (10), `event_bus:36` (10), `telegram_alert:30` (5), `whatsapp_alert:35` (5), `historify_service:1305` (5), `traffic_logger:16` (1), `latency_monitor:19` (1). At rest the count is near zero; under sustained load it converges on 47. Budget it as a **ceiling** alongside `GUNICORN_THREADS`, and measure the actual count in the soak rather than predicting it (`GT-B1-02`).
 
 Budget **native application threads separately from request threads** — EventBus (10), API/analyzer/traffic/latency writers, bot threads, APScheduler executors, order-update adapters, broker SDK threads. The shared HTTP pool (A10) is consumed by all of them, not only Gunicorn threads.
 
@@ -533,7 +535,7 @@ Qualitative gates that remain: no production process imports eventlet; MCP dispa
 
 "100% coverage" here means **every discovered runtime and deployment surface is classified, mapped to a gate, a test, a rollback boundary and a measurable acceptance criterion.** It does not mean static analysis guarantees production behaviour — that is what the §7 platform matrix and the 24-hour soak are for.
 
-By that definition, **discovery and classification are complete.** Every surface has a row in [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv): 149 rows, each carrying `decision`, `gate`, `test`, `rollback_boundary`, `acceptance_criterion` and `status`.
+By that definition **classification is not complete**, and rev 11 stops claiming it is. Every surface has a row, but **18 rows carry `INVESTIGATE:` decisions** — "review", "verify", "classify" are questions, not answers, and they are now labelled so they can be counted. Discovery is roughly 85-90%; structural integrity of the plan and tracker is sound; implementation and test completion are 0%. Every discovered surface has a row in [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv): 152 rows, each carrying `decision`, `gate`, `test`, `rollback_boundary`, `acceptance_criterion` and `status`.
 
 | Area | Rows | Resolved (no work) | Open |
 | --- | ---: | ---: | ---: |
@@ -546,7 +548,7 @@ By that definition, **discovery and classification are complete.** Every surface
 | Sandbox (A9) | 12 | 1 | 11 |
 | HTTP client + limiter (A10) | 4 | 1 | 3 |
 | Registries (A12) | 15 | 3 | 12 |
-| Schedulers extra (A13) | 2 | 1 | 1 |
+| Schedulers extra (A13) | 3 | 1 | 2 |
 | Schedulers (A13) | 3 | 2 | 1 |
 | Session/CSRF (A14) | 3 | 2 | 1 |
 | Capacity (B1, B2) | 8 | 3 | 5 |
@@ -557,13 +559,13 @@ By that definition, **discovery and classification are complete.** Every surface
 | Platform (§7) | 16 | 0 | 16 |
 | Rollback (§8.2) | 6 | 0 | 6 |
 | Product surfaces (rev 8) | 7 | 5 | 2 |
-| Security counters (A16) | 2 | 0 | 2 |
+| Security counters (A16) | 4 | 1 | 3 |
 | Telegram / WhatsApp (rev 10) | 5 | 2 | 3 |
 | Flow (rev 10) | 4 | 2 | 2 |
 | Historify (rev 10) | 3 | 2 | 1 |
-| **Total** | **149** | **26** | **123** |
+| **Total** | **152** | **27** | **125** |
 
-Twenty-six rows are **resolved with no work required** — each carries the evidence for why, so the exclusion is auditable rather than an omission: Flask-Limiter already holds per-key `RLock`s; flow and historify schedulers already set `max_instances: 1`; Flask session is a per-request signed cookie; 75 streaming and 5 download sleep sites are not request threads; four brokers' executors become dead branches; six broker files have guarded fallbacks.
+Twenty-seven rows are **resolved with no work required** — each carries the evidence for why, so the exclusion is auditable rather than an omission: Flask-Limiter already holds per-key `RLock`s; flow and historify schedulers already set `max_instances: 1`; Flask session is a per-request signed cookie; 75 streaming and 5 download sleep sites are not request threads; four brokers' executors become dead branches; six broker files have guarded fallbacks.
 
 **What remains is execution, not discovery.** The gates are prose and the tracker rows are `open` because no code or test has been written yet. §9 now carries derived values for every engineering row and provisional values for every product row, so implementation is unblocked — the seven product rows can be amended without re-planning.
 

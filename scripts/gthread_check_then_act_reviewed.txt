@@ -1,0 +1,49 @@
+# Reviewed check-then-act pairs — classified safe for the gthread migration.
+# Format: <path>:<mutation lineno>   # reason
+# A new unlocked pair not listed here fails scripts/gthread_check_then_act.py.
+# Re-review any entry whose surrounding code changes.
+
+# --- Broker streaming reconnect/backoff counters -------------------------
+# Per-adapter instance state, mutated only by that adapter's own streaming
+# thread. Each broker adapter owns one connection and one reconnect loop, so
+# there is no second writer under gthread. These are not request-path state.
+broker/aliceblue/streaming/aliceblue_adapter.py:968   # self.reconnect_attempts
+broker/angel/streaming/smartWebSocketV2.py:419        # self.current_retry_attempt
+broker/arrow/streaming/arrow_websocket.py:229         # self._auth_refresh_retries
+broker/fivepaisa/streaming/fivepaisa_adapter.py:237   # self.reconnect_attempts
+broker/fyers/streaming/fyers_hsm_websocket.py:978     # self.reconnect_attempts
+broker/fyers/streaming/fyers_tbt_websocket.py:243     # self.reconnect_attempts
+broker/hdfcsky/streaming/hdfcsky_websocket.py:224     # self._auth_refresh_retries
+broker/paytm/streaming/paytm_adapter.py:247           # self.reconnect_attempts
+broker/zerodha/streaming/zerodha_websocket.py:282     # self._auth_refresh_retries
+
+# --- Protocol decode cursors --------------------------------------------
+# Parser position within a single decode call on one buffer. Never shared.
+broker/groww/streaming/groww_protobuf.py:126          # self.position
+broker/groww/streaming/groww_protobuf.py:135          # self.position
+broker/groww/streaming/groww_protobuf.py:145          # self.position
+broker/groww/streaming/groww_protobuf.py:155          # self.position
+
+# --- Streaming receive buffers ------------------------------------------
+# Accumulator owned by the single NATS receive loop for that connection.
+broker/groww/streaming/groww_nats.py:184              # self.pending_data
+broker/groww/streaming/groww_nats.py:313              # self.pending_data
+broker/groww/streaming/groww_nats.py:322              # self.pending_data
+broker/groww/streaming/groww_nats.py:331              # self.pending_data
+broker/groww/streaming/groww_nats.py:341              # self.pending_data
+broker/groww/streaming/groww_nats.py:357              # self.pending_data
+
+# --- Subscription queues owned by one adapter thread --------------------
+broker/shoonya/streaming/shoonya_adapter.py:725       # self._sub_queue
+broker/shoonya/streaming/shoonya_adapter.py:726       # self._unsub_queue
+
+# --- Detector false positives -------------------------------------------
+# Local pandas DataFrame inside one request; not persisted or shared.
+broker/groww/api/data.py:279                          # df.index
+broker/groww/api/data.py:283                          # df.index
+broker/groww/api/data.py:285                          # df.index
+broker/groww/api/data.py:720                          # df.index
+# Local string built during request setup, not shared state.
+broker/kotak/api/data.py:28                           # self.base_url (per-instance, constructed per request)
+# One-shot stdout wrapper during a migration script, single-threaded.
+upgrade/migrate_smtp_simple.py:34                     # sys.stdout

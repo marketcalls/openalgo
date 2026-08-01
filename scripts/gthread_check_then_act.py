@@ -18,7 +18,48 @@ import ast
 import pathlib
 import sys
 
-SKIP = (".venv", "node_modules", "__pycache__", "/test/")
+SKIP = (
+    ".venv",
+    "node_modules",
+    "__pycache__",
+    "/test/",
+    ".claude/",
+    "examples/",
+    "scripts/",
+    "download/",
+)
+# Application code only. Passing explicit paths overrides this.
+DEFAULT_ROOTS = (
+    "services",
+    "blueprints",
+    "database",
+    "sandbox",
+    "utils",
+    "subscribers",
+    "websocket_proxy",
+    "broker",
+    "restx_api",
+    "upgrade",
+)
+ALLOWLIST = "scripts/gthread_check_then_act_reviewed.txt"
+
+
+def load_allowlist() -> set[str]:
+    """``path:lineno`` entries already classified as safe, one per line.
+
+    Keeping the classification next to the detector is what turns this from a
+    report into a gate: a new unlocked pair fails CI until someone records a
+    decision for it.
+    """
+    path = pathlib.Path(ALLOWLIST)
+    if not path.exists():
+        return set()
+    entries = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            entries.add(line)
+    return entries
 
 
 def attr_chain(node: ast.AST) -> str:
@@ -66,26 +107,46 @@ def scan(path: pathlib.Path) -> list[tuple]:
     ]
     for fn in functions:
         covered = lock_guarded_lines(fn)
-        guards: dict[str, int] = {}
+
+        # Collect guards and mutations separately, then pair them by source
+        # order. ast.walk yields breadth-first, so pairing during the walk can
+        # report a mutation that textually precedes its "guard".
+        guards: list[tuple[int, str]] = []
+        mutations: list[tuple[int, str]] = []
         for node in ast.walk(fn):
             if isinstance(node, ast.If):
                 for sub in ast.walk(node.test):
                     if isinstance(sub, ast.Attribute):
-                        guards[attr_chain(sub)] = node.lineno
+                        guards.append((node.lineno, attr_chain(sub)))
             elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Attribute):
-                target = attr_chain(node.target)
-                if target in guards:
-                    # Protected only when BOTH the guard and the mutation sit
-                    # inside a held lock in this function.
-                    locked = guards[target] in covered and node.lineno in covered
-                    hits.append(
-                        (path.as_posix(), guards[target], node.lineno, target, fn.name, locked)
-                    )
+                mutations.append((node.lineno, attr_chain(node.target)))
+            elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+                # Plain self-referential assignment: x.attr = x.attr - amount
+                target = node.targets[0]
+                if not isinstance(target, ast.Attribute):
+                    continue
+                name = attr_chain(target)
+                reads = {
+                    attr_chain(s) for s in ast.walk(node.value) if isinstance(s, ast.Attribute)
+                }
+                if name in reads:
+                    mutations.append((node.lineno, name))
+
+        for mut_line, target in mutations:
+            # A guard only counts when it textually precedes the mutation.
+            preceding = [ln for ln, name in guards if name == target and ln < mut_line]
+            if not preceding:
+                continue
+            guard_line = max(preceding)
+            # Protected only when BOTH the guard and the mutation sit inside a
+            # held lock in this function.
+            locked = guard_line in covered and mut_line in covered
+            hits.append((path.as_posix(), guard_line, mut_line, target, fn.name, locked))
     return hits
 
 
 def main() -> int:
-    roots = [pathlib.Path(p) for p in sys.argv[1:]] or [pathlib.Path(".")]
+    roots = [pathlib.Path(p) for p in (sys.argv[1:] or DEFAULT_ROOTS)]
     files: list[pathlib.Path] = []
     for root in roots:
         files.extend([root] if root.is_file() else root.rglob("*.py"))
@@ -96,10 +157,29 @@ def main() -> int:
             continue
         hits.extend(scan(path))
 
-    print(f"check-then-act on persisted attributes: {len(hits)}\n")
+    allowlist = load_allowlist()
+    unlocked = [h for h in hits if not h[5]]
+    unreviewed = [h for h in unlocked if f"{h[0]}:{h[2]}" not in allowlist]
+
+    print(
+        f"check-then-act pairs: {len(hits)}  unlocked: {len(unlocked)}  "
+        f"unreviewed: {len(unreviewed)}\n"
+    )
     for file, guard_line, mutate_line, target, fn, locked in hits:
-        state = "LOCKED  " if locked else "UNLOCKED"
+        if locked:
+            state = "LOCKED    "
+        elif f"{file}:{mutate_line}" in allowlist:
+            state = "REVIEWED  "
+        else:
+            state = "UNREVIEWED"
         print(f"  {state} {file}:{guard_line}->{mutate_line}  {fn}()  guards+mutates {target}")
+
+    if unreviewed:
+        print(
+            f"\nFAIL: {len(unreviewed)} unreviewed unlocked check-then-act pair(s). "
+            f"Classify each in {ALLOWLIST} or add a lock."
+        )
+        return 1
     return 0
 
 
