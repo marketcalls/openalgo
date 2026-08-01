@@ -525,10 +525,12 @@ class TelegramBotService:
 
             await temp_app.shutdown()
 
-            # Update bot config in database
-            update_bot_config(
-                {"bot_token": token, "is_active": False, "bot_username": bot_info.username}
-            )
+            # Persist the token and username only. is_active is owned by
+            # start_bot/stop_bot: writing False here would flip the flag off on
+            # the auto-start path (app.py) purely to have start_bot set it back
+            # a moment later, and a crash in that window would leave the bot
+            # disabled on the next boot.
+            update_bot_config({"bot_token": token, "bot_username": bot_info.username})
 
             return True, f"Bot initialized successfully: @{bot_info.username}"
 
@@ -557,9 +559,9 @@ class TelegramBotService:
 
                         # Store token and update config
                         self.bot_token = token
-                        update_bot_config(
-                            {"bot_token": token, "is_active": False, "bot_username": bot_username}
-                        )
+                        # is_active deliberately not written here — see
+                        # initialize_bot for why.
+                        update_bot_config({"bot_token": token, "bot_username": bot_username})
 
                         logger.info(f"Bot validated: @{bot_username}")
                         return True, f"Bot initialized successfully: @{bot_username}"
