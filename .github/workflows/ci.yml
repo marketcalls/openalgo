@@ -48,6 +48,27 @@ jobs:
             test/test_python_editor.py test/test_rate_limits_simple.py \
             test/test_logout_csrf.py -v --timeout=60
 
+      # The gthread migration suites. These assert concurrency invariants that
+      # only hold under real threads -- unlocked caches, cache reloads seen
+      # half-built, quota over-admission, a shutdown that leaves an orphan.
+      # They must run on every change, or the migration's guarantees decay
+      # silently.
+      - name: Run gthread migration tests
+        run: |
+          uv run pytest test/test_gthread_*.py -v --timeout=120
+
+      - name: Run gthread shell suites
+        run: |
+          bash test/test_gthread_unit_migration.sh
+          bash test/test_gthread_start_supervisor.sh
+
+      # Both gates must stay green: a new unlocked check-then-act fails the
+      # first, and a drifted sleep inventory fails the second.
+      - name: Run gthread gate scripts
+        run: |
+          uv run python scripts/gthread_check_then_act.py
+          uv run python scripts/gthread_sleep_inventory.py
+
   # Frontend linting
   frontend-lint:
     runs-on: ubuntu-latest
@@ -194,6 +215,43 @@ jobs:
   # then the docker-manifest job downloads all per-arch digests and
   # assembles them into a single Docker Hub manifest list under the
   # canonical tags (:latest, :<sha>).
+  # CLAUDE.md requires code to work on the dev server (threading) AND in
+  # production (currently eventlet). CI only ever exercised Linux, so a change
+  # that imports cleanly here could still break a Windows or macOS developer --
+  # and after the gthread cutover the dev and production models converge, which
+  # is only useful if both are actually tested.
+  dev-startup:
+    needs: [backend-lint]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Import the app on the development server path
+        shell: bash
+        env:
+          APP_KEY: ci-dev-startup-key
+          API_KEY_PEPPER: "0000000000000000000000000000000000000000000000000000000000000000"
+          DATABASE_URL: "sqlite:///db/openalgo-ci.db"
+          WEBSOCKET_PROXY_MODE: external
+        run: |
+          uv run python -c "
+          import app
+          from websocket_proxy.app_integration import resolve_proxy_mode
+          from blueprints.admin import _runtime_info
+          info = _runtime_info()
+          assert info['wsgi_hint'] == 'flask-dev', info
+          assert resolve_proxy_mode() == 'external'
+          print('dev startup OK on ${{ matrix.os }}:', info['python_version'])
+          "
+
   docker-build:
     needs: [backend-lint, backend-test, frontend-build, security-scan]
     # Skip for fork PRs (secrets not available)
@@ -269,6 +327,23 @@ jobs:
       # only manifests when called from inside a live PTB event loop, and
       # plain `python -c` has no running loop. See
       # docs/telegram-chart-rendering.md for the full write-up.
+      # Boots the REAL entrypoint: start.sh, gunicorn, Flask, Socket.IO and the
+      # WebSocket proxy. The Kaleido check below overrides the entrypoint, so
+      # on its own it cannot detect a broken worker class, a proxy that never
+      # starts, a supervisor that drops signals, or a container that reports
+      # healthy while market data is dead.
+      #
+      # EXPECTED_WORKER_CLASS is the cutover switch: it stays `eventlet` until
+      # PR-11 flips both this and the Dockerfile together.
+      - name: Container boot + runtime assertions
+        if: github.event_name == 'pull_request'
+        env:
+          EXPECTED_WORKER_CLASS: eventlet
+        run: |
+          SUFFIX="${{ matrix.suffix }}"
+          echo "[boot] Testing openalgo-ci:$SUFFIX on ${{ matrix.platform }}"
+          bash scripts/gthread_container_smoke.sh "openalgo-ci:$SUFFIX" "$EXPECTED_WORKER_CLASS"
+
       - name: Kaleido + Chromium smoke test
         if: github.event_name == 'pull_request'
         run: |

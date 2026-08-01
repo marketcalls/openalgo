@@ -84,19 +84,19 @@ GT-C4-03,broker,Comment-only sites,upstox mstock dhan iiflcapital angel,SAFE - n
 GT-C5-01,diag,Runtime info reports gthread,blueprints/admin.py:1205-1232,Report worker class/threads/counts,C5,test/test_gthread_diagnostics.py::test_worker_class_is_reported_not_inferred_from_eventlet,PR-9,Correct runtime reported,done
 GT-C5-02,diag,Frontend admin types,frontend/src/types/admin.ts:142,Match new fields,C5,test/test_gthread_diagnostics.py::test_frontend_runtime_type_exposes_the_new_fields,PR-9,UI shows correct runtime,done
 GT-C5-03,diag,Eventlet-only startup test,test/test_telegram_startup.py,Replace with gthread path,C5,test/test_gthread_diagnostics.py::test_eventlet_only_startup_test_skips_instead_of_erroring,PR-9,No eventlet monkeypatch in tests,done
-GT-P-01,platform,Linux amd64 full boot,.github/workflows/ci.yml,Real entrypoint boot,Section 7,CI job,PR-10,Asserts gunicorn 26 gthread 1 worker,open
-GT-P-02,platform,Linux arm64 full boot,.github/workflows/ci.yml,Real entrypoint boot,Section 7,CI job,PR-10,Same assertions as amd64,open
-GT-P-03,platform,CI smoke overrides entrypoint,.github/workflows/ci.yml:272,Replace with real boot,Section 7,CI job,PR-10,start.sh actually executed,open
-GT-P-04,platform,Socket.IO polling probe,CI,Probe,Section 7,CI job,PR-10,Polling connects,open
-GT-P-05,platform,Socket.IO websocket upgrade probe,CI,Probe,Section 7,CI job,PR-10,Upgrade succeeds on gthread,open
-GT-P-06,platform,Port 8765 probe,CI,Probe,Section 7,CI job,PR-10,Proxy reachable,open
-GT-P-07,platform,Clean shutdown both processes,CI,Stop container,Section 7,CI job,PR-10,Gunicorn and proxy exit within grace,open
+GT-P-01,platform,Linux amd64 full boot,.github/workflows/ci.yml,Real entrypoint boot,Section 7,test/test_gthread_ci_gates.py::test_container_boot_step_exists,PR-10,Asserts gunicorn 26 gthread 1 worker,done
+GT-P-02,platform,Linux arm64 full boot,.github/workflows/ci.yml,Real entrypoint boot,Section 7,test/test_gthread_ci_gates.py::test_container_boot_runs_on_both_architectures,PR-10,Same assertions as amd64,done
+GT-P-03,platform,CI smoke overrides entrypoint,.github/workflows/ci.yml:272,Replace with real boot,Section 7,test/test_gthread_ci_gates.py::test_container_boot_does_not_override_the_entrypoint,PR-10,start.sh actually executed,done
+GT-P-04,platform,Socket.IO polling probe,CI,Probe,Section 7,test/test_gthread_ci_gates.py::test_smoke_script_probes_each_surface,PR-10,Polling connects,done
+GT-P-05,platform,Socket.IO websocket upgrade probe,CI,Probe,Section 7,test/test_gthread_ci_gates.py::test_smoke_script_probes_each_surface,PR-10,Upgrade succeeds on gthread,done
+GT-P-06,platform,Port 8765 probe,CI,Probe,Section 7,test/test_gthread_ci_gates.py::test_smoke_script_probes_each_surface,PR-10,Proxy reachable,done
+GT-P-07,platform,Clean shutdown both processes,CI,Stop container,Section 7,test/test_gthread_ci_gates.py::test_smoke_script_verifies_clean_shutdown_of_both_processes,PR-10,Gunicorn and proxy exit within grace,done
 GT-P-08,platform,Native Ubuntu fresh install,CI or manual,Install test,Section 7,Job,PR-10,Service starts,open
 GT-P-09,platform,Native Ubuntu update.sh upgrade,CI or manual,Upgrade test,Section 7+C2,Job,PR-10,Unit migrated; service starts,open
 GT-P-10,platform,RHEL-family installer,manual,Render + boot,Section 7,Job,PR-10,Unit renders correctly,open
 GT-P-11,platform,Arch-family installer,manual,Render + boot,Section 7,Job,PR-10,Unit renders correctly,open
-GT-P-12,platform,Windows dev startup,CI,uv run app.py,Section 7,Job,PR-10,Dev server boots,open
-GT-P-13,platform,macOS dev startup,CI,uv run app.py,Section 7,Job,PR-10,Dev server boots,open
+GT-P-12,platform,Windows dev startup,CI,uv run app.py,Section 7,test/test_gthread_ci_gates.py::test_dev_startup_job_covers_all_three_platforms,PR-10,Dev server boots,done
+GT-P-13,platform,macOS dev startup,CI,uv run app.py,Section 7,test/test_gthread_ci_gates.py::test_dev_startup_job_covers_all_three_platforms,PR-10,Dev server boots,done
 GT-P-14,platform,Windows/macOS docker runner,manual,Script validation,Section 7,Job,PR-10,Scripts valid,open
 GT-P-15,platform,Multi-instance native,manual,Separate Flask/WS/ZMQ ports,Section 7,Job,PR-10,ZMQ_PORT invariant holds,open
 GT-P-16,platform,Multi-instance docker,manual,Separate ports,Section 7,Job,PR-10,No port drift,open
