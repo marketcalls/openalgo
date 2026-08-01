@@ -1,11 +1,11 @@
 # Eventlet to gthread — Migration Plan
 
 **Status:** Design — not yet built
-**Date:** 2026-08-01 (rev 4)
+**Date:** 2026-08-01 (rev 5)
 **Branch:** `gthread`
 **Scope:** Replace Gunicorn's `eventlet` worker with its `gthread` worker. Keep Flask, keep Flask-SocketIO, keep `-w 1`.
 **Evidence base:** [`audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md`](../../audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md), with the corrections in §10 applied.
-**Row-level tracking:** [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv) — 107 rows, each with decision, gate, test, rollback boundary and acceptance criterion.
+**Row-level tracking:** [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv) — 113 rows, each with decision, gate, test, rollback boundary and acceptance criterion.
 
 ---
 
@@ -73,6 +73,8 @@ The second-order constraint: **every long-lived request holds a real thread.** G
 `database/token_db_enhanced.py:181-309` and `:695-708`. `clear_cache()` empties nine structures then sets `cache_loaded = False`.
 
 Merely reordering the flag is **insufficient** — a reader can pass the `cache_loaded` check and then iterate while another thread clears. Required: build the new state off to the side and atomically swap a single reference; serialize writers with a load lock; retain the previous snapshot on failure. Readers must see the complete old snapshot or the complete new one, never a mix. This is on the live-order symbol lookup path.
+
+**Same defect, second location.** `database/qty_freeze_db.py:41-44,127-184` holds `_freeze_qty_cache` plus a `_cache_loaded` flag and does the identical `clear()`-then-refill (`:138`). It feeds order split and freeze-quantity sizing, so a partial read changes how an order is split. It takes the same snapshot-swap fix (`GT-A2-03`).
 
 ### A3. Protect shared `TTLCache` objects
 
@@ -468,19 +470,19 @@ Qualitative gates that remain: no production process imports eventlet; MCP dispa
 
 "100% coverage" here means **every discovered runtime and deployment surface is classified, mapped to a gate, a test, a rollback boundary and a measurable acceptance criterion.** It does not mean static analysis guarantees production behaviour — that is what the §7 platform matrix and the 24-hour soak are for.
 
-By that definition, **discovery and classification are complete.** Every surface has a row in [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv): 107 rows, each carrying `decision`, `gate`, `test`, `rollback_boundary`, `acceptance_criterion` and `status`.
+By that definition, **discovery and classification are complete.** Every surface has a row in [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv): 113 rows, each carrying `decision`, `gate`, `test`, `rollback_boundary`, `acceptance_criterion` and `status`.
 
 | Area | Rows | Resolved (no work) | Open |
 | --- | ---: | ---: | ---: |
 | Socket.IO emit (A1) | 4 | 0 | 4 |
-| Caches (A2, A3) | 14 | 0 | 14 |
+| Caches (A2, A3) | 15 | 0 | 15 |
 | SQLite + DuckDB (A4, A11, A15) | 10 | 0 | 10 |
 | MCP (A6) | 4 | 0 | 4 |
 | Proxy (A7) | 3 | 0 | 3 |
 | EventBus (A8) | 1 | 0 | 1 |
 | Sandbox (A9) | 4 | 0 | 4 |
 | HTTP client + limiter (A10) | 4 | 1 | 3 |
-| Registries (A12) | 7 | 0 | 7 |
+| Registries (A12) | 12 | 1 | 11 |
 | Schedulers (A13) | 3 | 2 | 1 |
 | Session/CSRF (A14) | 3 | 2 | 1 |
 | Capacity (B1, B2) | 6 | 3 | 3 |
@@ -490,11 +492,15 @@ By that definition, **discovery and classification are complete.** Every surface
 | Diagnostics (C5) | 3 | 0 | 3 |
 | Platform (§7) | 16 | 0 | 16 |
 | Rollback (§8.2) | 6 | 0 | 6 |
-| **Total** | **107** | **10** | **97** |
+| **Total** | **113** | **11** | **102** |
 
-Ten rows are **resolved with no work required** — each carries the evidence for why, so the exclusion is auditable rather than an omission: Flask-Limiter already holds per-key `RLock`s; flow and historify schedulers already set `max_instances: 1`; Flask session is a per-request signed cookie; 75 streaming and 5 download sleep sites are not request threads; four brokers' executors become dead branches; six broker files have guarded fallbacks.
+Eleven rows are **resolved with no work required** — each carries the evidence for why, so the exclusion is auditable rather than an omission: Flask-Limiter already holds per-key `RLock`s; flow and historify schedulers already set `max_instances: 1`; Flask session is a per-request signed cookie; 75 streaming and 5 download sleep sites are not request threads; four brokers' executors become dead branches; six broker files have guarded fallbacks.
 
 **What remains is execution, not discovery.** The gates are prose and the tracker rows are `open` because no code or test has been written yet. §9 now carries derived values for every engineering row and provisional values for every product row, so implementation is unblocked — the seven product rows can be amended without re-planning.
+
+**How this was verified (rev 5).** A residual sweep for module-level mutable globals across `services/`, `blueprints/`, `utils/`, `subscribers/`, `websocket_proxy/`, `sandbox/` and `database/` found **six surfaces that rev 4 had not mapped** — including `database/qty_freeze_db.py`, which carries the identical clear-then-refill defect as the symbol cache and sits on the order-splitting path. It was named in the source audit's GT-14 and lost when A12 was drafted. All six now have rows.
+
+That is the honest state of "complete": it means no unmapped surface survives the sweeps run so far, not that none exists. Each future sweep either finds nothing or, as here, finds something — and the tracker is the record of which sweeps have been run.
 
 **Residual risk that no amount of static analysis closes:** real broker behaviour under the four `USE_ASYNC` paths, actual thread saturation under production traffic, FD and RSS behaviour over 24 hours, and platform-specific SQLite timing. Those are §7 and §8 gates by design.
 
