@@ -1203,24 +1203,60 @@ def _hardware_snapshot():
 
 
 def _runtime_info():
-    """Python version, eventlet status, WSGI hint, uptime."""
+    """Runtime identity: interpreter, WSGI server, worker class, thread budget.
+
+    This is how a bad cutover is *detected*, so it has to report what is
+    actually running rather than infer it. The previous version keyed entirely
+    off eventlet: it defaulted wsgi_hint to "flask-dev" and only ever changed
+    that when eventlet was monkey-patched, so a gthread worker in production
+    would have reported itself as a development server.
+    """
     import sys as _sys
+    import threading as _threading
 
     info = {
         "python_version": _sys.version.split()[0],
         "python_implementation": _sys.implementation.name,
         "eventlet_active": False,
         "wsgi_hint": "flask-dev",
+        "gunicorn_version": None,
+        "worker_class": None,
+        "configured_threads": None,
+        "configured_workers": None,
+        "active_threads": _threading.active_count(),
+        "websocket_proxy_mode": None,
         "process_uptime_seconds": None,
     }
+
     try:
         import eventlet.patcher as _patcher
 
         info["eventlet_active"] = bool(_patcher.is_monkey_patched("socket"))
     except Exception:
         pass
-    if info["eventlet_active"]:
-        info["wsgi_hint"] = "gunicorn-eventlet"
+
+    # Gunicorn is only importable-as-loaded inside a worker, so its presence in
+    # sys.modules is the reliable signal -- not an env var a shell might unset.
+    gunicorn = _sys.modules.get("gunicorn")
+    if gunicorn is not None:
+        info["gunicorn_version"] = getattr(gunicorn, "__version__", "unknown")
+        info["wsgi_hint"] = "gunicorn"
+        cfg = _gunicorn_config()
+        if cfg:
+            info["worker_class"] = cfg.get("worker_class")
+            info["configured_threads"] = cfg.get("threads")
+            info["configured_workers"] = cfg.get("workers")
+        if info["eventlet_active"]:
+            info["wsgi_hint"] = "gunicorn-eventlet"
+        elif info["worker_class"]:
+            info["wsgi_hint"] = f"gunicorn-{info['worker_class']}"
+
+    try:
+        from websocket_proxy.app_integration import resolve_proxy_mode
+
+        info["websocket_proxy_mode"] = resolve_proxy_mode()
+    except Exception:
+        pass
 
     try:
         import psutil
@@ -1230,6 +1266,42 @@ def _runtime_info():
     except Exception:
         pass
     return info
+
+
+def _gunicorn_config() -> dict:
+    """Worker class, thread and worker counts as Gunicorn actually parsed them.
+
+    Read from the live arbiter config rather than from the command line, so a
+    value overridden by a config file or an environment variable is reported
+    as it is really in force.
+    """
+    import sys as _sys
+
+    result: dict = {}
+    try:
+        arbiter = _sys.modules.get("gunicorn.arbiter")
+        cfg = getattr(getattr(arbiter, "Arbiter", None), "_instance_cfg", None)
+        if cfg is None:
+            # Fall back to parsing argv, which is what start.sh and the systemd
+            # unit actually pass.
+            argv = _sys.argv
+            for flag, key, cast in (
+                ("--worker-class", "worker_class", str),
+                ("--threads", "threads", int),
+                ("--workers", "workers", int),
+            ):
+                if flag in argv:
+                    try:
+                        result[key] = cast(argv[argv.index(flag) + 1])
+                    except (IndexError, ValueError):
+                        pass
+            return result
+        result["worker_class"] = str(getattr(cfg, "worker_class_str", "") or "") or None
+        result["threads"] = getattr(cfg, "threads", None)
+        result["workers"] = getattr(cfg, "workers", None)
+    except Exception:
+        pass
+    return result
 
 
 def _build_info():
@@ -1701,6 +1773,12 @@ def _render_report(payload, errors_summary, errors_recent, fmt):
     lines.append(_md_kv("Implementation", runtime.get("python_implementation")))
     lines.append(_md_kv("Eventlet active", runtime.get("eventlet_active")))
     lines.append(_md_kv("WSGI", runtime.get("wsgi_hint")))
+    lines.append(_md_kv("Gunicorn", runtime.get("gunicorn_version")))
+    lines.append(_md_kv("Worker class", runtime.get("worker_class")))
+    lines.append(_md_kv("Configured threads", runtime.get("configured_threads")))
+    lines.append(_md_kv("Configured workers", runtime.get("configured_workers")))
+    lines.append(_md_kv("Active OS threads", runtime.get("active_threads")))
+    lines.append(_md_kv("WebSocket proxy mode", runtime.get("websocket_proxy_mode")))
     lines.append(_md_kv("Process uptime (s)", runtime.get("process_uptime_seconds")))
     lines.append("")
 

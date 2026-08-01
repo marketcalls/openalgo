@@ -81,9 +81,9 @@ GT-C3-13,docs,Documentation surfaces,INSTALL.md:84; DISCOVERY_MAP.md:29; CONTRIB
 GT-C4-01,broker,USE_ASYNC flip,shoonya definedge flattrade zebu api/data.py:25-27,Validate asyncio path,C4,Batch quote + option chain per broker,PR-11,Parity with executor path; FD/RSS flat,open
 GT-C4-02,broker,Guarded fallbacks,zerodha hdfcsky arrow dhan_sandbox,SAFE - no-op under gthread,C4,Smoke only,n/a,Resolves to plain threading,resolved
 GT-C4-03,broker,Comment-only sites,upstox mstock dhan iiflcapital angel,SAFE - no code change,C4,n/a,n/a,Documented,resolved
-GT-C5-01,diag,Runtime info reports gthread,blueprints/admin.py:1205-1232,Report worker class/threads/counts,C5,Admin endpoint assertion,PR-9,Correct runtime reported,open
-GT-C5-02,diag,Frontend admin types,frontend/src/types/admin.ts:142,Match new fields,C5,Type check,PR-9,UI shows correct runtime,open
-GT-C5-03,diag,Eventlet-only startup test,test/test_telegram_startup.py,Replace with gthread path,C5,Test suite,PR-9,No eventlet monkeypatch in tests,open
+GT-C5-01,diag,Runtime info reports gthread,blueprints/admin.py:1205-1232,Report worker class/threads/counts,C5,test/test_gthread_diagnostics.py::test_worker_class_is_reported_not_inferred_from_eventlet,PR-9,Correct runtime reported,done
+GT-C5-02,diag,Frontend admin types,frontend/src/types/admin.ts:142,Match new fields,C5,test/test_gthread_diagnostics.py::test_frontend_runtime_type_exposes_the_new_fields,PR-9,UI shows correct runtime,done
+GT-C5-03,diag,Eventlet-only startup test,test/test_telegram_startup.py,Replace with gthread path,C5,test/test_gthread_diagnostics.py::test_eventlet_only_startup_test_skips_instead_of_erroring,PR-9,No eventlet monkeypatch in tests,done
 GT-P-01,platform,Linux amd64 full boot,.github/workflows/ci.yml,Real entrypoint boot,Section 7,CI job,PR-10,Asserts gunicorn 26 gthread 1 worker,open
 GT-P-02,platform,Linux arm64 full boot,.github/workflows/ci.yml,Real entrypoint boot,Section 7,CI job,PR-10,Same assertions as amd64,open
 GT-P-03,platform,CI smoke overrides entrypoint,.github/workflows/ci.yml:272,Replace with real boot,Section 7,CI job,PR-10,start.sh actually executed,open

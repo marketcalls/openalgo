@@ -140,7 +140,18 @@ export interface SystemRuntime {
   python_version?: string
   python_implementation?: string
   eventlet_active?: boolean
+  /** e.g. "gunicorn-gthread", "gunicorn-eventlet", "flask-dev" */
   wsgi_hint?: string
+  gunicorn_version?: string | null
+  /** Gunicorn worker class actually in force, e.g. "gthread". */
+  worker_class?: string | null
+  /** --threads as Gunicorn parsed it; the thread budget under gthread. */
+  configured_threads?: number | null
+  configured_workers?: number | null
+  /** Live OS thread count, for comparing against configured_threads. */
+  active_threads?: number | null
+  /** external | subprocess | thread */
+  websocket_proxy_mode?: string | null
   process_uptime_seconds?: number | null
 }
 

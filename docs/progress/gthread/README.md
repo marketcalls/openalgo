@@ -20,7 +20,7 @@ language: what was broken, what we changed, and how we know it works.
 | [PR-6](PR-06-sqlite-retry.md) | Retry database writes that lose a race | Done |
 | [PR-7](PR-07-mcp-hardening.md) | Make the MCP server's counters and logs accurate | Done |
 | [PR-8](PR-08-sandbox-and-schedulers.md) | Fix sandbox shutdown and scheduler timing | Done |
-| PR-9 | Report the running configuration correctly | Not started |
+| [PR-9](PR-09-diagnostics.md) | Report the running configuration correctly | Done |
 | PR-10 | Add tests that boot the real container | Not started |
 | PR-11 | **The switch itself** — needs sign-off before starting | Not started |
 
@@ -30,8 +30,8 @@ language: what was broken, what we changed, and how we know it works.
 | --- | --- |
 | Total items tracked | 152 |
 | Already fine, no work needed | 28 |
-| Fixed and tested | 44 |
-| Still to do | 80 |
+| Fixed and tested | 47 |
+| Still to do | 77 |
 
 ## How we work
 

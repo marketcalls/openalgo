@@ -12,8 +12,15 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["APP_KEY"] = "test-key"
 
-# Monkey patch for eventlet simulation
-import eventlet
+# Monkey patch for eventlet simulation.
+#
+# This suite covers the eventlet initialization branch specifically. eventlet
+# is being removed by the gthread migration and is not installed by default,
+# so skip rather than fail collection. The branch that becomes the production
+# path is covered by test_gthread_telegram_startup.py.
+import pytest
+
+eventlet = pytest.importorskip("eventlet", reason="eventlet-only branch; see gthread migration")
 
 eventlet.monkey_patch()
 
