@@ -1,7 +1,7 @@
 # Eventlet to gthread — Migration Plan
 
 **Status:** Design — not yet built
-**Date:** 2026-08-01 (rev 2)
+**Date:** 2026-08-01 (rev 3)
 **Branch:** `gthread`
 **Scope:** Replace Gunicorn's `eventlet` worker with its `gthread` worker. Keep Flask, keep Flask-SocketIO, keep `-w 1`.
 **Evidence base:** [`audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md`](../../audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md), with the corrections in §10 applied.
@@ -145,6 +145,28 @@ Required: guard construction and teardown; add a bounded pool-acquisition timeou
 
 **Correction — Flask-Limiter needs no locking work.** `limiter.py:7` uses `storage_uri="memory://"`, and the installed backend already holds `defaultdict[str, threading.RLock]` per key (`limits/storage/memory.py:37`). A concurrency test is appropriate; a new locking design is not justified.
 
+### A11. Historify / DuckDB under real thread concurrency
+
+Not covered by the audit or by rev 1–2. `historify.duckdb` is one of the six databases and **does not go through `engine_factory`** — `database/historify_db.py:75` calls `duckdb.connect()` directly, so `NullPool` and the WAL/`busy_timeout` pragmas in `database/__init__.py` do not apply to it. Its `get_connection()` (`:49`) already carries a `max_retries`/`retry_delay` loop, which is itself evidence that write contention is a known problem there.
+
+DuckDB's single-writer model and connection semantics differ from SQLite's; more concurrent real-thread writers from the Historify scheduler and request paths is a materially different load. Required: determine the concurrency contract for the connection helper, whether connections may cross threads, and whether the retry loop is adequate or needs the same treatment as A4. Each connection is also an FD plus a buffer-pool arena — include it in the soak.
+
+### A12. Remaining unsynchronized registries
+
+Lower severity than A1–A3 but on the same footing as A6, and none currently has a lock:
+
+| Registry | Location | Exposure |
+| --- | --- | --- |
+| `_POOLED_ADAPTERS` | `websocket_proxy/broker_factory.py` | Mostly the proxy process; becomes request-thread reachable if A7b ever selects `thread` mode |
+| `_STRIKES_CACHE` | `services/option_symbol_service.py` | Unbounded key space; only `broker/paytm/database/master_contract_db.py:395` invalidates |
+| Workflow lock registry | `services/flow_executor_service.py:30-40` | Creation is guarded, entries never removed, grows with workflow IDs |
+| `_ADAPTERS` | `services/order_update_service.py` | Already locked — verify coverage extends to removal on disconnect |
+| `Error404Tracker` / banned-IP state | `utils/security_middleware.py` | Per-request mutation on the WSGI path outside Flask |
+| Traffic / latency log writers | `traffic_logger.py`, `database/latency_db.py` | Already serialized by design; confirm the design holds with real threads |
+| Scalping risk monitor | `services/scalping_risk_monitor_service.py` | Server-side SL/target engine; owns state across request and monitor threads |
+
+Deliverable is a decision per row — lock, bound, or documented as safe — not necessarily code in every case.
+
 ---
 
 ## 5. Phase B — thread budget
@@ -206,19 +228,41 @@ gunicorn --worker-class gthread --workers 1 --threads ${GUNICORN_THREADS:-32} ..
 
 `update.sh` must: inspect and back up the current unit; rewrite `--worker-class eventlet` to `gthread` and add the thread count; `daemon-reload`; validate the new `ExecStart` **before** removing eventlet; and automatically restore the previous unit and dependency set if startup fails.
 
-### C3. File inventory
+### C3. Complete `install/` and Docker inventory
 
-Confirmed active configuration surfaces:
+Every file in `install/` is classified. **No file may be left unclassified** — an unreviewed installer is how a migration ships a broken upgrade path.
 
-`Dockerfile:8-13` · `requirements-nginx.txt:148-149` · `start.sh:332-341` · `install/install.sh:766-776,1151-1157` · `install/install-multi.sh:310-311,605-611` · `install/update.sh:445-453` · `CONTRIBUTING.md:183,1059` · `CLAUDE.md:60-70`
+**Launches Gunicorn — must change worker class AND accept `GUNICORN_THREADS`:**
 
-Documentation surfaces (CLAUDE.md makes `docs/` the source of truth):
+| File | Site | Change |
+| --- | --- | --- |
+| `Dockerfile` | `:8-13` | Pin `gunicorn>=26,<27`, drop eventlet, add `GUNICORN_THREADS` default |
+| `start.sh` | `:332-341` | Worker class, threads, **and the A7a supervisor rewrite** |
+| `install/install.sh` | `:766-776`, `:1151-1157` | Dependency install + systemd `ExecStart` |
+| `install/install-multi.sh` | `:310-311`, `:605-611` | Dependency install + per-instance systemd `ExecStart` |
+| `install/update.sh` | `:445-453` | Dependencies **and the C2 unit migration** |
+| `requirements-nginx.txt` | `:148-149` | Repin, remove eventlet |
 
-`INSTALL.md:84` · `DISCOVERY_MAP.md:29` · `docs/docker/docker.md:28` · `docs/docker/DOCKER_BUILD_GUIDE.md:74` · `docs/websocket-architecture.md:477` · `docs/prd/websocket-proxy.md:51` · `docs/design/11-docker/README.md` (9 refs) · `docs/design/12-ubuntu-server/README.md` (4) · `docs/design/06-websockets/README.md` · `docs/design/34-app-startup/README.md` · `docs/design/02-backend/README.md` · `docs/design/20-design-principles/README.md` · `docs/design/30-upgrade-procedure/README.md`
+**Generates or rewrites `docker-compose` — must inject and preserve `GUNICORN_THREADS`:**
 
-**Excluded (rev 1 error):** `install/enable-remote-mcp-docker.sh:207` and `install/Remote-MCP-readme.md:89` mention gunicorn only in prose about `migrate_all.py` ordering. They configure nothing.
+| File | Note |
+| --- | --- |
+| `install/install-docker.sh` | Generates compose with an `environment:` block |
+| `install/install-docker-multi-custom-ssl.sh` | Generates compose; also owns `THREAD_LIMIT` (`:450-456`) — keep strictly separate from `GUNICORN_THREADS`, and apply the B3 aggregate host budget here |
+| `install/enable-remote-mcp-docker.sh` | **Reclassified.** Sets no worker class (rev 2 excluded it correctly on that basis), but `:67` discovers and rewrites existing `docker-compose.{yaml,yml}` files, so it must preserve the env var rather than drop it on rewrite |
+| `install/docker-run.sh` | 28 `-e` injections — largest env surface |
+| `install/docker-run.bat` | Windows equivalent; must stay in parity |
 
-`install/change-domain.sh` regenerates nginx's `/socket.io/` configuration and therefore belongs in WebSocket regression coverage even though it sets no worker class.
+**Touches the systemd unit or nginx — regression coverage, not configuration:**
+
+| File | Note |
+| --- | --- |
+| `install/change-domain.sh` | Reads the unit at `:200-201`, stops/starts the service (`:353-354`, `:470`), reloads nginx (`:439`, `:469`). Must be re-validated **after** the C2 unit migration, and regenerates `/socket.io/` config so it belongs in WebSocket regression coverage |
+| `install/update.bat` | Windows updater — no Gunicorn today; confirm it needs no unit handling |
+
+**Documentation surfaces** (CLAUDE.md makes `docs/` the source of truth):
+
+`INSTALL.md:84` · `DISCOVERY_MAP.md:29` · `CONTRIBUTING.md:183,1059` · `CLAUDE.md:60-70` · `docs/docker/docker.md:28` · `docs/docker/DOCKER_BUILD_GUIDE.md:74` · `docs/websocket-architecture.md:477` · `docs/prd/websocket-proxy.md:51` · `docs/design/11-docker/README.md` (9 refs) · `docs/design/12-ubuntu-server/README.md` (4) · `docs/design/06-websockets/README.md` · `docs/design/34-app-startup/README.md` · `docs/design/02-backend/README.md` · `docs/design/20-design-principles/README.md` · `docs/design/30-upgrade-procedure/README.md` · `install/Docker-install-readme.md` · `install/Docker-Multi-SSL-README.md` · `install/README.md` · `install/Remote-MCP-readme.md:89`
 
 Also: remove eventlet from `requirements-nginx.txt` and fresh-install commands; `uv pip install -r` does not prune an extraneous eventlet, so uninstall explicitly. Keep `simple-websocket` pinned. Keep `--timeout 300` initially and verify against both infinite SSE endpoints.
 
@@ -334,9 +378,44 @@ Qualitative gates that remain: no production process imports eventlet; MCP dispa
 | "CPU work blocks one thread" | Softened — GIL contention still degrades concurrent requests. |
 | Acceptance criteria unmeasurable | §9 now requires numbers before implementation. |
 
+### 10.3 Applied in rev 3
+
+| Gap | Correction |
+| --- | --- |
+| Historify/DuckDB absent | `database/historify_db.py:75` calls `duckdb.connect()` directly, bypassing `engine_factory`, so `NullPool` and the WAL/`busy_timeout` pragmas never apply. New gate A11. |
+| Unsynchronized registries absent | `_POOLED_ADAPTERS`, `_STRIKES_CACHE`, flow-executor lock registry, `Error404Tracker`, scalping monitor. New gate A12. |
+| `install/` inventory partial | All 14 files in `install/` now classified by role (C3). Five compose-generating scripts identified as `GUNICORN_THREADS` carriers. |
+| `enable-remote-mcp-docker.sh` excluded outright | Reclassified: correct that it sets no worker class, but `:67` rewrites existing compose files and must preserve the env var. |
+| `change-domain.sh` scoped to nginx only | It also reads the unit (`:200-201`) and stops/starts the service; must be re-validated after the C2 unit migration. |
+| Completeness implied | §11 now states explicitly what is still open. |
+
 ---
 
-## 11. Exit conditions
+## 11. Coverage status — this plan is not complete
+
+Stated plainly so nobody mistakes plan length for readiness. **Discovery is close to complete; the plan is not implementation-ready.**
+
+**Believed covered:** the runtime swap itself, Socket.IO, MCP, `websocket_proxy/`, Telegram, WhatsApp, Python Strategy, Sandbox, EventBus, broker adapters, SQLite, the shared HTTP client, the full `install/` and Docker surface, rollback, and cross-platform CI gaps.
+
+**Known open — must close before implementation starts:**
+
+| Item | Status |
+| --- | --- |
+| §9 acceptance numbers | **All TBD.** A product decision, not an engineering one. Implementation must not start without them. |
+| A4 transaction work list | Format specified, not filled in. One row per retryable mutation. |
+| B2 blocking-sleep inventory | 8 modules named; 40+ more contain sleeps and are uncategorized. |
+| A11 DuckDB concurrency contract | Newly identified; unassessed. |
+| A12 registry decisions | 7 rows, decision required per row. |
+| Effort and sequencing | No estimate, no owner assignment, no PR breakdown. |
+| Test code | None written. Every gate is currently prose. |
+
+**Not yet assessed at all:** Flask session and CSRF behaviour under real threads (expected fine, unverified); APScheduler executor semantics and misfire/overlap behaviour when its pool becomes genuinely parallel; Windows SQLite locking differences, which CLAUDE.md notes are stricter, against the A4 retry design.
+
+The honest summary: rev 3 is a good map of the territory, and the four release blockers are the highest-value output. It is not a build plan yet.
+
+---
+
+## 12. Exit conditions
 
 gthread remains correct while: one user and broker session per deployment; one worker; moderate browser/webhook/MCP/strategy concurrency; broker latency dominating; market ticks flowing through the separate asyncio/ZMQ proxy rather than the WSGI pool.
 
