@@ -50,16 +50,16 @@ GT-A12-04,registry,_ADAPTERS,services/order_update_service.py,INVESTIGATE: Verif
 GT-A12-05,registry,Error404Tracker / banned IPs,utils/security_middleware.py,Lock or document safe,A12,Concurrent 404 burst,PR-5,No lost bans; no growth,open
 GT-A12-06,registry,Traffic/latency writers,traffic_logger.py; database/latency_db.py,Confirm serialization holds,A12,Request burst,PR-5,Design intact under real threads,open
 GT-A12-07,registry,Scalping risk monitor,services/scalping_risk_monitor_service.py,INVESTIGATE: Review state ownership,A12,SL/target under load,PR-8,No missed or duplicate stop,open
-GT-A13-01,scheduler,python_strategy scheduler has no job_defaults,blueprints/python_strategy.py:110,Add max_instances/coalesce/misfire_grace,A13,Overlapping schedule triggers,PR-8,No concurrent duplicate strategy start,open
+GT-A13-01,scheduler,python_strategy scheduler inherits 1s misfire grace,blueprints/python_strategy.py:110,Set explicit misfire_grace_time; APScheduler already defaults max_instances=1 and coalesce=True so duplicates are NOT the risk,A13,Missed trigger while worker is busy,PR-8,Scheduled strategy starts are not silently skipped,open
 GT-A13-02,scheduler,flow scheduler,services/flow_scheduler_service.py:57-59,SAFE - max_instances=1 coalesce=True,A13,Regression only,n/a,No overlap,resolved
 GT-A13-03,scheduler,historify scheduler,services/historify_scheduler_service.py:60-65,SAFE - max_instances=1 coalesce=True,A13,Regression only,n/a,No overlap,resolved
 GT-A14-01,session,Flask session model,app.py + utils/auth_utils.py:374,SAFE - signed cookie is per-request,A14,Concurrent multi-device login,n/a,Sessions isolated per request,resolved
 GT-A14-02,session,CSRF protection,app.py:173 CSRFProtect,SAFE - token bound to session,A14,Concurrent form POST,n/a,No cross-thread token bleed,resolved
 GT-A14-03,session,active_sessions cap,database/auth_db.py,INVESTIGATE: Verify MAX_SESSIONS_PER_USER under threads,A14,Concurrent device logins,PR-5,Cap enforced exactly,open
 GT-B1-01,capacity,Thread budget formula,plan section 5,Derive from B2 + connection demand,B1,Load test at chosen value,PR-11,No saturation at target load,open
-GT-B2-01,capacity,Request-path sleeps,103 sites in 43 files under broker/*/api/{data|order_api|funds}.py,Count toward thread budget,B2,Burst history/quote requests,PR-11,Budget covers worst case,open
-GT-B2-02,capacity,Streaming-thread sleeps,75 sites under broker/*/streaming and api/*websocket*,EXCLUDED - not request threads,B2,n/a,n/a,Documented exclusion,resolved
-GT-B2-03,capacity,Master-contract download sleeps,5 sites in broker/*/database/master_contract_db.py,EXCLUDED - background thread,B2,n/a,n/a,Documented exclusion,resolved
+GT-B2-01,capacity,Request-path sleeps,111 sites in 48 files under broker/*/api/** (per scripts/gthread_sleep_inventory.py),Count toward thread budget,B2,Burst history/quote requests,PR-11,Budget covers worst case,open
+GT-B2-02,capacity,Streaming-thread sleeps,78 sites in 34 files under broker/*/streaming and api/*websocket*,EXCLUDED - not request threads,B2,n/a,n/a,Documented exclusion,resolved
+GT-B2-03,capacity,Master-contract download sleeps,5 sites in 3 files under broker/*/database/master_contract_db.py,EXCLUDED - background thread,B2,n/a,n/a,Documented exclusion,resolved
 GT-B2-04,capacity,Per-call executors (live),broker: nubra iiflcapital tradesmart; services: basket_order_service:351 historify flow_price_monitor flow_order_update_monitor telegram_alert whatsapp_alert,Bound max_workers,B2,Concurrent fan-out requests,PR-11,Thread count bounded,open
 GT-B2-05,capacity,Per-call executors (dead after USE_ASYNC),shoonya definedge flattrade zebu,EXCLUDED - asyncio path replaces,B2,Covered by C4,n/a,Documented,resolved
 GT-B3-01,deploy,GUNICORN_THREADS variable,Dockerfile start.sh .sample.env,New var; not THREAD_LIMIT,B3,Boot asserts thread count,PR-11,Configured value observable at runtime,open

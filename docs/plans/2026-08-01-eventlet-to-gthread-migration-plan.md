@@ -1,7 +1,7 @@
 # Eventlet to gthread — Migration Plan
 
 **Status:** Design — not yet built
-**Date:** 2026-08-01 (rev 11)
+**Date:** 2026-08-01 (rev 12)
 **Branch:** `gthread`
 **Scope:** Replace Gunicorn's `eventlet` worker with its `gthread` worker. Keep Flask, keep Flask-SocketIO, keep `-w 1`.
 **Evidence base:** [`audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md`](../../audit/EVENTLET_TO_GTHREAD_MIGRATION_AUDIT.md), with the corrections in §10 applied.
@@ -213,7 +213,19 @@ Under eventlet neither can interleave. Under gthread a concurrent burst from one
 
 Fix with a conditional UPDATE or a serialized counter; do not add a lock that is held across the DB write.
 
-**Re-run the detector after any change to a counter or balance path.** It found what the object-shaped sweeps could not, because these defects live in transaction boundaries, not in shared objects.
+**The detector is a CI gate, not a report.** Scoped to application code it finds 31 guard-then-mutate pairs: 4 already lock-protected, 27 unlocked. All 27 are classified in [`scripts/gthread_check_then_act_reviewed.txt`](../../scripts/gthread_check_then_act_reviewed.txt):
+
+| Classification | Count | Basis |
+| --- | ---: | --- |
+| Broker reconnect / auth-retry counters | 9 | Per-adapter instance, written only by that adapter's own streaming thread |
+| Protobuf decode cursors | 4 | Parser position within one decode call on one buffer |
+| NATS receive buffers | 6 | Accumulator owned by one receive loop |
+| Shoonya subscription queues | 2 | Owned by one adapter thread |
+| False positive — local `df.index` | 4 | Request-local pandas frame |
+| False positive — `self.base_url` | 1 | Constructed per request |
+| False positive — `sys.stdout` | 1 | Single-threaded migration script |
+
+It exits 1 on any **unreviewed** unlocked pair, so a new one fails CI until someone records a decision. Re-run it after any change to a counter or balance path — it found what the object-shaped sweeps could not, because these defects live in transaction boundaries rather than in shared objects.
 
 ### A15. Windows SQLite locking
 
@@ -535,7 +547,16 @@ Qualitative gates that remain: no production process imports eventlet; MCP dispa
 
 "100% coverage" here means **every discovered runtime and deployment surface is classified, mapped to a gate, a test, a rollback boundary and a measurable acceptance criterion.** It does not mean static analysis guarantees production behaviour — that is what the §7 platform matrix and the 24-hour soak are for.
 
-By that definition **classification is not complete**, and rev 11 stops claiming it is. Every surface has a row, but **18 rows carry `INVESTIGATE:` decisions** — "review", "verify", "classify" are questions, not answers, and they are now labelled so they can be counted. Discovery is roughly 85-90%; structural integrity of the plan and tracker is sound; implementation and test completion are 0%. Every discovered surface has a row in [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv): 152 rows, each carrying `decision`, `gate`, `test`, `rollback_boundary`, `acceptance_criterion` and `status`.
+By that definition **classification is not complete**, and rev 11 stopped claiming it is.
+
+| Metric | Value |
+| --- | --- |
+| Plan/tracker structural integrity | 100% — totals reconcile, no duplicate IDs, both scripts lint and run |
+| Risk discovery and classification | **88.2%** — 134 of 152 rows carry a decision; 18 are `INVESTIGATE:` |
+| Implementation and migration-test completion | **0%** — no code, no migration-specific tests |
+
+Recompute the middle figure with the tracker rather than asserting it: it is `1 - (INVESTIGATE rows / total rows)`.
+ Every surface has a row, but **18 rows carry `INVESTIGATE:` decisions** — "review", "verify", "classify" are questions, not answers, and they are now labelled so they can be counted. Discovery is roughly 85-90%; structural integrity of the plan and tracker is sound; implementation and test completion are 0%. Every discovered surface has a row in [`2026-08-01-gthread-migration-tracker.csv`](2026-08-01-gthread-migration-tracker.csv): 152 rows, each carrying `decision`, `gate`, `test`, `rollback_boundary`, `acceptance_criterion` and `status`.
 
 | Area | Rows | Resolved (no work) | Open |
 | --- | ---: | ---: | ---: |
@@ -567,7 +588,9 @@ By that definition **classification is not complete**, and rev 11 stops claiming
 
 Twenty-seven rows are **resolved with no work required** — each carries the evidence for why, so the exclusion is auditable rather than an omission: Flask-Limiter already holds per-key `RLock`s; flow and historify schedulers already set `max_instances: 1`; Flask session is a per-request signed cookie; 75 streaming and 5 download sleep sites are not request threads; four brokers' executors become dead branches; six broker files have guarded fallbacks.
 
-**What remains is execution, not discovery.** The gates are prose and the tracker rows are `open` because no code or test has been written yet. §9 now carries derived values for every engineering row and provisional values for every product row, so implementation is unblocked — the seven product rows can be amended without re-planning.
+**What remains is mostly execution, with 18 open investigations.** The gates are prose and the rows are `open` because no code or test exists yet — but 18 rows are `INVESTIGATE:`, meaning the classification itself is unfinished. Those are best closed inside the PR that touches each subsystem, where the code is already in hand, rather than as another discovery pass.
+
+§9 carries derived values for every engineering row and provisional values for every product row, so implementation is unblocked and the seven product rows can be amended without re-planning.
 
 **Rev 10 sweeps — Flow, Historify, Telegram, WhatsApp, plus a generalised detector.**
 
