@@ -150,13 +150,14 @@ export default function SipBacktesterResults() {
             >
               {inr(h.final_value)}
             </span>{' '}
-            — {h.multiple ? `${h.multiple.toFixed(2)}×` : '—'} your money, an{' '}
-            <span className="font-semibold">{pct(h.xirr)} XIRR</span> over {h.years?.toFixed(1)}{' '}
-            years.
+            — {h.multiple ? `${h.multiple.toFixed(2)}×` : '—'} your money. That is{' '}
+            <span className="font-semibold">{signedPct(h.absolute_return)}</span> on the capital you
+            put in, an <span className="font-semibold">XIRR of {pct(h.xirr)}</span> a year, over{' '}
+            {h.years?.toFixed(1)} years.
           </p>
           {h.cost_advantage !== null && h.cost_advantage < 0 && (
             <p className="mt-2 text-sm text-muted-foreground">
-              Buying a fixed amount each time got your units{' '}
+              Buying a fixed amount each time got your shares{' '}
               <span className="font-medium text-emerald-600 dark:text-emerald-500">
                 {Math.abs(h.cost_advantage * 100).toFixed(2)}% cheaper
               </span>{' '}
@@ -177,7 +178,7 @@ export default function SipBacktesterResults() {
 
       {/* ── Headline numbers ─────────────────────────────────────────── */}
       <Card>
-        <CardContent className="grid grid-cols-2 gap-4 pt-6 md:grid-cols-4 lg:grid-cols-7">
+        <CardContent className="grid grid-cols-2 gap-4 pt-6 md:grid-cols-4 lg:grid-cols-8">
           <Stat
             label="XIRR"
             value={pct(h.xirr)}
@@ -190,10 +191,16 @@ export default function SipBacktesterResults() {
             label="Gain"
             value={inr(h.gain)}
             tone={gainPositive ? 'good' : 'bad'}
-            hint={signedPct(h.absolute_return)}
+            hint="value minus invested"
           />
           <Stat
-            label="Units"
+            label="Absolute return"
+            value={signedPct(h.absolute_return)}
+            tone={gainPositive ? 'good' : 'bad'}
+            hint="on total capital invested"
+          />
+          <Stat
+            label="Shares held"
             value={h.units ? h.units.toFixed(3) : '—'}
             hint={`avg ${inr(h.average_cost, 2)}`}
           />

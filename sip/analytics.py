@@ -98,7 +98,9 @@ def underwater(result: SipResult) -> dict:
         else:
             current = 0
 
-    gap = (result.value - result.invested) / result.invested.replace(0, pd.NA)
+    # .where rather than .replace(0, pd.NA): the latter promotes the Series to
+    # object dtype, which makes every downstream fillna a deprecated downcast.
+    gap = (result.value - result.invested) / result.invested.where(result.invested != 0)
     worst_gap = _f(gap.min())
 
     return {
@@ -122,7 +124,7 @@ def drawdown(result: SipResult) -> dict:
     """
     value = result.value
     peak = value.cummax()
-    dd = (value - peak) / peak.replace(0, pd.NA)
+    dd = (value - peak) / peak.where(peak != 0)
 
     trough_at = dd.idxmin() if len(dd.dropna()) else None
     max_dd = _f(dd.min())
@@ -343,17 +345,42 @@ def yearly_breakdown(result: SipResult) -> list[dict]:
 
 
 def monthly_value_heatmap(result: SipResult) -> dict:
-    """Year down, month across: change in value beyond what was paid in.
+    """Year down, month across: the market's contribution, close to close.
 
-    Not raw value change, which would mostly show the installment. Subtracting
-    the money added leaves the part the market actually did.
+    Two deliberate choices.
+
+    **Close to close, never open to close.** Each cell compares this month's
+    closing value with the *previous month's closing value* -- month-end to
+    month-end. Resampling with ``.last()`` takes the final session of each
+    month, so consecutive cells are contiguous: no gap is skipped and no
+    intramonth open is used as a base. An open-to-close return would silently
+    discard the overnight and weekend moves between months.
+
+    **The installment is subtracted.** Raw value change would mostly show the
+    money paid in, not what the market did. Removing the contribution leaves
+    the part attributable to price.
+
+    The first month is ``None``, not zero: with no prior close there is no
+    close-to-close return to report, and printing 0% would claim a flat month
+    that was never measured.
     """
     df = pd.DataFrame({"value": result.value, "invested": result.invested})
+    # .last() = the closing value of the final session in each month.
     monthly = df.resample("ME").last()
-    added = monthly["invested"].diff().fillna(monthly["invested"])
-    market = monthly["value"].diff().fillna(monthly["value"]) - added
-    base = monthly["value"].shift(1).replace(0, pd.NA)
-    pct = (market / base).fillna(0.0)
+
+    prior_close = monthly["value"].shift(1)
+    prior_invested = monthly["invested"].shift(1)
+
+    # Money added between the two closes, so it is not counted as performance.
+    added = monthly["invested"] - prior_invested
+    market = (monthly["value"] - prior_close) - added
+
+    # .where rather than .replace(0, pd.NA): the latter promotes the Series to
+    # object dtype, and object-dtype fillna is a deprecated downcast. A zero
+    # prior close is real -- it happens when a whole month ends before the
+    # first installment -- so it must be handled, not assumed away.
+    base = prior_close.where(prior_close != 0)
+    pct = market / base
 
     grid: dict[int, list] = {}
     for when, val in pct.items():
@@ -364,6 +391,7 @@ def monthly_value_heatmap(result: SipResult) -> dict:
         "columns": ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
         "values": [grid[y] for y in sorted(grid)],
+        "basis": "close-to-close, contribution removed",
     }
 
 
