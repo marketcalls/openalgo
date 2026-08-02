@@ -6,7 +6,7 @@
  * right before it navigates here.
  */
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { downloadTearsheet } from '@/api/portfolio'
 import { AllocationChart } from '@/components/portfolio/AllocationChart'
 import { CrisisChart } from '@/components/portfolio/CrisisChart'
