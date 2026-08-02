@@ -37,17 +37,18 @@ language: what was broken, what we changed, and how we know it works.
 | [PR-12](PR-12-python-strategy.md) | Make the /python strategy host thread-safe | Done |
 | [PR-12a](PR-12a-python-audit-fixes.md) | Subprocess launch, config writes, lifecycle | Done |
 | [PR-13](PR-13-pool-registry.md) | Guard the pooled broker adapter registry | Done |
+| [PR-14](PR-14-production-greenlet-issues.md) | Map the open greenlet crashes to this migration | Validated |
 | PR-11b | **The switch itself** — needs sign-off before starting | Awaiting sign-off |
 
 ## Numbers
 
 | | |
 | --- | --- |
-| Total items tracked | 160 |
+| Total items tracked | 161 |
 | Already fine, no work needed | 50 |
 | Fixed and tested | 71 |
-| Still to do | 39 |
-| **Coverage of actionable rows** | **71 / 110 = 65%** |
+| Still to do | 40 |
+| **Coverage of actionable rows** | **71 / 111 = 64%** |
 
 ## Correction, 2026-08-02
 
@@ -89,10 +90,10 @@ conflating them would have left the more serious one in place.
 
 ## Open questions
 
-That is **not** the same as the migration being finished. Of the 39 items still
+That is **not** the same as the migration being finished. Of the 40 items still
 to do:
 
-- **16 are code the audits or later review reopened** — the SQLite retry helper still has no
+- **17 are code the audits or later review reopened** — the SQLite retry helper still has no
   production callers, eight cache modules keep compound lookup/delete patterns,
   Telegram initialization is not single-flight after a timeout, and the
   container health check does not prove a live broker feed.
