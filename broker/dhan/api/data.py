@@ -101,14 +101,26 @@ def get_api_response(endpoint, auth, method="POST", payload="", retry_count=0):
     else:
         res = client.request(method, url, headers=headers, content=payload)
 
-    # Add status attribute for compatibility with existing codebase
-    res.status = res.status_code
     response = json.loads(res.text)
 
-    logger.debug(f"Response status: {res.status}")
+    logger.debug(f"Response status: {res.status_code}")
     logger.debug(f"Response: {json.dumps(response, indent=2)}")
 
-    # Handle Dhan API error codes
+    # Handle Dhan API error codes — two formats:
+    # 1. Order/data API errors: {"status": "failed", "data": {"<code>": "<msg>"}}
+    # 2. Chart/historical API errors: {"errorType": "...", "errorCode": "DH-NNN", "errorMessage": "..."}
+    if "errorCode" in response or "errorType" in response:
+        error_code = response.get("errorCode", "unknown")
+        error_message = response.get("errorMessage", "Unknown error")
+        dh_error_mapping = {
+            "DH-906": "Invalid or expired Dhan access token. Re-authenticate via the broker login page.",
+            "DH-905": "Invalid client ID in BROKER_API_KEY.",
+            "DH-907": "Dhan API subscription not active for this endpoint.",
+        }
+        error_msg = dh_error_mapping.get(error_code, f"Dhan API Error {error_code}: {error_message}")
+        logger.error(f"API Error: {error_msg}")
+        raise Exception(error_msg)
+
     if response.get("status") == "failed":
         error_data = response.get("data", {})
         error_code = list(error_data.keys())[0] if error_data else "unknown"
@@ -235,7 +247,7 @@ class BrokerData:
             "NSE_INDEX": "IDX_I",  # NSE Index
             "BSE_INDEX": "IDX_I",  # BSE Index
         }
-        return exchange_map.get(exchange)
+        return exchange_map.get(exchange, "")
 
     def _get_instrument_type(self, exchange: str, symbol: str) -> str:
         """Get instrument type based on exchange and symbol"""
@@ -389,7 +401,7 @@ class BrokerData:
             if not self._is_trading_day(start_date) and not self._is_trading_day(end_date):
                 logger.info("Both start and end dates are non-trading days")
                 return pd.DataFrame(
-                    columns=["timestamp", "open", "high", "low", "close", "volume", "oi"]
+                    columns=pd.Index(["timestamp", "open", "high", "low", "close", "volume", "oi"])
                 )
 
             # If start and end dates are same, increase end date by one day
@@ -709,7 +721,7 @@ class BrokerData:
             df = pd.DataFrame(all_candles)
             if df.empty:
                 df = pd.DataFrame(
-                    columns=["timestamp", "open", "high", "low", "close", "volume", "oi"]
+                    columns=pd.Index(["timestamp", "open", "high", "low", "close", "volume", "oi"])
                 )
             else:
                 # Sort by timestamp and remove duplicates
@@ -736,6 +748,8 @@ class BrokerData:
         """
         try:
             security_id = get_token(symbol, exchange)
+            if security_id is None:
+                raise Exception(f"Token not found for {symbol} ({exchange})")
             exchange_type = self._get_exchange_segment(
                 exchange
             )  # Use the correct method for exchange type
@@ -1055,6 +1069,8 @@ class BrokerData:
         """
         try:
             security_id = get_token(symbol, exchange)
+            if security_id is None:
+                raise Exception(f"Token not found for {symbol} ({exchange})")
             exchange_type = self._get_exchange_segment(
                 exchange
             )  # Use the correct method for exchange type
