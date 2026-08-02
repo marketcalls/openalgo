@@ -69,6 +69,48 @@ SSE_SUBSCRIBERS = []  # List of Queue objects for SSE clients
 SSE_LOCK = threading.Lock()
 
 
+# ---------------------------------------------------------------------------
+# Safe registry access
+# ---------------------------------------------------------------------------
+# The two registries above are reached from request handlers, from the
+# APScheduler jobs that start and stop strategies on IST times, and from the
+# dead-process sweep. Under eventlet those never interleave mid-statement;
+# under gthread they are real threads and two shapes break:
+#
+#   if sid in STRATEGY_CONFIGS:      # thread A passes
+#       cfg = STRATEGY_CONFIGS[sid]  # thread B deleted it -> KeyError
+#
+#   for sid, cfg in STRATEGY_CONFIGS.items():   # B adds one mid-loop
+#       ...                                     # -> RuntimeError
+#
+# Use these three accessors instead of touching the dicts directly. They hold
+# PROCESS_LOCK only for the dict operation itself and never across file or
+# process I/O, so a slow listing cannot block a strategy from starting.
+
+
+def get_strategy_config(strategy_id: str) -> dict | None:
+    """The strategy's config, or None. Never raises KeyError."""
+    with PROCESS_LOCK:
+        return STRATEGY_CONFIGS.get(strategy_id)
+
+
+def get_running_strategy(strategy_id: str) -> dict | None:
+    """The live process record, or None. Never raises KeyError."""
+    with PROCESS_LOCK:
+        return RUNNING_STRATEGIES.get(strategy_id)
+
+
+def snapshot_strategy_configs() -> list[tuple[str, dict]]:
+    """A point-in-time copy of the registry, safe to iterate slowly.
+
+    The listing loop does a process poll and can call save_configs() per entry,
+    so it holds its iterator open for a long time. Iterating the live dict
+    would raise RuntimeError the moment another thread created a strategy.
+    """
+    with PROCESS_LOCK:
+        return list(STRATEGY_CONFIGS.items())
+
+
 def broadcast_status_update(strategy_id: str, status: str, message: str = None):
     """Broadcast strategy status update to all SSE subscribers"""
     event_data = {
@@ -167,9 +209,12 @@ def load_configs():
     if CONFIG_FILE.exists():
         try:
             with open(CONFIG_FILE, encoding="utf-8") as f:
-                STRATEGY_CONFIGS = json.load(f)
+                loaded = json.load(f)
             mutated = False
-            for cfg in STRATEGY_CONFIGS.values():
+            # Backfill on the off-to-the-side copy, then publish with a single
+            # rebind below, so a concurrent reader never sees a half-backfilled
+            # map (and never iterates one that is still being mutated).
+            for cfg in loaded.values():
                 if "exchange" not in cfg or not cfg.get("exchange"):
                     cfg["exchange"] = "NSE"
                     mutated = True
@@ -178,6 +223,7 @@ def load_configs():
                     if upper != cfg["exchange"]:
                         cfg["exchange"] = upper
                         mutated = True
+            STRATEGY_CONFIGS = loaded
             if mutated:
                 save_configs()
             logger.debug(f"Loaded {len(STRATEGY_CONFIGS)} strategy configurations")
@@ -222,10 +268,9 @@ def verify_strategy_ownership(strategy_id, user_id, return_config=False):
     if not strategy_id or ".." in strategy_id or "/" in strategy_id or "\\" in strategy_id:
         return False, (jsonify({"status": "error", "message": "Invalid strategy ID"}), 400)
 
-    if strategy_id not in STRATEGY_CONFIGS:
+    config = get_strategy_config(strategy_id)
+    if config is None:
         return False, (jsonify({"status": "error", "message": "Strategy not found"}), 404)
-
-    config = STRATEGY_CONFIGS[strategy_id]
     # Check ownership - allow access if user_id matches or if strategy has no owner (legacy)
     strategy_owner = config.get("user_id")
     if strategy_owner and strategy_owner != user_id:
@@ -927,7 +972,7 @@ def cleanup_dead_processes():
         # Also check STRATEGY_CONFIGS for stale is_running flags
         # (e.g., after app restart, RUNNING_STRATEGIES is empty but config has is_running=True)
         configs_to_fix = []
-        for strategy_id, config in STRATEGY_CONFIGS.items():
+        for strategy_id, config in snapshot_strategy_configs():
             if config.get("is_running") and strategy_id not in RUNNING_STRATEGIES:
                 # Config says running but not in memory - check if PID is alive
                 pid = config.get("pid")
@@ -1203,7 +1248,7 @@ def is_trading_day_enforcement_enabled() -> bool:
 
 def _is_strategy_running(strategy_id: str, config: dict) -> bool:
     """True if the strategy's process is alive (in-memory or by stored PID)."""
-    if strategy_id in RUNNING_STRATEGIES:
+    if get_running_strategy(strategy_id) is not None:
         return True
     pid = config.get("pid")
     if pid and check_process_status(pid):
@@ -1556,8 +1601,9 @@ def unschedule_strategy(strategy_id):
     if SCHEDULER.get_job(stop_job_id):
         SCHEDULER.remove_job(stop_job_id)
 
-    if strategy_id in STRATEGY_CONFIGS:
-        STRATEGY_CONFIGS[strategy_id]["is_scheduled"] = False
+    cfg = get_strategy_config(strategy_id)
+    if cfg is not None:
+        cfg["is_scheduled"] = False
         save_configs()
 
     logger.info(f"Unscheduled strategy {strategy_id}")
@@ -1572,7 +1618,7 @@ def index():
     cleanup_dead_processes()
 
     strategies = []
-    for sid, config in STRATEGY_CONFIGS.items():
+    for sid, config in snapshot_strategy_configs():
         # Check if process is actually running
         if config.get("pid"):
             config["is_running"] = check_process_status(config["pid"])
@@ -1600,8 +1646,8 @@ def index():
         }
 
         # Add runtime info if running
-        if sid in RUNNING_STRATEGIES:
-            info = RUNNING_STRATEGIES[sid]
+        info = get_running_strategy(sid)
+        if info is not None:
             strategy_info["started_at"] = info["started_at"]
             strategy_info["log_file"] = info["log_file"]
 
@@ -1805,8 +1851,9 @@ def start_strategy(strategy_id):
 
     # Clear manual stop flag since user is explicitly starting
     # This resumes scheduled auto-start
-    if strategy_id in STRATEGY_CONFIGS and STRATEGY_CONFIGS[strategy_id].get("manually_stopped"):
-        STRATEGY_CONFIGS[strategy_id].pop("manually_stopped", None)
+    cfg = get_strategy_config(strategy_id)
+    if cfg is not None and cfg.get("manually_stopped"):
+        cfg.pop("manually_stopped", None)
         save_configs()
         logger.info(
             f"Cleared manual stop flag for strategy {strategy_id} - scheduled auto-start resumed"
@@ -1895,8 +1942,9 @@ def stop_strategy(strategy_id):
     if is_running:
         # Strategy is actually running - stop the process
         success, message = stop_strategy_process(strategy_id)
-        if success and strategy_id in STRATEGY_CONFIGS:
-            STRATEGY_CONFIGS[strategy_id]["manually_stopped"] = True
+        cfg = get_strategy_config(strategy_id)
+        if success and cfg is not None:
+            cfg["manually_stopped"] = True
             save_configs()
             logger.info(
                 f"Strategy {strategy_id} manually stopped - will not auto-start until manually started"
@@ -1904,8 +1952,9 @@ def stop_strategy(strategy_id):
         return jsonify({"status": "success" if success else "error", "message": message})
     else:
         # Strategy is not running - just cancel the scheduled auto-start
-        if strategy_id in STRATEGY_CONFIGS:
-            STRATEGY_CONFIGS[strategy_id]["manually_stopped"] = True
+        cfg = get_strategy_config(strategy_id)
+        if cfg is not None:
+            cfg["manually_stopped"] = True
             save_configs()
             logger.info(
                 f"Strategy {strategy_id} schedule cancelled - will not auto-start until manually started"
@@ -2297,7 +2346,7 @@ def api_get_strategies():
     cleanup_dead_processes()
     strategies = []
 
-    for strategy_id, config in STRATEGY_CONFIGS.items():
+    for strategy_id, config in snapshot_strategy_configs():
         # Determine status with detailed schedule info
         if config.get("is_running"):
             status = "running"
@@ -2390,10 +2439,9 @@ def api_strategy_events():
 @check_session_validity
 def api_get_strategy(strategy_id):
     """API: Get single strategy as JSON"""
-    if strategy_id not in STRATEGY_CONFIGS:
+    config = get_strategy_config(strategy_id)
+    if config is None:
         return jsonify({"status": "error", "message": "Strategy not found"}), 404
-
-    config = STRATEGY_CONFIGS[strategy_id]
 
     # Determine status with detailed schedule info
     if config.get("is_running"):
@@ -2436,10 +2484,10 @@ def api_get_strategy(strategy_id):
 @check_session_validity
 def api_get_strategy_content(strategy_id):
     """API: Get strategy file content"""
-    if strategy_id not in STRATEGY_CONFIGS:
+    config = get_strategy_config(strategy_id)
+    if config is None:
         return jsonify({"status": "error", "message": "Strategy not found"}), 404
 
-    config = STRATEGY_CONFIGS[strategy_id]
     file_name = config.get("file_name")
     file_path = config.get("file_path")
 
@@ -2804,7 +2852,7 @@ def restore_strategy_states():
     restored_count = 0
     error_count = 0
 
-    for strategy_id, config in STRATEGY_CONFIGS.items():
+    for strategy_id, config in snapshot_strategy_configs():
         if (
             config.get("is_running")
             and config.get("pid")
@@ -2824,7 +2872,7 @@ def restore_strategy_states():
             f"Master contracts not ready - strategies will remain in error state until contracts are downloaded: {contract_message}"
         )
         # Mark all running strategies as error state due to master contract dependency
-        for config in STRATEGY_CONFIGS.values():
+        for _sid, config in snapshot_strategy_configs():
             if config.get("is_running"):
                 if config.get("pid") and check_process_status(config.get("pid")):
                     # A live strategy is already running. Keep its state intact
@@ -2838,7 +2886,7 @@ def restore_strategy_states():
         save_configs()
         return
 
-    for strategy_id, config in STRATEGY_CONFIGS.items():
+    for strategy_id, config in snapshot_strategy_configs():
         if config.get("is_running") and config.get("pid"):
             strategy_restored = strategy_id in RUNNING_STRATEGIES
 
@@ -2897,7 +2945,7 @@ def check_and_start_pending_strategies():
     failed_count = 0
 
     # Look for strategies that are in error state due to master contract dependency
-    for strategy_id, config in STRATEGY_CONFIGS.items():
+    for strategy_id, config in snapshot_strategy_configs():
         if config.get("is_error") and (
             "Waiting for master contracts" in config.get("error_message", "")
             or "Master contract dependency not met" in config.get("error_message", "")
@@ -2965,7 +3013,7 @@ def initialize_with_app_context():
 
         # Restore scheduled strategies
         restored_schedules = 0
-        for strategy_id, config in STRATEGY_CONFIGS.items():
+        for strategy_id, config in snapshot_strategy_configs():
             if config.get("is_scheduled"):
                 start_time = config.get("schedule_start")
                 stop_time = config.get("schedule_stop")
