@@ -13,7 +13,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
 import { webClient } from '@/api/client'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'

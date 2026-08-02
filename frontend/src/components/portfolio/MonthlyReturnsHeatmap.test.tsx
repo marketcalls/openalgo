@@ -12,10 +12,10 @@ describe('MonthlyReturnsHeatmap', () => {
       />
     )
 
-    expect(screen.getByText('12.3%')).toBeInTheDocument()
-    expect(screen.getByText('-4.5%')).toBeInTheDocument()
-    const cells = container.querySelectorAll('tbody td')
-    expect(cells[3]).toHaveTextContent('')
-    expect(cells[3]).toHaveStyle({ background: 'transparent' })
+    expect(screen.getByText('12.3')).toBeInTheDocument()
+    expect(screen.getByText('-4.5')).toBeInTheDocument()
+    const cells = container.querySelectorAll('.rounded-md')
+    expect(cells[2]).toHaveTextContent('')
+    expect(cells[2]).toHaveStyle({ background: 'transparent' })
   })
 })

@@ -14,64 +14,69 @@ import { cn } from '@/lib/utils'
  * per chart pane, so it works unchanged in every grid layout.
  */
 
-type Category = 'Cash' | 'F&O' | 'Currency' | 'Commodity' | 'Crypto'
+type Category = 'Index' | 'Cash' | 'F&O' | 'Currency' | 'Commodity' | 'Crypto'
 type Chip = 'ALL' | Category
 
-/** Map an OpenAlgo exchange code to its trading segment (chip). */
+/** Map an OpenAlgo exchange code to its trading segment (chip). Any exchange
+ * ending in _INDEX (NSE_INDEX, BSE_INDEX, GLOBAL_INDEX, MCX_INDEX, CDS_INDEX)
+ * is routed to 'Index' below, not listed here. */
 const EXCHANGE_CATEGORY: Record<string, Category> = {
   NSE: 'Cash',
   BSE: 'Cash',
-  NSE_INDEX: 'Cash',
-  BSE_INDEX: 'Cash',
-  GLOBAL_INDEX: 'Cash',
   NFO: 'F&O',
   BFO: 'F&O',
   CDS: 'Currency',
   BCD: 'Currency',
-  CDS_INDEX: 'Currency',
   MCX: 'Commodity',
   NCDEX: 'Commodity',
   NCO: 'Commodity',
-  MCX_INDEX: 'Commodity',
   CRYPTO: 'Crypto',
 }
 
-const CHIP_ORDER: Category[] = ['Cash', 'F&O', 'Currency', 'Commodity', 'Crypto']
+const CHIP_ORDER: Category[] = ['Index', 'Cash', 'F&O', 'Currency', 'Commodity', 'Crypto']
 
 function categoryOf(exchange: string): Category {
+  if (exchange.endsWith('_INDEX')) return 'Index'
   return EXCHANGE_CATEGORY[exchange] ?? 'Cash'
 }
 
-/** Segment display order — Cash (equity + index) first, then F&O, etc. */
+/**
+ * Segment display and ALL-view priority order. Index ranks first: a benchmark
+ * index (NIFTY, BANKNIFTY, SENSEX, ...) is almost always what someone charting
+ * "NIFTY" wants, not an ETF or scheme that happens to share the prefix.
+ */
 const CATEGORY_RANK: Record<Category, number> = {
-  Cash: 0,
-  'F&O': 1,
-  Currency: 2,
-  Commodity: 3,
-  Crypto: 4,
+  Index: 0,
+  Cash: 1,
+  'F&O': 2,
+  Currency: 3,
+  Commodity: 4,
+  Crypto: 5,
 }
 
 /**
- * Within-segment exchange order: cash equities (NSE, BSE) rank above their
- * indices (NSE_INDEX, BSE_INDEX), and each derivatives segment lists its primary
- * exchange first. The backend returns matches in cache-insertion order with no
- * relevance ranking, so this ordering happens entirely client-side.
+ * Within-segment exchange order. Equity indices (NSE_INDEX, BSE_INDEX) rank
+ * above global and sector indices, and each derivatives segment lists its
+ * primary exchange first. The backend (BrokerSymbolCache.search_symbols)
+ * already ranks matches by relevance before this component ever sees them —
+ * this is a finer-grained tiebreaker on top of that for rows the backend
+ * scored equally.
  */
 const EXCHANGE_RANK: Record<string, number> = {
+  NSE_INDEX: 0,
+  BSE_INDEX: 1,
+  GLOBAL_INDEX: 2,
+  MCX_INDEX: 3,
+  CDS_INDEX: 4,
   NSE: 0,
   BSE: 1,
-  NSE_INDEX: 2,
-  BSE_INDEX: 3,
-  GLOBAL_INDEX: 4,
   NFO: 0,
   BFO: 1,
   CDS: 0,
   BCD: 1,
-  CDS_INDEX: 2,
   MCX: 0,
   NCDEX: 1,
   NCO: 2,
-  MCX_INDEX: 3,
   CRYPTO: 0,
 }
 
@@ -85,7 +90,7 @@ function matchScore(symbol: string, q: string): number {
   return 3
 }
 
-/** Rank rows so Cash (NSE/BSE, then indices) surfaces above F&O/Currency/Commodity. */
+/** Rank rows so Index surfaces above Cash, which surfaces above F&O/Currency/Commodity. */
 function compareRows(a: SearchRow, b: SearchRow, q: string): number {
   const exA = String(a.exchange)
   const exB = String(b.exchange)
