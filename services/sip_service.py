@@ -38,6 +38,7 @@ from sip.analytics import (
     underwater,
     yearly_breakdown,
 )
+from sip.crisis import crisis_sip_analysis, crisis_summary
 from sip.engine import SipError, run_sip
 from sip.schedule import FREQUENCIES, ScheduleError
 from sip.xirr import xirr_or_none
@@ -292,6 +293,11 @@ def run_sip_backtest(
         payload["start_date_heatmap"] = start_date_heatmap(
             closes, float(amount), **sip_kw
         )
+        crisis_rows = crisis_sip_analysis(closes, float(amount), sip_kw=sip_kw)
+        payload["crisis"] = {
+            "summary": crisis_summary(crisis_rows),
+            "periods": crisis_rows,
+        }
         payload["sip_date_heatmap"] = (
             sip_date_heatmap(closes, start, end, float(amount), **sip_kw)
             if frequency in ("monthly", "quarterly")
