@@ -1538,24 +1538,18 @@ export class TradingTerminal {
   /* ── symbol selection ─────────────────────────────────────────────────── */
   async loadSymbol(pick: SearchRow, opts: { silent?: boolean } = {}): Promise<boolean> {
     if (!this.rest) return false
-    // swap the live stream: drop the previous symbol's subscription
-    if (
-      this.ws &&
-      this.sym &&
-      (this.sym.symbol !== pick.symbol || this.sym.exchange !== pick.exchange)
-    ) {
-      // Mirror connectLive's single-subscription model: the outgoing symbol
-      // holds exactly one mode -- LTP when quote-only, Depth otherwise.
-      try {
-        if (this.sym.quoteOnly) {
-          this.ws.unsubscribe('LTP', this.sym.symbol, this.sym.exchange)
-        } else {
-          this.ws.unsubscribe('Depth', this.sym.symbol, this.sym.exchange)
-        }
-      } catch {
-        /* not subscribed */
-      }
-    }
+    // Load transactionally: nothing below mutates terminal state until the new
+    // symbol's history is in hand. A failed or empty history used to leave
+    // this.sym pointing at the NEW symbol while the canvas, the toolbar and the
+    // live feed still belonged to the OLD one -- and since order actions read
+    // this.sym directly (placeFromMenu, exitPosition), a context-menu order
+    // would be placed on an instrument the user was not looking at.
+    //
+    // It also blanked rawBars, which made marketPrice() null and so silently
+    // disabled BOTH price guards: contextMenuAt stopped greying out order types
+    // and placeFromMenu stopped rejecting stops on the wrong side of the LTP,
+    // with the price taken from the old symbol's scale.
+    const prev = this.sym
     // authoritative metadata (lotsize / tick_size / freeze_qty)
     let info: Record<string, unknown> = { ...pick }
     try {
@@ -1572,10 +1566,10 @@ export class TradingTerminal {
     const lots = DERIVATIVE_EXCHANGES.has(exchange) && lotsize > 1
     const savedProduct = this.lsGet('product')
     const productOptions = lots ? ['MIS', 'NRML'] : ['MIS', 'CNC']
-    this.product = productOptions.includes(savedProduct || '')
+    const product = productOptions.includes(savedProduct || '')
       ? (savedProduct as string)
       : productOptions[0]
-    this.sym = {
+    const next = {
       symbol: String(info.symbol),
       exchange,
       name: String(info.name || ''),
@@ -1585,35 +1579,52 @@ export class TradingTerminal {
       freezeQty: Number(info.freeze_qty) || 1,
       quoteOnly: QUOTE_ONLY.has(exchange),
       productOptions,
-      product: this.product,
+      product,
     }
-    this.qty = 1
-    this.lsSet('symbol', JSON.stringify({ symbol: this.sym.symbol, exchange: this.sym.exchange }))
 
     // history
     const to = nowSec()
-    this.lastLtp = null
-    this.prevClose = null
-    this.liveBucket = null
-    this.noMoreHistory = false
+    let bars: typeof this.rawBars
     try {
-      this.rawBars = await this.rest.getBars({
-        symbol: this.sym.symbol,
-        exchange: this.sym.exchange,
+      bars = await this.rest.getBars({
+        symbol: next.symbol,
+        exchange: next.exchange,
         interval: this.interval,
         from: to - lookbackDays(this.interval) * 86400,
         to,
       })
     } catch (e) {
-      this.rawBars = []
       if (!opts.silent) this.toast(`history error: ${this.cleanError(e)}`, 'err')
       return false // caller may fall back (e.g. to the default symbol)
     }
-    if (!this.rawBars.length) {
+    if (!bars.length) {
       if (!opts.silent)
-        this.toast(`no history for ${this.sym.symbol} ${this.sym.exchange} ${this.interval}`, 'err')
+        this.toast(`no history for ${next.symbol} ${next.exchange} ${this.interval}`, 'err')
       return false
     }
+
+    // ---- commit: past this point the load cannot fail ----
+    // Swap the live stream only now, mirroring connectLive's single-subscription
+    // model: the outgoing symbol holds exactly one mode -- LTP when quote-only,
+    // Depth otherwise.
+    if (this.ws && prev && (prev.symbol !== next.symbol || prev.exchange !== next.exchange)) {
+      try {
+        if (prev.quoteOnly) {
+          this.ws.unsubscribe('LTP', prev.symbol, prev.exchange)
+        } else {
+          this.ws.unsubscribe('Depth', prev.symbol, prev.exchange)
+        }
+      } catch {
+        /* not subscribed */
+      }
+    }
+    this.sym = next
+    this.product = product
+    this.qty = 1
+    this.lsSet('symbol', JSON.stringify({ symbol: this.sym.symbol, exchange: this.sym.exchange }))
+    this.rawBars = bars
+    this.liveBucket = null
+    this.noMoreHistory = false
     this.prevClose =
       this.rawBars.length > 1
         ? this.rawBars[this.rawBars.length - 2].close
