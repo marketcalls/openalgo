@@ -783,25 +783,80 @@ mkdir -p $BACKUP_DIR
 echo "Creating backup..."
 cd /opt/openalgo
 
+# Resolve the REAL volume names before stopping anything.
+#
+# Compose prefixes named volumes with the project name, which comes from the
+# directory: the compose file declares "openalgo_db" but the actual volume in
+# /opt/openalgo is "openalgo_openalgo_db". This script used to pass the
+# declared name, and `docker run -v <unknown-name>:/data` does not fail -- it
+# CREATES an empty volume. The tar then succeeded with nothing in it, so the
+# backup archive looked fine and restored nothing.
+# Ask the container what it is ACTUALLY using, rather than guessing from
+# names. Name matching is unsafe here: the old buggy command created a stray
+# empty "openalgo_db" volume on every run, so a name pattern would happily
+# match that debris and archive nothing all over again.
+CONTAINER=$(sudo docker compose ps -q openalgo 2>/dev/null | head -1)
+[ -z "$CONTAINER" ] && CONTAINER=openalgo-web
+mount_for() {
+    sudo docker inspect "$CONTAINER" \
+        --format "{{range .Mounts}}{{if eq .Destination \"$1\"}}{{.Name}}{{end}}{{end}}" 2>/dev/null
+}
+DB_VOL=$(mount_for /app/db)
+ST_VOL=$(mount_for /app/strategies)
+
+if [ -z "$DB_VOL" ]; then
+    echo "ERROR: could not find the OpenAlgo database volume." >&2
+    echo "       Volumes present:" >&2
+    sudo docker volume ls --format '  {{.Name}}' >&2
+    echo "       Aborting without stopping the stack." >&2
+    exit 1
+fi
+echo "Database volume:   $DB_VOL"
+[ -n "$ST_VOL" ] && echo "Strategies volume: $ST_VOL"
+
 # Backup .env file and Docker volume data
 echo "Backing up configuration and volume data..."
 sudo docker compose stop
 
-# Create temp directory for volume exports
+# Whatever happens from here, bring the stack back up. A failed backup must
+# never leave a trading platform stopped.
 TEMP_DIR=$(mktemp -d)
+restore_stack() {
+    sudo rm -rf "$TEMP_DIR"
+    sudo docker compose start
+}
+trap restore_stack EXIT
 
-# Export data from Docker volumes
-sudo docker run --rm -v openalgo_db:/data -v $TEMP_DIR:/backup alpine tar -czf /backup/db.tar.gz -C /data . 2>/dev/null
-sudo docker run --rm -v openalgo_strategies:/data -v $TEMP_DIR:/backup alpine tar -czf /backup/strategies.tar.gz -C /data . 2>/dev/null
+# Export data from Docker volumes. No 2>/dev/null: if this fails you need to
+# know, because the whole point is having a restorable copy.
+sudo docker run --rm -v "$DB_VOL":/data -v $TEMP_DIR:/backup alpine tar -czf /backup/db.tar.gz -C /data . || {
+    echo "ERROR: failed to archive the database volume." >&2
+    exit 1
+}
+
+BACKUP_MEMBERS="db.tar.gz"
+if [ -n "$ST_VOL" ]; then
+    if sudo docker run --rm -v "$ST_VOL":/data -v $TEMP_DIR:/backup alpine tar -czf /backup/strategies.tar.gz -C /data .; then
+        BACKUP_MEMBERS="$BACKUP_MEMBERS strategies.tar.gz"
+    else
+        echo "WARNING: could not archive strategies; continuing with the database only." >&2
+    fi
+fi
+
+# Verify the database archive actually contains something before declaring
+# success. An empty archive is the failure mode this whole block exists to stop.
+if ! sudo tar -tzf "$TEMP_DIR/db.tar.gz" | grep -q .; then
+    echo "ERROR: the database archive is empty - not writing a misleading backup." >&2
+    exit 1
+fi
 
 # Create final backup
-sudo tar -czf $BACKUP_FILE .env -C $TEMP_DIR db.tar.gz strategies.tar.gz 2>/dev/null
+sudo tar -czf $BACKUP_FILE .env -C $TEMP_DIR $BACKUP_MEMBERS || {
+    echo "ERROR: failed to create $BACKUP_FILE" >&2
+    exit 1
+}
 
-# Cleanup temp directory
-sudo rm -rf $TEMP_DIR
-
-sudo docker compose start
-echo "Backup created: $BACKUP_FILE"
+echo "Backup created: $BACKUP_FILE ($(sudo du -h "$BACKUP_FILE" | cut -f1))"
 
 # Keep only last 7 backups
 cd $BACKUP_DIR

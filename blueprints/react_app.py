@@ -206,6 +206,12 @@ def react_portfolio_backtester():
     return serve_react_app()
 
 
+# SIP Backtester
+@react_bp.route("/sip-backtester")
+def react_sip_backtester():
+    return serve_react_app()
+
+
 # The former path. Kept so an existing bookmark reaches the SPA, which
 # redirects it to the new one rather than showing a not-found.
 @react_bp.route("/portfolio")

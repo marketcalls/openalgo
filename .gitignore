@@ -117,3 +117,6 @@ env.backup
 # ...but the negation above must not punch a hole in workspace/, whose
 # promise is that only readmes are tracked. Last matching rule wins.
 workspace/**/.sample.env
+
+# Local Git worktrees created for isolated feature and documentation work.
+.worktrees/
