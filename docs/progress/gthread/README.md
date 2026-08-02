@@ -44,11 +44,11 @@ language: what was broken, what we changed, and how we know it works.
 
 | | |
 | --- | --- |
-| Total items tracked | 161 |
+| Total items tracked | 162 |
 | Already fine, no work needed | 50 |
-| Fixed and tested | 71 |
+| Fixed and tested | 72 |
 | Still to do | 40 |
-| **Coverage of actionable rows** | **71 / 111 = 64%** |
+| **Coverage of actionable rows** | **72 / 112 = 64%** |
 
 ## Correction, 2026-08-02
 

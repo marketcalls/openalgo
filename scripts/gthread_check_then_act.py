@@ -38,6 +38,12 @@ DEFAULT_ROOTS = (
     "subscribers",
     "websocket_proxy",
     "broker",
+    # Added after the SIP backtester merged: these were never scanned, so the
+    # gate reported "clean" while three application packages sat outside it.
+    # A gate is only as good as what it looks at.
+    "portfolio",
+    "sip",
+    "events",
     "restx_api",
     "upgrade",
 )
