@@ -53,6 +53,10 @@ class SipResult:
     #: same sessions. The gap is the rupee-cost-averaging effect.
     average_cost: float
     average_price: float
+    #: Money paid in that could not buy a whole share and is still sitting in
+    #: the account. Indian cash equity trades in whole shares, so a fixed rupee
+    #: installment almost never spends to the last paisa.
+    cash: float = 0.0
     charges: float = 0.0
     #: Per-charge totals across every installment (stt, exchange_txn, sebi,
     #: stamp_duty, brokerage, tax, slippage). Empty when a flat model is used.
@@ -153,8 +157,10 @@ def run_sip(
     price_on = {d.date(): float(p) for d, p in window.items()}
 
     units_by_date: dict[date, float] = {}
+    cash_by_date: dict[date, float] = {}
     invested_by_date: dict[date, float] = {}
     total_units = 0.0
+    cash = 0.0
     total_invested = 0.0
     total_charges = 0.0
     breakdown: dict[str, float] = {}
@@ -162,23 +168,41 @@ def run_sip(
 
     for inst in installments:
         price = price_on[inst.executed]
-        charge = _charge_for(inst.amount, brokerage_percent, brokerage_flat, costs)
-        deployed = inst.amount - charge
-        if deployed <= 0:
-            raise SipError(
-                "charges exceed the installment amount; check brokerage settings"
-            )
-        bought = deployed / price
-        total_units += bought
+
+        # India has no fractional shares: cash equity and ETFs trade in whole
+        # units. A fixed rupee installment therefore almost never spends to the
+        # last paisa, and what is left stays in the account and is added to the
+        # next installment. Modelling this matters -- pretending you can buy
+        # 6.47 shares overstates the units held and every return derived from
+        # them, and the error compounds with each installment.
+        budget = cash + inst.amount
+
+        # Charges depend on the traded value, and the traded value depends on
+        # how many whole shares the charges leave room for. Size the trade
+        # first, then charge it, then step down a share if the charge no longer
+        # fits. One step is always enough: a charge is a small fraction of a
+        # share's price.
+        shares = int(budget // price)
+        charge = _charge_for(shares * price, brokerage_percent, brokerage_flat, costs)
+        while shares > 0 and shares * price + charge > budget:
+            shares -= 1
+            charge = _charge_for(shares * price, brokerage_percent, brokerage_flat, costs)
+        if shares == 0:
+            charge = 0.0  # nothing traded, nothing charged
+
+        spent = shares * price
+        cash = budget - spent - charge
+        total_units += shares
         total_invested += inst.amount
         total_charges += charge
-        if costs is not None:
+        if costs is not None and shares:
             for key, value in costs.breakdown(
-                buy_value=inst.amount, sell_value=0.0, orders=1
+                buy_value=spent, sell_value=0.0, orders=1
             ).items():
                 if key != "orders":
                     breakdown[key] = breakdown.get(key, 0.0) + float(value)
         units_by_date[inst.executed] = total_units
+        cash_by_date[inst.executed] = cash
         invested_by_date[inst.executed] = total_invested
         # Negative: money leaving the investor.
         cash_flows.append((inst.executed, -inst.amount))
@@ -192,7 +216,10 @@ def run_sip(
         [invested_by_date.get(d.date()) for d in window.index], index=window.index
     ).ffill().fillna(0.0)
 
-    value = units * window
+    cash_held = pd.Series(
+        [cash_by_date.get(d.date()) for d in window.index], index=window.index
+    ).ffill().fillna(0.0)
+    value = units * window + cash_held
     final_value = float(value.iloc[-1])
     last_session = window.index[-1].date()
 
@@ -200,7 +227,15 @@ def run_sip(
     # back at once on the final session.
     cash_flows.append((last_session, final_value))
 
-    deployed_total = total_invested - total_charges
+    # Cost per share actually acquired: everything paid in, less the charges
+    # and the cash still uninvested, divided by the shares it bought.
+    if total_units == 0:
+        raise SipError(
+            "no installment could afford a single share: the price exceeds the "
+            "amount available after charges. Increase the installment."
+        )
+
+    deployed_total = total_invested - total_charges - cash
     average_cost = (deployed_total / total_units) if total_units > 0 else 0.0
     executed_prices = [price_on[i.executed] for i in installments]
     average_price = sum(executed_prices) / len(executed_prices)
@@ -218,6 +253,7 @@ def run_sip(
         total_units=total_units,
         average_cost=average_cost,
         average_price=average_price,
+        cash=cash,
         charges=total_charges,
         charge_breakdown={k: round(v, 2) for k, v in breakdown.items()},
         warnings=list(warnings or []),
@@ -248,9 +284,15 @@ def run_lumpsum(
         raise SipError("no sessions available for the lumpsum comparison")
 
     entry_price = float(window.iloc[0])
-    charge = _charge_for(amount, brokerage_percent, brokerage_flat, costs)
-    units = (amount - charge) / entry_price
-    value = units * window
+    # Whole shares here too, or the comparison would give lumpsum a fractional
+    # advantage the SIP is not allowed. The unspent remainder stays as cash.
+    units = int(amount // entry_price)
+    charge = _charge_for(units * entry_price, brokerage_percent, brokerage_flat, costs)
+    while units > 0 and units * entry_price + charge > amount:
+        units -= 1
+        charge = _charge_for(units * entry_price, brokerage_percent, brokerage_flat, costs)
+    residual = amount - units * entry_price - charge
+    value = units * window + residual
     final_value = float(value.iloc[-1])
 
     return {

@@ -71,6 +71,9 @@ def headline(result: SipResult) -> dict:
         if result.average_price
         else None,
         "charges": _f(result.charges),
+        # India has no fractional shares, so a fixed rupee installment leaves a
+        # remainder. It is the investor's money and sits in the account.
+        "cash": _f(result.cash),
         "start": str(result.value.index[0].date()),
         "end": str(result.value.index[-1].date()),
         "years": _f((result.value.index[-1] - result.value.index[0]).days / 365.0),

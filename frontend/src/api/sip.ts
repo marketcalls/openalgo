@@ -58,6 +58,8 @@ export interface SipHeadline {
    *  dates — the rupee-cost-averaging effect, quantified. */
   cost_advantage: number | null
   charges: number | null
+  /** Paid in but not yet spent: whole shares leave a remainder. */
+  cash: number | null
   start: string
   end: string
   years: number | null

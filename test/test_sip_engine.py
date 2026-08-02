@@ -60,7 +60,11 @@ def test_charges_reduce_units_not_the_invested_amount():
                    brokerage_percent=1.0)
     assert paid.total_invested == free.total_invested
     assert paid.total_units < free.total_units
-    assert paid.charges == pytest.approx(600.0), "1% of 60000"
+    # 1% of the value actually TRADED, not of the installment. At Rs 100 a
+    # share a Rs 10,000 installment buys 99 whole shares (Rs 9,900) once the
+    # charge is allowed for, so 1% of 9,900 per installment. Charging the full
+    # installment would overstate brokerage on money that never traded.
+    assert paid.charges == pytest.approx(99.0 * 6)
 
 
 def test_charges_are_levied_per_installment():
@@ -98,10 +102,13 @@ def test_rejects_a_symbol_with_no_sessions_in_the_window():
         run_sip(flat(), "X", "NSE", date(2030, 1, 1), date(2030, 6, 30), 10000)
 
 
-def test_rejects_charges_larger_than_the_installment():
-    with pytest.raises(SipError, match="charges exceed"):
-        run_sip(flat(), "X", "NSE", date(2020, 1, 1), date(2020, 6, 30), 100,
-                brokerage_flat=500.0)
+def test_rejects_a_sip_that_can_never_afford_a_share():
+    """With whole shares, an installment too small to buy one is not an error
+    on its own -- the cash carries forward and buys later. It is only unusable
+    when nothing is ever bought."""
+    px = prices([100_000.0] * 200)   # one share costs more than the whole SIP
+    with pytest.raises(SipError, match="afford a single share"):
+        run_sip(px, "X", "NSE", date(2020, 1, 1), date(2020, 6, 30), 1000)
 
 
 def test_lumpsum_deploys_everything_on_the_first_session():
@@ -140,8 +147,12 @@ def test_statutory_charges_are_levied_per_installment():
     s = run_sip(flat(), "X", "NSE", date(2020, 1, 1), date(2020, 6, 30), 10000,
                 costs=india_costs())
     assert s.installment_count == 6
-    # STT 0.1% + stamp 0.015% + exchange + SEBI + GST on the taxed lines.
-    assert s.charges == pytest.approx(11.87 * 6, rel=1e-3)
+    # Charged on the value actually traded, which whole shares make slightly
+    # less than the installment. Derived, not hardcoded: a fixed number here
+    # would silently re-encode the fractional-share assumption.
+    traded = s.total_invested - s.cash - s.charges
+    assert s.charges == pytest.approx(traded * 0.0011872, rel=5e-3)
+    assert s.charges < 11.87 * 6, "charging the full installment would overstate it"
 
 
 def test_charge_breakdown_itemises_every_statutory_line():
@@ -149,7 +160,9 @@ def test_charge_breakdown_itemises_every_statutory_line():
                 costs=india_costs())
     for line in ("stt", "exchange_txn", "sebi", "stamp_duty", "tax"):
         assert s.charge_breakdown[line] > 0, f"{line} missing from the breakdown"
-    assert s.charge_breakdown["stt"] == pytest.approx(60.0), "0.1% of 60,000"
+    traded = s.total_invested - s.cash - s.charges
+    assert s.charge_breakdown["stt"] == pytest.approx(traded * 0.001, rel=1e-6), \
+        "STT is 0.1% of the value traded, not of the money paid in"
 
 
 def test_bse_and_nse_differ_only_in_the_exchange_fee():
@@ -174,6 +187,84 @@ def test_lumpsum_uses_the_same_charge_model():
     """Otherwise the SIP-versus-lumpsum comparison would be rigged."""
     lump = run_lumpsum(flat(), date(2020, 1, 1), date(2020, 6, 30), 60000,
                        costs=india_costs())
-    charged = 60000 - lump["units"] * 100.0
-    assert charged > 0
-    assert charged == pytest.approx(71.22, rel=1e-2), "one buy of 60,000"
+    traded = lump["units"] * 100.0
+    assert traded > 0
+    assert lump["units"] == int(lump["units"]), "lumpsum bought fractional shares"
+    # Everything is either in shares, in charges, or left as cash -- the same
+    # conservation the SIP path obeys.
+    expected_charge = traded * 0.0011872
+    residual = 60000 - traded - expected_charge
+    assert lump["final_value"] == pytest.approx(traded + residual, rel=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# Whole shares: India has no fractional units in cash equity or ETFs
+# ---------------------------------------------------------------------------
+
+
+def test_only_whole_shares_are_bought():
+    """A Rs 10,000 installment into a Rs 1,500 share buys 6, not 6.67.
+
+    Not exactly 6 every month: the Rs 1,000 remainder carries, so some months
+    afford 7. What must always hold is that the count is a whole number.
+    """
+    px = prices([1500.0] * 200)
+    s = run_sip(px, "X", "NSE", date(2020, 1, 1), date(2020, 6, 30), 10000)
+    assert s.total_units == int(s.total_units), "fractional shares were bought"
+    assert s.total_units == 40, "6 x 10,000 at 1,500, with the remainder carried"
+
+
+def test_no_money_is_created_or_lost():
+    """The invariant that makes the whole model trustworthy: everything paid in
+    is either in shares, in charges, or still in cash."""
+    px = prices([1500.0] * 200)
+    s = run_sip(px, "X", "NSE", date(2020, 1, 1), date(2020, 6, 30), 10000)
+    assert s.total_units * 1500.0 + s.cash + s.charges == pytest.approx(
+        s.total_invested
+    )
+
+
+def test_the_remainder_carries_forward_rather_than_being_lost():
+    """Rs 1,000 left over is not discarded -- it joins the next installment and
+    buys a 7th share in some months."""
+    px = prices([1500.0] * 400)
+    s = run_sip(px, "X", "NSE", date(2020, 1, 1), date(2020, 12, 31), 10000)
+    assert s.total_units > 6 * s.installment_count, "carried cash never bought"
+    # A single installment on its own cannot spend to the last rupee.
+    one = run_sip(px, "X", "NSE", date(2020, 1, 1), date(2020, 1, 31), 10000)
+    assert one.cash == pytest.approx(1000.0), "10,000 - 6 x 1,500"
+
+
+def test_uninvested_cash_is_counted_in_the_value():
+    """The investor paid it in and still holds it. Excluding it would make the
+    SIP look worse than it was."""
+    px = prices([1500.0] * 200)
+    s = run_sip(px, "X", "NSE", date(2020, 1, 1), date(2020, 5, 31), 10000)
+    assert s.cash > 0, "this schedule should leave a remainder"
+    assert s.final_value == pytest.approx(s.total_units * 1500.0 + s.cash)
+    # Flat price and no charges: you get back exactly what you put in.
+    assert s.final_value == pytest.approx(s.total_invested)
+
+
+def test_average_cost_is_per_share_actually_bought():
+    px = prices([1500.0] * 200)
+    s = run_sip(px, "X", "NSE", date(2020, 1, 1), date(2020, 6, 30), 10000)
+    assert s.average_cost == pytest.approx(1500.0)
+
+
+def test_lumpsum_also_buys_whole_shares():
+    """Otherwise the comparison would hand lumpsum a fractional advantage the
+    SIP is not allowed."""
+    px = prices([1500.0] * 200)
+    lump = run_lumpsum(px, date(2020, 1, 1), date(2020, 6, 30), 60000)
+    assert lump["units"] == int(lump["units"])
+    assert lump["units"] == 40, "60000 / 1500"
+
+
+def test_an_expensive_share_still_accumulates():
+    """A Rs 5,000 installment into a Rs 12,000 share buys nothing for two
+    months, then one share in the third. Nothing is lost meanwhile."""
+    px = prices([12000.0] * 400)
+    s = run_sip(px, "X", "NSE", date(2020, 1, 1), date(2020, 12, 31), 5000)
+    assert s.total_units >= 4, "12 x 5000 = 60000 buys 5 shares"
+    assert s.total_units == int(s.total_units)
