@@ -157,14 +157,30 @@ def test_no_method_reads_a_snapshot_field_twice():
         # The properties themselves are the single-read accessors.
         if any(isinstance(d, ast.Name) and d.id == "property" for d in fn.decorator_list):
             continue
-        reads = [
-            node.attr
-            for node in ast.walk(fn)
-            if isinstance(node, ast.Attribute)
-            and node.attr in fields
-            and isinstance(node.value, ast.Name)
-            and node.value.id == "self"
-        ]
+        # Both routes to a snapshot field count, because both re-read _snap:
+        #
+        #   self.by_symbol_exchange          -> property -> self._snap.<field>
+        #   self._snap.by_symbol_exchange    -> direct
+        #
+        # Counting only the first would have been a blind spot precisely where
+        # the fix lives: the corrected accessors use the *second* form, so this
+        # check could not see the pattern it exists to protect. A local
+        # `snap = self._snap` followed by `snap.<field>` is the safe shape and
+        # is deliberately not counted -- the generation is already bound.
+        def _is_snapshot_read(node):
+            if not (isinstance(node, ast.Attribute) and node.attr in fields):
+                return False
+            base = node.value
+            if isinstance(base, ast.Name) and base.id == "self":
+                return True  # via property
+            return (
+                isinstance(base, ast.Attribute)
+                and base.attr == "_snap"
+                and isinstance(base.value, ast.Name)
+                and base.value.id == "self"
+            )  # direct
+
+        reads = [node.attr for node in ast.walk(fn) if _is_snapshot_read(node)]
         if len(reads) >= 2:
             offenders.append(f"{fn.name} reads {sorted(set(reads))} {len(reads)} times")
 

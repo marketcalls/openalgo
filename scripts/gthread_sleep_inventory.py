@@ -46,12 +46,22 @@ def sleep_calls(path: pathlib.Path) -> int:
 # Reviewed baseline, matching tracker rows GT-B2-01/02/03. These are the
 # numbers the thread budget in the plan was derived from; if they move, the
 # budget must be re-derived rather than the numbers quietly updated.
-EXPECTED = {
+# Sites AND the files they are spread across. The tracker records both, and
+# they can drift independently: the same site count spread over more files
+# means a new broker picked up the pattern, which is exactly the change worth
+# noticing.
+EXPECTED_SITES = {
     "request-path": 111,
     "streaming-thread": 78,
     "background-download": 5,
     "total": 194,
     "budget": 111,
+}
+EXPECTED_FILES = {
+    "request-path": 48,
+    "streaming-thread": 34,
+    "background-download": 3,
+    "total": 85,
 }
 
 
@@ -77,17 +87,18 @@ def main() -> int:
     # "a drifted sleep inventory fails the gate" was false and a broker change
     # could silently move the thread budget. Drift is not automatically wrong;
     # it must be re-reviewed and the baseline updated deliberately.
-    drift = [
-        (name, expected, actual)
-        for name, expected, actual in (
-            ("request-path sites", EXPECTED["request-path"], counts["request-path"]),
-            ("streaming-thread sites", EXPECTED["streaming-thread"], counts["streaming-thread"]),
-            ("background-download sites", EXPECTED["background-download"], counts["background-download"]),
-            ("total sites", EXPECTED["total"], total),
-            ("thread-budget term", EXPECTED["budget"], budget),
-        )
-        if expected != actual
+    checks = [
+        (f"{c} sites", EXPECTED_SITES[c], counts[c])
+        for c in ("request-path", "streaming-thread", "background-download")
+    ] + [
+        (f"{c} files", EXPECTED_FILES[c], files[c])
+        for c in ("request-path", "streaming-thread", "background-download")
+    ] + [
+        ("total sites", EXPECTED_SITES["total"], total),
+        ("total files", EXPECTED_FILES["total"], sum(files.values())),
+        ("thread-budget term", EXPECTED_SITES["budget"], budget),
     ]
+    drift = [(n, e, a) for n, e, a in checks if e != a]
     if drift:
         print("\nFAIL: sleep inventory drifted from the reviewed baseline")
         for name, expected, actual in drift:

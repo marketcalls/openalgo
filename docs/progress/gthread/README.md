@@ -69,16 +69,30 @@ this migration and then reported as fixed:
   test-local functions, and never wired to a single production writer. Those
   rows are open again.
 
-What let both through was the same thing: **checks that were not gating.** Two
-shell suites, 63 checks, were never invoked by CI. The sleep-inventory gate
-returned success unconditionally while the workflow claimed drift would fail it.
-Both are fixed, and CI now fails if a suite exists without being run.
+**Correction to this correction.** An earlier version of this page blamed both
+defects on checks that were not gating. That was wrong, and a follow-up review
+caught it. There were **two separate failure modes**, and only one of them is
+about gating:
+
+| Failure mode | What happened | Remedy |
+| --- | --- | --- |
+| **Ran, but asserted the wrong boundary** | `test_gthread_cache_snapshot.py` and `test_gthread_sqlite_retry.py` were always in CI and always passed. The first asserted that a whole-snapshot assignment is atomic — never the part in doubt — instead of driving the real accessors. The second exercised the decorator on functions defined inside the test, so it stayed green with zero production callers. | Assert at the boundary production actually uses |
+| **Never ran at all** | Two shell suites, 63 checks, existed but were not invoked by CI. The sleep-inventory gate returned success unconditionally while the workflow claimed drift would fail it. | Gating, now enforced |
+
+The second is easy to spot once looked for. **The first is the dangerous one**,
+because it produces confidently green CI over a defect — and no amount of
+gating fixes it. Both are now addressed, but they needed different fixes, and
+conflating them would have left the more serious one in place.
 
 ## Open questions
 
-That is **not** the same as the migration being finished. Of the 23 items still
+That is **not** the same as the migration being finished. Of the 36 items still
 to do:
 
+- **13 are code the audit reopened** — the SQLite retry helper still has no
+  production callers, eight cache modules keep compound lookup/delete patterns,
+  Telegram initialization is not single-flight after a timeout, and the
+  container health check does not prove a live broker feed.
 - **5 are the switch itself and the files it changes** — repinning Gunicorn,
   dropping eventlet, the multi-instance thread budget, the broker async flip,
   and the half of the documentation sweep that only becomes true once the
