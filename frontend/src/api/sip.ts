@@ -174,6 +174,45 @@ export interface ChargeSummary {
   exchange: string
 }
 
+export interface CrisisSipRun {
+  start: string
+  invested: number | null
+  final_value: number | null
+  installments: number
+  xirr: number | null
+  multiple: number | null
+  absolute_return: number | null
+  average_cost: number | null
+}
+
+/** One crisis, run two ways: starting into it, versus waiting for it to end. */
+export interface CrisisPeriodRow {
+  key: string
+  label: string
+  note: string
+  scope: string
+  crisis_start: string
+  crisis_end: string
+  /** What the market itself did across the window. */
+  market_move: number | null
+  market_trough: number | null
+  started_into_it: CrisisSipRun
+  waited_for_the_end: CrisisSipRun
+  /** Positive means starting into the crisis beat waiting. */
+  xirr_advantage: number | null
+  starting_early_won: boolean
+}
+
+export interface CrisisAnalysis {
+  summary: {
+    crises: number
+    early_wins: number
+    share: number | null
+    median_advantage: number | null
+  }
+  periods: CrisisPeriodRow[]
+}
+
 export interface SipBacktestResponse {
   status: string
   request: {
@@ -198,6 +237,7 @@ export interface SipBacktestResponse {
   installments: Installment[]
   warnings: string[]
   charges?: ChargeSummary
+  crisis?: CrisisAnalysis
   rolling_xirr?: RollingWindow[]
   start_date_heatmap?: SipHeatmap
   sip_date_heatmap?: SipDateHeatmap | null

@@ -227,7 +227,7 @@ export default function SipBacktesterResults() {
         {(
           [
             ['overview', 'Overview'],
-            ['timing', 'Does timing matter?'],
+            ['timing', 'Starting in a crisis'],
             ['compare', 'Comparisons'],
             ['detail', 'Detail'],
           ] as const
@@ -325,6 +325,97 @@ export default function SipBacktesterResults() {
       {/* ── Timing ───────────────────────────────────────────────────── */}
       {tab === 'timing' && (
         <div className="space-y-4">
+          {result.crisis && result.crisis.periods.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Would starting in a crash have ruined it?</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-sm">
+                  Across{' '}
+                  <span className="font-semibold">{result.crisis.summary.crises} crises</span> your
+                  data covers, beginning the SIP{' '}
+                  <span className="font-semibold">as the crash started</span> beat waiting for it to
+                  end in <span className="font-semibold">{result.crisis.summary.early_wins}</span>{' '}
+                  of them
+                  {result.crisis.summary.median_advantage !== null && (
+                    <>
+                      , by a median of{' '}
+                      <span className="font-semibold">
+                        {signedPct(result.crisis.summary.median_advantage)}
+                      </span>{' '}
+                      XIRR
+                    </>
+                  )}
+                  .
+                </p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="text-xs text-muted-foreground">
+                      <tr className="border-b">
+                        <th className="py-1 text-left">Crisis</th>
+                        <th className="py-1 text-right">Market</th>
+                        <th className="py-1 text-right">Started into it</th>
+                        <th className="py-1 text-right">Waited for the end</th>
+                        <th className="py-1 text-right">Difference</th>
+                      </tr>
+                    </thead>
+                    <tbody className="tabular-nums">
+                      {result.crisis.periods.map((c) => (
+                        <tr key={c.key} className="border-b last:border-0">
+                          <td className="py-1">
+                            <div>{c.label}</div>
+                            <div className="text-[11px] text-muted-foreground">
+                              {c.crisis_start} to {c.crisis_end}
+                            </div>
+                          </td>
+                          <td
+                            className={cn(
+                              'py-1 text-right',
+                              (c.market_move ?? 0) < 0 && 'text-rose-600 dark:text-rose-500'
+                            )}
+                          >
+                            {signedPct(c.market_move, 1)}
+                          </td>
+                          <td className="py-1 text-right">
+                            <div className="font-medium">{pct(c.started_into_it.xirr)}</div>
+                            <div className="text-[11px] text-muted-foreground">
+                              {inr(c.started_into_it.final_value)}
+                            </div>
+                          </td>
+                          <td className="py-1 text-right">
+                            <div className="font-medium">{pct(c.waited_for_the_end.xirr)}</div>
+                            <div className="text-[11px] text-muted-foreground">
+                              {inr(c.waited_for_the_end.final_value)}
+                            </div>
+                          </td>
+                          <td
+                            className={cn(
+                              'py-1 text-right font-medium',
+                              c.starting_early_won
+                                ? 'text-emerald-600 dark:text-emerald-500'
+                                : 'text-muted-foreground'
+                            )}
+                          >
+                            {signedPct(c.xirr_advantage)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Both columns run the same installment to the same end date, so only the start
+                  moves. A SIP begun into a falling market spends the decline buying cheap units;
+                  one begun after the recovery pays post-rebound prices from its first installment.
+                  That is the opposite of the lumpsum intuition, which is exactly why it is worth
+                  measuring rather than assuming. Crises your price history does not fully cover are
+                  left out rather than reported from partial data.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
           {result.start_date_heatmap && (
             <Card>
               <CardHeader className="pb-2">

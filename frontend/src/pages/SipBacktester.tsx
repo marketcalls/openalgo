@@ -15,7 +15,7 @@ import { type PriceSource, runSipBacktest, type SipFrequency } from '@/api/sip'
 import { ChargeControls } from '@/components/portfolio/ChargeControls'
 import { SymbolSearchInput } from '@/components/portfolio/SymbolSearchInput'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -152,67 +152,8 @@ export default function SipBacktester() {
         </p>
       </div>
 
+      {/* ── Row 1: benchmark, schedule, period ──────────────────────── */}
       <div className="grid gap-4 md:grid-cols-3">
-        {/* ── What to invest in ─────────────────────────────────────── */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Invest in</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <SymbolSearchInput
-              value={symbol}
-              exchange={exchange}
-              onSelect={(next: string) => setSymbol(next)}
-            />
-            <Select value={exchange} onValueChange={(v) => setExchange(v as 'NSE' | 'BSE')}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="NSE">NSE</SelectItem>
-                <SelectItem value="BSE">BSE</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              Cash equity and ETFs. A SIP into a derivative is not a thing.
-            </p>
-          </CardContent>
-        </Card>
-
-        {/* ── How much, how often ───────────────────────────────────── */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Installment</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <div className="space-y-1">
-              <Label className="text-xs">Amount per installment</Label>
-              <Input
-                type="number"
-                min={1}
-                value={amount}
-                onChange={(e) => setAmount(Number(e.target.value))}
-              />
-            </div>
-            <Select value={frequency} onValueChange={(v) => setFrequency(v as SipFrequency)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {FREQUENCIES.map((f) => (
-                  <SelectItem key={f.value} value={f.value}>
-                    {f.label} <span className="text-muted-foreground">{f.note}</span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">
-              About <span className="font-medium">₹{inr(yearlyOutlay)}</span> a year.
-            </p>
-          </CardContent>
-        </Card>
-
-        {/* ── Benchmark ─────────────────────────────────────────────── */}
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">Benchmark</CardTitle>
@@ -235,106 +176,166 @@ export default function SipBacktester() {
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              The same schedule is run into the index, so the comparison is SIP against SIP — not
-              SIP against an index CAGR.
+              The same schedule is run into the index, so it is SIP against SIP — not SIP against an
+              index CAGR.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">SIP Schedule</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <Select value={frequency} onValueChange={(v) => setFrequency(v as SipFrequency)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {FREQUENCIES.map((f) => (
+                  <SelectItem key={f.value} value={f.value}>
+                    {f.label} <span className="text-muted-foreground">{f.note}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="flex gap-2">
+              <div className="flex-1 space-y-1">
+                <Label className="text-xs">SIP date</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={28}
+                  disabled={!usesDayOfMonth}
+                  value={dayOfMonth}
+                  onChange={(e) => setDayOfMonth(Number(e.target.value))}
+                />
+              </div>
+              <div className="flex-1 space-y-1">
+                <Label className="text-xs">Step-up %/yr</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={stepUp}
+                  onChange={(e) => setStepUp(Number(e.target.value))}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {usesDayOfMonth
+                ? 'Days 1–28 only; later dates do not exist in every month.'
+                : 'SIP date does not apply to this frequency.'}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Analysis Period</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <div className="flex gap-2">
+              <div className="flex-1 space-y-1">
+                <Label className="text-xs">Start</Label>
+                <Input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                />
+              </div>
+              <div className="flex-1 space-y-1">
+                <Label className="text-xs">End</Label>
+                <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              The first installment lands on the start date, or the next trading session after it.
             </p>
           </CardContent>
         </Card>
       </div>
 
-      {/* ── Period and options ──────────────────────────────────────── */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Period and options</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-3 lg:grid-cols-6">
-          <div className="space-y-1">
-            <Label className="text-xs">SIP start date</Label>
-            <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs">End date</Label>
-            <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs">SIP date</Label>
-            <Input
-              type="number"
-              min={1}
-              max={28}
-              disabled={!usesDayOfMonth}
-              value={dayOfMonth}
-              onChange={(e) => setDayOfMonth(Number(e.target.value))}
-            />
-            <p className="text-[11px] text-muted-foreground">
-              {usesDayOfMonth ? '1–28' : 'n/a for this frequency'}
+      {/* ── Row 2: the SIP, with charges as a sidebar ───────────────── */}
+      <div className="grid gap-4 lg:grid-cols-4">
+        <Card className="lg:col-span-3">
+          <CardHeader className="pb-2">
+            <CardTitle>Systematic Investment Plan</CardTitle>
+            <CardDescription>NSE and BSE cash equity and ETFs.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Symbol</Label>
+                <SymbolSearchInput
+                  className="w-56"
+                  value={symbol}
+                  exchange={exchange}
+                  onSelect={(next: string) => setSymbol(next)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Exchange</Label>
+                <Select value={exchange} onValueChange={(v) => setExchange(v as 'NSE' | 'BSE')}>
+                  <SelectTrigger className="w-28">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="NSE">NSE</SelectItem>
+                    <SelectItem value="BSE">BSE</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Amount per installment (₹)</Label>
+                <Input
+                  className="w-40"
+                  type="number"
+                  min={1}
+                  value={amount}
+                  onChange={(e) => setAmount(Number(e.target.value))}
+                />
+              </div>
+              <div className="pb-2 text-sm text-muted-foreground">
+                about <span className="font-medium">₹{inr(yearlyOutlay)}</span> a year
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-end gap-4 border-t pt-3">
+              <div>
+                <Label className="text-xs">Data source</Label>
+                <Select value={source} onValueChange={(v) => setSource(v as PriceSource)}>
+                  <SelectTrigger className="w-40">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="db">Historify (local)</SelectItem>
+                    <SelectItem value="api">Broker API</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="ml-auto flex items-center gap-3">
+                <Button onClick={run} disabled={busy}>
+                  {busy ? 'Running…' : 'Run SIP Backtest'}
+                </Button>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {source === 'api'
+                ? 'Broker history is adjusted for corporate actions and needs an active session.'
+                : 'Historify works without a broker login, so backtesting at the weekend is fine.'}
             </p>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs">Annual step-up %</Label>
-            <Input
-              type="number"
-              min={0}
-              max={100}
-              value={stepUp}
-              onChange={(e) => setStepUp(Number(e.target.value))}
-            />
-            <p className="text-[11px] text-muted-foreground">Raises on each anniversary</p>
-          </div>
-        </CardContent>
-        <CardContent className="flex flex-col gap-2 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-xs text-muted-foreground">
-            Charges and price source below are optional — the defaults are the standard NSE delivery
-            schedule and your broker's history.
-          </p>
-          <Button onClick={run} disabled={busy} size="lg" className="w-full sm:w-auto">
-            {busy ? 'Running…' : 'Run SIP Backtest'}
-          </Button>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
 
-      {/* ── Charges ─────────────────────────────────────────────────── */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Brokerage and charges</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <ChargeControls
-            value={charges}
-            onChange={setCharges}
-            exchange={costExchange}
-            onExchange={setCostExchange}
-          />
-          <p className="text-xs text-muted-foreground">
-            Levied on <span className="font-medium">every installment</span>, not once for the SIP.
-            Over 60 monthly buys that difference is not small, and it shows up as fewer units rather
-            than a separate line.
-          </p>
-        </CardContent>
-      </Card>
-
-      {/* ── Data source ─────────────────────────────────────────────── */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Price data</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <Select value={source} onValueChange={(v) => setSource(v as PriceSource)}>
-            <SelectTrigger className="md:w-72">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="api">Broker API</SelectItem>
-              <SelectItem value="db">Historify (DB)</SelectItem>
-            </SelectContent>
-          </Select>
-          <p className="text-xs text-muted-foreground">
-            {source === 'api'
-              ? 'Fetched live from your broker and adjusted for corporate actions. Needs an active broker session.'
-              : 'Read from your local Historify store. Works without a broker login, so backtesting at the weekend is fine.'}
-          </p>
-        </CardContent>
-      </Card>
+        {/* Right: every charge, editable. Levied on each installment. */}
+        <ChargeControls
+          value={charges}
+          onChange={setCharges}
+          exchange={costExchange}
+          onExchange={setCostExchange}
+        />
+      </div>
 
       {error && (
         <div className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
