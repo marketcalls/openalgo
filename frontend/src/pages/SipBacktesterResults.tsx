@@ -178,7 +178,7 @@ export default function SipBacktesterResults() {
 
       {/* ── Headline numbers ─────────────────────────────────────────── */}
       <Card>
-        <CardContent className="grid grid-cols-2 gap-4 pt-6 md:grid-cols-4 lg:grid-cols-8">
+        <CardContent className="grid grid-cols-2 gap-4 pt-6 md:grid-cols-4 lg:grid-cols-9">
           <Stat
             label="XIRR"
             value={pct(h.xirr)}
@@ -201,8 +201,13 @@ export default function SipBacktesterResults() {
           />
           <Stat
             label="Shares held"
-            value={h.units ? h.units.toFixed(3) : '—'}
+            value={h.units ? h.units.toFixed(0) : '—'}
             hint={`avg ${inr(h.average_cost, 2)}`}
+          />
+          <Stat
+            label="Uninvested cash"
+            value={inr(h.cash, 2)}
+            hint="whole shares leave a remainder"
           />
           <Stat
             label="Max drawdown"
