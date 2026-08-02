@@ -282,6 +282,15 @@ export default function SipBacktester() {
             <p className="text-[11px] text-muted-foreground">Raises on each anniversary</p>
           </div>
         </CardContent>
+        <CardContent className="flex flex-col gap-2 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-muted-foreground">
+            Charges and price source below are optional — the defaults are the standard NSE delivery
+            schedule and your broker's history.
+          </p>
+          <Button onClick={run} disabled={busy} size="lg" className="w-full sm:w-auto">
+            {busy ? 'Running…' : 'Run SIP Backtest'}
+          </Button>
+        </CardContent>
       </Card>
 
       {/* ── Charges ─────────────────────────────────────────────────── */}
@@ -332,12 +341,6 @@ export default function SipBacktester() {
           {error}
         </div>
       )}
-
-      <div className="flex justify-end">
-        <Button onClick={run} disabled={busy} size="lg">
-          {busy ? 'Running…' : 'Run SIP Backtest'}
-        </Button>
-      </div>
     </div>
   )
 }
