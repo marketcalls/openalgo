@@ -24,6 +24,13 @@ const tools = [
     color: 'bg-emerald-500',
   },
   {
+    title: 'SIP Backtester',
+    description:
+      'What a monthly, weekly or quarterly SIP would actually have returned: XIRR, rupee-cost averaging, start-date sensitivity and how it compares with a lumpsum',
+    href: '/sip-backtester',
+    color: 'bg-emerald-500',
+  },
+  {
     title: 'Portfolio Analyzer',
     description:
       'Grade the holdings you actually own: concentration, co-movement, drawdown resilience and behaviour in past crises',
