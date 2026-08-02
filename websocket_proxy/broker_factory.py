@@ -198,8 +198,12 @@ class _PooledAdapterWrapper:
             self._pool.disconnect()
             # Remove from global registry
             pool_key = f"{self._broker_name}_{self._user_id}"
+            # Remove by IDENTITY, not by key. After a credential rotation the
+            # key may already point at a fresh pool; a stale wrapper popping
+            # the key would evict that live replacement and strand the feed.
             with _POOL_LOCK:
-                _POOLED_ADAPTERS.pop(pool_key, None)
+                if _POOLED_ADAPTERS.get(pool_key) is self._pool:
+                    del _POOLED_ADAPTERS[pool_key]
 
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5):
         """Subscribe to market data"""
@@ -374,20 +378,28 @@ def cleanup_pools_for_user(user_id: str, broker_name: str | None = None) -> int:
     if not user_id:
         return 0
 
-    targets: list[str] = []
+    # Capture (key, pool) pairs, not just keys. Selecting by key and removing
+    # later lets a replacement pool created in between be disconnected instead
+    # of the one actually selected -- which kills a freshly authenticated feed.
     suffix = f"_{user_id}"
+    targets: list[tuple[str, object]] = []
     with _POOL_LOCK:
-        pool_keys = list(_POOLED_ADAPTERS.keys())
-    for pool_key in pool_keys:
-        if not pool_key.endswith(suffix):
-            continue
-        if broker_name is not None and not pool_key.startswith(f"{broker_name}_"):
-            continue
-        targets.append(pool_key)
+        for pool_key, pool in _POOLED_ADAPTERS.items():
+            if not pool_key.endswith(suffix):
+                continue
+            if broker_name is not None and not pool_key.startswith(f"{broker_name}_"):
+                continue
+            targets.append((pool_key, pool))
 
-    for pool_key in targets:
+    removed_count = 0
+    for pool_key, selected in targets:
         with _POOL_LOCK:
+            # Only remove the pool we selected. If it has already been replaced,
+            # leave the replacement alone.
+            if _POOLED_ADAPTERS.get(pool_key) is not selected:
+                continue
             pool = _POOLED_ADAPTERS.pop(pool_key, None)
+            removed_count += 1
         if pool is None:
             continue
         try:
@@ -397,12 +409,12 @@ def cleanup_pools_for_user(user_id: str, broker_name: str | None = None) -> int:
             # detached from the registry so the next connect rebuilds.
             logger.warning(f"Error disconnecting pool {pool_key} during invalidation: {e}")
 
-    if targets:
+    if removed_count:
         logger.info(
-            f"Invalidated {len(targets)} cached pool(s) for user={user_id}"
+            f"Invalidated {removed_count} cached pool(s) for user={user_id}"
             + (f" broker={broker_name}" if broker_name else "")
         )
-    return len(targets)
+    return removed_count
 
 
 def get_resource_health() -> dict:

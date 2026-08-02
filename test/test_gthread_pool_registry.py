@@ -204,3 +204,106 @@ def test_pool_stats_is_not_computed_while_holding_the_lock():
         and n.lineno in locked
     ]
     assert inside == [], f"get_stats() called while holding _POOL_LOCK: {inside}"
+
+
+# ---------------------------------------------------------------------------
+# Replacement / invalidation identity (external audit, 2026-08-02)
+# ---------------------------------------------------------------------------
+#
+# PR-13 added a lock but still removed pools BY KEY. After a credential
+# rotation the key can already point at a fresh pool, so a stale wrapper -- or
+# a user invalidation that selected the old pool -- would evict the live
+# replacement and strand the broker feed. Removal must match on identity.
+
+
+class _Wrapper:
+    """Minimal stand-in for the disconnect path of _PooledAdapterWrapper."""
+
+    def __init__(self, broker, user, pool):
+        self._broker_name, self._user_id, self._pool = broker, user, pool
+
+
+def test_stale_wrapper_disconnect_preserves_a_replacement_pool():
+    old_pool, replacement = _FakePool(), _FakePool()
+    key = "brokerx_user1"
+
+    # A wrapper still holding the OLD pool, while the registry has moved on.
+    stale = bf._PooledAdapterWrapper(adapter_class=object, broker_name="brokerx")
+    stale._pool = old_pool
+    stale._user_id = "user1"
+    bf._POOLED_ADAPTERS[key] = replacement
+
+    stale.disconnect()
+
+    assert bf._POOLED_ADAPTERS.get(key) is replacement, (
+        "a stale wrapper evicted the replacement pool; after a credential "
+        "rotation this strands the live feed"
+    )
+    assert old_pool.disconnected, "the stale wrapper's own pool was not disconnected"
+    assert not replacement.disconnected, "the replacement pool was disconnected"
+
+
+def test_wrapper_disconnect_removes_its_own_pool():
+    """The ordinary case must still work."""
+    pool = _FakePool()
+    key = "brokerx_user1"
+    wrapper = bf._PooledAdapterWrapper(adapter_class=object, broker_name="brokerx")
+    wrapper._pool = pool
+    wrapper._user_id = "user1"
+    bf._POOLED_ADAPTERS[key] = pool
+
+    wrapper.disconnect()
+
+    assert key not in bf._POOLED_ADAPTERS
+    assert pool.disconnected
+
+
+def test_invalidation_disconnects_the_pool_it_selected_not_a_replacement(monkeypatch):
+    """cleanup_pools_for_user selects pools, then removes them. A pool created
+    in between must not be disconnected in place of the selected one."""
+    key = "brokerx_user1"
+    old_pool, replacement = _FakePool(), _FakePool()
+    bf._POOLED_ADAPTERS[key] = old_pool
+
+    real_lock = bf._POOL_LOCK
+    swapped = {"done": False}
+
+    class _SwapOnSecondAcquire:
+        """Between selection and removal, simulate a re-login installing a new
+        pool under the same key."""
+
+        def __enter__(self):
+            real_lock.acquire()
+            return self
+
+        def __exit__(self, *a):
+            if not swapped["done"]:
+                swapped["done"] = True
+                bf._POOLED_ADAPTERS[key] = replacement
+            real_lock.release()
+            return False
+
+    monkeypatch.setattr(bf, "_POOL_LOCK", _SwapOnSecondAcquire())
+
+    removed = bf.cleanup_pools_for_user("user1")
+
+    assert bf._POOLED_ADAPTERS.get(key) is replacement, (
+        "invalidation removed the replacement pool instead of the one it selected"
+    )
+    assert not replacement.disconnected, (
+        "invalidation disconnected the freshly authenticated replacement feed"
+    )
+    assert removed == 0, f"reported {removed} removals, but the selected pool was gone"
+
+
+def test_invalidation_still_removes_an_unchanged_pool():
+    """The ordinary case: nothing swapped, so the pool is removed normally."""
+    key = "brokerx_user1"
+    pool = _FakePool()
+    bf._POOLED_ADAPTERS[key] = pool
+
+    removed = bf.cleanup_pools_for_user("user1")
+
+    assert removed == 1
+    assert key not in bf._POOLED_ADAPTERS
+    assert pool.disconnected

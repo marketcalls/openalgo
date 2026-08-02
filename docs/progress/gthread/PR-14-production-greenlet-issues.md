@@ -1,9 +1,24 @@
 # PR-14 — The production greenlet crashes, and whether gthread ends them
 
-**Status:** Validated · **Tracker item:** GT-A15-09 · **Issues:** #1569, #1441, #1467, #1473, #1402, #1474
+**Status:** Validated, then corrected · **Tracker item:** GT-A15-09 · **Issues:** #1569, #1441, #1467, #1473, #1402, #1474
 
-Six open production issues were checked against the branch. **Five are the same
-bug** wearing different clothes, and the sixth is a close cousin.
+Six open production issues were checked against the branch.
+
+**Corrected 2026-08-02 after review.** The first version of this page
+overstated the result in two specific ways, both of which mattered:
+
+* **#1467 is not this bug and was not fixed by gthread.** It is `select.poll`
+  removal, and it was fixed independently in **`b4a80e255`** ("harden restored
+  process lifecycle", 2 June), whose regression tests pass today. Claiming it
+  as a gthread win took credit for someone else's fix.
+* **#1402 was already reported resolved by PR #1438.** Listing it as an open
+  crash that gthread would fix was wrong.
+* **#1473 includes custom code outside this repository** — the reporter says so
+  explicitly. gthread cannot guarantee anything about code we cannot see.
+
+What remains true is narrower and still worth having: **gthread structurally
+removes the eventlet `greenlet.error` failure path.** It does not, on its own,
+certify any of these issues as closed.
 
 ## They are one root cause
 
@@ -33,12 +48,12 @@ manual restart.
 
 | Issue | Trigger | Symptom |
 | --- | --- | --- |
-| **#1402** | Cache-invalidation subscriber after a plain `/auth/login` | Login spins forever; invalidation pipeline dead until restart |
+| **#1402** | Cache-invalidation subscriber after a plain `/auth/login` | **Already reported resolved by PR #1438** |
 | **#1441** | APScheduler session-expiry job at 3:30 AM | Login broken every morning; needs `systemctl restart` |
 | **#1569** | ZMQ subscriber thread touching eventlet semaphores | Crash hours after startup, preceded by `'StreamHandler' object has no attribute 'lock'` |
 | **#1473** | Webhook order flow | Worker stale and unresponsive under two strategies |
 | **#1474** | Tick callback emitting Socket.IO from the broker's asyncio thread | Same crash, reached through `socketio.emit` |
-| **#1467** | Stopping a strategy | `module 'select' has no attribute 'poll'` — zombie process, `is_running` stuck true |
+| **#1467** | Stopping a strategy | `module 'select' has no attribute 'poll'` — **already fixed in `b4a80e255`, not by this migration** |
 
 ## Why gthread ends this class of bug
 
@@ -50,9 +65,12 @@ Verified on the branch: **no application code calls `eventlet.monkey_patch()`.**
 Eventlet is only ever activated by Gunicorn's own worker class. Selecting
 gthread means nothing patches the standard library at all.
 
-That is what makes this structural rather than a fix. Five of these six issues
-are not *repaired* by the migration; the conditions that produce them stop
-existing.
+That is what makes this structural rather than a fix. For the issues that are
+genuinely still open and genuinely eventlet-caused — **#1441, #1569, and the
+OpenAlgo-owned part of #1473** — the conditions that produce them stop existing.
+
+That is a narrower claim than "five of six fixed", and it is the one the
+evidence supports.
 
 #### #1467 specifically
 
@@ -85,6 +103,17 @@ The broader class (real threads racing on shared state) is what the rest of this
 migration has been about: 71 completed items covering caches, registries, the
 sandbox, MCP, Telegram and the strategy host.
 
+## Status of each issue, stated honestly
+
+| Issue | Position |
+| --- | --- |
+| **#1441** | Structurally eliminated. Needs one 3:00 AM rollover on gthread to confirm. |
+| **#1569** | Structurally eliminated. Needs live ZMQ and Socket.IO validation under load. |
+| **#1474** | Structurally addressed by the single serialized Socket.IO object, but **untested through the live broker callback chain**. |
+| **#1473** | Partly. The OpenAlgo-owned paths are addressed; the reporter's custom modules are outside this repository and cannot be covered. |
+| **#1467** | **Already fixed** in `b4a80e255`. Not attributable to this migration. |
+| **#1402** | **Already resolved** by PR #1438. Not attributable to this migration. |
+
 ## What this does not claim
 
 * **Not verified in production.** This is code and architecture analysis. None
@@ -111,3 +140,10 @@ sandbox, MCP, Telegram and the strategy host.
 
 Step 4 is the real acceptance test: on eventlet these appear within hours, and
 under gthread the string should be structurally impossible.
+
+**A single trading day is not sufficient to certify 24x7.** A seven-day
+deployed soak is required, covering the token rollover, `/python` restart and
+re-adoption, webhooks, Telegram, live market data, SSE streams, reconnects,
+SQLite contention, FD and RSS growth, and proxy failure recovery. The go-live
+test plan in `test/gthread_go_live_test_plan.xlsx` enumerates the individual
+cases; the soak is what turns them into a reliability claim.
