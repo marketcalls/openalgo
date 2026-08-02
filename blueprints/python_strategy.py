@@ -9,11 +9,13 @@ Note: Each strategy runs in a separate process for complete isolation
 import json
 import logging
 import os
+import pathlib
 import platform
 import queue
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 from datetime import date, datetime, time
 from pathlib import Path
@@ -67,6 +69,16 @@ PROCESS_LOCK = threading.RLock()  # Reentrant lock for nested process operations
 # SSE (Server-Sent Events) for real-time status updates
 SSE_SUBSCRIBERS = []  # List of Queue objects for SSE clients
 SSE_LOCK = threading.Lock()
+
+# Serializes writes to the config file. Separate from PROCESS_LOCK so a slow
+# disk cannot block a strategy from starting; PROCESS_LOCK is taken only long
+# enough to serialise the dict.
+_CONFIG_FILE_LOCK = threading.Lock()
+
+# Gunicorn is started with --graceful-timeout 30. Shutdown must finish inside
+# that or the worker is SIGKILLed part-way through cleanup, which is strictly
+# worse than leaving the remaining children to the OS.
+_SHUTDOWN_BUDGET_SECONDS = 20
 
 
 # ---------------------------------------------------------------------------
@@ -238,17 +250,40 @@ def save_configs():
     Writes to a temp file and then renames into place so a kill mid-write
     cannot leave a half-written JSON blob behind.
     """
-    try:
-        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = CONFIG_FILE.with_suffix(CONFIG_FILE.suffix + ".tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(STRATEGY_CONFIGS, f, indent=2, default=str, ensure_ascii=False)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, CONFIG_FILE)
-        logger.debug("Configurations saved")
-    except Exception as e:
-        logger.exception(f"Failed to save configs: {e}")
+    # Two concurrent savers previously shared ONE temp path, so their writes
+    # interleaved in the same file and whichever renamed second published the
+    # other's partial JSON. The rename is atomic; the write into a shared temp
+    # was not. Serialize the whole read-write-rename, and give each writer its
+    # own temp file so even an unexpected caller cannot collide.
+    with _CONFIG_FILE_LOCK:
+        tmp_path = None
+        try:
+            CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            with PROCESS_LOCK:
+                payload = json.dumps(
+                    STRATEGY_CONFIGS, indent=2, default=str, ensure_ascii=False
+                )
+            fd, tmp_name = tempfile.mkstemp(
+                dir=str(CONFIG_FILE.parent), prefix=CONFIG_FILE.name + ".", suffix=".tmp"
+            )
+            tmp_path = pathlib.Path(tmp_name)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(payload)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, CONFIG_FILE)
+            tmp_path = None
+            logger.debug("Configurations saved")
+        except Exception as e:
+            logger.exception(f"Failed to save configs: {e}")
+        finally:
+            # A failed save must not leave temp files accumulating next to the
+            # config on a long-lived worker.
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
 
 
 def verify_strategy_ownership(strategy_id, user_id, return_config=False):
@@ -409,8 +444,23 @@ def create_subprocess_args():
         except Exception as e:
             logger.warning(f"Could not set start_new_session: {e}")
 
-        # Apply resource limits to prevent runaway strategies
-        args["preexec_fn"] = set_resource_limits
+        # Resource limits are applied in the child AFTER exec (see
+        # _RLIMIT_BOOTSTRAP), not via preexec_fn.
+        #
+        # preexec_fn runs between fork() and exec(), and the Python docs state
+        # plainly that it "is not safe to use in the presence of threads. The
+        # child process could deadlock before exec is called." Our callback
+        # made that concrete: it called logger.debug()/logger.warning(), and
+        # the logging module takes locks. A fork that happens while another
+        # thread holds a logging lock produces a child holding a lock that will
+        # never be released -- it hangs forever, before the strategy even
+        # starts, and the parent waits on a process that will never run.
+        #
+        # Harmless under eventlet, which has no real threads to hold that lock.
+        # A live hazard under gthread, and on the Windows/macOS dev server.
+        args["env"] = dict(args.get("env") or os.environ)
+        args["env"]["OPENALGO_STRATEGY_MEM_MB"] = str(STRATEGY_MEMORY_LIMIT_MB)
+        args["env"]["OPENALGO_STRATEGY_CPU_SEC"] = str(STRATEGY_CPU_TIME_LIMIT_SEC)
 
     return args
 
@@ -426,11 +476,39 @@ STRATEGY_MEMORY_LIMIT_MB = int(os.environ.get('STRATEGY_MEMORY_LIMIT_MB', '1024'
 STRATEGY_CPU_TIME_LIMIT_SEC = 3600  # Max CPU time (1 hour) - resets on each run
 
 
+# Applied inside the child, after exec, so no lock can be inherited from a
+# forking thread. Reads the limits from the environment, sets them, then runs
+# the real strategy file as __main__ so `if __name__ == "__main__":` still fires
+# and __file__/sys.argv look exactly as they did before.
+_RLIMIT_BOOTSTRAP = (
+    "import os,sys,runpy\n"
+    "try:\n"
+    "    import resource\n"
+    "    _mb = int(os.environ.get('OPENALGO_STRATEGY_MEM_MB') or 0)\n"
+    "    if _mb:\n"
+    "        _b = _mb * 1024 * 1024\n"
+    "        for _r in ('RLIMIT_AS', 'RLIMIT_DATA'):\n"
+    "            try: resource.setrlimit(getattr(resource, _r), (_b, _b))\n"
+    "            except Exception: pass\n"
+    "    _cpu = int(os.environ.get('OPENALGO_STRATEGY_CPU_SEC') or 0)\n"
+    "    if _cpu:\n"
+    "        try: resource.setrlimit(resource.RLIMIT_CPU, (_cpu, _cpu))\n"
+    "        except Exception: pass\n"
+    "except Exception:\n"
+    "    pass\n"
+    "_p = sys.argv[1]\n"
+    "sys.argv = [_p] + sys.argv[2:]\n"
+    "runpy.run_path(_p, run_name='__main__')\n"
+)
+
+
 def set_resource_limits():
     """
-    Set resource limits for strategy subprocess (Unix/Mac only).
-    Called via preexec_fn before the strategy process starts.
-    Prevents runaway strategies from exhausting system resources.
+    Set resource limits for the CURRENT process (Unix/Mac only).
+
+    No longer used to launch strategies -- limits are applied in the child
+    after exec by _RLIMIT_BOOTSTRAP, because running this between fork and
+    exec could deadlock the child. Kept for direct callers and tests.
     """
     if IS_WINDOWS:
         return  # resource module not available on Windows
@@ -581,7 +659,18 @@ def start_strategy_process(strategy_id):
 
             # Start the process
             # Use Python unbuffered mode for real-time output
-            cmd = [get_python_executable(), "-u", str(file_path.absolute())]
+            if IS_WINDOWS:
+                cmd = [get_python_executable(), "-u", str(file_path.absolute())]
+            else:
+                # -c bootstrap applies the rlimits post-exec, then runs the
+                # strategy as __main__. Replaces the unsafe preexec_fn.
+                cmd = [
+                    get_python_executable(),
+                    "-u",
+                    "-c",
+                    _RLIMIT_BOOTSTRAP,
+                    str(file_path.absolute()),
+                ]
 
             # Log the command being executed for debugging
             logger.info(f"Executing command: {' '.join(cmd)}")
@@ -2258,7 +2347,7 @@ def status():
                     "is_running": config.get("is_running", False),
                     "is_scheduled": config.get("is_scheduled", False),
                 }
-                for sid, config in STRATEGY_CONFIGS.items()
+                for sid, config in snapshot_strategy_configs()
             ],
         }
     )
@@ -2775,13 +2864,30 @@ def save_strategy(strategy_id):
 def cleanup_on_exit():
     """Clean up all running processes on application exit"""
     logger.info("Cleaning up running strategies...")
+    # Take the id list under the lock, then release it. stop_strategy_process()
+    # terminates a child and waits for it; holding PROCESS_LOCK across those
+    # waits blocked every other thread for the whole shutdown, and the waits are
+    # sequential, so N strategies could exceed Gunicorn's 30s graceful timeout
+    # and get the worker SIGKILLed mid-cleanup.
     with PROCESS_LOCK:
-        for strategy_id in list(RUNNING_STRATEGIES.keys()):
-            try:
-                stop_strategy_process(strategy_id)
-            except Exception:
-                pass
-    logger.info("Cleanup complete")
+        strategy_ids = list(RUNNING_STRATEGIES.keys())
+
+    deadline = monotonic() + _SHUTDOWN_BUDGET_SECONDS
+    stopped = 0
+    for strategy_id in strategy_ids:
+        if monotonic() >= deadline:
+            logger.warning(
+                "Shutdown budget of %ss exhausted after stopping %d/%d strategies; "
+                "the rest are left to the OS, which reaps them with the worker.",
+                _SHUTDOWN_BUDGET_SECONDS, stopped, len(strategy_ids),
+            )
+            break
+        try:
+            stop_strategy_process(strategy_id)
+            stopped += 1
+        except Exception:
+            pass
+    logger.info("Cleanup complete (%d/%d stopped)", stopped, len(strategy_ids))
 
 
 # Register cleanup handler
@@ -2998,15 +3104,31 @@ init_scheduler()
 
 # Flag to track if full initialization has been done
 _initialized = False
+# Guards the check-then-set below. Without it two request threads both pass the
+# `if _initialized` test before either sets it, and both run restoration.
+_INIT_LOCK = threading.Lock()
 
 
 def initialize_with_app_context():
-    """Initialize components that require app context/database access"""
+    """Initialize components that require app context/database access.
+
+    The flag is set only once restoration has actually finished. It used to be
+    set first, so a second thread arriving mid-restore returned immediately and
+    served requests against half-restored strategy state. Concurrent callers now
+    block until the first one is done, which is correct for one-time startup.
+    """
     global _initialized
     if _initialized:
         return
-    _initialized = True
+    with _INIT_LOCK:
+        if _initialized:
+            return
+        _initialize_locked()
 
+
+def _initialize_locked():
+    """The one-time work. Runs with _INIT_LOCK held."""
+    global _initialized
     try:
         # Now safe to restore strategy states (requires database)
         restore_strategy_states()
@@ -3035,10 +3157,14 @@ def initialize_with_app_context():
         # This stops any scheduled strategies if app starts on a weekend/holiday
         daily_trading_day_check()
 
+        # Set LAST, and only on success. Marking it done up front let a second
+        # thread return immediately and serve requests against strategy state
+        # that was still being restored.
+        _initialized = True
         logger.debug(f"Python Strategy System fully initialized on {OS_TYPE}")
     except Exception as e:
         logger.warning(f"Deferred initialization skipped (likely no app context yet): {e}")
-        _initialized = False  # Reset flag to retry later
+        _initialized = False  # Leave it unset so a later request retries
 
 
 # Note: Flask removed before_app_first_request in newer versions

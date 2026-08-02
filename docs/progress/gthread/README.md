@@ -35,17 +35,18 @@ language: what was broken, what we changed, and how we know it works.
 | [PR-11a](PR-11a-opt-in.md) | Make gthread available to try, default unchanged | Done |
 | [PR-11a.1](PR-11a1-deploy-scripts.md) | Confirm the domain and Windows scripts need no change | Done |
 | [PR-12](PR-12-python-strategy.md) | Make the /python strategy host thread-safe | Done |
+| [PR-12a](PR-12a-python-audit-fixes.md) | Subprocess launch, config writes, lifecycle | Done |
 | PR-11b | **The switch itself** — needs sign-off before starting | Awaiting sign-off |
 
 ## Numbers
 
 | | |
 | --- | --- |
-| Total items tracked | 154 |
+| Total items tracked | 159 |
 | Already fine, no work needed | 50 |
-| Fixed and tested | 67 |
-| Still to do | 37 |
-| **Coverage of actionable rows** | **67 / 104 = 64%** |
+| Fixed and tested | 70 |
+| Still to do | 39 |
+| **Coverage of actionable rows** | **70 / 109 = 64%** |
 
 ## Correction, 2026-08-02
 
@@ -87,10 +88,10 @@ conflating them would have left the more serious one in place.
 
 ## Open questions
 
-That is **not** the same as the migration being finished. Of the 37 items still
+That is **not** the same as the migration being finished. Of the 39 items still
 to do:
 
-- **14 are code the audit or later review reopened** — the SQLite retry helper still has no
+- **16 are code the audits or later review reopened** — the SQLite retry helper still has no
   production callers, eight cache modules keep compound lookup/delete patterns,
   Telegram initialization is not single-flight after a timeout, and the
   container health check does not prove a live broker feed.

@@ -27,6 +27,7 @@ statements. Both are reachable on real threads -- including on Windows and
 macOS today, whose dev server has always used threads.
 """
 
+import os
 import threading
 
 import pytest
@@ -228,14 +229,191 @@ def test_no_direct_iteration_of_a_registry():
     guarded = _lock_guarded_lines(tree, ast)
 
     offenders = []
+    # ast.For AND ast.comprehension: the first version of this check looked only
+    # at For nodes, so a list comprehension in /python/status kept iterating the
+    # live registry while all seven tests passed. A blind spot in the check is
+    # indistinguishable from a clean file.
+    iterables = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.For) or node.lineno in guarded:
-            continue
-        it = node.iter
+        if isinstance(node, ast.For) and node.lineno not in guarded:
+            iterables.append((node.lineno, node.iter))
+        elif isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            if node.lineno in guarded:
+                continue
+            for gen in node.generators:
+                iterables.append((node.lineno, gen.iter))
+
+    for lineno, it in iterables:
         base = it.func.value if isinstance(it, ast.Call) and isinstance(it.func, ast.Attribute) else it
         if isinstance(base, ast.Name) and base.id in REGISTRIES:
-            offenders.append(f"line {node.lineno} iterates {base.id}")
+            offenders.append(f"line {lineno} iterates {base.id}")
     assert offenders == [], (
         "iterate a snapshot, not the live registry -- use "
         f"snapshot_strategy_configs(): {offenders}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Subprocess launch, config persistence, lifecycle (external audit, 2026-08-02)
+# ---------------------------------------------------------------------------
+
+
+def test_no_preexec_fn_anywhere():
+    """preexec_fn runs between fork and exec. The Python docs: "not safe to use
+    in the presence of threads. The child process could deadlock before exec is
+    called." Ours called logger.debug()/logger.warning(), and logging takes
+    locks -- a fork while another thread held one produced a child that hung
+    forever, before the strategy ever started.
+    """
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(ps))
+    # Only a real keyword argument or subscript assignment counts -- prose in a
+    # comment or docstring explaining why it was removed must not fail this.
+    offenders = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.keyword) and node.arg == "preexec_fn":
+            offenders.append(f"keyword at line {node.value.lineno}")
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.slice, ast.Constant)
+            and node.slice.value == "preexec_fn"
+            and isinstance(node.ctx, ast.Store)
+        ):
+            offenders.append(f"assignment at line {node.lineno}")
+    assert offenders == [], (
+        f"preexec_fn is back ({offenders}); "
+        "apply limits post-exec via _RLIMIT_BOOTSTRAP"
+    )
+
+
+def test_bootstrap_runs_the_script_as_main_with_limits(tmp_path):
+    """The replacement must preserve __main__, __file__ and argv, or every
+    `if __name__ == "__main__":` strategy silently stops running."""
+    import subprocess
+    import sys
+
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        "import os, sys, resource\n"
+        "print('NAME', __name__)\n"
+        "print('FILE', os.path.basename(__file__))\n"
+        "print('ARGV0', os.path.basename(sys.argv[0]))\n"
+        "print('CPU', resource.getrlimit(resource.RLIMIT_CPU)[0])\n"
+    )
+    env = dict(os.environ)
+    env["OPENALGO_STRATEGY_MEM_MB"] = "512"
+    env["OPENALGO_STRATEGY_CPU_SEC"] = "1234"
+
+    out = subprocess.run(
+        [sys.executable, "-u", "-c", ps._RLIMIT_BOOTSTRAP, str(probe)],
+        capture_output=True, text=True, timeout=60, env=env,
+    )
+    assert out.returncode == 0, out.stderr
+    assert "NAME __main__" in out.stdout
+    assert "FILE probe.py" in out.stdout
+    assert "ARGV0 probe.py" in out.stdout
+    # RLIMIT_AS is refused on macOS; RLIMIT_CPU works everywhere we run.
+    assert "CPU 1234" in out.stdout, f"CPU limit not applied: {out.stdout}"
+
+
+def test_concurrent_saves_never_corrupt_the_config(tmp_path, monkeypatch):
+    """Two savers previously shared ONE temp path, so their writes interleaved
+    in the same file and whichever renamed second published the other's partial
+    JSON. Every read must parse."""
+    import json as _json
+    import threading as _th
+
+    cfg = tmp_path / "strategies.json"
+    monkeypatch.setattr(ps, "CONFIG_FILE", cfg)
+
+    for i in range(150):
+        ps.STRATEGY_CONFIGS[f"s{i}"] = _cfg(i)
+
+    errors = []
+    stop = _th.Event()
+
+    def saver():
+        while not stop.is_set():
+            try:
+                ps.save_configs()
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"save: {type(exc).__name__}: {exc}")
+                return
+
+    def reader():
+        while not stop.is_set():
+            try:
+                if cfg.exists():
+                    _json.loads(cfg.read_text(encoding="utf-8"))
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"read: {type(exc).__name__}: {exc}")
+                return
+
+    threads = [_th.Thread(target=saver) for _ in range(4)] + [
+        _th.Thread(target=reader) for _ in range(2)
+    ]
+    for t in threads:
+        t.start()
+    stop.wait(2.0)
+    stop.set()
+    for t in threads:
+        t.join(timeout=5)
+
+    assert errors == [], f"concurrent saves corrupted the config: {errors[:3]}"
+    # No temp files left behind next to the config on a long-lived worker.
+    leftovers = [p.name for p in tmp_path.glob("*.tmp")]
+    assert leftovers == [], f"temp files leaked: {leftovers}"
+
+
+def test_initialization_is_single_flight_and_marks_done_last():
+    """The flag used to be set before restoration ran, so a second thread
+    returned immediately and served half-restored state."""
+    import inspect
+
+    src = inspect.getsource(ps.initialize_with_app_context)
+    assert "_INIT_LOCK" in src, "initialization is not serialized"
+
+    body = inspect.getsource(ps._initialize_locked)
+    set_true = body.index("_initialized = True")
+    assert "restore_strategy_states()" in body
+    assert body.index("restore_strategy_states()") < set_true, (
+        "the flag is still set before restoration finishes"
+    )
+
+
+def test_shutdown_does_not_hold_the_lock_across_process_waits():
+    """stop_strategy_process() terminates and waits. Doing that under
+    PROCESS_LOCK blocked every other thread for the whole shutdown, and the
+    sequential waits could outrun Gunicorn's 30s graceful timeout."""
+    import ast
+    import inspect
+    import textwrap
+
+    fn = ast.parse(textwrap.dedent(inspect.getsource(ps.cleanup_on_exit))).body[0]
+
+    # Structural, not textual: a comment mentioning stop_strategy_process must
+    # not decide this. Find calls that are lexically inside a `with
+    # PROCESS_LOCK:` block.
+    locked_lines = set()
+    for node in ast.walk(fn):
+        if isinstance(node, ast.With) and "PROCESS_LOCK" in ast.dump(node):
+            for sub in ast.walk(node):
+                if hasattr(sub, "lineno"):
+                    locked_lines.add(sub.lineno)
+
+    inside = [
+        node.lineno
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", "") == "stop_strategy_process"
+        and node.lineno in locked_lines
+    ]
+    assert inside == [], (
+        f"stop_strategy_process is called while holding PROCESS_LOCK (lines {inside}); "
+        "it terminates and waits for a child, which blocks every other thread"
+    )
+    assert ps._SHUTDOWN_BUDGET_SECONDS < 30, (
+        "the shutdown budget must stay inside gunicorn's --graceful-timeout 30"
     )
