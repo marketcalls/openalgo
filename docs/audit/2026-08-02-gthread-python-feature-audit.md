@@ -4,11 +4,11 @@
 
 **Branch:** `gthread`
 
-**Committed baseline:** `c6b2e6aee` (`PR-12b`)
-**Reviewed state:** PR-12 (`7021c82e8`), PR-12a (`9bb961e6a`), and the
-committed PR-12b correction.
+**Committed baseline:** `68689cec5` (`PR-12c`)
+**Reviewed state:** PR-12 (`7021c82e8`) through the committed PR-12c
+correction.
 At the final verification point, `blueprints/python_strategy.py` had Git blob
-ID `03cb95ad90fd62cccd8d3550aad797a4d3e26ff3`.
+ID `04b3b8646bef1826a69e876fd74ce2c88221f380`.
 
 ## Verdict
 
@@ -23,12 +23,14 @@ restoring those subprocesses from concurrent request and scheduler threads.
 
 PR-12 fixes some live-dictionary iteration and lookup errors. PR-12a removes
 the unsafe `preexec_fn`, fixes the missed status comprehension, and improves
-initialization, but introduced three regressions. PR-12b fixes the discarded
-resource-limit environment, sibling imports, and the ABBA lock cycle. Config
-persistence is still a release blocker because an older snapshot can overwrite
-a newer generation and all production callers ignore save failure. Shutdown
-also still has scheduler-job and Windows process-tree escape paths; several
-lifecycle interleavings need deterministic tests and fixes.
+initialization, but introduced three regressions. PR-12b fixes those immediate
+regressions but leaves generation ordering and shutdown escape paths. PR-12c
+correctly adds generation-ordered publication, shutdown admission control,
+Windows tree termination, the original NPROC limit, and a real `Popen`
+environment check. Persistence reporting is still incomplete on the user-facing
+start/stop paths, and the test suite itself writes production-relative strategy
+configuration and logs. Several lifecycle interleavings and scheduler session
+cleanup remain open by design.
 
 ## Findings
 
@@ -484,3 +486,75 @@ Recommended correction:
 4. Replace the remaining textual launch assertion with a captured `Popen`
    command/environment test and explicitly decide/test the NPROC compatibility
    policy.
+
+### Commit `68689cec5` (PR-12c)
+
+The main corrective mechanisms in PR-12c hold:
+
+- the monotonic generation guard prevents the reproduced generation-1 writer
+  from overwriting a persisted generation 2;
+- `_SHUTTING_DOWN` is set under `PROCESS_LOCK`, and
+  `start_strategy_process()` checks it both before and after acquiring that
+  lock;
+- the Windows survivor branch invokes `taskkill /F /T`;
+- `STRATEGY_NPROC_LIMIT` is restored to 256;
+- the environment test now captures the kwargs passed to the mocked `Popen`
+  instead of merely looking for a source string.
+
+PR-12c is still **not sufficient to close persistence reporting or the full
+cross-platform shutdown gate**:
+
+1. The claim that the other 19 ignored save results are internal is incorrect.
+   `/python/start/<id>` has two direct unchecked saves and then calls
+   `start_strategy_process()`, whose state save is also unchecked.
+   `/python/stop/<id>` has two unchecked saves and calls
+   `stop_strategy_process()`, whose save is unchecked. These are user-facing
+   mutating routes and can still return success when the new state will not
+   survive restart. The five-route AST test omits both route functions.
+2. The new `Popen` test is not filesystem-isolated. Its autouse fixture restores
+   only the in-memory registries; it does not monkeypatch `CONFIG_FILE` or
+   `LOGS_DIR`. Calling the real start path therefore writes the ignored
+   `strategies/strategy_configs.json` and creates `envprobe_*` logs. Eleven such
+   logs were present in the reviewed workspace. The combined suite also left
+   the real ignored config file with one test key (`m`), and no config backup
+   was found. Running this suite against a live bind-mounted installation can
+   overwrite the user's strategy registry.
+3. The shutdown race implementation is correct, but its test proves only the
+   pre-entry check: it sets `_SHUTTING_DOWN` before calling start. Removing the
+   essential second check under `PROCESS_LOCK` would still pass. A deterministic
+   test must pause start after the first check, let cleanup set the flag while
+   holding the lock, then prove `Popen` is never reached.
+4. The Windows survivor test remains textual: it slices the function source and
+   searches for `taskkill` and `/T`. Its own explanatory comment contains both,
+   so removing the real subprocess call while retaining the comment can still
+   pass. It also does not cover `taskkill` timeout: the fallback permits 10
+   seconds per survivor after the nominal 20-second budget, and
+   `subprocess.TimeoutExpired` is not caught by the current exception handler.
+5. The process-level pytest `atexit` logging errors remain. They do not fail the
+   suite but are now three errors per run because scheduler shutdown adds another
+   log after pytest closes its capture stream.
+
+Verification was run from isolated temporary working directories to avoid
+further writes to the repository's ignored runtime state:
+
+- complete gthread Python suite: **262 passed**;
+- existing `/python` suite: **40 passed**;
+- the gthread run created one isolated strategy config and one isolated
+  `envprobe` log, confirming the filesystem side effect;
+- the previously verified four shell suites remain **90 passed**;
+- `git show --check 68689cec5` reports trailing whitespace on tracker rows
+  `GT-A15-03` and `GT-A15-04`.
+
+Recommended correction:
+
+1. Include start and stop in persistence-failure handling; classify the
+   remaining callers by user-visible operation rather than direct helper name.
+2. Monkeypatch `CONFIG_FILE`, `LOGS_DIR`, generation counters, and any process
+   registry state for every test that drives the real start/save path. Add a
+   guard that fails if tests create files outside `tmp_path`.
+3. Add the lock-boundary shutdown test and an actual Windows taskkill-command
+   capture. Bound or catch taskkill timeout so cleanup continues through every
+   survivor.
+4. Inspect and recover `strategies/strategy_configs.json` from an external
+   deployment backup before running these tests again; do not treat the current
+   ignored file as a trustworthy production copy.

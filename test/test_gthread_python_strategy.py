@@ -40,8 +40,31 @@ _ENV_PROBE_FILE = Path(__file__).resolve().parent / "_env_probe_strategy.py"
 
 
 @pytest.fixture(autouse=True)
-def clean_registries():
-    """Never mutate the real module state across tests."""
+def clean_registries(tmp_path_factory, monkeypatch):
+    """Isolate BOTH the in-memory registries and the files they persist to.
+
+    Restoring only the dictionaries was not enough. Tests that drive the real
+    start path wrote to the production-relative `strategies/strategy_configs.json`
+    and dropped log files into `log/strategies/` -- and because both are
+    gitignored, `git status` never showed it. On a live installation with a
+    bind-mounted strategies directory, running this suite would overwrite the
+    user's strategy registry.
+    """
+    root = tmp_path_factory.mktemp("ps_isolated")
+    (root / "strategies" / "scripts").mkdir(parents=True, exist_ok=True)
+    (root / "log" / "strategies").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(ps, "CONFIG_FILE", root / "strategies" / "strategy_configs.json")
+    monkeypatch.setattr(ps, "STRATEGIES_DIR", root / "strategies" / "scripts")
+    monkeypatch.setattr(ps, "LOGS_DIR", root / "log" / "strategies")
+
+    # Prove the redirection took, rather than assuming it: a future rename of
+    # any of these constants must fail loudly here, not quietly write to the
+    # real installation again.
+    for name in ("CONFIG_FILE", "STRATEGIES_DIR", "LOGS_DIR"):
+        value = getattr(ps, name)
+        assert str(root) in str(value), f"{name} is not isolated: {value}"
+
     saved_cfg = dict(ps.STRATEGY_CONFIGS)
     saved_run = dict(ps.RUNNING_STRATEGIES)
     ps.STRATEGY_CONFIGS.clear()
@@ -51,6 +74,15 @@ def clean_registries():
     ps.STRATEGY_CONFIGS.update(saved_cfg)
     ps.RUNNING_STRATEGIES.clear()
     ps.RUNNING_STRATEGIES.update(saved_run)
+
+
+def test_the_suite_never_touches_the_real_installation():
+    """A guard on the guard: if the fixture stops isolating, this fails."""
+    for name in ("CONFIG_FILE", "STRATEGIES_DIR", "LOGS_DIR"):
+        value = str(getattr(ps, name))
+        assert "ps_isolated" in value, (
+            f"{name} points at the real installation during tests: {value}"
+        )
 
 
 def _cfg(i):
