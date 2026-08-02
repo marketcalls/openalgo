@@ -36,17 +36,18 @@ language: what was broken, what we changed, and how we know it works.
 | [PR-11a.1](PR-11a1-deploy-scripts.md) | Confirm the domain and Windows scripts need no change | Done |
 | [PR-12](PR-12-python-strategy.md) | Make the /python strategy host thread-safe | Done |
 | [PR-12a](PR-12a-python-audit-fixes.md) | Subprocess launch, config writes, lifecycle | Done |
+| [PR-13](PR-13-pool-registry.md) | Guard the pooled broker adapter registry | Done |
 | PR-11b | **The switch itself** — needs sign-off before starting | Awaiting sign-off |
 
 ## Numbers
 
 | | |
 | --- | --- |
-| Total items tracked | 159 |
+| Total items tracked | 160 |
 | Already fine, no work needed | 50 |
-| Fixed and tested | 70 |
+| Fixed and tested | 71 |
 | Still to do | 39 |
-| **Coverage of actionable rows** | **70 / 109 = 64%** |
+| **Coverage of actionable rows** | **71 / 110 = 65%** |
 
 ## Correction, 2026-08-02
 
