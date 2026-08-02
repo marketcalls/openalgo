@@ -244,25 +244,40 @@ def load_configs():
             STRATEGY_CONFIGS = {}
 
 
-def save_configs():
-    """Save strategy configurations to file atomically.
+def save_configs() -> bool:
+    """Persist strategy configurations atomically. Returns True on success.
 
-    Writes to a temp file and then renames into place so a kill mid-write
-    cannot leave a half-written JSON blob behind.
+    LOCK ORDER: PROCESS_LOCK is always taken BEFORE _CONFIG_FILE_LOCK, never
+    the other way round.
+
+    The previous version took _CONFIG_FILE_LOCK and then PROCESS_LOCK. Six call
+    sites -- start, stop, the dead-process sweep and delete -- already hold
+    PROCESS_LOCK when they call this, so those ran PROCESS -> CONFIG while a
+    standalone saver ran CONFIG -> PROCESS. Two threads in opposing order is a
+    textbook ABBA deadlock, and it hangs the worker permanently rather than
+    failing.
+
+    Serialising the dict first, in its own PROCESS_LOCK block, means a caller
+    that already holds PROCESS_LOCK simply re-enters it (it is an RLock) and
+    the only lock ever taken *inside* _CONFIG_FILE_LOCK is none at all.
     """
-    # Two concurrent savers previously shared ONE temp path, so their writes
-    # interleaved in the same file and whichever renamed second published the
-    # other's partial JSON. The rename is atomic; the write into a shared temp
-    # was not. Serialize the whole read-write-rename, and give each writer its
-    # own temp file so even an unexpected caller cannot collide.
+    # Step 1: snapshot under PROCESS_LOCK only. Re-entrant for callers that
+    # already hold it, and released before any disk I/O.
+    try:
+        with PROCESS_LOCK:
+            payload = json.dumps(
+                STRATEGY_CONFIGS, indent=2, default=str, ensure_ascii=False
+            )
+    except Exception as e:
+        logger.exception(f"Failed to serialise configs: {e}")
+        return False
+
+    # Step 2: write and rename under the file lock. No other lock is acquired
+    # in here, so there is no order to invert.
     with _CONFIG_FILE_LOCK:
         tmp_path = None
         try:
             CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with PROCESS_LOCK:
-                payload = json.dumps(
-                    STRATEGY_CONFIGS, indent=2, default=str, ensure_ascii=False
-                )
             fd, tmp_name = tempfile.mkstemp(
                 dir=str(CONFIG_FILE.parent), prefix=CONFIG_FILE.name + ".", suffix=".tmp"
             )
@@ -274,11 +289,13 @@ def save_configs():
             os.replace(tmp_path, CONFIG_FILE)
             tmp_path = None
             logger.debug("Configurations saved")
+            return True
         except Exception as e:
+            # Reported, not swallowed: a caller that just changed state needs to
+            # know the change did not reach disk and will not survive a restart.
             logger.exception(f"Failed to save configs: {e}")
+            return False
         finally:
-            # A failed save must not leave temp files accumulating next to the
-            # config on a long-lived worker.
             if tmp_path is not None:
                 try:
                     tmp_path.unlink()
@@ -458,9 +475,11 @@ def create_subprocess_args():
         #
         # Harmless under eventlet, which has no real threads to hold that lock.
         # A live hazard under gthread, and on the Windows/macOS dev server.
-        args["env"] = dict(args.get("env") or os.environ)
-        args["env"]["OPENALGO_STRATEGY_MEM_MB"] = str(STRATEGY_MEMORY_LIMIT_MB)
-        args["env"]["OPENALGO_STRATEGY_CPU_SEC"] = str(STRATEGY_CPU_TIME_LIMIT_SEC)
+        # NOTE: do NOT set args["env"] here. start_strategy_process() builds its
+        # own strategy_env and assigns subprocess_args["env"] wholesale, which
+        # discarded anything set at this point -- the limits reached the child
+        # as None and nothing was enforced. apply_strategy_limits_env() is
+        # called on the FINAL env instead.
 
     return args
 
@@ -474,6 +493,24 @@ def create_subprocess_args():
 #   - 8GB+ container: STRATEGY_MEMORY_LIMIT_MB=1024 (default)
 STRATEGY_MEMORY_LIMIT_MB = int(os.environ.get('STRATEGY_MEMORY_LIMIT_MB', '1024'))
 STRATEGY_CPU_TIME_LIMIT_SEC = 3600  # Max CPU time (1 hour) - resets on each run
+# Restored in the bootstrap: the original preexec_fn set these too, and dropping
+# them would have quietly widened what a runaway strategy can do.
+STRATEGY_NOFILE_LIMIT = int(os.environ.get("STRATEGY_NOFILE_LIMIT", "256"))
+STRATEGY_NPROC_LIMIT = int(os.environ.get("STRATEGY_NPROC_LIMIT", "64"))
+
+
+def apply_strategy_limits_env(env: dict) -> dict:
+    """Put the rlimit values into the environment the child will actually get.
+
+    Must be called on the FINAL env dict. An earlier version set these in
+    subprocess_args and they were silently dropped when start_strategy_process
+    replaced env wholesale, so every strategy ran with no limits at all.
+    """
+    env["OPENALGO_STRATEGY_MEM_MB"] = str(STRATEGY_MEMORY_LIMIT_MB)
+    env["OPENALGO_STRATEGY_CPU_SEC"] = str(STRATEGY_CPU_TIME_LIMIT_SEC)
+    env["OPENALGO_STRATEGY_NOFILE"] = str(STRATEGY_NOFILE_LIMIT)
+    env["OPENALGO_STRATEGY_NPROC"] = str(STRATEGY_NPROC_LIMIT)
+    return env
 
 
 # Applied inside the child, after exec, so no lock can be inherited from a
@@ -484,20 +521,36 @@ _RLIMIT_BOOTSTRAP = (
     "import os,sys,runpy\n"
     "try:\n"
     "    import resource\n"
+    "    def _lim(name, val):\n"
+    "        try:\n"
+    "            r = getattr(resource, name)\n"
+    "            soft, hard = resource.getrlimit(r)\n"
+    "            if hard != resource.RLIM_INFINITY:\n"
+    "                val = min(val, hard)\n"
+    "            resource.setrlimit(r, (val, val))\n"
+    "        except Exception:\n"
+    "            pass\n"
     "    _mb = int(os.environ.get('OPENALGO_STRATEGY_MEM_MB') or 0)\n"
     "    if _mb:\n"
-    "        _b = _mb * 1024 * 1024\n"
-    "        for _r in ('RLIMIT_AS', 'RLIMIT_DATA'):\n"
-    "            try: resource.setrlimit(getattr(resource, _r), (_b, _b))\n"
-    "            except Exception: pass\n"
+    "        _lim('RLIMIT_AS', _mb * 1024 * 1024)\n"
+    "        _lim('RLIMIT_DATA', _mb * 1024 * 1024)\n"
     "    _cpu = int(os.environ.get('OPENALGO_STRATEGY_CPU_SEC') or 0)\n"
     "    if _cpu:\n"
-    "        try: resource.setrlimit(resource.RLIMIT_CPU, (_cpu, _cpu))\n"
-    "        except Exception: pass\n"
+    "        _lim('RLIMIT_CPU', _cpu)\n"
+    "    _nof = int(os.environ.get('OPENALGO_STRATEGY_NOFILE') or 0)\n"
+    "    if _nof:\n"
+    "        _lim('RLIMIT_NOFILE', _nof)\n"
+    "    _npr = int(os.environ.get('OPENALGO_STRATEGY_NPROC') or 0)\n"
+    "    if _npr:\n"
+    "        _lim('RLIMIT_NPROC', _npr)\n"
     "except Exception:\n"
     "    pass\n"
-    "_p = sys.argv[1]\n"
+    "_p = os.path.abspath(sys.argv[1])\n"
     "sys.argv = [_p] + sys.argv[2:]\n"
+    # `python script.py` puts the script's directory at sys.path[0]; runpy does
+    # not. Without this a strategy importing a sibling helper module raises
+    # ModuleNotFoundError -- it worked before and would break on upgrade.
+    "sys.path.insert(0, os.path.dirname(_p))\n"
     "runpy.run_path(_p, run_name='__main__')\n"
 )
 
@@ -655,7 +708,8 @@ def start_strategy_process(strategy_id):
                         strategy_env["OPENALGO_API_KEY"] = _api_key
             except Exception as e:
                 logger.warning(f"Could not inject API key for strategy {strategy_id}: {e}")
-            subprocess_args["env"] = strategy_env
+            # Applied to the final env: anything set earlier is discarded here.
+            subprocess_args["env"] = apply_strategy_limits_env(strategy_env)
 
             # Start the process
             # Use Python unbuffered mode for real-time output
@@ -2862,32 +2916,79 @@ def save_strategy(strategy_id):
 
 # Cleanup on shutdown
 def cleanup_on_exit():
-    """Clean up all running processes on application exit"""
+    """Stop the scheduler, then every strategy, then kill whatever survives."""
     logger.info("Cleaning up running strategies...")
-    # Take the id list under the lock, then release it. stop_strategy_process()
-    # terminates a child and waits for it; holding PROCESS_LOCK across those
-    # waits blocked every other thread for the whole shutdown, and the waits are
-    # sequential, so N strategies could exceed Gunicorn's 30s graceful timeout
-    # and get the worker SIGKILLed mid-cleanup.
+
+    # 1. Stop the scheduler FIRST. While it is alive a scheduled job can start
+    #    a brand-new strategy behind the cleanup that is already running, and
+    #    that child outlives the worker entirely.
+    try:
+        if SCHEDULER is not None and SCHEDULER.running:
+            SCHEDULER.shutdown(wait=False)
+            logger.info("Scheduler stopped")
+    except Exception:
+        logger.exception("Failed to stop scheduler during shutdown")
+
+    # 2. Snapshot under the lock, then release it. stop_strategy_process()
+    #    terminates a child and waits; holding PROCESS_LOCK across those waits
+    #    blocks every other thread for the whole shutdown.
     with PROCESS_LOCK:
-        strategy_ids = list(RUNNING_STRATEGIES.keys())
+        running = dict(RUNNING_STRATEGIES)
 
     deadline = monotonic() + _SHUTDOWN_BUDGET_SECONDS
     stopped = 0
-    for strategy_id in strategy_ids:
+    timed_out = []
+    for strategy_id in running:
         if monotonic() >= deadline:
-            logger.warning(
-                "Shutdown budget of %ss exhausted after stopping %d/%d strategies; "
-                "the rest are left to the OS, which reaps them with the worker.",
-                _SHUTDOWN_BUDGET_SECONDS, stopped, len(strategy_ids),
-            )
+            timed_out = [s for s in running if s not in _stopped_ids(stopped, running)]
             break
         try:
             stop_strategy_process(strategy_id)
             stopped += 1
         except Exception:
+            logger.exception(f"Graceful stop failed for {strategy_id}")
+
+    # 3. Kill anything still alive. Children are NOT killed with the worker --
+    #    on bare metal they are reparented to init and keep running, holding
+    #    broker sessions and placing orders with nothing supervising them. Each
+    #    is a process-group leader (start_new_session=True), so the whole tree
+    #    goes with one killpg.
+    survivors = 0
+    for strategy_id, info in running.items():
+        proc = info.get("process")
+        pid = getattr(proc, "pid", None) or info.get("pid")
+        if not pid:
+            continue
+        try:
+            if proc is not None and proc.poll() is not None:
+                continue  # already exited
+        except Exception:
             pass
-    logger.info("Cleanup complete (%d/%d stopped)", stopped, len(strategy_ids))
+        try:
+            if IS_WINDOWS:
+                if proc is not None:
+                    proc.kill()
+            else:
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+            survivors += 1
+            logger.warning(
+                "Force-killed strategy %s (pid %s): it did not stop within the "
+                "%ss shutdown budget", strategy_id, pid, _SHUTDOWN_BUDGET_SECONDS,
+            )
+        except (ProcessLookupError, PermissionError, OSError):
+            pass  # already gone, or not ours to kill
+
+    if timed_out:
+        logger.warning("Shutdown budget exhausted; %d strategies were force-killed", survivors)
+    logger.info(
+        "Cleanup complete (%d/%d stopped gracefully, %d force-killed)",
+        stopped, len(running), survivors,
+    )
+
+
+def _stopped_ids(count, running):
+    """The first `count` ids of `running`, which are the ones already stopped."""
+    return list(running)[:count]
 
 
 # Register cleanup handler

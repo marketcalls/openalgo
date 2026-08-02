@@ -417,3 +417,197 @@ def test_shutdown_does_not_hold_the_lock_across_process_waits():
     assert ps._SHUTDOWN_BUDGET_SECONDS < 30, (
         "the shutdown budget must stay inside gunicorn's --graceful-timeout 30"
     )
+
+
+# ---------------------------------------------------------------------------
+# Second audit round (2026-08-02): the fixes above were themselves broken
+# ---------------------------------------------------------------------------
+
+
+def test_limits_survive_the_env_replacement():
+    """start_strategy_process() builds its own env and assigns it wholesale, so
+    anything set in subprocess_args earlier was silently discarded and every
+    strategy ran with NO limits. The values must be applied to the final env."""
+    import inspect
+
+    src = inspect.getsource(ps.start_strategy_process)
+    assert "apply_strategy_limits_env(strategy_env)" in src, (
+        "the limits are not applied to the env the child actually receives"
+    )
+
+    env = ps.apply_strategy_limits_env({})
+    assert env["OPENALGO_STRATEGY_MEM_MB"] == str(ps.STRATEGY_MEMORY_LIMIT_MB)
+    assert env["OPENALGO_STRATEGY_CPU_SEC"] == str(ps.STRATEGY_CPU_TIME_LIMIT_SEC)
+    assert int(env["OPENALGO_STRATEGY_NOFILE"]) > 0
+    assert int(env["OPENALGO_STRATEGY_NPROC"]) > 0
+
+    # And the arg builder must NOT set env, or it re-creates the illusion.
+    # Structural, so the comment explaining why it must not is not itself a hit.
+    import ast
+    import textwrap
+
+    fn = ast.parse(textwrap.dedent(inspect.getsource(ps.create_subprocess_args))).body[0]
+    sets_env = [
+        n.lineno
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Subscript)
+        and isinstance(n.ctx, ast.Store)
+        and isinstance(n.slice, ast.Constant)
+        and n.slice.value == "env"
+    ]
+    assert sets_env == [], (
+        f"create_subprocess_args assigns env (lines {sets_env}); "
+        "it will be discarded when start_strategy_process replaces it"
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX bootstrap")
+def test_bootstrap_preserves_sibling_imports(tmp_path):
+    """`python script.py` puts the script's directory on sys.path[0]; runpy does
+    not. A strategy importing a sibling helper worked before and would raise
+    ModuleNotFoundError after the change -- a silent break on upgrade."""
+    import subprocess
+    import sys
+
+    (tmp_path / "helper.py").write_text("VALUE = 'sibling-ok'\n")
+    strat = tmp_path / "strat.py"
+    strat.write_text(
+        "import sys\n"
+        "from helper import VALUE\n"
+        "print('IMPORT', VALUE)\n"
+        "print('PATH0', sys.path[0])\n"
+    )
+
+    out = subprocess.run(
+        [sys.executable, "-u", "-c", ps._RLIMIT_BOOTSTRAP, str(strat)],
+        capture_output=True, text=True, timeout=60,
+        env=ps.apply_strategy_limits_env(dict(os.environ)),
+    )
+    assert out.returncode == 0, f"sibling import failed: {out.stderr[-400:]}"
+    assert "IMPORT sibling-ok" in out.stdout
+    assert str(tmp_path) in out.stdout, f"sys.path[0] not the strategy dir: {out.stdout}"
+
+
+def test_save_configs_lock_order_cannot_deadlock():
+    """save_configs took _CONFIG_FILE_LOCK then PROCESS_LOCK, while six callers
+    already held PROCESS_LOCK when calling it. Opposing order between two
+    threads is an ABBA deadlock that hangs the worker permanently.
+
+    The previous concurrent-save test only ever exercised one order, so it
+    passed against a deadlocking implementation.
+    """
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(ps))
+    nested = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.With) and "_CONFIG_FILE_LOCK" in ast.dump(node):
+            for sub in ast.walk(node):
+                if sub is not node and isinstance(sub, ast.With) and "LOCK" in ast.dump(sub):
+                    nested.append(sub.lineno)
+    assert nested == [], (
+        f"a lock is acquired inside _CONFIG_FILE_LOCK (lines {nested}); "
+        "PROCESS_LOCK must always be taken first and released before it"
+    )
+
+
+def test_save_configs_deadlocks_under_opposing_order(tmp_path, monkeypatch):
+    """The behavioural half: one thread saves standalone while another saves
+    while already holding PROCESS_LOCK, exactly as start/stop/delete do."""
+    import threading as _th
+
+    cfg = tmp_path / "s.json"
+    monkeypatch.setattr(ps, "CONFIG_FILE", cfg)
+    for i in range(40):
+        ps.STRATEGY_CONFIGS[f"s{i}"] = _cfg(i)
+
+    done = _th.Event()
+    errors = []
+
+    def standalone():
+        for _ in range(120):
+            if not ps.save_configs():
+                errors.append("save returned False")
+                return
+
+    def holding_process_lock():
+        for _ in range(120):
+            with ps.PROCESS_LOCK:          # the order start/stop/delete use
+                if not ps.save_configs():
+                    errors.append("save returned False (locked path)")
+                    return
+
+    threads = [_th.Thread(target=standalone) for _ in range(3)] + [
+        _th.Thread(target=holding_process_lock) for _ in range(3)
+    ]
+    for t in threads:
+        t.start()
+
+    def waiter():
+        for t in threads:
+            t.join(timeout=30)
+        done.set()
+
+    w = _th.Thread(target=waiter, daemon=True)
+    w.start()
+    assert done.wait(45), (
+        "save_configs deadlocked under opposing lock order -- threads still alive: "
+        f"{[t.name for t in threads if t.is_alive()]}"
+    )
+    assert errors == [], errors
+
+
+def test_save_configs_reports_failure():
+    """A caller that just changed state needs to know the change never reached
+    disk. It used to swallow every exception and return None."""
+    import inspect
+
+    assert "-> bool" in inspect.getsource(ps.save_configs).splitlines()[0]
+
+
+def test_shutdown_stops_the_scheduler_and_kills_survivors():
+    """Children are reparented to init on bare metal, not killed with the
+    worker: a strategy left running keeps a broker session and can place orders
+    with nothing supervising it. And a live scheduler can start a new strategy
+    behind the cleanup."""
+    import ast
+    import inspect
+    import textwrap
+
+    src = inspect.getsource(ps.cleanup_on_exit)
+    fn = ast.parse(textwrap.dedent(src)).body[0]
+
+    # Structural: a comment mentioning killpg must not satisfy this. A textual
+    # check here passed against an implementation that had had the call removed.
+    calls = {
+        ast.unparse(n.func)
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+    }
+    assert any(c.endswith("SCHEDULER.shutdown") or c.endswith("shutdown") for c in calls), (
+        f"the scheduler is never shut down during cleanup (calls: {sorted(calls)})"
+    )
+    assert "os.killpg" in calls, (
+        f"surviving process groups are never killed (calls: {sorted(calls)})"
+    )
+
+    # Scheduler shutdown must come before the stopping loop.
+    assert src.index("SCHEDULER.shutdown") < src.index("stop_strategy_process("), (
+        "the scheduler is stopped after strategies, so it can start new ones"
+    )
+
+    # And still no waiting under the lock.
+    locked = set()
+    for node in ast.walk(fn):
+        if isinstance(node, ast.With) and "PROCESS_LOCK" in ast.dump(node):
+            for sub in ast.walk(node):
+                if hasattr(sub, "lineno"):
+                    locked.add(sub.lineno)
+    inside = [
+        n.lineno for n in ast.walk(fn)
+        if isinstance(n, ast.Call)
+        and getattr(n.func, "id", "") == "stop_strategy_process"
+        and n.lineno in locked
+    ]
+    assert inside == [], f"stop_strategy_process still called under PROCESS_LOCK: {inside}"

@@ -1,12 +1,13 @@
 # `/python` gthread migration audit
 
-**Date:** 2026-08-02  
-**Branch:** `gthread`  
-**Committed baseline:** `7021c82e8` (`PR-12`)  
-**Reviewed state:** the committed PR-12 `/python` registry patch and its tests.
-At the final verification point,
-`blueprints/python_strategy.py` had SHA-256
-`f40748c1cc1074c63159e9c70a7cfd77b38db443c95e966428e195e0bb5563fe`.
+**Date:** 2026-08-02
+
+**Branch:** `gthread`
+
+**Committed baseline:** `9bb961e6a` (`PR-12a`)
+**Reviewed state:** PR-12 (`7021c82e8`) plus the committed PR-12a follow-up.
+At the final verification point, `blueprints/python_strategy.py` had Git blob
+ID `4ac1a2dc397949e9f6b34e585b987d7c429798b8`.
 
 ## Verdict
 
@@ -19,12 +20,20 @@ dashboard connection, one thread per open `/python` tab. The remaining risk is
 the control plane: starting, stopping, editing, scheduling, persisting, and
 restoring those subprocesses from concurrent request and scheduler threads.
 
-PR-12 fixes some live-dictionary iteration and lookup
-errors. It does not make the subsystem thread-safe as a whole. The two release
-blockers are the POSIX subprocess launch and configuration persistence; several
-lifecycle interleavings also need deterministic tests and fixes.
+PR-12 fixes some live-dictionary iteration and lookup errors. PR-12a removes
+the unsafe `preexec_fn`, fixes the missed status comprehension, and improves
+initialization. It also introduces a lock-order deadlock, silently discards the
+new resource-limit environment, and changes sibling-import behavior for user
+strategies. Configuration persistence and POSIX strategy launch therefore
+remain release blockers; several lifecycle interleavings also need
+deterministic tests and fixes.
 
 ## Findings
+
+The findings in this section record the original PR-12 baseline and explain why
+the follow-up was needed. The current disposition of every item changed by
+PR-12a is in the commit recheck below; that recheck is authoritative for
+`9bb961e6a`.
 
 ### PY-GT-01 — Blocker — `preexec_fn` can deadlock a strategy start
 
@@ -292,7 +301,7 @@ registry helpers work. They do not clear the release blockers above.
    concurrency tests, correct the tracker IDs, and then re-run the three-platform
    matrix and live soak.
 
-## Recheck after PR-12 and the follow-up working tree
+## Recheck of PR-12 and PR-12a
 
 ### Commit `7021c82e8`
 
@@ -307,9 +316,9 @@ misses the `/python/status` list comprehension, and introduced duplicate tracker
 IDs. Those are completion/reporting problems rather than reasons to revert the
 useful code.
 
-### Uncommitted follow-up observed after PR-12
+### Commit `9bb961e6a` (PR-12a)
 
-The follow-up working tree moves several findings in the right direction:
+PR-12a moves several findings in the right direction:
 
 - removes the actual `preexec_fn` assignment;
 - adds a post-exec resource-limit bootstrap;
@@ -320,7 +329,8 @@ The follow-up working tree moves several findings in the right direction:
 - renumbers the new tracker rows to unique `GT-A15-*` IDs and records the
   lifecycle/session-cleanup work as open.
 
-It is **not ready to commit** in the reviewed state:
+It is **not ready to be treated as complete or deployed under gthread** in the
+reviewed state:
 
 1. `save_configs()` acquires `_CONFIG_FILE_LOCK` and then `PROCESS_LOCK`, while
    lifecycle callers already hold `PROCESS_LOCK` and call `save_configs()`. Two
@@ -337,29 +347,63 @@ It is **not ready to commit** in the reviewed state:
    invokes `_RLIMIT_BOOTSTRAP` directly with a hand-built environment, bypassing
    the production assembly path. The bootstrap also omits the previous
    `RLIMIT_NOFILE` and `RLIMIT_NPROC` protections.
-3. Config persistence errors are still caught and swallowed, so mutating routes
+3. The post-exec wrapper does not preserve `sys.path[0]`. A normal
+   `python /path/strategy.py` launch can import a sibling helper module from the
+   strategy directory, while the new `python -c <bootstrap> /path/strategy.py`
+   launch cannot. A deterministic probe returned `0` and printed
+   `sibling-import-ok` under the old launch, but the wrapper returned `1` with
+   `ModuleNotFoundError`. The bootstrap must insert the strategy directory into
+   `sys.path` (matching direct-script semantics), and the production-path test
+   must cover a sibling import.
+4. Config persistence errors are still caught and swallowed, so mutating routes
    can report success after the disk publication failed. The 18 mutation/save
    paths outside `PROCESS_LOCK` also mean taking that lock only around
    `json.dumps()` does not create a consistent snapshot.
-4. Shutdown still does not stop APScheduler first, still stops subprocesses
+5. Shutdown still does not stop APScheduler first, still stops subprocesses
    sequentially, and states that remaining children are reaped with the worker.
    That is false for bare-metal installs: without a parent-death signal or
    explicit termination, children are reparented and can keep running. The test
    checks only lexical lock placement and a constant smaller than 30; it does not
    run a stubborn child, a child process tree, or a scheduler race.
-5. The lifecycle operations and scheduler scoped-session cleanup remain open,
+6. The lifecycle operations and scheduler scoped-session cleanup remain open,
    correctly recorded as `GT-A15-06` and `GT-A15-07`.
 
 Verification of that working-tree state:
 
 - focused `/python` tests: **52 passed**;
 - gthread Python suite: **251 passed**;
-- Ruff: **failed** on two unsorted local import blocks in
-  `test/test_gthread_python_strategy.py`;
+- Ruff: **passed** for the changed Python source and test;
 - both pytest runs emitted logging errors from `cleanup_on_exit()` after pytest
   had closed its capture stream;
-- tracker: **159 rows / 159 unique IDs** after the follow-up renumbering.
+- tracker: **159 rows / 159 unique IDs** after the follow-up renumbering;
+- `git show --check 9bb961e6a` reports whitespace errors on the newly added
+  tracker rows and on three Markdown hard-break lines from the committed audit;
+  the current audit-only working-tree diff passes `git diff --check`.
 
-The green tests do not supersede the deterministic lock-order and environment
-assembly reproductions above. `GT-A15-02`, `GT-A15-03`, and `GT-A15-04` should
-remain open until production-path tests cover them.
+The green tests do not supersede the deterministic lock-order, environment
+assembly, and sibling-import reproductions above. `GT-A15-02`, `GT-A15-03`,
+and `GT-A15-04` should remain open until production-path tests cover their full
+acceptance criteria. The PR-12a progress page's `Done` status and its statements
+that limits are applied, config writes are fully serialized, and the OS reaps
+remaining children are not supported by the committed implementation.
+
+### Recommended correction sequence for PR-12a
+
+1. Build the final child environment once, retaining the two resource-limit
+   variables and the strategy variables. Restore `RLIMIT_NOFILE` and
+   `RLIMIT_NPROC`, preserve the strategy directory in `sys.path`, and test the
+   exact `Popen` command/environment construction rather than the bootstrap in
+   isolation.
+2. Remove the `_CONFIG_FILE_LOCK -> PROCESS_LOCK` / `PROCESS_LOCK ->
+   _CONFIG_FILE_LOCK` cycle. Define one lock order or use a generation-ordered
+   persistence worker; protect all writers and propagate persistence failure to
+   the mutating caller. Add a barrier test with one lifecycle operation and one
+   independent saver taking the opposing paths.
+3. Stop APScheduler dispatch before process cleanup, signal all strategy process
+   groups first, wait against one shared deadline, kill every survivor, and
+   verify a stubborn strategy plus its child leaves no process behind on bare
+   metal and in Docker.
+4. Complete the per-strategy lifecycle/state-machine and scheduler-session work
+   already recorded as `GT-A15-06` and `GT-A15-07`.
+5. Only then mark `GT-A15-02/03/04` and PR-12a done; keep the progress page and
+   tracker measurable criteria aligned with the production-path tests.
