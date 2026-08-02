@@ -42,14 +42,39 @@ language: what was broken, what we changed, and how we know it works.
 | --- | --- |
 | Total items tracked | 152 |
 | Already fine, no work needed | 50 |
-| Fixed and tested | 79 |
-| Still to do | 23 |
+| Fixed and tested | 66 |
+| Still to do | 36 |
+| **Coverage of actionable rows** | **66 / 102 = 65%** |
 
-## Open questions: none left
+## Correction, 2026-08-02
 
-Every one of the 152 items now carries a real decision — fixed, verified safe
-with evidence, or accepted with the reasoning recorded and a test pinning it.
-None were closed by assertion.
+An external audit checked these claims against the code and found that **14 rows
+marked done did not meet their own acceptance criteria**. It was right. Every
+finding was reproduced before being accepted, and those rows are now open again.
+
+This page previously said 79 done and implied the code work was complete. The
+honest figure is **66 of 102 actionable rows**. The gap was not a rounding
+error, it was rows marked done on the strength of a passing test that tested
+the wrong thing.
+
+Two of the findings are worth naming, because both were defects introduced by
+this migration and then reported as fixed:
+
+- **The symbol cache could still raise `KeyError` mid-refresh.** Publication was
+  made atomic, but every accessor re-read the snapshot through a property, so a
+  membership test and the lookup that followed it could land on different
+  generations. Fixed, with a structural check that now covers methods that do
+  not exist yet.
+- **The SQLite retry helper had no callers.** It was written, tested against
+  test-local functions, and never wired to a single production writer. Those
+  rows are open again.
+
+What let both through was the same thing: **checks that were not gating.** Two
+shell suites, 63 checks, were never invoked by CI. The sleep-inventory gate
+returned success unconditionally while the workflow claimed drift would fail it.
+Both are fixed, and CI now fails if a suite exists without being run.
+
+## Open questions
 
 That is **not** the same as the migration being finished. Of the 23 items still
 to do:

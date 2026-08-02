@@ -57,10 +57,15 @@ jobs:
         run: |
           uv run pytest test/test_gthread_*.py -v --timeout=120
 
+      # Every shell suite must be listed here. Two were added and left out,
+      # so 63 checks passed locally and ran nowhere -- which is how several
+      # incomplete rows survived review. Adding a suite means adding it here.
       - name: Run gthread shell suites
         run: |
           bash test/test_gthread_unit_migration.sh
           bash test/test_gthread_start_supervisor.sh
+          bash test/test_gthread_worker_optin.sh
+          bash test/test_gthread_deploy_scripts.sh
 
       # Both gates must stay green: a new unlocked check-then-act fails the
       # first, and a drifted sleep inventory fails the second.

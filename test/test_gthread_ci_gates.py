@@ -168,3 +168,53 @@ def test_emit_evidence_is_reachable_from_diagnostics():
     info = _runtime_info()
     assert "socketio_emits" in info
     assert set(info["socketio_emits"]) >= {"emits", "binary_emits"}
+
+
+# --------------------------------------------------------------------------
+# Every gthread suite and gate must actually run in CI
+# --------------------------------------------------------------------------
+
+
+def _backend_test_run_blocks(ci):
+    return "\n".join(
+        step.get("run", "") for step in ci["jobs"]["backend-test"]["steps"]
+    )
+
+
+def test_every_gthread_shell_suite_is_invoked_by_ci(ci):
+    """A suite that exists but is never invoked passes locally and protects
+    nothing. Two suites were added and left out of the workflow; 63 checks ran
+    only on a developer machine. This makes that omission fail the build.
+    """
+    on_disk = {p.name for p in (REPO / "test").glob("test_gthread_*.sh")}
+    assert on_disk, "no gthread shell suites found -- has the glob changed?"
+
+    runs = _backend_test_run_blocks(ci)
+    missing = sorted(name for name in on_disk if name not in runs)
+    assert missing == [], (
+        "these shell suites exist but are never run by CI: "
+        f"{missing}. Add them to the 'Run gthread shell suites' step."
+    )
+
+
+def test_every_gthread_python_suite_is_covered_by_the_glob(ci):
+    """The Python suites are run via a glob, so a new file is picked up
+    automatically. Assert the glob is still there rather than assuming it.
+    """
+    runs = _backend_test_run_blocks(ci)
+    assert "test/test_gthread_*.py" in runs, (
+        "the Python suites are no longer run by glob; new suites would be "
+        "silently skipped"
+    )
+
+
+def test_the_sleep_inventory_gate_can_actually_fail():
+    """CI claims a drifted sleep inventory fails the gate. It could not: main()
+    returned 0 unconditionally. Assert the baseline comparison exists, so the
+    comment and the code agree.
+    """
+    src = (REPO / "scripts" / "gthread_sleep_inventory.py").read_text(encoding="utf-8")
+    assert "EXPECTED" in src, "the sleep inventory has no reviewed baseline"
+    assert "return 1" in src, (
+        "the sleep inventory can never exit non-zero, so it is not a gate"
+    )

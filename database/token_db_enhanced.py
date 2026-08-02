@@ -190,6 +190,18 @@ class BrokerSymbolCache:
     # assignment -- so a reader sees either the complete old generation or the
     # complete new one, never a mix.
     #
+    # ATOMIC PUBLICATION IS ONLY HALF OF IT. Each property re-reads
+    # ``self._snap``, so touching one twice in a single method can straddle a
+    # swap:
+    #
+    #     if key in self.by_symbol_exchange:            # old generation
+    #         return self.by_symbol_exchange[key].token # new one -> KeyError
+    #
+    # Accessors must therefore read the snapshot ONCE and reuse it -- prefer
+    # ``self._snap.<field>.get(key)`` over membership-then-index. The
+    # properties remain for external readers and for single reads.
+    # test_gthread_snapshot_binding.py enforces this across the whole class.
+    #
     # The previous implementation cleared all nine in place and refilled them
     # over ~150k rows. A concurrent lookup during that window found empty
     # structures, and on the order path a symbol lookup that returns nothing is
@@ -444,9 +456,9 @@ class BrokerSymbolCache:
     def get_token(self, symbol: str, exchange: str) -> str | None:
         """Get token for symbol and exchange - O(1) lookup"""
         self.stats.hits += 1
-        key = (symbol, exchange)
-        if key in self.by_symbol_exchange:
-            return self.by_symbol_exchange[key].token
+        entry = self._snap.by_symbol_exchange.get((symbol, exchange))
+        if entry is not None:
+            return entry.token
 
         self.stats.hits -= 1
         self.stats.misses += 1
@@ -455,9 +467,9 @@ class BrokerSymbolCache:
     def get_symbol(self, token: str, exchange: str) -> str | None:
         """Get symbol for token and exchange - O(1) lookup"""
         self.stats.hits += 1
-        key = (token, exchange)
-        if key in self.by_token_exchange:
-            return self.by_token_exchange[key].symbol
+        entry = self._snap.by_token_exchange.get((token, exchange))
+        if entry is not None:
+            return entry.symbol
 
         self.stats.hits -= 1
         self.stats.misses += 1
@@ -466,9 +478,9 @@ class BrokerSymbolCache:
     def get_br_symbol(self, symbol: str, exchange: str) -> str | None:
         """Get broker symbol for symbol and exchange - O(1) lookup"""
         self.stats.hits += 1
-        key = (symbol, exchange)
-        if key in self.by_symbol_exchange:
-            return self.by_symbol_exchange[key].brsymbol
+        entry = self._snap.by_symbol_exchange.get((symbol, exchange))
+        if entry is not None:
+            return entry.brsymbol
 
         self.stats.hits -= 1
         self.stats.misses += 1
@@ -477,9 +489,9 @@ class BrokerSymbolCache:
     def get_oa_symbol(self, brsymbol: str, exchange: str) -> str | None:
         """Get OpenAlgo symbol for broker symbol and exchange - O(1) lookup"""
         self.stats.hits += 1
-        key = (brsymbol, exchange)
-        if key in self.by_brsymbol_exchange:
-            return self.by_brsymbol_exchange[key].symbol
+        entry = self._snap.by_brsymbol_exchange.get((brsymbol, exchange))
+        if entry is not None:
+            return entry.symbol
 
         self.stats.hits -= 1
         self.stats.misses += 1
@@ -488,9 +500,9 @@ class BrokerSymbolCache:
     def get_brexchange(self, symbol: str, exchange: str) -> str | None:
         """Get broker exchange for symbol and exchange - O(1) lookup"""
         self.stats.hits += 1
-        key = (symbol, exchange)
-        if key in self.by_symbol_exchange:
-            return self.by_symbol_exchange[key].brexchange
+        entry = self._snap.by_symbol_exchange.get((symbol, exchange))
+        if entry is not None:
+            return entry.brexchange
 
         self.stats.hits -= 1
         self.stats.misses += 1
@@ -499,9 +511,9 @@ class BrokerSymbolCache:
     def get_symbol_info(self, symbol: str, exchange: str) -> SymbolData | None:
         """Get full symbol data for symbol and exchange - O(1) lookup"""
         self.stats.hits += 1
-        key = (symbol, exchange)
-        if key in self.by_symbol_exchange:
-            return self.by_symbol_exchange[key]
+        entry = self._snap.by_symbol_exchange.get((symbol, exchange))
+        if entry is not None:
+            return entry
 
         self.stats.hits -= 1
         self.stats.misses += 1
@@ -510,8 +522,9 @@ class BrokerSymbolCache:
     def get_symbol_data(self, token: str) -> SymbolData | None:
         """Get complete symbol data by token - O(1) lookup"""
         self.stats.hits += 1
-        if token in self.by_token:
-            return self.by_token[token]
+        entry = self._snap.by_token.get(token)
+        if entry is not None:
+            return entry
 
         self.stats.hits -= 1
         self.stats.misses += 1
@@ -525,10 +538,11 @@ class BrokerSymbolCache:
         self.stats.bulk_queries += 1
         results = []
 
+        by_symbol_exchange = self._snap.by_symbol_exchange
         for symbol, exchange in symbol_exchange_pairs:
-            key = (symbol, exchange)
-            if key in self.by_symbol_exchange:
-                results.append(self.by_symbol_exchange[key].token)
+            entry = by_symbol_exchange.get((symbol, exchange))
+            if entry is not None:
+                results.append(entry.token)
                 self.stats.hits += 1
             else:
                 results.append(None)
@@ -543,10 +557,11 @@ class BrokerSymbolCache:
         self.stats.bulk_queries += 1
         results = []
 
+        by_token_exchange = self._snap.by_token_exchange
         for token, exchange in token_exchange_pairs:
-            key = (token, exchange)
-            if key in self.by_token_exchange:
-                results.append(self.by_token_exchange[key].symbol)
+            entry = by_token_exchange.get((token, exchange))
+            if entry is not None:
+                results.append(entry.symbol)
                 self.stats.hits += 1
             else:
                 results.append(None)
@@ -587,11 +602,15 @@ class BrokerSymbolCache:
             except ValueError:
                 pass
 
+        # Bind one generation: by_exchange and symbols must come from the same
+        # snapshot, or the index can list rows that the symbol map no longer has.
+        snap = self._snap
         # Use exchange index if available - significantly faster
-        if exchange and exchange in self.by_exchange:
-            symbols_to_search = self.by_exchange[exchange]
+        by_exchange = snap.by_exchange.get(exchange) if exchange else None
+        if by_exchange is not None:
+            symbols_to_search = by_exchange
         else:
-            symbols_to_search = self.symbols.values()
+            symbols_to_search = snap.symbols.values()
 
         # (score, length, symbol, tie-break sequence, row) — 0 = exact symbol
         # match, 1 = symbol starts with the query, 2 = query is a substring of
@@ -692,12 +711,15 @@ class BrokerSymbolCache:
                     except ValueError:
                         pass
 
+        # Bind one generation, as in search_symbols above.
+        snap = self._snap
         # Use exchange index if available - significantly faster for FNO searches
-        if exchange and exchange in self.by_exchange:
-            symbols_to_search = self.by_exchange[exchange]
+        by_exchange = snap.by_exchange.get(exchange) if exchange else None
+        if by_exchange is not None:
+            symbols_to_search = by_exchange
         else:
             # Fallback to all symbols if no exchange filter
-            symbols_to_search = self.symbols.values()
+            symbols_to_search = snap.symbols.values()
 
         for symbol_data in symbols_to_search:
             # Underlying filter (use extracted underlying from OpenAlgo symbol format)
