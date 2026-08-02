@@ -80,6 +80,19 @@ _CONFIG_FILE_LOCK = threading.Lock()
 # worse than leaving the remaining children to the OS.
 _SHUTDOWN_BUDGET_SECONDS = 20
 
+# Monotonic generation of STRATEGY_CONFIGS. Serialising under PROCESS_LOCK and
+# writing under _CONFIG_FILE_LOCK fixed the deadlock but not the ORDER: two
+# savers can snapshot as gen1, gen2 and then reach the file lock as gen2, gen1,
+# leaving generation 1 on disk while memory holds 2 -- both reporting success.
+# The generation stamp lets the older writer recognise it is stale and skip.
+_CONFIG_GENERATION = 0
+_PERSISTED_GENERATION = 0
+
+# Set once shutdown begins. Every start path must refuse after this, or an
+# already-running scheduler job can launch a strategy behind the cleanup
+# snapshot and that child outlives the worker.
+_SHUTTING_DOWN = threading.Event()
+
 
 # ---------------------------------------------------------------------------
 # Safe registry access
@@ -261,10 +274,14 @@ def save_configs() -> bool:
     that already holds PROCESS_LOCK simply re-enters it (it is an RLock) and
     the only lock ever taken *inside* _CONFIG_FILE_LOCK is none at all.
     """
-    # Step 1: snapshot under PROCESS_LOCK only. Re-entrant for callers that
-    # already hold it, and released before any disk I/O.
+    global _CONFIG_GENERATION, _PERSISTED_GENERATION
+
+    # Step 1: stamp and snapshot under PROCESS_LOCK only. Re-entrant for callers
+    # that already hold it, and released before any disk I/O.
     try:
         with PROCESS_LOCK:
+            _CONFIG_GENERATION += 1
+            generation = _CONFIG_GENERATION
             payload = json.dumps(
                 STRATEGY_CONFIGS, indent=2, default=str, ensure_ascii=False
             )
@@ -275,6 +292,16 @@ def save_configs() -> bool:
     # Step 2: write and rename under the file lock. No other lock is acquired
     # in here, so there is no order to invert.
     with _CONFIG_FILE_LOCK:
+        # A newer generation already reached disk, so this payload is stale and
+        # writing it would roll persisted state backwards. Not an error: the
+        # caller's data is on disk, carried by the newer snapshot.
+        if generation <= _PERSISTED_GENERATION:
+            logger.debug(
+                "Skipping stale config write (generation %d, persisted %d)",
+                generation, _PERSISTED_GENERATION,
+            )
+            return True
+
         tmp_path = None
         try:
             CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -288,7 +315,8 @@ def save_configs() -> bool:
                 os.fsync(f.fileno())
             os.replace(tmp_path, CONFIG_FILE)
             tmp_path = None
-            logger.debug("Configurations saved")
+            _PERSISTED_GENERATION = generation
+            logger.debug("Configurations saved (generation %d)", generation)
             return True
         except Exception as e:
             # Reported, not swallowed: a caller that just changed state needs to
@@ -496,7 +524,7 @@ STRATEGY_CPU_TIME_LIMIT_SEC = 3600  # Max CPU time (1 hour) - resets on each run
 # Restored in the bootstrap: the original preexec_fn set these too, and dropping
 # them would have quietly widened what a runaway strategy can do.
 STRATEGY_NOFILE_LIMIT = int(os.environ.get("STRATEGY_NOFILE_LIMIT", "256"))
-STRATEGY_NPROC_LIMIT = int(os.environ.get("STRATEGY_NPROC_LIMIT", "64"))
+STRATEGY_NPROC_LIMIT = int(os.environ.get("STRATEGY_NPROC_LIMIT", "256"))
 
 
 def apply_strategy_limits_env(env: dict) -> dict:
@@ -609,7 +637,17 @@ def set_resource_limits():
 
 def start_strategy_process(strategy_id):
     """Start a strategy in a new process - cross-platform implementation"""
+    # Refuse once shutdown has begun. SCHEDULER.shutdown(wait=False) lets an
+    # already-running job finish, so without this gate a scheduled start could
+    # land AFTER cleanup took its registry snapshot -- the child would never be
+    # seen, never stopped, and would outlive the worker holding a broker
+    # session. Checked before the lock and again under it.
+    if _SHUTTING_DOWN.is_set():
+        return False, "Server is shutting down"
+
     with PROCESS_LOCK:  # Thread-safe operation
+        if _SHUTTING_DOWN.is_set():
+            return False, "Server is shutting down"
         if strategy_id in RUNNING_STRATEGIES:
             return False, "Strategy already running"
 
@@ -1930,7 +1968,13 @@ def new_strategy():
                 "schedule_stop": schedule_stop,
                 "schedule_days": schedule_days,
             }
-            save_configs()
+            if not save_configs():
+                logger.error("New strategy %s created but config save failed", strategy_id)
+                return jsonify({
+                    "status": "error",
+                    "message": "Strategy created, but saving failed - it will not "
+                               "survive a restart",
+                }), 500
 
             # Setup scheduler jobs for the new strategy
             schedule_strategy(
@@ -2144,7 +2188,12 @@ def schedule_strategy_route(strategy_id):
         if exchange_in is not None:
             STRATEGY_CONFIGS[strategy_id]["exchange"] = normalize_exchange(exchange_in)
         schedule_strategy(strategy_id, start_time, stop_time, days)
-        save_configs()
+        if not save_configs():
+            return jsonify({
+                "status": "error",
+                "message": "Schedule applied in memory, but saving failed - it "
+                           "will be lost on restart",
+            }), 500
         exch = STRATEGY_CONFIGS[strategy_id].get("exchange", DEFAULT_STRATEGY_EXCHANGE)
         schedule_info = f"[{exch}] Scheduled at {start_time} IST"
         if stop_time:
@@ -2202,7 +2251,14 @@ def delete_strategy(strategy_id):
 
             # Remove from configs
             del STRATEGY_CONFIGS[strategy_id]
-            save_configs()
+            if not save_configs():
+                # The strategy is gone from memory but still on disk, so it
+                # comes back on restart. Saying "deleted" would be a lie.
+                return jsonify({
+                    "status": "error",
+                    "message": "Strategy removed, but saving failed - it will "
+                               "reappear after a restart",
+                }), 500
 
             return jsonify({"status": "success", "message": "Strategy deleted successfully"})
 
@@ -2360,7 +2416,12 @@ def clear_error_state(strategy_id):
         config.pop("is_error", None)
         config.pop("error_message", None)
         config.pop("error_time", None)
-        save_configs()
+        if not save_configs():
+            return jsonify({
+                "status": "error",
+                "message": "Error state cleared in memory, but saving failed - "
+                           "it will return after a restart",
+            }), 500
 
         logger.info(f"Cleared error state for strategy {strategy_id}")
         return jsonify({"status": "success", "message": "Error state cleared successfully"})
@@ -2898,7 +2959,13 @@ def save_strategy(strategy_id):
 
         # Update config
         config["last_modified"] = get_ist_time().isoformat()
-        save_configs()
+        if not save_configs():
+            logger.error(f"Strategy {strategy_id} file written but config save failed")
+            return jsonify({
+                "status": "error",
+                "message": "Code saved, but updating the strategy record failed - "
+                           "reload before making further changes",
+            }), 500
 
         logger.info(f"Strategy {strategy_id} saved successfully")
         return jsonify(
@@ -2918,6 +2985,11 @@ def save_strategy(strategy_id):
 def cleanup_on_exit():
     """Stop the scheduler, then every strategy, then kill whatever survives."""
     logger.info("Cleaning up running strategies...")
+
+    # 0. Close the door before anything else, under the lock, so a start
+    #    already inside PROCESS_LOCK finishes and no new one begins.
+    with PROCESS_LOCK:
+        _SHUTTING_DOWN.set()
 
     # 1. Stop the scheduler FIRST. While it is alive a scheduled job can start
     #    a brand-new strategy behind the cleanup that is already running, and
@@ -2966,8 +3038,13 @@ def cleanup_on_exit():
             pass
         try:
             if IS_WINDOWS:
-                if proc is not None:
-                    proc.kill()
+                # proc.kill() ends only the launcher; a strategy that spawned
+                # anything leaves the tree behind. taskkill /F /T is what the
+                # normal stop path already uses.
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    capture_output=True, timeout=10, check=False,
+                )
             else:
                 os.killpg(os.getpgid(pid), signal.SIGKILL)
             survivors += 1

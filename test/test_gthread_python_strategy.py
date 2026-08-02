@@ -29,10 +29,14 @@ macOS today, whose dev server has always used threads.
 
 import os
 import threading
+from pathlib import Path
+from unittest import mock
 
 import pytest
 
 from blueprints import python_strategy as ps
+
+_ENV_PROBE_FILE = Path(__file__).resolve().parent / "_env_probe_strategy.py"
 
 
 @pytest.fixture(autouse=True)
@@ -430,10 +434,42 @@ def test_limits_survive_the_env_replacement():
     strategy ran with NO limits. The values must be applied to the final env."""
     import inspect
 
-    src = inspect.getsource(ps.start_strategy_process)
-    assert "apply_strategy_limits_env(strategy_env)" in src, (
-        "the limits are not applied to the env the child actually receives"
+    # Capture what Popen is ACTUALLY given, rather than reading the source --
+    # a textual check here passed while the env was being discarded downstream.
+    captured = {}
+
+    class _FakePopen:
+        def __init__(self, cmd, **kw):
+            captured["cmd"] = cmd
+            captured["env"] = kw.get("env")
+            self.pid = 424242
+
+        def poll(self):
+            return None
+
+    ps.STRATEGY_CONFIGS["envprobe"] = dict(
+        _cfg(1), file_path=str(_ENV_PROBE_FILE), file_name=_ENV_PROBE_FILE.name
     )
+    # The start path consults the database for the active broker and for master
+    # contract readiness; neither exists in a unit-test DB, so stub them. The
+    # point here is what reaches Popen, not the preconditions.
+    with mock.patch.object(ps.subprocess, "Popen", _FakePopen), \
+         mock.patch.object(ps, "get_active_broker", lambda: "zerodha"), \
+         mock.patch.object(ps, "check_master_contract_ready", lambda *a, **k: (True, "ready")):
+        result = ps.start_strategy_process("envprobe")
+    ps.RUNNING_STRATEGIES.pop("envprobe", None)
+
+    ok = result[0] if isinstance(result, tuple) else result
+    assert ok, f"the strategy did not start, so nothing reached Popen: {result}"
+    env = captured.get("env")
+    assert env is not None, f"Popen was never given an env (captured={captured})"
+    assert env.get("OPENALGO_STRATEGY_MEM_MB") == str(ps.STRATEGY_MEMORY_LIMIT_MB), (
+        "the limits do not reach the process Popen actually launches: "
+        f"{ {k: v for k, v in env.items() if k.startswith('OPENALGO_STRATEGY')} }"
+    )
+    assert env.get("OPENALGO_STRATEGY_CPU_SEC") == str(ps.STRATEGY_CPU_TIME_LIMIT_SEC)
+    assert env.get("OPENALGO_STRATEGY_NOFILE") == str(ps.STRATEGY_NOFILE_LIMIT)
+    assert env.get("OPENALGO_STRATEGY_NPROC") == str(ps.STRATEGY_NPROC_LIMIT)
 
     env = ps.apply_strategy_limits_env({})
     assert env["OPENALGO_STRATEGY_MEM_MB"] == str(ps.STRATEGY_MEMORY_LIMIT_MB)
@@ -611,3 +647,136 @@ def test_shutdown_stops_the_scheduler_and_kills_survivors():
         and n.lineno in locked
     ]
     assert inside == [], f"stop_strategy_process still called under PROCESS_LOCK: {inside}"
+
+
+# ---------------------------------------------------------------------------
+# Third audit round (2026-08-02)
+# ---------------------------------------------------------------------------
+
+
+def test_older_snapshot_cannot_overwrite_a_newer_one(tmp_path, monkeypatch):
+    """Serialising under one lock and writing under another fixed the deadlock
+    but not the ORDER: two savers could snapshot gen1, gen2 and reach the file
+    lock as gen2, gen1, leaving stale state on disk while both returned True."""
+    import json as _json
+    import threading as _th
+
+    cfg = tmp_path / "s.json"
+    monkeypatch.setattr(ps, "CONFIG_FILE", cfg)
+    monkeypatch.setattr(ps, "_CONFIG_GENERATION", 0)
+    monkeypatch.setattr(ps, "_PERSISTED_GENERATION", 0)
+
+    ps.STRATEGY_CONFIGS.clear()
+    ps.STRATEGY_CONFIGS["k"] = {"generation": 1}
+
+    reached = _th.Event()
+    release = _th.Event()
+    real_lock = ps._CONFIG_FILE_LOCK
+
+    class _StallingLock:
+        """Holds the FIRST writer at the door until the second has published,
+        forcing the exact inversion by hand."""
+        def __init__(self):
+            self.first = True
+
+        def __enter__(self):
+            if self.first:
+                self.first = False
+                reached.set()
+                release.wait(10)
+            real_lock.acquire()
+            return self
+
+        def __exit__(self, *a):
+            real_lock.release()
+            return False
+
+    monkeypatch.setattr(ps, "_CONFIG_FILE_LOCK", _StallingLock())
+
+    results = {}
+
+    def old_writer():
+        results["old"] = ps.save_configs()          # snapshots generation 1
+
+    t = _th.Thread(target=old_writer)
+    t.start()
+    assert reached.wait(10), "the first writer never reached the file lock"
+
+    ps.STRATEGY_CONFIGS["k"] = {"generation": 2}
+    results["new"] = ps.save_configs()              # snapshots and writes gen 2
+
+    release.set()
+    t.join(timeout=10)
+
+    persisted = _json.loads(cfg.read_text(encoding="utf-8"))["k"]["generation"]
+    assert persisted == 2, (
+        f"an older snapshot overwrote a newer one: in-memory=2, persisted={persisted}"
+    )
+    assert results["old"] is True and results["new"] is True
+
+
+def test_mutating_routes_report_persistence_failure():
+    """A route that reports success after the save failed tells the user their
+    change is safe when it will vanish on restart."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(ps))
+    routes = {
+        "delete_strategy", "clear_error_state", "save_strategy",
+        "new_strategy", "schedule_strategy_route",
+    }
+    unchecked = []
+    for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        if fn.name not in routes:
+            continue
+        checked = any(
+            isinstance(n, ast.UnaryOp)
+            and isinstance(n.operand, ast.Call)
+            and getattr(n.operand.func, "id", "") == "save_configs"
+            for n in ast.walk(fn)
+        )
+        if not checked:
+            unchecked.append(fn.name)
+    assert unchecked == [], (
+        f"these routes ignore save_configs() failure and still report success: {unchecked}"
+    )
+
+
+def test_start_is_refused_once_shutdown_has_begun():
+    """SCHEDULER.shutdown(wait=False) lets a running job finish, so a scheduled
+    start could land after cleanup's snapshot -- never seen, never stopped, and
+    outliving the worker."""
+    import inspect
+
+    assert "_SHUTTING_DOWN" in inspect.getsource(ps.start_strategy_process), (
+        "start_strategy_process does not check the shutdown flag"
+    )
+    assert "_SHUTTING_DOWN" in inspect.getsource(ps.cleanup_on_exit)
+
+    ps._SHUTTING_DOWN.set()
+    try:
+        ok, message = ps.start_strategy_process("anything")
+        assert ok is False, "a strategy started during shutdown"
+        assert "shutting down" in message.lower()
+    finally:
+        ps._SHUTTING_DOWN.clear()
+
+
+def test_windows_survivors_get_tree_termination():
+    """proc.kill() ends only the launcher; a strategy that spawned anything
+    leaves the tree behind. taskkill /F /T is what the normal stop path uses."""
+    import inspect
+
+    src = inspect.getsource(ps.cleanup_on_exit)
+    win = src[src.index("if IS_WINDOWS:"):]
+    assert "taskkill" in win and "/T" in win, (
+        "Windows survivors are not tree-terminated"
+    )
+
+
+def test_nproc_limit_matches_the_original():
+    """256 was the value the original preexec_fn set. Lowering it silently is a
+    compatibility change, not a fix."""
+    assert ps.STRATEGY_NPROC_LIMIT == 256
+    assert ps.STRATEGY_NOFILE_LIMIT == 256

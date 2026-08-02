@@ -4,10 +4,11 @@
 
 **Branch:** `gthread`
 
-**Committed baseline:** `9bb961e6a` (`PR-12a`)
-**Reviewed state:** PR-12 (`7021c82e8`) plus the committed PR-12a follow-up.
+**Committed baseline:** `c6b2e6aee` (`PR-12b`)
+**Reviewed state:** PR-12 (`7021c82e8`), PR-12a (`9bb961e6a`), and the
+committed PR-12b correction.
 At the final verification point, `blueprints/python_strategy.py` had Git blob
-ID `4ac1a2dc397949e9f6b34e585b987d7c429798b8`.
+ID `03cb95ad90fd62cccd8d3550aad797a4d3e26ff3`.
 
 ## Verdict
 
@@ -22,11 +23,12 @@ restoring those subprocesses from concurrent request and scheduler threads.
 
 PR-12 fixes some live-dictionary iteration and lookup errors. PR-12a removes
 the unsafe `preexec_fn`, fixes the missed status comprehension, and improves
-initialization. It also introduces a lock-order deadlock, silently discards the
-new resource-limit environment, and changes sibling-import behavior for user
-strategies. Configuration persistence and POSIX strategy launch therefore
-remain release blockers; several lifecycle interleavings also need
-deterministic tests and fixes.
+initialization, but introduced three regressions. PR-12b fixes the discarded
+resource-limit environment, sibling imports, and the ABBA lock cycle. Config
+persistence is still a release blocker because an older snapshot can overwrite
+a newer generation and all production callers ignore save failure. Shutdown
+also still has scheduler-job and Windows process-tree escape paths; several
+lifecycle interleavings need deterministic tests and fixes.
 
 ## Findings
 
@@ -407,3 +409,78 @@ remaining children are not supported by the committed implementation.
    already recorded as `GT-A15-06` and `GT-A15-07`.
 5. Only then mark `GT-A15-02/03/04` and PR-12a done; keep the progress page and
    tracker measurable criteria aligned with the production-path tests.
+
+### Commit `c6b2e6aee` (PR-12b)
+
+PR-12b correctly fixes three important parts of PR-12a:
+
+- limit variables are added to the final child environment rather than an
+  environment that is later discarded;
+- the post-exec wrapper restores the strategy directory at `sys.path[0]`, and
+  the behavioral sibling-import test passes;
+- `save_configs()` no longer acquires `PROCESS_LOCK` from inside
+  `_CONFIG_FILE_LOCK`, so the reported ABBA lock cycle is removed;
+- the POSIX shutdown fallback now contains a real `os.killpg()` call, and the
+  scheduler is asked to stop before the registry snapshot.
+
+The commit is **not complete for `GT-A15-03` or the shutdown portion of
+`GT-A15-04`**:
+
+1. `save_configs()` snapshots under `PROCESS_LOCK`, releases it, and only then
+   waits for `_CONFIG_FILE_LOCK`. Publication is serialized, but generation
+   order is not. A deterministic ordered-lock reproduction forced a generation
+   1 writer to snapshot first and publish after generation 2. Both calls
+   returned `True`; memory ended at generation 2 while the JSON file ended at
+   generation 1. The current stress test proves absence of the old deadlock and
+   parse corruption, not that the latest committed generation wins.
+2. The new Boolean return does not propagate. AST classification found 24
+   production `save_configs()` calls and every call is a standalone expression;
+   none checks or returns the value. Routes can still report success after
+   persistence fails. `test_save_configs_reports_failure()` checks only that
+   the function annotation contains `-> bool`, so it passes without exercising
+   a single caller.
+3. `SCHEDULER.shutdown(wait=False)` prevents new scheduling but permits an
+   already-running job to continue. Cleanup then snapshots the registry without
+   a shutdown state/reservation. A deterministic reproduction let an in-flight
+   job acquire `PROCESS_LOCK` immediately after that snapshot and add
+   `started-after-snapshot`; cleanup returned without seeing or killing it.
+4. The Windows force-kill fallback calls `proc.kill()` for a strategy skipped by
+   the graceful loop. Unlike the existing `taskkill /F /T` path, this does not
+   guarantee termination of the strategy's child process tree. The AST test
+   asserts only the POSIX `os.killpg` call.
+5. The claim that every new assertion is AST-based is inaccurate. The positive
+   resource-limit check is still the textual assertion
+   `"apply_strategy_limits_env(strategy_env)" in src`; it does not prove the
+   call result reaches `Popen`. The helper assertions and live-container output
+   are useful evidence, but the test should capture the actual `Popen` kwargs.
+6. The restored `RLIMIT_NPROC` default changed from 256 to 64. That may be a
+   deliberate tighter policy, but it is a compatibility change rather than a
+   restoration of prior behavior. The reported container output covered AS,
+   CPU, and NOFILE, not NPROC.
+
+Verification of commit `c6b2e6aee`:
+
+- focused `/python` suite: **58 passed** (18 gthread checks plus 40 existing
+  tests);
+- complete gthread Python suite: **257 passed**;
+- all four shell suites: **90 passed**;
+- Ruff: **passed** for the changed Python source and test;
+- both pytest runs still emitted shutdown-time logging errors because the
+  `atexit` handler logs after pytest closes its capture stream;
+- `git show --check c6b2e6aee` still reports trailing whitespace on the three
+  changed tracker rows.
+
+Recommended correction:
+
+1. Couple snapshot generation to publication. Either use one consistent
+   `PROCESS_LOCK -> _CONFIG_FILE_LOCK` critical section for state changes that
+   must persist, or attach a monotonic generation and prevent an older snapshot
+   from replacing a newer one. Add the ordered generation-1/generation-2 test.
+2. Make mutating operations fail or roll back when persistence returns `False`;
+   test actual routes and scheduler entry points, not the helper annotation.
+3. Add a shutdown state checked by every start path before process creation, so
+   already-running scheduler jobs cannot launch behind cleanup. On Windows use
+   tree termination for the survivor fallback as well.
+4. Replace the remaining textual launch assertion with a captured `Popen`
+   command/environment test and explicitly decide/test the NPROC compatibility
+   policy.
