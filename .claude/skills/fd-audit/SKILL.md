@@ -5,10 +5,14 @@ description: Audit a change for resource leaks in OpenAlgo — file descriptors 
 
 # Resource leak audit — descriptors and memory
 
-OpenAlgo runs production as a **single long-lived Gunicorn worker**
-(`--worker-class eventlet -w 1`). It never restarts between deploys, so anything
-leaked once per request accumulates until the process dies. There is no second
-worker to absorb the failure and no natural recycling point.
+OpenAlgo runs production as a **single long-lived Gunicorn worker** — today
+`--worker-class eventlet -w 1`, and optionally `--worker-class gthread
+--threads 64 -w 1`. It never restarts between deploys, so anything leaked once
+per request accumulates until the process dies. There is no second worker to
+absorb the failure and no natural recycling point.
+
+Under gthread a leak is worse, not better: each request thread can hold its own
+descriptors concurrently, so the same per-request leak accumulates faster.
 
 Two failure modes, same root cause — unbounded growth in a process that never
 restarts:
@@ -78,7 +82,8 @@ joined/reaped on every path.
 `ThreadPoolExecutor` per call or per request — each holds threads plus an
 internal control pipe until shut down. Under eventlet, `threading.local()` maps
 to green threads, so per-green-thread state accumulates with connection count,
-not with CPU count.
+not with CPU count. Under gthread it maps to real OS threads, bounded by
+`--threads`, but each carries a real stack.
 
 **Files.** `with` blocks. Temp files cleaned up via `tempfile` context managers.
 

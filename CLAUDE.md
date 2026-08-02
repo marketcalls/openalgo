@@ -57,20 +57,66 @@ Detailed procedures live in `.claude/skills/` and load on demand:
 
 ## Runtime Constraints
 
-### Eventlet + Gunicorn (production)
+**Three runtimes, and code must work in all of them.** This is the single most
+common way a change passes locally and fails on deploy.
 
-Production (Ubuntu direct and Docker) runs `gunicorn --worker-class eventlet -w 1`:
+| Runtime | Used by | Threading |
+| --- | --- | --- |
+| **eventlet** (`gunicorn --worker-class eventlet -w 1`) | Docker and Ubuntu server — **the default** | Green threads |
+| **gthread** (`gunicorn --worker-class gthread --threads 64 -w 1`) | Opt-in, experimental (see below) | Real OS threads |
+| **dev server** (`uv run app.py`) | Windows and macOS desktop | Real OS threads |
+
+Write for the **strictest** of the three: assume real OS threads (so guard
+shared state) *and* assume eventlet (so no `asyncio`).
+
+### Eventlet + Gunicorn (the current default)
 
 - **No `asyncio`.** Eventlet monkey-patches the stdlib and is incompatible with `asyncio.run()`, `async`/`await`, and `asyncio.get_event_loop()`. Async work must use eventlet green threads or run on a separate real OS thread — see `telegram_bot_service.py:_render_plotly_png` for the pattern.
 - **Single worker (`-w 1`) is mandatory.** Flask-SocketIO state is in-process and cannot be shared across workers.
 - **`threading.local()` maps to green threads**, which is why `scoped_session` works correctly under eventlet.
+- **Never call `eventlet.monkey_patch()` from application code.** Eventlet is activated only by Gunicorn's worker class. Modules that `import eventlet` do so to *detect* patching (`eventlet.patcher.is_monkey_patched`) and must degrade cleanly when it is absent.
+
+### gthread (opt-in, experimental)
+
+Eventlet is retired and **Gunicorn 26 removes the worker entirely**, so the
+platform is migrating to gthread. It is opt-in and **not the default**: setting
+`OPENALGO_WORKER_CLASS = 'gthread'` in `.env` switches it, and removing the line
+switches back. Resolution lives in `install/lib/gunicorn_runtime.sh`, which is
+sourced by `start.sh`, both installers and `update.sh`.
+
+- **Selecting gthread always implies a thread count** (64 by default, floored at 16). Gunicorn's own default of one thread deadlocks on the first SSE stream, so the two settings are deliberately coupled — never plumb them independently.
+- **Gunicorn 25.3 ships both workers**, so the opt-in needs no dependency change. The pin stays `gunicorn>=25.0,<26` until the cutover.
+- Status, open items and per-step notes: `docs/progress/gthread/README.md` and `docs/plans/2026-08-01-gthread-migration-tracker.csv`.
+
+**The governing rule:** *under eventlet, code that does not yield is atomic
+relative to other greenlets; under gthread it is not.* Every check-then-act on
+shared state that was accidentally safe becomes a real race. Because the dev
+server already uses real threads, those races are reachable on Windows and
+macOS **today** — they are not hypothetical future bugs.
+
+### Thread-safety patterns this migration established
+
+Follow these when touching shared state; each was written after a real defect.
+
+- **Bind one snapshot, then use it.** Never `if key in d: return d[key]` on state another thread can mutate — a swap between the two lines raises `KeyError`. Use `.get()`, or bind the container once (`snap = self._snap`). See `database/token_db_enhanced.py`.
+- **Iterate a copy, never the live container.** `for k, v in D.items()` raises `RuntimeError` if another thread inserts mid-loop. Snapshot under the lock, iterate outside it. This applies to comprehensions too.
+- **Publish by single rebind.** Build the replacement off to the side and assign once, so readers see the complete old generation or the complete new one. Where order matters, stamp a generation and refuse to publish an older one over a newer.
+- **Never hold a lock across I/O** — a disk write, a process `wait()`, a broker call, or a `join()`. Snapshot under the lock, release, then do the slow thing.
+- **Fixed lock order.** Where two locks exist, always take them in the same order; opposing order between two threads is a deadlock that hangs the worker permanently. Current order: `PROCESS_LOCK` before `_CONFIG_FILE_LOCK` (`blueprints/python_strategy.py`).
+- **Locks belong on the class, not the instance.** Managers are constructed per request, so a per-instance lock guards nothing.
+- **No `preexec_fn`.** It runs between `fork()` and `exec()` and is documented as unsafe with threads — ours called `logger.*`, and a fork while another thread held a logging lock produced a child that hung forever. Apply limits in the child after exec (`_RLIMIT_BOOTSTRAP`).
+- **`socketio.emit()` is not thread-safe.** Use the single `extensions.socketio` (`SerializedSocketIO`) object; never construct another.
+
+Two gate scripts enforce part of this: `scripts/gthread_check_then_act.py` and
+`scripts/gthread_sleep_inventory.py`. **Both have known blind spots** — the
+first only sees attribute guards (`self.foo`), not bare module-level names, and
+does not detect check-then-*read* at all. A clean run is not proof.
 
 ### Development server differs
 
-`uv run app.py` uses standard threading, not eventlet. Code must work in both.
-`asyncio` works fine on the dev server and **breaks in production** — this is the
-single most common way a change passes locally and fails on deploy. SQLite
-locking is also stricter on Windows.
+`uv run app.py` uses standard threading, not eventlet. `asyncio` works fine
+there and **breaks under eventlet in production**. SQLite locking is also
+stricter on Windows.
 
 ## Invariants — do not break these
 
@@ -84,7 +130,7 @@ and the cache-invalidation publisher (`database/cache_invalidation.py`).
 
 - **Never make a publisher `bind()`.** ZMQ allows many PUBs to connect to one bound SUB, so publishers across processes share one fixed port with no contention.
 - **`ZMQ_PORT` is fixed by config and never drifts.** No port scan, no `5555 -> 5556` fallback, no runtime mutation of `os.environ["ZMQ_PORT"]`. `install-multi.sh` gives each instance its own `ZMQ_PORT` (`5555 + i-1`) and each stays put.
-- **Why:** under gunicorn+eventlet the proxy runs *out of process* (a subprocess via `install.sh`, or a separate `python -m websocket_proxy.server` on Docker `start.sh`) while the cache-invalidation publisher runs inside gunicorn. If a publisher binds, the two processes race for the port; the loser silently slides to the next port while the SUB stays put, so **`subscribe` succeeds but no ticks are delivered**. Works on the single-process dev server, broken only under eventlet — historically very hard to spot. Broker-agnostic.
+- **Why:** under gunicorn+eventlet the proxy runs *out of process* (a subprocess via `install.sh`, or a separate `python -m websocket_proxy.server` on Docker `start.sh`) while the cache-invalidation publisher runs inside gunicorn. If a publisher binds, the two processes race for the port; the loser silently slides to the next port while the SUB stays put, so **`subscribe` succeeds but no ticks are delivered**. Works on the single-process dev server and breaks under Gunicorn — with either worker class, since the proxy is out of process in both — which is what made it historically very hard to spot. Broker-agnostic.
 
 ### Multi-session login must not tear down the shared broker feed
 
