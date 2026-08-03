@@ -161,6 +161,19 @@ def _has_fresher_session(username, current_session_id=None):
     return False
 
 
+def has_login_this_trading_session(username) -> bool:
+    """Return True if ``username`` has an active session that authenticated at
+    or after today's rollover boundary (default 03:00 IST).
+
+    Unlike ``is_session_valid()``, this reads only the database and never
+    touches the Flask request-scoped ``session``, so background threads can ask
+    it. Used at boot to decide whether the stored broker token belongs to the
+    current trading session: Indian broker tokens die at the daily rollover, and
+    only a login after that boundary re-establishes one.
+    """
+    return _has_fresher_session(username)
+
+
 def revoke_user_tokens(revoke_db_tokens=True):
     """
     Revoke auth tokens for the current user when session expires.
