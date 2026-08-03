@@ -7,13 +7,21 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-NUBRA_BASE_URL = "https://api.nubra.io"
+UAT_BASE_URL = "https://uatapi.nubra.io"
+PROD_BASE_URL = "https://api.nubra.io"
+
+
+def get_base_url():
+    """Base URL for the environment the account is mapped to (PROD by default)."""
+    use_uat = os.getenv("NUBRA_USE_UAT", "false").lower() == "true"
+    return UAT_BASE_URL if use_uat else PROD_BASE_URL
+
 
 def calculate_margin_api(positions, auth):
     """
     Calculate margin requirement for a basket of positions using Nubra API.
 
-    API: POST /orders/v2/margin_required
+    API: POST /sentinel/orders/funds_required
 
     Args:
         positions: List of positions in OpenAlgo format
@@ -60,7 +68,7 @@ def calculate_margin_api(positions, auth):
     try:
         # Make the request using the shared client
         response = client.post(
-            f"{NUBRA_BASE_URL}/orders/v2/margin_required",
+            f"{get_base_url()}/sentinel/orders/funds_required",
             headers=headers,
             content=payload,
         )
