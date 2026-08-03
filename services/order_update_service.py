@@ -137,7 +137,7 @@ def start_order_update_adapter(user_id: str, broker: str) -> bool:
             logger.exception(f"Failed to start order-update adapter for {broker}/{user_id}")
             return False
         _ADAPTERS[user_id] = adapter
-        logger.info(f"Order-update adapter started for {broker}/{user_id}")
+        logger.debug(f"Order-update adapter started for {broker}/{user_id}")
         return True
 
 
@@ -196,7 +196,7 @@ def start_order_update_adapters_on_boot(db_ready=None) -> None:
             from websocket_proxy.connection_manager import SharedZmqPublisher
 
             SharedZmqPublisher().connect()
-            logger.info("Shared ZMQ publisher warmed up for order-update relay")
+            logger.debug("Shared ZMQ publisher warmed up for order-update relay")
         except Exception:
             logger.exception("Failed to warm up shared ZMQ publisher")
 

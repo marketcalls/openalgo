@@ -145,7 +145,7 @@ class SharedZmqPublisher:
             self.socket.connect(endpoint)
             self.zmq_port = zmq_port
             self._connected = True
-            self.logger.info(f"Shared ZMQ publisher connected to {endpoint}")
+            self.logger.debug(f"Shared ZMQ publisher connected to {endpoint}")
             return zmq_port
 
     def publish(self, topic: str, data: dict):

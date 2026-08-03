@@ -81,8 +81,8 @@ from blueprints.oitracker import oitracker_bp  # Import the OI tracker blueprint
 from blueprints.orders import orders_bp
 from blueprints.platforms import platforms_bp
 from blueprints.playground import playground_bp  # Import the API playground blueprint
-from blueprints.postback import postback_bp  # Import broker postback (order updates) blueprint
 from blueprints.pnltracker import pnltracker_bp  # Import the pnl tracker blueprint
+from blueprints.postback import postback_bp  # Import broker postback (order updates) blueprint
 from blueprints.python_strategy import initialize_with_app_context as init_python_strategy
 from blueprints.python_strategy import python_strategy_bp  # Import the python strategy blueprint
 from blueprints.react_app import (  # Import React frontend blueprint
@@ -269,6 +269,14 @@ def create_app():
         logger.warning("React frontend not available - run 'npm run build' in frontend/")
 
     app.register_blueprint(api_v1_bp)
+
+    # Pull openstatz in on a background thread. It costs about 1.4s, almost all
+    # of it matplotlib and seaborn behind its plotting module, which the
+    # portfolio feature never uses -- every chart is drawn in the browser.
+    # Warming here means the first backtest does not pay it and boot does not
+    # block on it.
+    from portfolio import warm_analytics
+    warm_analytics()
 
     # Exempt API endpoints from CSRF protection (they use API key authentication)
     csrf.exempt(api_v1_bp)
@@ -626,7 +634,7 @@ def create_app():
 
     @app.context_processor
     def inject_version():
-        return dict(version=get_version())
+        return {"version": get_version()}
 
     @app.route("/api/config/host")
     def get_host_config():

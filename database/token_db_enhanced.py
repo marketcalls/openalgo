@@ -3,6 +3,7 @@ Enhanced Token DB with Full Memory Caching for 100,000+ symbols
 Optimized for zero-config deployment with configurable session reset time (SESSION_EXPIRY_TIME)
 """
 
+import heapq
 import re
 import time
 from collections import defaultdict
@@ -459,15 +460,24 @@ class BrokerSymbolCache:
         """
         Search symbols by partial match with multi-term support.
         All terms must match (AND logic).
-        Returns list of matching SymbolData objects
-        Optimized to use exchange index when available
+        Returns list of matching SymbolData objects, most relevant first.
+        Optimized to use exchange index when available.
+
+        Ranked, not first-found: a query like "NIFTY" AND-matches every NIFTY
+        option contract on NFO (thousands of them) as well as every NIFTY
+        index (a few hundred). Stopping at the first ``limit`` hits in
+        dict-iteration order let the option chain -- which has no natural
+        relevance to a symbol search -- crowd out the index and equity
+        matches a caller actually wants, with no way to reach the rest by
+        typing a more specific query. Scoring on the query itself and taking
+        the closest matches instead fixes that for every segment, not just
+        indices, without hardcoding any exchange.
         """
         # Split query into terms
+        query_upper = query.strip().upper()
         terms = [term.strip().upper() for term in query.split() if term.strip()]
         if not terms:
             return []
-
-        matches = []
 
         # Parse numeric terms for strike matching
         num_terms = []
@@ -483,12 +493,23 @@ class BrokerSymbolCache:
         else:
             symbols_to_search = self.symbols.values()
 
+        # (score, length, symbol, tie-break sequence, row) — 0 = exact symbol
+        # match, 1 = symbol starts with the query, 2 = query is a substring of
+        # the symbol, 3 = matched only via brsymbol/name/token/strike. Shorter
+        # symbols before longer ones at the same score, so "NIFTY" and
+        # "NIFTY50" sort ahead of a 20-character option contract that merely
+        # happens to start with the same letters.
+        scored: list[tuple[int, int, str, int, SymbolData]] = []
+        seq = 0
         for symbol_data in symbols_to_search:
-            # All terms must match
+            symbol_upper = symbol_data.symbol.upper()
+
             all_match = True
+            symbol_term_match = True
             for term in terms:
+                term_in_symbol = term in symbol_upper
                 term_match = (
-                    term in symbol_data.symbol.upper()
+                    term_in_symbol
                     or term in symbol_data.brsymbol.upper()
                     or (symbol_data.name and term in symbol_data.name.upper())
                     or (symbol_data.token and term in symbol_data.token)
@@ -504,14 +525,25 @@ class BrokerSymbolCache:
                 if not term_match:
                     all_match = False
                     break
+                symbol_term_match = symbol_term_match and term_in_symbol
 
-            if all_match:
-                matches.append(symbol_data)
+            if not all_match:
+                continue
 
-                if len(matches) >= limit:
-                    break
+            if symbol_upper == query_upper:
+                score = 0
+            elif symbol_upper.startswith(query_upper):
+                score = 1
+            elif symbol_term_match:
+                score = 2
+            else:
+                score = 3
 
-        return matches
+            seq += 1
+            scored.append((score, len(symbol_upper), symbol_upper, seq, symbol_data))
+
+        top = heapq.nsmallest(limit, scored, key=lambda row: row[:4])
+        return [row[4] for row in top]
 
     def fno_search_symbols(
         self,

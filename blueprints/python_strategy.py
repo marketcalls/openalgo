@@ -2965,7 +2965,7 @@ def initialize_with_app_context():
                         logger.exception(f"Failed to restore schedule for {strategy_id}: {e}")
 
         if restored_schedules > 0:
-            logger.info(f"Restored {restored_schedules} scheduled strategies")
+            logger.debug(f"Restored {restored_schedules} scheduled strategies")
 
         # Run immediate trading day check on startup
         # This stops any scheduled strategies if app starts on a weekend/holiday

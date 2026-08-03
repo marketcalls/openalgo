@@ -4,6 +4,7 @@ import {
   Bot,
   ClipboardList,
   Download,
+  GraduationCap,
   HelpCircle,
   LogIn,
   Menu,
@@ -14,7 +15,7 @@ import {
   Wand2,
 } from 'lucide-react'
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { Footer } from '@/components/layout/Footer'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -26,6 +27,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet'
+import { tools } from '@/lib/tools'
 import { useThemeStore } from '@/stores/themeStore'
 
 const integrations = [
@@ -54,6 +56,7 @@ export default function Home() {
   const navLinks = [
     { href: '/', label: 'Home', internal: true },
     { href: '/faq', label: 'FAQ', internal: true },
+    { href: 'https://www.openalgo.in/learn', label: 'Varsity', internal: false },
     { href: 'https://openalgo.in/discord', label: 'Community', internal: false },
     { href: 'https://openalgo.in/roadmap', label: 'Roadmap', internal: false },
     { href: 'https://docs.openalgo.in', label: 'Docs', internal: false },
@@ -120,6 +123,15 @@ export default function Home() {
                     <Download className="h-5 w-5" />
                     Download
                   </Link>
+                  <a
+                    href="https://www.openalgo.in/learn"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-4 py-2 rounded-md hover:bg-accent"
+                  >
+                    <GraduationCap className="h-5 w-5" />
+                    Varsity
+                  </a>
                   <a
                     href="https://openalgo.in/discord"
                     target="_blank"
@@ -203,7 +215,9 @@ export default function Home() {
             >
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px] shadow-emerald-400/60" />
               <span className="text-amber-700 dark:text-amber-500">New in V2</span>
-              <span className="text-muted-foreground">- 15+ Tool Options Analytics Suite</span>
+              <span className="text-muted-foreground">
+                - {tools.length} Tool Options &amp; Portfolio Analytics Suite
+              </span>
               <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
             </Link>
             <h1 className="text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight mb-6">
@@ -215,8 +229,8 @@ export default function Home() {
             </p>
             <p className="text-base sm:text-lg text-muted-foreground max-w-2xl mx-auto mb-10">
               Test and Execute your Trading ideas, Connect your favorite Trading Platforms, AI
-              Driven Strategy Development with a built-in Options Analytics Suite across 30+
-              Brokers.
+              Driven Strategy Development, with a built-in Options &amp; Portfolio Analytics Suite -
+              option chains and Greeks, portfolio and SIP backtesting - across 30+ Brokers.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Button size="lg" asChild>
