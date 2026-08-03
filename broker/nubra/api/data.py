@@ -684,6 +684,16 @@ class BrokerData:
             else:
                 raise Exception(f"Exchange '{exchange}' is not supported by Nubra. Supported exchanges: NSE, BSE, NFO, BFO, MCX, NSE_INDEX, BSE_INDEX")
 
+            # Indices carry no traded volume, and Nubra rejects the whole query
+            # with {"error": "invalid field tick_volume"} if it is requested for
+            # type=INDEX. The only volume field an INDEX accepts is
+            # cumulative_volume, which is a running day total rather than a
+            # per-candle figure, so asking for it would poison the volume
+            # column - leave index candles at volume 0 instead.
+            fields = ["open", "high", "low", "close"]
+            if instrument_type != "INDEX":
+                fields.append("tick_volume")
+
             # Convert dates to datetime objects
             from_date = pd.to_datetime(start_date)
             to_date = pd.to_datetime(end_date)
@@ -739,7 +749,7 @@ class BrokerData:
                             "exchange": api_exchange,
                             "type": instrument_type,
                             "values": [br_symbol],
-                            "fields": ["open", "high", "low", "close", "tick_volume"],
+                            "fields": fields,
                             "startDate": start_iso,
                             "endDate": end_iso,
                             "interval": self.timeframe_map[interval],
@@ -760,7 +770,16 @@ class BrokerData:
 
                     logger.debug(f"Nubra timeseries raw response: {json.dumps(response, indent=2) if isinstance(response, dict) else response}")
 
-                    # Parse response
+                    # Parse response. Anything that is not a "charts" envelope is
+                    # a rejection - surface it, otherwise a malformed query looks
+                    # identical to a genuinely empty range and the caller only
+                    # ever sees "no data".
+                    if isinstance(response, dict) and response.get("error"):
+                        logger.error(
+                            f"Nubra timeseries rejected {br_symbol} "
+                            f"({api_exchange}/{instrument_type}, {start_iso} to {end_iso}): "
+                            f"{response.get('error')}"
+                        )
                     if response and response.get("message") == "charts":
                         result = response.get("result", [])
                         if result:
