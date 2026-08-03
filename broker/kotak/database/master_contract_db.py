@@ -406,20 +406,25 @@ def get_kotak_master_filepaths():
     # accessible_urls stayed empty and the caller (download_csv_kotak_data)
     # raised "Scripmaster API failed" even though the files were fully
     # downloadable the whole time. Use a ranged GET (bytes=0-0) instead of
-    # HEAD -- avoids the redirect loop and, unlike a plain GET, does not pull
-    # the full multi-MB CSV twice (once here, once in the real download).
+    # HEAD -- avoids the redirect loop. Kotak's CDN ignores the Range header
+    # and answers with the full multi-MB body regardless, so stream the
+    # request and close it after reading only the status line/headers --
+    # otherwise a plain client.get() call buffers the entire CSV into memory
+    # just for this check, then the real download in download_csv_kotak_data
+    # pulls the same bytes again.
     accessible_urls = {}
     for key, url in fallback_urls.items():
         try:
             logger.info(f"Testing direct URL: {url}")
-            response = client.get(
-                url, timeout=10, follow_redirects=True, headers={"Range": "bytes=0-0"}
-            )
-            if response.status_code in (200, 206):
+            with client.stream(
+                "GET", url, timeout=10, follow_redirects=True, headers={"Range": "bytes=0-0"}
+            ) as response:
+                status_code = response.status_code
+            if status_code in (200, 206):
                 accessible_urls[key] = url
                 logger.info(f"Direct URL accessible: {key}")
             else:
-                logger.warning(f"Direct URL returned {response.status_code}: {key}")
+                logger.warning(f"Direct URL returned {status_code}: {key}")
         except httpx.HTTPError as e:
             logger.warning(f"Direct URL HTTP error: {key} - {e}")
         except Exception as e:
