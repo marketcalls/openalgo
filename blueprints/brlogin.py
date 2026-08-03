@@ -11,6 +11,7 @@ from flask import current_app as app
 from limiter import limiter  # Import the limiter instance
 from utils.auth_utils import handle_auth_failure, handle_auth_success
 from utils.config import (
+    build_external_url,
     get_broker_api_key,
     get_broker_api_secret,
     get_login_rate_limit_hour,
@@ -851,8 +852,12 @@ def broker_callback(broker, para=None):
                 from broker.rmoney.baseurl import INTERACTIVE_URL as RMONEY_INTERACTIVE_URL
 
                 BROKER_API_KEY_LOCAL = os.getenv("BROKER_API_KEY")
-                callback_url = url_for(
-                    "brlogin.broker_callback", broker="rmoney", _external=True
+                # Built from HOST_SERVER, not the request Host header: this URL
+                # is handed to the broker as the OAuth return address, so a
+                # poisoned Host would send the callback (and its credentials)
+                # to an attacker-controlled origin.
+                callback_url = build_external_url(
+                    url_for("brlogin.broker_callback", broker="rmoney")
                 )
                 oauth_url = f"{RMONEY_INTERACTIVE_URL}/thirdparty?appKey={BROKER_API_KEY_LOCAL}&returnURL={callback_url}"
                 return redirect(oauth_url)
