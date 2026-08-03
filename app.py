@@ -713,7 +713,7 @@ def setup_environment(app):
             ]
 
             db_init_start = time.time()
-            with ThreadPoolExecutor(max_workers=15) as executor:
+            with ThreadPoolExecutor(max_workers=1) as executor:  # FIX: Prevent SQLite parallel write-lock crash
                 futures = {executor.submit(func): name for name, func in db_init_functions}
                 for future in as_completed(futures):
                     db_name = futures[future]
@@ -768,6 +768,13 @@ def setup_environment(app):
                 logger.debug("Python strategy scheduler initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize Python strategy scheduler: {e}")
+
+            # FIX: Clean up any SQLAlchemy sessions (SQLite transactions) left open by startup checks
+            try:
+                from utils.db_sessions import remove_all_scoped_sessions
+                remove_all_scoped_sessions()
+            except Exception:
+                pass
 
             try:
                 from services.flow_scheduler_service import init_flow_scheduler
@@ -1156,4 +1163,4 @@ if __name__ == "__main__":
             flush=True,
         )
 
-    socketio.run(app, host=host_ip, port=port, debug=debug, reloader_options=reloader_options)
+    socketio.run(app, host=host_ip, port=port, debug=debug, allow_unsafe_werkzeug=True, use_reloader=False, reloader_options=reloader_options)
