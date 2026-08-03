@@ -773,8 +773,8 @@ def setup_environment(app):
             try:
                 from utils.db_sessions import remove_all_scoped_sessions
                 remove_all_scoped_sessions()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"Failed to clean up scoped sessions: {e}")
 
             try:
                 from services.flow_scheduler_service import init_flow_scheduler
