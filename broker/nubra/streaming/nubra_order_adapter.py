@@ -2,9 +2,11 @@
 Nubra order-update adapter — realtime order/trade events over the
 notifications WebSocket stream.
 
-Docs: broker-api-docs/nubra/api-docs.md, "Realtime Order Updates" section.
-Endpoint (UAT, the only one published in the doc; override with
-NUBRA_ORDER_WS_URL when Nubra publishes production): wss://uatapi.nubra.io/ws
+Docs: broker-api-docs/nubra-api-rest-api-v3-llm-builder.md, "Realtime Order
+Updates" section.
+Endpoint: discovered per-session from GET /userinfo -> env_info.user_ws_url
+(the URL is environment specific, so it must not be hardcoded). Falls back to
+NUBRA_ORDER_WS_URL, then to the UAT endpoint.
 Auth: Bearer session token + x-device-id headers (same convention as
 broker/nubra/api/nubrawebsocket.py), then a post-open text handshake:
     subscribe <session_token> notifications notification
@@ -23,6 +25,7 @@ import os
 
 from google.protobuf.any_pb2 import Any as ProtoAny
 
+from broker.nubra.api.auth_api import get_ws_urls
 from database.auth_db import get_auth_token
 from utils.logging import get_logger
 from websocket_proxy.order_adapter import BaseOrderUpdateAdapter, to_openalgo_symbol
@@ -119,9 +122,24 @@ class NubraOrderUpdateAdapter(BaseOrderUpdateAdapter):
         super().__init__(broker_name="nubra", user_id=user_id)
         self.session_token = session_token
         self.device_id = device_id
+        self._ws_url = None
 
     def get_ws_url(self) -> str:
-        return os.getenv("NUBRA_ORDER_WS_URL", NUBRA_ORDER_WS_URL_DEFAULT)
+        """
+        Resolve the order-update stream URL for this session.
+
+        Nubra publishes it per environment via GET /userinfo, so ask the API
+        first and only fall back to a configured/default endpoint if that call
+        fails. Resolved once per adapter, then reused across reconnects.
+        """
+        if self._ws_url is None:
+            user_ws_url, _market_ws_url = get_ws_urls(self.session_token, self.device_id)
+            if user_ws_url:
+                self.logger.info(f"Nubra order WS URL from /userinfo: {user_ws_url}")
+            self._ws_url = user_ws_url or os.getenv(
+                "NUBRA_ORDER_WS_URL", NUBRA_ORDER_WS_URL_DEFAULT
+            )
+        return self._ws_url
 
     def get_headers(self):
         return {

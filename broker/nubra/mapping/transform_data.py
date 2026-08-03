@@ -1,237 +1,180 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
-# Mapping Nubra API Parameters https://api.nubra.io/docs
+# Mapping Nubra Trading API V3 (OMS V3 intent orders)
+#
+# V3 replaces the old snake_case /orders/v2 payload with a camelCase "intent
+# order" model posted to /sentinel/orders/*. Every request -- create, modify,
+# cancel and margin -- wraps its items in a top-level ``orders`` array, even
+# when there is exactly one item.
+#
+# Docs: broker-api-docs/nubra-api-rest-api-v3-llm-builder.md
+#       "Place Single Order" / "Modify Order" / "Cancel Order"
 
-import os
-
-from database.token_db import get_br_symbol
+import re
 
 
-def _market_protection_pct():
-    """
-    Market-Protection-Price (MPP) band (fraction) for emulating MARKET / SL-M.
-
-    Nubra does NOT support MARKET price_type (docs: "Do not send MARKET as
-    price_type") and has no broker-side market-protection flag (unlike Zerodha's
-    market_protection / Arrow's mpp). We therefore emulate a market order the way
-    those brokers' MPP feature does: a DAY LIMIT priced at LTP +/- this band
-    (BUY above, SELL below) so it is marketable but capped. The same band sets
-    the marketable limit for SL-M stop orders. Configurable via
-    NUBRA_MARKET_PROTECTION_PCT (percent, default 1.0).
-    """
+def _paise(value):
+    """Rupees -> integer paise. Nubra V3 carries every price as int paise."""
     try:
-        return float(os.getenv("NUBRA_MARKET_PROTECTION_PCT", "1.0")) / 100.0
+        price = float(value or 0)
     except (TypeError, ValueError):
-        return 0.01
+        return 0
+    return int(round(price * 100))
 
 
-def transform_data(data, token, market_price_paise=None):
+def sanitize_strat_tag(tag):
     """
-    Transforms the OpenAlgo API request structure to Nubra's expected structure.
+    Normalize an OpenAlgo strategy name into a Nubra V3 ``stratTags`` entry.
 
-    OpenAlgo format:
-    - action: BUY/SELL
-    - product: CNC/MIS/NRML
-    - pricetype: MARKET/LIMIT/SL/SL-M
-    - price: float (in rupees)
-    - trigger_price: float (in rupees, for stoploss orders)
-    - quantity: int
-
-    Nubra format:
-    - order_side: ORDER_SIDE_BUY/ORDER_SIDE_SELL
-    - order_delivery_type: ORDER_DELIVERY_TYPE_CNC/ORDER_DELIVERY_TYPE_IDAY
-    - order_type: ORDER_TYPE_REGULAR/ORDER_TYPE_STOPLOSS
-    - price_type: LIMIT (Nubra is limit-only; MARKET is emulated as an MPP limit)
-    - order_price: int (in paise)
-    - validity_type: DAY (Nubra has no IOC routing; MPP limits rest as DAY)
-    - algo_params.trigger_price: int (in paise, for stoploss orders)
-    - order_qty: int
-
-    Args:
-        market_price_paise: Market-Protection-Price (in paise, LTP +/- band)
-            computed by the caller, used to emulate a MARKET order as a DAY LIMIT.
-            When None for a MARKET request, the caller is expected to have guarded
-            against placement.
+    Nubra's rules (place-order "Important Rules"): pass exactly one tag and do
+    not use underscores -- use a hyphenated or plain tag such as ``abc-def``.
+    Anything outside [A-Za-z0-9-] is collapsed to a hyphen so an arbitrary
+    OpenAlgo strategy name ("My Strategy_v2") becomes a legal tag
+    ("my-strategy-v2").
     """
-    # Convert price from rupees to paise (multiply by 100)
-    price = float(data.get("price", 0))
-    price_in_paise = int(round(price * 100)) if price else 0
-
-    trigger_price = float(data.get("trigger_price", 0))
-    trigger_price_in_paise = int(round(trigger_price * 100)) if trigger_price else 0
-
-    pricetype = data.get("pricetype", "MARKET").upper()
-    side = data["action"].upper()
-
-    # All orders use DAY validity. Nubra has no IOC routing, and the MPP-style
-    # market emulation deliberately rests as a DAY limit (like Zerodha/Arrow MPP).
-    validity_type = "DAY"
-
-    # Build the transformed data structure for Nubra API
-    transformed = {
-        "ref_id": int(token),  # Instrument reference ID from token
-        "order_side": map_order_side(side),
-        "order_delivery_type": map_order_delivery_type(data["product"]),
-        "order_type": map_order_type(pricetype),
-        "price_type": map_price_type(pricetype),  # always LIMIT (Nubra is limit-only)
-        "order_qty": int(data["quantity"]),
-        "validity_type": validity_type,
-        "order_price": price_in_paise,
-        "tag": data.get("strategy", "openalgo"),
-    }
-
-    # MARKET emulation: Nubra rejects price_type=MARKET and has no market-protection
-    # flag, so we send a DAY LIMIT at the Market-Protection-Price (LTP +/- band,
-    # computed by the caller) -- the same idea as Zerodha market_protection / Arrow mpp.
-    if pricetype == "MARKET":
-        if market_price_paise:
-            transformed["order_price"] = int(market_price_paise)
-        # else: leave price_in_paise (the caller should have guarded placement)
-
-    # Add algo_params for stoploss orders
-    if pricetype in ("SL", "SL-M"):
-        transformed["algo_params"] = {
-            "trigger_price": trigger_price_in_paise
-        }
-        # SL-M is a stop-MARKET order, which Nubra has no native type for. Emulate
-        # it as a stop-LIMIT whose limit is placed beyond the trigger by the
-        # protection band so it is marketable the moment the trigger fires.
-        # Nubra rule: BUY stop needs order_price >= trigger; SELL needs <= trigger.
-        if pricetype == "SL-M" and trigger_price_in_paise:
-            buf = _market_protection_pct()
-            if side == "BUY":
-                transformed["order_price"] = int(round(trigger_price_in_paise * (1 + buf)))
-            else:
-                transformed["order_price"] = int(round(trigger_price_in_paise * (1 - buf)))
-
-    return transformed
-
-
-def transform_modify_order_data(data, token, market_price_paise=None):
-    """
-    Transforms modify order data from OpenAlgo format to Nubra's format.
-
-    Nubra Modify Order API: POST /orders/v2/modify/{order_id}
-
-    Compulsory fields: order_price, order_qty, exchange, order_type
-    For ORDER_TYPE_STOPLOSS: also requires trigger_price in algo_params
-
-    Note: order_id goes in the URL, not in the payload
-    """
-    price = float(data.get("price", 0))
-    price_in_paise = int(round(price * 100)) if price else 0
-
-    trigger_price = float(data.get("trigger_price", 0))
-    trigger_price_in_paise = int(round(trigger_price * 100)) if trigger_price else 0
-
-    pricetype = data.get("pricetype", "MARKET").upper()
-    side = data.get("action", "BUY").upper()
-
-    # Build payload per Nubra API requirements
-    # order_id is passed in URL, not in payload
-    transformed = {
-        "order_qty": int(data["quantity"]),
-        "order_price": price_in_paise,
-        "exchange": data["exchange"],  # Compulsory field
-        "order_type": map_order_type(pricetype),
-    }
-
-    # MARKET emulation on modify: aggressive limit from the live book (caller-supplied)
-    if pricetype == "MARKET" and market_price_paise:
-        transformed["order_price"] = int(market_price_paise)
-
-    # Add algo_params for stoploss orders (trigger_price is compulsory for stoploss)
-    if pricetype in ("SL", "SL-M"):
-        transformed["algo_params"] = {
-            "trigger_price": trigger_price_in_paise
-        }
-        # SL-M -> marketable stop-limit beyond the trigger (see transform_data)
-        if pricetype == "SL-M" and trigger_price_in_paise:
-            buf = _market_protection_pct()
-            if side == "BUY":
-                transformed["order_price"] = int(round(trigger_price_in_paise * (1 + buf)))
-            else:
-                transformed["order_price"] = int(round(trigger_price_in_paise * (1 - buf)))
-
-    return transformed
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", str(tag or "openalgo")).strip("-").lower()
+    return slug or "openalgo"
 
 
 def map_order_side(action):
-    """
-    Maps OpenAlgo action (BUY/SELL) to Nubra order_side.
-    """
-    side_mapping = {
-        "BUY": "ORDER_SIDE_BUY",
-        "SELL": "ORDER_SIDE_SELL",
-    }
-    return side_mapping.get(action.upper(), "ORDER_SIDE_BUY")
+    """OpenAlgo action -> Nubra V3 ``side``. V3 uses bare BUY/SELL."""
+    return "SELL" if str(action).upper() == "SELL" else "BUY"
 
 
 def map_order_delivery_type(product):
     """
-    Maps OpenAlgo product type to Nubra order_delivery_type.
-    CNC -> ORDER_DELIVERY_TYPE_CNC (Cash & Carry / Delivery)
-    MIS -> ORDER_DELIVERY_TYPE_IDAY (Intraday)
-    NRML -> ORDER_DELIVERY_TYPE_CNC (Normal for F&O, treated as carry forward)
+    OpenAlgo product -> Nubra V3 ``deliveryType``.
+
+    V3 exposes only IDAY (intraday) and CNC. NRML has no distinct V3 value, so
+    carry-forward F&O maps to CNC -- the same collapse the V2 mapping used.
     """
-    delivery_type_mapping = {
-        "CNC": "ORDER_DELIVERY_TYPE_CNC",
-        "MIS": "ORDER_DELIVERY_TYPE_IDAY",
-        "NRML": "ORDER_DELIVERY_TYPE_CNC",  # NRML (normal) maps to CNC for F&O
-    }
-    return delivery_type_mapping.get(product.upper(), "ORDER_DELIVERY_TYPE_IDAY")
+    return {
+        "CNC": "CNC",
+        "MIS": "IDAY",
+        "NRML": "CNC",
+    }.get(str(product).upper(), "IDAY")
 
 
-def map_order_type(pricetype):
-    """
-    Maps OpenAlgo pricetype to Nubra order_type.
-    Regular orders for MARKET/LIMIT, Stoploss for SL/SL-M
-    """
-    order_type_mapping = {
-        "MARKET": "ORDER_TYPE_REGULAR",
-        "LIMIT": "ORDER_TYPE_REGULAR",
-        "SL": "ORDER_TYPE_STOPLOSS",
-        "SL-M": "ORDER_TYPE_STOPLOSS",
-    }
-    return order_type_mapping.get(pricetype.upper(), "ORDER_TYPE_REGULAR")
+def reverse_map_product_type(delivery_type):
+    """Nubra V3 ``deliveryType`` -> OpenAlgo product."""
+    return {"CNC": "CNC", "IDAY": "MIS"}.get(str(delivery_type).upper(), "MIS")
 
 
 def map_price_type(pricetype):
     """
-    Maps OpenAlgo pricetype to Nubra price_type.
+    OpenAlgo pricetype -> Nubra V3 ``priceType``.
 
-    Nubra is LIMIT-only for order entry (docs: "Do not send MARKET as
-    price_type"). Every OpenAlgo pricetype therefore maps to LIMIT; MARKET and
-    SL-M are emulated with an aggressive/marketable limit price (see
-    transform_data / _market_protection_pct).
+    V3 supports a native MARKET price type (V2 did not, which is why the old
+    integration emulated market orders with a protection-band limit). SL is a
+    triggered LIMIT and SL-M a triggered MARKET -- the trigger itself lives in
+    ``entryConfig``, not in the price type.
     """
-    price_type_mapping = {
-        "MARKET": "LIMIT",  # emulated via MPP limit (LTP +/- band), DAY validity
+    return {
+        "MARKET": "MARKET",
         "LIMIT": "LIMIT",
-        "SL": "LIMIT",      # Stoploss Limit
-        "SL-M": "LIMIT",    # emulated stop-market via marketable limit
+        "SL": "LIMIT",
+        "SL-M": "MARKET",
+    }.get(str(pricetype).upper(), "MARKET")
+
+
+def map_validity_type(pricetype):
+    """
+    Nubra validated MARKET orders only with ``validityType: "IOC"`` and no
+    ``entryPrice`` (place-order "Important Rules"). LIMIT families rest as DAY.
+    """
+    return "IOC" if map_price_type(pricetype) == "MARKET" else "DAY"
+
+
+def build_entry_trigger(pricetype, trigger_price, action):
+    """
+    Build the V3 ``entryConfig`` for a stop order, or None when not a stop.
+
+    OpenAlgo SL/SL-M carry a trigger_price; V3 expresses that as an LTP entry
+    trigger. Stop semantics set the direction: a BUY stop arms above the
+    trigger, a SELL stop arms below it.
+    """
+    if str(pricetype).upper() not in ("SL", "SL-M"):
+        return None
+
+    trigger_paise = _paise(trigger_price)
+    if not trigger_paise:
+        return None
+
+    bound = "atOrAbove" if map_order_side(action) == "BUY" else "atOrBelow"
+    return {"triggers": {"ltp": {bound: {"value": trigger_paise}}}}
+
+
+def transform_data(data, token):
+    """
+    Transform an OpenAlgo place-order request into ONE Nubra V3 order item.
+
+    The caller wraps the result as ``{"orders": [item]}`` before POSTing it to
+    /sentinel/orders/create.
+
+    OpenAlgo in:  action, product, pricetype, price, trigger_price, quantity
+    Nubra V3 out: refId, qty, side, deliveryType, priceType, validityType,
+                  isMultiLeg, executionMode, entryPrice, entryConfig, stratTags
+
+    Note there is no order_type/ORDER_TYPE_STOPLOSS field in V3 -- a stop order
+    is an ordinary order carrying an ``entryConfig`` trigger, and Nubra
+    normalizes it back as ``intentOrderType: "TRIGGER"``.
+    """
+    pricetype = str(data.get("pricetype", "MARKET")).upper()
+
+    item = {
+        "refId": int(token),
+        "qty": int(data["quantity"]),
+        "side": map_order_side(data["action"]),
+        "deliveryType": map_order_delivery_type(data["product"]),
+        "priceType": map_price_type(pricetype),
+        "validityType": map_validity_type(pricetype),
+        "isMultiLeg": False,
+        "executionMode": "ENTRY",
+        "stratTags": [sanitize_strat_tag(data.get("strategy"))],
     }
-    return price_type_mapping.get(pricetype.upper(), "LIMIT")
+
+    # entryPrice is required for LIMIT and must be omitted for MARKET.
+    if item["priceType"] == "LIMIT":
+        item["entryPrice"] = _paise(data.get("price"))
+
+    entry_config = build_entry_trigger(pricetype, data.get("trigger_price"), data["action"])
+    if entry_config:
+        item["entryConfig"] = entry_config
+
+    return item
+
+
+def transform_modify_order_data(data, orderid):
+    """
+    Transform an OpenAlgo modify request into ONE Nubra V3 modify item.
+
+    The caller wraps the result as ``{"orders": [item]}`` for
+    /sentinel/orders/modify. V3 modify is an order-level patch keyed by
+    ``orderId`` (the intentOrderId) -- field names stay aligned to the
+    create-order shape, and ``legs``/``isMultiLeg`` are never resent.
+    """
+    pricetype = str(data.get("pricetype", "MARKET")).upper()
+
+    item = {
+        "orderId": int(orderid),
+        "qty": int(data["quantity"]),
+        "deliveryType": map_order_delivery_type(data.get("product", "MIS")),
+        "priceType": map_price_type(pricetype),
+        "validityType": map_validity_type(pricetype),
+        "executionMode": "ENTRY",
+    }
+
+    if item["priceType"] == "LIMIT":
+        item["entryPrice"] = _paise(data.get("price"))
+
+    entry_config = build_entry_trigger(
+        pricetype, data.get("trigger_price"), data.get("action", "BUY")
+    )
+    if entry_config:
+        item["entryConfig"] = entry_config
+
+    return item
 
 
 def map_product_type(product):
-    """
-    Maps OpenAlgo product type to Nubra's internal product type for position lookup.
-    Used for get_open_position to match positions.
-    """
-    product_type_mapping = {
-        "CNC": "ORDER_DELIVERY_TYPE_CNC",
-        "NRML": "ORDER_DELIVERY_TYPE_CNC",
-        "MIS": "ORDER_DELIVERY_TYPE_IDAY",
-    }
-    return product_type_mapping.get(product.upper(), "ORDER_DELIVERY_TYPE_IDAY")
-
-
-def reverse_map_product_type(product):
-    """
-    Maps Nubra's order_delivery_type back to OpenAlgo product type.
-    """
-    reverse_product_type_mapping = {
-        "ORDER_DELIVERY_TYPE_CNC": "CNC",
-        "ORDER_DELIVERY_TYPE_IDAY": "MIS",
-    }
-    return reverse_product_type_mapping.get(product, "MIS")
+    """OpenAlgo product -> V3 deliveryType, for position lookups."""
+    return map_order_delivery_type(product)
