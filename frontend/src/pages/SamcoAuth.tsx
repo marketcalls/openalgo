@@ -13,7 +13,7 @@ import {
   Smartphone,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router'
 import { fetchCSRFToken } from '@/api/client'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {

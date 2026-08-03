@@ -4,7 +4,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Copy, Eye, EyeOff, Info, Loader2, Settings2, Trash2, X } from 'lucide-react'
 import { useCallback, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams } from 'react-router'
 import { flowQueryKeys, getIndexSymbolsLotSizes, getWebhookInfo } from '@/api/flow'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'

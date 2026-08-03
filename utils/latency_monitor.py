@@ -147,10 +147,12 @@ def track_latency(api_type):
                 # Start response processing stage
                 tracker.start_stage("broker_response")
 
-                # Get response data
-                if hasattr(response, "json"):
+                # Get response data. A file download (e.g. the portfolio
+                # tearsheet) has a `.json` property but isn't JSON, so it
+                # resolves to None rather than raising.
+                if hasattr(response, "json") and isinstance(response.json, dict):
                     response_data = response.json
-                elif isinstance(response, tuple) and len(response) > 0:
+                elif isinstance(response, tuple) and len(response) > 0 and isinstance(response[0], dict):
                     response_data = response[0]
                 else:
                     response_data = {}

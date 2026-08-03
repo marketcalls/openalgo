@@ -14,7 +14,7 @@ import {
   useReactFlow,
 } from '@xyflow/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router'
 import { showToast } from '@/utils/toast'
 import '@xyflow/react/dist/style.css'
 import {

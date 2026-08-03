@@ -1,6 +1,6 @@
 import { AlertTriangle, ArrowLeft, ExternalLink, Loader2, Shield } from 'lucide-react'
 import { useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router'
 import { fetchCSRFToken } from '@/api/client'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
