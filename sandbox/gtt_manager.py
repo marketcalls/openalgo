@@ -234,7 +234,11 @@ class GTTManager:
             else:
                 blocked = sum(margins)
 
-            ok, message = self.fund_manager.block_margin(
+            # Staged, so the reservation and the GTT rows land in one commit.
+            # Blocking first and persisting after meant a failed insert left the
+            # money reserved against a GTT that does not exist, recoverable only
+            # by a compensating release that could itself fail.
+            ok, message = self.fund_manager.stage_margin_delta(
                 blocked, description=f"GTT {symbol} {exchange}"
             )
             if not ok:
@@ -279,13 +283,10 @@ class GTTManager:
             try:
                 db_session.commit()
             except Exception:
-                # block_margin already committed, so a rollback here does not
-                # undo it. Hand the reservation back explicitly or it is
-                # orphaned in used_margin with no GTT to account for it.
+                # One transaction now, so the rollback takes the reservation
+                # with it - no compensating release to get wrong.
                 db_session.rollback()
-                self.fund_manager.release_margin(
-                    blocked, description=f"GTT {gtt_id} persist failed"
-                )
+                db_session.expire_all()
                 raise
 
             logger.info(
@@ -554,6 +555,11 @@ class GTTManager:
             # then this value was still current.
             released = Decimal(str(gtt.margin_blocked or 0))
 
+            # Parent claim, leg cancellation and the fund release are one
+            # transaction. Committing the parent first meant a later failure
+            # left the GTT terminally cancelled with the money still blocked and
+            # no way to retry - the row was already 'cancelled', so a second
+            # attempt could not claim it.
             won = db_session.execute(
                 update(SandboxGTT)
                 .where(
@@ -563,10 +569,9 @@ class GTTManager:
                 )
                 .values(gtt_status="cancelled", margin_blocked=Decimal("0.00"))
             )
-            db_session.commit()
-
             if won.rowcount != 1:
                 # Someone else resolved it between the read and here.
+                db_session.rollback()
                 db_session.expire_all()
                 return self._not_found(trigger_id)
 
@@ -581,28 +586,18 @@ class GTTManager:
                 )
                 .values(leg_status="cancelled", claimed_at=None)
             )
-            db_session.commit()
 
             if released > 0:
-                freed, reason = _release_margin(
-                    self.user_id, released, f"GTT {trigger_id} cancelled"
+                staged, reason = self.fund_manager.stage_margin_delta(
+                    -released, description=f"GTT {trigger_id} cancelled"
                 )
-                if not freed:
-                    # The GTT row already says cancelled but the money is still
-                    # blocked. Reporting success here would leave the user with
-                    # funds locked against a trigger that no longer exists, and
-                    # nothing to point at. Record the amount still owed on the
-                    # row so reconciliation can see it, and fail loudly.
+                if not staged:
+                    db_session.rollback()
+                    db_session.expire_all()
                     logger.error(
-                        f"GTT {trigger_id}: cancelled but its {released} margin could "
-                        f"not be released ({reason})"
+                        f"GTT {trigger_id}: could not release its {released} margin "
+                        f"({reason}); the GTT is unchanged and can be cancelled again"
                     )
-                    db_session.execute(
-                        update(SandboxGTT)
-                        .where(SandboxGTT.gtt_id == trigger_id)
-                        .values(margin_blocked=released)
-                    )
-                    db_session.commit()
                     return (
                         False,
                         {
@@ -610,13 +605,20 @@ class GTTManager:
                             "mode": "analyze",
                             "trigger_id": trigger_id,
                             "message": (
-                                f"GTT cancelled but {released} margin could not be "
-                                f"released ({reason}). Funds remain blocked - check "
-                                "the sandbox funds reconciliation."
+                                f"Could not release {released} margin ({reason}). The "
+                                "GTT is unchanged - retry the cancel."
                             ),
                         },
                         500,
                     )
+
+            try:
+                db_session.commit()
+            except Exception:
+                # Nothing landed, so the GTT is still active and cancellable.
+                db_session.rollback()
+                db_session.expire_all()
+                raise
 
             logger.info(f"Sandbox GTT {trigger_id} cancelled; released {released}")
             return True, {"status": "success", "mode": "analyze", "trigger_id": trigger_id}, 200
@@ -970,18 +972,26 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
             "gtt_leg_id": leg.id,
         }
 
-        # Release the GTT's reservation first: place_order blocks margin for the
-        # order it creates, and holding both at once would reject a leg the
-        # account can afford.
+        # Release the GTT's reservation before placing: place_order blocks
+        # margin for the order it creates, and holding both at once would
+        # reject a leg the account can afford.
+        #
+        # The release and the margin_blocked=0 that records it are one
+        # transaction. Committing them separately meant a crash in between left
+        # the money returned while the row still claimed it, and recovery reads
+        # margin_blocked > 0 as proof the funds were never released - so it
+        # would re-arm the GTT without restoring anything, leaving it active and
+        # unfunded.
         released = Decimal(str(gtt.margin_blocked or 0))
         if released > 0:
-            freed, reason = _release_margin(
-                gtt.user_id, released, f"GTT {gtt.gtt_id} triggered"
+            staged, reason = FundManager(gtt.user_id).stage_margin_delta(
+                -released, description=f"GTT {gtt.gtt_id} triggered"
             )
-            if not freed:
+            if not staged:
                 # Placing now would block a second reservation on top of one
-                # that was never returned - the account would be charged twice
-                # for a single trigger. Stand down and let the next tick retry.
+                # that was never returned - the account charged twice for a
+                # single trigger. Stand down and let the next tick retry.
+                db_session.rollback()
                 logger.error(
                     f"GTT {gtt.gtt_id}: could not release its {released} margin "
                     f"({reason}); not placing the order"
@@ -989,9 +999,21 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
                 _revert_parent(gtt.gtt_id)
                 _revert_claim(leg_id)
                 return False
-            released_ok = True
+
             gtt.margin_blocked = Decimal("0.00")
-            db_session.commit()
+            try:
+                db_session.commit()
+            except Exception:
+                # Neither the funds nor the row moved; nothing to compensate.
+                db_session.rollback()
+                logger.exception(
+                    f"GTT {gtt.gtt_id}: releasing its margin failed to commit; "
+                    "not placing the order"
+                )
+                _revert_parent(gtt.gtt_id)
+                _revert_claim(leg_id)
+                return False
+            released_ok = True
 
         success, response, _status = order_manager.place_order(order_payload)
 

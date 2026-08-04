@@ -1245,18 +1245,22 @@ class TestCancelReportsReleaseFailure:
         trigger_id = response["trigger_id"]
 
         with mock.patch.object(
-            FundManager, "release_margin", return_value=(False, "ledger locked")
+            FundManager, "stage_margin_delta", return_value=(False, "ledger locked")
         ):
             ok2, resp, status = mgr.cancel_gtt(trigger_id)
 
         assert ok2 is False and status == 500
-        assert "could not be released" in resp["message"]
+        assert "Could not release" in resp["message"]
 
         db_session.expire_all()
         gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
-        assert float(gtt.margin_blocked) > 0, (
-            "the row shows no reservation while the funds are still blocked"
-        )
+        # The whole transaction rolls back now, so the GTT is untouched rather
+        # than terminally cancelled with the money still held. That also keeps
+        # it retryable - the old behaviour left a 'cancelled' row that no second
+        # attempt could claim.
+        assert gtt.gtt_status == "active", "cancel left the GTT in a terminal state"
+        assert float(gtt.margin_blocked) > 0
+        assert mgr.cancel_gtt(trigger_id)[0] is True, "the retry could not cancel it"
 
     def test_a_normal_cancel_still_succeeds(self, clean_gtt_user):
         mgr = GTTManager(GTT_TEST_USER)
@@ -1376,7 +1380,7 @@ class TestMarginTransitionsFailClosed:
         assert try_claim_trigger(leg_id) is True
 
         orders_before = SandboxOrders.query.filter_by(user_id=GTT_TEST_USER).count()
-        with self._patched_release():
+        with self._patched_staged():
             assert fire_leg(leg_id, execution_price=96) is False
 
         db_session.expire_all()
@@ -1712,3 +1716,171 @@ class TestExpiryAndModifyRespectAFire:
         assert result["modify"][0] is False, "modify succeeded after the GTT fired"
         db_session.expire_all()
         assert SandboxGTT.query.filter_by(gtt_id=trigger_id).first().gtt_status == "triggered"
+
+
+class TestFireAndCancelCrashConsistency:
+    """Fire and cancel must leave funds and state agreeing after any failure."""
+
+    def _break_commit(self, nth=1):
+        from database.sandbox_db import db_session
+
+        real = db_session.commit
+        state = {"n": 0}
+
+        def flaky():
+            state["n"] += 1
+            if state["n"] == nth:
+                raise RuntimeError(f"commit #{nth} failed")
+            return real()
+
+        return mock.patch.object(db_session, "commit", side_effect=flaky)
+
+    def _row_and_ledger_agree(self, fm, trigger_id):
+        from database.sandbox_db import SandboxGTT
+
+        gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+        row = float(gtt.margin_blocked or 0)
+        ledger = float(_used_margin(fm))
+        assert row == ledger, (
+            f"GTT records {row} reserved while the ledger holds {ledger}"
+        )
+        return gtt
+
+    def test_fire_commit_failure_keeps_funds_and_row_together(self, clean_gtt_user):
+        """The reported case: funds released, row still claiming the money.
+
+        Recovery reads margin_blocked > 0 as proof the funds were never
+        released, so a split here produced an active GTT with nothing behind it.
+        """
+        from database.sandbox_db import SandboxGTT, SandboxGTTLeg, db_session
+        from sandbox.gtt_manager import fire_leg, try_claim_trigger
+
+        fm = clean_gtt_user
+        mgr = GTTManager(GTT_TEST_USER)
+        payload = _single_gtt()
+        payload["action"] = "BUY"
+        ok, response, _ = mgr.place_gtt(payload, last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+
+        # Every commit boundary, not just the first. Breaking only commit #1
+        # lets a two-commit implementation fail at the release itself, so
+        # nothing moves and nothing splits - the test would pass against the
+        # very bug it exists to catch. The GTT is re-armed between iterations so
+        # each boundary is genuinely reached.
+        for nth in (1, 2, 3):
+            db_session.rollback()
+            db_session.expire_all()
+            db_session.execute(
+                __import__("sqlalchemy").update(SandboxGTT)
+                .where(SandboxGTT.gtt_id == trigger_id)
+                .values(gtt_status="active")
+            )
+            db_session.execute(
+                __import__("sqlalchemy").update(SandboxGTTLeg)
+                .where(SandboxGTTLeg.gtt_id == trigger_id)
+                .values(leg_status="pending", claimed_at=None, triggered_order_id=None)
+            )
+            db_session.commit()
+            db_session.expire_all()
+
+            gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+            leg_id = gtt.legs[0].id
+            if not try_claim_trigger(leg_id):
+                continue
+            with self._break_commit(nth):
+                try:
+                    fire_leg(leg_id, execution_price=96)
+                except Exception:
+                    pass
+            db_session.rollback()
+            db_session.expire_all()
+            self._row_and_ledger_agree(fm, trigger_id)
+
+    def test_recovery_after_a_fire_crash_leaves_a_funded_gtt(self, clean_gtt_user):
+        """An active GTT must never be armed with nothing behind it."""
+        from database.sandbox_db import SandboxGTT, db_session
+        from sandbox.gtt_manager import reclaim_stranded_parents
+
+        fm = clean_gtt_user
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+
+        # Crash state: parent claimed, funds and row released together.
+        gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+        gtt.gtt_status = "triggered"
+        gtt.margin_blocked = Decimal("0.00")
+        db_session.commit()
+        GTTManager(GTT_TEST_USER).fund_manager.release_margin(
+            Decimal("950.00"), description="simulated release"
+        )
+
+        reclaim_stranded_parents()
+        db_session.expire_all()
+        gtt = self._row_and_ledger_agree(fm, trigger_id)
+        assert gtt.gtt_status == "active"
+        assert float(gtt.margin_blocked) > 0, "re-armed with no reservation behind it"
+
+    def test_cancel_commit_failure_leaves_it_retryable(self, clean_gtt_user):
+        """A failed cancel must not leave a terminal row with the funds held."""
+        from database.sandbox_db import SandboxGTT, db_session
+
+        fm = clean_gtt_user
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+
+        for nth in (1, 2):
+            with self._break_commit(nth):
+                try:
+                    mgr.cancel_gtt(trigger_id)
+                except Exception:
+                    pass
+            db_session.rollback()
+            db_session.expire_all()
+            self._row_and_ledger_agree(fm, trigger_id)
+
+        # Whatever the outcome, the row and the ledger agree - that is the
+        # invariant. And if the cancel did not go through, it must still be
+        # claimable: the old code committed 'cancelled' first, so a failure left
+        # a terminal row that no retry could take.
+        gtt = self._row_and_ledger_agree(fm, trigger_id)
+        if gtt.gtt_status == "active":
+            assert mgr.cancel_gtt(trigger_id)[0] is True, "the retry could not cancel it"
+            db_session.expire_all()
+            self._row_and_ledger_agree(fm, trigger_id)
+        else:
+            assert gtt.gtt_status == "cancelled"
+            assert float(gtt.margin_blocked or 0) == 0.0
+
+    def test_placement_commit_failure_reserves_nothing(self, clean_gtt_user):
+        """A failed insert must not leave money reserved for a GTT that does
+        not exist. Blocking first and persisting after relied on a compensating
+        release that could itself fail."""
+        from database.sandbox_db import SandboxGTT, db_session
+
+        fm = clean_gtt_user
+        before = _used_margin(fm)
+
+        # Both boundaries: breaking only the first lets a block-then-persist
+        # implementation fail at the block, so nothing is reserved and nothing
+        # splits - passing against the bug it exists to catch.
+        for nth in (1, 2):
+            with self._break_commit(nth):
+                try:
+                    GTTManager(GTT_TEST_USER).place_gtt(_single_gtt(), last_price=100)
+                except Exception:
+                    pass
+            db_session.rollback()
+            db_session.expire_all()
+
+            stored = SandboxGTT.query.filter_by(user_id=GTT_TEST_USER).all()
+            row_total = sum(float(g.margin_blocked or 0) for g in stored)
+            assert row_total == float(_used_margin(fm)), (
+                f"commit #{nth}: GTTs record {row_total} while the ledger holds "
+                f"{_used_margin(fm)}"
+            )
+        assert before is not None
