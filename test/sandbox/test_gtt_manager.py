@@ -1884,3 +1884,111 @@ class TestFireAndCancelCrashConsistency:
                 f"{_used_margin(fm)}"
             )
         assert before is not None
+
+
+class TestConcurrentPlacementReservations:
+    """Two placements racing must reserve twice, not once.
+
+    The lost update: both threads read the same starting balance, each writes
+    its own total, and the second commit erases the first. Two GTTs then record
+    950 of margin each while the ledger moved only once - and firing or
+    cancelling both drives used_margin negative, conjuring available funds.
+    """
+
+    def _sum_active_reservations(self):
+        from database.sandbox_db import SandboxGTT
+
+        return sum(
+            float(g.margin_blocked or 0)
+            for g in SandboxGTT.query.filter_by(
+                user_id=GTT_TEST_USER, gtt_status="active"
+            ).all()
+        )
+
+    def test_two_simultaneous_placements_both_reserve(self, clean_gtt_user):
+        import threading
+
+        from database.sandbox_db import db_session
+
+        fm = clean_gtt_user
+        before = float(_used_margin(fm))
+
+        # Both threads reach the staging step before either commits, which is
+        # the window the class lock does not cover.
+        staged = threading.Barrier(2, timeout=10)
+        results = []
+        lock = threading.Lock()
+
+        original_stage = type(fm).stage_margin_delta
+
+        def staged_then_wait(self, delta, description=""):
+            out = original_stage(self, delta, description=description)
+            try:
+                staged.wait()
+            except threading.BrokenBarrierError:
+                pass
+            return out
+
+        def place():
+            try:
+                with mock.patch.object(
+                    type(fm), "stage_margin_delta", staged_then_wait
+                ):
+                    ok, response, _ = GTTManager(GTT_TEST_USER).place_gtt(
+                        _single_gtt(), last_price=100
+                    )
+                with lock:
+                    results.append(ok)
+            except Exception:
+                with lock:
+                    results.append(False)
+            finally:
+                # Scoped sessions are per thread; leaving one bound leaks its
+                # identity map into whatever runs on this thread next.
+                db_session.remove()
+
+        threads = [threading.Thread(target=place) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=20)
+
+        db_session.expire_all()
+        reserved = self._sum_active_reservations()
+        ledger = float(_used_margin(fm)) - before
+
+        assert reserved == ledger, (
+            f"active GTTs record {reserved} reserved but the ledger moved {ledger} - "
+            "one reservation was lost"
+        )
+
+    def test_reservations_and_ledger_agree_after_mixed_activity(self, clean_gtt_user):
+        """The invariant the QA asked for, across a sequence of operations."""
+        from database.sandbox_db import db_session
+
+        fm = clean_gtt_user
+        before = float(_used_margin(fm))
+        mgr = GTTManager(GTT_TEST_USER)
+
+        ids = []
+        for _ in range(3):
+            ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+            assert ok
+            ids.append(response["trigger_id"])
+
+        assert mgr.cancel_gtt(ids[0])[0] is True
+        assert mgr.modify_gtt(ids[1], _single_gtt(trigger=95.0, price=95.0, qty=5))[0] is True
+
+        db_session.expire_all()
+        reserved = self._sum_active_reservations()
+        assert reserved == float(_used_margin(fm)) - before, (
+            f"reservations total {reserved} but the ledger moved "
+            f"{float(_used_margin(fm)) - before}"
+        )
+
+    def test_a_placement_beyond_available_funds_is_refused(self, clean_gtt_user):
+        """The sufficiency guard is in the WHERE clause, not a Python check."""
+        huge = _single_gtt(qty=100_000_000, price=95.0, trigger=95.0)
+        ok, response, status = GTTManager(GTT_TEST_USER).place_gtt(huge, last_price=100)
+        assert ok is False and status == 400
+        assert "Insufficient funds" in response["message"]
