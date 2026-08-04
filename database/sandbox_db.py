@@ -351,6 +351,14 @@ class SandboxGTTLeg(Base):
 
     trigger_price = Column(DECIMAL(10, 2), nullable=False)
 
+    # Which way the market must move to fire this leg: "below" when the trigger
+    # sits under the LTP at placement (triggerprice_sl - SELL stop-loss, BUY the
+    # dip) and "above" when it sits over it (triggerprice_tg - BUY breakout,
+    # SELL at target). Stored because the direction is a property of the trigger
+    # role, NOT of the leg's action: a BUY-on-dip fires falling and a
+    # SELL-at-target fires rising, so deriving it from BUY/SELL inverts both.
+    trigger_direction = Column(String(5), nullable=False, default="below")
+
     action = Column(String(10), nullable=False)  # BUY | SELL
     quantity = Column(Integer, nullable=False)
     price = Column(DECIMAL(10, 2), nullable=False)
@@ -385,6 +393,9 @@ class SandboxGTTLeg(Base):
         # reaper's stale-claim query (leg_status='triggering' AND claimed_at < cutoff).
         Index("idx_gtt_leg_status_claimed", "leg_status", "claimed_at"),
         CheckConstraint(
+            "trigger_direction IN ('below', 'above')", name="check_gtt_trigger_direction"
+        ),
+        CheckConstraint(
             "leg_status IN ('pending', 'triggering', 'triggered', 'cancelled')",
             name="check_gtt_leg_status",
         ),
@@ -399,8 +410,40 @@ def init_db():
 
     init_db_with_logging(Base, engine, "Sandbox DB", logger)
 
+    _migrate_add_gtt_trigger_direction()
+
     # Initialize default configuration
     init_default_config()
+
+
+def _migrate_add_gtt_trigger_direction():
+    """Add sandbox_gtt_legs.trigger_direction to databases created without it.
+
+    create_all() only creates missing tables, never missing columns, so an
+    install that already has sandbox_gtt_legs would keep a table with no
+    direction column and every GTT read would fail. Existing rows default to
+    "below", which is the safe reading: it is the direction a stop-loss uses,
+    and the leg is re-evaluated on the next tick either way.
+    """
+    from sqlalchemy import text
+
+    try:
+        with engine.connect() as conn:
+            existing = {
+                row[1] for row in conn.execute(text("PRAGMA table_info(sandbox_gtt_legs)"))
+            }
+            if not existing or "trigger_direction" in existing:
+                return
+            conn.execute(
+                text(
+                    "ALTER TABLE sandbox_gtt_legs ADD COLUMN trigger_direction "
+                    "VARCHAR(5) NOT NULL DEFAULT 'below'"
+                )
+            )
+            conn.commit()
+            logger.info("Added sandbox_gtt_legs.trigger_direction")
+    except Exception as e:
+        logger.exception(f"Could not add sandbox_gtt_legs.trigger_direction: {e}")
 
 
 def init_default_config():

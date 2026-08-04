@@ -70,6 +70,16 @@ def seed_symbol_master():
         # Table may already exist; the query below is the real check.
         pass
 
+    # Sandbox tables and their column migrations. Existing installs upgrade
+    # through init_db(), so the tests must take the same path or they would
+    # only ever exercise a freshly-created schema.
+    try:
+        from database.sandbox_db import init_db as init_sandbox_db
+
+        init_sandbox_db()
+    except Exception as exc:
+        pytest.skip(f"Could not initialise the sandbox database: {exc}")
+
     try:
         for spec in TEST_SYMBOLS:
             existing = SymToken.query.filter_by(
@@ -83,6 +93,7 @@ def seed_symbol_master():
         pytest.skip(f"Could not seed the symbol master for sandbox tests: {exc}")
 
     yield
+
 
 #: Modules whose tests place MARKET orders, which the sandbox prices from a live
 #: quote. Without a broker session there is no price, the order is rejected, and
