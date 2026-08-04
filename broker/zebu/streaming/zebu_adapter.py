@@ -57,55 +57,60 @@ class Config:
 
 
 class MarketDataCache:
-    """Manages market data caching with thread safety"""
+    """Manages market data caching with thread safety.
+
+    Keyed by scrip (``"NFO|65872"``), never by the bare token. Noren tokens are
+    unique only within an exchange, so a token-keyed cache merges two different
+    instruments into one slot - see issue #1732.
+    """
 
     def __init__(self):
         self._cache = {}
-        self._initialized_tokens = set()
+        self._initialized_scrips = set()
         self._lock = threading.Lock()
         self.logger = logging.getLogger("market_cache")
 
-    def get(self, token: str) -> dict[str, Any]:
-        """Get cached data for a token"""
+    def get(self, scrip: str) -> dict[str, Any]:
+        """Get cached data for a scrip"""
         with self._lock:
-            return self._cache.get(token, {}).copy()
+            return self._cache.get(scrip, {}).copy()
 
-    def update(self, token: str, data: dict[str, Any]) -> dict[str, Any]:
+    def update(self, scrip: str, data: dict[str, Any]) -> dict[str, Any]:
         """Update cache with new data and return merged result"""
         with self._lock:
-            cached_data = self._cache.get(token, {})
-            merged_data = self._merge_data(cached_data, data, token)
-            self._cache[token] = merged_data
+            cached_data = self._cache.get(scrip, {})
+            merged_data = self._merge_data(cached_data, data, scrip)
+            self._cache[scrip] = merged_data
 
-            if token not in self._initialized_tokens:
-                self._initialized_tokens.add(token)
-                self._log_cache_initialization(token, data)
+            if scrip not in self._initialized_scrips:
+                self._initialized_scrips.add(scrip)
+                self._log_cache_initialization(scrip, data)
 
             return merged_data.copy()
 
-    def clear(self, token: str = None) -> None:
-        """Clear cache for specific token or all tokens"""
+    def clear(self, scrip: str = None) -> None:
+        """Clear cache for specific scrip or all scrips"""
         with self._lock:
-            if token:
-                self._cache.pop(token, None)
-                self._initialized_tokens.discard(token)
-                self.logger.info(f"Cleared cache for token {token}")
+            if scrip:
+                self._cache.pop(scrip, None)
+                self._initialized_scrips.discard(scrip)
+                self.logger.info(f"Cleared cache for scrip {scrip}")
             else:
                 cache_size = len(self._cache)
                 self._cache.clear()
-                self._initialized_tokens.clear()
-                self.logger.info(f"Cleared all cached market data ({cache_size} tokens)")
+                self._initialized_scrips.clear()
+                self.logger.info(f"Cleared all cached market data ({cache_size} scrips)")
 
     def get_stats(self) -> dict[str, Any]:
         """Get cache statistics"""
         with self._lock:
             return {
-                "total_tokens": len(self._cache),
-                "initialized_tokens": len(self._initialized_tokens),
-                "tokens": list(self._cache.keys()),
+                "total_scrips": len(self._cache),
+                "initialized_scrips": len(self._initialized_scrips),
+                "scrips": list(self._cache.keys()),
             }
 
-    def _merge_data(self, cached: dict, new: dict, token: str) -> dict:
+    def _merge_data(self, cached: dict, new: dict, scrip: str) -> dict:
         """Smart merge logic for market data"""
         merged = cached.copy()
 
@@ -142,14 +147,14 @@ class MarketDataCache:
         """Check if value represents zero"""
         return value in [None, "", "0", 0, "0.0", 0.0]
 
-    def _log_cache_initialization(self, token: str, data: dict) -> None:
+    def _log_cache_initialization(self, scrip: str, data: dict) -> None:
         """Log cache initialization details"""
         basic_fields = ["lp", "o", "h", "l", "c", "v", "ap", "pc", "ltq", "ltt", "tbq", "tsq"]
         present_fields = sum(1 for field in basic_fields if field in data)
         completeness = present_fields / len(basic_fields)
 
         self.logger.info(
-            f"Initializing cache for token {token} - "
+            f"Initializing cache for scrip {scrip} - "
             f"{present_fields}/{len(basic_fields)} fields present ({completeness:.1%})"
         )
 
@@ -315,11 +320,23 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.ws_client = None
 
     def _setup_market_cache(self):
-        """Initialize market data caching system"""
+        """Initialize market data caching system.
+
+        Every routing structure is keyed by scrip (``"NFO|65872"``), not by the
+        bare token: Noren tokens are unique only within an exchange, and the live
+        master contract carries thousands of cross-exchange duplicates (NSE/CDS,
+        BSE_INDEX/NSE, BSE/MCX). Token-keyed routing merged two instruments into
+        one slot and published one symbol's price under the other's topic -
+        issue #1732.
+        """
         self.market_cache = MarketDataCache()
         self.subscriptions = {}
-        self.token_to_symbol = {}
+        self.scrip_to_symbol = {}  # scrip -> (symbol, exchange)
         self.ws_subscription_refs = {}  # Reference counting for WebSocket subscriptions
+        # Fallback index for feed messages that arrive without the 'e' field.
+        # Only consulted when the exchange is missing, and only trusted when it
+        # resolves to exactly one scrip.
+        self._token_to_scrips = {}  # token -> set of scrips
 
     def _setup_connection_management(self):
         """Initialize connection management"""
@@ -425,7 +442,8 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Clean up market data cache and subscriptions
         self.market_cache.clear()
         self.subscriptions.clear()
-        self.token_to_symbol.clear()
+        self.scrip_to_symbol.clear()
+        self._token_to_scrips.clear()
         self.ws_subscription_refs.clear()
 
         # Clean up ZeroMQ resources
@@ -457,7 +475,8 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             self.market_cache.clear()
             self.subscriptions.clear()
-            self.token_to_symbol.clear()
+            self.scrip_to_symbol.clear()
+            self._token_to_scrips.clear()
             self.ws_subscription_refs.clear()
             self.cleanup_zmq()
             self.connected = False
@@ -549,6 +568,7 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
     ) -> dict[str, Any]:
         """Unsubscribe from market data"""
         base_correlation_id = f"{symbol}_{exchange}_{mode}"
+        scrip_to_clear = None
 
         with self.lock:
             # Find the first matching subscription for this client
@@ -572,14 +592,14 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Remove the subscription
             del self.subscriptions[correlation_id]
 
-            # Clean up token mapping if no other subscriptions use it
-            token = subscription["token"]
-            if not any(sub["token"] == token for sub in self.subscriptions.values()):
-                self.token_to_symbol.pop(token, None)
+            # Clean up scrip mapping if no other subscriptions use it
+            scrip = subscription["scrip"]
+            if not any(sub["scrip"] == scrip for sub in self.subscriptions.values()):
+                self._deindex_scrip(subscription)
+                scrip_to_clear = scrip
 
             # Only unsubscribe from WebSocket if this was the last subscription
             if is_last:
-                scrip = subscription["scrip"]
                 if scrip in self.ws_subscription_refs:
                     if mode in [Config.MODE_LTP, Config.MODE_QUOTE]:
                         self.ws_subscription_refs[scrip]["touchline_count"] -= 1
@@ -589,6 +609,10 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         self.ws_subscription_refs[scrip]["depth_count"] -= 1
                         if self.ws_subscription_refs[scrip]["depth_count"] <= 0:
                             self._websocket_unsubscribe(subscription)
+
+        # Clear cache for removed scrip (outside lock - cache has its own lock)
+        if scrip_to_clear:
+            self.market_cache.clear(scrip_to_clear)
 
         return self._create_success_response(
             f"Unsubscribed from {symbol}.{exchange}", symbol=symbol, exchange=exchange, mode=mode
@@ -617,6 +641,10 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
         token = token_info["token"]
         brexchange = token_info["brexchange"]
         zebu_exchange = ZebuExchangeMapper.to_zebu_exchange(brexchange)
+        # Validate the mapping to prevent "None|token" scrip strings, which would
+        # never match the exchange on an incoming feed message
+        if not zebu_exchange:
+            raise ValueError(f"Unsupported exchange: {brexchange}")
         scrip = f"{zebu_exchange}|{token}"
 
         return {
@@ -632,10 +660,24 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Store subscription and update mappings"""
         with self.lock:
             self.subscriptions[correlation_id] = subscription
-            self.token_to_symbol[subscription["token"]] = (
-                subscription["symbol"],
-                subscription["exchange"],
-            )
+            self._index_subscription(subscription)
+
+    def _index_subscription(self, subscription: dict) -> None:
+        """Add a subscription's scrip to the routing indexes. Caller holds self.lock."""
+        scrip = subscription["scrip"]
+        self.scrip_to_symbol[scrip] = (subscription["symbol"], subscription["exchange"])
+        self._token_to_scrips.setdefault(subscription["token"], set()).add(scrip)
+
+    def _deindex_scrip(self, subscription: dict) -> None:
+        """Drop a scrip from the routing indexes. Caller holds self.lock."""
+        scrip = subscription["scrip"]
+        self.scrip_to_symbol.pop(scrip, None)
+        token = subscription["token"]
+        scrips_for_token = self._token_to_scrips.get(token)
+        if scrips_for_token is not None:
+            scrips_for_token.discard(scrip)
+            if not scrips_for_token:
+                del self._token_to_scrips[token]
 
     def _websocket_subscribe(self, subscription: dict) -> None:
         """Handle WebSocket subscription with reference counting"""
@@ -692,7 +734,6 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _remove_subscription(self, correlation_id: str, subscription: dict) -> None:
         """Remove subscription and clean up mappings"""
-        token = subscription["token"]
         scrip = subscription["scrip"]
         mode = subscription["mode"]
 
@@ -722,10 +763,10 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
             ):
                 del self.ws_subscription_refs[scrip]
 
-        # Remove token mapping if no other subscriptions use it
-        if not any(sub["token"] == token for sub in self.subscriptions.values()):
-            self.token_to_symbol.pop(token, None)
-            self.market_cache.clear(token)
+        # Remove scrip mapping if no other subscriptions use it
+        if not any(sub["scrip"] == scrip for sub in self.subscriptions.values()):
+            self._deindex_scrip(subscription)
+            self.market_cache.clear(scrip)
 
     def _on_open(self, ws):
         """Handle WebSocket connection open"""
@@ -909,34 +950,62 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
             msg_type = data.get("t")
             token = data.get("tk")
 
-            if not self._is_valid_market_message(msg_type, token):
+            if not msg_type or not token:
                 return
 
-            symbol, exchange = self._get_symbol_info(token)
+            # Issue #1732: route on the full scrip. Every touchline/depth message
+            # carries the exchange in 'e' alongside the token in 'tk'; the token
+            # alone is ambiguous across exchanges.
+            scrip = self._resolve_scrip(data.get("e"), token)
+            if not scrip:
+                return
+
+            symbol, exchange = self._get_symbol_info(scrip)
             if not symbol:
                 return
 
-            matching_subscriptions = self._find_matching_subscriptions(token)
+            matching_subscriptions = self._find_matching_subscriptions(scrip)
 
             for subscription in matching_subscriptions:
                 if self._should_process_message(msg_type, subscription["mode"]):
-                    self._process_subscription_message(data, subscription, symbol, exchange)
+                    self._process_subscription_message(data, subscription, symbol, exchange, scrip)
 
         except Exception as e:
             self.logger.error(f"Message processing error: {e}")
 
-    def _is_valid_market_message(self, msg_type: str, token: str) -> bool:
-        """Validate market message"""
-        return msg_type and token and token in self.token_to_symbol
+    def _resolve_scrip(self, feed_exchange: Any, token: str) -> str | None:
+        """Map a feed message's (exchange, token) pair to a subscribed scrip.
 
-    def _get_symbol_info(self, token: str) -> tuple:
-        """Get symbol and exchange from token"""
-        return self.token_to_symbol.get(token, (None, None))
+        The exchange comes straight from the message's 'e' field, which Zebu
+        sends on every tf/tk/df/dk packet. When it is missing we fall back to the
+        token index, but only when that resolves unambiguously - a token shared
+        by two subscribed exchanges cannot be routed, and mis-routing it is what
+        issue #1732 was about.
+        """
+        if feed_exchange:
+            scrip = f"{feed_exchange}|{token}"
+            return scrip if scrip in self.scrip_to_symbol else None
 
-    def _find_matching_subscriptions(self, token: str) -> list[dict]:
-        """Find all subscriptions matching the token"""
+        candidates = self._token_to_scrips.get(token)
+        if not candidates:
+            return None
+        if len(candidates) > 1:
+            self.logger.warning(
+                f"Feed message for token {token} has no exchange and matches "
+                f"{len(candidates)} subscribed scrips ({sorted(candidates)}); dropping "
+                f"rather than routing it to the wrong symbol"
+            )
+            return None
+        return next(iter(candidates))
+
+    def _get_symbol_info(self, scrip: str) -> tuple:
+        """Get symbol and exchange from scrip"""
+        return self.scrip_to_symbol.get(scrip, (None, None))
+
+    def _find_matching_subscriptions(self, scrip: str) -> list[dict]:
+        """Find all subscriptions matching the scrip"""
         with self.lock:
-            return [sub for sub in self.subscriptions.values() if sub["token"] == token]
+            return [sub for sub in self.subscriptions.values() if sub["scrip"] == scrip]
 
     def _should_process_message(self, msg_type: str, mode: int) -> bool:
         """Determine if message should be processed for given mode"""
@@ -951,14 +1020,14 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
         return False
 
     def _process_subscription_message(
-        self, data: dict, subscription: dict, symbol: str, exchange: str
+        self, data: dict, subscription: dict, symbol: str, exchange: str, scrip: str
     ) -> None:
         """Process message for a specific subscription"""
         mode = subscription["mode"]
         msg_type = data.get("t")
 
         # Normalize data
-        normalized_data = self._normalize_market_data(data, msg_type, mode)
+        normalized_data = self._normalize_market_data(data, msg_type, mode, scrip)
         normalized_data.update(
             {"symbol": symbol, "exchange": exchange, "timestamp": int(time.time() * 1000)}
         )
@@ -999,13 +1068,12 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error(f"[PUBLISH] Failed to publish data: {e}")
 
     def _normalize_market_data(
-        self, data: dict[str, Any], msg_type: str, mode: int
+        self, data: dict[str, Any], msg_type: str, mode: int, scrip: str
     ) -> dict[str, Any]:
         """Normalize market data based on mode with improved structure"""
-        token = data.get("tk")
-        if token:
+        if scrip:
             # Use cache to handle partial updates
-            data = self.market_cache.update(token, data)
+            data = self.market_cache.update(scrip, data)
 
         # Get mode-specific normalizer
         normalizer = self.normalizers.get(mode)
@@ -1019,9 +1087,9 @@ class ZebuWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Get market data cache statistics"""
         return self.market_cache.get_stats()
 
-    def clear_market_data_cache(self, token: str = None) -> None:
-        """Clear market data cache"""
-        self.market_cache.clear(token)
+    def clear_market_data_cache(self, scrip: str = None) -> None:
+        """Clear market data cache for a scrip (``"NFO|65872"``), or all scrips"""
+        self.market_cache.clear(scrip)
 
 
 # Utility functions

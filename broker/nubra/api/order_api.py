@@ -749,8 +749,21 @@ def cancel_all_orders_api(data, auth):
     order_book_response = get_order_book(AUTH_TOKEN)
 
     if is_error_response(order_book_response):
-        logger.warning(f"Nubra order book error, cancelling nothing: {order_book_response}")
-        return [], []  # Return empty lists indicating failure to retrieve the order book
+        # Raise rather than return ([], []). cancel_all_order_service turns any
+        # returned tuple into HTTP 200 "Canceled 0 orders", so an unreadable
+        # order book would tell the caller cancellation succeeded while their
+        # working orders are still live. Its except branch turns this into a
+        # 500 and logs the reason.
+        # is_error_response() also matches on status alone, so neither key is
+        # guaranteed to be present -- without the final fallback the raised
+        # exception reads "... order book: None".
+        message = (
+            order_book_response.get("message")
+            or order_book_response.get("error")
+            or "Unknown error"
+        )
+        logger.error(f"Nubra order book unavailable, cannot cancel orders: {message}")
+        raise Exception(f"Failed to fetch Nubra order book: {message}")
 
     orders_to_cancel = flatten_order_buckets(order_book_response, buckets=_WORKING_BUCKETS)
 
