@@ -76,3 +76,42 @@ def on_multiorder_completed(event):
 def on_analyzer_error(event):
     # Mirror telegram: validation errors stay off the chat channels.
     pass
+
+
+# --- GTT ------------------------------------------------------------------
+# Mirrors the telegram handlers so the two alert channels stay in step: a user
+# on WhatsApp should not silently miss a GTT firing that a Telegram user sees.
+# Failures stay silent here too, matching on_order_failed.
+
+
+def on_gtt_placed(event):
+    _send(event.api_type, event.request_data, event.response_data, event.api_key)
+
+
+def on_gtt_modified(event):
+    _send(event.api_type, event.request_data, event.response_data, event.api_key)
+
+
+def on_gtt_cancelled(event):
+    _send(event.api_type, event.request_data, event.response_data, event.api_key)
+
+
+def on_gtt_triggered(event):
+    """The GTT fired and an order went in without the user asking."""
+    _send(event.api_type, event.request_data, event.response_data, event.api_key)
+
+
+def on_gtt_expired(event):
+    _send(event.api_type, event.request_data, event.response_data, event.api_key)
+
+
+def on_gtt_failed(event):
+    pass
+
+
+def on_gtt_modify_failed(event):
+    pass
+
+
+def on_gtt_cancel_failed(event):
+    pass
