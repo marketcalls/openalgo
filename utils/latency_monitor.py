@@ -295,6 +295,13 @@ def init_latency_monitoring(app):
         "split_order": "SPLIT",
         "options_order": "OPTIONS",
         "options_multiorder": "OPTIONS_MULTI",
+        # GTT. These were already being wrapped - an unmapped namespace falls
+        # back to its uppercased name - but as PLACE_GTT_ORDER etc, which does
+        # not match the ORDER_TYPES set below, so GTT latency was being purged
+        # after 7 days as though it were a data query.
+        "place_gtt_order": "GTT_PLACE",
+        "modify_gtt_order": "GTT_MODIFY",
+        "cancel_gtt_order": "GTT_CANCEL",
         # Data/Account endpoints (auto-purge after 7 days)
         "quotes": "QUOTES",
         "history": "HISTORY",
@@ -336,6 +343,12 @@ def init_latency_monitoring(app):
         "SPLIT",
         "OPTIONS",
         "OPTIONS_MULTI",
+        # A GTT is an order instruction, not a data query. It can also rest for
+        # a year before firing, so purging its placement latency after a week
+        # would discard the record long before the order it describes exists.
+        "GTT_PLACE",
+        "GTT_MODIFY",
+        "GTT_CANCEL",
     }
 
     # Wrap all API endpoints with latency tracking
