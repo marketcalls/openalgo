@@ -94,6 +94,13 @@ describe('Navigation Config', () => {
       expect(isActiveRoute('/strategy/123/configure', '/strategy')).toBe(true)
     })
 
+    it('does not match a route that merely starts with /strategy', () => {
+      // /strategybuilder and /strategybuilder/portfolio are Tools pages. A bare
+      // startsWith lit the Strategy tab on both, contradicting the breadcrumb.
+      expect(isActiveRoute('/strategybuilder', '/strategy')).toBe(false)
+      expect(isActiveRoute('/strategybuilder/portfolio', '/strategy')).toBe(false)
+    })
+
     it('does not prefix match non-strategy routes', () => {
       // Other routes should not prefix match
       expect(isActiveRoute('/dashboard/sub', '/dashboard')).toBe(false)

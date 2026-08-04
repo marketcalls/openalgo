@@ -91,7 +91,11 @@ export const externalLinks = {
 // Uses startsWith for routes with nested pages (like /strategy/*)
 export function isActiveRoute(pathname: string, href: string): boolean {
   if (href === '/strategy') {
-    return pathname.startsWith('/strategy')
+    // Match on a path boundary, not a bare prefix. '/strategybuilder' starts
+    // with '/strategy', so a plain startsWith lit up the Strategy tab while
+    // the user was on a Tools page - the breadcrumb said TOOLS and the nav
+    // disagreed.
+    return pathname === '/strategy' || pathname.startsWith('/strategy/')
   }
   return pathname === href
 }
