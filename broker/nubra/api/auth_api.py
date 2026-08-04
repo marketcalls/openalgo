@@ -1,26 +1,14 @@
-import json
 import os
 
+from broker.nubra.api.baseurl import get_base_url, get_device_id, get_nubra_headers
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Nubra API Base URLs
-UAT_BASE_URL = "https://uatapi.nubra.io"
-PROD_BASE_URL = "https://api.nubra.io"
-
-
-def get_base_url():
-    """Get the base URL based on environment setting."""
-    # Default to production, can be configured via env
-    use_uat = os.getenv("NUBRA_USE_UAT", "false").lower() == "true"
-    return UAT_BASE_URL if use_uat else PROD_BASE_URL
-
-
-def get_device_id():
-    """Get a consistent device ID for Nubra API calls."""
-    return "OPENALGO"
+# Re-exported so existing importers of these names keep working; the hosts and
+# the device id themselves live in baseurl.py.
+__all__ = ["get_base_url", "get_device_id"]
 
 
 def _error_message(data, fallback):
@@ -42,11 +30,7 @@ def _error_message(data, fallback):
 
 def _session_headers(session_token, device_id=None):
     """Authenticated V3 REST headers: Authorization + x-device-id."""
-    return {
-        "Content-Type": "application/json",
-        "x-device-id": device_id or get_device_id(),
-        "Authorization": f"Bearer {session_token}",
-    }
+    return get_nubra_headers(session_token, device_id=device_id)
 
 
 def _normalize_totp(totp_code):
@@ -614,11 +598,7 @@ def validate_static_ip(session_token, device_id=None):
 
     response = client.get(
         f"{get_base_url()}/ipaddress/validate",
-        headers={
-            "Accept": "application/json",
-            "x-device-id": device_id or get_device_id(),
-            "Authorization": f"Bearer {session_token}",
-        },
+        headers=get_nubra_headers(session_token, with_json=False, device_id=device_id),
     )
 
     try:

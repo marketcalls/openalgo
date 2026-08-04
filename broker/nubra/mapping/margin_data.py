@@ -130,9 +130,17 @@ def parse_margin_response(response_data):
 
         # An error response carries no marginInfo block. Note code == 1 is the
         # V3 success marker, so code alone must not be treated as an error.
+        #
+        # V3 reports the reason in "error", not "message" -- reading only
+        # "message" turns a precise diagnosis ("Orders cannot be placed from
+        # this IP address...") into "Unknown error from Nubra".
         if not isinstance(margin_info, dict):
-            message = response_data.get("message") or "Unknown error from Nubra"
-            return {"status": "error", "message": message}
+            message = (
+                response_data.get("error")
+                or response_data.get("message")
+                or "Unknown error from Nubra"
+            )
+            return {"status": "error", "message": str(message)}
 
         total_margin = float(margin_info.get("totalMargin", 0) or 0)
         total_funds_required = float(response_data.get("totalFundsRequired", 0) or 0)

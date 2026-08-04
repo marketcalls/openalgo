@@ -20,15 +20,15 @@ fields OpenAlgo needs. Prices arrive in paise (÷100, matching
 nubrawebsocket.py's convention).
 """
 
-import json
 import os
 
 from google.protobuf.any_pb2 import Any as ProtoAny
 
 from broker.nubra.api.auth_api import get_ws_urls
+from broker.nubra.mapping.exchange import resolve_instrument, to_openalgo_exchange
 from database.auth_db import get_auth_token
 from utils.logging import get_logger
-from websocket_proxy.order_adapter import BaseOrderUpdateAdapter, to_openalgo_symbol
+from websocket_proxy.order_adapter import BaseOrderUpdateAdapter
 
 logger = get_logger(__name__)
 
@@ -191,13 +191,27 @@ class NubraOrderUpdateAdapter(BaseOrderUpdateAdapter):
         if isinstance(refdata_bytes, bytes) and refdata_bytes:
             try:
                 refdata = _decode_fields(refdata_bytes)
-                symbol = _first_str(refdata, 5)  # stock_name
-                exchange = _first_str(refdata, 10)
-                # Map to OpenAlgo format via the instrument token (field 4) —
-                # the same get_symbol lookup the REST orderbook mapping uses.
-                symbol = to_openalgo_symbol(
-                    symbol, exchange, token=_first(refdata, 4, None) or None
+                broker_symbol = _first_str(refdata, 5)   # stock_name
+                nubra_exchange = _first_str(refdata, 10)
+                derivative_type = _first_str(refdata, 11)
+                # RefData field 1 is ref_id, which is what Nubra stores in
+                # symtoken.token. Field 4 is the exchange token and never
+                # matches. resolve_instrument() also folds Nubra's "NSE" to NFO
+                # for derivatives and confirms both against the master contract.
+                symbol, exchange = resolve_instrument(
+                    nubra_exchange,
+                    derivative_type,
+                    ref_id=_first(refdata, 1, None),
+                    broker_symbol=broker_symbol,
                 )
+                if not symbol:
+                    self.logger.warning(
+                        f"Nubra order update not in the master contract: "
+                        f"stockName={broker_symbol!r} exchange={nubra_exchange!r} "
+                        f"derivativeType={derivative_type!r}"
+                    )
+                    symbol = broker_symbol
+                    exchange = to_openalgo_exchange(nubra_exchange, derivative_type)
             except ValueError:
                 pass
 
