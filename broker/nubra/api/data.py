@@ -750,17 +750,19 @@ class BrokerData:
             # Initialize list to store all candle data
             all_candles = {}
 
-            # Last failure seen while chunking. A chunk that fails is not fatal
-            # on its own -- a long range can legitimately span dates the
-            # contract did not trade -- but a run that collects no candles at
-            # all and saw a failure must not masquerade as an empty range.
+            # Most recent failure seen while chunking, as (kind, message). A
+            # chunk that fails is not fatal on its own -- a long range can
+            # legitimately span dates the contract did not trade -- but a run
+            # that collects no candles at all and saw a failure must not
+            # masquerade as an empty range.
             #
-            # Kept apart by kind: a rejection is Nubra refusing the query, while
-            # an exception is a local or transport failure on our side. Merging
-            # them would report a timeout as "Nubra rejected the request" and
-            # send troubleshooting to the wrong system.
-            last_rejection = None
-            last_exception = None
+            # One ordered slot rather than one per kind: a rejection is Nubra
+            # refusing the query while an exception is a local or transport
+            # failure on our side, and reporting the wrong one sends
+            # troubleshooting to the wrong system. Keeping them in separate
+            # variables meant an early rejected chunk permanently outranked a
+            # later connection failure, so the newest failure wins here.
+            last_failure = None
 
             # Process data in chunks
             current_start = from_date
@@ -833,11 +835,11 @@ class BrokerData:
                     # identical to a genuinely empty range and the caller only
                     # ever sees "no data".
                     if isinstance(response, dict) and response.get("error"):
-                        last_rejection = str(response.get("error"))
+                        last_failure = ("rejection", str(response.get("error")))
                         logger.error(
                             f"Nubra timeseries rejected {br_symbol} "
                             f"({api_exchange}/{instrument_type}, {start_iso} to {end_iso}): "
-                            f"{last_rejection}"
+                            f"{last_failure[1]}"
                         )
                     if response and response.get("message") == "charts":
                         result = response.get("result", [])
@@ -896,8 +898,8 @@ class BrokerData:
                     raise
 
                 except Exception as chunk_error:
-                    last_exception = str(chunk_error)
-                    logger.error(f"Debug - Error fetching chunk {current_start} to {current_end}: {last_exception}")
+                    last_failure = ("exception", str(chunk_error))
+                    logger.error(f"Debug - Error fetching chunk {current_start} to {current_end}: {chunk_error}")
 
                 # Move to next chunk
                 current_start = current_end + timedelta(days=1)
@@ -910,16 +912,14 @@ class BrokerData:
             # only came up empty because Nubra rejected the query, in which case
             # the caller needs the reason rather than a silent empty result.
             if not all_candles:
-                if last_rejection:
-                    raise Exception(
-                        f"Nubra rejected the historical data request for {symbol} "
-                        f"({exchange}, {interval}): {last_rejection}"
+                if last_failure:
+                    kind, detail = last_failure
+                    lead = (
+                        "Nubra rejected the historical data request for"
+                        if kind == "rejection"
+                        else "Failed to fetch historical data for"
                     )
-                if last_exception:
-                    raise Exception(
-                        f"Failed to fetch historical data for {symbol} "
-                        f"({exchange}, {interval}): {last_exception}"
-                    )
+                    raise Exception(f"{lead} {symbol} ({exchange}, {interval}): {detail}")
                 logger.debug("Debug - No data received from API")
                 return pd.DataFrame(columns=["close", "high", "low", "open", "timestamp", "volume", "oi"])
 
