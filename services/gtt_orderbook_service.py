@@ -21,16 +21,12 @@ def import_broker_gtt_module(broker_name: str) -> Any | None:
 def get_gtt_orderbook_with_auth(
     auth_token: str, broker: str, original_data: dict[str, Any] | None = None
 ) -> tuple[bool, dict[str, Any], int]:
+    # Analyze (sandbox) mode reads the sandbox GTT book. Gated on original_data
+    # because that is where the API key lives, and the sandbox book is per-user.
     if get_analyze_mode() and original_data:
-        return (
-            False,
-            {
-                "mode": "analyze",
-                "status": "error",
-                "message": "Sandbox GTT support not yet implemented",
-            },
-            501,
-        )
+        from services.sandbox_service import sandbox_gtt_orderbook
+
+        return sandbox_gtt_orderbook(original_data.get("apikey", ""))
 
     broker_module = import_broker_gtt_module(broker)
     if broker_module is None:

@@ -39,3 +39,16 @@ on_split_completed = _log_event
 on_options_completed = _log_event
 on_multiorder_completed = _log_event
 on_analyzer_error = _log_event
+
+# GTT. Logged exactly like any other order API call, so a GTT placement shows up
+# in the API log (live) or the analyzer log (analyze) alongside everything else.
+# Without these the whole GTT surface was invisible: only failures reached the
+# log, and only because they route through analyzer.error.
+on_gtt_placed = _log_event
+on_gtt_failed = _log_event
+on_gtt_modified = _log_event
+on_gtt_modify_failed = _log_event
+on_gtt_cancelled = _log_event
+on_gtt_cancel_failed = _log_event
+on_gtt_triggered = _log_event
+on_gtt_expired = _log_event
