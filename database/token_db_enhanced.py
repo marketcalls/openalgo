@@ -1132,13 +1132,27 @@ def fno_search_symbols(
 
 
 def get_distinct_expiries_cached(
-    exchange: str | None = None, underlying: str | None = None
+    exchange: str | None = None,
+    underlying: str | None = None,
+    instrumenttype: str | None = None,
 ) -> list[str]:
     """
     Get distinct expiry dates from cache - fast O(1) lookup using pre-computed indexes
     Falls back to database if cache is not available
+
+    The pre-computed indexes do not distinguish futures from options, so a
+    request that asks for one goes to the database. That matters on MCX, where
+    the two calendars differ and a mixed list hands an option chain an expiry
+    with no strikes behind it.
     """
     cache = get_cache()
+
+    if instrumenttype:
+        from database.symbol import get_distinct_expiries
+
+        return get_distinct_expiries(
+            exchange=exchange, underlying=underlying, instrumenttype=instrumenttype
+        )
 
     if cache.cache_loaded and cache.is_cache_valid():
         from datetime import datetime
