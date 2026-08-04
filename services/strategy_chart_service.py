@@ -25,6 +25,10 @@ import pandas as pd
 import pytz
 
 from services.history_service import get_history
+from services.option_symbol_service import (
+    NO_SPOT_EXCHANGES,
+    resolve_underlying_quote,
+)
 from services.quotes_service import get_quotes
 from utils.logging import get_logger
 
@@ -204,6 +208,27 @@ def get_strategy_chart_data(
 
         quote_exchange = _get_quote_exchange(base_symbol, exchange)
 
+        # MCX and the currency segments have no tradable spot, so the history
+        # series for the underlying comes from the near-month future. Asking for
+        # "CRUDEOIL" on MCX returns nothing and the chart loses its underlying
+        # line entirely.
+        underlying_symbol = base_symbol
+        if exchange.upper() in NO_SPOT_EXCHANGES:
+            _resolved = resolve_underlying_quote(base_symbol, exchange.upper())
+            if _resolved is None:
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": (
+                            f"No unexpired futures found for {base_symbol} on "
+                            f"{exchange.upper()}"
+                        ),
+                    },
+                    404,
+                )
+            underlying_symbol, quote_exchange = _resolved
+
         # ── Underlying history ────────────────────────────────────────
         # Some brokers (e.g., Zerodha's Kite API) don't return intraday
         # minute-level candles for INDEX tokens (NIFTY, BANKNIFTY, SENSEX).
@@ -213,7 +238,7 @@ def get_strategy_chart_data(
         underlying_missing = False
         df_underlying: pd.DataFrame | None = None
         success_u, resp_u, _ = get_history(
-            symbol=base_symbol,
+            symbol=underlying_symbol,
             exchange=quote_exchange,
             interval=interval,
             start_date=start_date_str,
