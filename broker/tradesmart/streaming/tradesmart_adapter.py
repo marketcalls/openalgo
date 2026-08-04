@@ -68,15 +68,20 @@ def safe_int(value: Any, default: int = 0) -> int:
 
 
 class MarketDataCache:
-    """Thread-safe cache that merges partial Noren updates into full snapshots."""
+    """Thread-safe cache that merges partial Noren updates into full snapshots.
+
+    Keyed by scrip (``"NFO|65872"``), never by the bare token. Noren tokens are
+    unique only within an exchange, so a token-keyed cache merges two different
+    instruments into one slot - see issue #1732.
+    """
 
     def __init__(self):
         self._cache = {}
         self._lock = threading.Lock()
 
-    def update(self, token: str, data: dict[str, Any]) -> dict[str, Any]:
+    def update(self, scrip: str, data: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
-            cached = self._cache.get(token, {})
+            cached = self._cache.get(scrip, {})
             merged = cached.copy()
             for key, value in data.items():
                 # Preserve a good cached OHLC/ap when a partial sends zero/blank
@@ -87,13 +92,13 @@ class MarketDataCache:
             for key, value in cached.items():
                 if key not in data:
                     merged[key] = value
-            self._cache[token] = merged
+            self._cache[scrip] = merged
             return merged.copy()
 
-    def clear(self, token: str = None) -> None:
+    def clear(self, scrip: str = None) -> None:
         with self._lock:
-            if token:
-                self._cache.pop(token, None)
+            if scrip:
+                self._cache.pop(scrip, None)
             else:
                 self._cache.clear()
 
@@ -113,7 +118,16 @@ class TradeSmartWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         self.market_cache = MarketDataCache()
         self.subscriptions = {}
-        self.token_to_symbol = {}
+        # Every routing structure is keyed by scrip ("NFO|65872"), not by the bare
+        # token: Noren tokens are unique only within an exchange, and the live
+        # master contract carries thousands of cross-exchange duplicates (NSE/CDS,
+        # BSE_INDEX/NSE, BSE/MCX). Token-keyed routing merged two instruments into
+        # one slot and published one symbol's price under the other's topic - #1732.
+        self.scrip_to_symbol = {}  # scrip -> (symbol, exchange)
+        # Fallback index for feed messages that arrive without the 'e' field.
+        # Only consulted when the exchange is missing, and only trusted when it
+        # resolves to exactly one scrip.
+        self._token_to_scrips = {}  # token -> set of scrips
         self.ws_subscription_refs = {}
 
         self.running = False
@@ -216,10 +230,7 @@ class TradeSmartWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     cid.startswith(base_correlation_id) for cid in self.subscriptions.keys()
                 )
                 self.subscriptions[correlation_id] = subscription
-                self.token_to_symbol[subscription["token"]] = (
-                    subscription["symbol"],
-                    subscription["exchange"],
-                )
+                self._index_subscription(subscription)
                 if self.connected and not already_ws_subscribed:
                     self._websocket_subscribe(subscription)
 
@@ -234,6 +245,7 @@ class TradeSmartWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self, symbol: str, exchange: str, mode: int = Config.MODE_QUOTE
     ) -> dict[str, Any]:
         base_correlation_id = f"{symbol}_{exchange}_{mode}"
+        scrip_to_clear = None
         with self.lock:
             matching = [
                 (cid, sub)
@@ -249,12 +261,17 @@ class TradeSmartWebSocketAdapter(BaseBrokerWebSocketAdapter):
             is_last = len(matching) == 1
             del self.subscriptions[correlation_id]
 
-            token = subscription["token"]
-            if not any(sub["token"] == token for sub in self.subscriptions.values()):
-                self.token_to_symbol.pop(token, None)
+            scrip = subscription["scrip"]
+            if not any(sub["scrip"] == scrip for sub in self.subscriptions.values()):
+                self._deindex_scrip(subscription)
+                scrip_to_clear = scrip
 
             if is_last:
                 self._websocket_unsubscribe(subscription)
+
+        # Clear cache for removed scrip (outside lock - cache has its own lock)
+        if scrip_to_clear:
+            self.market_cache.clear(scrip_to_clear)
 
         return self._create_success_response(
             f"Unsubscribed from {symbol}.{exchange}", symbol=symbol, exchange=exchange, mode=mode
@@ -273,6 +290,10 @@ class TradeSmartWebSocketAdapter(BaseBrokerWebSocketAdapter):
         token = token_info["token"]
         brexchange = token_info["brexchange"]
         ts_exchange = TradeSmartExchangeMapper.to_tradesmart_exchange(brexchange)
+        # Validate the mapping to prevent "None|token" scrip strings, which would
+        # never match the exchange on an incoming feed message
+        if not ts_exchange:
+            raise ValueError(f"Unsupported exchange: {brexchange}")
         scrip = f"{ts_exchange}|{token}"
         return {
             "symbol": symbol,
@@ -282,6 +303,23 @@ class TradeSmartWebSocketAdapter(BaseBrokerWebSocketAdapter):
             "token": token,
             "scrip": scrip,
         }
+
+    def _index_subscription(self, subscription: dict) -> None:
+        """Add a subscription's scrip to the routing indexes. Caller holds self.lock."""
+        scrip = subscription["scrip"]
+        self.scrip_to_symbol[scrip] = (subscription["symbol"], subscription["exchange"])
+        self._token_to_scrips.setdefault(subscription["token"], set()).add(scrip)
+
+    def _deindex_scrip(self, subscription: dict) -> None:
+        """Drop a scrip from the routing indexes. Caller holds self.lock."""
+        scrip = subscription["scrip"]
+        self.scrip_to_symbol.pop(scrip, None)
+        token = subscription["token"]
+        scrips_for_token = self._token_to_scrips.get(token)
+        if scrips_for_token is not None:
+            scrips_for_token.discard(scrip)
+            if not scrips_for_token:
+                del self._token_to_scrips[token]
 
     def _websocket_subscribe(self, subscription: dict) -> None:
         """Reference-count a scrip and queue it for a batched subscribe. Holds self.lock."""
@@ -485,19 +523,51 @@ class TradeSmartWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _process_market_message(self, data: dict[str, Any]) -> None:
         msg_type = data.get("t")
         token = data.get("tk")
-        if not msg_type or not token or token not in self.token_to_symbol:
+        if not msg_type or not token:
             return
 
-        symbol, exchange = self.token_to_symbol.get(token, (None, None))
+        # Issue #1732: route on the full scrip. Every touchline/depth message
+        # carries the exchange in 'e' alongside the token in 'tk'; the token
+        # alone is ambiguous across exchanges.
+        scrip = self._resolve_scrip(data.get("e"), token)
+        if not scrip:
+            return
+
+        symbol, exchange = self.scrip_to_symbol.get(scrip, (None, None))
         if not symbol:
             return
 
         with self.lock:
-            matching = [sub for sub in self.subscriptions.values() if sub["token"] == token]
+            matching = [sub for sub in self.subscriptions.values() if sub["scrip"] == scrip]
 
         for subscription in matching:
             if self._should_process_message(msg_type, subscription["mode"]):
-                self._publish_subscription(data, subscription, symbol, exchange)
+                self._publish_subscription(data, subscription, symbol, exchange, scrip)
+
+    def _resolve_scrip(self, feed_exchange: Any, token: str) -> str | None:
+        """Map a feed message's (exchange, token) pair to a subscribed scrip.
+
+        The exchange comes straight from the message's 'e' field, which TradeSmart
+        sends on every tf/tk/df/dk packet. When it is missing we fall back to the
+        token index, but only when that resolves unambiguously - a token shared
+        by two subscribed exchanges cannot be routed, and mis-routing it is what
+        issue #1732 was about.
+        """
+        if feed_exchange:
+            scrip = f"{feed_exchange}|{token}"
+            return scrip if scrip in self.scrip_to_symbol else None
+
+        candidates = self._token_to_scrips.get(token)
+        if not candidates:
+            return None
+        if len(candidates) > 1:
+            self.logger.warning(
+                f"Feed message for token {token} has no exchange and matches "
+                f"{len(candidates)} subscribed scrips ({sorted(candidates)}); dropping "
+                f"rather than routing it to the wrong symbol"
+            )
+            return None
+        return next(iter(candidates))
 
     def _should_process_message(self, msg_type: str, mode: int) -> bool:
         touchline = {Config.MSG_TOUCHLINE_FULL, Config.MSG_TOUCHLINE_PARTIAL}
@@ -508,10 +578,12 @@ class TradeSmartWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return msg_type in depth
         return False
 
-    def _publish_subscription(self, data: dict, subscription: dict, symbol: str, exchange: str):
+    def _publish_subscription(
+        self, data: dict, subscription: dict, symbol: str, exchange: str, scrip: str
+    ):
         mode = subscription["mode"]
         msg_type = data.get("t")
-        normalized = self._normalize_market_data(data, msg_type, mode)
+        normalized = self._normalize_market_data(data, msg_type, mode, scrip)
         normalized.update(
             {"symbol": symbol, "exchange": exchange, "timestamp": int(time.time() * 1000)}
         )
@@ -524,10 +596,9 @@ class TradeSmartWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             self.logger.error(f"Failed to publish data: {e}")
 
-    def _normalize_market_data(self, data, msg_type, mode):
-        token = data.get("tk")
-        if token:
-            data = self.market_cache.update(token, data)
+    def _normalize_market_data(self, data, msg_type, mode, scrip):
+        if scrip:
+            data = self.market_cache.update(scrip, data)
 
         if mode == Config.MODE_LTP:
             return {
@@ -611,7 +682,8 @@ class TradeSmartWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                 count = len(self.subscriptions)
                 self.subscriptions.clear()
-                self.token_to_symbol.clear()
+                self.scrip_to_symbol.clear()
+                self._token_to_scrips.clear()
                 self.ws_subscription_refs.clear()
                 self.market_cache.clear()
 

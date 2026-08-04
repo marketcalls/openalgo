@@ -566,6 +566,12 @@ class BrokerData:
                                 "low": 0, "ltp": 0, "prev_close": 0, "volume": 0, "oi": 0,
                             }
                         })
+                    except NubraSessionExpired:
+                        # Not a per-symbol failure -- every remaining symbol
+                        # would fail identically, and the zeroed placeholder
+                        # below would publish a dead session as real prices.
+                        raise
+
                     except Exception as e:
                         logger.warning(f"REST fallback failed for {sym}: {e}")
                         results.append({
@@ -579,6 +585,9 @@ class BrokerData:
 
             logger.info(f"Batch multiquotes: {len(results)} results for {len(symbols)} symbols")
             return results
+
+        except NubraSessionExpired:
+            raise
 
         except Exception as e:
             logger.exception("Error fetching multiquotes (batch)")
@@ -612,6 +621,10 @@ class BrokerData:
             try:
                 quote_data = self.get_quotes(symbol, exchange)
                 return {"symbol": symbol, "exchange": exchange, "data": quote_data}
+            except NubraSessionExpired:
+                # Let it out of the worker so the batch fails as a whole rather
+                # than reporting an expired session as N per-symbol errors.
+                raise
             except Exception as e:
                 logger.warning(f"Failed to fetch quote for {symbol}: {e}")
                 return {"symbol": symbol, "exchange": exchange, "error": str(e)}
@@ -621,6 +634,8 @@ class BrokerData:
             for future in concurrent.futures.as_completed(future_to_symbol):
                 try:
                     results.append(future.result())
+                except NubraSessionExpired:
+                    raise
                 except Exception as e:
                     logger.error(f"Generate quote exception: {e}")
 
@@ -735,11 +750,19 @@ class BrokerData:
             # Initialize list to store all candle data
             all_candles = {}
 
-            # Last rejection seen while chunking. A chunk that fails is not
-            # fatal on its own -- a long range can legitimately span dates the
-            # contract did not trade -- but a run that collects no candles at
-            # all and saw a rejection must not masquerade as an empty range.
-            last_error = None
+            # Most recent failure seen while chunking, as (kind, message). A
+            # chunk that fails is not fatal on its own -- a long range can
+            # legitimately span dates the contract did not trade -- but a run
+            # that collects no candles at all and saw a failure must not
+            # masquerade as an empty range.
+            #
+            # One ordered slot rather than one per kind: a rejection is Nubra
+            # refusing the query while an exception is a local or transport
+            # failure on our side, and reporting the wrong one sends
+            # troubleshooting to the wrong system. Keeping them in separate
+            # variables meant an early rejected chunk permanently outranked a
+            # later connection failure, so the newest failure wins here.
+            last_failure = None
 
             # Process data in chunks
             current_start = from_date
@@ -812,11 +835,11 @@ class BrokerData:
                     # identical to a genuinely empty range and the caller only
                     # ever sees "no data".
                     if isinstance(response, dict) and response.get("error"):
-                        last_error = str(response.get("error"))
+                        last_failure = ("rejection", str(response.get("error")))
                         logger.error(
                             f"Nubra timeseries rejected {br_symbol} "
                             f"({api_exchange}/{instrument_type}, {start_iso} to {end_iso}): "
-                            f"{last_error}"
+                            f"{last_failure[1]}"
                         )
                     if response and response.get("message") == "charts":
                         result = response.get("result", [])
@@ -875,8 +898,8 @@ class BrokerData:
                     raise
 
                 except Exception as chunk_error:
-                    last_error = str(chunk_error)
-                    logger.error(f"Debug - Error fetching chunk {current_start} to {current_end}: {last_error}")
+                    last_failure = ("exception", str(chunk_error))
+                    logger.error(f"Debug - Error fetching chunk {current_start} to {current_end}: {chunk_error}")
 
                 # Move to next chunk
                 current_start = current_end + timedelta(days=1)
@@ -889,11 +912,14 @@ class BrokerData:
             # only came up empty because Nubra rejected the query, in which case
             # the caller needs the reason rather than a silent empty result.
             if not all_candles:
-                if last_error:
-                    raise Exception(
-                        f"Nubra rejected the historical data request for {symbol} "
-                        f"({exchange}, {interval}): {last_error}"
+                if last_failure:
+                    kind, detail = last_failure
+                    lead = (
+                        "Nubra rejected the historical data request for"
+                        if kind == "rejection"
+                        else "Failed to fetch historical data for"
                     )
+                    raise Exception(f"{lead} {symbol} ({exchange}, {interval}): {detail}")
                 logger.debug("Debug - No data received from API")
                 return pd.DataFrame(columns=["close", "high", "low", "open", "timestamp", "volume", "oi"])
 
@@ -1009,6 +1035,9 @@ class BrokerData:
                 "totalbuyqty": 0,
                 "totalsellqty": 0,
             }
+
+        except NubraSessionExpired:
+            raise
 
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
@@ -1182,6 +1211,12 @@ class BrokerData:
                 "totalbuyqty": totalbuyqty,
                 "totalsellqty": totalsellqty,
             }
+
+        except NubraSessionExpired:
+            # Same reasoning as _get_quotes_via_rest: returning None here lets
+            # get_depth() fall through to its zeroed-depth fallback, reporting a
+            # dead session as an empty book.
+            raise
 
         except Exception as e:
             logger.error(f"REST depth error for {symbol} on {exchange}: {str(e)}")
