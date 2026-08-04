@@ -189,14 +189,14 @@ const brokerFields: Record<string, BrokerConfig> = {
   nubra: {
     fields: [
       {
-        name: 'totp',
-        label: 'TOTP Code',
+        name: 'otp',
+        label: 'OTP',
         type: 'text',
-        placeholder: 'Enter 6-digit TOTP',
+        placeholder: 'Enter 6-digit OTP',
         maxLength: 6,
         pattern: '[0-9]{6}',
         inputMode: 'numeric',
-        hint: 'Enter the 6-digit code from your authenticator app',
+        hint: 'An OTP has been sent to your registered mobile number. For a new code, start the Nubra login again from the broker page.',
       },
     ],
     callbackUrl: '/nubra/callback',
