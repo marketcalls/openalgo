@@ -2108,3 +2108,92 @@ class TestFandOCloseFollowsCAS:
         for ex, spec in CAS_CLOSE_MIGRATION.items():
             assert spec["old_end"] == (15 * 3600 + 30 * 60) * 1000, ex
             assert spec["new_end"] == (15 * 3600 + 40 * 60) * 1000, ex
+
+
+class TestFundPrimitivesRejectBadAmounts:
+    """Every committing fund method must refuse an amount that invents money."""
+
+    def _funds(self):
+        from database.sandbox_db import SandboxFunds
+
+        return SandboxFunds.query.filter_by(user_id=GTT_TEST_USER).first()
+
+    def test_t1_transfer_cannot_underflow(self, clean_gtt_user):
+        """The T+1 settlement path. An over-transfer drives used_margin
+        negative and the difference silently becomes headroom for more trades,
+        without even the visible cash bump a bad release leaves."""
+        from database.sandbox_db import db_session
+
+        fm = clean_gtt_user
+        before = self._funds().used_margin
+
+        ok, message = fm.transfer_margin_to_holdings(1, "underflow probe")
+        db_session.expire_all()
+
+        assert ok is False
+        assert "only" in message
+        assert self._funds().used_margin == before
+
+    def test_t1_transfer_still_works_normally(self, clean_gtt_user):
+        from database.sandbox_db import db_session
+
+        fm = clean_gtt_user
+        assert fm.block_margin(500, "x")[0] is True
+        db_session.expire_all()
+        assert fm.transfer_margin_to_holdings(500, "x")[0] is True
+        db_session.expire_all()
+        row = self._funds()
+        assert row.used_margin == Decimal("0.00")
+        # Transferred to holdings, so available_balance is deliberately NOT
+        # credited - the money is represented in holdings value.
+        assert row.available_balance < Decimal("10000000.00")
+
+    @pytest.mark.parametrize("amount", [0, -1, Decimal("-0.01")])
+    def test_block_refuses_non_positive(self, clean_gtt_user, amount):
+        """A negative block is a release wearing the wrong name."""
+        from database.sandbox_db import db_session
+
+        fm = clean_gtt_user
+        before = (self._funds().used_margin, self._funds().available_balance)
+        ok, _ = fm.block_margin(amount, "probe")
+        db_session.expire_all()
+        assert ok is False
+        assert (self._funds().used_margin, self._funds().available_balance) == before
+
+    @pytest.mark.parametrize("amount", [-1, Decimal("-0.01")])
+    def test_release_refuses_negative(self, clean_gtt_user, amount):
+        from database.sandbox_db import db_session
+
+        fm = clean_gtt_user
+        before = (self._funds().used_margin, self._funds().available_balance)
+        ok, _ = fm.release_margin(amount, description="probe")
+        db_session.expire_all()
+        assert ok is False
+        assert (self._funds().used_margin, self._funds().available_balance) == before
+
+    @pytest.mark.parametrize("amount", [0, -1])
+    def test_credit_refuses_non_positive(self, clean_gtt_user, amount):
+        """A negative credit debits the balance with none of the checks a real
+        debit goes through."""
+        from database.sandbox_db import db_session
+
+        fm = clean_gtt_user
+        before = self._funds().available_balance
+        ok, _ = fm.credit_sale_proceeds(amount, "probe")
+        db_session.expire_all()
+        assert ok is False
+        assert self._funds().available_balance == before
+
+    def test_used_margin_never_goes_negative_across_the_primitives(self, clean_gtt_user):
+        """The invariant, driven through every committing path."""
+        from database.sandbox_db import db_session
+
+        fm = clean_gtt_user
+        for call in (
+            lambda: fm.release_margin(1, description="p"),
+            lambda: fm.transfer_margin_to_holdings(1, "p"),
+            lambda: fm.block_margin(-1, "p"),
+        ):
+            call()
+            db_session.expire_all()
+            assert self._funds().used_margin >= 0, "used_margin went negative"

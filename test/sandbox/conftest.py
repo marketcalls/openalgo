@@ -98,7 +98,10 @@ def seed_symbol_master():
 #: Modules whose tests place MARKET orders, which the sandbox prices from a live
 #: quote. Without a broker session there is no price, the order is rejected, and
 #: the margin assertions fail for a reason unrelated to margin.
-LIVE_QUOTE_MODULES = ("test_margin_scenarios",)
+LIVE_QUOTE_MODULES = (
+    "test_margin_scenarios",
+    "test_cnc_sell_validation",
+)
 
 
 def _live_quotes_available() -> bool:

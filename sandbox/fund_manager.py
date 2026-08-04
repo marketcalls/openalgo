@@ -317,6 +317,13 @@ class FundManager:
 
                 amount = Decimal(str(amount))
 
+                # A negative "block" is a release wearing the wrong name: it
+                # subtracts from used_margin and credits available_balance,
+                # inventing cash. Amounts are always positive; direction is the
+                # method you call.
+                if amount <= 0:
+                    return False, f"Block amount must be positive, got {amount}"
+
                 if funds.available_balance < amount:
                     return (
                         False,
@@ -348,6 +355,12 @@ class FundManager:
 
                 amount = Decimal(str(amount))
                 realized_pnl = Decimal(str(realized_pnl))
+
+                # A negative release blocks margin and destroys available cash;
+                # same reasoning as block_margin. realized_pnl is deliberately
+                # unrestricted - a loss is a legitimate negative.
+                if amount < 0:
+                    return False, f"Release amount cannot be negative, got {amount}"
 
                 # Refuse to release more than is reserved. Letting it through
                 # drives used_margin negative and credits the difference as
@@ -406,6 +419,24 @@ class FundManager:
 
                 amount = Decimal(str(amount))
 
+                if amount <= 0:
+                    return False, f"Transfer amount must be positive, got {amount}"
+
+                # Same ceiling as release_margin. This is the T+1 settlement
+                # path, so an over-transfer drives used_margin negative and the
+                # difference silently becomes headroom for further trades -
+                # without even the visible cash bump a bad release leaves.
+                if amount > funds.used_margin:
+                    logger.error(
+                        f"Refusing to transfer ₹{amount} to holdings for user "
+                        f"{self.user_id}: only ₹{funds.used_margin} is reserved. "
+                        f"{description}"
+                    )
+                    return (
+                        False,
+                        f"Cannot transfer ₹{amount}: only ₹{funds.used_margin} is reserved",
+                    )
+
                 # Reduce used margin (release from used_margin)
                 # But do NOT credit available_balance - money is now in holdings
                 funds.used_margin -= amount
@@ -435,6 +466,11 @@ class FundManager:
                     return False, "Funds not initialized"
 
                 amount = Decimal(str(amount))
+
+                # A negative credit debits available_balance with none of the
+                # sufficiency checks a real debit goes through.
+                if amount <= 0:
+                    return False, f"Credit amount must be positive, got {amount}"
 
                 # Credit sale proceeds to available balance
                 funds.available_balance += amount
