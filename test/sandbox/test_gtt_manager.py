@@ -1339,10 +1339,25 @@ class TestMarginTransitionsFailClosed:
     """No state change is published when the funds did not move."""
 
     def _patched_release(self):
+        """Refuse the committing release, used by fire."""
         from sandbox.fund_manager import FundManager
 
         return mock.patch.object(
             FundManager, "release_margin", return_value=(False, "ledger locked")
+        )
+
+    def _patched_staged(self):
+        """Refuse the staged change, used by modify and expiry.
+
+        Those two now move funds inside their own transaction via
+        stage_margin_delta, so refusing release_margin would no longer reach
+        them - the assertion, that a refused fund move publishes no state
+        change, is unchanged.
+        """
+        from sandbox.fund_manager import FundManager
+
+        return mock.patch.object(
+            FundManager, "stage_margin_delta", return_value=(False, "ledger locked")
         )
 
     def test_fire_does_not_place_when_the_release_fails(self, clean_gtt_user):
@@ -1385,7 +1400,7 @@ class TestMarginTransitionsFailClosed:
 
         # Halving the quantity halves the requirement, so this is a decrease.
         smaller = _single_gtt(trigger=95.0, price=95.0, qty=5)
-        with self._patched_release():
+        with self._patched_staged():
             ok2, resp, status = mgr.modify_gtt(trigger_id, smaller)
 
         assert ok2 is False and status == 500
@@ -1411,7 +1426,7 @@ class TestMarginTransitionsFailClosed:
         gtt.expires_at = datetime.now() - timedelta(hours=1)
         db_session.commit()
 
-        with self._patched_release():
+        with self._patched_staged():
             assert expire_due_gtts() == 0, "reported an expiry whose funds never moved"
 
         db_session.expire_all()
@@ -1441,3 +1456,259 @@ class TestMarginTransitionsFailClosed:
             gtt_id=response["trigger_id"]
         ).first().gtt_status == "expired"
         assert _used_margin(fm) < before
+
+
+class TestFundsAndStateCommitTogether:
+    """A failed commit must not leave the ledger and the row disagreeing."""
+
+    def _break_commit(self, nth=1):
+        """Fail the nth db_session.commit() of the operation under test.
+
+        Which commit matters. Failing only the first would let a two-commit
+        implementation fail at the funds step, so nothing moves and nothing
+        splits - the test would pass against the very bug it exists to catch.
+        Each case below breaks both the first and the second commit and asserts
+        the row and the ledger still agree either way.
+        """
+        from database.sandbox_db import db_session
+
+        real = db_session.commit
+        state = {"n": 0}
+
+        def flaky():
+            state["n"] += 1
+            if state["n"] == nth:
+                raise RuntimeError(f"commit #{nth} failed")
+            return real()
+
+        return mock.patch.object(db_session, "commit", side_effect=flaky), state
+
+    def test_modify_decrease_commit_failure_leaves_both_unchanged(self, clean_gtt_user):
+        from database.sandbox_db import SandboxGTT, db_session
+
+        fm = clean_gtt_user
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(trigger=95.0, price=95.0), last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+        ledger_before = _used_margin(fm)
+        row_before = float(SandboxGTT.query.filter_by(gtt_id=trigger_id).first().margin_blocked)
+
+        for nth in (1, 2):
+            patch, _ = self._break_commit(nth)
+            with patch:
+                try:
+                    mgr.modify_gtt(trigger_id, _single_gtt(trigger=95.0, price=95.0, qty=5))
+                except Exception:
+                    pass
+            db_session.rollback()
+            db_session.expire_all()
+            # The invariant, not immutability: an unbroken iteration may
+            # legitimately complete. What must never happen is the row and the
+            # ledger describing different amounts of the same money.
+            row_now = float(
+                SandboxGTT.query.filter_by(gtt_id=trigger_id).first().margin_blocked
+            )
+            assert row_now == float(_used_margin(fm)), (
+                f"commit #{nth}: row says {row_now}, ledger says {_used_margin(fm)}"
+            )
+        assert ledger_before is not None and row_before is not None
+
+    def test_modify_increase_commit_failure_leaves_both_unchanged(self, clean_gtt_user):
+        from database.sandbox_db import SandboxGTT, db_session
+
+        fm = clean_gtt_user
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(trigger=95.0, price=95.0, qty=5), last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+        ledger_before = _used_margin(fm)
+        row_before = float(SandboxGTT.query.filter_by(gtt_id=trigger_id).first().margin_blocked)
+
+        for nth in (1, 2):
+            patch, _ = self._break_commit(nth)
+            with patch:
+                try:
+                    mgr.modify_gtt(trigger_id, _single_gtt(trigger=95.0, price=95.0, qty=10))
+                except Exception:
+                    pass
+            db_session.rollback()
+            db_session.expire_all()
+            # The invariant, not immutability: an unbroken iteration may
+            # legitimately complete. What must never happen is the row and the
+            # ledger describing different amounts of the same money.
+            row_now = float(
+                SandboxGTT.query.filter_by(gtt_id=trigger_id).first().margin_blocked
+            )
+            assert row_now == float(_used_margin(fm)), (
+                f"commit #{nth}: row says {row_now}, ledger says {_used_margin(fm)}"
+            )
+        assert ledger_before is not None and row_before is not None
+
+    def test_expiry_commit_failure_does_not_release_funds(self, clean_gtt_user):
+        """A retry would otherwise release the same reservation twice."""
+        from datetime import datetime, timedelta
+
+        from database.sandbox_db import SandboxGTT, db_session
+        from sandbox.gtt_manager import expire_due_gtts
+
+        fm = clean_gtt_user
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+        ledger_before = _used_margin(fm)
+
+        gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+        gtt.expires_at = datetime.now() - timedelta(hours=1)
+        db_session.commit()
+
+        for nth in (1, 2):
+            patch, _ = self._break_commit(nth)
+            with patch:
+                try:
+                    expire_due_gtts()
+                except Exception:
+                    pass
+            db_session.rollback()
+            db_session.expire_all()
+            gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+            row_now = float(gtt.margin_blocked or 0)
+            assert row_now == float(_used_margin(fm)), (
+                f"commit #{nth}: the GTT records {row_now} while the ledger holds "
+                f"{_used_margin(fm)} - a retry would release it twice"
+            )
+        assert ledger_before is not None
+
+
+class TestExpiryAndModifyRespectAFire:
+    """Both must use a conditional claim, not a stale active read."""
+
+    def test_expiry_cannot_overwrite_a_fired_gtt(self, clean_gtt_user):
+        from datetime import datetime, timedelta
+
+        from database.sandbox_db import SandboxGTT, SandboxOrders, db_session
+        from sandbox.gtt_manager import expire_due_gtts, fire_leg, try_claim_trigger
+
+        mgr = GTTManager(GTT_TEST_USER)
+        payload = _single_gtt()
+        payload["action"] = "BUY"
+        ok, response, _ = mgr.place_gtt(payload, last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+        gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+        gtt.expires_at = datetime.now() - timedelta(hours=1)  # due to expire
+        db_session.commit()
+
+        leg_id = gtt.legs[0].id
+        assert try_claim_trigger(leg_id) is True
+        assert fire_leg(leg_id, execution_price=96) is True
+
+        # Put the parent back to 'active' so the sweep's pre-filter selects it,
+        # reproducing the real race: the query saw an active GTT, and the fire
+        # completed before the update ran. Without the conditional claim the
+        # sweep would overwrite the fire and release the order's margin.
+        db_session.execute(
+            __import__("sqlalchemy").update(SandboxGTT)
+            .where(SandboxGTT.gtt_id == trigger_id)
+            .values(gtt_status="active")
+        )
+        db_session.commit()
+        # Drop the stale in-memory GTT, or a later flush writes its old
+        # gtt_status back over what the injected fire set.
+        db_session.expire_all()
+
+        real_execute = db_session.execute
+        real_commit = db_session.commit
+        state = {"n": 0}
+
+        def fire_lands_first(*args, **kwargs):
+            # On the sweep's first statement, slip the fire's result in - the
+            # GTT becomes 'triggered' before the expiry UPDATE is issued.
+            state["n"] += 1
+            if state["n"] == 1:
+                real_execute(
+                    __import__("sqlalchemy").update(SandboxGTT)
+                    .where(SandboxGTT.gtt_id == trigger_id)
+                    .values(gtt_status="triggered")
+                )
+                # Committed, or the sweep's own rollback would discard the very
+                # fire this test is simulating.
+                real_commit()
+            return real_execute(*args, **kwargs)
+
+        with mock.patch.object(db_session, "execute", side_effect=fire_lands_first):
+            expire_due_gtts()
+        db_session.expire_all()
+
+        gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+        assert gtt.gtt_status == "triggered", "expiry overwrote a fired GTT"
+        order = SandboxOrders.query.filter_by(gtt_leg_id=leg_id).first()
+        assert order is not None, "the child order was stranded by the expiry"
+
+    def test_modify_fails_against_an_already_fired_gtt(self, clean_gtt_user):
+        from database.sandbox_db import SandboxGTT, db_session
+        from sandbox.gtt_manager import fire_leg, try_claim_trigger
+
+        mgr = GTTManager(GTT_TEST_USER)
+        payload = _single_gtt()
+        payload["action"] = "BUY"
+        ok, response, _ = mgr.place_gtt(payload, last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+        leg_id = SandboxGTT.query.filter_by(gtt_id=trigger_id).first().legs[0].id
+        assert try_claim_trigger(leg_id) is True
+        assert fire_leg(leg_id, execution_price=96) is True
+
+        payload2 = _single_gtt(trigger=90.0, price=90.0)
+        payload2["action"] = "BUY"
+        ok2, _, status = mgr.modify_gtt(trigger_id, payload2)
+        assert ok2 is False and status == 404, "modify succeeded against a fired GTT"
+
+        db_session.expire_all()
+        assert SandboxGTT.query.filter_by(gtt_id=trigger_id).first().gtt_status == "triggered"
+
+    def test_modify_reading_active_then_losing_the_race(self, clean_gtt_user):
+        """Modify reads active, a fire completes, modify resumes."""
+        import threading
+
+        from database.sandbox_db import SandboxGTT, db_session
+        from sandbox.gtt_manager import fire_leg, try_claim_trigger
+
+        mgr = GTTManager(GTT_TEST_USER)
+        payload = _single_gtt()
+        payload["action"] = "BUY"
+        ok, response, _ = mgr.place_gtt(payload, last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+        leg_id = SandboxGTT.query.filter_by(gtt_id=trigger_id).first().legs[0].id
+
+        read_done = threading.Event()
+        fire_done = threading.Event()
+        result = {}
+        original = GTTManager._get_active_gtt
+
+        def slow_read(self, tid):
+            gtt = original(self, tid)
+            read_done.set()
+            fire_done.wait(timeout=5)
+            return gtt
+
+        def modify_thread():
+            payload2 = _single_gtt(trigger=90.0, price=90.0)
+            payload2["action"] = "BUY"
+            with mock.patch.object(GTTManager, "_get_active_gtt", slow_read):
+                result["modify"] = mgr.modify_gtt(trigger_id, payload2)
+
+        t = threading.Thread(target=modify_thread)
+        t.start()
+        assert read_done.wait(timeout=5)
+
+        assert try_claim_trigger(leg_id) is True
+        assert fire_leg(leg_id, execution_price=96) is True
+        fire_done.set()
+        t.join(timeout=10)
+
+        assert result["modify"][0] is False, "modify succeeded after the GTT fired"
+        db_session.expire_all()
+        assert SandboxGTT.query.filter_by(gtt_id=trigger_id).first().gtt_status == "triggered"
