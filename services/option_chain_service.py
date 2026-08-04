@@ -52,11 +52,13 @@ from database.symbol import SymToken, db_session
 from database.token_db import get_br_symbol
 from database.token_db_enhanced import fno_search_symbols
 from services.option_symbol_service import (
+    NO_SPOT_EXCHANGES,
     construct_option_symbol,
     find_atm_strike_from_actual,
     get_available_strikes,
     get_option_exchange,
     parse_underlying_symbol,
+    resolve_underlying_quote,
 )
 from services.quotes_service import get_multiquotes, get_quotes, import_broker_module
 from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
@@ -281,7 +283,34 @@ def get_option_chain(
                 )
             quote_symbol = _perp[0]["symbol"]
 
-        if exchange.upper() not in CRYPTO_EXCHANGES:
+        elif exchange.upper() in NO_SPOT_EXCHANGES:
+            # MCX and the currency segments list no spot instrument: there is a
+            # CRUDEOIL19AUG26FUT but no plain CRUDEOIL, so a spot quote returns
+            # nothing and the chain comes back with no underlying price at all.
+            # The near-month future is the pricing reference instead.
+            quote_exchange = exchange.upper()
+            resolved = resolve_underlying_quote(base_symbol, quote_exchange)
+            if resolved is None:
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": (
+                            f"No unexpired futures found for {base_symbol} on "
+                            f"{quote_exchange}. {quote_exchange} options are priced "
+                            "against the near-month future, which this product does "
+                            "not currently have."
+                        ),
+                    },
+                    404,
+                )
+            quote_symbol, quote_exchange = resolved
+            logger.info(
+                f"{exchange.upper()} has no spot; pricing {base_symbol} against "
+                f"{quote_symbol}"
+            )
+
+        if exchange.upper() not in CRYPTO_EXCHANGES and exchange.upper() not in NO_SPOT_EXCHANGES:
             # Use base symbol for index quotes (non-Delta)
             quote_symbol = base_symbol if embedded_expiry else underlying
 
