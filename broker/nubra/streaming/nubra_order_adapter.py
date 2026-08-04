@@ -25,7 +25,8 @@ import os
 from google.protobuf.any_pb2 import Any as ProtoAny
 
 from broker.nubra.api.auth_api import get_ws_urls
-from broker.nubra.mapping.exchange import resolve_instrument, to_openalgo_exchange
+from broker.nubra.mapping.order_data import resolve_instrument
+from broker.nubra.mapping.transform_data import map_exchange
 from database.auth_db import get_auth_token
 from utils.logging import get_logger
 from websocket_proxy.order_adapter import BaseOrderUpdateAdapter
@@ -211,7 +212,7 @@ class NubraOrderUpdateAdapter(BaseOrderUpdateAdapter):
                         f"derivativeType={derivative_type!r}"
                     )
                     symbol = broker_symbol
-                    exchange = to_openalgo_exchange(nubra_exchange, derivative_type)
+                    exchange = map_exchange(nubra_exchange, derivative_type)
             except ValueError:
                 pass
 
