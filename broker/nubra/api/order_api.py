@@ -754,7 +754,14 @@ def cancel_all_orders_api(data, auth):
         # order book would tell the caller cancellation succeeded while their
         # working orders are still live. Its except branch turns this into a
         # 500 and logs the reason.
-        message = order_book_response.get("message") or order_book_response.get("error")
+        # is_error_response() also matches on status alone, so neither key is
+        # guaranteed to be present -- without the final fallback the raised
+        # exception reads "... order book: None".
+        message = (
+            order_book_response.get("message")
+            or order_book_response.get("error")
+            or "Unknown error"
+        )
         logger.error(f"Nubra order book unavailable, cannot cancel orders: {message}")
         raise Exception(f"Failed to fetch Nubra order book: {message}")
 
