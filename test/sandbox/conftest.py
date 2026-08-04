@@ -133,3 +133,23 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if any(module in item.nodeid for module in LIVE_QUOTE_MODULES):
             item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def clean_scoped_sessions():
+    """Drop the scoped session's identity map around every test.
+
+    SQLAlchemy's scoped_session caches loaded objects per thread. Tests that
+    mutate a GTT, and engine code that writes the same rows from a worker
+    thread, otherwise leave stale instances behind, so a later test reads an
+    object whose in-memory state no longer matches the row. That is why these
+    tests passed alone and failed in a full run.
+    """
+    from database.sandbox_db import db_session
+
+    db_session.remove()
+    yield
+    try:
+        db_session.rollback()
+    finally:
+        db_session.remove()

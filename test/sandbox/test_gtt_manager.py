@@ -273,12 +273,19 @@ def clean_gtt_user():
         """
         from decimal import Decimal as D
 
-        from database.sandbox_db import SandboxFunds, SandboxPositions
+        from database.sandbox_db import SandboxFunds, SandboxOrders, SandboxPositions
 
         for gtt in SandboxGTT.query.filter_by(user_id=GTT_TEST_USER).all():
             SandboxGTTLeg.query.filter_by(gtt_id=gtt.gtt_id).delete()
             db_session.delete(gtt)
         SandboxPositions.query.filter_by(user_id=GTT_TEST_USER).delete()
+        # Orders too, and for a reason worth stating: SQLite reuses a deleted
+        # row's autoincrement id, so the next test's leg can be handed id 1
+        # again. A leftover order still correlated to id 1 then trips the unique
+        # index, and recovery reads it as "this GTT already fired". Production
+        # never deletes legs, so this is a test-only hazard - but it makes the
+        # suite lie in both directions if left.
+        SandboxOrders.query.filter_by(user_id=GTT_TEST_USER).delete()
         db_session.commit()
 
         initialize_user_funds(GTT_TEST_USER)
@@ -1089,3 +1096,158 @@ class TestCrashRecovery:
         reclaim_stranded_legs()  # what the engines and catch-up actually call
         db_session.expire_all()
         assert SandboxGTT.query.filter_by(gtt_id=trigger_id).first().gtt_status == "active"
+
+
+class TestDurableOrderCorrelation:
+    """Recovery must read the order table, not just the leg's marker.
+
+    The child order is committed before the leg records triggered_order_id. A
+    crash between those two commits leaves a real order with no marker, and a
+    recovery that trusts the marker alone would re-arm a GTT that had already
+    fired - placing a second order for one trigger.
+    """
+
+    def test_child_order_carries_the_leg_correlation(self, clean_gtt_user):
+        from database.sandbox_db import SandboxGTT, SandboxOrders
+        from sandbox.gtt_manager import fire_leg, try_claim_trigger
+
+        mgr = GTTManager(GTT_TEST_USER)
+        payload = _single_gtt()
+        payload["action"] = "BUY"  # BUY needs no holdings, so it fills
+        ok, response, _ = mgr.place_gtt(payload, last_price=100)
+        assert ok
+        leg = SandboxGTT.query.filter_by(gtt_id=response["trigger_id"]).first().legs[0]
+        assert try_claim_trigger(leg.id) is True
+        assert fire_leg(leg.id, execution_price=96) is True
+
+        order = SandboxOrders.query.filter_by(gtt_leg_id=leg.id).first()
+        assert order is not None, "child order carries no correlation to its GTT leg"
+        assert order.orderid == leg.triggered_order_id
+
+    def test_crash_before_the_marker_does_not_re_arm(self, clean_gtt_user):
+        """A real child order exists; only the marker is missing."""
+        from database.sandbox_db import SandboxGTT, SandboxGTTLeg, SandboxOrders, db_session
+        from sandbox.gtt_manager import fire_leg, reclaim_stranded_parents, try_claim_trigger
+
+        mgr = GTTManager(GTT_TEST_USER)
+        payload = _single_gtt()
+        payload["action"] = "BUY"
+        ok, response, _ = mgr.place_gtt(payload, last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+        leg_id = SandboxGTT.query.filter_by(gtt_id=trigger_id).first().legs[0].id
+        assert try_claim_trigger(leg_id) is True
+        assert fire_leg(leg_id, execution_price=96) is True
+
+        orders_after_fire = SandboxOrders.query.filter_by(user_id=GTT_TEST_USER).count()
+
+        # Rewind exactly the state a crash between the two commits leaves:
+        # the order row is real, the marker never got written, the leg is back
+        # to pending and the parent still says triggered.
+        db_session.execute(
+            __import__("sqlalchemy").update(SandboxGTTLeg)
+            .where(SandboxGTTLeg.id == leg_id)
+            .values(leg_status="pending", triggered_order_id=None, claimed_at=None)
+        )
+        db_session.commit()
+
+        reclaim_stranded_parents()
+        db_session.expire_all()
+
+        gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+        assert gtt.gtt_status == "triggered", "a fired GTT was re-armed"
+        assert gtt.legs[0].leg_status == "triggered", "leg was not finalised from the order row"
+        assert gtt.legs[0].triggered_order_id, "marker was not repaired from the order row"
+        assert (
+            SandboxOrders.query.filter_by(user_id=GTT_TEST_USER).count() == orders_after_fire
+        ), "recovery created a second child order"
+
+    def test_the_correlation_is_unique(self, clean_gtt_user):
+        """The unique index is what stops a replayed claim double-ordering."""
+        from database.sandbox_db import SandboxOrders, db_session
+
+        existing = SandboxOrders.query.filter(SandboxOrders.gtt_leg_id.isnot(None)).first()
+        if existing is None:
+            pytest.skip("no correlated order in this run")
+        clone = SandboxOrders(
+            orderid="DUPLICATE-TEST",
+            user_id=GTT_TEST_USER,
+            symbol=existing.symbol,
+            exchange=existing.exchange,
+            action=existing.action,
+            quantity=existing.quantity,
+            price=existing.price,
+            price_type=existing.price_type,
+            product=existing.product,
+            order_status="open",
+            pending_quantity=0,
+            gtt_leg_id=existing.gtt_leg_id,
+        )
+        db_session.add(clone)
+        # IntegrityError specifically: the point is the unique index rejecting
+        # it, not that any error occurs.
+        from sqlalchemy.exc import IntegrityError
+
+        with pytest.raises(IntegrityError):
+            db_session.commit()
+        db_session.rollback()
+
+
+class TestRecoveryDoesNotDoubleBlock:
+    def test_crash_before_the_release_keeps_one_reservation(self, clean_gtt_user):
+        """The reproduced case: used margin went from 950 to 1900."""
+        from database.sandbox_db import SandboxGTT, db_session
+        from sandbox.gtt_manager import reclaim_stranded_parents
+
+        fm = clean_gtt_user
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        blocked = _used_margin(fm)
+        assert blocked > 0
+
+        # Crash after claiming the parent, before releasing the margin: the
+        # reservation is still intact on the row.
+        gtt = SandboxGTT.query.filter_by(gtt_id=response["trigger_id"]).first()
+        gtt.gtt_status = "triggered"
+        db_session.commit()
+
+        reclaim_stranded_parents()
+        db_session.expire_all()
+
+        assert _used_margin(fm) == blocked, "recovery reserved the same margin twice"
+        gtt = SandboxGTT.query.filter_by(gtt_id=response["trigger_id"]).first()
+        assert gtt.gtt_status == "active"
+        assert float(gtt.margin_blocked) > 0
+
+
+class TestCancelReportsReleaseFailure:
+    def test_cancel_fails_when_the_funds_cannot_be_returned(self, clean_gtt_user):
+        """Reporting success would leave funds locked against a dead trigger."""
+        from database.sandbox_db import SandboxGTT, db_session
+        from sandbox.fund_manager import FundManager
+
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+
+        with mock.patch.object(
+            FundManager, "release_margin", return_value=(False, "ledger locked")
+        ):
+            ok2, resp, status = mgr.cancel_gtt(trigger_id)
+
+        assert ok2 is False and status == 500
+        assert "could not be released" in resp["message"]
+
+        db_session.expire_all()
+        gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+        assert float(gtt.margin_blocked) > 0, (
+            "the row shows no reservation while the funds are still blocked"
+        )
+
+    def test_a_normal_cancel_still_succeeds(self, clean_gtt_user):
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        assert mgr.cancel_gtt(response["trigger_id"])[0] is True
