@@ -229,6 +229,53 @@ class FundManager:
             logger.exception(f"Error checking margin for user {self.user_id}: {e}")
             return False, f"Error checking margin: {str(e)}"
 
+    def stage_margin_delta(self, delta, description=""):
+        """Apply a margin change WITHOUT committing, so a caller can make the
+        funds move and its own state change one transaction.
+
+        block_margin and release_margin each commit on their own. That is right
+        for a plain order, but it makes a GTT transition two separate commits:
+        the funds move, then the GTT row is written, and a failure in between
+        leaves the ledger and the row disagreeing about the same money with
+        nothing to reconcile them. Callers that must be atomic stage the change
+        here and commit once, so either both land or neither does.
+
+        Args:
+            delta: Positive to block (reserve), negative to release.
+            description: For the log line.
+
+        Returns:
+            ``(ok, message)``. The caller must commit on success and roll back
+            on failure - nothing is committed here.
+        """
+        with self._lock:
+            try:
+                funds = self._ensure_funds_initialized()
+                if not funds:
+                    return False, "Funds not initialized"
+
+                delta = Decimal(str(delta))
+                if delta == 0:
+                    return True, "No change"
+
+                if delta > 0 and funds.available_balance < delta:
+                    return (
+                        False,
+                        f"Insufficient funds. Required: ₹{delta}, "
+                        f"Available: ₹{funds.available_balance}",
+                    )
+
+                funds.available_balance -= delta
+                funds.used_margin += delta
+                # Deliberately no commit: the caller owns the transaction.
+                logger.info(
+                    f"Staged ₹{delta} margin change for user {self.user_id}. {description}"
+                )
+                return True, f"Margin change staged: ₹{delta}"
+            except Exception as e:
+                logger.exception(f"Error staging margin for user {self.user_id}: {e}")
+                return False, f"Error staging margin: {str(e)}"
+
     def block_margin(self, amount, description=""):
         """Block margin for a trade"""
         with self._lock:

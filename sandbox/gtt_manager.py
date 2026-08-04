@@ -417,38 +417,50 @@ class GTTManager:
 
             old_blocked = Decimal(str(gtt.margin_blocked or 0))
             delta = new_blocked - old_blocked
-            if delta > 0:
-                ok, message = self.fund_manager.block_margin(
-                    delta, description=f"GTT {trigger_id} modify"
+
+            # One transaction: the funds move, the parent is re-priced and the
+            # legs are rewritten, then a single commit. Two commits meant a
+            # failure between them left the ledger and the row disagreeing
+            # about the same money, in either direction depending on which way
+            # the margin went.
+            #
+            # The parent update is also conditional on 'active'. The read above
+            # can be stale - a fire can claim the GTT while this request is in
+            # flight - and a plain assignment would report a successful modify
+            # against a GTT that had already triggered.
+            claimed = db_session.execute(
+                update(SandboxGTT)
+                .where(
+                    SandboxGTT.gtt_id == trigger_id,
+                    SandboxGTT.user_id == self.user_id,
+                    SandboxGTT.gtt_status == "active",
                 )
-                if not ok:
-                    return False, {"status": "error", "mode": "analyze", "message": message}, 400
-            elif delta < 0:
-                freed, reason = _release_margin(
-                    self.user_id, -delta, f"GTT {trigger_id} modify"
+                .values(margin_blocked=new_blocked)
+            )
+            if claimed.rowcount != 1:
+                db_session.rollback()
+                db_session.expire_all()
+                logger.info(
+                    f"GTT {trigger_id}: no longer active when the modify was applied"
                 )
-                if not freed:
-                    # Recording the lower figure while the funds are still held
-                    # would make the row disagree with the ledger, and every
-                    # later reconciliation would blame the difference on
-                    # something else.
-                    logger.error(
-                        f"GTT {trigger_id}: modify could not release {-delta} "
-                        f"({reason}); leaving the reservation as it was"
-                    )
-                    return (
-                        False,
-                        {
-                            "status": "error",
-                            "mode": "analyze",
-                            "trigger_id": trigger_id,
-                            "message": (
-                                f"Could not release {-delta} margin ({reason}). The GTT "
-                                "is unchanged."
-                            ),
-                        },
-                        500,
-                    )
+                return self._not_found(trigger_id)
+
+            staged, message = self.fund_manager.stage_margin_delta(
+                delta, description=f"GTT {trigger_id} modify"
+            )
+            if not staged:
+                db_session.rollback()
+                db_session.expire_all()
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "mode": "analyze",
+                        "trigger_id": trigger_id,
+                        "message": f"{message}. The GTT is unchanged.",
+                    },
+                    400 if delta > 0 else 500,
+                )
 
             # strict: the length check above guarantees a 1:1 pairing, and a
             # silent truncation here would leave a leg holding stale prices.
@@ -460,9 +472,15 @@ class GTTManager:
                 existing.pricetype = updated["pricetype"]
                 existing.action = updated["action"]
                 existing.leg_margin = updated["margin"]
-            gtt.margin_blocked = new_blocked
 
-            db_session.commit()
+            try:
+                db_session.commit()
+            except Exception:
+                # Nothing was committed, so the funds change unwinds with it.
+                db_session.rollback()
+                db_session.expire_all()
+                raise
+
             logger.info(f"Sandbox GTT {trigger_id} modified; margin now {new_blocked}")
             return True, {"status": "success", "mode": "analyze", "trigger_id": trigger_id}, 200
 
@@ -815,6 +833,19 @@ def _compensate_failed_fire(gtt, leg_id: int, released: Decimal, order_committed
 
     _revert_parent(gtt.gtt_id)
     _revert_claim(leg_id)
+
+
+def self_release(gtt, amount: Decimal) -> tuple[bool, str]:
+    """Stage a GTT's margin release inside the caller's transaction."""
+    if amount <= 0:
+        return True, ""
+    try:
+        return FundManager(gtt.user_id).stage_margin_delta(
+            -amount, description=f"GTT {gtt.gtt_id} expired"
+        )
+    except Exception:
+        logger.exception(f"GTT {gtt.gtt_id}: staging the expiry release raised")
+        return False, "stage_margin_delta raised"
 
 
 def _release_margin(user_id: str, amount: Decimal, description: str) -> tuple[bool, str]:
@@ -1345,26 +1376,58 @@ def expire_due_gtts() -> int:
         for gtt in due:
             released = Decimal(str(gtt.margin_blocked or 0))
 
-            # Free the money first. Committing 'expired' with margin_blocked=0
-            # and then discovering the release failed leaves the row claiming
-            # funds were returned that are still held, and the GTT is gone so
-            # nothing points at them any more.
-            freed, reason = _release_margin(
-                gtt.user_id, released, f"GTT {gtt.gtt_id} expired"
+            # Claim the parent conditionally, exactly as firing does. The query
+            # above is a stale read by the time we act on it: a GTT can be
+            # fired, cancelled or expired by another path in between, and
+            # assigning 'expired' over a fire would strand a real child order
+            # and release the margin that order now needs.
+            claimed = db_session.execute(
+                update(SandboxGTT)
+                .where(
+                    SandboxGTT.gtt_id == gtt.gtt_id,
+                    SandboxGTT.gtt_status == "active",
+                )
+                .values(gtt_status="expired", margin_blocked=Decimal("0.00"))
             )
-            if not freed:
+            if claimed.rowcount != 1:
+                db_session.rollback()
+                logger.debug(
+                    f"GTT {gtt.gtt_id}: resolved by another path before it expired"
+                )
+                continue
+
+            db_session.execute(
+                update(SandboxGTTLeg)
+                .where(
+                    SandboxGTTLeg.gtt_id == gtt.gtt_id,
+                    SandboxGTTLeg.leg_status == "pending",
+                )
+                .values(leg_status="cancelled", claimed_at=None)
+            )
+
+            # Staged, not committed: the funds move and the expiry land in the
+            # same transaction. Releasing first and committing after meant a
+            # failed commit left the money returned while the GTT stayed
+            # active - and the next sweep would release the same reservation
+            # again.
+            staged, reason = self_release(gtt, released)
+            if not staged:
+                db_session.rollback()
                 logger.error(
                     f"GTT {gtt.gtt_id}: past expiry but its {released} margin could "
                     f"not be released ({reason}); leaving it active to retry"
                 )
                 continue
 
-            gtt.gtt_status = "expired"
-            gtt.margin_blocked = Decimal("0.00")
-            for leg in gtt.legs:
-                if leg.leg_status == "pending":
-                    leg.leg_status = "cancelled"
-            db_session.commit()
+            try:
+                db_session.commit()
+            except Exception:
+                db_session.rollback()
+                logger.exception(
+                    f"GTT {gtt.gtt_id}: expiry commit failed; nothing was applied"
+                )
+                continue
+
             expired += 1
             logger.info(f"Sandbox GTT {gtt.gtt_id} expired; released {released}")
             _publish_expired(gtt)
