@@ -1,13 +1,13 @@
 from datetime import datetime
 
-from broker.nubra.mapping.exchange import (
+from broker.nubra.mapping.transform_data import (
+    brexchange_of,
+    candidate_exchanges,
     derivative_type_of,
-    nubra_exchange_of,
-    resolve_instrument,
-    to_openalgo_exchange,
+    map_exchange,
+    reverse_map_product_type,
 )
-from broker.nubra.mapping.transform_data import reverse_map_product_type
-from database.token_db import get_oa_symbol
+from database.token_db import get_oa_symbol, get_symbol
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -57,6 +57,36 @@ def extract_positions(positions_data):
     return portfolio.get("positions") or []
 
 
+def resolve_instrument(brexchange, derivative_type=None, ref_id=None, broker_symbol=None):
+    """
+    Resolve a Nubra instrument to (OpenAlgo symbol, OpenAlgo exchange).
+
+    The exchange is confirmed rather than inferred: map_exchange() only decides
+    which OpenAlgo exchanges are worth probing, and both values returned come
+    from the master contract row that actually matched. ``ref_id`` is tried
+    first because that is what Nubra stores in ``symtoken.token``; the broker
+    symbol is the second key.
+
+    Returns:
+        ``(symbol, exchange)``, or ``(None, None)`` when nothing matched, so
+        callers can say so instead of substituting a plausible-looking guess.
+    """
+    ref_id = str(ref_id or "").strip()
+    broker_symbol = str(broker_symbol or "").strip()
+
+    for candidate in candidate_exchanges(brexchange, derivative_type):
+        if ref_id:
+            symbol = get_symbol(ref_id, candidate)
+            if symbol:
+                return symbol, candidate
+        if broker_symbol:
+            symbol = get_oa_symbol(broker_symbol, candidate)
+            if symbol:
+                return symbol, candidate
+
+    return None, None
+
+
 def _first_present(row, *names):
     """First non-None value among ``names``, or None when the row has none of them."""
     if not isinstance(row, dict):
@@ -100,7 +130,7 @@ def resolve_position(position):
     every downstream lookup on it fails.
     """
     broker_symbol = position.get("symbol", "")
-    nubra_exchange = nubra_exchange_of(position)
+    nubra_exchange = brexchange_of(position)
     derivative_type = derivative_type_of(position)
     ref_id = str(position.get("refId", "") or "")
 
@@ -115,7 +145,7 @@ def resolve_position(position):
         f"symbol={broker_symbol!r} exchange={nubra_exchange!r} "
         f"derivativeType={derivative_type!r}; reporting broker-native values"
     )
-    return broker_symbol, to_openalgo_exchange(nubra_exchange, derivative_type)
+    return broker_symbol, map_exchange(nubra_exchange, derivative_type)
 
 
 # Nubra V3 lifecycle bucket -> OpenAlgo status vocabulary.
@@ -221,7 +251,7 @@ def _resolve_symbol(order):
     )
     return (
         broker_symbol or ref_data.get("displayName", ""),
-        to_openalgo_exchange(nubra_exchange, derivative_type),
+        map_exchange(nubra_exchange, derivative_type),
         ref_id,
     )
 

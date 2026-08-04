@@ -178,3 +178,112 @@ def transform_modify_order_data(data, orderid):
 def map_product_type(product):
     """OpenAlgo product -> V3 deliveryType, for position lookups."""
     return map_order_delivery_type(product)
+
+
+# --- Exchange mapping (Nubra -> OpenAlgo) -----------------------------------
+#
+# Nubra's exchange vocabulary has exactly three values -- NSE, BSE and MCX. It
+# has no NFO or BFO: an NSE option comes back as ``exchange: "NSE"`` with
+# ``derivativeType: "OPT"``, while the master contract stores that same row as
+# ``exchange='NFO', brexchange='NSE'``.
+#
+# Everything keyed on the OpenAlgo exchange therefore misses unless that is
+# folded back first -- get_symbol, get_oa_symbol and get_token are all keyed on
+# the OpenAlgo exchange, and so is the ``pos_exchange == exchange`` comparison
+# in the smart-order path.
+#
+# The forward direction (OpenAlgo -> Nubra, used when subscribing to the market
+# feed) lives in streaming/nubra_mapping.py.
+
+# Nubra cash exchange -> the OpenAlgo derivatives exchange its F&O rows live
+# under. MCX is absent on purpose: Nubra reports commodity futures and options
+# as "MCX", which is already the OpenAlgo exchange for them.
+_DERIVATIVE_EXCHANGE = {
+    "NSE": "NFO",
+    "BSE": "BFO",
+}
+
+# ``derivativeType`` values that mean "this is an F&O contract". Cash rows carry
+# "STOCK"; index rows never appear on the order or position paths.
+_DERIVATIVE_TYPES = ("OPT", "FUT")
+
+
+def map_exchange(brexchange, derivative_type=None):
+    """
+    Maps the Broker Exchange to the OpenAlgo Exchange.
+
+    Nubra needs ``derivative_type`` to disambiguate, because the same broker
+    exchange ("NSE") covers both the cash and the derivatives segment.
+
+    Unmapped values fall back to the raw broker exchange rather than None, so
+    an unexpected segment degrades to a visible label instead of propagating a
+    null downstream.
+    """
+    exchange = str(brexchange or "").upper()
+    if str(derivative_type or "").upper() in _DERIVATIVE_TYPES:
+        return _DERIVATIVE_EXCHANGE.get(exchange, exchange)
+    return exchange
+
+
+def candidate_exchanges(brexchange, derivative_type=None):
+    """
+    OpenAlgo exchanges worth probing for a Nubra row, most likely first.
+
+    A known ``derivativeType`` narrows this to exactly one candidate. When it is
+    missing or unrecognised, both the derivatives and the cash exchange are
+    offered so resolution still succeeds off the master contract instead of
+    depending on a field Nubra may not have sent.
+    """
+    exchange = str(brexchange or "").upper()
+    if not exchange:
+        return ()
+
+    derivative = _DERIVATIVE_EXCHANGE.get(exchange)
+    dtype = str(derivative_type or "").upper()
+
+    if dtype in _DERIVATIVE_TYPES:
+        return (derivative,) if derivative else (exchange,)
+    if dtype:
+        # A recognised non-derivative type ("STOCK") is authoritative.
+        return (exchange,)
+    return (derivative, exchange) if derivative else (exchange,)
+
+
+def derivative_type_of(row):
+    """
+    Read ``derivativeType`` from a V3 order, position or refData object.
+
+    Order rows carry it on ``refData`` (and on ``legs[0].refData`` for strategy
+    orders and for the single orders Nubra returns as ``isMulti: true``), while
+    position rows carry it at the top level.
+    """
+    if not isinstance(row, dict):
+        return ""
+
+    for candidate in (row, row.get("refData")):
+        if isinstance(candidate, dict) and candidate.get("derivativeType"):
+            return str(candidate["derivativeType"])
+
+    legs = row.get("legs")
+    if isinstance(legs, list) and legs and isinstance(legs[0], dict):
+        leg_ref_data = legs[0].get("refData")
+        if isinstance(leg_ref_data, dict) and leg_ref_data.get("derivativeType"):
+            return str(leg_ref_data["derivativeType"])
+
+    return ""
+
+
+def brexchange_of(row):
+    """Nubra exchange for a V3 order or position row, top level or refData."""
+    if not isinstance(row, dict):
+        return ""
+
+    exchange = row.get("exchange")
+    if not exchange:
+        for source in (row.get("refData"), *(row.get("legs") or [])[:1]):
+            if isinstance(source, dict):
+                exchange = source.get("exchange") or (source.get("refData") or {}).get("exchange")
+                if exchange:
+                    break
+
+    return str(exchange or "")
