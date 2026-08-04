@@ -327,7 +327,59 @@ def run_catch_up_tasks():
         # Run daily PnL snapshot catch-up (for missed days)
         catch_up_daily_pnl_snapshot()
 
+        # Fire any GTT whose trigger was crossed while the app was down
+        catch_up_gtts()
+
         logger.info("Catch-up tasks completed")
 
     except Exception as e:
         logger.exception(f"Error running catch-up tasks: {e}")
+
+
+def catch_up_gtts():
+    """Fire GTTs whose trigger was crossed while the app was down.
+
+    Deliberately not gated by market hours: an off-hours restart is exactly the
+    case this exists for, and the polling engine has no market-hours gate
+    either, so adding one here would make GTTs behave differently from every
+    other resting order.
+
+    Stranded claims are reverted first. A leg left in ``triggering`` by the
+    crash that took the app down is invisible to the pending scan below, so
+    without this step the very restart meant to recover it would skip it.
+    """
+    try:
+        from sandbox import gtt_manager
+
+        reclaimed = gtt_manager.reclaim_stranded_legs()
+        if reclaimed:
+            logger.info(f"Catch-up reverted {reclaimed} stranded GTT leg(s)")
+
+        rows = gtt_manager.get_active_legs()
+        if not rows:
+            logger.debug("No active GTT legs to catch up")
+            return
+
+        from sandbox.execution_engine import ExecutionEngine
+
+        engine = ExecutionEngine()
+        symbols = list({(gtt.symbol, gtt.exchange) for _leg, gtt in rows})
+        quotes = engine._fetch_quotes_batch(symbols)
+
+        fired = 0
+        for leg, gtt in rows:
+            quote = quotes.get((gtt.symbol, gtt.exchange))
+            if not quote:
+                continue
+            ltp = quote.get("ltp")
+            if not gtt_manager.leg_is_triggered_by(leg.action, leg.trigger_price, ltp):
+                continue
+            if gtt_manager.try_claim_trigger(leg.id):
+                if gtt_manager.fire_leg(leg.id, execution_price=ltp):
+                    fired += 1
+
+        if fired:
+            logger.info(f"Catch-up fired {fired} GTT(s) crossed while the app was down")
+
+    except Exception as e:
+        logger.exception(f"Error in GTT catch-up: {e}")

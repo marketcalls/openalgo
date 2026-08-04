@@ -517,6 +517,28 @@ def reconcile_margin(user_id, auto_fix=True):
             if pos.quantity != 0  # Only count open positions
         )
 
+        # Active GTTs hold margin too. Without counting them a resting GTT looks
+        # exactly like a leaked reservation, and with auto_fix on that would
+        # release the very margin the GTT needs to place its order when it
+        # fires.
+        try:
+            from database.sandbox_db import SandboxGTT
+
+            total_gtt_margin = sum(
+                Decimal(str(gtt.margin_blocked or 0))
+                for gtt in SandboxGTT.query.filter_by(
+                    user_id=user_id, gtt_status="active"
+                ).all()
+            )
+        except Exception:
+            logger.exception(
+                "Could not total active GTT margin during reconciliation; "
+                "skipping reconciliation rather than risk releasing it"
+            )
+            return False, Decimal("0"), "GTT margin unavailable; reconciliation skipped"
+
+        total_position_margin += total_gtt_margin
+
         # Get current used_margin from funds
         funds = SandboxFunds.query.filter_by(user_id=user_id).first()
         if not funds:
