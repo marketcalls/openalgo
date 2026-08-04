@@ -1992,3 +1992,85 @@ class TestConcurrentPlacementReservations:
         ok, response, status = GTTManager(GTT_TEST_USER).place_gtt(huge, last_price=100)
         assert ok is False and status == 400
         assert "Insufficient funds" in response["message"]
+
+
+class TestMarginUnderflowGuard:
+    """Releasing more than is reserved would invent money.
+
+    Not reachable through a valid GTT transition today - the conditional claims
+    prevent a double release - but the primitive allowed it, so any future
+    caller or recovery bug supplying an excessive amount would have credited the
+    difference as available cash and corrupted every figure derived from the
+    balance.
+    """
+
+    def _funds(self, user):
+        from database.sandbox_db import SandboxFunds
+
+        return SandboxFunds.query.filter_by(user_id=user).first()
+
+    def test_staged_release_beyond_the_reservation_is_refused(self, clean_gtt_user):
+        from database.sandbox_db import db_session
+
+        fm = clean_gtt_user
+        row = self._funds(GTT_TEST_USER)
+        before_used, before_avail = row.used_margin, row.available_balance
+
+        ok, message = fm.stage_margin_delta(-1, "underflow probe")
+        db_session.rollback()
+        db_session.expire_all()
+
+        assert ok is False
+        assert "more than the reserved margin" in message
+        row = self._funds(GTT_TEST_USER)
+        assert row.used_margin == before_used
+        assert row.available_balance == before_avail
+
+    def test_committed_release_beyond_the_reservation_is_refused(self, clean_gtt_user):
+        from database.sandbox_db import db_session
+
+        fm = clean_gtt_user
+        row = self._funds(GTT_TEST_USER)
+        before_used, before_avail = row.used_margin, row.available_balance
+
+        ok, message = fm.release_margin(1, description="underflow probe")
+        db_session.expire_all()
+
+        assert ok is False
+        assert "only" in message
+        row = self._funds(GTT_TEST_USER)
+        assert row.used_margin == before_used
+        assert row.available_balance == before_avail
+
+    def test_used_margin_can_never_go_negative(self, clean_gtt_user):
+        """The invariant, driven from a real reservation."""
+        from database.sandbox_db import db_session
+
+        fm = clean_gtt_user
+        assert fm.block_margin(500, "x")[0] is True
+        db_session.expire_all()
+
+        # One cent more than is held.
+        assert fm.release_margin(Decimal("500.01"), description="x")[0] is False
+        db_session.expire_all()
+        assert self._funds(GTT_TEST_USER).used_margin == Decimal("500.00")
+
+        # Exactly what is held is fine.
+        assert fm.release_margin(Decimal("500.00"), description="x")[0] is True
+        db_session.expire_all()
+        row = self._funds(GTT_TEST_USER)
+        assert row.used_margin == Decimal("0.00")
+        assert row.used_margin >= 0
+
+    def test_a_normal_gtt_cycle_is_unaffected(self, clean_gtt_user):
+        """The guard must not block the releases that are supposed to happen."""
+        from database.sandbox_db import db_session
+
+        fm = clean_gtt_user
+        before = _used_margin(fm)
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        assert mgr.cancel_gtt(response["trigger_id"])[0] is True
+        db_session.expire_all()
+        assert _used_margin(fm) == before

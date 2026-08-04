@@ -273,6 +273,12 @@ class FundManager:
             stmt = update(SandboxFunds).where(SandboxFunds.user_id == self.user_id)
             if delta > 0:
                 stmt = stmt.where(SandboxFunds.available_balance >= delta)
+            else:
+                # Releasing more than is actually reserved would drive
+                # used_margin negative and credit the difference as available
+                # cash - money the account never had. Guarded in the same
+                # statement so the check cannot be raced past.
+                stmt = stmt.where(SandboxFunds.used_margin >= -delta)
             stmt = stmt.values(
                 available_balance=SandboxFunds.available_balance - delta,
                 used_margin=SandboxFunds.used_margin + delta,
@@ -282,7 +288,10 @@ class FundManager:
             if result.rowcount != 1:
                 if delta > 0:
                     return False, f"Insufficient funds. Required: ₹{delta}"
-                return False, "Funds row not found"
+                return (
+                    False,
+                    f"Cannot release ₹{-delta}: more than the reserved margin",
+                )
 
             # The in-memory copy is now stale; drop it so later reads see the
             # value the database actually holds.
@@ -339,6 +348,23 @@ class FundManager:
 
                 amount = Decimal(str(amount))
                 realized_pnl = Decimal(str(realized_pnl))
+
+                # Refuse to release more than is reserved. Letting it through
+                # drives used_margin negative and credits the difference as
+                # available cash, so a single over-release anywhere - a double
+                # release, a stale amount, a recovery bug - invents money and
+                # every figure derived from the balance is wrong afterwards.
+                # Failing here instead leaves the margin blocked, which
+                # reconcile_margin(auto_fix=True) already exists to correct.
+                if amount > funds.used_margin:
+                    logger.error(
+                        f"Refusing to release ₹{amount} for user {self.user_id}: only "
+                        f"₹{funds.used_margin} is reserved. {description}"
+                    )
+                    return (
+                        False,
+                        f"Cannot release ₹{amount}: only ₹{funds.used_margin} is reserved",
+                    )
 
                 # Release the margin
                 funds.used_margin -= amount
