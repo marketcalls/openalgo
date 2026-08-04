@@ -172,7 +172,7 @@ class ExecutionEngine:
             if not quote:
                 continue
             ltp = quote.get("ltp")
-            if not gtt_manager.leg_is_triggered_by(leg.action, leg.trigger_price, ltp):
+            if not gtt_manager.leg_is_triggered_by(leg.trigger_direction, leg.trigger_price, ltp):
                 continue
 
             # The claim is what makes this safe to run alongside the WebSocket

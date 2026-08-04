@@ -29,7 +29,7 @@ import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from database.sandbox_db import (
     SandboxGTT,
@@ -65,8 +65,7 @@ def _claim_timeout_seconds() -> int:
         return int(get_config("gtt_claim_timeout_sec", DEFAULT_CLAIM_TIMEOUT_SEC))
     except (TypeError, ValueError):
         logger.warning(
-            "gtt_claim_timeout_sec is not an integer; using "
-            f"{DEFAULT_CLAIM_TIMEOUT_SEC}s"
+            f"gtt_claim_timeout_sec is not an integer; using {DEFAULT_CLAIM_TIMEOUT_SEC}s"
         )
         return DEFAULT_CLAIM_TIMEOUT_SEC
 
@@ -76,18 +75,64 @@ def _oco_margin_mode() -> str:
     return mode if mode in ("max", "sum") else "max"
 
 
-def leg_is_triggered_by(action: str, trigger_price, ltp) -> bool:
-    """Whether ``ltp`` has crossed ``trigger_price`` for a leg of ``action``.
+def _resolve_expiry(supplied) -> datetime:
+    """When this GTT stops resting.
 
-    A BUY leg is a breakout above its trigger; a SELL leg is a breakdown below
-    it. Both comparisons are inclusive, matching how the regular sandbox
-    SL/SL-M book treats a trigger touched exactly.
+    A caller-supplied ``expires_at`` is honoured; overwriting it with the
+    default silently rests a GTT for a year the user asked to expire sooner.
+    Anything unparseable falls back to the Zerodha-parity default rather than
+    being rejected, since expiry is not what the request is about.
+    """
+    if supplied:
+        for parse in (
+            lambda v: datetime.fromisoformat(str(v)),
+            lambda v: datetime.strptime(str(v), "%Y-%m-%d %H:%M:%S"),
+            lambda v: datetime.strptime(str(v), "%Y-%m-%d"),
+        ):
+            try:
+                return parse(supplied)
+            except (TypeError, ValueError):
+                continue
+        logger.warning(f"Unparseable GTT expires_at {supplied!r}; using the default")
+    return _now() + timedelta(days=DEFAULT_EXPIRY_DAYS)
+
+
+def _pricing_basis(leg: dict, last_price) -> float:
+    """Price to size a leg's margin against.
+
+    A LIMIT leg is sized at its limit. A MARKET leg has no limit price, and
+    sizing it at 0 reserves nothing - the GTT would be accepted, then fail to
+    fund its order the moment it fired. The trigger price is the best estimate
+    available for a MARKET leg, since that is roughly where it will execute;
+    the placement LTP is the fallback if even that is missing.
+    """
+    price = float(leg.get("price") or 0)
+    if price > 0:
+        return price
+    trigger = float(leg.get("trigger_price") or 0)
+    if trigger > 0:
+        return trigger
+    return float(last_price or 0)
+
+
+def leg_is_triggered_by(direction: str, trigger_price, ltp) -> bool:
+    """Whether ``ltp`` has crossed ``trigger_price`` in ``direction``.
+
+    Direction is a property of the trigger's role, not of the leg's action.
+    ``triggerprice_sl`` sits below the LTP at placement and fires on a fall;
+    ``triggerprice_tg`` sits above it and fires on a rise. Deriving this from
+    BUY/SELL inverts two of the four documented cases - a BUY-on-dip fires
+    falling and a SELL-at-target fires rising - which would trigger every such
+    GTT immediately on the first tick.
+
+    Comparisons are inclusive, matching how the regular sandbox SL/SL-M book
+    treats a trigger touched exactly.
     """
     if trigger_price is None or ltp is None:
         return False
     trigger = Decimal(str(trigger_price))
     price = Decimal(str(ltp))
-    if (action or "").upper() == "BUY":
+    if (direction or "").lower() == "above":
         return price >= trigger
     return price <= trigger
 
@@ -102,7 +147,12 @@ class GTTManager:
     # -- placement ---------------------------------------------------------
 
     def _leg_margin(self, symbol, exchange, product, quantity, price, action):
-        """Margin one leg would need if it fired, priced at its limit price."""
+        """Margin one leg would need if it fired.
+
+        ``price`` must already be a realistic execution price. A MARKET leg
+        carries no limit price, so pricing it at 0 reserves nothing and the GTT
+        promises an order it cannot fund - see ``_pricing_basis``.
+        """
         margin, error = self.fund_manager.calculate_margin_required(
             symbol=symbol,
             exchange=exchange,
@@ -152,7 +202,12 @@ class GTTManager:
             # Price each leg, then decide what the GTT as a whole must reserve.
             for leg in legs:
                 margin, error = self._leg_margin(
-                    symbol, exchange, product, leg["quantity"], leg["price"], leg["action"]
+                    symbol,
+                    exchange,
+                    product,
+                    leg["quantity"],
+                    _pricing_basis(leg, last_price),
+                    leg["action"],
                 )
                 if margin is None:
                     return (
@@ -191,7 +246,7 @@ class GTTManager:
                 last_price=Decimal(str(last_price or 0)),
                 gtt_status="active",
                 margin_blocked=blocked,
-                expires_at=_now() + timedelta(days=DEFAULT_EXPIRY_DAYS),
+                expires_at=_resolve_expiry(gtt_data.get("expires_at")),
             )
             db_session.add(gtt)
 
@@ -201,6 +256,7 @@ class GTTManager:
                         gtt_id=gtt_id,
                         leg_number=index,
                         trigger_price=Decimal(str(leg["trigger_price"])),
+                        trigger_direction=leg["direction"],
                         action=leg["action"],
                         quantity=int(leg["quantity"]),
                         price=Decimal(str(leg["price"])),
@@ -211,11 +267,23 @@ class GTTManager:
                     )
                 )
 
-            db_session.commit()
+            try:
+                db_session.commit()
+            except Exception:
+                # block_margin already committed, so a rollback here does not
+                # undo it. Hand the reservation back explicitly or it is
+                # orphaned in used_margin with no GTT to account for it.
+                db_session.rollback()
+                self.fund_manager.release_margin(
+                    blocked, description=f"GTT {gtt_id} persist failed"
+                )
+                raise
+
             logger.info(
                 f"Sandbox GTT {gtt_id} placed for {self.user_id}: {trigger_type} "
                 f"{symbol}/{exchange}, margin blocked {blocked}"
             )
+            _notify_websocket_engine(gtt)
             return True, {"status": "success", "mode": "analyze", "trigger_id": gtt_id}, 200
 
         except Exception as e:
@@ -256,6 +324,7 @@ class GTTManager:
             return [
                 {
                     "trigger_price": sl_trigger,
+                    "direction": "below",  # stoploss leg: the lower trigger
                     "action": action,
                     "quantity": quantity,
                     "price": as_float(gtt_data.get("stoploss")) or price,
@@ -263,6 +332,7 @@ class GTTManager:
                 },
                 {
                     "trigger_price": tg_trigger,
+                    "direction": "above",  # target leg: the higher trigger
                     "action": action,
                     "quantity": quantity,
                     "price": as_float(gtt_data.get("target")) or price,
@@ -279,6 +349,9 @@ class GTTManager:
         return [
             {
                 "trigger_price": trigger,
+                # The suffix is the directional hint: _sl sits below the LTP,
+                # _tg above it. SINGLE has no stoploss/target roles.
+                "direction": "below" if sl_trigger > 0 else "above",
                 "action": action,
                 "quantity": quantity,
                 "price": price,
@@ -316,7 +389,7 @@ class GTTManager:
                     gtt.exchange,
                     gtt_data.get("product") or gtt.legs[0].product,
                     leg["quantity"],
-                    leg["price"],
+                    _pricing_basis(leg, gtt.last_price),
                     leg["action"],
                 )
                 if margin is None:
@@ -338,14 +411,13 @@ class GTTManager:
                 if not ok:
                     return False, {"status": "error", "mode": "analyze", "message": message}, 400
             elif delta < 0:
-                self.fund_manager.release_margin(
-                    -delta, description=f"GTT {trigger_id} modify"
-                )
+                self.fund_manager.release_margin(-delta, description=f"GTT {trigger_id} modify")
 
             # strict: the length check above guarantees a 1:1 pairing, and a
             # silent truncation here would leave a leg holding stale prices.
             for existing, updated in zip(gtt.legs, legs, strict=True):
                 existing.trigger_price = Decimal(str(updated["trigger_price"]))
+                existing.trigger_direction = updated["direction"]
                 existing.quantity = int(updated["quantity"])
                 existing.price = Decimal(str(updated["price"]))
                 existing.pricetype = updated["pricetype"]
@@ -376,8 +448,13 @@ class GTTManager:
             released = Decimal(str(gtt.margin_blocked or 0))
             gtt.gtt_status = "cancelled"
             for leg in gtt.legs:
-                if leg.leg_status == "pending":
+                # 'triggering' too: a leg claimed a moment ago has not placed
+                # anything yet, and fire_leg revalidates both states before it
+                # does, so cancelling here stops it. Leaving it alone let a
+                # cancelled GTT still place an order.
+                if leg.leg_status in ("pending", "triggering"):
                     leg.leg_status = "cancelled"
+                    leg.claimed_at = None
             gtt.margin_blocked = Decimal("0.00")
             db_session.commit()
 
@@ -398,8 +475,14 @@ class GTTManager:
                 500,
             )
 
-    def list_gtts(self, status_filter: str | None = None) -> tuple[bool, dict, int]:
-        """The user's GTTs, newest first, in broker-orderbook shape."""
+    def list_gtts(self, status_filter: str | None = "active") -> tuple[bool, dict, int]:
+        """The user's GTTs, newest first, in the canonical orderbook shape.
+
+        Active-only by default, matching the broker mappers: the orderbook UI
+        lists triggers that can still fire, so returning cancelled and expired
+        rows would show the user GTTs that no longer exist. Pass
+        ``status_filter=None`` for the full history.
+        """
         try:
             query = SandboxGTT.query.filter_by(user_id=self.user_id)
             if status_filter:
@@ -423,31 +506,36 @@ class GTTManager:
             )
 
     def _serialize(self, gtt: SandboxGTT) -> dict:
+        """One orderbook entry, shaped exactly like the broker mappers produce.
+
+        ``trigger_prices`` is not optional: the frontend's GttOrder type
+        requires it and GttTab renders it directly, so an entry without it
+        breaks the GTT tab rather than merely looking different.
+        """
         return {
             "trigger_id": gtt.gtt_id,
-            "strategy": gtt.strategy,
             "trigger_type": gtt.trigger_type,
+            "status": gtt.gtt_status,
             "symbol": gtt.symbol,
             "exchange": gtt.exchange,
+            "trigger_prices": [float(leg.trigger_price or 0) for leg in gtt.legs],
             "last_price": float(gtt.last_price or 0),
-            "status": gtt.gtt_status,
-            "margin_blocked": float(gtt.margin_blocked or 0),
-            "created_at": gtt.created_at.isoformat() if gtt.created_at else None,
-            "expires_at": gtt.expires_at.isoformat() if gtt.expires_at else None,
             "legs": [
                 {
-                    "leg_number": leg.leg_number,
-                    "trigger_price": float(leg.trigger_price or 0),
                     "action": leg.action,
                     "quantity": leg.quantity,
                     "price": float(leg.price or 0),
                     "pricetype": leg.pricetype,
                     "product": leg.product,
-                    "status": leg.leg_status,
-                    "triggered_order_id": leg.triggered_order_id,
                 }
                 for leg in gtt.legs
             ],
+            "created_at": gtt.created_at.isoformat() if gtt.created_at else "",
+            "updated_at": gtt.updated_at.isoformat() if gtt.updated_at else "",
+            "expires_at": gtt.expires_at.isoformat() if gtt.expires_at else "",
+            # Sandbox-only extras, additive so the shared shape is unaffected.
+            "strategy": gtt.strategy,
+            "margin_blocked": float(gtt.margin_blocked or 0),
         }
 
     def _get_active_gtt(self, trigger_id: str):
@@ -482,15 +570,46 @@ def try_claim_trigger(leg_id: int) -> bool:
         True if this caller now owns the leg and must call ``fire_leg``.
     """
     try:
+        # Exclusivity is per GTT, not per leg. Claiming only on
+        # leg_status='pending' lets both legs of an OCO be claimed at once by
+        # two evaluators - each wins its own leg - and both then place an
+        # order, which is precisely what OCO must never do. The predicate also
+        # requires the parent to still be active, so a GTT cancelled or expired
+        # between evaluation and claim cannot fire.
+        parent = select(SandboxGTTLeg.gtt_id).where(SandboxGTTLeg.id == leg_id).scalar_subquery()
+
+        sibling_busy = (
+            select(SandboxGTTLeg.id)
+            .where(
+                SandboxGTTLeg.gtt_id == parent,
+                SandboxGTTLeg.id != leg_id,
+                SandboxGTTLeg.leg_status.in_(["triggering", "triggered"]),
+            )
+            .exists()
+        )
+        parent_active = (
+            select(SandboxGTT.id)
+            .where(SandboxGTT.gtt_id == parent, SandboxGTT.gtt_status == "active")
+            .exists()
+        )
+
         result = db_session.execute(
             update(SandboxGTTLeg)
-            .where(SandboxGTTLeg.id == leg_id, SandboxGTTLeg.leg_status == "pending")
+            .where(
+                SandboxGTTLeg.id == leg_id,
+                SandboxGTTLeg.leg_status == "pending",
+                ~sibling_busy,
+                parent_active,
+            )
             .values(leg_status="triggering", claimed_at=datetime.now())
         )
         db_session.commit()
         won = result.rowcount == 1
         if not won:
-            logger.debug(f"GTT leg {leg_id}: claim lost, another evaluator owns it")
+            logger.debug(
+                f"GTT leg {leg_id}: claim lost - another evaluator owns this GTT, "
+                "or it is no longer active"
+            )
         return won
     except Exception as e:
         db_session.rollback()
@@ -540,6 +659,19 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
         _revert_claim(leg_id)
         return False
 
+    # Revalidate under the claim. Cancellation, expiry or the stranded-leg
+    # reaper can all have moved this GTT between the claim and here, and every
+    # one of those means the order must not be placed.
+    if leg.leg_status != "triggering":
+        logger.info(f"GTT leg {leg_id} is '{leg.leg_status}', not 'triggering' - not firing")
+        return False
+    if gtt.gtt_status != "active":
+        logger.info(
+            f"GTT {gtt.gtt_id} is '{gtt.gtt_status}', not 'active' - not firing leg {leg_id}"
+        )
+        _revert_claim(leg_id)
+        return False
+
     try:
         order_manager = OrderManager(gtt.user_id)
         order_payload = {
@@ -572,11 +704,21 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
             logger.error(f"GTT leg {leg_id} order rejected: {message}")
             # Put the reservation back so the retry has funds to work with.
             if released > 0:
-                FundManager(gtt.user_id).block_margin(
+                reblocked, reason = FundManager(gtt.user_id).block_margin(
                     released, description=f"GTT {gtt.gtt_id} fire failed"
                 )
-                gtt.margin_blocked = released
+                # Only record what was actually re-reserved. Another order may
+                # have taken the funds during the release/place window, and
+                # writing the amount back regardless would claim margin the
+                # account does not hold.
+                gtt.margin_blocked = released if reblocked else Decimal("0.00")
                 db_session.commit()
+                if not reblocked:
+                    logger.error(
+                        f"GTT {gtt.gtt_id}: could not restore {released} margin after a "
+                        f"failed fire ({reason}). The GTT now holds no reservation and "
+                        "may fail to fund its order on the next trigger."
+                    )
             _revert_claim(leg_id)
             return False
 
@@ -619,11 +761,35 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
         return False
 
 
+def _notify_websocket_engine(gtt: SandboxGTT) -> None:
+    """Ask the running WebSocket engine to start watching this GTT.
+
+    The engine's index is built at startup, so a GTT placed while it runs would
+    otherwise never be ticked - inert until a restart or a fallback to polling.
+    A no-op when the polling engine is active, which scans the table directly.
+    """
+    try:
+        from sandbox.websocket_execution_engine import (
+            get_websocket_execution_engine,
+            is_websocket_execution_engine_running,
+        )
+
+        if not is_websocket_execution_engine_running():
+            return
+        engine = get_websocket_execution_engine()
+        if engine is not None:
+            engine.notify_gtt_placed(gtt)
+    except Exception as e:
+        # Never fail a placement because the watcher could not be told: the
+        # polling fallback and the boot rebuild both still find this GTT.
+        logger.exception(f"Could not notify the WebSocket engine of GTT {gtt.gtt_id}: {e}")
+
+
 def _publish_triggered(gtt: SandboxGTT, orderid) -> None:
     """Announce a fired GTT. A publish failure must not undo a placed order."""
     try:
-        from events import bus
         from events.order_events import GTTTriggeredEvent
+        from utils.event_bus import bus
 
         bus.publish(
             GTTTriggeredEvent(
@@ -637,6 +803,25 @@ def _publish_triggered(gtt: SandboxGTT, orderid) -> None:
         )
     except Exception as e:
         logger.exception(f"Error publishing GTTTriggeredEvent for {gtt.gtt_id}: {e}")
+
+
+def _publish_expired(gtt: SandboxGTT) -> None:
+    """Announce an expired GTT. A publish failure must not undo the expiry."""
+    try:
+        from events.order_events import GTTExpiredEvent
+        from utils.event_bus import bus
+
+        bus.publish(
+            GTTExpiredEvent(
+                mode="analyze",
+                api_type="placegttorder",
+                symbol=gtt.symbol,
+                exchange=gtt.exchange,
+                trigger_id=gtt.gtt_id,
+            )
+        )
+    except Exception as e:
+        logger.exception(f"Error publishing GTTExpiredEvent for {gtt.gtt_id}: {e}")
 
 
 def reclaim_stranded_legs() -> int:
@@ -693,13 +878,11 @@ def expire_due_gtts() -> int:
     """Flip past-expiry active GTTs to ``expired`` and release their margin."""
     expired = 0
     try:
-        due = (
-            SandboxGTT.query.filter(
-                SandboxGTT.gtt_status == "active",
-                SandboxGTT.expires_at.isnot(None),
-                SandboxGTT.expires_at < datetime.now(),
-            ).all()
-        )
+        due = SandboxGTT.query.filter(
+            SandboxGTT.gtt_status == "active",
+            SandboxGTT.expires_at.isnot(None),
+            SandboxGTT.expires_at < datetime.now(),
+        ).all()
         for gtt in due:
             released = Decimal(str(gtt.margin_blocked or 0))
             gtt.gtt_status = "expired"
@@ -714,6 +897,7 @@ def expire_due_gtts() -> int:
                 )
             expired += 1
             logger.info(f"Sandbox GTT {gtt.gtt_id} expired; released {released}")
+            _publish_expired(gtt)
         return expired
     except Exception as e:
         db_session.rollback()

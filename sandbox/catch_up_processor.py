@@ -372,7 +372,7 @@ def catch_up_gtts():
             if not quote:
                 continue
             ltp = quote.get("ltp")
-            if not gtt_manager.leg_is_triggered_by(leg.action, leg.trigger_price, ltp):
+            if not gtt_manager.leg_is_triggered_by(leg.trigger_direction, leg.trigger_price, ltp):
                 continue
             if gtt_manager.try_claim_trigger(leg.id):
                 if gtt_manager.fire_leg(leg.id, execution_price=ltp):
