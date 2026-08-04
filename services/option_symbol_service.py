@@ -599,8 +599,8 @@ def get_option_exchange(underlying_exchange: str) -> str:
     Logic:
         NSE / NSE_INDEX -> NFO
         BSE / BSE_INDEX -> BFO
-        MCX -> MCX (commodities have options on same exchange)
-        CDS -> CDS (currency options on same exchange)
+        MCX / NCO / NCDEX -> same exchange (commodities)
+        CDS / BCD -> same exchange (currency options)
     """
     underlying_exchange = underlying_exchange.upper()
 
@@ -612,6 +612,11 @@ def get_option_exchange(underlying_exchange: str) -> str:
         return "MCX"
     elif underlying_exchange == "CDS":
         return "CDS"
+    elif underlying_exchange in ("NCO", "BCD", "NCDEX"):
+        # NSE commodities, BSE currency and NCDEX also list their options on
+        # the same exchange. Falling through to the NFO default sent the strike
+        # lookup to the wrong segment, so the chain came back empty. See #1748.
+        return underlying_exchange
     elif underlying_exchange in CRYPTO_EXCHANGES:
         return underlying_exchange
     else:
