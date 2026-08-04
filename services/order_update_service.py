@@ -214,11 +214,28 @@ def start_order_update_adapters_on_boot(db_ready=None) -> None:
 
         try:
             from database.auth_db import Auth
+            from utils.session import has_login_this_trading_session
 
             sessions = Auth.query.filter_by(is_revoked=False).all()
             for auth_obj in sessions:
-                if auth_obj.name and auth_obj.broker:
-                    start_order_update_adapter(auth_obj.name, auth_obj.broker)
+                if not (auth_obj.name and auth_obj.broker):
+                    continue
+                # is_revoked alone is not proof the token still works. Indian
+                # broker tokens die at the daily rollover (~03:00 IST), but the
+                # row is only flagged revoked by the auto-expiry sweep, which
+                # runs from a before_request hook and therefore needs a browser
+                # request to fire. Between the rollover and the first request,
+                # a restart would otherwise start an adapter on a token the
+                # broker killed hours ago and sit in a 401 reconnect loop.
+                if not has_login_this_trading_session(auth_obj.name):
+                    logger.info(
+                        f"Order-update adapter not started for "
+                        f"{auth_obj.broker}/{auth_obj.name}: no login since today's "
+                        "session rollover, so the stored broker token is stale. "
+                        "It starts on the next broker login."
+                    )
+                    continue
+                start_order_update_adapter(auth_obj.name, auth_obj.broker)
             if not sessions:
                 logger.debug("No active broker sessions found; no order-update adapters started")
         except Exception:
