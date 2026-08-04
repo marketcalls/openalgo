@@ -396,17 +396,35 @@ def get_kotak_master_filepaths():
         "NSE_CM": f"https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/{today}/transformed-v1/nse_cm-v1.csv",
     }
 
-    # Test accessibility of fallback URLs using httpx
+    # Test accessibility of fallback URLs using httpx.
+    #
+    # A plain HEAD request here reliably hits an infinite redirect loop on
+    # Kotak's CDN (lapi.kotaksecurities.com) -- verified directly: httpx.head()
+    # on these URLs raises "Exceeded maximum allowed redirects" every time,
+    # while httpx.get() on the identical URL returns 200 immediately with the
+    # full CSV, no redirects at all. Because every accessibility check failed,
+    # accessible_urls stayed empty and the caller (download_csv_kotak_data)
+    # raised "Scripmaster API failed" even though the files were fully
+    # downloadable the whole time. Use a ranged GET (bytes=0-0) instead of
+    # HEAD -- avoids the redirect loop. Kotak's CDN ignores the Range header
+    # and answers with the full multi-MB body regardless, so stream the
+    # request and close it after reading only the status line/headers --
+    # otherwise a plain client.get() call buffers the entire CSV into memory
+    # just for this check, then the real download in download_csv_kotak_data
+    # pulls the same bytes again.
     accessible_urls = {}
     for key, url in fallback_urls.items():
         try:
             logger.info(f"Testing direct URL: {url}")
-            response = client.head(url, timeout=10, follow_redirects=True)
-            if response.status_code == 200:
+            with client.stream(
+                "GET", url, timeout=10, follow_redirects=True, headers={"Range": "bytes=0-0"}
+            ) as response:
+                status_code = response.status_code
+            if status_code in (200, 206):
                 accessible_urls[key] = url
                 logger.info(f"Direct URL accessible: {key}")
             else:
-                logger.warning(f"Direct URL returned {response.status_code}: {key}")
+                logger.warning(f"Direct URL returned {status_code}: {key}")
         except httpx.HTTPError as e:
             logger.warning(f"Direct URL HTTP error: {key} - {e}")
         except Exception as e:
