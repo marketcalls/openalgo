@@ -2074,3 +2074,37 @@ class TestMarginUnderflowGuard:
         assert mgr.cancel_gtt(response["trigger_id"])[0] is True
         db_session.expire_all()
         assert _used_margin(fm) == before
+
+
+class TestFandOCloseFollowsCAS:
+    """NFO and BFO trade past the cash close under SEBI's Closing Auction Session."""
+
+    def test_default_timings_close_fo_at_1540(self):
+        from database.market_calendar_db import DEFAULT_MARKET_TIMINGS
+
+        fo_close = (15 * 3600 + 40 * 60) * 1000
+        cash_close = (15 * 3600 + 30 * 60) * 1000
+        for ex in ("NFO", "BFO"):
+            assert DEFAULT_MARKET_TIMINGS[ex]["end_offset"] == fo_close, ex
+        # Cash is unchanged: CAS applies to the equity segment, which stops
+        # continuous trading earlier, not later.
+        for ex in ("NSE", "BSE"):
+            assert DEFAULT_MARKET_TIMINGS[ex]["end_offset"] == cash_close, ex
+
+    def test_expiry_settlement_matches_the_new_close(self):
+        """Settling at 15:30 would close an expiring contract before it stops
+        trading."""
+        from datetime import time as dt_time
+
+        from sandbox.position_manager import EXCHANGE_CLOSE_TIMES
+
+        assert EXCHANGE_CLOSE_TIMES["NFO"] == dt_time(15, 40)
+        assert EXCHANGE_CLOSE_TIMES["BFO"] == dt_time(15, 40)
+
+    def test_migration_only_touches_rows_still_on_the_old_close(self):
+        """An admin's customised timing must not be reset to a default."""
+        from database.market_calendar_db import CAS_CLOSE_MIGRATION
+
+        for ex, spec in CAS_CLOSE_MIGRATION.items():
+            assert spec["old_end"] == (15 * 3600 + 30 * 60) * 1000, ex
+            assert spec["new_end"] == (15 * 3600 + 40 * 60) * 1000, ex

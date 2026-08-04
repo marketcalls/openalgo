@@ -172,8 +172,13 @@ def get_contract_expiry(symbol, exchange):
 # MIS square-off times in sandbox config (15:15 etc.), which are deliberately
 # BEFORE close -- an expiring contract trades right up to the closing bell.
 EXCHANGE_CLOSE_TIMES = {
-    "NFO": dt_time(15, 30),
-    "BFO": dt_time(15, 30),
+    # 15:40, not 15:30: SEBI's Closing Auction Session (effective 2026-08-03)
+    # pauses continuous trading in the cash segment at 15:15 and derives its
+    # close by auction, while the derivatives segment keeps trading to roughly
+    # 15:40. Settling an expiring contract at 15:30 would close it ten minutes
+    # before it actually stops trading.
+    "NFO": dt_time(15, 40),
+    "BFO": dt_time(15, 40),
     "CDS": dt_time(17, 0),
     "BCD": dt_time(17, 0),
     "MCX": dt_time(23, 30),
