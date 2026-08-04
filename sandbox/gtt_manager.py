@@ -90,9 +90,17 @@ def _resolve_expiry(supplied) -> datetime:
             lambda v: datetime.strptime(str(v), "%Y-%m-%d"),
         ):
             try:
-                return parse(supplied)
+                parsed = parse(supplied)
             except (TypeError, ValueError):
                 continue
+            if parsed.tzinfo is not None:
+                # The column is a naive DateTime compared against
+                # datetime.now(), so an offset-carrying value must be converted
+                # to local time first. Storing the wall-clock digits unchanged
+                # would treat 13:00Z and 13:00+05:30 as the same instant when
+                # they are five and a half hours apart.
+                parsed = parsed.astimezone().replace(tzinfo=None)
+            return parsed
         logger.warning(f"Unparseable GTT expires_at {supplied!r}; using the default")
     return _now() + timedelta(days=DEFAULT_EXPIRY_DAYS)
 
@@ -368,6 +376,10 @@ class GTTManager:
             if gtt is None:
                 return self._not_found(trigger_id)
 
+            immutable = self._immutable_violation(gtt, gtt_data)
+            if immutable:
+                return False, {"status": "error", "mode": "analyze", "message": immutable}, 400
+
             legs = self._build_legs(gtt_data)
             if not legs or len(legs) != len(gtt.legs):
                 return (
@@ -437,6 +449,45 @@ class GTTManager:
                 {"status": "error", "mode": "analyze", "message": f"GTT modify error: {e}"},
                 500,
             )
+
+    @staticmethod
+    def _immutable_violation(gtt, gtt_data: dict) -> str | None:
+        """Reject a modify that changes something the contract fixes.
+
+        modifygttorder documents action, symbol/exchange and trigger_type as
+        not modifiable. Silently applying an action flip would turn a resting
+        buy into a sell, and silently ignoring an instrument change would leave
+        the user believing a trigger now watches a symbol it does not.
+        """
+        requested_action = (gtt_data.get("action") or "").upper()
+        if requested_action and gtt.legs and requested_action != gtt.legs[0].action.upper():
+            return (
+                "action cannot be changed on an existing GTT "
+                f"({gtt.legs[0].action} -> {requested_action}). Cancel and re-place."
+            )
+
+        symbol = (gtt_data.get("symbol") or "").upper()
+        if symbol and symbol != (gtt.symbol or "").upper():
+            return (
+                f"symbol cannot be changed on an existing GTT ({gtt.symbol} -> {symbol}). "
+                "Cancel and re-place."
+            )
+
+        exchange = (gtt_data.get("exchange") or "").upper()
+        if exchange and exchange != (gtt.exchange or "").upper():
+            return (
+                f"exchange cannot be changed on an existing GTT ({gtt.exchange} -> "
+                f"{exchange}). Cancel and re-place."
+            )
+
+        requested_type = (gtt_data.get("trigger_type") or "").upper()
+        current_type = "OCO" if gtt.trigger_type == "two-leg" else "SINGLE"
+        if requested_type and requested_type != current_type:
+            return (
+                f"trigger_type cannot be changed ({current_type} -> {requested_type}). "
+                "Cancel and re-place."
+            )
+        return None
 
     def cancel_gtt(self, trigger_id: str) -> tuple[bool, dict, int]:
         """Cancel an active GTT and release its margin."""
@@ -617,6 +668,24 @@ def try_claim_trigger(leg_id: int) -> bool:
         return False
 
 
+def _revert_parent(gtt_id: str) -> None:
+    """Hand a GTT back to 'active' after a fire that did not complete.
+
+    Conditional on it still being 'triggered', so this cannot resurrect a GTT
+    that another path has since cancelled or expired.
+    """
+    try:
+        db_session.execute(
+            update(SandboxGTT)
+            .where(SandboxGTT.gtt_id == gtt_id, SandboxGTT.gtt_status == "triggered")
+            .values(gtt_status="active")
+        )
+        db_session.commit()
+    except Exception as e:
+        db_session.rollback()
+        logger.exception(f"Error reverting GTT {gtt_id} to active: {e}")
+
+
 def _revert_claim(leg_id: int) -> None:
     """Put a claimed leg back to ``pending`` after a failed fire.
 
@@ -659,15 +728,27 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
         _revert_claim(leg_id)
         return False
 
-    # Revalidate under the claim. Cancellation, expiry or the stranded-leg
-    # reaper can all have moved this GTT between the claim and here, and every
-    # one of those means the order must not be placed.
     if leg.leg_status != "triggering":
         logger.info(f"GTT leg {leg_id} is '{leg.leg_status}', not 'triggering' - not firing")
         return False
-    if gtt.gtt_status != "active":
+
+    # Take the parent atomically, before any irreversible step. Reading
+    # gtt_status here would be check-then-act: a cancel landing between the read
+    # and place_order returns success while the order still goes in, and both
+    # paths then release the same margin. Flipping active -> triggered in one
+    # conditional UPDATE means whoever wins that row owns the outcome, and
+    # cancel - which only matches gtt_status='active' - can no longer succeed.
+    claimed_parent = db_session.execute(
+        update(SandboxGTT)
+        .where(SandboxGTT.gtt_id == gtt.gtt_id, SandboxGTT.gtt_status == "active")
+        .values(gtt_status="triggered")
+    )
+    db_session.commit()
+    if claimed_parent.rowcount != 1:
+        db_session.refresh(gtt)
         logger.info(
-            f"GTT {gtt.gtt_id} is '{gtt.gtt_status}', not 'active' - not firing leg {leg_id}"
+            f"GTT {gtt.gtt_id} is no longer active ('{gtt.gtt_status}') - "
+            f"not firing leg {leg_id}"
         )
         _revert_claim(leg_id)
         return False
@@ -719,6 +800,7 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
                         f"failed fire ({reason}). The GTT now holds no reservation and "
                         "may fail to fund its order on the next trigger."
                     )
+            _revert_parent(gtt.gtt_id)
             _revert_claim(leg_id)
             return False
 
@@ -744,7 +826,7 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
                     f"GTT {gtt.gtt_id}: sibling of leg {leg_id} already resolved elsewhere"
                 )
 
-        gtt.gtt_status = "triggered"
+        # gtt_status was already set to 'triggered' by the parent claim above.
         db_session.commit()
 
         logger.info(
@@ -757,6 +839,7 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
     except Exception as e:
         db_session.rollback()
         logger.exception(f"Error firing GTT leg {leg_id}: {e}")
+        _revert_parent(gtt.gtt_id)
         _revert_claim(leg_id)
         return False
 
@@ -785,20 +868,60 @@ def _notify_websocket_engine(gtt: SandboxGTT) -> None:
         logger.exception(f"Could not notify the WebSocket engine of GTT {gtt.gtt_id}: {e}")
 
 
+def _api_key_for(user_id: str) -> str:
+    """The user's API key, needed by the alert subscribers to identify them.
+
+    A trigger fires from a background thread with no request context, so there
+    is no key to carry through - it has to be looked up. Returns "" on failure:
+    a missing key costs an alert, and must not cost the order.
+    """
+    try:
+        from database.auth_db import ApiKeys, decrypt_token
+
+        row = ApiKeys.query.filter_by(user_id=user_id).first() or ApiKeys.query.first()
+        return decrypt_token(row.api_key_encrypted) if row else ""
+    except Exception:
+        logger.exception(f"Could not resolve an API key for {user_id}")
+        return ""
+
+
 def _publish_triggered(gtt: SandboxGTT, orderid) -> None:
-    """Announce a fired GTT. A publish failure must not undo a placed order."""
+    """Announce a fired GTT. A publish failure must not undo a placed order.
+
+    request_data/response_data are populated because the log and alert
+    subscribers read them: without a payload the row would land in the log with
+    nothing in it, which is worse than useless when reconstructing why an order
+    appeared unprompted.
+    """
     try:
         from events.order_events import GTTTriggeredEvent
         from utils.event_bus import bus
 
+        request_data = {
+            "api_type": "gtttriggered",
+            "trigger_id": gtt.gtt_id,
+            "symbol": gtt.symbol,
+            "exchange": gtt.exchange,
+            "strategy": gtt.strategy or "",
+            "trigger_prices": [float(leg.trigger_price or 0) for leg in gtt.legs],
+        }
+        response_data = {
+            "status": "success",
+            "mode": "analyze",
+            "trigger_id": gtt.gtt_id,
+            "orderid": orderid or "",
+        }
         bus.publish(
             GTTTriggeredEvent(
                 mode="analyze",
-                api_type="placegttorder",
+                api_type="gtttriggered",
                 symbol=gtt.symbol,
                 exchange=gtt.exchange,
                 trigger_id=gtt.gtt_id,
                 triggered_order_id=orderid or "",
+                request_data=request_data,
+                response_data=response_data,
+                api_key=_api_key_for(gtt.user_id),
             )
         )
     except Exception as e:
@@ -811,13 +934,29 @@ def _publish_expired(gtt: SandboxGTT) -> None:
         from events.order_events import GTTExpiredEvent
         from utils.event_bus import bus
 
+        request_data = {
+            "api_type": "gttexpired",
+            "trigger_id": gtt.gtt_id,
+            "symbol": gtt.symbol,
+            "exchange": gtt.exchange,
+            "strategy": gtt.strategy or "",
+        }
+        response_data = {
+            "status": "success",
+            "mode": "analyze",
+            "trigger_id": gtt.gtt_id,
+            "message": "GTT expired without firing",
+        }
         bus.publish(
             GTTExpiredEvent(
                 mode="analyze",
-                api_type="placegttorder",
+                api_type="gttexpired",
                 symbol=gtt.symbol,
                 exchange=gtt.exchange,
                 trigger_id=gtt.gtt_id,
+                request_data=request_data,
+                response_data=response_data,
+                api_key=_api_key_for(gtt.user_id),
             )
         )
     except Exception as e:

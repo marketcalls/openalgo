@@ -409,8 +409,12 @@ class WebSocketExecutionEngine:
 
                 if gtt_manager.try_claim_trigger(leg_id):
                     user_id = self._leg_user_id(leg)
-                    gtt_manager.fire_leg(leg_id, execution_price=float(ltp))
-                    self._drop_gtt_leg(symbol_key, leg_id, user_id)
+                    # Only stop watching a leg that actually fired. A failed
+                    # fire reverts the leg to pending, so dropping it here
+                    # regardless left the GTT live in the database but inert -
+                    # unsubscribed and unindexed until a restart.
+                    if gtt_manager.fire_leg(leg_id, execution_price=float(ltp)):
+                        self._drop_gtt_leg(symbol_key, leg_id, user_id)
             except Exception as e:
                 logger.exception(f"Error evaluating GTT leg {leg_id}: {e}")
 

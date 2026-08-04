@@ -775,3 +775,147 @@ class TestEventPublishing:
         from utils.event_bus import bus
 
         assert bus is not None
+
+
+class TestCancelFireRace:
+    """Cancel and fire must not both succeed on the same GTT."""
+
+    def test_cancel_after_revalidation_still_prevents_the_order(self, clean_gtt_user):
+        """The real race: cancel lands between the state check and place_order.
+
+        The earlier test cancelled before fire_leg started, which the atomic
+        claim was never in danger of failing. This one cancels from inside
+        place_order, which is the window that actually mattered.
+        """
+        from unittest import mock
+
+        from database.sandbox_db import SandboxGTT, SandboxOrders, db_session
+        from sandbox.gtt_manager import fire_leg, try_claim_trigger
+
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+        leg_id = SandboxGTT.query.filter_by(gtt_id=trigger_id).first().legs[0].id
+        assert try_claim_trigger(leg_id) is True
+
+        cancel_result = {}
+
+        def cancel_mid_flight(*args, **kwargs):
+            cancel_result["value"] = mgr.cancel_gtt(trigger_id)
+            return (True, {"orderid": "SHOULD-NOT-HAPPEN"}, 200)
+
+        with mock.patch.object(
+            __import__("sandbox.order_manager", fromlist=["OrderManager"]).OrderManager,
+            "place_order",
+            side_effect=cancel_mid_flight,
+        ):
+            fired = fire_leg(leg_id, execution_price=94)
+
+        db_session.expire_all()
+        gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+        cancel_ok = cancel_result.get("value", (False,))[0]
+
+        # Exactly one of the two may win, and they must agree with the state.
+        assert not (fired and cancel_ok), "cancel and fire both reported success"
+        if cancel_ok:
+            assert gtt.gtt_status == "cancelled"
+        else:
+            assert gtt.gtt_status == "triggered"
+
+        assert float(gtt.margin_blocked or 0) >= 0
+        funds_used = _used_margin(clean_gtt_user)
+        assert funds_used >= 0, f"used_margin went negative: {funds_used}"
+
+    def test_cancel_cannot_succeed_once_the_parent_is_claimed(self, clean_gtt_user):
+        from database.sandbox_db import SandboxGTT, db_session
+        from sandbox.gtt_manager import try_claim_trigger
+
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+        assert try_claim_trigger(
+            SandboxGTT.query.filter_by(gtt_id=trigger_id).first().legs[0].id
+        )
+
+        # Simulate the parent claim fire_leg performs.
+        gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+        gtt.gtt_status = "triggered"
+        db_session.commit()
+
+        ok2, _, status = mgr.cancel_gtt(trigger_id)
+        assert ok2 is False and status == 404
+
+
+class TestModifyImmutability:
+    """action, symbol, exchange and trigger_type cannot be changed."""
+
+    def _placed(self):
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        return mgr, response["trigger_id"]
+
+    def test_action_flip_is_rejected(self, clean_gtt_user):
+        mgr, trigger_id = self._placed()
+        payload = _single_gtt()
+        payload["action"] = "BUY"  # placed as SELL
+        ok, response, status = mgr.modify_gtt(trigger_id, payload)
+        assert ok is False and status == 400
+        assert "action cannot be changed" in response["message"]
+
+    def test_symbol_change_is_rejected(self, clean_gtt_user):
+        mgr, trigger_id = self._placed()
+        payload = _single_gtt()
+        payload["symbol"] = "RELIANCE"
+        ok, response, status = mgr.modify_gtt(trigger_id, payload)
+        assert ok is False and status == 400
+        assert "symbol cannot be changed" in response["message"]
+
+    def test_trigger_type_change_is_rejected(self, clean_gtt_user):
+        mgr, trigger_id = self._placed()
+        payload = _oco_gtt()
+        ok, response, status = mgr.modify_gtt(trigger_id, payload)
+        assert ok is False and status == 400
+        assert "trigger_type cannot be changed" in response["message"]
+
+    def test_a_legal_modify_still_works(self, clean_gtt_user):
+        mgr, trigger_id = self._placed()
+        payload = _single_gtt(trigger=90.0, price=90.0)
+        assert mgr.modify_gtt(trigger_id, payload)[0] is True
+
+
+class TestTimezoneAwareExpiry:
+    def test_offset_is_converted_not_ignored(self):
+        """13:00Z and 13:00+05:30 are 5.5 hours apart, not the same instant."""
+        from sandbox.gtt_manager import _resolve_expiry
+
+        utc = _resolve_expiry("2026-12-31T13:00:00+00:00")
+        ist = _resolve_expiry("2026-12-31T13:00:00+05:30")
+        assert utc != ist
+        assert abs((utc - ist).total_seconds()) == 5.5 * 3600
+
+    def test_naive_input_is_preserved(self):
+        from sandbox.gtt_manager import _resolve_expiry
+
+        assert _resolve_expiry("2026-12-31 13:00:00").hour == 13
+
+    def test_stored_value_is_naive(self):
+        """The column is a naive DateTime; an aware value would break compares."""
+        from sandbox.gtt_manager import _resolve_expiry
+
+        assert _resolve_expiry("2026-12-31T13:00:00+05:30").tzinfo is None
+
+
+class TestServiceOrderbookDefault:
+    def test_service_layer_hides_cancelled_gtts(self, clean_gtt_user):
+        """The manager default is not enough: the service passes it explicitly."""
+        import inspect
+
+        from services.sandbox_service import sandbox_gtt_orderbook
+
+        default = inspect.signature(sandbox_gtt_orderbook).parameters["status_filter"].default
+        assert default == "active", (
+            "the service default overrides the manager's, so it must be active-only"
+        )

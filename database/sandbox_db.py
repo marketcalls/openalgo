@@ -440,8 +440,26 @@ def _migrate_add_gtt_trigger_direction():
                     "VARCHAR(5) NOT NULL DEFAULT 'below'"
                 )
             )
+            # Backfill from the data rather than leaving every existing leg at
+            # the column default. A leg whose trigger sits above the price
+            # recorded when the GTT was placed is a target leg and fires on a
+            # rise; calling it 'below' would fire it on the wrong side, and for
+            # an already-active GTT that means an unexpected order.
+            conn.execute(
+                text(
+                    "UPDATE sandbox_gtt_legs SET trigger_direction = 'above' "
+                    "WHERE gtt_id IN (SELECT gtt_id FROM sandbox_gtt) "
+                    "AND trigger_price > ("
+                    "  SELECT last_price FROM sandbox_gtt "
+                    "  WHERE sandbox_gtt.gtt_id = sandbox_gtt_legs.gtt_id"
+                    ")"
+                )
+            )
             conn.commit()
-            logger.info("Added sandbox_gtt_legs.trigger_direction")
+            logger.info(
+                "Added sandbox_gtt_legs.trigger_direction and backfilled it from "
+                "each leg's trigger price relative to the GTT's placement price"
+            )
     except Exception as e:
         logger.exception(f"Could not add sandbox_gtt_legs.trigger_direction: {e}")
 

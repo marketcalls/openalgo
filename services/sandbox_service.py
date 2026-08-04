@@ -779,9 +779,15 @@ def sandbox_cancel_gtt_order(trigger_id: str, api_key: str) -> tuple[bool, dict[
 
 
 def sandbox_gtt_orderbook(
-    api_key: str, status_filter: str | None = None
+    api_key: str, status_filter: str | None = "active"
 ) -> tuple[bool, dict[str, Any], int]:
-    """List the sandbox user's GTTs."""
+    """List the sandbox user's GTTs, active-only by default.
+
+    The default is repeated here rather than left to the manager because this
+    function passes the value on explicitly: defaulting to None would override
+    the manager's own default and put cancelled and expired triggers back in
+    the orderbook. Pass status_filter=None deliberately for full history.
+    """
     user_id = get_user_id_from_apikey(api_key)
     if not user_id:
         return False, {"status": "error", "message": "Invalid API key", "mode": "analyze"}, 403
