@@ -141,6 +141,45 @@ class ExecutionEngine:
         except Exception as e:
             logger.exception(f"Error in execution engine: {e}")
 
+        # GTTs are evaluated on every tick regardless of whether there were
+        # regular orders: a GTT is the only thing resting in the book when a
+        # user has no open orders, which is the common case.
+        try:
+            self._check_pending_gtts()
+        except Exception as e:
+            logger.exception(f"Error checking pending GTTs: {e}")
+
+    def _check_pending_gtts(self):
+        """Fire any GTT leg whose trigger the market has crossed.
+
+        Reclaims stranded claims first: a leg left in ``triggering`` by a killed
+        worker is invisible to the pending scan below, so without this it would
+        never fire again.
+        """
+        from sandbox import gtt_manager
+
+        gtt_manager.reclaim_stranded_legs()
+
+        rows = gtt_manager.get_active_legs()
+        if not rows:
+            return
+
+        symbols = list({(gtt.symbol, gtt.exchange) for _leg, gtt in rows})
+        quote_cache = self._fetch_quotes_batch(symbols)
+
+        for leg, gtt in rows:
+            quote = quote_cache.get((gtt.symbol, gtt.exchange))
+            if not quote:
+                continue
+            ltp = quote.get("ltp")
+            if not gtt_manager.leg_is_triggered_by(leg.action, leg.trigger_price, ltp):
+                continue
+
+            # The claim is what makes this safe to run alongside the WebSocket
+            # engine and the catch-up scan: exactly one of them wins the leg.
+            if gtt_manager.try_claim_trigger(leg.id):
+                gtt_manager.fire_leg(leg.id, execution_price=ltp)
+
     def _fetch_quote(self, symbol, exchange):
         """
         Fetch real-time quote for a symbol using API key
