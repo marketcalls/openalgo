@@ -219,7 +219,7 @@ def authenticate_broker(otp_code, temp_token=None):
     if not temp_token:
         return None, None, (
             "Login session expired before the OTP was submitted. "
-            "Reload the Nubra login page to request a new OTP."
+            "Start the Nubra login again from the broker page to request a new OTP."
         )
 
     otp_str = str(otp_code or "").strip()
@@ -560,10 +560,18 @@ def get_user_info(session_token, device_id=None):
     """
     client = get_httpx_client()
 
-    response = client.get(
-        f"{get_base_url()}/userinfo",
-        headers=_session_headers(session_token, device_id),
-    )
+    # A transport failure here must not escape: the order-update adapter calls
+    # this at startup purely to discover its WebSocket URL, and an unreachable
+    # /userinfo should fall back to the configured default rather than stop the
+    # stream from starting at all.
+    try:
+        response = client.get(
+            f"{get_base_url()}/userinfo",
+            headers=_session_headers(session_token, device_id),
+        )
+    except Exception as e:
+        logger.warning(f"Nubra /userinfo request failed: {e}")
+        return None, f"userinfo request failed: {e}"
 
     try:
         payload = response.json()

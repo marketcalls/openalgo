@@ -517,12 +517,14 @@ def map_position_data(position_data):
     Map Nubra's V3 positions response to OpenAlgo normalized format.
 
     V3 returns a single flat ``portfolio.positions`` list carrying a signed
-    ``netQuantity`` -- replacing V2's stock/fut/opt/close split that had to be
-    merged and sign-corrected by hand.
+    signed net quantity -- replacing V2's stock/fut/opt/close split that had to
+    be merged and sign-corrected by hand.
 
     Prices are in paise (divide by 100).
     """
-    if isinstance(position_data, dict) and position_data.get("error"):
+    if isinstance(position_data, dict) and (
+        position_data.get("error") or position_data.get("status") == "error"
+    ):
         logger.warning(f"Nubra positions error: {position_data}")
         return []
 

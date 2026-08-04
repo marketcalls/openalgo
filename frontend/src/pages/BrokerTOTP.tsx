@@ -196,7 +196,7 @@ const brokerFields: Record<string, BrokerConfig> = {
         maxLength: 6,
         pattern: '[0-9]{6}',
         inputMode: 'numeric',
-        hint: 'An OTP has been sent to your registered mobile number. Reload this page to resend.',
+        hint: 'An OTP has been sent to your registered mobile number. For a new code, start the Nubra login again from the broker page.',
       },
     ],
     callbackUrl: '/nubra/callback',

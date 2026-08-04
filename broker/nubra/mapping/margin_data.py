@@ -2,6 +2,7 @@
 # Mapping Nubra Trading API V3 margin (POST /sentinel/orders/funds_required)
 
 from broker.nubra.mapping.transform_data import (
+    build_entry_trigger,
     map_order_delivery_type,
     map_order_side,
     map_price_type,
@@ -79,6 +80,17 @@ def transform_margin_positions(positions):
             if price_type == "LIMIT":
                 price = float(position.get("price", 0) or 0)
                 nubra_order["entryPrice"] = int(round(price * 100))
+
+            # Carry the stop trigger too. The V3 margin request reuses the
+            # placement payload verbatim, so omitting entryConfig prices an
+            # untriggered LIMIT/MARKET order rather than the SL/SL-M the caller
+            # asked about. MarginCalculatorSchema resolves trigger_price for
+            # exactly this reason.
+            entry_config = build_entry_trigger(
+                pricetype, position.get("trigger_price"), position["action"]
+            )
+            if entry_config:
+                nubra_order["entryConfig"] = entry_config
 
             transformed_orders.append(nubra_order)
             logger.debug(
