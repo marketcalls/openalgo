@@ -26,6 +26,8 @@ import pytz
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from sqlalchemy import update
+
 from database.sandbox_db import (
     SandboxFunds,
     SandboxHoldings,
@@ -248,33 +250,52 @@ class FundManager:
             ``(ok, message)``. The caller must commit on success and roll back
             on failure - nothing is committed here.
         """
-        with self._lock:
-            try:
-                funds = self._ensure_funds_initialized()
-                if not funds:
-                    return False, "Funds not initialized"
+        try:
+            if not self._ensure_funds_initialized():
+                return False, "Funds not initialized"
 
-                delta = Decimal(str(delta))
-                if delta == 0:
-                    return True, "No change"
+            delta = Decimal(str(delta))
+            if delta == 0:
+                return True, "No change"
 
-                if delta > 0 and funds.available_balance < delta:
-                    return (
-                        False,
-                        f"Insufficient funds. Required: ₹{delta}, "
-                        f"Available: ₹{funds.available_balance}",
-                    )
+            # A single UPDATE that computes the new balance in SQL, not in
+            # Python. Reading the row, adjusting it in memory and letting the
+            # caller commit is a lost update: two threads each read the same
+            # starting balance, each write their own total, and the second
+            # commit erases the first - two GTTs reserving 950 each while the
+            # ledger moved only once. The class lock cannot help, because it is
+            # released long before the caller commits, and it protects nothing
+            # against a second process.
+            #
+            # The sufficiency check is part of the WHERE clause for the same
+            # reason: checking in Python and updating afterwards is
+            # check-then-act, and rowcount tells us which of the two happened.
+            stmt = update(SandboxFunds).where(SandboxFunds.user_id == self.user_id)
+            if delta > 0:
+                stmt = stmt.where(SandboxFunds.available_balance >= delta)
+            stmt = stmt.values(
+                available_balance=SandboxFunds.available_balance - delta,
+                used_margin=SandboxFunds.used_margin + delta,
+            )
+            result = db_session.execute(stmt, execution_options={"synchronize_session": False})
 
-                funds.available_balance -= delta
-                funds.used_margin += delta
-                # Deliberately no commit: the caller owns the transaction.
-                logger.info(
-                    f"Staged ₹{delta} margin change for user {self.user_id}. {description}"
-                )
-                return True, f"Margin change staged: ₹{delta}"
-            except Exception as e:
-                logger.exception(f"Error staging margin for user {self.user_id}: {e}")
-                return False, f"Error staging margin: {str(e)}"
+            if result.rowcount != 1:
+                if delta > 0:
+                    return False, f"Insufficient funds. Required: ₹{delta}"
+                return False, "Funds row not found"
+
+            # The in-memory copy is now stale; drop it so later reads see the
+            # value the database actually holds.
+            db_session.expire(self._ensure_funds_initialized())
+
+            # Deliberately no commit: the caller owns the transaction.
+            logger.info(
+                f"Staged ₹{delta} margin change for user {self.user_id}. {description}"
+            )
+            return True, f"Margin change staged: ₹{delta}"
+        except Exception as e:
+            logger.exception(f"Error staging margin for user {self.user_id}: {e}")
+            return False, f"Error staging margin: {str(e)}"
 
     def block_margin(self, amount, description=""):
         """Block margin for a trade"""
