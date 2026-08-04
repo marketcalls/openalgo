@@ -424,7 +424,31 @@ class GTTManager:
                 if not ok:
                     return False, {"status": "error", "mode": "analyze", "message": message}, 400
             elif delta < 0:
-                self.fund_manager.release_margin(-delta, description=f"GTT {trigger_id} modify")
+                freed, reason = _release_margin(
+                    self.user_id, -delta, f"GTT {trigger_id} modify"
+                )
+                if not freed:
+                    # Recording the lower figure while the funds are still held
+                    # would make the row disagree with the ledger, and every
+                    # later reconciliation would blame the difference on
+                    # something else.
+                    logger.error(
+                        f"GTT {trigger_id}: modify could not release {-delta} "
+                        f"({reason}); leaving the reservation as it was"
+                    )
+                    return (
+                        False,
+                        {
+                            "status": "error",
+                            "mode": "analyze",
+                            "trigger_id": trigger_id,
+                            "message": (
+                                f"Could not release {-delta} margin ({reason}). The GTT "
+                                "is unchanged."
+                            ),
+                        },
+                        500,
+                    )
 
             # strict: the length check above guarantees a 1:1 pairing, and a
             # silent truncation here would leave a leg holding stale prices.
@@ -542,14 +566,9 @@ class GTTManager:
             db_session.commit()
 
             if released > 0:
-                try:
-                    freed, reason = self.fund_manager.release_margin(
-                        released, description=f"GTT {trigger_id} cancelled"
-                    )
-                except Exception:
-                    freed, reason = False, "release_margin raised"
-                    logger.exception(f"GTT {trigger_id}: releasing margin raised")
-
+                freed, reason = _release_margin(
+                    self.user_id, released, f"GTT {trigger_id} cancelled"
+                )
                 if not freed:
                     # The GTT row already says cancelled but the money is still
                     # blocked. Reporting success here would leave the user with
@@ -798,6 +817,23 @@ def _compensate_failed_fire(gtt, leg_id: int, released: Decimal, order_committed
     _revert_claim(leg_id)
 
 
+def _release_margin(user_id: str, amount: Decimal, description: str) -> tuple[bool, str]:
+    """Release margin and report whether it actually happened.
+
+    Every caller here publishes a state change - expired, cancelled, modified,
+    triggered - and each of those is a lie if the funds did not move. Wrapping
+    the call means no caller can forget to look at the result, and a raised
+    exception reads the same as a refusal.
+    """
+    if amount <= 0:
+        return True, ""
+    try:
+        return FundManager(user_id).release_margin(amount, description=description)
+    except Exception:
+        logger.exception(f"{description}: release_margin raised")
+        return False, "release_margin raised"
+
+
 def _revert_parent(gtt_id: str) -> None:
     """Hand a GTT back to 'active' after a fire that did not complete.
 
@@ -884,6 +920,7 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
         return False
 
     released = Decimal("0.00")
+    released_ok = False
     try:
         order_manager = OrderManager(gtt.user_id)
         order_payload = {
@@ -907,9 +944,21 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
         # account can afford.
         released = Decimal(str(gtt.margin_blocked or 0))
         if released > 0:
-            FundManager(gtt.user_id).release_margin(
-                released, description=f"GTT {gtt.gtt_id} triggered"
+            freed, reason = _release_margin(
+                gtt.user_id, released, f"GTT {gtt.gtt_id} triggered"
             )
+            if not freed:
+                # Placing now would block a second reservation on top of one
+                # that was never returned - the account would be charged twice
+                # for a single trigger. Stand down and let the next tick retry.
+                logger.error(
+                    f"GTT {gtt.gtt_id}: could not release its {released} margin "
+                    f"({reason}); not placing the order"
+                )
+                _revert_parent(gtt.gtt_id)
+                _revert_claim(leg_id)
+                return False
+            released_ok = True
             gtt.margin_blocked = Decimal("0.00")
             db_session.commit()
 
@@ -918,7 +967,9 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
         if not success:
             message = response.get("message") if isinstance(response, dict) else response
             logger.error(f"GTT leg {leg_id} order rejected: {message}")
-            _compensate_failed_fire(gtt, leg_id, released, order_committed=False)
+            _compensate_failed_fire(
+                gtt, leg_id, released if released_ok else Decimal('0.00'), order_committed=False
+            )
             return False
 
         orderid = response.get("orderid") if isinstance(response, dict) else None
@@ -959,7 +1010,10 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
         # Same compensation as a rejection: an exception after the release left
         # the GTT armed with no reservation, which is the worse of the two.
         _compensate_failed_fire(
-            gtt, leg_id, released, order_committed=bool(locals().get("orderid"))
+            gtt,
+            leg_id,
+            released if locals().get("released_ok") else Decimal("0.00"),
+            order_committed=bool(locals().get("orderid")),
         )
         return False
 
@@ -1161,8 +1215,13 @@ def reclaim_stranded_parents() -> int:
             # already fired, whatever the leg says. Re-arming it here would
             # place a second order for a single trigger.
             leg_ids = [leg.id for leg in legs]
+            # Rejected attempts are not evidence the GTT fired - the broker
+            # refused, nothing was bought, and the GTT should be re-armed.
             placed = (
-                SandboxOrders.query.filter(SandboxOrders.gtt_leg_id.in_(leg_ids)).first()
+                SandboxOrders.query.filter(
+                    SandboxOrders.gtt_leg_id.in_(leg_ids),
+                    SandboxOrders.order_status != "rejected",
+                ).first()
                 if leg_ids
                 else None
             )
@@ -1285,16 +1344,27 @@ def expire_due_gtts() -> int:
         ).all()
         for gtt in due:
             released = Decimal(str(gtt.margin_blocked or 0))
+
+            # Free the money first. Committing 'expired' with margin_blocked=0
+            # and then discovering the release failed leaves the row claiming
+            # funds were returned that are still held, and the GTT is gone so
+            # nothing points at them any more.
+            freed, reason = _release_margin(
+                gtt.user_id, released, f"GTT {gtt.gtt_id} expired"
+            )
+            if not freed:
+                logger.error(
+                    f"GTT {gtt.gtt_id}: past expiry but its {released} margin could "
+                    f"not be released ({reason}); leaving it active to retry"
+                )
+                continue
+
             gtt.gtt_status = "expired"
             gtt.margin_blocked = Decimal("0.00")
             for leg in gtt.legs:
                 if leg.leg_status == "pending":
                     leg.leg_status = "cancelled"
             db_session.commit()
-            if released > 0:
-                FundManager(gtt.user_id).release_margin(
-                    released, description=f"GTT {gtt.gtt_id} expired"
-                )
             expired += 1
             logger.info(f"Sandbox GTT {gtt.gtt_id} expired; released {released}")
             _publish_expired(gtt)

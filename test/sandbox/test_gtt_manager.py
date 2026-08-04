@@ -1164,11 +1164,23 @@ class TestDurableOrderCorrelation:
 
     def test_the_correlation_is_unique(self, clean_gtt_user):
         """The unique index is what stops a replayed claim double-ordering."""
-        from database.sandbox_db import SandboxOrders, db_session
+        # Create the correlated order this test needs rather than hoping one
+        # survives from another test. It never did - the fixture purges orders
+        # before each test, so this always skipped and proved nothing.
+        from database.sandbox_db import SandboxGTT, SandboxOrders, db_session
+        from sandbox.gtt_manager import fire_leg, try_claim_trigger
 
-        existing = SandboxOrders.query.filter(SandboxOrders.gtt_leg_id.isnot(None)).first()
-        if existing is None:
-            pytest.skip("no correlated order in this run")
+        mgr = GTTManager(GTT_TEST_USER)
+        payload = _single_gtt()
+        payload["action"] = "BUY"
+        ok, response, _ = mgr.place_gtt(payload, last_price=100)
+        assert ok
+        leg = SandboxGTT.query.filter_by(gtt_id=response["trigger_id"]).first().legs[0]
+        assert try_claim_trigger(leg.id) is True
+        assert fire_leg(leg.id, execution_price=96) is True
+
+        existing = SandboxOrders.query.filter_by(gtt_leg_id=leg.id).first()
+        assert existing is not None, "the fired GTT produced no correlated order"
         clone = SandboxOrders(
             orderid="DUPLICATE-TEST",
             user_id=GTT_TEST_USER,
@@ -1251,3 +1263,181 @@ class TestCancelReportsReleaseFailure:
         ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
         assert ok
         assert mgr.cancel_gtt(response["trigger_id"])[0] is True
+
+
+class TestRejectedOrdersDoNotPoisonCorrelation:
+    """A refused order is not evidence the GTT fired."""
+
+    def _rejected_fire(self, mgr):
+        """A CNC SELL with no holdings: the sandbox rejects it for real."""
+        from database.sandbox_db import SandboxGTT
+        from sandbox.gtt_manager import fire_leg, try_claim_trigger
+
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        leg_id = SandboxGTT.query.filter_by(gtt_id=response["trigger_id"]).first().legs[0].id
+        assert try_claim_trigger(leg_id) is True
+        assert fire_leg(leg_id, execution_price=94) is False  # rejected
+        return response["trigger_id"], leg_id
+
+    def test_rejected_child_is_not_correlated(self, clean_gtt_user):
+        from database.sandbox_db import SandboxOrders
+
+        _, leg_id = self._rejected_fire(GTTManager(GTT_TEST_USER))
+        correlated = SandboxOrders.query.filter_by(gtt_leg_id=leg_id).first()
+        assert correlated is None, (
+            "a rejected order claimed the unique correlation - the leg can now "
+            "never place another order"
+        )
+
+    def test_recovery_re_arms_after_a_rejection(self, clean_gtt_user):
+        """A rejected attempt must not be repaired into 'triggered'."""
+        from database.sandbox_db import SandboxGTT, db_session
+        from sandbox.gtt_manager import reclaim_stranded_parents
+
+        mgr = GTTManager(GTT_TEST_USER)
+        trigger_id, _ = self._rejected_fire(mgr)
+
+        # Put the parent into the crash state and let recovery decide.
+        gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+        gtt.gtt_status = "triggered"
+        db_session.commit()
+
+        reclaim_stranded_parents()
+        db_session.expire_all()
+        gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+        assert gtt.gtt_status == "active", (
+            "a rejected attempt was treated as a completed fire"
+        )
+
+    def test_the_leg_can_fire_again_after_a_rejection(self, clean_gtt_user):
+        """The unique index must not permanently block a retried leg."""
+        from database.sandbox_db import SandboxGTT, SandboxGTTLeg, db_session
+        from sandbox.gtt_manager import fire_leg, try_claim_trigger
+
+        mgr = GTTManager(GTT_TEST_USER)
+        trigger_id, leg_id = self._rejected_fire(mgr)
+
+        # Make the retry succeed by flipping the leg to a BUY, which needs no
+        # holdings. The point is that the INSERT is not blocked.
+        db_session.execute(
+            __import__("sqlalchemy").update(SandboxGTTLeg)
+            .where(SandboxGTTLeg.id == leg_id)
+            .values(action="BUY")
+        )
+        db_session.commit()
+
+        assert try_claim_trigger(leg_id) is True
+        assert fire_leg(leg_id, execution_price=96) is True, (
+            "the retry was blocked, most likely by the rejected order's correlation"
+        )
+        db_session.expire_all()
+        assert SandboxGTT.query.filter_by(gtt_id=trigger_id).first().gtt_status == "triggered"
+
+
+class TestMarginTransitionsFailClosed:
+    """No state change is published when the funds did not move."""
+
+    def _patched_release(self):
+        from sandbox.fund_manager import FundManager
+
+        return mock.patch.object(
+            FundManager, "release_margin", return_value=(False, "ledger locked")
+        )
+
+    def test_fire_does_not_place_when_the_release_fails(self, clean_gtt_user):
+        """Placing anyway blocks a second reservation over one never returned."""
+        from database.sandbox_db import SandboxGTT, SandboxOrders, db_session
+        from sandbox.gtt_manager import fire_leg, try_claim_trigger
+
+        fm = clean_gtt_user
+        mgr = GTTManager(GTT_TEST_USER)
+        payload = _single_gtt()
+        payload["action"] = "BUY"
+        ok, response, _ = mgr.place_gtt(payload, last_price=100)
+        assert ok
+        blocked = _used_margin(fm)
+        leg_id = SandboxGTT.query.filter_by(gtt_id=response["trigger_id"]).first().legs[0].id
+        assert try_claim_trigger(leg_id) is True
+
+        orders_before = SandboxOrders.query.filter_by(user_id=GTT_TEST_USER).count()
+        with self._patched_release():
+            assert fire_leg(leg_id, execution_price=96) is False
+
+        db_session.expire_all()
+        assert SandboxOrders.query.filter_by(user_id=GTT_TEST_USER).count() == orders_before
+        assert _used_margin(fm) == blocked, "margin was blocked twice"
+        gtt = SandboxGTT.query.filter_by(gtt_id=response["trigger_id"]).first()
+        assert gtt.gtt_status == "active"
+
+    def test_modify_reports_failure_when_the_release_fails(self, clean_gtt_user):
+        from database.sandbox_db import SandboxGTT, db_session
+
+        fm = clean_gtt_user
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(trigger=95.0, price=95.0), last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+        before_margin = _used_margin(fm)
+        before_row = float(
+            SandboxGTT.query.filter_by(gtt_id=trigger_id).first().margin_blocked
+        )
+
+        # Halving the quantity halves the requirement, so this is a decrease.
+        smaller = _single_gtt(trigger=95.0, price=95.0, qty=5)
+        with self._patched_release():
+            ok2, resp, status = mgr.modify_gtt(trigger_id, smaller)
+
+        assert ok2 is False and status == 500
+        db_session.expire_all()
+        assert _used_margin(fm) == before_margin
+        assert float(
+            SandboxGTT.query.filter_by(gtt_id=trigger_id).first().margin_blocked
+        ) == before_row, "the row shows a smaller reservation than the ledger holds"
+
+    def test_expiry_leaves_the_gtt_active_when_the_release_fails(self, clean_gtt_user):
+        from datetime import datetime, timedelta
+
+        from database.sandbox_db import SandboxGTT, db_session
+        from sandbox.gtt_manager import expire_due_gtts
+
+        fm = clean_gtt_user
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        blocked = _used_margin(fm)
+
+        gtt = SandboxGTT.query.filter_by(gtt_id=response["trigger_id"]).first()
+        gtt.expires_at = datetime.now() - timedelta(hours=1)
+        db_session.commit()
+
+        with self._patched_release():
+            assert expire_due_gtts() == 0, "reported an expiry whose funds never moved"
+
+        db_session.expire_all()
+        gtt = SandboxGTT.query.filter_by(gtt_id=response["trigger_id"]).first()
+        assert gtt.gtt_status == "active", "expired while its margin was still held"
+        assert float(gtt.margin_blocked) > 0
+        assert _used_margin(fm) == blocked
+
+    def test_expiry_still_works_normally(self, clean_gtt_user):
+        from datetime import datetime, timedelta
+
+        from database.sandbox_db import SandboxGTT, db_session
+        from sandbox.gtt_manager import expire_due_gtts
+
+        fm = clean_gtt_user
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        before = _used_margin(fm)
+        gtt = SandboxGTT.query.filter_by(gtt_id=response["trigger_id"]).first()
+        gtt.expires_at = datetime.now() - timedelta(hours=1)
+        db_session.commit()
+
+        assert expire_due_gtts() >= 1
+        db_session.expire_all()
+        assert SandboxGTT.query.filter_by(
+            gtt_id=response["trigger_id"]
+        ).first().gtt_status == "expired"
+        assert _used_margin(fm) < before
