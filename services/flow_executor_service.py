@@ -3111,7 +3111,7 @@ def execute_workflow(
                 depth=0,
             )
 
-            update_execution_status(execution.id, "completed")
+            update_execution_status(execution.id, "completed", logs=logs)
             return {
                 "status": "success",
                 "message": "Workflow executed successfully",
@@ -3128,7 +3128,7 @@ def execute_workflow(
                     "level": "error",
                 }
             )
-            update_execution_status(execution.id, "failed", error=str(e))
+            update_execution_status(execution.id, "failed", error=str(e), logs=logs)
             return {
                 "status": "error",
                 "message": str(e),
