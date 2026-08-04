@@ -125,6 +125,7 @@ def register_all():
         bus.subscribe(_topic, getattr(log_subscriber, f"on_{_name}"), f"log:{_name}")
         bus.subscribe(_topic, getattr(socketio_subscriber, f"on_{_name}"), f"socketio:{_name}")
         bus.subscribe(_topic, getattr(telegram_subscriber, f"on_{_name}"), f"telegram:{_name}")
+        bus.subscribe(_topic, getattr(whatsapp_subscriber, f"on_{_name}"), f"whatsapp:{_name}")
 
     # --- analyzer.error ---
     bus.subscribe("analyzer.error", log_subscriber.on_analyzer_error, "log:analyzer_error")

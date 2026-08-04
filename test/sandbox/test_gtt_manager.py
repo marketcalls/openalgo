@@ -10,6 +10,7 @@ exactly one winner.
 import os
 import sys
 from decimal import Decimal
+from unittest import mock
 
 import pytest
 
@@ -919,3 +920,172 @@ class TestServiceOrderbookDefault:
         assert default == "active", (
             "the service default overrides the manager's, so it must be active-only"
         )
+
+
+class TestAtomicCancel:
+    """Cancel is a conditional UPDATE, not a read followed by a write."""
+
+    def test_cancel_pausing_after_its_read_cannot_clobber_a_fire(self, clean_gtt_user):
+        """The exact sequence the audit described.
+
+        Cancel reads the GTT while active, is held there while fire claims the
+        parent, then resumes. Its write must not turn 'triggered' back into
+        'cancelled' - that reported success for an order that still got placed
+        and released the same margin twice.
+        """
+        import threading
+
+        from database.sandbox_db import SandboxGTT, db_session
+        from sandbox.gtt_manager import try_claim_trigger
+
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+        leg_id = SandboxGTT.query.filter_by(gtt_id=trigger_id).first().legs[0].id
+
+        read_done = threading.Event()
+        fire_done = threading.Event()
+        result = {}
+
+        original_get = GTTManager._get_active_gtt
+
+        def slow_read(self, tid):
+            gtt = original_get(self, tid)
+            read_done.set()
+            fire_done.wait(timeout=5)  # hold cancel between read and write
+            return gtt
+
+        def cancel_thread():
+            with mock.patch.object(GTTManager, "_get_active_gtt", slow_read):
+                result["cancel"] = mgr.cancel_gtt(trigger_id)
+
+        t = threading.Thread(target=cancel_thread)
+        t.start()
+        assert read_done.wait(timeout=5), "cancel never performed its read"
+
+        # Fire claims the parent while cancel is parked mid-operation.
+        assert try_claim_trigger(leg_id) is True
+        db_session.execute(
+            __import__("sqlalchemy").update(SandboxGTT)
+            .where(SandboxGTT.gtt_id == trigger_id, SandboxGTT.gtt_status == "active")
+            .values(gtt_status="triggered")
+        )
+        db_session.commit()
+        fire_done.set()
+        t.join(timeout=10)
+
+        cancel_ok = result["cancel"][0]
+        db_session.expire_all()
+        final = SandboxGTT.query.filter_by(gtt_id=trigger_id).first().gtt_status
+
+        assert cancel_ok is False, "cancel reported success after the fire claimed it"
+        assert final == "triggered", f"cancel clobbered the fire: status is {final}"
+
+
+class TestFireExceptionCompensation:
+    """An exception must not leave the GTT armed with no reservation."""
+
+    def test_exception_after_release_restores_the_margin(self, clean_gtt_user):
+        from database.sandbox_db import SandboxGTT, db_session
+        from sandbox.gtt_manager import fire_leg, try_claim_trigger
+        from sandbox.order_manager import OrderManager
+
+        fm = clean_gtt_user
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+        blocked = _used_margin(fm)
+        leg_id = SandboxGTT.query.filter_by(gtt_id=trigger_id).first().legs[0].id
+        assert try_claim_trigger(leg_id) is True
+
+        with mock.patch.object(OrderManager, "place_order", side_effect=RuntimeError("boom")):
+            assert fire_leg(leg_id, execution_price=94) is False
+
+        db_session.expire_all()
+        gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+        assert gtt.gtt_status == "active", "GTT did not return to active"
+        assert float(gtt.margin_blocked) > 0, "GTT is armed with no reservation"
+        assert _used_margin(fm) == blocked, "margin was not restored to its pre-fire value"
+
+    def test_unrestorable_margin_marks_the_gtt_rejected(self, clean_gtt_user):
+        """Better visibly dead than silently armed and unfunded."""
+        from database.sandbox_db import SandboxGTT, db_session
+        from sandbox.fund_manager import FundManager
+        from sandbox.gtt_manager import fire_leg, try_claim_trigger
+        from sandbox.order_manager import OrderManager
+
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+        leg_id = SandboxGTT.query.filter_by(gtt_id=trigger_id).first().legs[0].id
+        assert try_claim_trigger(leg_id) is True
+
+        with mock.patch.object(OrderManager, "place_order", side_effect=RuntimeError("boom")), \
+             mock.patch.object(FundManager, "block_margin", return_value=(False, "no funds")):
+            assert fire_leg(leg_id, execution_price=94) is False
+
+        db_session.expire_all()
+        gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+        assert gtt.gtt_status == "rejected", (
+            f"GTT left as '{gtt.gtt_status}' with no margin - it would fire and fail"
+        )
+
+
+class TestCrashRecovery:
+    """A worker dying mid-fire must not strand the GTT forever."""
+
+    def _strand(self, mgr):
+        """Reproduce the crash state: parent triggered, leg still pending."""
+        from database.sandbox_db import SandboxGTT, db_session
+
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        trigger_id = response["trigger_id"]
+        gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+        gtt.gtt_status = "triggered"          # claimed the parent...
+        gtt.margin_blocked = Decimal("0.00")  # ...released the margin...
+        db_session.commit()                   # ...then died before placing.
+        return trigger_id
+
+    def test_crash_before_the_child_order_returns_the_gtt_to_active(self, clean_gtt_user):
+        from database.sandbox_db import SandboxGTT, db_session
+        from sandbox.gtt_manager import reclaim_stranded_parents
+
+        mgr = GTTManager(GTT_TEST_USER)
+        trigger_id = self._strand(mgr)
+
+        assert reclaim_stranded_parents() >= 1
+        db_session.expire_all()
+        gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+        assert gtt.gtt_status == "active"
+        assert gtt.legs[0].leg_status == "pending"
+        assert float(gtt.margin_blocked) > 0, "re-armed without restoring its reservation"
+
+    def test_crash_after_the_child_order_is_finalised_not_undone(self, clean_gtt_user):
+        """Undoing this would place a second order for one trigger."""
+        from database.sandbox_db import SandboxGTT, db_session
+        from sandbox.gtt_manager import reclaim_stranded_parents
+
+        mgr = GTTManager(GTT_TEST_USER)
+        trigger_id = self._strand(mgr)
+        gtt = SandboxGTT.query.filter_by(gtt_id=trigger_id).first()
+        gtt.legs[0].triggered_order_id = "ORDER-ALREADY-PLACED"
+        db_session.commit()
+
+        reclaim_stranded_parents()
+        db_session.expire_all()
+        assert SandboxGTT.query.filter_by(gtt_id=trigger_id).first().gtt_status == "triggered"
+
+    def test_recovery_runs_from_the_normal_reaper(self, clean_gtt_user):
+        from database.sandbox_db import SandboxGTT, db_session
+        from sandbox.gtt_manager import reclaim_stranded_legs
+
+        mgr = GTTManager(GTT_TEST_USER)
+        trigger_id = self._strand(mgr)
+
+        reclaim_stranded_legs()  # what the engines and catch-up actually call
+        db_session.expire_all()
+        assert SandboxGTT.query.filter_by(gtt_id=trigger_id).first().gtt_status == "active"

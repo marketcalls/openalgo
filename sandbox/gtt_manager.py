@@ -490,23 +490,54 @@ class GTTManager:
         return None
 
     def cancel_gtt(self, trigger_id: str) -> tuple[bool, dict, int]:
-        """Cancel an active GTT and release its margin."""
+        """Cancel an active GTT and release its margin.
+
+        The status change is a conditional UPDATE, not a read followed by a
+        write. Reading an active GTT and then assigning ``cancelled`` is
+        check-then-act: fire_leg can claim the parent in between, and the stale
+        object would then overwrite 'triggered' with 'cancelled' while the child
+        order was already on its way - cancel reporting success for an order
+        that got placed anyway, with the margin released twice.
+
+        Only the caller whose UPDATE matched may touch the legs or the funds.
+        """
         try:
             gtt = self._get_active_gtt(trigger_id)
             if gtt is None:
                 return self._not_found(trigger_id)
 
+            # Captured before the claim. Only fire_leg changes this, and it can
+            # only do so after winning the same row, so if our UPDATE matches
+            # then this value was still current.
             released = Decimal(str(gtt.margin_blocked or 0))
-            gtt.gtt_status = "cancelled"
-            for leg in gtt.legs:
-                # 'triggering' too: a leg claimed a moment ago has not placed
-                # anything yet, and fire_leg revalidates both states before it
-                # does, so cancelling here stops it. Leaving it alone let a
-                # cancelled GTT still place an order.
-                if leg.leg_status in ("pending", "triggering"):
-                    leg.leg_status = "cancelled"
-                    leg.claimed_at = None
-            gtt.margin_blocked = Decimal("0.00")
+
+            won = db_session.execute(
+                update(SandboxGTT)
+                .where(
+                    SandboxGTT.gtt_id == trigger_id,
+                    SandboxGTT.user_id == self.user_id,
+                    SandboxGTT.gtt_status == "active",
+                )
+                .values(gtt_status="cancelled", margin_blocked=Decimal("0.00"))
+            )
+            db_session.commit()
+
+            if won.rowcount != 1:
+                # Someone else resolved it between the read and here.
+                db_session.expire_all()
+                return self._not_found(trigger_id)
+
+            # 'triggering' too: a leg claimed a moment ago has placed nothing
+            # yet, and fire_leg revalidates the parent before it does, so
+            # cancelling the leg here stops it.
+            db_session.execute(
+                update(SandboxGTTLeg)
+                .where(
+                    SandboxGTTLeg.gtt_id == trigger_id,
+                    SandboxGTTLeg.leg_status.in_(["pending", "triggering"]),
+                )
+                .values(leg_status="cancelled", claimed_at=None)
+            )
             db_session.commit()
 
             if released > 0:
@@ -668,6 +699,69 @@ def try_claim_trigger(leg_id: int) -> bool:
         return False
 
 
+def _compensate_failed_fire(gtt, leg_id: int, released: Decimal, order_committed: bool) -> None:
+    """Undo a fire that did not complete, on every failure path.
+
+    Both a rejected order and a raised exception land here, because they leave
+    the same wreckage: the GTT's reservation has already been released so the
+    child order could be funded, and the parent has already been claimed. A
+    rejection used to restore the margin while an exception did not, so a raised
+    error left the GTT back on 'active' holding nothing - it would fire again on
+    the next tick and be rejected for want of funds.
+
+    If the reservation cannot be restored, the GTT is marked 'rejected' rather
+    than returned to 'active'. An active GTT with no margin is a trap: it looks
+    armed and fails the moment it matters.
+    """
+    if order_committed:
+        # The child order exists. Undoing the parent now would double-fire.
+        logger.error(
+            f"GTT {gtt.gtt_id}: fire failed after the child order was committed; "
+            "leaving it triggered so the order is not duplicated"
+        )
+        return
+
+    restored = True
+    if released > 0:
+        try:
+            restored, reason = FundManager(gtt.user_id).block_margin(
+                released, description=f"GTT {gtt.gtt_id} fire failed"
+            )
+        except Exception:
+            restored = False
+            reason = "block_margin raised"
+            logger.exception(f"GTT {gtt.gtt_id}: restoring margin raised")
+
+        try:
+            gtt.margin_blocked = released if restored else Decimal("0.00")
+            db_session.commit()
+        except Exception:
+            db_session.rollback()
+            logger.exception(f"GTT {gtt.gtt_id}: could not persist the restored margin")
+
+        if not restored:
+            logger.error(
+                f"GTT {gtt.gtt_id}: could not restore {released} margin after a failed "
+                f"fire ({reason}). Marking it rejected rather than leaving it armed "
+                "and unfunded."
+            )
+            try:
+                db_session.execute(
+                    update(SandboxGTT)
+                    .where(SandboxGTT.gtt_id == gtt.gtt_id)
+                    .values(gtt_status="rejected")
+                )
+                db_session.commit()
+            except Exception:
+                db_session.rollback()
+                logger.exception(f"GTT {gtt.gtt_id}: could not mark it rejected")
+            _revert_claim(leg_id)
+            return
+
+    _revert_parent(gtt.gtt_id)
+    _revert_claim(leg_id)
+
+
 def _revert_parent(gtt_id: str) -> None:
     """Hand a GTT back to 'active' after a fire that did not complete.
 
@@ -753,6 +847,7 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
         _revert_claim(leg_id)
         return False
 
+    released = Decimal("0.00")
     try:
         order_manager = OrderManager(gtt.user_id)
         order_payload = {
@@ -783,25 +878,7 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
         if not success:
             message = response.get("message") if isinstance(response, dict) else response
             logger.error(f"GTT leg {leg_id} order rejected: {message}")
-            # Put the reservation back so the retry has funds to work with.
-            if released > 0:
-                reblocked, reason = FundManager(gtt.user_id).block_margin(
-                    released, description=f"GTT {gtt.gtt_id} fire failed"
-                )
-                # Only record what was actually re-reserved. Another order may
-                # have taken the funds during the release/place window, and
-                # writing the amount back regardless would claim margin the
-                # account does not hold.
-                gtt.margin_blocked = released if reblocked else Decimal("0.00")
-                db_session.commit()
-                if not reblocked:
-                    logger.error(
-                        f"GTT {gtt.gtt_id}: could not restore {released} margin after a "
-                        f"failed fire ({reason}). The GTT now holds no reservation and "
-                        "may fail to fund its order on the next trigger."
-                    )
-            _revert_parent(gtt.gtt_id)
-            _revert_claim(leg_id)
+            _compensate_failed_fire(gtt, leg_id, released, order_committed=False)
             return False
 
         orderid = response.get("orderid") if isinstance(response, dict) else None
@@ -839,8 +916,11 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
     except Exception as e:
         db_session.rollback()
         logger.exception(f"Error firing GTT leg {leg_id}: {e}")
-        _revert_parent(gtt.gtt_id)
-        _revert_claim(leg_id)
+        # Same compensation as a rejection: an exception after the release left
+        # the GTT armed with no reservation, which is the worse of the two.
+        _compensate_failed_fire(
+            gtt, leg_id, released, order_committed=bool(locals().get("orderid"))
+        )
         return False
 
 
@@ -992,11 +1072,109 @@ def reclaim_stranded_legs() -> int:
                 f"Reclaimed {result.rowcount} GTT leg(s) stranded in 'triggering' "
                 "by an interrupted worker"
             )
+        # A crashed fire strands the parent as well as the leg, and a parent
+        # left on 'triggered' with a pending leg is invisible to every
+        # evaluator - so the leg reclaim alone would not bring the GTT back.
+        reclaim_stranded_parents()
         return result.rowcount
     except Exception as e:
         db_session.rollback()
         logger.exception(f"Error reclaiming stranded GTT legs: {e}")
         return 0
+
+
+def reclaim_stranded_parents() -> int:
+    """Recover GTTs whose fire died between claiming the parent and placing.
+
+    fire_leg flips the parent to 'triggered' before the child order exists, so
+    that a cancel cannot slip in. If the worker dies in that window the leg
+    reaper puts the leg back to 'pending' but nothing touches the parent, and
+    the GTT is left 'triggered' with a pending leg: invisible to every
+    evaluator, and unable to fire, cancel or expire.
+
+    Recovery is decided by whether the child order actually exists, which is the
+    only durable evidence of how far the fire got:
+
+    * no leg carries a triggered_order_id -> the order was never placed, so the
+      GTT goes back to 'active' and its reservation is restored;
+    * some leg does -> the order is real, so the GTT stays 'triggered' and is
+      simply finalised.
+
+    Restoring the reservation matters as much as the status: the crash happened
+    after the margin was released, so a GTT returned to 'active' without it
+    would be armed and unfunded. If the funds cannot be restored the GTT is
+    marked 'rejected' instead.
+    """
+    recovered = 0
+    try:
+        stranded = (
+            SandboxGTT.query.filter(SandboxGTT.gtt_status == "triggered").all()
+        )
+        for gtt in stranded:
+            legs = gtt.legs or []
+            if any(leg.triggered_order_id for leg in legs):
+                continue  # the order exists; nothing to undo
+            if not any(leg.leg_status in ("pending", "triggering") for leg in legs):
+                continue  # fully resolved (cancelled sibling etc), not stranded
+
+            required = Decimal(str(gtt.margin_blocked or 0))
+            if required <= 0:
+                # The reservation was released during the fire; put back what
+                # the legs say the GTT needs.
+                required = max(
+                    (Decimal(str(leg.leg_margin or 0)) for leg in legs),
+                    default=Decimal("0.00"),
+                )
+
+            restored = True
+            if required > 0:
+                try:
+                    restored, reason = FundManager(gtt.user_id).block_margin(
+                        required, description=f"GTT {gtt.gtt_id} crash recovery"
+                    )
+                except Exception:
+                    restored, reason = False, "block_margin raised"
+                    logger.exception(f"GTT {gtt.gtt_id}: recovery re-block raised")
+
+            if not restored:
+                logger.error(
+                    f"GTT {gtt.gtt_id}: stranded by an interrupted fire and its "
+                    f"{required} margin could not be restored ({reason}). Marking it "
+                    "rejected rather than re-arming it unfunded."
+                )
+                db_session.execute(
+                    update(SandboxGTT)
+                    .where(SandboxGTT.gtt_id == gtt.gtt_id)
+                    .values(gtt_status="rejected")
+                )
+                db_session.commit()
+                recovered += 1
+                continue
+
+            db_session.execute(
+                update(SandboxGTT)
+                .where(SandboxGTT.gtt_id == gtt.gtt_id, SandboxGTT.gtt_status == "triggered")
+                .values(gtt_status="active", margin_blocked=required)
+            )
+            db_session.execute(
+                update(SandboxGTTLeg)
+                .where(
+                    SandboxGTTLeg.gtt_id == gtt.gtt_id,
+                    SandboxGTTLeg.leg_status == "triggering",
+                )
+                .values(leg_status="pending", claimed_at=None)
+            )
+            db_session.commit()
+            recovered += 1
+            logger.warning(
+                f"GTT {gtt.gtt_id}: recovered from an interrupted fire - back to "
+                f"active with {required} margin restored"
+            )
+        return recovered
+    except Exception as e:
+        db_session.rollback()
+        logger.exception(f"Error reclaiming stranded GTT parents: {e}")
+        return recovered
 
 
 def get_active_legs() -> list:
