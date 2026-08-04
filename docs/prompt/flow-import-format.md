@@ -379,7 +379,19 @@ Fires on a clock schedule.
 | `executeAt` | `"YYYY-MM-DD"` | — | Required when `scheduleType="once"`. |
 | `intervalValue` | number | `1` | For `interval` mode. |
 | `intervalUnit` | `"seconds"` \| `"minutes"` \| `"hours"` | `"minutes"` | For `interval` mode. |
-| `marketHoursOnly` | boolean | `true` | If true, the schedule pauses outside 09:15–15:30 IST on weekdays. |
+| `marketHoursOnly` | boolean | `true` | If true, the schedule pauses outside the trading window below. |
+| `marketHoursExchange` | string | `"NSE"` | Which exchange calendar sets the window. `MCX` runs to 23:55, `CRYPTO` never closes. |
+| `marketHoursStart` | `"HH:MM"` | exchange open | Narrows or widens the start. Omit to use the exchange's own open. |
+| `marketHoursEnd` | `"HH:MM"` | exchange close | Narrows or widens the end. Omit to use the exchange's own close. |
+
+The window is resolved from the market calendar, not from fixed times, so
+weekends, trading holidays and special sessions (muhurat) are handled for you
+and each exchange gets its own hours. `marketHoursStart` / `marketHoursEnd`
+override the clock only — **they cannot reopen a day the exchange is shut**,
+so a workflow cannot configure its way into trading on Diwali.
+
+Both are read from the graph on every run, so editing them applies from the
+next run without deactivating and reactivating the workflow.
 
 ```json
 {
@@ -390,7 +402,10 @@ Fires on a clock schedule.
     "scheduleType": "daily",
     "time": "09:20",
     "days": [0, 1, 2, 3, 4],
-    "marketHoursOnly": true
+    "marketHoursOnly": true,
+    "marketHoursExchange": "NSE",
+    "marketHoursStart": "09:15",
+    "marketHoursEnd": "15:40"
   }
 }
 ```
