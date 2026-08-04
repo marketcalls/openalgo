@@ -569,7 +569,8 @@ def broker_callback(broker, para=None):
         # Nubra logs in with a phone OTP, which is a two-step exchange: the GET
         # dispatches the OTP and mints a temp_token, the POST redeems that token
         # together with the code the user received. The temp_token is held in
-        # the server-side session between the two.
+        # the Flask session between the two -- a signed (not encrypted) cookie,
+        # so nothing beyond this single-use, ~30s token belongs in it.
         if request.method == "GET":
             from broker.nubra.api.auth_api import request_login_otp
 
@@ -581,7 +582,9 @@ def broker_callback(broker, para=None):
             session["nubra_masked_phone"] = masked_phone
             logger.info(f"Nubra login OTP dispatched to {masked_phone}")
 
-            # Redirect to the React OTP page (reloading it resends the OTP)
+            # Redirect to the React OTP page. Reloading that page does NOT
+            # resend -- only this GET dispatches an OTP, so a new code means
+            # starting the Nubra login again from the broker page.
             return redirect("/broker/nubra/totp")
 
         elif request.method == "POST":

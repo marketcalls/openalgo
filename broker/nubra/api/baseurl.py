@@ -39,6 +39,21 @@ SESSION_EXPIRED_MESSAGE = (
 )
 
 
+class NubraSessionExpired(Exception):
+    """
+    Raised when Nubra answers HTTP 440.
+
+    A distinct type rather than a plain Exception because the market-data paths
+    deliberately swallow per-symbol and per-chunk failures to keep partial
+    results useful. Without something they can identify, an expired session
+    reaches the caller as zeroed quotes or an empty DataFrame -- a
+    successful-looking empty result instead of "log in again".
+    """
+
+    def __init__(self, message=SESSION_EXPIRED_MESSAGE):
+        super().__init__(message)
+
+
 def get_base_url():
     """Production host by default; UAT when NUBRA_USE_UAT is truthy."""
     if str(os.getenv("NUBRA_USE_UAT", "")).strip().lower() in ("1", "true", "yes"):

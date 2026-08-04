@@ -3,8 +3,8 @@
 import json
 
 from broker.nubra.api.baseurl import (
-    SESSION_EXPIRED_MESSAGE,
     SESSION_EXPIRED_STATUS,
+    NubraSessionExpired,
     get_nubra_headers,
     get_url,
 )
@@ -36,8 +36,13 @@ def get_margin_data(auth_token):
     response.status = response.status_code
 
     if response.status_code == SESSION_EXPIRED_STATUS:
-        logger.error(f"Nubra session expired (HTTP 440) fetching funds: {SESSION_EXPIRED_MESSAGE}")
-        return {}
+        # Raise rather than return {}. funds_service reports success
+        # unconditionally when this function returns, so an empty dict would
+        # answer HTTP 200 with no margin data instead of telling the user to
+        # log in again; its except branch turns this into a 500 carrying the
+        # message.
+        logger.error("Nubra session expired (HTTP 440) fetching funds")
+        raise NubraSessionExpired()
 
     try:
         margin_data = json.loads(response.text)

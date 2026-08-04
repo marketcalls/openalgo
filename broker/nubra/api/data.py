@@ -6,8 +6,8 @@ from datetime import timedelta
 import pandas as pd
 
 from broker.nubra.api.baseurl import (
-    SESSION_EXPIRED_MESSAGE,
     SESSION_EXPIRED_STATUS,
+    NubraSessionExpired,
     get_nubra_headers,
     get_url,
 )
@@ -67,7 +67,7 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
             # re-authentication case rather than a retriable error.
             if response.status_code == SESSION_EXPIRED_STATUS:
                 logger.error(f"Nubra session expired (HTTP 440) on {endpoint}")
-                raise Exception(SESSION_EXPIRED_MESSAGE)
+                raise NubraSessionExpired()
 
             if response.status_code == 403:
                 logger.debug(f"Debug - API returned 403 Forbidden. Headers: {headers}")
@@ -216,6 +216,9 @@ class BrokerData:
                 "volume": 0,
                 "oi": 0,
             }
+
+        except NubraSessionExpired:
+            raise
 
         except Exception as e:
             logger.error(f"Error fetching quotes for {symbol} on {exchange}: {str(e)}")
@@ -419,11 +422,17 @@ class BrokerData:
                 "oi": 0,
             }
 
+        except NubraSessionExpired:
+            # An expired session is not a per-symbol failure. Returning None
+            # here would let get_quotes() fall through to its zeroed-quote
+            # fallback, reporting a dead session as a live price of 0.
+            raise
+
         except Exception as e:
             # Propagate authentication errors
             if "Authentication failed" in str(e):
                 raise
-            
+
             logger.error(f"REST quote error for {symbol} on {exchange}: {str(e)}")
             return None
 
@@ -726,6 +735,12 @@ class BrokerData:
             # Initialize list to store all candle data
             all_candles = {}
 
+            # Last rejection seen while chunking. A chunk that fails is not
+            # fatal on its own -- a long range can legitimately span dates the
+            # contract did not trade -- but a run that collects no candles at
+            # all and saw a rejection must not masquerade as an empty range.
+            last_error = None
+
             # Process data in chunks
             current_start = from_date
             while current_start <= to_date:
@@ -797,10 +812,11 @@ class BrokerData:
                     # identical to a genuinely empty range and the caller only
                     # ever sees "no data".
                     if isinstance(response, dict) and response.get("error"):
+                        last_error = str(response.get("error"))
                         logger.error(
                             f"Nubra timeseries rejected {br_symbol} "
                             f"({api_exchange}/{instrument_type}, {start_iso} to {end_iso}): "
-                            f"{response.get('error')}"
+                            f"{last_error}"
                         )
                     if response and response.get("message") == "charts":
                         result = response.get("result", [])
@@ -852,8 +868,15 @@ class BrokerData:
 
                                 logger.debug(f"Debug - Chunk received {len(close_data)} candles")
 
+                except NubraSessionExpired:
+                    # Not a per-chunk failure -- every remaining chunk would
+                    # fail the same way, and swallowing it would hand back an
+                    # empty DataFrame that reads as "no data for this range".
+                    raise
+
                 except Exception as chunk_error:
-                    logger.error(f"Debug - Error fetching chunk {current_start} to {current_end}: {str(chunk_error)}")
+                    last_error = str(chunk_error)
+                    logger.error(f"Debug - Error fetching chunk {current_start} to {current_end}: {last_error}")
 
                 # Move to next chunk
                 current_start = current_end + timedelta(days=1)
@@ -862,8 +885,15 @@ class BrokerData:
                 if current_start <= to_date:
                     time.sleep(1.0)
 
-            # If no data was found, return empty DataFrame
+            # If no data was found, return empty DataFrame -- unless the run
+            # only came up empty because Nubra rejected the query, in which case
+            # the caller needs the reason rather than a silent empty result.
             if not all_candles:
+                if last_error:
+                    raise Exception(
+                        f"Nubra rejected the historical data request for {symbol} "
+                        f"({exchange}, {interval}): {last_error}"
+                    )
                 logger.debug("Debug - No data received from API")
                 return pd.DataFrame(columns=["close", "high", "low", "open", "timestamp", "volume", "oi"])
 
@@ -904,6 +934,11 @@ class BrokerData:
 
             logger.info(f"Debug - Received {len(df)} candles for {symbol}")
             return df
+
+        except NubraSessionExpired:
+            # Keep the type intact so callers can tell "log in again" apart
+            # from an ordinary data-fetch failure.
+            raise
 
         except Exception as e:
             logger.error(f"Debug - Error: {str(e)}")

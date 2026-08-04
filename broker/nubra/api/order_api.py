@@ -80,6 +80,20 @@ def _error_payload(status_code, data):
     return payload
 
 
+def is_error_response(response):
+    """
+    True when a Nubra response represents a failure rather than data.
+
+    Covers both shapes: the raw V3 body (``{"error": ...}``) and the
+    standardized form _error_payload() produces (``{"status": "error"}``).
+    Checking only ``error`` misses every 440, which carries no ``error`` key --
+    and a missed failure reads downstream as "no open positions".
+    """
+    if not isinstance(response, dict):
+        return False
+    return bool(response.get("error")) or response.get("status") == "error"
+
+
 def _promote_error_to_message(response_data):
     """
     Copy a V3 ``error`` string into ``message`` when only ``error`` is present.
@@ -478,9 +492,12 @@ def close_all_positions(current_api_key, auth):
 
     logger.debug(f"Nubra positions response: {positions_response}")
 
-    if isinstance(positions_response, dict) and positions_response.get("error"):
+    if is_error_response(positions_response):
         logger.warning(f"Nubra positions error: {positions_response}")
-        return {"message": "Failed to fetch positions"}, 500
+        return {
+            "status": "error",
+            "message": positions_response.get("message") or "Failed to fetch positions",
+        }, 500
 
     positions = extract_positions(positions_response)
 
@@ -731,7 +748,8 @@ def cancel_all_orders_api(data, auth):
 
     order_book_response = get_order_book(AUTH_TOKEN)
 
-    if isinstance(order_book_response, dict) and order_book_response.get("error"):
+    if is_error_response(order_book_response):
+        logger.warning(f"Nubra order book error, cancelling nothing: {order_book_response}")
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
     orders_to_cancel = flatten_order_buckets(order_book_response, buckets=_WORKING_BUCKETS)
