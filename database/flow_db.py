@@ -447,8 +447,23 @@ def get_workflow_executions(workflow_id, limit=50):
         return []
 
 
-def update_execution_status(execution_id, status, error=None):
-    """Update execution status"""
+def update_execution_status(execution_id, status, error=None, logs=None):
+    """Update execution status, and persist the node trace when one is supplied.
+
+    ``logs`` is written once at the end of the run rather than appended per
+    node, so a 48-node workflow costs one write instead of ~50. Without it the
+    logs column stayed empty for every execution, which meant a scheduled run
+    that quietly did nothing left no record of which condition stopped it - the
+    trace existed only in the HTTP response of a manual "Run Now".
+
+    Args:
+        execution_id: Row to update.
+        status: "running", "completed" or "failed".
+        error: Failure message, stored only when truthy.
+        logs: Accumulated node trace. ``None`` leaves any existing value alone;
+            an empty list is still written, since "ran and logged nothing" is
+            itself worth recording.
+    """
     try:
         execution = get_execution(execution_id)
         if not execution:
@@ -457,6 +472,8 @@ def update_execution_status(execution_id, status, error=None):
         execution.status = status
         if error:
             execution.error = error
+        if logs is not None:
+            execution.logs = list(logs)
 
         if status == "running" and not execution.started_at:
             execution.started_at = func.now()
