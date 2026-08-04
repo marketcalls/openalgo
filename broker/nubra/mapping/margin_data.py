@@ -1,6 +1,14 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
-# Mapping Nubra Margin API
+# Mapping Nubra Trading API V3 margin (POST /sentinel/orders/funds_required)
 
+from broker.nubra.mapping.transform_data import (
+    build_entry_trigger,
+    map_order_delivery_type,
+    map_order_side,
+    map_price_type,
+    map_validity_type,
+    sanitize_strat_tag,
+)
 from database.token_db import get_token
 from utils.logging import get_logger
 
@@ -9,46 +17,32 @@ logger = get_logger(__name__)
 
 def transform_margin_positions(positions):
     """
-    Transform OpenAlgo margin position format to Nubra margin format.
-    
-    Nubra Margin API Payload Structure:
-    {
-        "with_portfolio": true,
-        "with_legs": false,
-        "is_basket": true,
-        "order_req": {
-            "exchange": "NSE",
-            "orders": [
-                {
-                    "ref_id": 12345,
-                    "order_qty": 10,
-                    "order_side": "ORDER_SIDE_BUY",
-                    "order_delivery_type": "ORDER_DELIVERY_TYPE_CNC",
-                    "price_type": "MARKET",         # Optional but good to have
-                    "order_price": 0,               # Optional for market
-                    "order_type": "ORDER_TYPE_REGULAR"
-                },
-                ...
-            ]
+    Transform OpenAlgo margin positions into a Nubra V3 funds_required payload.
+
+    V3 reuses the placement payload verbatim and adds one top-level field,
+    ``requestType``. There is no basket wrapper any more -- several independent
+    single orders are simply several items in ``orders``:
+
+        {
+          "requestType": "NEW",
+          "orders": [
+            {"refId": 72329, "qty": 1, "side": "BUY", "deliveryType": "IDAY",
+             "priceType": "LIMIT", "validityType": "DAY", "isMultiLeg": false,
+             "executionMode": "ENTRY", "entryPrice": 127000,
+             "stratTags": ["openalgo-margin"]}
+          ]
         }
-    }
+
+    Returns None when no position could be resolved to a numeric ref_id.
     """
     transformed_orders = []
     skipped_positions = []
-    
-    # We need to determine the exchange for the payload.
-    # Assuming all positions in the basket are for the same exchange segment for now.
-    # If mixed, we'll take the first one found.
-    primary_exchange = None
 
     for position in positions:
         try:
             symbol = position["symbol"]
             exchange = position["exchange"]
-            
-            if not primary_exchange:
-                primary_exchange = exchange
-            
+
             # Get the token for the symbol
             token = get_token(symbol, exchange)
 
@@ -58,39 +52,49 @@ def transform_margin_positions(positions):
                 skipped_positions.append(f"{symbol} ({exchange})")
                 continue
 
-            # Validate token is a valid number (Nubra expects numeric ref_id)
+            # Validate token is a valid number (Nubra expects numeric refId)
             token_str = str(token).strip()
             if not token_str.replace(".", "").replace("-", "").isdigit():
                 logger.warning(f"Invalid token format for {symbol} ({exchange}): '{token_str}'")
                 skipped_positions.append(f"{symbol} ({exchange}) - invalid token: {token_str}")
                 continue
-                
+
             ref_id = int(float(token_str))
 
-            # Map fields
-            order_side = map_order_side(position["action"])
-            delivery_type = map_product_type(position["product"])
-            pricetype = position.get("pricetype", "MARKET")
+            pricetype = str(position.get("pricetype", "MARKET")).upper()
             price_type = map_price_type(pricetype)
-            order_type = map_order_type(pricetype)
-            
-            price = float(position.get("price", 0))
-            price_in_paise = int(round(price * 100)) if price else 0
 
-            # Transform the position
             nubra_order = {
-                "ref_id": ref_id,
-                "order_qty": int(position["quantity"]),
-                "order_side": order_side,
-                "order_delivery_type": delivery_type,
-                "price_type": price_type,
-                "order_price": price_in_paise,
-                "order_type": order_type
+                "refId": ref_id,
+                "qty": int(position["quantity"]),
+                "side": map_order_side(position["action"]),
+                "deliveryType": map_order_delivery_type(position["product"]),
+                "priceType": price_type,
+                "validityType": map_validity_type(pricetype),
+                "isMultiLeg": False,
+                "executionMode": "ENTRY",
+                "stratTags": [sanitize_strat_tag(position.get("strategy", "openalgo-margin"))],
             }
+
+            # entryPrice is required for LIMIT and must be omitted for MARKET.
+            if price_type == "LIMIT":
+                price = float(position.get("price", 0) or 0)
+                nubra_order["entryPrice"] = int(round(price * 100))
+
+            # Carry the stop trigger too. The V3 margin request reuses the
+            # placement payload verbatim, so omitting entryConfig prices an
+            # untriggered LIMIT/MARKET order rather than the SL/SL-M the caller
+            # asked about. MarginCalculatorSchema resolves trigger_price for
+            # exactly this reason.
+            entry_config = build_entry_trigger(
+                pricetype, position.get("trigger_price"), position["action"]
+            )
+            if entry_config:
+                nubra_order["entryConfig"] = entry_config
 
             transformed_orders.append(nubra_order)
             logger.debug(
-                f"Successfully transformed position: {symbol} ({exchange}) with ref_id: {ref_id}"
+                f"Successfully transformed position: {symbol} ({exchange}) with refId: {ref_id}"
             )
 
         except Exception as e:
@@ -107,122 +111,66 @@ def transform_margin_positions(positions):
     if not transformed_orders:
         return None
 
-    # Get default basket parameters from first order
-    first_order = transformed_orders[0]
-    
-    # Construct the final Nubra payload structure
-    payload_data = {
-        "with_portfolio": True,  # Critical for accurate calculation
-        "with_legs": False,
-        "is_basket": True,       # Always treat as basket for margin batch calculation
-        "order_req": {
-            "exchange": primary_exchange if primary_exchange else "NSE",
-            "orders": transformed_orders,
-            # basket_params is REQUIRED when is_basket is true
-            "basket_params": {
-                "order_side": first_order.get("order_side", "ORDER_SIDE_BUY"),
-                "order_delivery_type": first_order.get("order_delivery_type", "ORDER_DELIVERY_TYPE_CNC"),
-                "price_type": first_order.get("price_type", "MARKET"),
-                "multiplier": 1  # Default multiplier
-            }
-        }
-    }
-    
-    return payload_data
-
-
-def map_product_type(product):
-    """
-    Maps OpenAlgo product type to Nubra order_delivery_type.
-    """
-    mapping = {
-        "CNC": "ORDER_DELIVERY_TYPE_CNC",
-        "NRML": "ORDER_DELIVERY_TYPE_CNC", # NRML maps to CNC/Margin
-        "MIS": "ORDER_DELIVERY_TYPE_IDAY",
-    }
-    return mapping.get(product.upper(), "ORDER_DELIVERY_TYPE_IDAY")
-
-
-def map_order_side(action):
-    """
-    Maps OpenAlgo action to Nubra order_side.
-    """
-    mapping = {
-        "BUY": "ORDER_SIDE_BUY",
-        "SELL": "ORDER_SIDE_SELL",
-    }
-    return mapping.get(action.upper(), "ORDER_SIDE_BUY")
-
-
-def map_price_type(pricetype):
-    """
-    Maps OpenAlgo pricetype to Nubra price_type.
-    """
-    mapping = {
-        "MARKET": "MARKET",
-        "LIMIT": "LIMIT",
-        "SL": "LIMIT",
-        "SL-M": "MARKET",
-    }
-    return mapping.get(pricetype.upper(), "MARKET")
-
-
-def map_order_type(pricetype):
-    """
-    Maps OpenAlgo pricetype to Nubra order_type.
-    """
-    mapping = {
-        "MARKET": "ORDER_TYPE_REGULAR",
-        "LIMIT": "ORDER_TYPE_REGULAR",
-        "SL": "ORDER_TYPE_STOPLOSS",
-        "SL-M": "ORDER_TYPE_STOPLOSS",
-    }
-    return mapping.get(pricetype.upper(), "ORDER_TYPE_REGULAR")
+    return {"requestType": "NEW", "orders": transformed_orders}
 
 
 def parse_margin_response(response_data):
     """
-    Parse Nubra margin calculator response to OpenAlgo standard format.
+    Parse the Nubra V3 funds_required response into the OpenAlgo standard format.
 
-    Nubra Response Example:
+    V3 response:
     {
-      "span": 52000,
-      "exposure": 18000,
-      "total_margin": 70000,
-      "margin_benefit": 0,
-      "leg_margin": null,
-      "message": null
+      "code": 1,
+      "marginInfo": {"totalMargin": 0, "message": null},
+      "brokerageInfo": {"totalChargesFloat": 13565.63879385},
+      "totalFundsRequired": 13565,
+      "willDefaultBePlacedAsAmo": true,
+      "willBeAutoSliced": false
     }
+
+    V3 no longer breaks the requirement into span/exposure -- it returns a
+    single ``marginInfo.totalMargin`` plus estimated charges. ``totalMargin``
+    is the blocked margin component while ``totalFundsRequired`` includes
+    charges, so the latter is the number a caller needs before placing.
     """
     try:
         if not response_data or not isinstance(response_data, dict):
             return {"status": "error", "message": "Invalid response from broker"}
-        
-        # Nubra sometimes returns error code in response
-        if response_data.get("code"):
-             return {
-                "status": "error",
-                "message": response_data.get("message", "Unknown error from Nubra"),
-            }
 
-        # Extract values
-        # Note: Nubra returns total_margin which is the most important field
-        # We map it to total_margin_required
-        total_margin_required = float(response_data.get("total_margin", 0))
-        span_margin = float(response_data.get("span", 0))
-        exposure_margin = float(response_data.get("exposure", 0))
-        
-        # Return standardized format match OpenAlgo API specification
+        margin_info = response_data.get("marginInfo")
+        brokerage_info = response_data.get("brokerageInfo") or {}
+
+        # An error response carries no marginInfo block. Note code == 1 is the
+        # V3 success marker, so code alone must not be treated as an error.
+        #
+        # V3 reports the reason in "error", not "message" -- reading only
+        # "message" turns a precise diagnosis ("Orders cannot be placed from
+        # this IP address...") into "Unknown error from Nubra".
+        if not isinstance(margin_info, dict):
+            message = (
+                response_data.get("error")
+                or response_data.get("message")
+                or "Unknown error from Nubra"
+            )
+            return {"status": "error", "message": str(message)}
+
+        total_margin = float(margin_info.get("totalMargin", 0) or 0)
+        total_funds_required = float(response_data.get("totalFundsRequired", 0) or 0)
+        total_charges = float(brokerage_info.get("totalChargesFloat", 0) or 0)
+
+        # Return standardized format matching the OpenAlgo API specification.
+        # V3 gives no span/exposure split; report the blocked margin as span and
+        # leave exposure at zero rather than inventing a breakdown.
         return {
             "status": "success",
             "data": {
-                "total_margin_required": total_margin_required,
-                "span_margin": span_margin,
-                "exposure_margin": exposure_margin,
+                "total_margin_required": total_funds_required or total_margin,
+                "span_margin": total_margin,
+                "exposure_margin": 0.0,
+                "total_charges": round(total_charges, 2),
             },
         }
 
     except Exception as e:
         logger.error(f"Error parsing margin response: {e}")
         return {"status": "error", "message": f"Failed to parse margin response: {str(e)}"}
-
