@@ -78,6 +78,13 @@ class SandboxOrders(Base):
     margin_blocked = Column(
         DECIMAL(10, 2), nullable=True, default=0.00
     )  # Margin blocked at order placement
+    # Set only on an order a GTT leg placed, and written in the same INSERT as
+    # the order itself. That atomicity is the point: SandboxGTTLeg.triggered_order_id
+    # is written in a later commit, so a crash in between would leave the order
+    # with no marker and recovery would re-arm a GTT that had already fired.
+    # Unique, so replaying the same claim cannot create a second child order.
+    gtt_leg_id = Column(Integer, nullable=True, unique=True, index=True)
+
     order_timestamp = Column(DateTime, nullable=False, default=func.now())
     update_timestamp = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
 
@@ -411,9 +418,35 @@ def init_db():
     init_db_with_logging(Base, engine, "Sandbox DB", logger)
 
     _migrate_add_gtt_trigger_direction()
+    _migrate_add_order_gtt_leg_id()
 
     # Initialize default configuration
     init_default_config()
+
+
+def _migrate_add_order_gtt_leg_id():
+    """Add sandbox_orders.gtt_leg_id to databases created without it."""
+    from sqlalchemy import text
+
+    try:
+        with engine.connect() as conn:
+            existing = {row[1] for row in conn.execute(text("PRAGMA table_info(sandbox_orders)"))}
+            if not existing or "gtt_leg_id" in existing:
+                return
+            conn.execute(text("ALTER TABLE sandbox_orders ADD COLUMN gtt_leg_id INTEGER"))
+            # SQLite cannot add a UNIQUE column by ALTER, so the constraint is
+            # created as an index afterwards. Partial, because every non-GTT
+            # order leaves this NULL and many NULLs must stay allowed.
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_sandbox_orders_gtt_leg "
+                    "ON sandbox_orders(gtt_leg_id) WHERE gtt_leg_id IS NOT NULL"
+                )
+            )
+            conn.commit()
+            logger.info("Added sandbox_orders.gtt_leg_id")
+    except Exception as e:
+        logger.exception(f"Could not add sandbox_orders.gtt_leg_id: {e}")
 
 
 def _migrate_add_gtt_trigger_direction():

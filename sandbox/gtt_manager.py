@@ -34,6 +34,7 @@ from sqlalchemy import select, update
 from database.sandbox_db import (
     SandboxGTT,
     SandboxGTTLeg,
+    SandboxOrders,
     db_session,
     get_config,
 )
@@ -541,9 +542,44 @@ class GTTManager:
             db_session.commit()
 
             if released > 0:
-                self.fund_manager.release_margin(
-                    released, description=f"GTT {trigger_id} cancelled"
-                )
+                try:
+                    freed, reason = self.fund_manager.release_margin(
+                        released, description=f"GTT {trigger_id} cancelled"
+                    )
+                except Exception:
+                    freed, reason = False, "release_margin raised"
+                    logger.exception(f"GTT {trigger_id}: releasing margin raised")
+
+                if not freed:
+                    # The GTT row already says cancelled but the money is still
+                    # blocked. Reporting success here would leave the user with
+                    # funds locked against a trigger that no longer exists, and
+                    # nothing to point at. Record the amount still owed on the
+                    # row so reconciliation can see it, and fail loudly.
+                    logger.error(
+                        f"GTT {trigger_id}: cancelled but its {released} margin could "
+                        f"not be released ({reason})"
+                    )
+                    db_session.execute(
+                        update(SandboxGTT)
+                        .where(SandboxGTT.gtt_id == trigger_id)
+                        .values(margin_blocked=released)
+                    )
+                    db_session.commit()
+                    return (
+                        False,
+                        {
+                            "status": "error",
+                            "mode": "analyze",
+                            "trigger_id": trigger_id,
+                            "message": (
+                                f"GTT cancelled but {released} margin could not be "
+                                f"released ({reason}). Funds remain blocked - check "
+                                "the sandbox funds reconciliation."
+                            ),
+                        },
+                        500,
+                    )
 
             logger.info(f"Sandbox GTT {trigger_id} cancelled; released {released}")
             return True, {"status": "success", "mode": "analyze", "trigger_id": trigger_id}, 200
@@ -860,6 +896,10 @@ def fire_leg(leg_id: int, execution_price=None) -> bool:
             "price_type": leg.pricetype,
             "product": leg.product,
             "strategy": gtt.strategy or "GTT",
+            # Written in the same INSERT as the order. This is what makes
+            # recovery correct: leg.triggered_order_id is a later commit, so a
+            # crash between the two would otherwise hide a placed order.
+            "gtt_leg_id": leg.id,
         }
 
         # Release the GTT's reservation first: place_order blocks margin for the
@@ -1113,13 +1153,53 @@ def reclaim_stranded_parents() -> int:
         for gtt in stranded:
             legs = gtt.legs or []
             if any(leg.triggered_order_id for leg in legs):
-                continue  # the order exists; nothing to undo
+                continue  # marker present; the order exists
+
+            # The marker is written after the order, so its absence proves
+            # nothing. Ask the order table directly - a row correlated to one of
+            # these legs means the child order was committed and this GTT has
+            # already fired, whatever the leg says. Re-arming it here would
+            # place a second order for a single trigger.
+            leg_ids = [leg.id for leg in legs]
+            placed = (
+                SandboxOrders.query.filter(SandboxOrders.gtt_leg_id.in_(leg_ids)).first()
+                if leg_ids
+                else None
+            )
+            if placed is not None:
+                logger.warning(
+                    f"GTT {gtt.gtt_id}: interrupted after its child order "
+                    f"{placed.orderid} was committed but before the leg was marked; "
+                    "finalising rather than re-arming"
+                )
+                db_session.execute(
+                    update(SandboxGTTLeg)
+                    .where(SandboxGTTLeg.id == placed.gtt_leg_id)
+                    .values(
+                        leg_status="triggered",
+                        triggered_order_id=placed.orderid,
+                        claimed_at=None,
+                    )
+                )
+                db_session.commit()
+                recovered += 1
+                continue
             if not any(leg.leg_status in ("pending", "triggering") for leg in legs):
                 continue  # fully resolved (cancelled sibling etc), not stranded
 
-            required = Decimal(str(gtt.margin_blocked or 0))
-            if required <= 0:
-                # The reservation was released during the fire; put back what
+            still_reserved = Decimal(str(gtt.margin_blocked or 0))
+            if still_reserved > 0:
+                # The crash happened before the release, so the funds were never
+                # given back. Blocking again here would reserve the same money
+                # twice - the GTT is already funded, so only its status needs
+                # putting right.
+                required = Decimal("0.00")
+                logger.info(
+                    f"GTT {gtt.gtt_id}: interrupted before its margin was released; "
+                    f"the existing {still_reserved} reservation stands"
+                )
+            else:
+                # Released during the fire and never restored - put back what
                 # the legs say the GTT needs.
                 required = max(
                     (Decimal(str(leg.leg_margin or 0)) for leg in legs),
@@ -1154,7 +1234,10 @@ def reclaim_stranded_parents() -> int:
             db_session.execute(
                 update(SandboxGTT)
                 .where(SandboxGTT.gtt_id == gtt.gtt_id, SandboxGTT.gtt_status == "triggered")
-                .values(gtt_status="active", margin_blocked=required)
+                .values(
+                    gtt_status="active",
+                    margin_blocked=still_reserved if still_reserved > 0 else required,
+                )
             )
             db_session.execute(
                 update(SandboxGTTLeg)
