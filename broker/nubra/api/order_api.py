@@ -1,37 +1,33 @@
 import json
-import os
 import threading
 import time
 
-import httpx
-
-from broker.nubra.mapping.order_data import extract_positions, flatten_order_buckets
+from broker.nubra.api.baseurl import (
+    SESSION_EXPIRED_MESSAGE,
+    SESSION_EXPIRED_STATUS,
+    get_base_url,
+    get_nubra_headers,
+)
+from broker.nubra.mapping.order_data import (
+    extract_positions,
+    flatten_order_buckets,
+    position_net_qty,
+    resolve_position,
+)
 from broker.nubra.mapping.transform_data import (
-    map_product_type,
     reverse_map_product_type,
     transform_data,
     transform_modify_order_data,
 )
-from database.auth_db import get_auth_token
-from database.token_db import get_br_symbol, get_symbol, get_token
+from database.token_db import get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Nubra API Base URLs
-UAT_BASE_URL = "https://uatapi.nubra.io"
-PROD_BASE_URL = "https://api.nubra.io"
-
-
-def get_base_url():
-    """Base URL for the environment the account is mapped to (PROD by default)."""
-    use_uat = os.getenv("NUBRA_USE_UAT", "false").lower() == "true"
-    return UAT_BASE_URL if use_uat else PROD_BASE_URL
-
-
-# Nubra rate limits (per IP)
-# Trading APIs: 10 ops/sec (PROD), 100 ops/sec (UAT)
+# Nubra documents 100 ops/sec on UAT for trading APIs and says to treat it as a
+# validation baseline rather than a production throughput promise, so the
+# sequential loops below pace themselves at 10 ops/sec.
 _MAX_RETRIES = 3
 _RATE_LIMIT_BASE_DELAY = 1.0  # Base delay for 429 retry (seconds)
 
@@ -57,19 +53,51 @@ class _StubResponse:
         return {}
 
 
-def _headers(auth_token):
-    """Authenticated REST headers for OMS V3 (Authorization + x-device-id)."""
-    return {
-        "Authorization": f"Bearer {auth_token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "x-device-id": "OPENALGO",
-    }
+def _error_payload(status_code, data):
+    """
+    Standardize a failed Nubra response for OpenAlgo's service layer.
+
+    The account services (orderbook, tradebook, positionbook, holdings) all
+    check for ``{"status": "error", "message": ...}``. Returning the raw V3
+    body instead means a 440 flattens to an empty bucket list and the user sees
+    an empty order book rather than "session expired".
+    """
+    if not isinstance(data, dict):
+        data = {}
+
+    if status_code == SESSION_EXPIRED_STATUS:
+        message = SESSION_EXPIRED_MESSAGE
+    else:
+        message = (
+            data.get("error")
+            or data.get("message")
+            or f"Nubra request failed (HTTP {status_code})"
+        )
+
+    payload = dict(data)
+    payload["status"] = "error"
+    payload["message"] = str(message)
+    return payload
+
+
+def _promote_error_to_message(response_data):
+    """
+    Copy a V3 ``error`` string into ``message`` when only ``error`` is present.
+
+    The V3 error shape is ``{"error": "...", "nubra_error_code": ""}`` and the
+    docs say to surface the ``error`` string directly, but OpenAlgo's service
+    layer reads ``message``. Leaves an existing ``message`` untouched.
+    """
+    if not isinstance(response_data, dict):
+        return response_data
+    if not response_data.get("message") and response_data.get("error"):
+        response_data["message"] = str(response_data["error"])
+    return response_data
 
 
 def get_api_response(endpoint, auth, method="GET", payload=""):
     client = get_httpx_client()
-    headers = _headers(auth)
+    headers = get_nubra_headers(auth)
     url = f"{get_base_url()}{endpoint}"
 
     if isinstance(payload, (dict, list)):
@@ -102,15 +130,27 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
 
+    if response.status_code == SESSION_EXPIRED_STATUS:
+        logger.error(f"Nubra session expired (HTTP 440) on {endpoint}; re-authentication required")
+        return _error_payload(response.status_code, {})
+
     # Handle empty response
     if not response.text:
+        if response.status_code >= 400:
+            return _error_payload(response.status_code, {})
         return {}
 
     try:
-        return json.loads(response.text)
+        data = json.loads(response.text)
     except json.JSONDecodeError:
         logger.error(f"Failed to parse JSON response from {endpoint}: {response.text}")
-        return {}
+        return _error_payload(response.status_code, {}) if response.status_code >= 400 else {}
+
+    if response.status_code >= 400:
+        logger.error(f"Nubra request failed on {endpoint} (HTTP {response.status_code}): {data}")
+        return _error_payload(response.status_code, data)
+
+    return data
 
 
 def get_order_book(auth):
@@ -208,11 +248,9 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
     """
     Get the net quantity for a specific position.
 
-    V3 positions are a flat list carrying signed ``netQuantity``, so there is no
+    V3 positions are a flat list carrying a signed net quantity, so there is no
     need to reconstruct direction from a separate order side.
     """
-    # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
-    tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = _get_cached_positions(auth)
 
     logger.debug(f"Nubra positions data: {positions_data}")
@@ -220,19 +258,20 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
     net_qty = "0"
 
     for position in extract_positions(positions_data):
-        pos_exchange = position.get("exchange", "")
-        pos_symbol = position.get("symbol", "")
-        ref_id = str(position.get("refId", ""))
-
+        # resolve_position() returns the master-contract symbol and exchange, so
+        # both sides of these comparisons are in OpenAlgo terms. Comparing the
+        # raw Nubra fields cannot work for F&O: Nubra reports an NFO option as
+        # exchange "NSE" under its own brsymbol.
+        pos_symbol, pos_exchange = resolve_position(position)
         pos_producttype = reverse_map_product_type(position.get("deliveryType", ""))
 
-        if pos_exchange == exchange and pos_producttype == producttype:
-            # Match by symbol or ref_id
-            symbol_from_db = get_symbol(ref_id, pos_exchange)
-
-            if symbol_from_db == tradingsymbol or pos_symbol == tradingsymbol:
-                net_qty = str(position.get("netQuantity", 0) or 0)
-                break
+        if (
+            pos_exchange == exchange
+            and pos_producttype == producttype
+            and pos_symbol == tradingsymbol
+        ):
+            net_qty = str(position_net_qty(position))
+            break
 
     return net_qty
 
@@ -282,7 +321,7 @@ def place_order_api(data, auth):
     for attempt in range(_MAX_RETRIES):
         response = client.post(
             f"{get_base_url()}/sentinel/orders/create",
-            headers=_headers(AUTH_TOKEN),
+            headers=get_nubra_headers(AUTH_TOKEN),
             content=payload,
         )
         if response.status_code == 429:
@@ -327,6 +366,17 @@ def place_order_api(data, auth):
     else:
         orderid = None
         response_data["status"] = False
+        if response.status_code == SESSION_EXPIRED_STATUS:
+            logger.error("Nubra session expired (HTTP 440) placing order; re-authentication required")
+            response_data["message"] = SESSION_EXPIRED_MESSAGE
+        else:
+            # V3 puts the human-readable reason in "error"
+            # ({"error": "...", "nubra_error_code": ""}), but the service layer
+            # reads "message". Without this copy every rejection -- wrong
+            # strike, insufficient funds, unregistered static IP -- reaches the
+            # user as the generic "Failed to place order" and the real cause
+            # only exists in the log line above.
+            _promote_error_to_message(response_data)
         response.status = response.status_code
 
     return response, response_data, orderid
@@ -440,8 +490,9 @@ def close_all_positions(current_api_key, auth):
 
     # Loop through each position to close (throttled to 10 ops/sec per Nubra rate limit)
     positions_closed = 0
+    failed_to_close = []
     for position in positions:
-        net_qty = int(position.get("netQuantity", 0) or 0)
+        net_qty = position_net_qty(position)
 
         # Skip if quantity is zero
         if net_qty == 0:
@@ -451,14 +502,18 @@ def close_all_positions(current_api_key, auth):
         action = "SELL" if net_qty > 0 else "BUY"
         quantity = abs(net_qty)
 
-        exchange = position.get("exchange", "NSE")
-        symbol = position.get("symbol", "")
-        ref_id = str(position.get("refId", ""))
-
-        # Try to get OpenAlgo symbol from database using ref_id
-        oa_symbol = get_symbol(ref_id, exchange)
-        if oa_symbol:
-            symbol = oa_symbol
+        # place_order_api() resolves the ref_id with get_token(symbol, exchange),
+        # so both must already be in OpenAlgo terms -- passing Nubra's own
+        # symbol and "NSE" for an F&O position makes that lookup fail and the
+        # square-off order is rejected before it is ever sent.
+        symbol, exchange = resolve_position(position)
+        if not symbol or not exchange:
+            logger.error(
+                f"Nubra square-off skipped: cannot resolve position "
+                f"refId={position.get('refId')!r} to an OpenAlgo symbol"
+            )
+            failed_to_close.append(str(position.get("refId", "")))
+            continue
 
         logger.debug(f"Closing position - Symbol: {symbol}, Exchange: {exchange}, Qty: {quantity}, Action: {action}")
 
@@ -480,12 +535,36 @@ def close_all_positions(current_api_key, auth):
 
         # Place the order to close the position
         res, response, orderid = place_order_api(place_order_payload, auth)
-        positions_closed += 1
+
+        if orderid:
+            positions_closed += 1
+        else:
+            failed_to_close.append(f"{symbol} ({exchange})")
+            logger.error(f"Nubra square-off failed for {symbol} ({exchange}): {response}")
 
         logger.debug(f"Close position response: {response}, orderid: {orderid}")
 
         # Rate limit: 10 ops/sec = 100ms gap between requests
         time.sleep(0.1)
+
+    # Report what actually happened rather than asserting success. A run where
+    # every row had a zero net quantity, or where every square-off order was
+    # rejected, must not come back as "SquaredOff" -- that reads as flat while
+    # the exposure is still live.
+    if failed_to_close:
+        message = (
+            f"Squared off {positions_closed} position(s); "
+            f"failed to close: {', '.join(failed_to_close)}"
+        )
+        logger.error(f"Nubra square-off incomplete. {message}")
+        return {"status": "error", "message": message}, 500
+
+    if not positions_closed:
+        logger.warning(
+            f"Nubra square-off placed no orders: all {len(positions)} position(s) "
+            f"reported a zero net quantity"
+        )
+        return {"message": "No Open Positions Found"}, 200
 
     return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
 
@@ -514,7 +593,7 @@ def cancel_order(orderid, auth):
     for attempt in range(_MAX_RETRIES):
         response = client.post(
             f"{get_base_url()}/sentinel/orders/cancel",
-            headers=_headers(AUTH_TOKEN),
+            headers=get_nubra_headers(AUTH_TOKEN),
             content=payload,
         )
         if response.status_code == 429:
@@ -533,6 +612,10 @@ def cancel_order(orderid, auth):
 
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
+
+    if response.status_code == SESSION_EXPIRED_STATUS:
+        logger.error(f"Nubra session expired (HTTP 440) cancelling order {orderid}")
+        return {"status": "error", "message": SESSION_EXPIRED_MESSAGE}, response.status_code
 
     # Handle empty response
     if not response.text:
@@ -585,7 +668,7 @@ def modify_order(data, auth):
     for attempt in range(_MAX_RETRIES):
         response = client.post(
             f"{get_base_url()}/sentinel/orders/modify",
-            headers=_headers(AUTH_TOKEN),
+            headers=get_nubra_headers(AUTH_TOKEN),
             content=payload,
         )
         if response.status_code == 429:
@@ -604,6 +687,10 @@ def modify_order(data, auth):
 
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
+
+    if response.status_code == SESSION_EXPIRED_STATUS:
+        logger.error(f"Nubra session expired (HTTP 440) modifying order {orderid}")
+        return {"status": "error", "message": SESSION_EXPIRED_MESSAGE}, response.status_code
 
     # Handle empty response
     if not response.text:

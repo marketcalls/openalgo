@@ -1,20 +1,11 @@
 import json
-import os
 
+from broker.nubra.api.baseurl import get_nubra_headers, get_url
 from broker.nubra.mapping.margin_data import parse_margin_response, transform_margin_positions
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
-
-UAT_BASE_URL = "https://uatapi.nubra.io"
-PROD_BASE_URL = "https://api.nubra.io"
-
-
-def get_base_url():
-    """Base URL for the environment the account is mapped to (PROD by default)."""
-    use_uat = os.getenv("NUBRA_USE_UAT", "false").lower() == "true"
-    return UAT_BASE_URL if use_uat else PROD_BASE_URL
 
 
 def calculate_margin_api(positions, auth):
@@ -31,7 +22,6 @@ def calculate_margin_api(positions, auth):
         Tuple of (response, response_data)
     """
     AUTH_TOKEN = auth
-    device_id = "OPENALGO"
 
     # Transform positions to Nubra format (this returns the full payload)
     payload_data = transform_margin_positions(positions)
@@ -50,12 +40,7 @@ def calculate_margin_api(positions, auth):
         return MockResponse(), error_response
 
     # Prepare headers
-    headers = {
-        "Authorization": f"Bearer {AUTH_TOKEN}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "x-device-id": device_id,
-    }
+    headers = get_nubra_headers(AUTH_TOKEN)
 
     # Prepare JSON payload
     payload = json.dumps(payload_data)
@@ -68,7 +53,7 @@ def calculate_margin_api(positions, auth):
     try:
         # Make the request using the shared client
         response = client.post(
-            f"{get_base_url()}/sentinel/orders/funds_required",
+            get_url("/sentinel/orders/funds_required"),
             headers=headers,
             content=payload,
         )

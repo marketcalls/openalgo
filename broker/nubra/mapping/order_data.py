@@ -1,7 +1,13 @@
 from datetime import datetime
 
+from broker.nubra.mapping.exchange import (
+    derivative_type_of,
+    nubra_exchange_of,
+    resolve_instrument,
+    to_openalgo_exchange,
+)
 from broker.nubra.mapping.transform_data import reverse_map_product_type
-from database.token_db import get_oa_symbol, get_symbol
+from database.token_db import get_oa_symbol
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -49,6 +55,67 @@ def extract_positions(positions_data):
 
     portfolio = positions_data.get("portfolio") or {}
     return portfolio.get("positions") or []
+
+
+def _first_present(row, *names):
+    """First non-None value among ``names``, or None when the row has none of them."""
+    if not isinstance(row, dict):
+        return None
+    for name in names:
+        value = row.get(name)
+        if value is not None:
+            return value
+    return None
+
+
+# The live /sentinel/portfolio/positions payload does NOT use the field names in
+# the V3 doc: it returns netQty/buyQty/sellQty/ltp where the doc promises
+# netQuantity/buyQuantity/sellQuantity/lastTradedPrice. Read the observed name
+# first and keep the documented one as a fallback, so this survives Nubra
+# aligning the API to its own documentation later.
+def position_net_qty(position):
+    """Signed net quantity for a V3 position row, as an int."""
+    try:
+        return int(_first_present(position, "netQty", "netQuantity") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def position_ltp_paise(position):
+    """Last traded price for a V3 position row, in paise."""
+    return _first_present(position, "ltp", "lastTradedPrice") or 0
+
+
+def resolve_position(position):
+    """
+    Resolve (tradingsymbol, exchange) for a V3 position row.
+
+    ``position["symbol"]`` is Nubra's brsymbol, which only coincides with the
+    OpenAlgo symbol for cash instruments -- an option is ``NIFTY26AUG24000CE``
+    on Nubra and ``NIFTY25AUG2624000CE`` in OpenAlgo.
+
+    An unresolved row keeps Nubra's own symbol and exchange so a live position
+    is never dropped from the book, but says so in the log -- silently showing
+    broker-native values would be indistinguishable from a correct row while
+    every downstream lookup on it fails.
+    """
+    broker_symbol = position.get("symbol", "")
+    nubra_exchange = nubra_exchange_of(position)
+    derivative_type = derivative_type_of(position)
+    ref_id = str(position.get("refId", "") or "")
+
+    symbol, exchange = resolve_instrument(
+        nubra_exchange, derivative_type, ref_id=ref_id, broker_symbol=broker_symbol
+    )
+    if symbol:
+        return symbol, exchange
+
+    logger.warning(
+        f"Nubra position not in the master contract: refId={ref_id!r} "
+        f"symbol={broker_symbol!r} exchange={nubra_exchange!r} "
+        f"derivativeType={derivative_type!r}; reporting broker-native values"
+    )
+    return broker_symbol, to_openalgo_exchange(nubra_exchange, derivative_type)
 
 
 # Nubra V3 lifecycle bucket -> OpenAlgo status vocabulary.
@@ -116,10 +183,15 @@ def _resolve_symbol(order):
     """
     Resolve (tradingsymbol, exchange, ref_id) for a V3 order or leg.
 
-    For multi-leg strategy orders the instrument lives on the first leg, since
-    the strategy row itself carries no top-level refId.
+    The instrument lives on the first leg whenever the row carries no top-level
+    refId. That is not just the strategy-order case the docs describe: live
+    single orders also come back as ``isMulti: true`` with a populated
+    ``legs[]`` and no top-level ``refId``.
+
+    ``exchange`` is folded to the OpenAlgo exchange before any lookup -- Nubra
+    reports an NSE option as ``NSE``, so ``get_symbol(ref_id, "NSE")`` would
+    miss the ``NFO`` row and leave the caller with Nubra's display name.
     """
-    exchange = order.get("exchange", "")
     ref_data = order.get("refData") or {}
     ref_id = order.get("refId")
 
@@ -128,13 +200,30 @@ def _resolve_symbol(order):
         ref_data = first_leg.get("refData") or ref_data
         ref_id = first_leg.get("refId")
 
-    exchange = ref_data.get("exchange") or exchange
+    nubra_exchange = ref_data.get("exchange") or order.get("exchange", "")
+    derivative_type = ref_data.get("derivativeType") or derivative_type_of(order)
     ref_id = str(ref_id or "")
+    broker_symbol = ref_data.get("stockName", "")
 
-    symbol_from_db = get_symbol(ref_id, exchange) if ref_id else None
-    tradingsymbol = symbol_from_db or ref_data.get("displayName") or ref_data.get("stockName") or ""
+    tradingsymbol, exchange = resolve_instrument(
+        nubra_exchange, derivative_type, ref_id=ref_id, broker_symbol=broker_symbol
+    )
+    if tradingsymbol:
+        return tradingsymbol, exchange, ref_id
 
-    return tradingsymbol, exchange, ref_id
+    # displayName ("NIFTY 23 JUN 26 24050 CE") is a human label, never an
+    # OpenAlgo symbol -- it is the last resort purely so the row still renders,
+    # and it is worth a warning because nothing downstream can look it up.
+    logger.warning(
+        f"Nubra order not in the master contract: refId={ref_id!r} "
+        f"stockName={broker_symbol!r} exchange={nubra_exchange!r} "
+        f"derivativeType={derivative_type!r}; reporting broker-native values"
+    )
+    return (
+        broker_symbol or ref_data.get("displayName", ""),
+        to_openalgo_exchange(nubra_exchange, derivative_type),
+        ref_id,
+    )
 
 
 def _trigger_price_paise(order):
@@ -415,15 +504,18 @@ def map_position_data(position_data):
     positions = []
     for pos in raw_positions:
         avg_price_paise = pos.get("avgPrice", 0) or 0
-        ltp_paise = pos.get("lastTradedPrice", 0) or 0
+        ltp_paise = position_ltp_paise(pos)
+        net_qty = position_net_qty(pos)
+
+        tradingsymbol, exchange = resolve_position(pos)
 
         positions.append({
-            "tradingsymbol": pos.get("symbol", ""),
+            "tradingsymbol": tradingsymbol,
             "symboltoken": str(pos.get("refId", "")),
-            "exchange": pos.get("exchange", "NSE"),
+            "exchange": exchange,
             "producttype": reverse_map_product_type(pos.get("deliveryType", "")),
-            "netqty": pos.get("netQuantity", 0) or 0,
-            "quantity": pos.get("netQuantity", 0) or 0,
+            "netqty": net_qty,
+            "quantity": net_qty,
             "avgnetprice": avg_price_paise / 100 if avg_price_paise else 0.0,
             "avgbuyprice": (pos.get("avgBuyPrice", 0) or 0) / 100,
             "avgsellprice": (pos.get("avgSellPrice", 0) or 0) / 100,

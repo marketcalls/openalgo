@@ -1,24 +1,17 @@
 # api/funds.py
 
 import json
-import os
 
-import httpx
-
+from broker.nubra.api.baseurl import (
+    SESSION_EXPIRED_MESSAGE,
+    SESSION_EXPIRED_STATUS,
+    get_nubra_headers,
+    get_url,
+)
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
-
-# Nubra API Base URLs
-UAT_BASE_URL = "https://uatapi.nubra.io"
-PROD_BASE_URL = "https://api.nubra.io"
-
-
-def get_base_url():
-    """Get the base URL based on environment setting."""
-    use_uat = os.getenv("NUBRA_USE_UAT", "false").lower() == "true"
-    return UAT_BASE_URL if use_uat else PROD_BASE_URL
 
 
 def get_margin_data(auth_token):
@@ -33,22 +26,18 @@ def get_margin_data(auth_token):
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
-    base_url = get_base_url()
 
-    headers = {
-        "Authorization": f"Bearer {auth_token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "x-device-id": "OPENALGO",
-    }
-
-    endpoint = f"{base_url}/sentinel/portfolio/user_funds_and_margin"
+    endpoint = get_url("/sentinel/portfolio/user_funds_and_margin")
     logger.debug(f"Nubra funds request to: {endpoint}")
 
-    response = client.get(endpoint, headers=headers)
+    response = client.get(endpoint, headers=get_nubra_headers(auth_token, with_json=False))
 
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
+
+    if response.status_code == SESSION_EXPIRED_STATUS:
+        logger.error(f"Nubra session expired (HTTP 440) fetching funds: {SESSION_EXPIRED_MESSAGE}")
+        return {}
 
     try:
         margin_data = json.loads(response.text)

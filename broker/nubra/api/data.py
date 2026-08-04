@@ -1,14 +1,17 @@
 import json
-import os
 import threading
 import time
-import urllib.parse
-from datetime import datetime, timedelta
+from datetime import timedelta
 
-import httpx
 import pandas as pd
 
-from database.token_db import get_br_symbol, get_oa_symbol, get_token
+from broker.nubra.api.baseurl import (
+    SESSION_EXPIRED_MESSAGE,
+    SESSION_EXPIRED_STATUS,
+    get_nubra_headers,
+    get_url,
+)
+from database.token_db import get_br_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -20,23 +23,16 @@ logger = get_logger(__name__)
 def get_api_response(endpoint, auth, method="GET", payload=""):
     """Helper function to make API calls to Nubra with 429 rate limit handling."""
     AUTH_TOKEN = auth
-    device_id = "OPENALGO"  # Fixed device ID
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
-    headers = {
-        "Authorization": f"Bearer {AUTH_TOKEN}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "x-device-id": device_id,
-    }
+    headers = get_nubra_headers(AUTH_TOKEN)
 
     if isinstance(payload, dict):
         payload = json.dumps(payload)
 
-    # Nubra base URL
-    url = f"https://api.nubra.io{endpoint}"
+    url = get_url(endpoint)
 
     max_retries = 3
     base_delay = 1.0
@@ -66,6 +62,12 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
             # Add status attribute for compatibility with the existing codebase
             response.status = response.status_code
+
+            # 440 is Nubra's session-expired code and, per the V3 docs, a
+            # re-authentication case rather than a retriable error.
+            if response.status_code == SESSION_EXPIRED_STATUS:
+                logger.error(f"Nubra session expired (HTTP 440) on {endpoint}")
+                raise Exception(SESSION_EXPIRED_MESSAGE)
 
             if response.status_code == 403:
                 logger.debug(f"Debug - API returned 403 Forbidden. Headers: {headers}")
@@ -394,21 +396,27 @@ class BrokerData:
             # Prices are in paise, need to convert to rupees (divide by 100)
             bids = orderbook.get("bid", [])
             asks = orderbook.get("ask", [])
-            
+
             bid_price = float(bids[0].get("p", 0)) / 100 if bids else 0
             ask_price = float(asks[0].get("p", 0)) / 100 if asks else 0
             ltp = float(orderbook.get("ltp", 0)) / 100
 
+            # /orderbooks returns bid, ask, ltp, ltq, volume, ts and prev_close
+            # only -- verified live across NSE, NFO and MCX ref_ids. It carries
+            # no open/high/low and no open interest, so those stay 0 here and
+            # are filled by the WebSocket path above, which does supply them.
+            # Reading them off this response would look correct and always
+            # yield zero.
             return {
                 "bid": bid_price,
                 "ask": ask_price,
-                "open": float(orderbook.get("open", 0)) / 100,
-                "high": float(orderbook.get("high", 0)) / 100,
-                "low": float(orderbook.get("low", 0)) / 100,
+                "open": 0,
+                "high": 0,
+                "low": 0,
                 "ltp": ltp,
                 "prev_close": float(orderbook.get("prev_close", 0)) / 100,
                 "volume": int(orderbook.get("volume", 0)),
-                "oi": int(orderbook.get("oi", 0)),
+                "oi": 0,
             }
 
         except Exception as e:
@@ -724,17 +732,31 @@ class BrokerData:
                 # Calculate chunk end date
                 current_end = min(current_start + timedelta(days=chunk_days - 1), to_date)
 
-                # Set start time to market open (09:15 IST -> 03:45 UTC)
-                chunk_start = current_start.replace(hour=3, minute=45, second=0, microsecond=0)
-                
-                # Set end time
-                current_time = pd.Timestamp.now()
-                if current_end.date() == current_time.date():
-                    # Convert current IST to approximate UTC
-                    chunk_end = current_time - pd.Timedelta(hours=5, minutes=30)
-                else:
-                    # For past dates, set end time to market close (15:30 IST -> 10:00 UTC)
-                    chunk_end = current_end.replace(hour=10, minute=0, second=0, microsecond=0)
+                # Ask for the whole UTC day rather than clipping to a session
+                # window. The window this code used to send -- 03:45 to 10:00
+                # UTC, i.e. 09:15 to 15:30 IST -- is the NSE cash session, so it
+                # silently truncated every exchange that trades outside it: MCX
+                # runs 09:00 to 23:30 IST, losing its first 15 minutes and its
+                # entire evening session. Nubra only returns candles that
+                # actually exist, so a wider window costs nothing and there is
+                # no session table to keep in sync with exchange circulars.
+                chunk_start = current_start.normalize()
+                chunk_end = current_end.normalize() + timedelta(days=1) - timedelta(seconds=1)
+
+                # Never ask beyond the present. pd.Timestamp.utcnow() is the
+                # real UTC clock; the previous "local time minus 5:30" only
+                # produced UTC on a server whose own timezone was IST.
+                now_utc = pd.Timestamp.utcnow().tz_localize(None)
+                if chunk_end > now_utc:
+                    chunk_end = now_utc
+
+                # A wholly future chunk would invert the range; stop instead of
+                # asking Nubra for a window that ends before it starts.
+                if chunk_end <= chunk_start:
+                    logger.debug(
+                        f"Debug - Skipping future chunk {current_start.date()} to {current_end.date()}"
+                    )
+                    break
 
                 # Format dates as ISO strings
                 start_iso = chunk_start.strftime("%Y-%m-%dT%H:%M:%S.000Z")
