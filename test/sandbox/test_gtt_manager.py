@@ -198,13 +198,30 @@ def clean_gtt_user():
     from sandbox.fund_manager import FundManager, initialize_user_funds
 
     def purge():
+        """Drop this user's GTTs and reset their funds.
+
+        Deleting a GTT row does not release the margin it blocked, so without
+        the funds reset the reservation from one test leaks into the next and
+        every reconciliation check sees a phantom discrepancy.
+        """
+        from decimal import Decimal as D
+
+        from database.sandbox_db import SandboxFunds, SandboxPositions
+
         for gtt in SandboxGTT.query.filter_by(user_id=GTT_TEST_USER).all():
             SandboxGTTLeg.query.filter_by(gtt_id=gtt.gtt_id).delete()
             db_session.delete(gtt)
+        SandboxPositions.query.filter_by(user_id=GTT_TEST_USER).delete()
         db_session.commit()
 
+        initialize_user_funds(GTT_TEST_USER)
+        funds = SandboxFunds.query.filter_by(user_id=GTT_TEST_USER).first()
+        if funds is not None:
+            funds.available_balance += D(str(funds.used_margin or 0))
+            funds.used_margin = D("0.00")
+            db_session.commit()
+
     purge()
-    initialize_user_funds(GTT_TEST_USER)
     yield FundManager(GTT_TEST_USER)
     purge()
 
@@ -417,3 +434,90 @@ class TestStrandedLegReclaim:
         leg = self._claimed_leg()
         reclaim_stranded_legs()
         assert SandboxGTTLeg.query.filter_by(id=leg.id).first().leg_status == "triggering"
+
+
+class TestMarginReconciliation:
+    """A resting GTT must not look like leaked margin."""
+
+    def test_active_gtt_margin_is_not_flagged_as_a_discrepancy(self, clean_gtt_user):
+        """With auto_fix on, a false flag would release the GTT's reservation."""
+        from sandbox.fund_manager import reconcile_margin
+
+        ok, response, _ = GTTManager(GTT_TEST_USER).place_gtt(_single_gtt(), last_price=100)
+        assert ok
+
+        has_discrepancy, amount, message = reconcile_margin(GTT_TEST_USER, auto_fix=False)
+        assert has_discrepancy is False, (
+            f"active GTT margin was flagged as a discrepancy of {amount}: {message}"
+        )
+
+    def test_cancelled_gtt_margin_is_not_double_counted(self, clean_gtt_user):
+        from sandbox.fund_manager import reconcile_margin
+
+        mgr = GTTManager(GTT_TEST_USER)
+        ok, response, _ = mgr.place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        assert mgr.cancel_gtt(response["trigger_id"])[0] is True
+
+        has_discrepancy, amount, _ = reconcile_margin(GTT_TEST_USER, auto_fix=False)
+        assert has_discrepancy is False, f"discrepancy {amount} after cancelling a GTT"
+
+
+class TestMaintenanceThread:
+    """The upkeep that neither execution engine performs."""
+
+    def test_intervals_are_sane(self):
+        from sandbox.execution_thread import GTTMaintenanceThread
+
+        # Reclaim must run well inside the claim timeout, or a stranded leg
+        # waits far longer than the timeout promises.
+        from sandbox.gtt_manager import DEFAULT_CLAIM_TIMEOUT_SEC
+
+        assert GTTMaintenanceThread.RECLAIM_INTERVAL_SEC <= DEFAULT_CLAIM_TIMEOUT_SEC
+        assert GTTMaintenanceThread.EXPIRY_INTERVAL_SEC >= 600
+
+    def test_stop_is_idempotent(self):
+        from sandbox.execution_thread import _stop_gtt_maintenance
+
+        _stop_gtt_maintenance()
+        _stop_gtt_maintenance()  # must not raise when nothing is running
+
+    def test_thread_reclaims_and_stops(self, clean_gtt_user):
+        """End to end: a stranded leg is recovered without the polling engine."""
+        from datetime import datetime, timedelta
+
+        from database.sandbox_db import SandboxGTT, SandboxGTTLeg, db_session
+        from sandbox.execution_thread import GTTMaintenanceThread
+        from sandbox.gtt_manager import try_claim_trigger
+
+        ok, response, _ = GTTManager(GTT_TEST_USER).place_gtt(_single_gtt(), last_price=100)
+        assert ok
+        leg = SandboxGTT.query.filter_by(gtt_id=response["trigger_id"]).first().legs[0]
+        assert try_claim_trigger(leg.id) is True
+        leg.claimed_at = datetime.now() - timedelta(hours=1)
+        db_session.commit()
+
+        thread = GTTMaintenanceThread()
+        thread.RECLAIM_INTERVAL_SEC = 1  # instance override, keeps the test quick
+        thread.start()
+        try:
+            deadline = __import__("time").time() + 10
+            while __import__("time").time() < deadline:
+                db_session.expire_all()
+                if SandboxGTTLeg.query.filter_by(id=leg.id).first().leg_status == "pending":
+                    break
+                __import__("time").sleep(0.2)
+        finally:
+            thread.stop()
+            thread.join(timeout=5)
+
+        assert not thread.is_alive(), "maintenance thread did not stop"
+        assert SandboxGTTLeg.query.filter_by(id=leg.id).first().leg_status == "pending"
+
+
+class TestCatchUp:
+    def test_catch_up_is_exported_and_safe_with_no_gtts(self, clean_gtt_user):
+        """Runs on every boot, so it must be a no-op when there is nothing to do."""
+        from sandbox.catch_up_processor import catch_up_gtts
+
+        catch_up_gtts()  # must not raise
