@@ -31,6 +31,17 @@ from utils.logging import get_logger
 _RECONNECT_BACKOFFS = [1, 2, 5, 10, 30, 60]
 
 
+def _is_auth_rejection(error) -> bool:
+    """True when the broker refused the handshake because the token is bad.
+
+    A 401/403 says the credential is dead, not that the network hiccuped, so
+    reconnecting cannot fix it — every retry is another rejected handshake and
+    another ERROR line. Broker tokens are only reissued by a login, so the
+    adapter stands down and waits for one.
+    """
+    return getattr(error, "status_code", None) in (401, 403)
+
+
 def to_openalgo_symbol(broker_symbol: str, exchange: str, token=None) -> str:
     """Best-effort mapping of a broker symbol to OpenAlgo symbol format.
 
@@ -82,6 +93,7 @@ class BaseOrderUpdateAdapter(ABC):
         self._heartbeat_thread: threading.Thread | None = None
         self._running = False
         self._shutting_down = False
+        self._auth_rejected = False
         self._lock = threading.Lock()
 
     # -- broker-specific hooks -------------------------------------------------
@@ -137,6 +149,7 @@ class BaseOrderUpdateAdapter(ABC):
             if self._running:
                 return
             self._shutting_down = False
+            self._auth_rejected = False
             self._running = True
             self._thread = threading.Thread(
                 target=self._run_forever,
@@ -170,10 +183,25 @@ class BaseOrderUpdateAdapter(ABC):
             try:
                 self._connect_once()
             except Exception as e:
-                self.logger.warning(
-                    f"Order-update connection error ({self.broker_name}/{self.user_id}): {e}"
-                )
+                if _is_auth_rejection(e):
+                    self._auth_rejected = True
+                else:
+                    self.logger.warning(
+                        f"Order-update connection error ({self.broker_name}/{self.user_id}): {e}"
+                    )
             if self._shutting_down:
+                break
+            if self._auth_rejected:
+                # Stand down rather than retry. Leaving _running False lets a
+                # later login restart this same object; in practice the service
+                # builds a fresh adapter, which is also fine.
+                with self._lock:
+                    self._running = False
+                self.logger.info(
+                    f"Order-update adapter idle for {self.broker_name}/{self.user_id}: "
+                    "the broker rejected the stored token. It reconnects on the "
+                    "next broker login."
+                )
                 break
             delay = _RECONNECT_BACKOFFS[min(attempt, len(_RECONNECT_BACKOFFS) - 1)]
             attempt += 1
@@ -207,6 +235,19 @@ class BaseOrderUpdateAdapter(ABC):
                 self._start_heartbeat_thread(interval)
 
         def on_error(ws, error):
+            if _is_auth_rejection(error):
+                # Logged once here, then _run_forever stands the adapter down.
+                # Kept at warning: an expired token at startup is routine, not
+                # a fault, and the old behaviour buried it under a repeating
+                # ERROR every backoff interval.
+                self._auth_rejected = True
+                self.logger.warning(
+                    f"Order-update WS token rejected "
+                    f"({self.broker_name}/{self.user_id}): "
+                    f"{getattr(error, 'status_code', 'auth error')}. "
+                    "Not retrying until the next broker login."
+                )
+                return
             self.logger.warning(
                 f"Order-update WS error ({self.broker_name}/{self.user_id}): {error}"
             )
