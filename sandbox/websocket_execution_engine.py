@@ -44,6 +44,11 @@ class WebSocketExecutionEngine:
         # Maps symbol_key -> list of order IDs
         self._pending_orders_index: dict[str, list[str]] = {}
 
+        # Maps symbol_key -> list of GTT *leg* IDs. Keyed by leg, not by parent
+        # GTT: the claim that decides who fires happens at leg level, and an OCO
+        # pair can have its two legs crossed by the same tick.
+        self._pending_gtt_index: dict[str, list[int]] = {}
+
         # Track symbols we're monitoring
         self._monitored_symbols: set[str] = set()
 
@@ -128,6 +133,7 @@ class WebSocketExecutionEngine:
 
         with self._lock:
             self._pending_orders_index.clear()
+            self._pending_gtt_index.clear()
             self._monitored_symbols.clear()
             self._user_symbol_refcounts.clear()
             self._position_refs.clear()
@@ -169,8 +175,22 @@ class WebSocketExecutionEngine:
                     self._monitored_symbols.add(symbol_key)
                     self._increment_user_symbol_refcount(order.user_id, symbol_key)
 
+                # Resting GTTs need tick monitoring exactly like resting orders,
+                # and are frequently the only thing in the book - a user with no
+                # open orders but an active GTT must still be subscribed.
+                from sandbox import gtt_manager
+
+                gtt_legs = gtt_manager.get_active_legs()
+                for leg, gtt in gtt_legs:
+                    symbol_key = f"{gtt.exchange}:{gtt.symbol}"
+                    self._pending_gtt_index.setdefault(symbol_key, []).append(leg.id)
+                    self._monitored_symbols.add(symbol_key)
+                    self._increment_user_symbol_refcount(gtt.user_id, symbol_key)
+
                 logger.debug(
-                    f"Built order index: {len(pending_orders)} orders across {len(self._monitored_symbols)} symbols"
+                    f"Built order index: {len(pending_orders)} orders and "
+                    f"{len(gtt_legs)} GTT legs across "
+                    f"{len(self._monitored_symbols)} symbols"
                 )
 
                 # Event-driven MTM: open positions hold feed subscriptions too,
@@ -346,22 +366,124 @@ class WebSocketExecutionEngine:
 
             symbol_key = f"{exchange}:{symbol}"
 
-            # Check if we have pending orders for this symbol
+            # Snapshot both indexes under one lock, then work outside it: firing
+            # re-enters this engine via notify_order_* and would deadlock.
             with self._lock:
                 order_ids = self._pending_orders_index.get(symbol_key, []).copy()
+                leg_ids = self._pending_gtt_index.get(symbol_key, []).copy()
 
-            if not order_ids:
-                return
-
-            # Process each pending order for this symbol
             for order_id in order_ids:
                 try:
                     self._check_and_execute_order(order_id, Decimal(str(ltp)))
                 except Exception as e:
                     logger.exception(f"Error processing order {order_id}: {e}")
 
+            # Checked even when there are no pending orders: a GTT is often the
+            # only thing resting for this symbol.
+            if leg_ids:
+                self._check_gtt_legs(symbol_key, leg_ids, Decimal(str(ltp)))
+
         except Exception as e:
             logger.exception(f"Error in market data callback: {e}")
+
+    def _check_gtt_legs(self, symbol_key: str, leg_ids: list, ltp: Decimal):
+        """Fire any of this symbol's GTT legs whose trigger the tick crossed.
+
+        The claim is what keeps this safe next to the polling engine and the
+        catch-up scan: all three can see the same tick, and only the claim
+        winner places an order.
+        """
+        from database.sandbox_db import SandboxGTTLeg
+        from sandbox import gtt_manager
+
+        for leg_id in leg_ids:
+            try:
+                leg = SandboxGTTLeg.query.filter_by(id=leg_id).first()
+                if leg is None or leg.leg_status != "pending":
+                    # Resolved by another evaluator since the index was built.
+                    self._drop_gtt_leg(symbol_key, leg_id, self._leg_user_id(leg))
+                    continue
+
+                if not gtt_manager.leg_is_triggered_by(leg.trigger_direction, leg.trigger_price, ltp):
+                    continue
+
+                if gtt_manager.try_claim_trigger(leg_id):
+                    user_id = self._leg_user_id(leg)
+                    # Only stop watching a leg that actually fired. A failed
+                    # fire reverts the leg to pending, so dropping it here
+                    # regardless left the GTT live in the database but inert -
+                    # unsubscribed and unindexed until a restart.
+                    if gtt_manager.fire_leg(leg_id, execution_price=float(ltp)):
+                        self._drop_gtt_leg(symbol_key, leg_id, user_id)
+            except Exception as e:
+                logger.exception(f"Error evaluating GTT leg {leg_id}: {e}")
+
+    @staticmethod
+    def _leg_user_id(leg):
+        """Owner of a leg, for refcounting. None when the leg is already gone."""
+        if leg is None:
+            return None
+        try:
+            from database.sandbox_db import SandboxGTT
+
+            parent = SandboxGTT.query.filter_by(gtt_id=leg.gtt_id).first()
+            return parent.user_id if parent else None
+        except Exception:
+            return None
+
+    def _drop_gtt_leg(self, symbol_key: str, leg_id: int, user_id: str | None = None):
+        """Stop watching a leg that is no longer pending, and unsubscribe if last.
+
+        Without the refcount decrement the engine keeps a websocket subscription
+        alive for a symbol nothing is watching any more, for the life of the
+        process.
+        """
+        unsubscribe_user = None
+        unsubscribe_symbol = None
+
+        with self._lock:
+            legs = self._pending_gtt_index.get(symbol_key)
+            if legs and leg_id in legs:
+                legs.remove(leg_id)
+            if legs is not None and not legs:
+                del self._pending_gtt_index[symbol_key]
+                if symbol_key not in self._pending_orders_index:
+                    self._monitored_symbols.discard(symbol_key)
+
+            if user_id and self._decrement_user_symbol_refcount(user_id, symbol_key):
+                unsubscribe_user = user_id
+                unsubscribe_symbol = symbol_key
+
+        if unsubscribe_user and unsubscribe_symbol:
+            exchange, symbol = unsubscribe_symbol.split(":", 1)
+            self._unsubscribe_ws_symbols(unsubscribe_user, [(symbol, exchange)])
+
+    def notify_gtt_placed(self, gtt):
+        """Start watching a newly placed GTT without waiting for a rebuild.
+
+        The startup rebuild only sees GTTs that already existed, so without this
+        a GTT placed while the engine is running would never receive a tick -
+        it would sit inert until a restart or a fallback to polling.
+        """
+        symbol_key = f"{gtt.exchange}:{gtt.symbol}"
+        subscribe_user = None
+
+        with self._lock:
+            for leg in gtt.legs:
+                if leg.leg_status != "pending":
+                    continue
+                legs = self._pending_gtt_index.setdefault(symbol_key, [])
+                if leg.id not in legs:
+                    legs.append(leg.id)
+                self._monitored_symbols.add(symbol_key)
+                # One ref per leg, matching the per-leg decrement on resolve.
+                if self._increment_user_symbol_refcount(gtt.user_id, symbol_key):
+                    subscribe_user = gtt.user_id
+
+        if subscribe_user:
+            exchange, symbol = symbol_key.split(":", 1)
+            self._subscribe_ws_symbols(subscribe_user, [(symbol, exchange)])
+            logger.debug(f"Subscribed {symbol_key} for GTT {gtt.gtt_id}")
 
     def _check_and_execute_order(self, order_id: str, ltp: Decimal):
         """

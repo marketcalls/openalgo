@@ -713,29 +713,41 @@ def setup_environment(app):
             ]
 
             db_init_start = time.time()
-            with ThreadPoolExecutor(max_workers=15) as executor:
+            # max_workers=1 on purpose: 14 of the 20 functions above target the
+            # same file (openalgo.db), and SQLite permits one writer per file,
+            # so running them concurrently made them contend for the write lock
+            # rather than progress in parallel - the "database is locked" seen
+            # on fresh installs. The parallelism was never real; serialising is
+            # measurably faster on the restart path because it stops threads
+            # queueing behind each other. See PR #1734.
+            #
+            # The executor is kept rather than a plain loop so each function
+            # stays its own future: one database failing to initialise must not
+            # abort the other nineteen.
+            with ThreadPoolExecutor(max_workers=1) as executor:
                 futures = {executor.submit(func): name for name, func in db_init_functions}
                 for future in as_completed(futures):
                     db_name = futures[future]
                     try:
                         future.result()
-                    except Exception as e:
-                        logger.error(f"Failed to initialize {db_name}: {e}")
+                    except Exception:
+                        logger.exception(f"Failed to initialize {db_name}")
 
             db_init_time = (time.time() - db_init_start) * 1000
-            logger.debug(f"All databases initialized in parallel ({db_init_time:.0f}ms)")
+            logger.debug(f"All databases initialized ({db_init_time:.0f}ms)")
 
             # The strategy book must be listening before any order can be
             # accepted: order.placed carries the only copy of the strategy tag,
             # so an order placed before this registration loses its attribution
             # permanently. Registered ahead of db_ready for that reason.
             # Retried rather than attempted once: the failure that matters here
-            # is a transient one (the DB file briefly unavailable during a
-            # parallel init), and losing it means every order placed afterwards
-            # is unattributable. Startup still proceeds if it ultimately fails -
-            # a P&L ledger must not keep the platform from trading - but the
-            # book then reports itself unavailable instead of an innocent zero,
-            # so nothing downstream can mistake it for a flat strategy.
+            # is a transient one (the DB file briefly unavailable because the
+            # out-of-process websocket proxy holds the write lock), and losing
+            # it means every order placed afterwards is unattributable. Startup
+            # still proceeds if it ultimately fails - a P&L ledger must not keep
+            # the platform from trading - but the book then reports itself
+            # unavailable instead of an innocent zero, so nothing downstream can
+            # mistake it for a flat strategy.
             for _attempt in range(1, 4):
                 try:
                     from database.strategy_book_db import init_strategy_book_db

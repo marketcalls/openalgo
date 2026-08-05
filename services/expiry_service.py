@@ -76,7 +76,10 @@ def get_expiry_dates(
             )
 
         # Validate exchange
-        supported_exchanges = ["NFO", "BFO", "MCX", "CDS", "CRYPTO"]
+        # NCO (NSE commodities) and BCD (BSE currency) list their own options
+        # and were simply missing here, so the expiry lookup returned a 400 and
+        # every downstream selector in Strategy Builder stayed empty. See #1748.
+        supported_exchanges = ["NFO", "BFO", "MCX", "CDS", "NCO", "BCD", "CRYPTO"]
         if exchange.upper() not in supported_exchanges:
             logger.warning(f"Unsupported exchange provided: {exchange}")
             return (

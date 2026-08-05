@@ -2,9 +2,11 @@
 Nubra order-update adapter — realtime order/trade events over the
 notifications WebSocket stream.
 
-Docs: broker-api-docs/nubra/api-docs.md, "Realtime Order Updates" section.
-Endpoint (UAT, the only one published in the doc; override with
-NUBRA_ORDER_WS_URL when Nubra publishes production): wss://uatapi.nubra.io/ws
+Docs: broker-api-docs/nubra-api-rest-api-v3-llm-builder.md, "Realtime Order
+Updates" section.
+Endpoint: discovered per-session from GET /userinfo -> env_info.user_ws_url
+(the URL is environment specific, so it must not be hardcoded). Falls back to
+NUBRA_ORDER_WS_URL, then to the UAT endpoint.
 Auth: Bearer session token + x-device-id headers (same convention as
 broker/nubra/api/nubrawebsocket.py), then a post-open text handshake:
     subscribe <session_token> notifications notification
@@ -18,14 +20,16 @@ fields OpenAlgo needs. Prices arrive in paise (÷100, matching
 nubrawebsocket.py's convention).
 """
 
-import json
 import os
 
 from google.protobuf.any_pb2 import Any as ProtoAny
 
+from broker.nubra.api.auth_api import get_ws_urls
+from broker.nubra.mapping.order_data import resolve_instrument
+from broker.nubra.mapping.transform_data import map_exchange
 from database.auth_db import get_auth_token
 from utils.logging import get_logger
-from websocket_proxy.order_adapter import BaseOrderUpdateAdapter, to_openalgo_symbol
+from websocket_proxy.order_adapter import BaseOrderUpdateAdapter
 
 logger = get_logger(__name__)
 
@@ -119,9 +123,24 @@ class NubraOrderUpdateAdapter(BaseOrderUpdateAdapter):
         super().__init__(broker_name="nubra", user_id=user_id)
         self.session_token = session_token
         self.device_id = device_id
+        self._ws_url = None
 
     def get_ws_url(self) -> str:
-        return os.getenv("NUBRA_ORDER_WS_URL", NUBRA_ORDER_WS_URL_DEFAULT)
+        """
+        Resolve the order-update stream URL for this session.
+
+        Nubra publishes it per environment via GET /userinfo, so ask the API
+        first and only fall back to a configured/default endpoint if that call
+        fails. Resolved once per adapter, then reused across reconnects.
+        """
+        if self._ws_url is None:
+            user_ws_url, _market_ws_url = get_ws_urls(self.session_token, self.device_id)
+            if user_ws_url:
+                self.logger.info(f"Nubra order WS URL from /userinfo: {user_ws_url}")
+            self._ws_url = user_ws_url or os.getenv(
+                "NUBRA_ORDER_WS_URL", NUBRA_ORDER_WS_URL_DEFAULT
+            )
+        return self._ws_url
 
     def get_headers(self):
         return {
@@ -173,13 +192,27 @@ class NubraOrderUpdateAdapter(BaseOrderUpdateAdapter):
         if isinstance(refdata_bytes, bytes) and refdata_bytes:
             try:
                 refdata = _decode_fields(refdata_bytes)
-                symbol = _first_str(refdata, 5)  # stock_name
-                exchange = _first_str(refdata, 10)
-                # Map to OpenAlgo format via the instrument token (field 4) —
-                # the same get_symbol lookup the REST orderbook mapping uses.
-                symbol = to_openalgo_symbol(
-                    symbol, exchange, token=_first(refdata, 4, None) or None
+                broker_symbol = _first_str(refdata, 5)   # stock_name
+                nubra_exchange = _first_str(refdata, 10)
+                derivative_type = _first_str(refdata, 11)
+                # RefData field 1 is ref_id, which is what Nubra stores in
+                # symtoken.token. Field 4 is the exchange token and never
+                # matches. resolve_instrument() also folds Nubra's "NSE" to NFO
+                # for derivatives and confirms both against the master contract.
+                symbol, exchange = resolve_instrument(
+                    nubra_exchange,
+                    derivative_type,
+                    ref_id=_first(refdata, 1, None),
+                    broker_symbol=broker_symbol,
                 )
+                if not symbol:
+                    self.logger.warning(
+                        f"Nubra order update not in the master contract: "
+                        f"stockName={broker_symbol!r} exchange={nubra_exchange!r} "
+                        f"derivativeType={derivative_type!r}"
+                    )
+                    symbol = broker_symbol
+                    exchange = map_exchange(nubra_exchange, derivative_type)
             except ValueError:
                 pass
 

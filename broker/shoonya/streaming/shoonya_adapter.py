@@ -47,56 +47,61 @@ class Config:
 
 
 class MarketDataCache:
-    """Manages market data caching with thread safety"""
+    """Manages market data caching with thread safety.
+
+    Keyed by scrip (``"NFO|65872"``), never by the bare token. Shoonya tokens
+    are unique only within an exchange, so a token-keyed cache merges two
+    different instruments into one slot — see issue #1732.
+    """
 
     def __init__(self):
         self._cache = {}
-        self._initialized_tokens = set()
+        self._initialized_scrips = set()
         self._lock = threading.Lock()
         self.logger = logging.getLogger("market_cache")
 
-    def get(self, token: str) -> dict[str, Any]:
-        """Get cached data for a token"""
+    def get(self, scrip: str) -> dict[str, Any]:
+        """Get cached data for a scrip"""
         with self._lock:
-            return self._cache.get(token, {}).copy()
+            return self._cache.get(scrip, {}).copy()
 
-    def update(self, token: str, data: dict[str, Any]) -> dict[str, Any]:
+    def update(self, scrip: str, data: dict[str, Any]) -> dict[str, Any]:
         """Update cache with new data and return merged result"""
         with self._lock:
-            cached_data = self._cache.get(token, {})
-            merged_data = self._merge_data(cached_data, data, token)
-            self._cache[token] = merged_data
+            cached_data = self._cache.get(scrip, {})
+            merged_data = self._merge_data(cached_data, data, scrip)
+            self._cache[scrip] = merged_data
 
-            if token not in self._initialized_tokens:
-                self._initialized_tokens.add(token)
-                self._log_cache_initialization(token, data)
+            if scrip not in self._initialized_scrips:
+                self._initialized_scrips.add(scrip)
+                self._log_cache_initialization(scrip, data)
 
             return merged_data.copy()
 
-    def clear(self, token: str = None) -> None:
-        """Clear cache for specific token or all tokens"""
+    def clear(self, scrip: str = None) -> None:
+        """Clear cache for specific scrip or all scrips"""
         with self._lock:
-            if token:
-                self._cache.pop(token, None)
-                self._initialized_tokens.discard(token)
-                self.logger.info(f"Cleared cache for token {token}")
+            if scrip:
+                self._cache.pop(scrip, None)
+                self._initialized_scrips.discard(scrip)
+                self.logger.info(f"Cleared cache for scrip {scrip}")
             else:
                 cache_size = len(self._cache)
                 self._cache.clear()
-                self._initialized_tokens.clear()
-                self.logger.info(f"Cleared all cached market data ({cache_size} tokens)")
+                self._initialized_scrips.clear()
+                self.logger.info(f"Cleared all cached market data ({cache_size} scrips)")
 
     def get_stats(self) -> dict[str, Any]:
         """Get cache statistics"""
         with self._lock:
             return {
-                "total_tokens": len(self._cache),
-                "initialized_tokens": len(self._initialized_tokens),
-                "tokens": list(self._cache.keys()),
+                "total_scrips": len(self._cache),
+                "initialized_scrips": len(self._initialized_scrips),
+                "scrips": list(self._cache.keys()),
             }
 
     # L3 fix: Removed unused depth_prices, depth_quantities, depth_orders variables
-    def _merge_data(self, cached: dict, new: dict, token: str) -> dict:
+    def _merge_data(self, cached: dict, new: dict, scrip: str) -> dict:
         """Smart merge logic for market data"""
         merged = cached.copy()
 
@@ -119,14 +124,14 @@ class MarketDataCache:
         """Check if value represents zero"""
         return value in [None, "", "0", 0, "0.0", 0.0]
 
-    def _log_cache_initialization(self, token: str, data: dict) -> None:
+    def _log_cache_initialization(self, scrip: str, data: dict) -> None:
         """Log cache initialization details"""
         basic_fields = ["lp", "o", "h", "l", "c", "v", "ap", "pc", "ltq", "ltt", "tbq", "tsq"]
         present_fields = sum(1 for field in basic_fields if field in data)
         completeness = present_fields / len(basic_fields)
 
         self.logger.info(
-            f"Initializing cache for token {token} - "
+            f"Initializing cache for scrip {scrip} - "
             f"{present_fields}/{len(basic_fields)} fields present ({completeness:.1%})"
         )
 
@@ -280,12 +285,24 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.ws_client = None
 
     def _setup_market_cache(self):
-        """Initialize market data caching system"""
+        """Initialize market data caching system.
+
+        Every routing structure is keyed by scrip (``"NFO|65872"``), not by the
+        bare token: Shoonya tokens are unique only within an exchange, and the
+        live master contract carries thousands of cross-exchange duplicates
+        (NSE/CDS, BSE_INDEX/NSE, BSE/MCX). Token-keyed routing merged two
+        instruments into one slot and published one symbol's price under the
+        other's topic — issue #1732.
+        """
         self.market_cache = MarketDataCache()
-        self.token_to_symbol = {}
+        self.scrip_to_symbol = {}  # scrip -> (symbol, exchange)
         self.ws_subscription_refs = {}  # Reference counting for WebSocket subscriptions
-        # SA-R7-10 fix: Index for O(1) subscription lookup by token on hot message path
-        self._token_to_cids = {}  # token -> set of correlation_ids
+        # SA-R7-10 fix: Index for O(1) subscription lookup by scrip on hot message path
+        self._scrip_to_cids = {}  # scrip -> set of correlation_ids
+        # Fallback index for feed messages that arrive without the 'e' field.
+        # Only consulted when the exchange is missing, and only trusted when it
+        # resolves to exactly one scrip.
+        self._token_to_scrips = {}  # token -> set of scrips
 
     def _setup_connection_management(self):
         """Initialize connection management"""
@@ -404,9 +421,10 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             ws_to_stop = self.ws_client
             self.ws_client = None
             self.subscriptions.clear()
-            self.token_to_symbol.clear()
+            self.scrip_to_symbol.clear()
             self.ws_subscription_refs.clear()
-            self._token_to_cids.clear()
+            self._scrip_to_cids.clear()
+            self._token_to_scrips.clear()
 
         # Wait for timer thread to finish (may be executing _attempt_reconnection)
         if timer_to_join and timer_to_join.is_alive():
@@ -484,15 +502,20 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                 # Store the subscription
                 self.subscriptions[correlation_id] = subscription
-                self.token_to_symbol[subscription["token"]] = (
+                scrip = subscription["scrip"]
+                self.scrip_to_symbol[scrip] = (
                     subscription["symbol"],
                     subscription["exchange"],
                 )
-                # Maintain token → correlation_id index
+                # Maintain scrip → correlation_id index
+                if scrip not in self._scrip_to_cids:
+                    self._scrip_to_cids[scrip] = set()
+                self._scrip_to_cids[scrip].add(correlation_id)
+                # Maintain token → scrip index for exchange-less feed messages
                 token = subscription["token"]
-                if token not in self._token_to_cids:
-                    self._token_to_cids[token] = set()
-                self._token_to_cids[token].add(correlation_id)
+                if token not in self._token_to_scrips:
+                    self._token_to_scrips[token] = set()
+                self._token_to_scrips[token].add(scrip)
 
                 if self.connected and not already_ws_subscribed:
                     need_ws_subscribe = True
@@ -529,7 +552,7 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Collect state under lock, execute WS calls outside
         need_ws_unsubscribe = False
         subscription = None
-        token_to_clear = None
+        scrip_to_clear = None
 
         with self.lock:
             # M7 fix: Use trailing underscore in prefix match
@@ -553,17 +576,23 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Remove the subscription
             del self.subscriptions[correlation_id]
 
-            # Maintain token → correlation_id index
-            token = subscription["token"]
-            if token in self._token_to_cids:
-                self._token_to_cids[token].discard(correlation_id)
-                if not self._token_to_cids[token]:
-                    del self._token_to_cids[token]
+            # Maintain scrip → correlation_id index
+            scrip = subscription["scrip"]
+            if scrip in self._scrip_to_cids:
+                self._scrip_to_cids[scrip].discard(correlation_id)
+                if not self._scrip_to_cids[scrip]:
+                    del self._scrip_to_cids[scrip]
 
-            # Clean up token mapping if no other subscriptions use it
-            if token not in self._token_to_cids:
-                self.token_to_symbol.pop(token, None)
-                token_to_clear = token
+            # Clean up scrip mapping if no other subscriptions use it
+            if scrip not in self._scrip_to_cids:
+                self.scrip_to_symbol.pop(scrip, None)
+                token = subscription["token"]
+                scrips_for_token = self._token_to_scrips.get(token)
+                if scrips_for_token is not None:
+                    scrips_for_token.discard(scrip)
+                    if not scrips_for_token:
+                        del self._token_to_scrips[token]
+                scrip_to_clear = scrip
 
             # SA-R8-3 note: Only call _websocket_unsubscribe for the last
             # correlation_id. The ref count inside _websocket_unsubscribe is a
@@ -576,9 +605,9 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if need_ws_unsubscribe:
             self._websocket_unsubscribe(subscription)
 
-        # Clear cache for removed token
-        if token_to_clear:
-            self.market_cache.clear(token_to_clear)
+        # Clear cache for removed scrip
+        if scrip_to_clear:
+            self.market_cache.clear(scrip_to_clear)
 
         return self._create_success_response(
             f"Unsubscribed from {symbol}.{exchange}", symbol=symbol, exchange=exchange, mode=mode
@@ -1109,7 +1138,7 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             touchline_scrips = set()
             depth_scrips = set()
 
-            # SA-R8-2 note: _token_to_cids is NOT rebuilt here because this method
+            # SA-R8-2 note: _scrip_to_cids is NOT rebuilt here because this method
             # does NOT modify self.subscriptions. The index remains valid.
             for subscription in self.subscriptions.values():
                 scrip = subscription["scrip"]
@@ -1183,14 +1212,17 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not msg_type or not token:
                 return
 
-            # SA-R7-10 fix: Use _token_to_cids index for O(1) lookup instead of linear scan
+            # Issue #1732: route on the full scrip. Every touchline/depth message
+            # carries the exchange in 'e' alongside the token in 'tk'; the token
+            # alone is ambiguous across exchanges.
             with self.lock:
-                if token not in self.token_to_symbol:
+                scrip = self._resolve_scrip_locked(data.get("e"), token)
+                if not scrip:
                     return
-                symbol, exchange = self.token_to_symbol.get(token, (None, None))
+                symbol, exchange = self.scrip_to_symbol.get(scrip, (None, None))
                 if not symbol:
                     return
-                cids = self._token_to_cids.get(token)
+                cids = self._scrip_to_cids.get(scrip)
                 if not cids:
                     return
                 matching_subscriptions = [
@@ -1201,10 +1233,37 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             for subscription in matching_subscriptions:
                 if self._should_process_message(msg_type, subscription["mode"]):
-                    self._process_subscription_message(data, subscription, symbol, exchange)
+                    self._process_subscription_message(
+                        data, subscription, symbol, exchange, scrip
+                    )
 
         except Exception as e:
             self.logger.error(f"Message processing error: {e}")
+
+    def _resolve_scrip_locked(self, feed_exchange: Any, token: str) -> str | None:
+        """Map a feed message's (exchange, token) pair to a subscribed scrip.
+
+        The exchange comes straight from the message's 'e' field, which Shoonya
+        sends on every tf/tk/df/dk packet. When it is missing we fall back to the
+        token index, but only when that resolves unambiguously — a token shared
+        by two subscribed exchanges cannot be routed, and mis-routing it is what
+        issue #1732 was about. Caller must hold self.lock.
+        """
+        if feed_exchange:
+            scrip = f"{feed_exchange}|{token}"
+            return scrip if scrip in self.scrip_to_symbol else None
+
+        candidates = self._token_to_scrips.get(token)
+        if not candidates:
+            return None
+        if len(candidates) > 1:
+            self.logger.warning(
+                f"Feed message for token {token} has no exchange and matches "
+                f"{len(candidates)} subscribed scrips ({sorted(candidates)}); dropping "
+                f"rather than routing it to the wrong symbol"
+            )
+            return None
+        return next(iter(candidates))
 
     def _should_process_message(self, msg_type: str, mode: int) -> bool:
         """Determine if message should be processed for given mode"""
@@ -1219,14 +1278,14 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         return False
 
     def _process_subscription_message(
-        self, data: dict, subscription: dict, symbol: str, exchange: str
+        self, data: dict, subscription: dict, symbol: str, exchange: str, scrip: str
     ) -> None:
         """Process message for a specific subscription"""
         mode = subscription["mode"]
         msg_type = data.get("t")
 
         # Normalize data
-        normalized_data = self._normalize_market_data(data, msg_type, mode)
+        normalized_data = self._normalize_market_data(data, msg_type, mode, scrip)
         normalized_data.update(
             {"symbol": symbol, "exchange": exchange, "timestamp": int(time.time() * 1000)}
         )
@@ -1241,13 +1300,12 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.publish_market_data(topic, normalized_data)
 
     def _normalize_market_data(
-        self, data: dict[str, Any], msg_type: str, mode: int
+        self, data: dict[str, Any], msg_type: str, mode: int, scrip: str
     ) -> dict[str, Any]:
         """Normalize market data based on mode with improved structure"""
-        token = data.get("tk")
-        if token:
+        if scrip:
             # Use cache to handle partial updates
-            data = self.market_cache.update(token, data)
+            data = self.market_cache.update(scrip, data)
 
         # Get mode-specific normalizer
         normalizer = self.normalizers.get(mode)
@@ -1261,9 +1319,9 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Get market data cache statistics"""
         return self.market_cache.get_stats()
 
-    def clear_market_data_cache(self, token: str = None) -> None:
-        """Clear market data cache"""
-        self.market_cache.clear(token)
+    def clear_market_data_cache(self, scrip: str = None) -> None:
+        """Clear market data cache for a scrip (``"NFO|65872"``), or all scrips"""
+        self.market_cache.clear(scrip)
 
     def unsubscribe_all(self) -> dict[str, Any]:
         """
@@ -1297,9 +1355,10 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Clear all subscription tracking but keep WebSocket connection alive
                 subscription_count = len(self.subscriptions)
                 self.subscriptions.clear()
-                self.token_to_symbol.clear()
+                self.scrip_to_symbol.clear()
                 self.ws_subscription_refs.clear()
-                self._token_to_cids.clear()
+                self._scrip_to_cids.clear()
+                self._token_to_scrips.clear()
 
                 # Snapshot ws_client reference under lock
                 ws = self.ws_client
@@ -1400,9 +1459,10 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             with self.lock:
                 self.reconnect_attempts = 0
                 self.subscriptions.clear()
-                self.token_to_symbol.clear()
+                self.scrip_to_symbol.clear()
                 self.ws_subscription_refs.clear()
-                self._token_to_cids.clear()
+                self._scrip_to_cids.clear()
+                self._token_to_scrips.clear()
 
             self.market_cache.clear()
         except Exception as e:

@@ -566,17 +566,40 @@ def broker_callback(broker, para=None):
             forward_url = "broker.html"
 
     elif broker == "nubra":
+        # Nubra logs in with a phone OTP, which is a two-step exchange: the GET
+        # dispatches the OTP and mints a temp_token, the POST redeems that token
+        # together with the code the user received. The temp_token is held in
+        # the Flask session between the two -- a signed (not encrypted) cookie,
+        # so nothing beyond this single-use, ~30s token belongs in it.
         if request.method == "GET":
-            # Redirect to React TOTP page
+            from broker.nubra.api.auth_api import request_login_otp
+
+            temp_token, masked_phone, error_message = request_login_otp()
+            if error_message:
+                return handle_auth_failure(error_message, forward_url="broker.html")
+
+            session["nubra_temp_token"] = temp_token
+            session["nubra_masked_phone"] = masked_phone
+            logger.info(f"Nubra login OTP dispatched to {masked_phone}")
+
+            # Redirect to the React OTP page. Reloading that page does NOT
+            # resend -- only this GET dispatches an OTP, so a new code means
+            # starting the Nubra login again from the broker page.
             return redirect("/broker/nubra/totp")
 
         elif request.method == "POST":
-            totp_code = request.form.get("totp")
+            # The shared React login component posts the code as "totp"
+            otp_code = request.form.get("otp") or request.form.get("totp")
 
-            if not totp_code:
-                return jsonify({"status": "error", "message": "TOTP code is required."}), 400
+            if not otp_code:
+                return jsonify({"status": "error", "message": "OTP is required."}), 400
 
-            auth_token, feed_token, error_message = auth_function(totp_code)
+            # Single-use: drop the token so a failed attempt cannot silently
+            # replay a stale one -- the user reloads to get a fresh OTP.
+            temp_token = session.pop("nubra_temp_token", None)
+            session.pop("nubra_masked_phone", None)
+
+            auth_token, feed_token, error_message = auth_function(otp_code, temp_token)
             forward_url = "broker.html"
 
     elif broker == "samco":
@@ -1169,4 +1192,59 @@ def samco_update_ip():
     return jsonify({
         "status": "success",
         "message": data.get("statusMessage", "IP updated successfully"),
+    })
+
+
+@brlogin_bp.route("/nubra/ip-status", methods=["GET"])
+@limiter.limit(LOGIN_RATE_LIMIT_MIN)
+@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
+def nubra_ip_status():
+    """Get static IP validation status for Nubra.
+
+    Mirrors the read half of /samco/ip-status. There is deliberately no
+    /nubra/update-ip counterpart: Nubra's REST V3 API exposes only
+    GET /ipaddress/validate, with no endpoint to register or change the
+    static IPs -- that is done through Nubra directly.
+    """
+    if "user" not in session:
+        return jsonify({"status": "error", "message": "Not logged in"}), 401
+
+    from broker.nubra.api.auth_api import validate_static_ip
+    from database.auth_db import get_auth_token
+
+    session_token = get_auth_token(session["user"])
+    if not session_token:
+        return jsonify({
+            "status": "error",
+            "message": "Not connected to Nubra. Log in to the broker first.",
+        }), 400
+
+    payload, error = validate_static_ip(session_token)
+
+    if error:
+        # "No IP addresses registered for user" is the expected answer for an
+        # account without static IP access, not a failure to report.
+        registered = "no ip addresses registered" not in error.lower()
+        return jsonify({
+            "status": "error",
+            "message": error,
+            "registered": registered,
+            "editable": False,
+        }), 200 if not registered else 400
+
+    return jsonify({
+        "status": "success",
+        "registered": True,
+        "is_matched": payload.get("is_matched", False),
+        "current_ip": payload.get("current_ip_address", ""),
+        "primary_ip": payload.get("primary_ip_address", ""),
+        "secondary_ip": payload.get("secondary_ip_address", ""),
+        # Nubra has no register/update IP API; changes go through Nubra.
+        "editable": False,
+        "message": (
+            "Current IP matches a registered static IP."
+            if payload.get("is_matched")
+            else "Current IP does NOT match the registered static IPs. "
+                 "Update them with Nubra to restore access."
+        ),
     })
