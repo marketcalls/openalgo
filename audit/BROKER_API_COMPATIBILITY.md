@@ -178,6 +178,8 @@ The stub state matters most. A broker whose `get_history` returns an empty frame
 
 Market data and order/trade updates are separate adapters. Plenty of brokers ship the first without the second, so a single "streaming" column would tell a user their order updates work when they do not.
 
+A `-` under Order/Trade Updates means not implemented **yet**. Coverage for the remaining brokers is planned, so read it as a current state rather than a permanent limitation.
+
 | Broker | Market Data | Order/Trade Updates |
 |---|---|---|
 | aliceblue | Y | Y |
