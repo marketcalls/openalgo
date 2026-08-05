@@ -1,6 +1,6 @@
 # GTT (Good Till Triggered) Orders — Phased Implementation Plan
 
-**Status:** Phase 2 + early Phase 6 (Dhan) shipped; Phase 3 (sandbox) and Phases 4–5 in progress
+**Status:** Phases 2, 3 + early Phase 6 (Dhan) shipped; Phases 4–5 in progress
 **Owner:** Rajandran R
 **Created:** 2026-04-22
 **Companion doc:** Product Design Report (conversation artifact)

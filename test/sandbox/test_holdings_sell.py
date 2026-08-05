@@ -123,10 +123,11 @@ def _balance():
 
 
 def test_partial_holdings_sell():
-    """SELL 150 of a 200-share holding → holding 50, no short, proceeds credited."""
-    print("\n" + "=" * 60)
-    print("TEST 1: partial CNC sell from holdings (200 → sell 150)")
-    print("=" * 60)
+    """SELL 150 of a 200-share holding leaves a -150 day position.
+
+    The holding stays at 200 for the rest of the session; T+1 settlement is
+    what reduces it. The day position is the record of the sale.
+    """
     _reset()
     _seed_holding(200)
 
@@ -134,29 +135,26 @@ def test_partial_holdings_sell():
     db_session.expire_all()
 
     holding = _holding()
-    short = _short_position()
-    expected_balance = START_BALANCE + Decimal("150") * Decimal("2500.00")
+    assert holding is not None, "the holding disappeared"
+    assert holding.quantity == 200, (
+        f"the holding moved to {holding.quantity} on the sell; only T+1 settlement "
+        "should reduce it"
+    )
 
-    ok = True
-    if not holding or holding.quantity != 50:
-        print(f"holding should be 50, got {holding.quantity if holding else None}")
-        ok = False
-    if short is not None:
-        print(f"a phantom short position was created: qty {short.quantity}")
-        ok = False
-    if _balance() != expected_balance:
-        print(f"proceeds not credited: {_balance()} != {expected_balance}")
-        ok = False
-    if ok:
-        print("PASS: holding 200→50, no short, ₹375000 proceeds credited")
-    return ok
+    day = _short_position()
+    assert day is not None, "the sell left no day position to record it"
+    assert day.quantity == -150, f"day position should be -150, got {day.quantity}"
+
+    # Proceeds arrive at settlement, not on the sell, so the balance is
+    # unchanged here. Asserted rather than ignored: a credit appearing now
+    # would mean the same shares could fund another trade before they settle.
+    assert _balance() == START_BALANCE, (
+        f"balance moved to {_balance()} before settlement"
+    )
 
 
 def test_full_holdings_sell():
-    """SELL 200 of a 200-share holding → holding gone, no short."""
-    print("\n" + "=" * 60)
-    print("TEST 2: full CNC sell from holdings (200 → sell 200)")
-    print("=" * 60)
+    """SELL the whole 200-share holding leaves a -200 day position."""
     _reset()
     _seed_holding(200)
 
@@ -164,25 +162,23 @@ def test_full_holdings_sell():
     db_session.expire_all()
 
     holding = _holding()
-    short = _short_position()
+    assert holding is not None and holding.quantity == 200, (
+        "the holding should stand until T+1 settlement, even when sold in full"
+    )
 
-    ok = True
-    if holding is not None and holding.quantity != 0:
-        print(f"holding should be gone/zero, got {holding.quantity}")
-        ok = False
-    if short is not None:
-        print(f"a phantom short position was created: qty {short.quantity}")
-        ok = False
-    if ok:
-        print("PASS: holding fully sold, no short position")
-    return ok
+    day = _short_position()
+    assert day is not None and day.quantity == -200, (
+        f"day position should be -200, got {day.quantity if day else None}"
+    )
 
 
 def test_position_then_holdings_sell():
-    """Open long 50 + holdings 100, SELL 120 → position closed, holding 30."""
-    print("\n" + "=" * 60)
-    print("TEST 3: CNC sell spanning open position + holdings (50+100, sell 120)")
-    print("=" * 60)
+    """A sell spanning an open long and a holding closes the long first.
+
+    Long 50 plus holding 100, sell 120: the 50 open position is closed and the
+    remaining 70 comes from the holding, which stays at 100 until settlement.
+    The net day position is therefore -70, not -120.
+    """
     _reset()
     _seed_position(50, avg=Decimal("2500.00"), margin=Decimal("125000.00"))
     _seed_holding(100)
@@ -191,26 +187,18 @@ def test_position_then_holdings_sell():
     db_session.expire_all()
 
     holding = _holding()
-    short = _short_position()
-    long_pos = (
-        SandboxPositions.query.filter_by(user_id=USER_ID, symbol="RELIANCE", exchange="NSE")
-        .filter(SandboxPositions.quantity > 0)
-        .first()
+    assert holding is not None and holding.quantity == 100, (
+        f"the holding moved to {holding.quantity if holding else None} before settlement"
     )
 
-    ok = True
-    if not holding or holding.quantity != 30:
-        print(f"holding should be 30, got {holding.quantity if holding else None}")
-        ok = False
-    if short is not None:
-        print(f"a phantom short position was created: qty {short.quantity}")
-        ok = False
-    if long_pos is not None:
-        print(f"long position should be closed, still open at {long_pos.quantity}")
-        ok = False
-    if ok:
-        print("PASS: position closed (50), holding 100→30, proceeds for 70")
-    return ok
+    position = SandboxPositions.query.filter_by(
+        user_id=USER_ID, symbol="RELIANCE", exchange="NSE"
+    ).first()
+    assert position is not None, "the sell left no position"
+    assert position.quantity == -70, (
+        f"net day position should be -70 (long 50 closed, 70 sold from the "
+        f"holding), got {position.quantity}"
+    )
 
 
 if __name__ == "__main__":
@@ -222,10 +210,16 @@ if __name__ == "__main__":
         test_full_holdings_sell,
         test_position_then_holdings_sell,
     ]
-    passed = sum(1 for t in tests if t())
-    failed = len(tests) - passed
+    failed = 0
+    for t in tests:
+        try:
+            t()
+            print(f"PASS: {t.__name__}")
+        except AssertionError as e:
+            failed += 1
+            print(f"FAIL: {t.__name__}: {e}")
 
     print("\n" + "=" * 60)
-    print(f"RESULTS: {passed} passed, {failed} failed")
+    print(f"RESULTS: {len(tests) - failed} passed, {failed} failed")
     print("=" * 60)
     sys.exit(0 if failed == 0 else 1)

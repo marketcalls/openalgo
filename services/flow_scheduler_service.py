@@ -256,20 +256,107 @@ class FlowScheduler:
             logger.info("Flow Scheduler shutdown")
 
 
-def is_within_market_hours(now: datetime | None = None) -> bool:
-    """Whether now falls inside NSE equity hours on a weekday (IST).
+#: Exchange whose calendar is consulted when the trigger node names none. This
+#: selects a calendar, not a time - the hours themselves always come from the
+#: market-calendar tables.
+DEFAULT_MARKET_HOURS_EXCHANGE = "NSE"
+
+
+def _parse_hhmm(value) -> int | None:
+    """"HH:MM" as minutes past midnight, or None if it is not a valid time.
+
+    Returning None rather than a fallback time matters: the caller then falls
+    through to the exchange calendar instead of silently trading to a time
+    nobody configured.
+    """
+    if value is None:
+        return None
+    try:
+        hours, minutes = (int(part) for part in str(value).strip().split(":", 1))
+    except (ValueError, TypeError):
+        return None
+    if not (0 <= hours <= 23 and 0 <= minutes <= 59):
+        return None
+    return hours * 60 + minutes
+
+
+def is_within_market_hours(
+    now: datetime | None = None,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    exchange: str | None = None,
+) -> bool:
+    """Whether ``now`` falls inside the workflow's trading window (IST).
 
     The editor offers a "market hours only" switch on the schedule trigger and
     defaults it on, but nothing read it, so an interval schedule kept firing
     overnight and at weekends.
+
+    No trading time is hardcoded here. The day is resolved through
+    ``get_effective_session_window``, the same calendar the rest of the
+    platform uses, so weekends, trading holidays, muhurat and other special
+    sessions, and per-exchange hours are all inherited rather than restated.
+    That calendar knows MCX runs to 23:55 and CRYPTO never closes, which a
+    fixed 09:15-15:30 window got wrong for every non-equity workflow.
+
+    Args:
+        now: IST-aware instant to test. Defaults to the current time.
+        start: Optional "HH:MM" override from the workflow's trigger node.
+        end: Optional "HH:MM" override from the workflow's trigger node.
+        exchange: Calendar to consult. Defaults to NSE.
+
+    Returns:
+        False whenever the exchange is shut that day, regardless of any
+        override - an override narrows or extends the clock, it does not
+        reopen a holiday.
     """
     import pytz
 
-    now = now or datetime.now(pytz.timezone("Asia/Kolkata"))
-    if now.weekday() >= 5:  # Saturday, Sunday
+    from database.market_calendar_db import get_effective_session_window
+
+    ist = pytz.timezone("Asia/Kolkata")
+    now = now or datetime.now(ist)
+
+    exch = (exchange or DEFAULT_MARKET_HOURS_EXCHANGE).upper()
+    window = get_effective_session_window(now.date(), exch)
+    if window is None:
+        # Shut that day: weekend, or a trading holiday for this exchange.
         return False
+
+    start_minutes = _parse_hhmm(start)
+    end_minutes = _parse_hhmm(end)
+
+    if start_minutes is None or end_minutes is None:
+        session_start = datetime.fromtimestamp(window["start_ms"] / 1000, ist)
+        session_end = datetime.fromtimestamp(window["end_ms"] / 1000, ist)
+        if start_minutes is None:
+            start_minutes = session_start.hour * 60 + session_start.minute
+        if end_minutes is None:
+            end_minutes = session_end.hour * 60 + session_end.minute
+
     minutes = now.hour * 60 + now.minute
-    return (9 * 60 + 15) <= minutes <= (15 * 60 + 30)
+    return start_minutes <= minutes <= end_minutes
+
+
+def get_market_hours_config(workflow) -> dict:
+    """Market-hours settings from a workflow's trigger node.
+
+    Read from the graph on every run rather than baked into the scheduler job,
+    so editing the times in the flow JSON takes effect on the next run - the
+    same way node edits already do - instead of needing a deactivate and
+    reactivate cycle.
+    """
+    for node in getattr(workflow, "nodes", None) or []:
+        if node.get("type") == "start":
+            data = node.get("data") or {}
+            return {
+                "enabled": bool(data.get("marketHoursOnly", False)),
+                "start": data.get("marketHoursStart") or None,
+                "end": data.get("marketHoursEnd") or None,
+                "exchange": data.get("marketHoursExchange") or None,
+            }
+    return {"enabled": False, "start": None, "end": None, "exchange": None}
 
 
 def execute_workflow_scheduled(
@@ -284,7 +371,32 @@ def execute_workflow_scheduled(
         logger.error(f"No API key available for workflow {workflow_id}")
         return
 
-    if market_hours_only and not is_within_market_hours():
+    # The window is read from the workflow's trigger node on every run, so
+    # changing the times in the flow JSON applies from the next run. The
+    # market_hours_only argument is what older jobs stored in the jobstore and
+    # is honoured when the graph does not set the switch itself.
+    config = {"enabled": market_hours_only, "start": None, "end": None, "exchange": None}
+    try:
+        from database.flow_db import get_workflow
+
+        workflow = get_workflow(workflow_id)
+        if workflow is not None:
+            from_graph = get_market_hours_config(workflow)
+            if from_graph["enabled"] or any(
+                from_graph[k] for k in ("start", "end", "exchange")
+            ):
+                config = from_graph
+    except Exception:
+        # A lookup failure must not silently drop the gate and let a workflow
+        # trade at 3am, so the stored flag stands.
+        logger.exception(
+            f"Could not read market-hours config for workflow {workflow_id}; "
+            "using the schedule's stored setting"
+        )
+
+    if config["enabled"] and not is_within_market_hours(
+        start=config["start"], end=config["end"], exchange=config["exchange"]
+    ):
         logger.debug(
             f"Skipping scheduled workflow {workflow_id}: outside market hours"
         )
