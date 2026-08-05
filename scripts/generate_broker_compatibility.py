@@ -279,6 +279,12 @@ def render() -> str:
         "column would tell a user their order updates work when they do not."
     )
     add("")
+    add(
+        "A `-` under Order/Trade Updates means not implemented **yet**. Coverage "
+        "for the remaining brokers is planned, so read it as a current state "
+        "rather than a permanent limitation."
+    )
+    add("")
     add("| Broker | " + " | ".join(stream_columns) + " |")
     add("|---" * (len(stream_columns) + 1) + "|")
     for b in names:
