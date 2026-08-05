@@ -2,7 +2,7 @@ import importlib
 import os
 import re
 import time
-from datetime import datetime, date
+from datetime import date, datetime
 from threading import Thread
 
 import pytz
@@ -10,7 +10,6 @@ from flask import current_app as app
 from flask import jsonify, redirect, request, session, url_for
 
 from database.auth_db import get_feed_token as db_get_feed_token
-from utils.ip_helper import get_real_ip
 from database.auth_db import upsert_auth
 from database.master_contract_status_db import (
     get_exchange_stats_from_db,
@@ -22,6 +21,7 @@ from database.master_contract_status_db import (
     update_status,
 )
 from utils.constants import CRYPTO_BROKERS
+from utils.ip_helper import get_real_ip
 from utils.logging import get_logger
 from utils.session import get_session_expiry_time, set_session_login_time
 
@@ -349,6 +349,43 @@ def async_master_contract_download(broker):
     return master_contract_status
 
 
+def activate_broker_auth_token(auth_token, user_session_key, broker, feed_token=None, user_id=None):
+    """
+    Persist broker auth and start master-contract work without touching Flask session state.
+
+    Browser logins and private service-to-service token imports share this path so
+    cache invalidation, broker status initialization, and master-contract loading stay identical.
+    """
+    inserted_id = upsert_auth(
+        user_session_key,
+        auth_token,
+        broker,
+        feed_token=feed_token,
+        user_id=user_id,
+    )
+    if not inserted_id:
+        logger.error(f"Failed to upsert auth token for user {user_session_key}")
+        return None
+
+    logger.info(f"Database record upserted with ID: {inserted_id}")
+    init_broker_status(broker)
+
+    should_download, reason = should_download_master_contract(broker)
+    logger.info(
+        f"Smart download check for {broker}: should_download={should_download}, reason={reason}"
+    )
+
+    if should_download:
+        thread = Thread(target=async_master_contract_download, args=(broker,), daemon=True)
+        thread.start()
+    else:
+        logger.info(f"Skipping download for {broker}: {reason}")
+        thread = Thread(target=load_existing_master_contract, args=(broker,), daemon=True)
+        thread.start()
+
+    return inserted_id
+
+
 def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, user_id=None):
     """
     Handles common tasks after successful authentication.
@@ -380,7 +417,7 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     session_id = secrets.token_hex(32)
     session["session_id"] = session_id  # Store in cookie for logout cleanup
 
-    from database.auth_db import register_session, get_active_sessions
+    from database.auth_db import get_active_sessions, register_session
     register_session(
         username=user_session_key,
         session_id=session_id,
@@ -413,30 +450,14 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     except Exception:
         pass  # Don't block login if logging fails
 
-    # Store auth token in database
-    inserted_id = upsert_auth(
-        user_session_key, auth_token, broker, feed_token=feed_token, user_id=user_id
+    inserted_id = activate_broker_auth_token(
+        auth_token,
+        user_session_key,
+        broker,
+        feed_token=feed_token,
+        user_id=user_id,
     )
     if inserted_id:
-        logger.info(f"Database record upserted with ID: {inserted_id}")
-        # Initialize master contract status for this broker
-        init_broker_status(broker)
-
-        # Smart download: Check if we need to download or can use cached data
-        should_download, reason = should_download_master_contract(broker)
-        logger.info(f"Smart download check for {broker}: should_download={should_download}, reason={reason}")
-
-        if should_download:
-            # Start async download in background thread
-            thread = Thread(target=async_master_contract_download, args=(broker,), daemon=True)
-            thread.start()
-        else:
-            # Use cached data - load existing master contract
-            logger.info(f"Skipping download for {broker}: {reason}")
-            thread = Thread(target=load_existing_master_contract, args=(broker,), daemon=True)
-            thread.start()
-
-        # Return JSON for AJAX requests (React), redirect for OAuth callbacks
         if is_ajax_request():
             return jsonify(
                 {
@@ -445,19 +466,16 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
                     "redirect": "/dashboard",
                 }
             ), 200
-        else:
-            return redirect(url_for("dashboard_bp.dashboard"))
-    else:
-        logger.error(f"Failed to upsert auth token for user {user_session_key}")
-        if is_ajax_request():
-            return jsonify(
-                {
-                    "status": "error",
-                    "message": "Failed to store authentication token. Please try again.",
-                }
-            ), 500
-        else:
-            return redirect(url_for("auth.broker_login"))
+        return redirect(url_for("dashboard_bp.dashboard"))
+
+    if is_ajax_request():
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Failed to store authentication token. Please try again.",
+            }
+        ), 500
+    return redirect(url_for("auth.broker_login"))
 
 
 def handle_auth_failure(error_message, forward_url="broker.html"):

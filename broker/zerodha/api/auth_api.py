@@ -5,6 +5,51 @@ import os
 from utils.httpx_client import get_httpx_client
 
 
+def _clean_secret_value(value: str | None) -> str:
+    return (value or "").strip().strip("'\"")
+
+
+def format_auth_token(access_token: str) -> str:
+    broker_api_key = _clean_secret_value(os.getenv("BROKER_API_KEY"))
+    cleaned_token = _clean_secret_value(access_token)
+    if not broker_api_key:
+        raise ValueError("zerodha_broker_api_key_missing")
+    if not cleaned_token:
+        raise ValueError("zerodha_access_token_missing")
+    return f"{broker_api_key}:{cleaned_token}"
+
+
+def validate_access_token(access_token: str) -> tuple[bool, str | None]:
+    try:
+        auth_token = format_auth_token(access_token)
+    except ValueError as exc:
+        return False, str(exc)
+
+    client = get_httpx_client()
+    try:
+        response = client.get(
+            "https://api.kite.trade/user/profile",
+            headers={
+                "Authorization": f"token {auth_token}",
+                "X-Kite-Version": "3",
+            },
+        )
+    except Exception:
+        return False, "zerodha_profile_request_failed"
+
+    if response.status_code != 200:
+        return False, "zerodha_profile_rejected"
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return False, "zerodha_profile_invalid_json"
+
+    if payload.get("status") == "success":
+        return True, None
+    return False, "zerodha_profile_rejected"
+
+
 def authenticate_broker(request_token):
     try:
         # Fetching the necessary credentials from environment variables
