@@ -4,7 +4,7 @@ import os
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pandas as pd
@@ -762,15 +762,25 @@ class BrokerData:
                     if ssboe is not None:
                         timestamp = int(ssboe)
                     else:
+                        # TPSeries `time` is IST wall-clock, so a naive parse
+                        # against the host clock reproduces its ssboe. The
+                        # date-only EODChartData form has no clock at all and
+                        # must be pinned to 00:00 UTC — the convention every
+                        # other daily bar here uses — or it would land 5.5
+                        # hours early and miss the timestamp dedupe.
                         timestamp = None
-                        for time_format in ("%d-%m-%Y %H:%M:%S", "%d-%b-%Y"):
+                        for time_format, as_utc in (
+                            ("%d-%m-%Y %H:%M:%S", False),
+                            ("%d-%b-%Y", True),
+                        ):
                             try:
-                                timestamp = int(
-                                    datetime.strptime(candle["time"], time_format).timestamp()
-                                )
-                                break
+                                parsed = datetime.strptime(candle["time"], time_format)
                             except ValueError:
                                 continue
+                            if as_utc:
+                                parsed = parsed.replace(tzinfo=UTC)
+                            timestamp = int(parsed.timestamp())
+                            break
                         if timestamp is None:
                             logger.error(f"Unparseable candle time, skipping: {candle}")
                             continue
