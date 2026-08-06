@@ -218,6 +218,19 @@ export interface TerminalOptions {
 }
 
 const DERIVATIVE_EXCHANGES = new Set(['NFO', 'BFO', 'CDS', 'BCD', 'MCX', 'NCO', 'NCDEX'])
+
+/**
+ * Products a segment accepts. Derivative segments are NRML/MIS and cash equity
+ * is CNC/MIS; the exchange alone decides, never the contract's lot size.
+ */
+export function productOptionsFor(exchange: string): string[] {
+  return DERIVATIVE_EXCHANGES.has(exchange) ? ['MIS', 'NRML'] : ['MIS', 'CNC']
+}
+
+/** Whether quantity on this segment is entered in lots rather than units. */
+export function usesLots(exchange: string): boolean {
+  return DERIVATIVE_EXCHANGES.has(exchange)
+}
 const QUOTE_ONLY = new Set(['NSE_INDEX', 'BSE_INDEX', 'MCX_INDEX', 'GLOBAL_INDEX'])
 const STRATEGY = 'chart-trading'
 const VISIBLE_BARS = 120
@@ -1569,9 +1582,14 @@ export class TradingTerminal {
     }
     const exchange = String(info.exchange)
     const lotsize = Number(info.lotsize) || 1
-    const lots = DERIVATIVE_EXCHANGES.has(exchange) && lotsize > 1
+    // The segment decides this, never the lot size. Every MCX, NCO and CDS
+    // contract carries lotsize 1 in the master, so a `lotsize > 1` guard read
+    // them as cash equity and offered CNC — which those segments do not accept,
+    // so the broker rejected the order. Quantity is unaffected: orderQty() is
+    // lots × lotsize, and multiplying by a lot size of 1 sends the same number.
+    const lots = usesLots(exchange)
     const savedProduct = this.lsGet('product')
-    const productOptions = lots ? ['MIS', 'NRML'] : ['MIS', 'CNC']
+    const productOptions = productOptionsFor(exchange)
     this.product = productOptions.includes(savedProduct || '')
       ? (savedProduct as string)
       : productOptions[0]
