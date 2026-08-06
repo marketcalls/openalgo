@@ -246,20 +246,31 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.batch_timer.cancel()
                 self.batch_timer = None
 
+    @staticmethod
+    def _segment_of(instrument_token: str) -> str:
+        """Segment prefix of a SEGMENT:TOKEN instrument (e.g. 'NFO')."""
+        return str(instrument_token).split(":", 1)[0]
+
     def _process_batch_subscriptions(self) -> None:
-        """Flush queued subscriptions to the client, grouped by mode, so a burst
-        of per-symbol subscribe() calls becomes a few frames instead of one per
-        symbol."""
+        """Flush queued subscriptions to the client, grouped by mode AND segment,
+        so a burst of per-symbol subscribe() calls becomes a few frames instead
+        of one per symbol.
+
+        Segment is part of the grouping key deliberately: a single frame mixing
+        NSE/BSE/NFO/BFO instruments has been observed to deliver ticks only for
+        the first segment in the list. One frame per (mode, segment) costs a
+        handful of extra small messages and removes the ordering dependency.
+        """
         with self.lock:
             if not self.subscription_queue:
                 self.batch_timer = None
                 return
-            # Group queued instruments by INDmoney mode (dedup within the batch)
-            mode_groups: dict[str, list[str]] = {}
+            # Group queued instruments by (mode, segment), dedup within the batch
+            groups: dict[tuple[str, str], list[str]] = {}
             for sub in self.subscription_queue:
-                mode = sub["mode"]
                 token = sub["instrument_token"]
-                bucket = mode_groups.setdefault(mode, [])
+                key = (sub["mode"], self._segment_of(token))
+                bucket = groups.setdefault(key, [])
                 if token not in bucket:
                     bucket.append(token)
             self.subscription_queue.clear()
@@ -271,12 +282,16 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.info("Batch flush skipped (not connected); will resubscribe on open")
             return
 
-        for mode, instruments in mode_groups.items():
+        for (mode, segment), instruments in groups.items():
             try:
-                self.logger.info(f"Batch subscribing {len(instruments)} instruments in {mode} mode")
+                self.logger.info(
+                    f"Batch subscribing {len(instruments)} {segment} instruments in {mode} mode"
+                )
                 self.ws_client.subscribe(instruments=instruments, mode=mode)
             except Exception as e:
-                self.logger.error(f"Batch subscription failed for {mode} mode: {e}")
+                self.logger.error(
+                    f"Batch subscription failed for {segment} in {mode} mode: {e}"
+                )
 
     def subscribe(
         self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 1
@@ -309,8 +324,22 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         token = token_info["token"]
         brexchange = token_info["brexchange"]
 
-        # Create INDmoney instrument token (SEGMENT:TOKEN format)
-        instrument_token = IndmoneyExchangeMapper.create_instrument_token(brexchange, token)
+        # Create INDmoney instrument token (SEGMENT:TOKEN format).
+        #
+        # Build this from the OpenAlgo `exchange`, NOT `brexchange`. brexchange
+        # is the PARENT venue - the master contract stores NFO under brexchange
+        # "NSE" and BFO under "BSE" - so using it subscribes every F&O token as
+        # "NSE:<token>"/"BSE:<token>". The server has no such instrument in the
+        # cash segment and simply never sends a tick, which looks like a silent
+        # feed rather than an error. NSE equity was the only case that worked,
+        # because there alone exchange == brexchange.
+        instrument_token = IndmoneyExchangeMapper.create_instrument_token(exchange, token)
+        if not instrument_token:
+            return self._create_error_response(
+                "UNSUPPORTED_EXCHANGE",
+                f"INDmoney does not provide a market data feed for {exchange}. "
+                f"Supported: {', '.join(IndmoneyExchangeMapper.EXCHANGE_SEGMENTS)}",
+            )
 
         # Convert mode to INDmoney format
         indmoney_mode = IndmoneyModeMapper.get_indmoney_mode(mode)
@@ -377,10 +406,15 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             )
 
         token = token_info["token"]
-        brexchange = token_info["brexchange"]
 
-        # Create INDmoney instrument token
-        instrument_token = IndmoneyExchangeMapper.create_instrument_token(brexchange, token)
+        # Create INDmoney instrument token. Must match what subscribe() sent -
+        # built from the OpenAlgo `exchange`, not the parent `brexchange`.
+        instrument_token = IndmoneyExchangeMapper.create_instrument_token(exchange, token)
+        if not instrument_token:
+            return self._create_error_response(
+                "UNSUPPORTED_EXCHANGE",
+                f"INDmoney does not provide a market data feed for {exchange}",
+            )
 
         # Convert mode to INDmoney format
         indmoney_mode = IndmoneyModeMapper.get_indmoney_mode(mode)
@@ -442,9 +476,9 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         with self.lock:
             self.logger.info(f"Number of stored subscriptions: {len(self.subscriptions)}")
 
-            # Group subscriptions by mode for efficient resubscription
-            ltp_instruments = []
-            quote_instruments = []
+            # Group by (mode, segment) - see _process_batch_subscriptions for why
+            # segment is part of the key.
+            groups: dict[tuple[str, str], list[str]] = {}
 
             for correlation_id, sub in self.subscriptions.items():
                 instrument_token = sub["instrument_token"]
@@ -453,32 +487,24 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     f"  - {correlation_id}: instrument={instrument_token}, mode={mode}"
                 )
 
-                if mode == "ltp":
-                    ltp_instruments.append(instrument_token)
-                elif mode == "quote":
-                    quote_instruments.append(instrument_token)
+                if mode in ("ltp", "quote"):
+                    groups.setdefault((mode, self._segment_of(instrument_token)), []).append(
+                        instrument_token
+                    )
 
             # Resubscribe in batches
             try:
-                if ltp_instruments:
+                for (mode, segment), instruments in groups.items():
                     self.logger.info(
-                        f"RESUBSCRIBING to {len(ltp_instruments)} LTP instruments: {ltp_instruments}"
+                        f"RESUBSCRIBING to {len(instruments)} {segment} instruments "
+                        f"in {mode} mode: {instruments}"
                     )
-                    self.ws_client.subscribe(instruments=ltp_instruments, mode="ltp")
+                    self.ws_client.subscribe(instruments=instruments, mode=mode)
                     self.logger.info(
-                        f"Resubscribed to {len(ltp_instruments)} instruments in LTP mode"
-                    )
-
-                if quote_instruments:
-                    self.logger.info(
-                        f"RESUBSCRIBING to {len(quote_instruments)} QUOTE instruments: {quote_instruments}"
-                    )
-                    self.ws_client.subscribe(instruments=quote_instruments, mode="quote")
-                    self.logger.info(
-                        f"Resubscribed to {len(quote_instruments)} instruments in QUOTE mode"
+                        f"Resubscribed to {len(instruments)} {segment} instruments in {mode} mode"
                     )
 
-                if not ltp_instruments and not quote_instruments:
+                if not groups:
                     self.logger.warning(
                         "No subscriptions to resubscribe (subscriptions list is empty)"
                     )
@@ -548,14 +574,36 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.warning(f"[WARN] Message missing instrument or mode: {message}")
                 return
 
-            # Find the subscription that matches this instrument
+            # Find the subscription that matches this instrument.
+            #
+            # Ticks may carry either the full "SEGMENT:TOKEN" or just the bare
+            # token. A bare token is ambiguous - the docs define separate NSE:/
+            # BSE:/NFO:/BFO:/NIDX:/BIDX: prefixes precisely because token
+            # numbers are only unique *within* a segment - so match the full
+            # instrument token first and only fall back to the bare token, and
+            # then only when exactly one subscription claims it.
             subscription = None
             with self.lock:
-                for sub in self.subscriptions.values():
-                    # INDmoney returns only the token part, not the full SEGMENT:TOKEN
-                    if sub["token"] == instrument:
-                        subscription = sub
-                        break
+                subs = list(self.subscriptions.values())
+
+            for sub in subs:
+                if sub["instrument_token"] == instrument:
+                    subscription = sub
+                    break
+
+            if subscription is None:
+                token_matches = [s for s in subs if s["token"] == instrument]
+                if len(token_matches) == 1:
+                    subscription = token_matches[0]
+                elif len(token_matches) > 1:
+                    # Same token number subscribed on more than one segment;
+                    # guessing would attribute the tick to the wrong symbol.
+                    self.logger.warning(
+                        f"Ambiguous tick for token {instrument}: subscribed on "
+                        f"{[s['exchange'] for s in token_matches]}. Dropping - the feed "
+                        "did not qualify it with a segment prefix."
+                    )
+                    return
 
             if not subscription:
                 self.logger.debug(f"Received data for unsubscribed instrument: {instrument}")
