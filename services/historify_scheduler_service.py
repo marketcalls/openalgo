@@ -4,7 +4,6 @@ Historify Scheduler Service
 Handles scheduled historical data downloads using APScheduler (Flask/sync version)
 """
 
-import os
 import threading
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -14,6 +13,12 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from database.apscheduler_jobstore_db import (
+    HISTORIFY_JOBSTORE_TABLE,
+    ensure_jobstore_table,
+    get_database_url,
+)
+from database.engine_factory import create_db_engine
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -46,15 +51,29 @@ class HistorifyScheduler:
                 return
 
             if db_url is None:
-                db_url = os.getenv("DATABASE_URL", "sqlite:///db/openalgo.db")
+                db_url = get_database_url()
 
             self._api_key = api_key
             self._socketio = socketio
 
             try:
+                # Create the job store table before APScheduler would. Its own
+                # DDL in start() is one-shot: an install that loses the boot
+                # write-lock race never initializes the scheduler, and every
+                # scheduled download then silently never runs for the life of
+                # the process (issue #1750). app.py normally creates this during
+                # the serialized database-init phase, which leaves the call
+                # below a read-only no-op; it retries here for any caller that
+                # starts the scheduler outside that path.
+                ensure_jobstore_table(HISTORIFY_JOBSTORE_TABLE, database_url=db_url)
+
+                # engine= rather than url= so the job store uses the project
+                # NullPool policy instead of SQLAlchemy's default QueuePool,
+                # which would hold connections open for the life of the
+                # process. See database/engine_factory.py.
                 jobstores = {
                     "default": SQLAlchemyJobStore(
-                        url=db_url, tablename="historify_apscheduler_jobs"
+                        engine=create_db_engine(db_url), tablename=HISTORIFY_JOBSTORE_TABLE
                     )
                 }
                 self._scheduler = BackgroundScheduler(
