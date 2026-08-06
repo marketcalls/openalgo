@@ -54,6 +54,12 @@ def _mark_bad(scrip_code):
 _MAX_RETRIES = 3
 _RATE_LIMIT_BASE_DELAY = 1.0  # seconds; doubled each attempt (1s, 2s, 4s)
 
+# Data APIs are capped at 5 requests/second (docs 03-conventions), i.e. one per
+# 200ms. A multi-year history request is split into chunks that were previously
+# fired back-to-back, which reliably tripped a 429 and cost a full second of
+# backoff per breach. Pacing proactively is cheaper than being throttled.
+_DATA_API_MIN_INTERVAL = 0.25
+
 
 def request_with_retry(client, method, url, **kwargs):
     """
@@ -95,12 +101,6 @@ def get_api_response(endpoint, auth, method="GET", params=None):
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
-    # Log token info for debugging (mask the actual token)
-    token_preview = (
-        AUTH_TOKEN[:20] + "..." + AUTH_TOKEN[-10:] if len(AUTH_TOKEN) > 30 else AUTH_TOKEN
-    )
-    logger.debug(f"Using auth token: {token_preview}")
-
     headers = {
         "Authorization": AUTH_TOKEN,
         "Content-Type": "application/json",
@@ -109,9 +109,9 @@ def get_api_response(endpoint, auth, method="GET", params=None):
 
     url = get_url(endpoint)
 
+    # Never log `headers` - it carries the Authorization token.
     logger.debug(f"Making request to {url}")
     logger.debug(f"Method: {method}")
-    logger.debug(f"Headers: {headers}")
     logger.debug(f"Params: {params}")
     # Build query string for debugging
     if params:
@@ -259,12 +259,10 @@ class BrokerData:
         """Initialize Indmoney data handler with authentication token"""
         self.auth_token = auth_token
         # Map common timeframe format to Indmoney intervals
+        # INDstocks no longer offers any sub-minute interval - the documented
+        # set starts at 1minute (docs 07-historical-data). Advertising second
+        # granularity here only produced requests the server rejects.
         self.timeframe_map = {
-            # Seconds (max 1 day range)
-            "1s": "1second",
-            "5s": "5second",
-            "10s": "10second",
-            "15s": "15second",
             # Minutes (max 7 days range for 1-30m)
             "1m": "1minute",
             "2m": "2minute",
@@ -317,6 +315,32 @@ class BrokerData:
         )
 
         return scrip_code
+
+    @staticmethod
+    def _extract_market_depth(container, scrip_code):
+        """
+        Pull the {aggregate, depth} object out of a `market_depth` value.
+
+        The docs show it flat (``data.<scrip>.market_depth.depth``) but the live
+        API has been observed with an extra scrip-code level
+        (``data.<scrip>.market_depth.<scrip>.depth``). Accept either, so neither
+        shape silently yields an empty book.
+        """
+        if not isinstance(container, dict):
+            return {}
+        # Extra scrip-keyed level.
+        nested = container.get(scrip_code)
+        if isinstance(nested, dict) and ("depth" in nested or "aggregate" in nested):
+            return nested
+        # Documented flat shape.
+        if "depth" in container or "aggregate" in container:
+            return container
+        # Single unknown key wrapping the real object.
+        if len(container) == 1:
+            only = next(iter(container.values()))
+            if isinstance(only, dict) and ("depth" in only or "aggregate" in only):
+                return only
+        return {}
 
     def _clean_number(self, value, default=0):
         """Clean comma-separated number strings and convert to appropriate type"""
@@ -387,8 +411,9 @@ class BrokerData:
                     }
 
                     # Try to extract bid/ask from market depth if available in full response
-                    market_depth_container = full_data.get("market_depth", {})
-                    market_depth = market_depth_container.get(scrip_code, {})
+                    market_depth = self._extract_market_depth(
+                        full_data.get("market_depth"), scrip_code
+                    )
                     depth_levels = market_depth.get("depth", [])
 
                     if depth_levels and len(depth_levels) > 0:
@@ -428,9 +453,9 @@ class BrokerData:
                 )
                 depth_raw = depth_response.get("data", {}).get(scrip_code, {})
 
-                # Handle the extra nesting level in market depth
-                market_depth_container = depth_raw.get("market_depth", {})
-                market_depth = market_depth_container.get(scrip_code, {})
+                market_depth = self._extract_market_depth(
+                    depth_raw.get("market_depth"), scrip_code
+                )
                 depth_levels = market_depth.get("depth", [])
 
                 if depth_levels and len(depth_levels) > 0:
@@ -754,10 +779,10 @@ class BrokerData:
                         "totalsellqty": 0,
                     }
 
-                # Process market depth - handle the extra nesting level
-                market_depth_container = depth_data.get("market_depth", {})
-                # Indmoney has an extra nesting level with the scrip code
-                market_depth = market_depth_container.get(scrip_code, {})
+                # Process market depth (tolerates both documented and observed shapes)
+                market_depth = self._extract_market_depth(
+                    depth_data.get("market_depth"), scrip_code
+                )
                 depth_levels = market_depth.get("depth", [])
                 aggregate = market_depth.get("aggregate", {})
 
@@ -929,10 +954,6 @@ class BrokerData:
 
             # Check if date range exceeds Indmoney limits
             max_ranges = {
-                "1second": 1,
-                "5second": 1,
-                "10second": 1,
-                "15second": 1,  # 1 day
                 "1minute": 7,
                 "2minute": 7,
                 "3minute": 7,
@@ -957,7 +978,11 @@ class BrokerData:
 
             all_candles = []
 
-            for chunk_start, chunk_end in date_chunks:
+            for chunk_index, (chunk_start, chunk_end) in enumerate(date_chunks):
+                # Stay under the 5/s Data API limit. No delay before the first
+                # chunk, so a single-chunk request is not slowed at all.
+                if chunk_index:
+                    time.sleep(_DATA_API_MIN_INTERVAL)
                 try:
                     chunk_start_ts = self._date_to_timestamp_ms(chunk_start)
                     chunk_end_ts = self._date_to_timestamp_ms(chunk_end, end_of_day=True)

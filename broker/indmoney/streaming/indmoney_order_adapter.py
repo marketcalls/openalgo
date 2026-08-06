@@ -5,14 +5,28 @@ Docs: broker-api-docs/indstocks-api-docs/08-websockets.md ("Order Updates").
 Endpoint: wss://ws-order-updates.indstocks.com/api/v1/ws/trades
 Auth: raw access token in the Authorization header (no "Bearer" prefix, per
 the INDstocks docs). Subscribe handshake (post-connect):
-{"action": "subscribe", "mode": "order_updates"}.
+{"action": "subscribe", "mode": "order_update"}.
 
-The streamed payload is thin — order_id, order_status, filled_quantity,
-remaining_quantity, average_price, timestamp. Symbol/exchange/action are not
-included; those fields are left empty and consumers correlate by orderid.
-Status normalization reuses broker/indmoney/mapping/order_data.py::
-normalize_order_status (the repo's single source of truth for this broker,
-incl. PARTIALLY FILLED variants).
+The documented sample frame does NOT match what the server sends. Observed live
+on 2026-08-06:
+
+    {"mode": "order_update", "timestamp": 1786000826536,
+     "data": {"order_id": "96057848", "entity_name": "Yes Bank Ltd",
+              "order_type": "SELL", "order_status": "S", "lot": 1,
+              "executed_price": 22.89, "elapsed_time": 23,
+              "error_message": " ", "req_quantity": 1, "requested_lot": 1}}
+
+Differences from the docs: the payload is nested under "data" (docs show it
+flat), there is no "type" field, order_status is a single letter rather than the
+REST vocabulary, "order_type" is the BUY/SELL side rather than the price type,
+and there is no filled/pending split - only req_quantity.
+
+Symbol and exchange are not included (entity_name is a company name, not a
+tradable symbol), so those are left empty and consumers correlate by orderid.
+
+NOTE: the order_id here is bare numeric ("96057848") while the REST order book
+uses a prefixed form ("EQ-…"/"DRV-…"). Anything correlating stream updates back
+to a placed order must account for that.
 """
 
 import json
@@ -41,36 +55,206 @@ class IndmoneyOrderUpdateAdapter(BaseOrderUpdateAdapter):
         # Raw token, no "Bearer" prefix — per INDstocks WS docs.
         return {"Authorization": self.access_token}
 
+    def _handle_message(self, raw_message):
+        # Log every inbound frame before normalization. The base adapter drops a
+        # frame silently when normalize() returns None, so without this an
+        # unexpected payload shape is invisible - exactly the failure mode that
+        # made this stream look connected-but-dead.
+        self.logger.info(f">> RAW INDMONEY ORDER FRAME: {str(raw_message)[:500]}")
+        return super()._handle_message(raw_message)
+
     def on_open_extra(self, ws) -> None:
-        ws.send(json.dumps({"action": "subscribe", "mode": "order_updates"}))
-        self.logger.info("Sent IndMoney order_updates subscribe")
+        # Confirmed live: the server echoes "mode":"order_update" (singular) on
+        # every frame, so that is the correct subscription mode. The server
+        # sends no subscribe acknowledgement, so an unrecognised mode would fail
+        # silently - the socket stays open and simply never delivers.
+        ws.send(json.dumps({"action": "subscribe", "mode": "order_update"}))
+        self.logger.info("Sent IndMoney order_update subscribe")
+
+    # Candidate spellings per logical field. The documented sample does not
+    # match what the server actually sends (see the class docstring), so read
+    # tolerantly rather than binding to a single spelling.
+    _ORDER_ID_KEYS = ("order_id", "orderId", "orderid", "id", "order_no", "orderNo")
+    _STATUS_KEYS = ("order_status", "orderStatus", "status")
+    _FILLED_KEYS = ("filled_quantity", "filledQuantity", "traded_qty", "tradedQty", "filled_qty")
+    _REMAINING_KEYS = (
+        "remaining_quantity",
+        "remainingQuantity",
+        "pending_qty",
+        "pendingQty",
+        "remaining_qty",
+    )
+    _AVG_PRICE_KEYS = (
+        "executed_price",
+        "average_price",
+        "averagePrice",
+        "avg_price",
+        "avgPrice",
+        "traded_price",
+    )
+    _QUANTITY_KEYS = ("req_quantity", "quantity", "qty", "requested_qty")
+
+    # The live stream reports status as a single letter, not the REST
+    # vocabulary. Confirmed against real order flow on 2026-08-06:
+    #   R -> first frame emitted on place and on modify (received/requested)
+    #   P -> pending at the exchange (carries elapsed_time)
+    #   S -> executed (carries executed_price)
+    # The remaining codes are inferred from the usual Indian-broker convention
+    # and are logged when they fire so they can be confirmed against real
+    # rejections/cancellations.
+    _CONFIRMED_STATUS_CODES = {"R": "open", "P": "open", "S": "complete"}
+    _INFERRED_STATUS_CODES = {
+        "C": "cancelled",
+        "X": "cancelled",
+        "F": "rejected",
+        "E": "rejected",
+        "J": "rejected",
+    }
+
+    @staticmethod
+    def _field(data, keys, default=None):
+        """First present, non-empty value among `keys`."""
+        for key in keys:
+            if key in data and data[key] not in (None, ""):
+                return data[key]
+        return default
+
+    @staticmethod
+    def _as_int(value):
+        try:
+            return int(float(str(value)))
+        except (TypeError, ValueError):
+            return 0
+
+    def _map_status(self, raw_status):
+        """Map the stream's status code to an OpenAlgo canonical status."""
+        code = str(raw_status).strip().upper()
+
+        if code in self._CONFIRMED_STATUS_CODES:
+            return self._CONFIRMED_STATUS_CODES[code]
+
+        if code in self._INFERRED_STATUS_CODES:
+            mapped = self._INFERRED_STATUS_CODES[code]
+            self.logger.warning(
+                f"Order-update status code {code!r} mapped to {mapped!r} by inference. "
+                "Confirm this against the broker before relying on it."
+            )
+            return mapped
+
+        # Not a single-letter code - fall back to the REST vocabulary, which the
+        # stream may also use (underscore variants like PARTIALLY_EXECUTED).
+        mapped = normalize_order_status(code.replace("_", " "))
+        if mapped == code.lower():
+            self.logger.warning(f"Unrecognised order-update status {raw_status!r}; passing through")
+        return mapped
+
+    @staticmethod
+    def _decode(raw_message):
+        """
+        Decode a frame to a dict, tolerating double-encoded JSON.
+
+        INDstocks sends the payload as a JSON *string* containing JSON, i.e. the
+        text frame is "{\\"mode\\":\\"order_update\\",...}" rather than
+        {"mode":"order_update",...}. A single json.loads() therefore yields a
+        str, not a dict. The market-data adapter already decodes twice; this
+        stream needs the same treatment.
+        """
+        value = raw_message
+        for _ in range(3):  # bounded: one real decode plus the extra wrapper
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, (bytes, bytearray)):
+                value = value.decode("utf-8", errors="replace")
+            if not isinstance(value, str):
+                return None
+            try:
+                value = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return None
+        return value if isinstance(value, dict) else None
 
     def normalize(self, raw_message):
-        try:
-            data = json.loads(raw_message)
-        except (json.JSONDecodeError, TypeError):
+        frame = self._decode(raw_message)
+
+        if frame is None:
+            self.logger.warning(
+                f"Could not decode an order-update frame: {str(raw_message)[:300]}"
+            )
             return None
 
-        if data.get("type") != "order":
-            return None  # subscription acks / other frame types
+        # The real payload is nested under "data"; the documented sample shows
+        # it flat. Accept either so neither shape is dropped.
+        data = frame.get("data")
+        if not isinstance(data, dict):
+            data = frame
 
-        # The stream uses underscore variants (e.g. PARTIALLY_EXECUTED) of the
-        # REST status vocabulary (PARTIALLY FILLED ...) — normalize separators
-        # before the shared status mapper.
-        raw_status = str(data.get("order_status", "")).replace("_", " ")
-        order_status = normalize_order_status(raw_status)
+        orderid = self._field(data, self._ORDER_ID_KEYS)
+        raw_status = self._field(data, self._STATUS_KEYS)
 
-        filled = int(data.get("filled_quantity") or 0)
-        remaining = int(data.get("remaining_quantity") or 0)
+        # Treat any frame carrying an order id AND a status as an order update,
+        # whatever it calls itself. The previous code required type == "order"
+        # and returned None otherwise - and the base adapter drops a None
+        # silently, with no log line, so a shape mismatch made every update
+        # disappear without a trace.
+        if orderid is None or raw_status is None:
+            # Acks and heartbeats are legitimately uninteresting, but a frame we
+            # cannot turn into an update must stay visible - a silent drop here
+            # is exactly what hid this stream's failure before.
+            self.logger.info(
+                f"Order-update frame carried no order id/status, ignoring: {str(frame)[:300]}"
+            )
+            return None
 
-        return {
-            "orderid": str(data.get("order_id", "")),
+        order_status = self._map_status(raw_status)
+
+        # The stream reports the requested quantity only; it carries no
+        # filled/pending split. Prefer explicit fields if they ever appear,
+        # otherwise derive the split from the status.
+        quantity = self._as_int(self._field(data, self._QUANTITY_KEYS, 0))
+        filled = self._field(data, self._FILLED_KEYS)
+        remaining = self._field(data, self._REMAINING_KEYS)
+
+        if filled is None and remaining is None:
+            if order_status == "complete":
+                filled, remaining = quantity, 0
+            else:
+                filled, remaining = 0, quantity
+        else:
+            filled = self._as_int(filled)
+            remaining = self._as_int(remaining)
+            quantity = quantity or (filled + remaining)
+
+        try:
+            average_price = float(self._field(data, self._AVG_PRICE_KEYS, 0) or 0)
+        except (TypeError, ValueError):
+            average_price = 0.0
+
+        # "order_type" on this stream is the transaction side (BUY/SELL), not
+        # the price type.
+        action = str(self._field(data, ("order_type", "txn_type", "transaction_type"), "")).upper()
+        if action not in ("BUY", "SELL"):
+            action = ""
+
+        # error_message is " " (a single space) when there is nothing to report.
+        rejection_reason = str(self._field(data, ("error_message", "reason"), "") or "").strip()
+
+        self.logger.info(
+            f"Order update: {orderid} {action} status={order_status} "
+            f"(raw {raw_status!r}) qty={quantity} filled={filled} avg={average_price}"
+        )
+
+        fields = {
+            "orderid": str(orderid),
+            "action": action,
             "order_status": order_status,
-            "quantity": filled + remaining,
+            "quantity": quantity,
             "filled_quantity": filled,
             "pending_quantity": remaining,
-            "average_price": float(data.get("average_price") or 0),
+            "average_price": average_price,
         }
+        if rejection_reason and order_status == "rejected":
+            fields["rejection_reason"] = rejection_reason
+        return fields
 
 
 def create_indmoney_order_adapter(user_id: str) -> "IndmoneyOrderUpdateAdapter | None":
