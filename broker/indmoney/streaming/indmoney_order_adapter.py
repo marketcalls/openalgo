@@ -46,15 +46,24 @@ logger = get_logger(__name__)
 
 INDMONEY_ORDER_UPDATE_WS_URL = "wss://ws-order-updates.indstocks.com/api/v1/ws/trades"
 
-# Maps the stream's bare numeric order id -> the canonical EQ-/DRV- id.
+# Maps (user_id, bare numeric order id) -> the canonical EQ-/DRV- id.
+#
+# The user id is part of the key because the order book it is built from is
+# per-user: two accounts can hold the same numeric id, and a process-global
+# mapping would publish one user's canonical id on another's stream.
+#
 # Bounded and TTL'd: an order id is only interesting for the trading day, and
 # this runs in a worker that never restarts.
 _ID_CACHE = TTLCache(maxsize=4096, ttl=86400)
 _ID_CACHE_LOCK = threading.Lock()
-# A burst of frames for an unknown order must not trigger one order-book fetch
-# each; refreshes are throttled and the whole book is ingested per refresh.
+
+# A burst of frames for the SAME unknown order must not trigger one order-book
+# fetch each. Throttling is therefore per (user, order id), not global - a
+# global clock would leave a genuinely new order publishing a bare id for the
+# whole window, so the same order would appear under two different ids across
+# its own lifecycle and break dedup.
 _ID_REFRESH_MIN_INTERVAL = 5.0
-_last_id_refresh = 0.0
+_id_refresh_attempts = TTLCache(maxsize=4096, ttl=300)
 
 
 def _canonical_order_id(raw_id, user_id):
@@ -65,19 +74,21 @@ def _canonical_order_id(raw_id, user_id):
     cannot be reached - an unresolved id is still better than dropping the
     update.
     """
-    global _last_id_refresh
-
     order_id = str(raw_id or "").strip()
     if not order_id or "-" in order_id:
         return order_id  # already canonical
 
+    key = (str(user_id), order_id)
+    now = time.monotonic()
+
     with _ID_CACHE_LOCK:
-        hit = _ID_CACHE.get(order_id)
+        hit = _ID_CACHE.get(key)
         if hit:
             return hit
-        due = (time.monotonic() - _last_id_refresh) >= _ID_REFRESH_MIN_INTERVAL
+        last_try = _id_refresh_attempts.get(key, 0.0)
+        due = (now - last_try) >= _ID_REFRESH_MIN_INTERVAL
         if due:
-            _last_id_refresh = time.monotonic()
+            _id_refresh_attempts[key] = now
 
     if not due:
         return order_id
@@ -92,15 +103,20 @@ def _canonical_order_id(raw_id, user_id):
         if not auth:
             return order_id
 
+        # Fetch OUTSIDE the lock. Holding a mutex across a network round trip
+        # would stall normalization for every other order-update stream while
+        # one user's order book is slow or being rate-limited.
+        book = get_order_book(auth) or []
+
         resolved = None
         with _ID_CACHE_LOCK:
-            for order in get_order_book(auth) or []:
+            for order in book:
                 if not isinstance(order, dict):
                     continue
                 canonical = str(order.get("id", ""))
                 suffix = canonical.split("-", 1)[-1]
                 if suffix and suffix != canonical:
-                    _ID_CACHE[suffix] = canonical
+                    _ID_CACHE[(str(user_id), suffix)] = canonical
                     if suffix == order_id:
                         resolved = canonical
         return resolved or order_id
