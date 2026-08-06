@@ -1,13 +1,12 @@
 import json
-import os
 import threading
 import time
 from datetime import datetime, timedelta
 
-import httpx
 import pandas as pd
 
 from broker.indmoney.api.baseurl import get_url
+from broker.indmoney.api.rate_limiter import rate_limited_request
 from database.token_db import get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -48,48 +47,7 @@ def _mark_bad(scrip_code):
             if now - ts > _BAD_SCRIP_TTL:
                 _BAD_SCRIP_CODES.pop(code, None)
 
-# 429 (rate-limit) retry configuration. IndStocks enforces per-category rate
-# limits (Data/Quote 5/s) and returns 429 on breach (docs 03-conventions /
-# 14-errors), so requests retry with backoff.
-_MAX_RETRIES = 3
-_RATE_LIMIT_BASE_DELAY = 1.0  # seconds; doubled each attempt (1s, 2s, 4s)
 
-# Data APIs are capped at 5 requests/second (docs 03-conventions), i.e. one per
-# 200ms. A multi-year history request is split into chunks that were previously
-# fired back-to-back, which reliably tripped a 429 and cost a full second of
-# backoff per breach. Pacing proactively is cheaper than being throttled.
-_DATA_API_MIN_INTERVAL = 0.25
-
-
-def request_with_retry(client, method, url, **kwargs):
-    """
-    Perform an httpx request, retrying HTTP 429 with exponential backoff
-    (honouring Retry-After when present). Sets ``.status`` for compatibility
-    with the existing codebase.
-    """
-    response = None
-    for attempt in range(_MAX_RETRIES):
-        response = client.request(method.upper(), url, **kwargs)
-        if response.status_code == 429 and attempt < _MAX_RETRIES - 1:
-            retry_after = response.headers.get("Retry-After")
-            try:
-                delay = (
-                    min(float(retry_after), 30.0)
-                    if retry_after
-                    else _RATE_LIMIT_BASE_DELAY * (2 ** attempt)
-                )
-            except (TypeError, ValueError):
-                delay = _RATE_LIMIT_BASE_DELAY * (2 ** attempt)
-            logger.warning(
-                f"Rate limit hit (429) on {url}, retrying in {delay:.1f}s "
-                f"(attempt {attempt + 1}/{_MAX_RETRIES})"
-            )
-            time.sleep(delay)
-            continue
-        break
-    if response is not None:
-        response.status = response.status_code
-    return response
 
 
 def get_api_response(endpoint, auth, method="GET", params=None):
@@ -123,11 +81,11 @@ def get_api_response(endpoint, auth, method="GET", params=None):
     try:
         # request_with_retry handles HTTP 429 with backoff and sets .status
         if method == "GET":
-            res = request_with_retry(client, "GET", url, headers=headers, params=params)
+            res = rate_limited_request(client, "GET", url, headers=headers, params=params)
         elif method == "POST":
-            res = request_with_retry(client, "POST", url, headers=headers, json=params)
+            res = rate_limited_request(client, "POST", url, headers=headers, json=params)
         else:
-            res = request_with_retry(client, method, url, headers=headers, params=params)
+            res = rate_limited_request(client, method, url, headers=headers, params=params)
 
         logger.debug(f"Request completed. Status code: {res.status_code}")
         logger.info(f"Actual request URL: {res.url}")
@@ -514,7 +472,6 @@ class BrokerData:
         """
         try:
             BATCH_SIZE = 500  # Indmoney API batch size limit
-            RATE_LIMIT_DELAY = 0.3  # Delay in seconds between batch API calls
 
             # If symbols exceed batch size, process in batches
             if len(symbols) > BATCH_SIZE:
@@ -532,9 +489,7 @@ class BrokerData:
                     batch_results = self._process_multiquotes_batch(batch)
                     all_results.extend(batch_results)
 
-                    # Rate limit delay between batches
-                    if i + BATCH_SIZE < len(symbols):
-                        time.sleep(RATE_LIMIT_DELAY)
+                    # Pacing is handled centrally by rate_limiter (quote bucket).
 
                 logger.info(
                     f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches"
@@ -978,11 +933,10 @@ class BrokerData:
 
             all_candles = []
 
-            for chunk_index, (chunk_start, chunk_end) in enumerate(date_chunks):
-                # Stay under the 5/s Data API limit. No delay before the first
-                # chunk, so a single-chunk request is not slowed at all.
-                if chunk_index:
-                    time.sleep(_DATA_API_MIN_INTERVAL)
+            for chunk_start, chunk_end in date_chunks:
+                # Pacing is handled centrally by rate_limiter (data bucket), which
+                # also paces against concurrent callers - a local sleep here would
+                # only compound it.
                 try:
                     chunk_start_ts = self._date_to_timestamp_ms(chunk_start)
                     chunk_end_ts = self._date_to_timestamp_ms(chunk_end, end_of_day=True)
