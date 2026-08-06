@@ -1264,8 +1264,14 @@ def get_dashboard_data():
 
 @auth_bp.route("/logout", methods=["GET", "POST"])
 def logout():
-    if session.get("logged_in"):
-        username = session["user"]
+    was_logged_in = bool(session.get("logged_in"))
+    username = session.get("user")
+
+    # Wipe the browser session before teardown so a revocation or notification
+    # failure cannot leave the user stuck in a half-logged-in state.
+    session.clear()
+
+    if was_logged_in:
 
         # Clear cache entries before database update to prevent stale data access
         cache_key_auth = f"auth-{username}"
@@ -1311,13 +1317,6 @@ def logout():
 
         # Clear entire session to ensure complete logout
         logger.info(f"Session cleared for user: {username}")
-
-    # Always wipe the session cookie. A half-done login (password step complete,
-    # broker OAuth not done) leaves session["user"] set without
-    # session["logged_in"]. Without this, /auth/logout is a no-op in that state
-    # and the user is stuck in an infinite /broker redirect loop with no escape
-    # short of clearing cookies.
-    session.clear()
 
     # For POST requests (AJAX from React), return JSON
     if request.method == "POST":
