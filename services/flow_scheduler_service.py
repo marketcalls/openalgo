@@ -4,8 +4,6 @@ Flow Workflow Scheduler Service
 Handles scheduled workflow execution using APScheduler (Flask/sync version)
 """
 
-import logging
-import os
 import threading
 from collections.abc import Callable
 from datetime import datetime
@@ -17,7 +15,15 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-logger = logging.getLogger(__name__)
+from database.apscheduler_jobstore_db import (
+    FLOW_JOBSTORE_TABLE,
+    ensure_jobstore_table,
+    get_database_url,
+)
+from database.engine_factory import create_db_engine
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class FlowScheduler:
@@ -46,13 +52,29 @@ class FlowScheduler:
                 return
 
             if db_url is None:
-                db_url = os.getenv("DATABASE_URL", "sqlite:///db/openalgo.db")
+                db_url = get_database_url()
 
             self._api_key = api_key
 
             try:
+                # Create the job store table before APScheduler would. Its own
+                # DDL in start() is one-shot: an install that loses the boot
+                # write-lock race never initializes the scheduler, and every
+                # scheduled workflow then silently never runs for the life of
+                # the process (issue #1750). app.py normally creates this during
+                # the serialized database-init phase, which leaves the call
+                # below a read-only no-op; it retries here for any caller that
+                # starts the scheduler outside that path.
+                ensure_jobstore_table(FLOW_JOBSTORE_TABLE, database_url=db_url)
+
+                # engine= rather than url= so the job store uses the project
+                # NullPool policy instead of SQLAlchemy's default QueuePool,
+                # which would hold connections open for the life of the
+                # process. See database/engine_factory.py.
                 jobstores = {
-                    "default": SQLAlchemyJobStore(url=db_url, tablename="flow_apscheduler_jobs")
+                    "default": SQLAlchemyJobStore(
+                        engine=create_db_engine(db_url), tablename=FLOW_JOBSTORE_TABLE
+                    )
                 }
                 self._scheduler = BackgroundScheduler(
                     jobstores=jobstores,

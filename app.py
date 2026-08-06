@@ -113,6 +113,7 @@ from csp import apply_csp_middleware  # Import the CSP middleware
 from database.action_center_db import init_db as ensure_action_center_tables_exists
 from database.analyzer_db import init_db as ensure_analyzer_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
+from database.apscheduler_jobstore_db import ensure_jobstore_tables_exist
 from database.auth_db import init_db as ensure_auth_tables_exists
 from database.chartink_db import init_db as ensure_chartink_tables_exists
 from database.flow_db import init_db as ensure_flow_tables_exists
@@ -710,6 +711,12 @@ def setup_environment(app):
                 ("Scalping DB", ensure_scalping_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),
                 ("Strategy Portfolio DB", ensure_strategy_portfolio_tables_exists),
+                # Created here, not left to APScheduler's own CREATE TABLE in
+                # scheduler.start(). That DDL would otherwise run further down
+                # this function, after db_ready releases the rest of the boot,
+                # and has to win the write lock against it. This phase is
+                # single-threaded, so the same DDL runs uncontended. See #1750.
+                ("Scheduler Job Stores", ensure_jobstore_tables_exist),
             ]
 
             db_init_start = time.time()
