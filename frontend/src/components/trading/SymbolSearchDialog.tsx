@@ -80,6 +80,39 @@ const EXCHANGE_RANK: Record<string, number> = {
   CRYPTO: 0,
 }
 
+const DERIVATIVE_EXCHANGES = new Set([
+  'NFO',
+  'BFO',
+  'CDS',
+  'BCD',
+  'MCX',
+  'NCDEX',
+  'NCO',
+])
+
+const MONTH_NUM: Record<string, number> = {
+  JAN: 0,
+  FEB: 1,
+  MAR: 2,
+  APR: 3,
+  MAY: 4,
+  JUN: 5,
+  JUL: 6,
+  AUG: 7,
+  SEP: 8,
+  OCT: 9,
+  NOV: 10,
+  DEC: 11,
+}
+
+function expiryMs(symbol: string): number {
+  const match = /(\d{2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2})/.exec(
+    symbol,
+  )
+  if (!match) return Infinity
+  return Date.UTC(2000 + Number(match[3]), MONTH_NUM[match[2]], Number(match[1]))
+}
+
 /** 0 = exact symbol match, 1 = prefix, 2 = substring, 3 = matched on name only. */
 function matchScore(symbol: string, q: string): number {
   if (!q) return 3
@@ -102,6 +135,10 @@ function compareRows(a: SearchRow, b: SearchRow, q: string): number {
   if (exDiff) return exDiff
   const lenDiff = String(a.symbol).length - String(b.symbol).length
   if (lenDiff) return lenDiff
+  if (DERIVATIVE_EXCHANGES.has(exA) && DERIVATIVE_EXCHANGES.has(exB)) {
+    const expDiff = expiryMs(String(a.symbol)) - expiryMs(String(b.symbol))
+    if (expDiff) return expDiff
+  }
   return String(a.symbol).localeCompare(String(b.symbol))
 }
 
