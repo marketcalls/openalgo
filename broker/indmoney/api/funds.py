@@ -49,11 +49,15 @@ def _available_cash(data, fallback):
         for key in _CASH_BALANCE_KEYS:
             if detailed.get(key) is not None:
                 return _as_float(detailed[key])
-        # Unexpected shape but still a breakdown - take the largest cash figure
-        # rather than silently reporting zero.
-        values = [_as_float(v) for v in detailed.values() if isinstance(v, (int, float, str))]
-        if values:
-            return max(values)
+        # Unexpected shape: fall through to withdrawal_balance rather than
+        # guessing. Taking the largest value in the breakdown would happily
+        # return option_buy - which exceeds the cash limit (4449.65 vs 2980.40
+        # in the docs' own sample) - and reporting premium buying power as
+        # stock cash overstates available funds and therefore order size.
+        logger.warning(
+            "IndMoney detailed_avl_balance has no recognised cash key "
+            f"({sorted(detailed)}); using withdrawal_balance for available cash."
+        )
     return fallback
 
 

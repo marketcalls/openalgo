@@ -26,6 +26,7 @@ import json
 import os
 
 from broker.indmoney.api.baseurl import get_url
+from broker.indmoney.api.rate_limiter import rate_limited_request
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -49,15 +50,27 @@ def validate_access_token(access_token):
     call fails with TokenException while the UI claims the broker is connected.
 
     Returns:
-        tuple[bool, str | None]: (is_valid, reason_if_not)
+        tuple[bool | None, str | None]: (is_valid, reason)
+
+        True  - the broker accepted the token
+        False - the broker REJECTED it; it is genuinely unusable
+        None  - could not be determined (network/API failure). A transient
+                outage is not evidence against the token, so callers must not
+                treat this as a rejection - otherwise a blip locks a working
+                installation out of its own broker session.
     """
     access_token = (str(access_token) if access_token is not None else "").strip()
     if not access_token:
         return False, "empty token"
 
     try:
+        # Routed through the shared limiter so this shares the non-trading clock
+        # with every other REST call; a login racing concurrent traffic must not
+        # be what pushes the account over the documented rate.
         client = get_httpx_client()
-        response = client.get(
+        response = rate_limited_request(
+            client,
+            "GET",
             get_url("/user/profile"),
             headers={"Authorization": access_token, "Accept": "application/json"},
             timeout=_REQUEST_TIMEOUT,
@@ -72,13 +85,17 @@ def validate_access_token(access_token):
             reason = body.get("message") or body.get("error_type") or reason
         except (json.JSONDecodeError, TypeError):
             pass
-        return False, str(reason)
+
+        # Only an auth rejection proves the token is bad. A 429 or a 5xx says
+        # nothing about it.
+        if response.status_code in (401, 403):
+            return False, str(reason)
+        return None, str(reason)
 
     except Exception as e:
-        # A network failure is not proof the token is bad. Say so, and let the
-        # caller decide rather than silently discarding a good token.
+        # A network failure is not proof the token is bad.
         logger.warning(f"Could not validate IndMoney access token: {e}")
-        return False, f"validation request failed: {e}"
+        return None, f"validation request failed: {e}"
 
 
 def authenticate_broker(code):
@@ -105,6 +122,16 @@ def authenticate_broker(code):
 
         is_valid, reason = validate_access_token(access_token)
         if is_valid:
+            return access_token, None
+
+        if is_valid is None:
+            # Unverifiable, not rejected. Proceed with the configured token
+            # rather than locking a working installation out over a transient
+            # outage - if it really is dead, the first API call says so.
+            logger.warning(
+                f"Could not verify the access token in BROKER_API_SECRET ({reason}); "
+                "proceeding with it. If broker calls fail, regenerate the token."
+            )
             return access_token, None
 
         logger.warning(f"Access token in BROKER_API_SECRET was rejected: {reason}")

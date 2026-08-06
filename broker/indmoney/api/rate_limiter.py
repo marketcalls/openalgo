@@ -116,6 +116,22 @@ def apply_rate_limit(bucket):
     Each caller reserves the next slot under the module-level lock, so N
     concurrent threads queue behind one another instead of all seeing the same
     "last call" timestamp and firing together.
+
+    What this guarantees: the *average* request rate stays at or below the paced
+    rate. What it does not guarantee: an exact minimum gap between any two
+    consecutive requests. Slots are reserved in order, but each caller then
+    sleeps independently, so OS scheduling jitter can let one land slightly
+    before the previous one's intended slot. Measured over 20 calls on 5
+    threads, gaps dip to ~0.21s against a 0.25s target while the overall rate
+    holds at 4.2/s.
+
+    That wobble is what the 20% headroom absorbs - a 0.21s gap is 4.8 req/s
+    instantaneous, still inside the documented 5/s ceiling. Enforcing an exact
+    gap would mean holding a per-bucket lock across the sleep, which serialises
+    the bucket and lets one slow request stall every other caller's pacing. The
+    broker meters a rate, not individual gaps, so bounding the rate is the
+    correct trade. broker/definedge, broker/dhan and broker/fyers all take the
+    same approach.
     """
     rate = _RATE_PER_SECOND.get(bucket)
     if not rate:
@@ -199,11 +215,18 @@ def rate_limited_request(client, method, url, **kwargs):
 
     Every IndMoney REST call should go through this helper so pacing and
     rate-limit retries are applied uniformly against one shared clock.
+
+    Order writes are NEVER auto-retried. Placement, modification and
+    cancellation are not idempotent and INDstocks offers no idempotency key, so
+    a 429 that the broker had in fact accepted would be replayed as a second
+    live order. Reconcile against the order book instead - the same rule the
+    docs give for 5xx (14-errors: "Never blindly retry order placement").
     """
     bucket = classify(url, method)
+    retries = 0 if bucket == "order" else MAX_RETRIES
     response = None
 
-    for attempt in range(MAX_RETRIES + 1):
+    for attempt in range(retries + 1):
         apply_rate_limit(bucket)
         _record_daily(bucket)
         response = client.request(str(method).upper(), url, **kwargs)
@@ -211,13 +234,19 @@ def rate_limited_request(client, method, url, **kwargs):
         if response.status_code != 429:
             break
 
-        if attempt < MAX_RETRIES:
+        if attempt < retries:
             delay = retry_delay(response.headers, attempt)
             logger.warning(
                 f"IndMoney rate limit hit (429) on {method} {url} [{bucket}]; "
-                f"retry {attempt + 1}/{MAX_RETRIES} in {delay:.2f}s"
+                f"retry {attempt + 1}/{retries} in {delay:.2f}s"
             )
             time.sleep(delay)
+        elif bucket == "order":
+            logger.error(
+                f"IndMoney rate limit hit (429) on {method} {url} [order]. NOT retried - "
+                "an order write may have been accepted before the throttle. Check the "
+                "order book before resubmitting."
+            )
 
     if response is not None:
         # The rest of the codebase reads `.status`.

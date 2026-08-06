@@ -1095,7 +1095,11 @@ class BrokerData:
         """
         Get list of supported timeframes/intervals for historical data.
 
+        INDstocks offers no sub-minute interval; the documented set starts at
+        1minute (docs 07-historical-data).
+
         Returns:
-            list: List of supported interval strings like ['1s', '5s', '1m', '5m', '15m', '1h', 'D', etc.]
+            list: Supported interval strings - '1m', '2m', '3m', '4m', '5m',
+            '10m', '15m', '30m', '1h', '2h', '3h', '4h', 'D', 'W', 'M'.
         """
         return list(self.timeframe_map.keys())

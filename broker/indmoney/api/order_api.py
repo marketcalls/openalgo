@@ -7,6 +7,7 @@ from broker.indmoney.api.baseurl import get_url
 from broker.indmoney.api.rate_limiter import rate_limited_request
 from broker.indmoney.mapping.order_data import (
     OPEN_STATUSES,
+    SMART_ORDER_TYPES,
     TRIGGER_PENDING_STATUSES,
     map_product_to_openalgo,
     resolve_exchange,
@@ -292,68 +293,6 @@ def _enrich_positions_with_ltp(positions, auth):
         logger.warning(f"Could not enrich positions with LTP: {e}")
 
 
-def get_order_trades(orderid, auth, segment=None):
-    """
-    Fetch the executed trades (fills) for a single order.
-
-    Endpoint: GET /order/trades. Note this is a GET that carries a JSON *body*
-    rather than query params - the order id is not a path segment. The older
-    ``GET /trades/{order_id}`` form no longer exists.
-
-    Args:
-        orderid: IndMoney order id (EQ-/DRV-/GTT- prefixed).
-        auth: IndMoney access token.
-        segment: "EQUITY" or "DERIVATIVE". Derived from the order-id prefix
-            when omitted.
-
-    Returns:
-        list[dict]: Fill rows, or [] on error.
-    """
-    try:
-        if not orderid:
-            logger.error("get_order_trades called without an order id")
-            return []
-
-        if not segment:
-            segment = "DERIVATIVE" if str(orderid).startswith("DRV-") else "EQUITY"
-
-        client = get_httpx_client()
-        headers = {
-            "Authorization": auth,
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-        payload = json.dumps({"order_id": orderid, "segment": segment})
-
-        response = rate_limited_request(
-            client, "GET", get_url("/order/trades"), headers=headers, content=payload
-        )
-
-        if response.status_code not in (200, 201):
-            logger.error(
-                f"Failed to fetch trades for {orderid}: "
-                f"HTTP {response.status_code} - {response.text[:200]}"
-            )
-            return []
-
-        data = json.loads(response.text)
-        if data.get("status") != "success":
-            logger.error(
-                f"Failed to fetch trades for {orderid}: {data.get('message', 'Unknown error')}"
-            )
-            return []
-
-        trades = data.get("data") or []
-        if not isinstance(trades, list):
-            logger.warning(f"Unexpected trades payload for {orderid}: {type(trades)}")
-            return []
-
-        return trades
-
-    except Exception as e:
-        logger.error(f"Exception in get_order_trades for {orderid}: {e}")
-        return []
-
 
 def get_positions(auth, include_ltp=True):
     """
@@ -555,8 +494,11 @@ def _is_smart_order(orderid, auth):
 
     A GTT- prefix is conclusive, but a smart-order PARENT is issued an
     EQ-/DRV- id exactly like a regular order, so the prefix alone cannot
-    decide. Fall back to the order book, where a stop parent reports
-    order_type TRIGGER (or OCO for a child leg).
+    decide. Fall back to the order book and match on the order type.
+
+    Confirmed live on 2026-08-06: a standalone TRIGGER order comes BACK from
+    the order book as order_type "GTT_LIMIT", not "TRIGGER". Matching only the
+    request-side vocabulary sent stop cancels/modifies to the regular endpoints.
 
     On any doubt this returns False, keeping the regular endpoint - the same
     behaviour as before this routing existed.
@@ -569,7 +511,7 @@ def _is_smart_order(orderid, auth):
         for order in get_order_book(auth) or []:
             if isinstance(order, dict) and str(order.get("id", "")) == orderid:
                 order_type = str(order.get("order_type", "")).upper()
-                return order_type in ("TRIGGER", "OCO")
+                return order_type in SMART_ORDER_TYPES
     except Exception as e:
         logger.warning(f"Could not classify order {orderid} against the order book: {e}")
     return False

@@ -62,6 +62,12 @@ _LEGACY_EXCHANGE_SEGMENTS = {
 _DERIVATIVE_CANDIDATES = ("NFO", "BFO")
 _EQUITY_CANDIDATES = ("NSE", "BSE")
 
+# Order types that identify a smart-order (GTT) leg. The request vocabulary is
+# TRIGGER, but the order book reports the same order back as GTT_LIMIT /
+# GTT_MARKET, and a child leg as OCO. Cancel/modify routing and the order-book
+# price mapping both key off this set, so it lives in one place.
+SMART_ORDER_TYPES = frozenset({"TRIGGER", "OCO", "GTT_LIMIT", "GTT_MARKET"})
+
 
 def resolve_exchange(security_id, exchange, segment, default="NSE"):
     """

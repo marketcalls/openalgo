@@ -25,11 +25,17 @@ Symbol and exchange are not included (entity_name is a company name, not a
 tradable symbol), so those are left empty and consumers correlate by orderid.
 
 NOTE: the order_id here is bare numeric ("96057848") while the REST order book
-uses a prefixed form ("EQ-…"/"DRV-…"). Anything correlating stream updates back
-to a placed order must account for that.
+and the place-order response use a prefixed form ("EQ-96057848"/"DRV-…"). The
+stream id is the numeric part of the canonical id, so _canonical_order_id()
+resolves it against the order book before publishing - without that, clients
+cannot match an update to the order they placed, and dedup by order id fails.
 """
 
 import json
+import threading
+import time
+
+from cachetools import TTLCache
 
 from broker.indmoney.mapping.order_data import normalize_order_status
 from database.auth_db import get_auth_token
@@ -39,6 +45,69 @@ from websocket_proxy.order_adapter import BaseOrderUpdateAdapter
 logger = get_logger(__name__)
 
 INDMONEY_ORDER_UPDATE_WS_URL = "wss://ws-order-updates.indstocks.com/api/v1/ws/trades"
+
+# Maps the stream's bare numeric order id -> the canonical EQ-/DRV- id.
+# Bounded and TTL'd: an order id is only interesting for the trading day, and
+# this runs in a worker that never restarts.
+_ID_CACHE = TTLCache(maxsize=4096, ttl=86400)
+_ID_CACHE_LOCK = threading.Lock()
+# A burst of frames for an unknown order must not trigger one order-book fetch
+# each; refreshes are throttled and the whole book is ingested per refresh.
+_ID_REFRESH_MIN_INTERVAL = 5.0
+_last_id_refresh = 0.0
+
+
+def _canonical_order_id(raw_id, user_id):
+    """
+    Resolve the stream's bare numeric order id to the canonical EQ-/DRV- id.
+
+    Returns `raw_id` unchanged if it is already prefixed, or if the order book
+    cannot be reached - an unresolved id is still better than dropping the
+    update.
+    """
+    global _last_id_refresh
+
+    order_id = str(raw_id or "").strip()
+    if not order_id or "-" in order_id:
+        return order_id  # already canonical
+
+    with _ID_CACHE_LOCK:
+        hit = _ID_CACHE.get(order_id)
+        if hit:
+            return hit
+        due = (time.monotonic() - _last_id_refresh) >= _ID_REFRESH_MIN_INTERVAL
+        if due:
+            _last_id_refresh = time.monotonic()
+
+    if not due:
+        return order_id
+
+    try:
+        # Imported lazily: the streaming package and websocket_proxy import each
+        # other, so a module-level import here risks the known cycle.
+        from broker.indmoney.api.order_api import get_order_book
+        from database.auth_db import get_auth_token
+
+        auth = get_auth_token(user_id)
+        if not auth:
+            return order_id
+
+        resolved = None
+        with _ID_CACHE_LOCK:
+            for order in get_order_book(auth) or []:
+                if not isinstance(order, dict):
+                    continue
+                canonical = str(order.get("id", ""))
+                suffix = canonical.split("-", 1)[-1]
+                if suffix and suffix != canonical:
+                    _ID_CACHE[suffix] = canonical
+                    if suffix == order_id:
+                        resolved = canonical
+        return resolved or order_id
+
+    except Exception as e:
+        logger.warning(f"Could not resolve IndMoney order id {order_id}: {e}")
+        return order_id
 
 
 class IndmoneyOrderUpdateAdapter(BaseOrderUpdateAdapter):
@@ -238,13 +307,17 @@ class IndmoneyOrderUpdateAdapter(BaseOrderUpdateAdapter):
         # error_message is " " (a single space) when there is nothing to report.
         rejection_reason = str(self._field(data, ("error_message", "reason"), "") or "").strip()
 
+        # Publish the canonical EQ-/DRV- id so consumers can match the update to
+        # the order they placed.
+        canonical_id = _canonical_order_id(orderid, self.user_id)
+
         self.logger.info(
-            f"Order update: {orderid} {action} status={order_status} "
+            f"Order update: {canonical_id} {action} status={order_status} "
             f"(raw {raw_status!r}) qty={quantity} filled={filled} avg={average_price}"
         )
 
         fields = {
-            "orderid": str(orderid),
+            "orderid": str(canonical_id),
             "action": action,
             "order_status": order_status,
             "quantity": quantity,
