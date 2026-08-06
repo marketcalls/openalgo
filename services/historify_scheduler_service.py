@@ -608,6 +608,24 @@ def execute_schedule(schedule_id: str, api_key: str = None):
             )
         update_schedule(schedule_id, status="idle", last_run_status="error")
         increment_schedule_run_counts(schedule_id, is_success=False)
+    finally:
+        # APScheduler runs this on its own worker thread with no Flask app
+        # context, so teardown_appcontext never fires and every scoped session
+        # this run touched - auth_db for the API key lookup, plus whatever
+        # create_and_start_job reaches - stays bound to that thread holding its
+        # SQLite connection. The worker threads are reused, so the connections
+        # accumulate rather than being released when a run ends, and production
+        # is a single Gunicorn worker that never restarts.
+        #
+        # This has to be a finally rather than a line at the end: the four
+        # early returns above (missing schedule, disabled, no API key, no
+        # symbols) are the common paths and would otherwise skip it entirely.
+        #
+        # Same cleanup flow_scheduler_service, flow_price_monitor_service and
+        # flow_order_update_monitor_service already do. See issue #1738.
+        from utils.db_sessions import remove_all_scoped_sessions
+
+        remove_all_scoped_sessions()
 
 
 # Global scheduler instance

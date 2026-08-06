@@ -24,7 +24,7 @@ dependencies = [
   "click==8.4.1",
   "colorama==0.4.6",
   "comm==0.2.3",
-  "cryptography==48.0.1",
+  "cryptography==50.0.0",
   "darkdetect==0.8.0",
   "debugpy==1.8.21",
   "decorator==5.3.1",
@@ -224,6 +224,10 @@ filterwarnings = [
 analysis = [
     "dash>=4.4.1",
     "dash-bootstrap-components>=2.0.4",
+    # Pulled in transitively via streamlit; pinned here to satisfy Dependabot's
+    # advisory on the lockfile (GitPython <=3.1.56 -> >=3.1.57). Nothing in the
+    # main dependency list uses it, so this never reaches a production install.
+    "gitpython>=3.1.57",
     "ipywidgets>=8.1.8",
     "matplotlib>=3.11.1",
     "scipy>=1.18.0",
