@@ -4,8 +4,15 @@ import os
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import unquote
+
+if "eventlet" in sys.modules:
+    import eventlet
+
+    _real_threading = eventlet.patcher.original("threading")
+else:
+    _real_threading = threading
 
 from broker.samco.api.data import BrokerData
 from broker.samco.streaming.samcoWebSocket import SamcoWebSocket
@@ -34,8 +41,13 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.reconnect_attempts = 0
         self.max_reconnect_attempts = 10
         self.running = False
-        self.lock = threading.Lock()
+        self.lock = _real_threading.Lock()
         self._reconnecting = False  # Guard against concurrent reconnect threads
+
+        # Batch subscription queueing (mirrors zerodha/dhan/flattrade/upstox/fyers)
+        self.subscription_queue = []
+        self.batch_timer = None
+        self.batch_delay = 0.5  # 500ms delay to collect more subscriptions in a batch
         self._broker_data = None  # Cached BrokerData for index listing lookups
         self._index_listing_cache = {}  # {symbol_exchange: listing_id}
 
@@ -160,6 +172,14 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def disconnect(self) -> None:
         """Disconnect from Samco WebSocket"""
         self.running = False
+
+        # Cancel any pending batch timer and clear the queue
+        if self.batch_timer:
+            self.batch_timer.cancel()
+            self.batch_timer = None
+        with self.lock:
+            self.subscription_queue.clear()
+
         if hasattr(self, "ws_client") and self.ws_client:
             self.ws_client.close_connection()
 
@@ -273,13 +293,24 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "is_fallback": is_fallback,
             }
 
-        # Subscribe if connected
-        if self.connected and self.ws_client:
-            try:
-                self.ws_client.subscribe(correlation_id, mode, token_list)
-            except Exception as e:
-                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
-                return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+        # Queue subscription for batch processing instead of sending one message per call.
+        # On reconnection the _on_open path already resubscribes everything from
+        # self.subscriptions, so queued items only need to be flushed when connected.
+        with self.lock:
+            self.subscription_queue.append(
+                {
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "brexchange": brexchange,
+                    "token": token,
+                    "mode": mode,
+                    "token_list": token_list,
+                }
+            )
+
+            # Start the batch timer when the first queued item arrives
+            if len(self.subscription_queue) == 1:
+                self._start_batch_timer()
 
         # Return success with capability info
         return self._create_success_response(
@@ -293,6 +324,56 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
             actual_depth=actual_depth,
             is_fallback=is_fallback,
         )
+
+    def _start_batch_timer(self) -> None:
+        """Start a timer to process queued subscriptions in a single batch."""
+        if self.batch_timer:
+            self.batch_timer.cancel()
+
+        self.batch_timer = _real_threading.Timer(
+            self.batch_delay, self._process_batch_subscriptions
+        )
+        self.batch_timer.start()
+
+    def _process_batch_subscriptions(self) -> None:
+        """Flush queued subscriptions in one batched request per mode."""
+        with self.lock:
+            queue = self.subscription_queue[:]
+            self.subscription_queue.clear()
+            self.batch_timer = None
+
+        if not queue or not self.connected or not self.ws_client:
+            return
+
+        # Group by mode, then by exchange
+        mode_groups: dict[int, dict[str, list[str]]] = {}
+        for sub in queue:
+            mode = sub["mode"]
+            exchange = sub["brexchange"]
+            token = sub["token"]
+            if mode not in mode_groups:
+                mode_groups[mode] = {}
+            if exchange not in mode_groups[mode]:
+                mode_groups[mode][exchange] = []
+            mode_groups[mode][exchange].append(token)
+
+        for mode, exchange_tokens in mode_groups.items():
+            token_list = [
+                {
+                    "exchangeType": SamcoExchangeMapper.get_exchange_type(exchange),
+                    "tokens": list(set(tokens)),
+                }
+                for exchange, tokens in exchange_tokens.items()
+            ]
+
+            try:
+                self.ws_client.subscribe(f"batch_{mode}", mode, token_list)
+                self.logger.info(
+                    f"Batch subscribed {sum(len(g['tokens']) for g in token_list)} "
+                    f"symbol(s) in mode {mode}"
+                )
+            except Exception as e:
+                self.logger.error(f"Batch subscription failed for mode {mode}: {e}")
 
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> dict[str, Any]:
         """
@@ -365,7 +446,7 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Group subscriptions by mode and batch them into single requests
         with self.lock:
             subscriptions_by_mode = {}
-            for correlation_id, sub in self.subscriptions.items():
+            for _correlation_id, sub in self.subscriptions.items():
                 mode = sub["mode"]
                 if mode not in subscriptions_by_mode:
                     subscriptions_by_mode[mode] = []
@@ -401,10 +482,22 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Callback for WebSocket errors"""
         self.logger.error(f"Samco WebSocket error: {error}")
 
+        # Short-circuit the reconnect loop on authentication failures so a
+        # stale token does not hammer the broker for the whole retry window.
+        if self.ws_client and getattr(self.ws_client, "_auth_failed", False):
+            self.logger.error("Authentication failure detected; stopping reconnect loop")
+            self.running = False
+
     def _on_close(self, wsapp) -> None:
         """Callback when connection is closed"""
         self.logger.info("Samco WebSocket connection closed")
         self.connected = False
+
+        # If the socket closed because of an auth failure, do not reconnect.
+        if self.ws_client and getattr(self.ws_client, "_auth_failed", False):
+            self.logger.error("Connection closed after authentication failure; not reconnecting")
+            self.running = False
+            return
 
         # Attempt to reconnect if we're still running
         if self.running:
