@@ -79,18 +79,26 @@ def validate_access_token(access_token):
         if response.status_code in (200, 201):
             return True, None
 
+        # Decide the verdict from the status code ALONE, before touching the
+        # body. Parsing must only ever enrich the message: if it could raise,
+        # a 403 would escape to the outer handler and be reported as
+        # "unverifiable", and the caller would then proceed with a credential
+        # the broker had explicitly rejected.
+        rejected = response.status_code in (401, 403)
+
         reason = f"HTTP {response.status_code}"
         try:
             body = json.loads(response.text)
-            reason = body.get("message") or body.get("error_type") or reason
-        except (json.JSONDecodeError, TypeError):
+            # A JSON body need not be an object - a bare list or string has no
+            # .get(), so check before using it.
+            if isinstance(body, dict):
+                reason = body.get("message") or body.get("error_type") or reason
+        except Exception:
             pass
 
         # Only an auth rejection proves the token is bad. A 429 or a 5xx says
         # nothing about it.
-        if response.status_code in (401, 403):
-            return False, str(reason)
-        return None, str(reason)
+        return (False, str(reason)) if rejected else (None, str(reason))
 
     except Exception as e:
         # A network failure is not proof the token is bad.

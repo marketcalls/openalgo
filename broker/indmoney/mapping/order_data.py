@@ -62,11 +62,27 @@ _LEGACY_EXCHANGE_SEGMENTS = {
 _DERIVATIVE_CANDIDATES = ("NFO", "BFO")
 _EQUITY_CANDIDATES = ("NSE", "BSE")
 
-# Order types that identify a smart-order (GTT) leg. The request vocabulary is
-# TRIGGER, but the order book reports the same order back as GTT_LIMIT /
-# GTT_MARKET, and a child leg as OCO. Cancel/modify routing and the order-book
-# price mapping both key off this set, so it lives in one place.
-SMART_ORDER_TYPES = frozenset({"TRIGGER", "OCO", "GTT_LIMIT", "GTT_MARKET"})
+# How the broker's order types map to OpenAlgo price types. The request
+# vocabulary for a stop is TRIGGER, but the order book reports the same order
+# back as GTT_LIMIT / GTT_MARKET, and a child leg as OCO.
+BROKER_ORDER_TYPE_MAP = {
+    "MARKET": "MARKET",
+    "LIMIT": "LIMIT",
+    "STOP_LOSS": "SL",
+    "STOP_LOSS_MARKET": "SL-M",
+    # Smart-order (GTT) vocabulary
+    "TRIGGER": "SL",
+    "GTT_LIMIT": "SL",
+    "GTT_MARKET": "SL-M",
+    "OCO": "OCO",
+}
+
+# Order types that identify a smart-order (GTT) leg, used by cancel/modify
+# routing to pick the /smart/order endpoints. Derived from the map above so the
+# two cannot drift: adding a GTT type in one place adds it in both.
+SMART_ORDER_TYPES = frozenset(
+    {"TRIGGER", "OCO"} | {t for t in BROKER_ORDER_TYPE_MAP if t.startswith("GTT_")}
+)
 
 
 def resolve_exchange(security_id, exchange, segment, default="NSE"):
@@ -377,18 +393,8 @@ def transform_order_data(orders):
             # what the order book calls a smart TRIGGER order - i.e. the
             # stop-loss order types, which is how OpenAlgo should show them.
             order_type = order.get("orderType", "").upper()
-            order_type_map = {
-                "MARKET": "MARKET",
-                "LIMIT": "LIMIT",
-                "STOP_LOSS": "SL",
-                "STOP_LOSS_MARKET": "SL-M",
-                "GTT_LIMIT": "SL",
-                "TRIGGER": "SL",
-                "GTT_MARKET": "SL-M",
-                "OCO": "OCO",
-            }
-            if order_type in order_type_map:
-                order["orderType"] = order_type_map[order_type]
+            if order_type in BROKER_ORDER_TYPE_MAP:
+                order["orderType"] = BROKER_ORDER_TYPE_MAP[order_type]
 
             transformed_order = {
                 "symbol": order.get("tradingSymbol", ""),
