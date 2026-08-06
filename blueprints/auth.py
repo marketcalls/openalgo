@@ -1310,8 +1310,14 @@ def logout():
         })
 
         # Clear entire session to ensure complete logout
-        session.clear()
         logger.info(f"Session cleared for user: {username}")
+
+    # Always wipe the session cookie. A half-done login (password step complete,
+    # broker OAuth not done) leaves session["user"] set without
+    # session["logged_in"]. Without this, /auth/logout is a no-op in that state
+    # and the user is stuck in an infinite /broker redirect loop with no escape
+    # short of clearing cookies.
+    session.clear()
 
     # For POST requests (AJAX from React), return JSON
     if request.method == "POST":
