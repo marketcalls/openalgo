@@ -94,7 +94,24 @@ preferences_model = api.model(
 
 
 def run_async(coro):
-    """Helper to run async coroutine in sync context"""
+    """Runs an async coroutine in a synchronous context.
+    
+    Creates a new event loop for the coroutine to execute and properly closes it when completed.
+    For calling async functions from Flask request handlers.
+
+    Args: 
+        coro: A coroutine object to be executed.
+
+    Returns: 
+        Returns what is produced by the coroutine that was executed.
+
+    Raises:
+        RuntimeError: If the event loop fails to initialize.
+        Any exception that is raised by the coroutine being executed.
+
+    Example:
+        result = run_async(telegram_bot_service.stop_bot())
+    """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -275,9 +292,17 @@ class StopBot(Resource):
 
 
 def get_webhook_secret():
-    """
-    Get or generate webhook secret for Telegram webhook verification.
-    Uses TELEGRAM_WEBHOOK_SECRET env var, or derives from bot token if not set.
+    """Get or generate webhook secret for Telegram webhook verification.
+   
+    Uses TELEGRAM_WEBHOOK_SECRET env ver, or if its not set, devires from hashing the bot token so
+    the raw token is not exposed and the same bot always gets the same secret.
+    
+    Returns:
+        str | None: The webhook secret if set, or the first 32 characters of the bot token's
+        SHA-256 hex digest, or None if neither is available.
+
+    Example:
+        secret = get_webhook_secret()
     """
     # First check for explicit webhook secret
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
