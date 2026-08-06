@@ -1,72 +1,33 @@
 import json
 import os
-
-import httpx
 import threading
 import time
 
 from broker.indmoney.api.baseurl import get_url
+from broker.indmoney.api.rate_limiter import rate_limited_request
 from broker.indmoney.mapping.order_data import (
     OPEN_STATUSES,
+    SMART_ORDER_TYPES,
     TRIGGER_PENDING_STATUSES,
+    map_product_to_openalgo,
+    resolve_exchange,
 )
 from broker.indmoney.mapping.transform_data import (
-    map_exchange,
-    map_exchange_type,
     map_product_type,
-    map_segment,
-    reverse_map_product_type,
     transform_data,
     transform_modify_order_data,
 )
-from database.auth_db import get_auth_token
-from database.token_db import get_br_symbol, get_oa_symbol, get_symbol, get_token
+from database.token_db import get_br_symbol, get_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# 429 (rate-limit) retry configuration. IndStocks enforces per-category rate
-# limits (Order 10/s, Data/Quote 5/s, Non-Trading 15/s) and returns 429 on
-# breach (docs 03-conventions / 14-errors), so requests retry with backoff.
-_MAX_RETRIES = 3
-_RATE_LIMIT_BASE_DELAY = 1.0  # seconds; doubled each attempt (1s, 2s, 4s)
 
-
-def request_with_retry(client, method, url, **kwargs):
-    """
-    Perform an httpx request, retrying HTTP 429 with exponential backoff
-    (honouring Retry-After when present). Sets ``.status`` for compatibility
-    with the existing codebase.
-    """
-    response = None
-    for attempt in range(_MAX_RETRIES):
-        response = client.request(method.upper(), url, **kwargs)
-        if response.status_code == 429 and attempt < _MAX_RETRIES - 1:
-            retry_after = response.headers.get("Retry-After")
-            try:
-                delay = (
-                    min(float(retry_after), 30.0)
-                    if retry_after
-                    else _RATE_LIMIT_BASE_DELAY * (2 ** attempt)
-                )
-            except (TypeError, ValueError):
-                delay = _RATE_LIMIT_BASE_DELAY * (2 ** attempt)
-            logger.warning(
-                f"Rate limit hit (429) on {url}, retrying in {delay:.1f}s "
-                f"(attempt {attempt + 1}/{_MAX_RETRIES})"
-            )
-            time.sleep(delay)
-            continue
-        break
-    if response is not None:
-        response.status = response.status_code
-    return response
 
 
 def get_api_response(endpoint, auth, method="GET", payload="", params=None):
     AUTH_TOKEN = auth
-    api_key = os.getenv("BROKER_API_KEY")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -82,15 +43,15 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
     try:
         # request_with_retry handles HTTP 429 with backoff and sets .status
         if method == "GET":
-            response = request_with_retry(
+            response = rate_limited_request(
                 client, "GET", url, headers=headers, params=params
             )
         elif method == "POST":
-            response = request_with_retry(
+            response = rate_limited_request(
                 client, "POST", url, headers=headers, content=payload, params=params
             )
         else:
-            response = request_with_retry(
+            response = rate_limited_request(
                 client, method, url, headers=headers, content=payload, params=params
             )
 
@@ -114,6 +75,17 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
 
         # Check for API errors in the response
         if isinstance(response_data, dict):
+            # The Instruments, Market Quotes and Historical endpoints use a
+            # different envelope: {"message": ..., "success": false} with no
+            # `status` and no `error_type` (docs 14-errors). Without this branch
+            # those failures fall through as success and degrade to empty data.
+            if response_data.get("success") is False:
+                error_message = response_data.get("message") or response_data.get(
+                    "error", "Unknown error"
+                )
+                logger.error(f"API Error from {endpoint}: {error_message}")
+                return {"status": "error", "message": error_message}
+
             # Indmoney API errors come in this format
             if response_data.get("status") in ["error", "failure"]:
                 # Handle both 'error' and 'failure' status
@@ -206,6 +178,10 @@ def get_trade_book(auth):
                         "txn_type": order.get("txn_type", ""),
                         "product": order.get("product", ""),
                         "segment": order.get("segment", ""),
+                        # The trade-book payload carries no exchange at all, so
+                        # the matching order is the only place the real venue
+                        # (NSE vs BSE) can come from.
+                        "exchange": order.get("exchange", ""),
                     }
                     for key in (order.get("exch_order_id"), order.get("id")):
                         if key:
@@ -220,8 +196,11 @@ def get_trade_book(auth):
                 if order_info:
                     trade["txn_type"] = order_info["txn_type"]
                     trade["product"] = order_info["product"]
+                    if order_info.get("exchange"):
+                        trade["exchange"] = order_info["exchange"]
                     logger.debug(
-                        f"Enriched trade {exch_order_id} with txn_type={order_info['txn_type']}, product={order_info['product']}"
+                        f"Enriched trade {exch_order_id} with txn_type={order_info['txn_type']}, "
+                        f"product={order_info['product']}, exchange={order_info.get('exchange', '')}"
                     )
                 else:
                     logger.debug(
@@ -238,12 +217,95 @@ def get_trade_book(auth):
         return []
 
 
-def get_positions(auth):
+# Scrip-code segment prefixes for the quote API, keyed by OpenAlgo exchange.
+_QUOTE_SEGMENT_BY_EXCHANGE = {
+    "NSE": "NSE",
+    "BSE": "BSE",
+    "NFO": "NFO",
+    "BFO": "BFO",
+}
+
+
+def _enrich_positions_with_ltp(positions, auth):
+    """
+    Attach a live price to each open position.
+
+    /portfolio/positions returns no last-traded price and no unrealized P&L -
+    only `realized_profit`. Without this the position book shows LTP 0, market
+    value 0, and reports realized P&L as though it were total P&L. One batched
+    /market/quotes/ltp call fills that in.
+
+    Failures are non-fatal: positions are still returned, just without LTP.
+    """
+    scrip_by_position = {}
+    for pos in positions:
+        if not isinstance(pos, dict):
+            continue
+        # Closed rows have nothing to mark to market.
+        try:
+            if int(pos.get("net_qty", pos.get("net_quantity", 0)) or 0) == 0:
+                continue
+        except (TypeError, ValueError):
+            pass
+
+        token = str(pos.get("security_id") or "").strip()
+        if not token:
+            continue
+
+        exchange = resolve_exchange(
+            token,
+            pos.get("exchange") or pos.get("exchange_segment", ""),
+            pos.get("segment") or pos.get("query_segment", ""),
+        )
+        segment = _QUOTE_SEGMENT_BY_EXCHANGE.get(exchange)
+        if not segment:
+            continue
+
+        scrip_by_position[id(pos)] = f"{segment}_{token}"
+
+    if not scrip_by_position:
+        return
+
+    try:
+        scrip_codes = sorted(set(scrip_by_position.values()))
+        response = get_api_response(
+            "/market/quotes/ltp",
+            auth,
+            "GET",
+            params={"scrip-codes": ",".join(scrip_codes)},
+        )
+        # get_api_response unwraps `data` on the standard envelope; tolerate both.
+        quotes = response if isinstance(response, dict) else {}
+        if "data" in quotes and isinstance(quotes.get("data"), dict):
+            quotes = quotes["data"]
+
+        for pos in positions:
+            scrip = scrip_by_position.get(id(pos))
+            if not scrip:
+                continue
+            quote = quotes.get(scrip)
+            if isinstance(quote, dict) and quote.get("live_price") is not None:
+                pos["last_traded_price"] = quote["live_price"]
+
+        logger.debug(f"Enriched {len(scrip_codes)} position(s) with LTP")
+
+    except Exception as e:
+        logger.warning(f"Could not enrich positions with LTP: {e}")
+
+
+
+def get_positions(auth, include_ltp=True):
     """
     Fetch all positions for the current trading day.
     Fetches positions from all combinations of segment and product:
     - Derivative: MARGIN, INTRADAY
     - Equity: CNC, INTRADAY
+
+    Args:
+        auth: IndMoney access token.
+        include_ltp: Attach live prices so the position book can show market
+            value and MTM. Skipped on the smart-order path, which only needs
+            net quantity and should not pay for an extra quote round trip.
     """
     try:
         all_positions = []
@@ -263,40 +325,38 @@ def get_positions(auth):
             # Debug: Log the actual API response to understand the structure
             logger.debug(f"Positions API response for {query}: {result}")
 
-            if result and isinstance(result, dict):
-                # Extract net_positions and day_positions from the response
-                net_positions = result.get("net_positions", [])
-                day_positions = result.get("day_positions", [])
+            # /portfolio/positions returns `data` as a FLAT ARRAY. Collect the
+            # rows first, then tag every row with the query it came from - the
+            # payload itself does not always state the segment/product, and
+            # map_position_data() relies on these tags. Tagging only one shape
+            # of the response is what previously left every position untagged
+            # and mapped to NSE.
+            batch = []
+            if result and isinstance(result, list):
+                batch = result
+            elif result and isinstance(result, dict):
+                # Tolerate the older documented net/day grouping if it returns.
+                net_positions = result.get("net_positions") or []
+                day_positions = result.get("day_positions") or []
+                if isinstance(net_positions, list):
+                    batch.extend(net_positions)
+                if isinstance(day_positions, list):
+                    batch.extend(day_positions)
 
-                # Debug: Log sample position if available
-                if net_positions:
-                    logger.debug(
-                        f"Sample net_position fields: {list(net_positions[0].keys()) if net_positions[0] else 'empty'}"
-                    )
-                if day_positions:
-                    logger.debug(
-                        f"Sample day_position fields: {list(day_positions[0].keys()) if day_positions[0] else 'empty'}"
-                    )
+            if batch:
+                logger.debug(
+                    f"Sample position fields: "
+                    f"{list(batch[0].keys()) if isinstance(batch[0], dict) else type(batch[0])}"
+                )
 
-                if net_positions and isinstance(net_positions, list):
-                    # Tag positions with the query parameters for context
-                    for pos in net_positions:
-                        if isinstance(pos, dict):
-                            pos["query_segment"] = query["segment"]
-                            pos["query_product"] = query["product"]
-                    all_positions.extend(net_positions)
+            for pos in batch:
+                if isinstance(pos, dict):
+                    pos["query_segment"] = query["segment"]
+                    pos["query_product"] = query["product"]
+                    all_positions.append(pos)
 
-                if day_positions and isinstance(day_positions, list):
-                    # Tag positions with the query parameters for context
-                    for pos in day_positions:
-                        if isinstance(pos, dict):
-                            pos["query_segment"] = query["segment"]
-                            pos["query_product"] = query["product"]
-                    all_positions.extend(day_positions)
-
-            elif result and isinstance(result, list):
-                # Fallback: if response is directly a list (legacy format)
-                all_positions.extend(result)
+        if include_ltp and all_positions:
+            _enrich_positions_with_ltp(all_positions, auth)
 
         logger.debug(f"Fetched {len(all_positions)} total positions (all segments and products)")
         return all_positions
@@ -349,8 +409,9 @@ def _get_cached_positions(auth):
         if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
             return cached["data"]
 
-    # Cache miss or expired - fetch from broker
-    positions_data = get_positions(auth)
+    # Cache miss or expired - fetch from broker. The smart-order path only reads
+    # net quantity, so skip the LTP round trip that the position book needs.
+    positions_data = get_positions(auth, include_ltp=False)
 
     with _position_cache_lock:
         _position_cache[auth] = {"data": positions_data, "timestamp": time.monotonic()}
@@ -365,36 +426,13 @@ def _invalidate_position_cache(auth):
 
 
 
-def _map_exchange_segment(exchange_segment):
-    """
-    Map an IndMoney position ``exchange_segment`` (e.g. NSE_EQ, NSE_FNO, BSE_EQ)
-    or a legacy segment label (EQUITY, F&O, COMMODITY) to the OpenAlgo exchange code.
-    """
-    seg = str(exchange_segment or "").upper()
-    mapping = {
-        "NSE_EQ": "NSE",
-        "NSE_FNO": "NFO",
-        "NSE_FO": "NFO",
-        "BSE_EQ": "BSE",
-        "BSE_FNO": "BFO",
-        "BSE_FO": "BFO",
-        "MCX_FO": "MCX",
-        "MCX_COMM": "MCX",
-        # Legacy labels
-        "EQUITY": "NSE",
-        "F&O": "NFO",
-        "FUTURES": "NFO",
-        "COMMODITY": "MCX",
-    }
-    if seg in mapping:
-        return mapping[seg]
-    if seg.startswith("NSE"):
-        return "NSE"
-    if seg.startswith("BSE"):
-        return "BSE"
-    if seg.startswith("MCX"):
-        return "MCX"
-    return seg
+def _position_exchange(position):
+    """Resolve the OpenAlgo exchange for one IndMoney position row."""
+    return resolve_exchange(
+        position.get("security_id"),
+        position.get("exchange") or position.get("exchange_segment", ""),
+        position.get("segment") or position.get("query_segment", ""),
+    )
 
 
 def get_open_position(tradingsymbol, exchange, product, auth):
@@ -432,25 +470,80 @@ def get_open_position(tradingsymbol, exchange, product, auth):
 
             # Read documented IndMoney position fields (with legacy fallbacks)
             position_token = str(position.get("security_id", "") or "")
-            position_symbol = position.get("trading_symbol") or position.get("symbol")
-            position_qty = position.get("net_quantity", position.get("net_qty", 0))
+            position_symbol = position.get("symbol") or position.get("trading_symbol")
+            position_qty = position.get("net_qty", position.get("net_quantity", 0))
 
-            # Map exchange_segment (e.g. NSE_EQ, NSE_FNO, BSE_EQ) to the
-            # NSE/BSE/MCX root returned by map_exchange_type()
-            mapped_exchange = map_exchange_type(
-                _map_exchange_segment(
-                    position.get("exchange_segment", position.get("segment", ""))
-                )
-            )
+            # Compare the exact OpenAlgo exchange. The old code collapsed NFO to
+            # its NSE parent on both sides, which happened to work for NSE F&O
+            # but matched a BFO position against a BSE request and vice versa.
+            position_exchange = _position_exchange(position)
 
             # Prefer a reliable security_id match; fall back to symbol match
             token_match = target_token and position_token == target_token
             symbol_match = position_symbol == tradingsymbol
-            if (token_match or symbol_match) and mapped_exchange == map_exchange_type(exchange):
+            if (token_match or symbol_match) and position_exchange == str(exchange).upper():
                 net_qty = str(position_qty)
                 break  # Return the first match
 
     return net_qty
+
+
+def _is_smart_order(orderid, auth):
+    """
+    True if `orderid` belongs to the smart-order (GTT) book.
+
+    A GTT- prefix is conclusive, but a smart-order PARENT is issued an
+    EQ-/DRV- id exactly like a regular order, so the prefix alone cannot
+    decide. Fall back to the order book and match on the order type.
+
+    Confirmed live on 2026-08-06: a standalone TRIGGER order comes BACK from
+    the order book as order_type "GTT_LIMIT", not "TRIGGER". Matching only the
+    request-side vocabulary sent stop cancels/modifies to the regular endpoints.
+
+    On any doubt this returns False, keeping the regular endpoint - the same
+    behaviour as before this routing existed.
+    """
+    orderid = str(orderid or "")
+    if orderid.startswith("GTT-"):
+        return True
+
+    try:
+        for order in get_order_book(auth) or []:
+            if isinstance(order, dict) and str(order.get("id", "")) == orderid:
+                order_type = str(order.get("order_type", "")).upper()
+                return order_type in SMART_ORDER_TYPES
+    except Exception as e:
+        logger.warning(f"Could not classify order {orderid} against the order book: {e}")
+    return False
+
+
+def _extract_order_id(response_data):
+    """
+    Pull the order id out of a placement response.
+
+    /order        -> {"data": {"order_id": ...}}
+    /smart/order  -> {"data": {"order_data": [{"order_id": ..., "child_order_details": {...}}]}}
+    """
+    data = response_data.get("data") or {}
+    if not isinstance(data, dict):
+        return None
+
+    order_id = data.get("order_id")
+    if order_id:
+        return order_id
+
+    order_data = data.get("order_data")
+    if isinstance(order_data, list):
+        for entry in order_data:
+            if isinstance(entry, dict) and entry.get("order_id"):
+                child = entry.get("child_order_details") or {}
+                if isinstance(child, dict) and child.get("order_id"):
+                    logger.info(
+                        f"Smart order {entry['order_id']} created with child leg "
+                        f"{child['order_id']} (cancel/modify each separately)"
+                    )
+                return entry["order_id"]
+    return None
 
 
 def place_order_api(data, auth):
@@ -469,16 +562,20 @@ def place_order_api(data, auth):
     }
     payload = json.dumps(newdata)
 
-    logger.debug(f"Placing order with payload: {payload}")
-    logger.debug(f"Indmoney API URL: {get_url('/order')}")
-    logger.debug(f"Indmoney API Headers: {headers}")
-    logger.debug(f"Indmoney API Payload: {payload}")
+    # Never log `headers` - it carries the Authorization token.
+    # A TRIGGER order is a stop order, and the trigger facility lives on
+    # /smart/order - /order has no stop type and no trigger_price field.
+    is_trigger_order = newdata.get("order_type") == "TRIGGER"
+    endpoint = "/smart/order" if is_trigger_order else "/order"
+
+    # Never log `headers` - it carries the Authorization token.
+    logger.debug(f"Placing order at {get_url(endpoint)} with payload: {payload}")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
-    url = get_url("/order")
-    res = request_with_retry(client, "POST", url, headers=headers, content=payload)
+    url = get_url(endpoint)
+    res = rate_limited_request(client, "POST", url, headers=headers, content=payload)
 
     try:
         response_data = json.loads(res.text)
@@ -492,8 +589,10 @@ def place_order_api(data, auth):
     orderid = None
     if res.status_code == 200 or res.status_code == 201:
         if response_data and response_data.get("status") == "success":
-            # Indmoney returns order ID in data.order_id field
-            orderid = response_data.get("data", {}).get("order_id")
+            # /order returns data.order_id; /smart/order returns
+            # data.order_data[<n>].order_id (with the SL/target child, if any,
+            # under child_order_details).
+            orderid = _extract_order_id(response_data)
             logger.debug(f"Order placed successfully with ID: {orderid}")
             # Format response to match OpenAlgo API standard
             response_data = {"orderid": orderid, "status": "success"}
@@ -522,7 +621,6 @@ def place_order_api(data, auth):
 
 def place_smartorder_api(data, auth):
     AUTH_TOKEN = auth
-    BROKER_API_KEY = os.getenv("BROKER_API_KEY")
     # If no API call is made in this function then res will return None
     res = None
 
@@ -607,8 +705,9 @@ def place_smartorder_api(data, auth):
 
 def close_all_positions(current_api_key, auth):
     AUTH_TOKEN = auth
-    # Fetch the current open positions
-    positions_response = get_positions(AUTH_TOKEN)
+    # Fetch the current open positions. Squaring off only needs net quantity,
+    # so skip the LTP enrichment round trip.
+    positions_response = get_positions(AUTH_TOKEN, include_ltp=False)
     logger.debug(f"Positions response for closing all: {positions_response}")
 
     # Handle the actual flat array format from IndMoney API
@@ -633,37 +732,32 @@ def close_all_positions(current_api_key, auth):
                 continue
 
             # Skip if net quantity is zero - documented field with legacy fallback
-            net_qty = position.get("net_quantity", position.get("net_qty", 0))
-            if int(net_qty) == 0:
+            net_qty = position.get("net_qty", position.get("net_quantity", 0))
+            if int(net_qty or 0) == 0:
                 continue
 
             # Determine action based on net quantity
             action = "SELL" if int(net_qty) > 0 else "BUY"
             quantity = abs(int(net_qty))
 
-            # Map exchange_segment (documented) to OpenAlgo exchange, legacy fallback
-            exchange = _map_exchange_segment(
-                position.get("exchange_segment", position.get("segment", ""))
-            )
+            exchange = _position_exchange(position)
 
             # get openalgo symbol to send to placeorder function
             symbol = get_symbol(position["security_id"], exchange)
+            if not symbol:
+                logger.error(
+                    f"Cannot square off token {position.get('security_id')} on {exchange}: "
+                    "symbol not found in the master contract; skipping"
+                )
+                continue
             logger.debug(f"The Symbol is {symbol}")
 
             # Determine product type. get_positions() tags each item with the
             # query_product it was fetched under (cnc/intraday/margin); fall back
             # to any product field the API returns.
-            api_product = str(
-                position.get("query_product", position.get("product", ""))
-            ).upper()
-            if api_product == "INTRADAY":
-                product = "MIS"
-            elif api_product in ("DELIVERY", "CNC"):
-                product = "CNC"
-            elif api_product == "MARGIN" or exchange in ["NFO", "MCX", "BFO", "CDS"]:
-                product = "NRML"
-            else:
-                product = "MIS"
+            product = map_product_to_openalgo(
+                position.get("query_product") or position.get("product", ""), exchange
+            )
 
             # Prepare the order payload
             place_order_payload = {
@@ -709,9 +803,15 @@ def cancel_order(orderid, auth):
         "order_id": orderid,
     }
 
+    # A stop/GTT order must be cancelled on the smart-order endpoint;
+    # /order/cancel does not know about it.
+    endpoint = (
+        "/smart/order/cancel" if _is_smart_order(orderid, AUTH_TOKEN) else "/order/cancel"
+    )
+
     # Make the POST request to cancel order using httpx
-    url = get_url("/order/cancel")
-    res = request_with_retry(client, "POST", url, headers=headers, content=json.dumps(payload))
+    url = get_url(endpoint)
+    res = rate_limited_request(client, "POST", url, headers=headers, content=json.dumps(payload))
 
     # Parse the response
     data = json.loads(res.text)
@@ -741,6 +841,23 @@ def modify_order(data, auth):
         data
     )  # You need to implement this function
 
+    # A stop/GTT order lives on the smart-order endpoint, which additionally
+    # requires algo_id and takes trigger_price rather than a plain limit.
+    is_smart = _is_smart_order(orderid, AUTH_TOKEN)
+    if is_smart:
+        transformed_order_data["algo_id"] = "99999"  # smart orders are NSE-only
+        trigger_price = data.get("trigger_price")
+        if trigger_price:
+            transformed_order_data["trigger_price"] = float(trigger_price)
+            # Keep the trigger-limit aligned with the new limit price so the
+            # modified stop still executes as a trigger-limit.
+            transformed_order_data["trigger_limit_price"] = transformed_order_data.pop(
+                "limit_price", None
+            )
+            transformed_order_data = {
+                k: v for k, v in transformed_order_data.items() if v is not None
+            }
+
     # Set up the request headers
     headers = {
         "Authorization": AUTH_TOKEN,
@@ -755,10 +872,10 @@ def modify_order(data, auth):
     client = get_httpx_client()
 
     # Construct the URL for modifying the order
-    url = get_url("/order/modify")
+    url = get_url("/smart/order/modify" if is_smart else "/order/modify")
 
     # Make the POST request using httpx
-    res = request_with_retry(client, "POST", url, headers=headers, content=payload)
+    res = rate_limited_request(client, "POST", url, headers=headers, content=payload)
 
     # Parse the response
     data = json.loads(res.text)

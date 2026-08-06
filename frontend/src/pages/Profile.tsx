@@ -1138,6 +1138,23 @@ export default function ProfilePage() {
                   </AlertDescription>
                 </Alert>
               )}
+              {selectedBroker === 'indmoney' && (
+                <Alert className="bg-blue-50 dark:bg-blue-950 border-blue-200">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertTitle>IndMoney Credentials</AlertTitle>
+                  <AlertDescription>
+                    <p>
+                      <strong>API Key</strong>: the <code>Client ID</code> shown at indstocks.com
+                      &gt; API Trading &gt; Access Tokens after you set up TOTP.
+                    </p>
+                    <p className="mt-1">
+                      <strong>API Secret</strong>: leave blank to log in with MPIN + TOTP
+                      (recommended). If you paste an access token here instead, it is used as-is and
+                      the TOTP flow is skipped - you must regenerate it every 24 hours.
+                    </p>
+                  </AlertDescription>
+                </Alert>
+              )}
 
               {/* Save Button */}
               <Button
