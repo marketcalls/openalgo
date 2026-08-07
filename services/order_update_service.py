@@ -73,8 +73,20 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
     ),
 }
 
-# Brokers with no push mechanism fall back to REST-orderbook polling.
-_POLLING_BROKERS = {"groww"}
+# Brokers with no *usable* push mechanism fall back to REST-orderbook polling.
+#
+# groww: no push feed at all (its public API documents only REST live data).
+#
+# fivepaisa: it does document an OrderTradeConfirmations WebSocket, but 5Paisa
+# permits only ONE feed connection per {access_token, client_code} and a new
+# connection evicts the existing one. A dedicated order socket therefore fights
+# the market-data adapter: each evicts the other ~150ms after connecting, and
+# both flap forever (verified live 2026-08-07 — see the header of
+# broker/fivepaisa/streaming/fivepaisa_order_adapter.py). Multiplexing order
+# updates onto the market-data socket instead is not viable either: that adapter
+# runs in the websocket_proxy *subprocess* under gunicorn+eventlet and Docker, so
+# the OrderUpdateEvent would be published on the wrong process's event bus.
+_POLLING_BROKERS = {"groww", "fivepaisa"}
 
 # user_id -> live adapter (BaseOrderUpdateAdapter or PollingOrderUpdateAdapter)
 _ADAPTERS: dict[str, object] = {}
