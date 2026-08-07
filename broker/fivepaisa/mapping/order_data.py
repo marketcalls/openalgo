@@ -30,6 +30,54 @@ def convert_date_string(date_str):
         return "Invalid date format"
 
 
+# 5Paisa order statuses -> OpenAlgo's lowercase orderbook vocabulary.
+# Keys are the full "Order Status" table from
+# broker-api-docs/fivepaisa-api-docs/08-order-tracking.md, lowercased.
+#
+# The after-hours ("AH ...") and "Xmitted" states used to fall through this
+# mapping and reach the UI as raw broker text. That is not cosmetic: the React
+# order book gates its Modify and Cancel buttons on order_status === "open", so
+# an unmapped status still renders an open-looking row but silently loses both
+# buttons — and "AH Cancelled" never matched the old `== "Cancelled"` test, so
+# it was neither counted nor normalized.
+_ORDER_STATUS_MAP = {
+    "fully executed": "complete",
+    "pending": "open",
+    "open": "open",
+    "modified": "open",
+    "placed": "open",
+    "ah placed": "open",
+    "ah modified": "open",
+    # "Order has been prepared by 5paisa system, but exchange rejected it or
+    # hasn't reached exchange" — ambiguous by the broker's own wording, so it
+    # collapses to open like every other in-flight state.
+    "xmitted": "open",
+    "cancelled": "cancelled",
+    "canceled": "cancelled",
+    "ah cancelled": "cancelled",
+    "rejected by 5p": "rejected",
+    "rejected by exch": "rejected",
+}
+
+
+def normalize_order_status(status):
+    """Map a 5Paisa OrderStatus to OpenAlgo's lowercase vocabulary.
+
+    Unknown statuses fall back to any status containing "Rejected"/"Cancelled"
+    before being passed through lowercased, so a new broker state degrades to
+    readable text instead of disappearing.
+    """
+    raw = (status or "").strip()
+    mapped = _ORDER_STATUS_MAP.get(raw.lower())
+    if mapped:
+        return mapped
+    if "rejected" in raw.lower():
+        return "rejected"
+    if "cancel" in raw.lower():
+        return "cancelled"
+    return raw.lower()
+
+
 def map_order_data(order_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
@@ -111,20 +159,18 @@ def calculate_order_statistics(order_data):
 
             # Count orders based on their status
             status = order["OrderStatus"].strip() if order["OrderStatus"] else ""
+            normalized = normalize_order_status(status)
 
-            # Normalize status to standardized values
-            if status == "Fully Executed":
+            if normalized == "complete":
                 total_completed_orders += 1
-                order["OrderStatus"] = "complete"
-            elif status in ["Pending", "Modified", "Open"]:
+            elif normalized == "open":
                 total_open_orders += 1
-                order["OrderStatus"] = "open"
-            elif "Rejected" in status:
+            elif normalized == "rejected":
                 total_rejected_orders += 1
-                order["OrderStatus"] = "rejected"
-            elif status == "Cancelled":
+            elif normalized == "cancelled":
                 total_cancelled_orders += 1
-                order["OrderStatus"] = "cancelled"
+
+            order["OrderStatus"] = normalized
 
     # Compile and return the statistics
     return {
@@ -171,11 +217,12 @@ def transform_order_data(orders):
             # Default to LIMIT for any other scenario
             pricetype = "LIMIT"
 
-        # Extract quantity based on availability (TradedQty or PendingQty)
-        quantity = order.get("TradedQty", 0)
-        # If TradedQty is 0 but there's a PendingQty, use that instead for rejected/canceled orders
-        if quantity == 0 and order.get("Qty") is not None:
-            quantity = order.get("Qty")
+        # "quantity" is the ORDER quantity everywhere else in OpenAlgo, and
+        # 5Paisa's "Qty" is exactly that (docs 08-order-tracking.md: Qty = total
+        # quantity of the order, TradedQty = executed, PendingQty = pending).
+        # Reading TradedQty here under-reported every partially filled order —
+        # 40 of 100 filled showed as a quantity-40 order.
+        quantity = order.get("Qty") or 0
 
         # CRITICAL FIX: Ensure BrokerOrderId is properly converted to string consistently
         # This ensures the same format is used when comparing in the orderstatus endpoint
