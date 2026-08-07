@@ -444,8 +444,14 @@ def create_app():
         csrf.exempt(app.view_functions["brlogin.samco_ip_status"])
         csrf.exempt(app.view_functions["brlogin.samco_update_ip"])
 
-        # Exempt logout endpoint from CSRF protection (safe - only destroys session)
-        csrf.exempt(app.view_functions["auth.logout"])
+        # auth.logout is deliberately NOT exempt. It is not "safe" in the CSRF
+        # sense: it revokes the broker token, publishes CACHE_INVALIDATE_ALL
+        # (tearing down the shared WebSocket feed), clears every device's
+        # session and flushes the symbol cache. SameSite=Lax alone does not
+        # cover it - ports are not part of the same-site check, so any other
+        # service on the same host could forge the POST. The GET form is
+        # covered separately by the fetch-metadata check in auth.logout, since
+        # Flask-WTF never validates safe methods.
 
         # Exempt health check endpoints from CSRF (for AWS ELB, K8s probes)
         csrf.exempt(app.view_functions["health_bp.simple_health"])
