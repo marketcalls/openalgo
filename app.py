@@ -113,6 +113,7 @@ from csp import apply_csp_middleware  # Import the CSP middleware
 from database.action_center_db import init_db as ensure_action_center_tables_exists
 from database.analyzer_db import init_db as ensure_analyzer_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
+from database.apscheduler_jobstore_db import ensure_jobstore_tables_exist
 from database.auth_db import init_db as ensure_auth_tables_exists
 from database.chartink_db import init_db as ensure_chartink_tables_exists
 from database.flow_db import init_db as ensure_flow_tables_exists
@@ -443,8 +444,14 @@ def create_app():
         csrf.exempt(app.view_functions["brlogin.samco_ip_status"])
         csrf.exempt(app.view_functions["brlogin.samco_update_ip"])
 
-        # Exempt logout endpoint from CSRF protection (safe - only destroys session)
-        csrf.exempt(app.view_functions["auth.logout"])
+        # auth.logout is deliberately NOT exempt. It is not "safe" in the CSRF
+        # sense: it revokes the broker token, publishes CACHE_INVALIDATE_ALL
+        # (tearing down the shared WebSocket feed), clears every device's
+        # session and flushes the symbol cache. SameSite=Lax alone does not
+        # cover it - ports are not part of the same-site check, so any other
+        # service on the same host could forge the POST. The GET form is
+        # covered separately by the fetch-metadata check in auth.logout, since
+        # Flask-WTF never validates safe methods.
 
         # Exempt health check endpoints from CSRF (for AWS ELB, K8s probes)
         csrf.exempt(app.view_functions["health_bp.simple_health"])
@@ -710,6 +717,12 @@ def setup_environment(app):
                 ("Scalping DB", ensure_scalping_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),
                 ("Strategy Portfolio DB", ensure_strategy_portfolio_tables_exists),
+                # Created here, not left to APScheduler's own CREATE TABLE in
+                # scheduler.start(). That DDL would otherwise run further down
+                # this function, after db_ready releases the rest of the boot,
+                # and has to win the write lock against it. This phase is
+                # single-threaded, so the same DDL runs uncontended. See #1750.
+                ("Scheduler Job Stores", ensure_jobstore_tables_exist),
             ]
 
             db_init_start = time.time()
