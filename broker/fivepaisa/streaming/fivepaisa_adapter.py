@@ -32,6 +32,18 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     # Delay between successive batch frames (server prefers fewer, larger frames
     # with breathing room; only applied when more batches remain).
     SUBSCRIPTION_DELAY = 0.5
+    # Collect window opened by the first queued scrip, before the first frame is
+    # sent — the same fixed window Zerodha's adapter opens on its batch timer.
+    #
+    # Callers subscribe one symbol at a time (an option chain fires ~50 separate
+    # subscribe() calls), and without this the drain thread sent the very first
+    # scrip immediately, found the queue momentarily empty, exited, and was then
+    # restarted by the next enqueue — one 1-scrip frame per symbol, with the
+    # SUBSCRIPTION_DELAY throttle never engaging because the queue was always
+    # briefly empty right after a send. A 25-strike chain cost 50 frames in
+    # quote mode. Waiting once here lets the burst accumulate so it leaves as
+    # one frame per method.
+    SUBSCRIPTION_COLLECT_WINDOW = 0.5
 
     def __init__(self):
         super().__init__()
@@ -286,6 +298,15 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         previous one-frame-per-symbol flood on bulk subscribe / resubscribe.
         """
         consecutive_failures = 0
+
+        # Collect window: let the rest of the burst land before the first frame
+        # goes out (see SUBSCRIPTION_COLLECT_WINDOW). Interruptible, so a
+        # disconnect during the window doesn't stall shutdown.
+        if self._stop_event.wait(self.SUBSCRIPTION_COLLECT_WINDOW):
+            with self.lock:
+                self._sub_thread = None
+            return
+
         while self.running and not self._stop_event.is_set():
             # Decide whether to exit on an EMPTY queue under the same lock that
             # _enqueue_subscriptions holds when it appends work and checks our
@@ -313,21 +334,28 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 continue
             consecutive_failures = 0
 
-            # Pull a batch of same-method scrips off the front of the queue.
+            # Pull a batch of same-method scrips. The method is taken from the
+            # head of the queue, but matching scrips are then gathered from
+            # ANYWHERE in it — depth subscriptions enqueue two methods per symbol
+            # (MarketDepthService + MarketFeedV3, see _methods_for_mode), so a
+            # front-run-only scan would alternate methods every item and emit
+            # one-scrip frames, which is exactly the flood this batching exists
+            # to prevent. Order within a method is preserved.
             batch_method = None
             batch_scrips = []
             with self.lock:
-                while (
-                    self.pending_subscriptions
-                    and len(batch_scrips) < self.MAX_SCRIPS_PER_SUBSCRIBE
-                ):
-                    method, scrip = self.pending_subscriptions[0]
-                    if batch_method is None:
-                        batch_method = method
-                    elif method != batch_method:
-                        break
-                    self.pending_subscriptions.popleft()
-                    batch_scrips.append(scrip)
+                if self.pending_subscriptions:
+                    batch_method = self.pending_subscriptions[0][0]
+                    remaining = deque()
+                    for method, scrip in self.pending_subscriptions:
+                        if (
+                            method == batch_method
+                            and len(batch_scrips) < self.MAX_SCRIPS_PER_SUBSCRIBE
+                        ):
+                            batch_scrips.append(scrip)
+                        else:
+                            remaining.append((method, scrip))
+                    self.pending_subscriptions = remaining
 
             if not batch_scrips:
                 continue
@@ -402,8 +430,9 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Create scrip data for 5Paisa API
         scrip_data = [{"Exch": exch_code, "ExchType": exch_type, "ScripCode": int(token)}]
 
-        # Get the appropriate method for the mode
-        method = FivePaisaCapabilityRegistry.get_method_for_mode(mode)
+        # Get the appropriate method(s) for the mode
+        methods = self._methods_for_mode(mode)
+        method = methods[0]
 
         # Generate unique correlation ID
         correlation_id = f"{symbol}_{exchange}_{mode}"
@@ -420,6 +449,7 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "mode": mode,
                 "depth_level": depth_level,
                 "method": method,
+                "methods": methods,
                 "scrip_data": scrip_data,
             }
 
@@ -429,9 +459,9 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if self.connected and self.ws_client:
             self.logger.debug(
                 f"Queueing subscription for {symbol} ({exchange}/{brexchange}) - "
-                f"Token: {token}, Method: {method}, Exch: {exch_code}, Type: {exch_type}"
+                f"Token: {token}, Methods: {methods}, Exch: {exch_code}, Type: {exch_type}"
             )
-            self._enqueue_subscriptions([(method, scrip_data[0])])
+            self._enqueue_subscriptions([(m, scrip_data[0]) for m in methods])
 
         # Return success
         return self._create_success_response(
@@ -441,6 +471,44 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             mode=mode,
             depth_level=depth_level,
         )
+
+    def _methods_for_mode(self, mode: int) -> list[str]:
+        """Subscription method(s) a mode needs.
+
+        Depth needs TWO. 5Paisa's MarketDepthService frame carries only the
+        order book — Exch, ExchType, Token, TBidQ, TOffQ, Details, Time — and no
+        last-traded price at all (see the sample frame in
+        broker-api-docs/fivepaisa-api-docs/10-market-data-websocket.md). The
+        traded price lives exclusively on MarketFeedV3's `LastRate`.
+
+        Subscribing depth alone therefore published ltp=0 on every DEPTH tick,
+        and because the option chain merges live ticks over its REST snapshot,
+        that zero overwrote the correct REST LTP and the whole chain read 0.00.
+
+        Adding MarketFeedV3 alongside makes LastRate arrive for the same token;
+        _on_data fans every frame out to all subscriptions for that token, so
+        _apply_snapshot records LastRate and carries it onto the depth frames
+        that lack it.
+        """
+        method = FivePaisaCapabilityRegistry.get_method_for_mode(mode)
+        if mode == 3:
+            feed = FivePaisaCapabilityRegistry.get_method_for_mode(2)
+            if feed != method:
+                return [method, feed]
+        return [method]
+
+    def _methods_still_needed(self, token: str) -> set:
+        """Methods still required by the remaining subscriptions for `token`.
+
+        Callers hold self.lock. Used so unsubscribing a depth stream does not
+        tear down MarketFeedV3 while another subscription on the same token
+        (another mode, or another client's depth stream) still needs it.
+        """
+        needed = set()
+        for sub in self.subscriptions.values():
+            if str(sub["token"]) == str(token):
+                needed.update(sub.get("methods") or [sub["method"]])
+        return needed
 
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> dict[str, Any]:
         """
@@ -471,8 +539,8 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Create scrip data
         scrip_data = [{"Exch": exch_code, "ExchType": exch_type, "ScripCode": int(token)}]
 
-        # Get the appropriate method for the mode
-        method = FivePaisaCapabilityRegistry.get_method_for_mode(mode)
+        # Method(s) this subscription pulled in (depth also pulls MarketFeedV3)
+        methods = self._methods_for_mode(mode)
 
         # Generate correlation ID
         correlation_id = f"{symbol}_{exchange}_{mode}"
@@ -482,22 +550,35 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # send Unsubscribe now but leave the batched Subscribe in the queue, which
         # the processor then sends afterwards — resurrecting a stale server-side
         # subscription and unwanted feed traffic.
-        target = (method, scrip_data[0])
         with self.lock:
-            if correlation_id in self.subscriptions:
-                del self.subscriptions[correlation_id]
+            # The stored correlation_id carries the depth level for mode 3, so
+            # match on the prefix rather than requiring the caller to know it.
+            for key in [k for k in self.subscriptions if k == correlation_id
+                        or k.startswith(f"{correlation_id}_")]:
+                del self.subscriptions[key]
+
+            # Only drop methods no remaining subscription on this token needs —
+            # MarketFeedV3 may still be feeding another mode (or another depth
+            # stream) for the same scrip.
+            still_needed = self._methods_still_needed(token)
+            to_unsubscribe = [m for m in methods if m not in still_needed]
+
             if self.pending_subscriptions:
+                targets = {(m, tuple(sorted(scrip_data[0].items()))) for m in to_unsubscribe}
                 self.pending_subscriptions = deque(
-                    item for item in self.pending_subscriptions if item != target
+                    item
+                    for item in self.pending_subscriptions
+                    if (item[0], tuple(sorted(item[1].items()))) not in targets
                 )
 
         # Unsubscribe if connected
         if self.connected and self.ws_client:
-            try:
-                self.ws_client.unsubscribe(method, scrip_data)
-            except Exception as e:
-                self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
-                return self._create_error_response("UNSUBSCRIPTION_ERROR", str(e))
+            for m in to_unsubscribe:
+                try:
+                    self.ws_client.unsubscribe(m, scrip_data)
+                except Exception as e:
+                    self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
+                    return self._create_error_response("UNSUBSCRIPTION_ERROR", str(e))
 
         return self._create_success_response(
             f"Unsubscribed from {symbol}.{exchange}", symbol=symbol, exchange=exchange, mode=mode
@@ -513,8 +594,13 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Resubscribe to existing subscriptions via the batch queue (coalesced
         # into multi-scrip frames) rather than one frame per symbol.
         with self.lock:
+            # Depth subscriptions carry two methods (see _methods_for_mode), so
+            # resubscribe every one of them or LTP goes back to 0 after a
+            # reconnect. Older stored entries only have "method".
             items = [
-                (sub["method"], sub["scrip_data"][0]) for sub in self.subscriptions.values()
+                (m, sub["scrip_data"][0])
+                for sub in self.subscriptions.values()
+                for m in (sub.get("methods") or [sub["method"]])
             ]
         if items:
             self.logger.info(f"Resubscribing {len(items)} subscription(s) in batches")

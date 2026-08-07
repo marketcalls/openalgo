@@ -1,11 +1,95 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Angel Broking Parameters https://smartapi.angelbroking.com/docs/Orders
 
+import math
+from decimal import Decimal
+
 from database.token_db import get_br_symbol, get_symbol_info
 from utils.logging import get_logger
-from utils.mpp_slab import calculate_protected_price, get_instrument_type_from_symbol
+from utils.mpp_slab import (
+    calculate_protected_price,
+    get_instrument_type_from_symbol,
+    get_mpp_percentage,
+)
 
 logger = get_logger(__name__)
+
+
+def _tick_decimals(tick: float) -> int:
+    """Number of decimal places implied by a tick size (0.05 -> 2, 0.0025 -> 4)."""
+    return max(0, -Decimal(str(tick)).as_tuple().exponent)
+
+
+def _snap_to_tick(value: float, tick: float, direction: str) -> float:
+    """Snap ``value`` to a multiple of ``tick``.
+
+    ``"floor"`` rounds down and ``"ceil"`` rounds up, so the protective limit
+    stays strictly on the required side of the trigger after snapping —
+    nearest-tick rounding could land it back on the trigger.
+    """
+    ratio = round(value / tick, 6)  # tame float noise before the floor/ceil
+    k = math.floor(ratio) if direction == "floor" else math.ceil(ratio)
+    return round(k * tick, _tick_decimals(tick))
+
+
+def _slm_protected_price(symbol, exchange, action, trigger_price):
+    """
+    Derive a protective stop-limit price for an SL-M order from its trigger.
+
+    5Paisa rejects every order it sees as "at market" when it comes from an API
+    key, with RMS reason "Market order with Algo Id not allowed" (verified live
+    2026-08-07 on NSE cash; the same string Kotak returns). 5Paisa has no
+    order-type field — `Price = 0` IS the market flag, and the order book echoes
+    it back as `AtMarket = "Y"` — so an SL-M sent as Price 0 + StopLossPrice is
+    rejected outright.
+
+    Plain MARKET orders already dodge this: transform_data() converts them to an
+    MPP-protected LIMIT off the LTP. SL-M skipped that path entirely. Give it the
+    same treatment, but anchored on the TRIGGER rather than the LTP (the LTP is
+    irrelevant to an order that rests until the trigger fires): offset MPP%
+    beyond the trigger in the fill direction — SELL below it, BUY above it — so
+    the stop still fills once triggered. Same shape as the Dhan #1647 fix and the
+    Kotak SL-M conversion.
+
+    NSE also requires an SL SELL limit at or below its trigger (and BUY at or
+    above), so the beyond-trigger direction is what the exchange wants anyway.
+
+    The limit is snapped to the instrument tick away from the trigger (SELL
+    floors, BUY ceils) and forced at least one tick past it, so rounding can
+    never put it back onto the trigger or collapse it to zero on a low-priced
+    scrip. Fails closed when the tick size cannot be resolved rather than
+    guessing 2 decimals, which 5Paisa would reject on a tick-size check.
+    """
+    instrument_type = get_instrument_type_from_symbol(symbol)
+
+    symbol_info = get_symbol_info(symbol, exchange)
+    try:
+        tick_size = float(getattr(symbol_info, "tick_size", None)) if symbol_info else 0.0
+    except (TypeError, ValueError):
+        tick_size = 0.0
+    if not math.isfinite(tick_size) or tick_size <= 0:
+        raise ValueError(
+            f"Cannot resolve tick size from DB for {symbol}/{exchange}; required to "
+            f"build a valid SL-M protective limit price"
+        )
+
+    pct = (get_mpp_percentage(trigger_price, instrument_type) or 0) / 100.0
+
+    if action.upper() == "SELL":
+        # Strictly BELOW the trigger, at least one tick away, tick-aligned.
+        raw = min(trigger_price * (1 - pct), trigger_price - tick_size)
+        limit = _snap_to_tick(raw, tick_size, "floor")
+        if limit <= 0:
+            raise ValueError(
+                f"SL-M SELL trigger {trigger_price} for {symbol}/{exchange} is too low "
+                f"to derive a positive protective limit at tick {tick_size}"
+            )
+    else:
+        # Strictly ABOVE the trigger, at least one tick away, tick-aligned.
+        raw = max(trigger_price * (1 + pct), trigger_price + tick_size)
+        limit = _snap_to_tick(raw, tick_size, "ceil")
+
+    return limit
 
 
 def transform_data(data, token, auth_token=None):
@@ -78,6 +162,32 @@ def transform_data(data, token, auth_token=None):
                 f"MPP Error: Failed to apply MPP for Symbol={data['symbol']}, "
                 f"Exchange={data['exchange']}, Error={e}. Sending price={price} as-is."
             )
+
+    # SL-M carries no price of its own, so it would go out as Price=0 — which
+    # 5Paisa reads as "at market" and rejects for API keys ("Market order with
+    # Algo Id not allowed"). Convert it to a stop-LIMIT priced just beyond the
+    # trigger. Unlike the MARKET branch above this needs no quote, so it works
+    # even without an auth token.
+    trigger_price = float(data.get("trigger_price", "0") or 0)
+    if data.get("pricetype") == "SL-M" and trigger_price > 0:
+        try:
+            price = _slm_protected_price(
+                data["symbol"], data["exchange"], action, trigger_price
+            )
+            logger.info(
+                f"MPP Conversion Complete: Symbol={data['symbol']}, "
+                f"OrderType=SL-M->SL, Trigger={trigger_price}, FinalPrice={price}"
+            )
+        except Exception as e:
+            # Fail loudly rather than silently sending Price=0, which 5Paisa
+            # would reject anyway — the caller sees the reason instead of a
+            # bare RMS rejection.
+            logger.error(
+                f"MPP Error: Cannot build SL-M protective limit for "
+                f"Symbol={data['symbol']}, Exchange={data['exchange']}, "
+                f"Trigger={trigger_price}: {e}"
+            )
+            raise
 
     # Basic mapping
     transformed = {
