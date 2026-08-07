@@ -287,6 +287,32 @@ def reformat_symbol(row, file_segment=None):
         return trading_symbol
 
 
+def derive_name(row):
+    """
+    Underlying root for SymToken.name.
+
+    `name` must hold the UNDERLYING (e.g. "NIFTY"), not the contract
+    description. Every F&O tool filters it with an exact match - the option
+    chain's expiry lookup does `SymToken.name.ilike("NIFTY")` - so anything
+    else silently returns zero rows and the tool renders empty.
+
+    IndMoney's SYMBOL_NAME is unusable for this: it is the full contract
+    description on derivatives ("NIFTY-Aug2026-18500-CE") and blank on indices.
+    Derive the root the same way reformat_symbol() does, from the part of
+    TRADING_SYMBOL before the first hyphen, and fall back to the OpenAlgo
+    symbol for cash and index rows where the two coincide.
+
+    Must run AFTER `symbol` and `instrumenttype` are assigned.
+    """
+    instrumenttype = str(row.get("instrumenttype", "") or "")
+    if instrumenttype in ("CE", "PE", "FUT"):
+        trading_symbol = str(row.get("TRADING_SYMBOL", "") or "")
+        base = trading_symbol.split("-")[0].strip()
+        if base:
+            return base
+    return str(row.get("symbol", "") or "")
+
+
 def assign_values(row, file_segment=None):
     """
     Assign exchange and instrument type values based on Indmoney data structure
@@ -416,7 +442,7 @@ def process_indmoney_csv(path):
 
         # Map Indmoney columns to our database schema
         df["token"] = df["SECURITY_ID"].astype(str)
-        df["name"] = df["SYMBOL_NAME"].fillna(df["TRADING_SYMBOL"]).fillna("")
+        # `name` is derived below, once symbol and instrumenttype exist.
         df["expiry"] = df["EXPIRY_DATE"].str.upper()
         df["strike"] = pd.to_numeric(df["STRIKE_PRICE"], errors="coerce").fillna(0.0)
         df["lotsize"] = pd.to_numeric(df["LOT_UNITS"], errors="coerce").fillna(1).astype(int)
@@ -447,6 +473,10 @@ def process_indmoney_csv(path):
                 "S&P BSE SENSEX 50": "SENSEX50",
             }
         )
+
+        # Derive `name` last: it needs the final symbol (after the index
+        # special-cases above) and instrumenttype. See derive_name().
+        df["name"] = df.apply(derive_name, axis=1)
 
         # Keep only required columns for the database
         db_columns = [

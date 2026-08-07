@@ -118,6 +118,7 @@ Each broker has different requirements. Here's a quick reference:
 | Dhan | Client ID, Access Token | [Dhan API](https://api.dhan.co) |
 | Fyers | App ID, Secret | [Fyers API](https://myapi.fyers.in) |
 | Upstox | API Key, Secret | [Upstox Developer](https://api.upstox.com) |
+| IndMoney | Client ID (+ MPIN and TOTP at login) | [INDstocks Access Tokens](https://indstocks.com/app/api-trading/access-tokens) |
 
 ### Update .env with Broker Details
 
@@ -142,6 +143,27 @@ BROKER_CLIENT_CODE=your_client_code
 BROKER_PASSWORD=your_password
 BROKER_TOTP_KEY=your_totp_secret
 ```
+
+Example for IndMoney (INDstocks):
+```ini
+# Broker Selection
+BROKER=indmoney
+
+# IndMoney Credentials
+# API Key = the Client ID shown at indstocks.com > API Trading > Access Tokens
+#           after you complete the one-time TOTP setup on that page.
+BROKER_API_KEY=your_indstocks_client_id
+
+# Leave the secret BLANK to log in with MPIN + TOTP (recommended). OpenAlgo then
+# mints a fresh 24-hour access token at each login. Only set it if you prefer to
+# paste a token generated from the dashboard, which you must renew every 24 hours.
+BROKER_API_SECRET=
+```
+
+You enter the **MPIN** and the current **6-digit TOTP** on the OpenAlgo login screen -
+neither is stored in `.env`. Token generation is limited to one request per 60 seconds,
+and 5 wrong codes in 15 minutes locks it for 15 minutes, so keep the server clock synced
+via NTP and never resubmit a code you have already used.
 
 ### Alternative: Configure via Web Interface
 
