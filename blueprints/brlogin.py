@@ -476,11 +476,63 @@ def broker_callback(broker, para=None):
                     }
                 ), 400
     elif broker == "indmoney":
-        code = "indmoney"
-        logger.debug(f"IndMoney broker - The code is {code}")
-        auth_token, error_message = auth_function(code)
+        # Two credential shapes are supported (docs 04-authentication-users):
+        #   BROKER_API_SECRET set -> a manually generated 24h access token; use
+        #     it directly. This keeps existing installations working unchanged.
+        #   BROKER_API_SECRET blank -> TOTP flow. BROKER_API_KEY holds the
+        #     static Client ID (sent as x-api-key); the user supplies MPIN and a
+        #     live TOTP code, and POST /generate/token mints a fresh token.
+        # Detected from the credentials themselves rather than a new env flag.
+        manual_token = (get_broker_api_secret() or "").strip()
+        indmoney_client_id = (get_broker_api_key() or "").strip()
 
-        forward_url = "broker.html"
+        if request.method == "GET":
+            if manual_token:
+                # auth_function validates the token against /user/profile first,
+                # so a placeholder or an expired paste cannot be stored as if it
+                # were a working session.
+                logger.debug("IndMoney broker - trying access token from BROKER_API_SECRET")
+                auth_token, error_message = auth_function("indmoney")
+                forward_url = "broker.html"
+
+                if not auth_token and indmoney_client_id:
+                    logger.warning(
+                        "IndMoney: BROKER_API_SECRET is not a usable access token "
+                        f"({error_message}); falling back to MPIN + TOTP login"
+                    )
+                    return redirect("/broker/indmoney/totp")
+
+            elif indmoney_client_id:
+                # Redirect to React TOTP page
+                return redirect("/broker/indmoney/totp")
+
+            else:
+                return handle_auth_failure(
+                    "IndMoney is not configured. Set BROKER_API_KEY to the Client ID from "
+                    "indstocks.com > API Trading > Access Tokens, and leave BROKER_API_SECRET "
+                    "blank to log in with MPIN + TOTP.",
+                    forward_url="broker.html",
+                )
+
+        elif request.method == "POST":
+            from broker.indmoney.api.auth_api import authenticate_broker_totp
+
+            mpin = request.form.get("mpin")
+            totp_code = request.form.get("totp")
+
+            if not mpin or not totp_code:
+                return jsonify(
+                    {"status": "error", "message": "Please provide both MPIN and TOTP code"}
+                ), 400
+
+            logger.info("IndMoney TOTP authentication initiated")
+            auth_token, error_message = authenticate_broker_totp(mpin, totp_code)
+            forward_url = "broker.html"
+
+            if auth_token:
+                logger.info("IndMoney authentication successful, auth_token received")
+            else:
+                logger.error(f"IndMoney authentication failed: {error_message}")
 
     elif broker == "deltaexchange":
         code = "deltaexchange"
@@ -1126,7 +1178,8 @@ def samco_ip_status():
         return jsonify({"status": "error", "message": "Not logged in"}), 401
 
     from broker.samco.api.auth_api import get_client_id
-    from database.auth_db import samco_get_ip_status as get_ip_status, samco_has_secret_key as has_secret_key
+    from database.auth_db import samco_get_ip_status as get_ip_status
+    from database.auth_db import samco_has_secret_key as has_secret_key
 
     uid = get_client_id()
     ip_status = get_ip_status(uid)
@@ -1145,7 +1198,9 @@ def samco_update_ip():
         return jsonify({"status": "error", "message": "Not logged in"}), 401
 
     from broker.samco.api.auth_api import get_client_id, get_password, register_ip, update_ip
-    from database.auth_db import samco_get_ip_status as get_ip_status, samco_has_registered_ip as has_registered_ip, samco_save_ip_info as save_ip_info
+    from database.auth_db import samco_get_ip_status as get_ip_status
+    from database.auth_db import samco_has_registered_ip as has_registered_ip
+    from database.auth_db import samco_save_ip_info as save_ip_info
 
     uid = get_client_id()
     password = get_password()
