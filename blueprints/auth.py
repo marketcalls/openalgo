@@ -1264,8 +1264,14 @@ def get_dashboard_data():
 
 @auth_bp.route("/logout", methods=["GET", "POST"])
 def logout():
-    if session.get("logged_in"):
-        username = session["user"]
+    was_logged_in = bool(session.get("logged_in"))
+    username = session.get("user")
+
+    # Wipe the browser session before teardown so a revocation or notification
+    # failure cannot leave the user stuck in a half-logged-in state.
+    session.clear()
+
+    if was_logged_in:
 
         # Clear cache entries before database update to prevent stale data access
         cache_key_auth = f"auth-{username}"
@@ -1310,7 +1316,6 @@ def logout():
         })
 
         # Clear entire session to ensure complete logout
-        session.clear()
         logger.info(f"Session cleared for user: {username}")
 
     # For POST requests (AJAX from React), return JSON
