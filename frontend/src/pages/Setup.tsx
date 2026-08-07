@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
+import { fetchCSRFToken } from '@/api/client'
 import { cn } from '@/lib/utils'
 import { showToast } from '@/utils/toast'
 
@@ -117,10 +118,14 @@ export default function Setup() {
       // If setup was successful (response ok or redirected), go to login
       if (response.ok || response.redirected) {
         showToast.success('Account created successfully')
-        // Clear any existing session by calling logout
+        // Clear any existing session by calling logout. /auth/logout is CSRF
+        // protected, so the token has to be attached explicitly here - this is
+        // a raw fetch, not the axios client that adds it via an interceptor.
         try {
+          const csrfToken = await fetchCSRFToken()
           await fetch('/auth/logout', {
             method: 'POST',
+            headers: { 'X-CSRFToken': csrfToken },
             credentials: 'include',
           })
         } catch {
