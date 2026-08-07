@@ -32,6 +32,18 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     # Delay between successive batch frames (server prefers fewer, larger frames
     # with breathing room; only applied when more batches remain).
     SUBSCRIPTION_DELAY = 0.5
+    # Collect window opened by the first queued scrip, before the first frame is
+    # sent — the same fixed window Zerodha's adapter opens on its batch timer.
+    #
+    # Callers subscribe one symbol at a time (an option chain fires ~50 separate
+    # subscribe() calls), and without this the drain thread sent the very first
+    # scrip immediately, found the queue momentarily empty, exited, and was then
+    # restarted by the next enqueue — one 1-scrip frame per symbol, with the
+    # SUBSCRIPTION_DELAY throttle never engaging because the queue was always
+    # briefly empty right after a send. A 25-strike chain cost 50 frames in
+    # quote mode. Waiting once here lets the burst accumulate so it leaves as
+    # one frame per method.
+    SUBSCRIPTION_COLLECT_WINDOW = 0.5
 
     def __init__(self):
         super().__init__()
@@ -286,6 +298,15 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         previous one-frame-per-symbol flood on bulk subscribe / resubscribe.
         """
         consecutive_failures = 0
+
+        # Collect window: let the rest of the burst land before the first frame
+        # goes out (see SUBSCRIPTION_COLLECT_WINDOW). Interruptible, so a
+        # disconnect during the window doesn't stall shutdown.
+        if self._stop_event.wait(self.SUBSCRIPTION_COLLECT_WINDOW):
+            with self.lock:
+                self._sub_thread = None
+            return
+
         while self.running and not self._stop_event.is_set():
             # Decide whether to exit on an EMPTY queue under the same lock that
             # _enqueue_subscriptions holds when it appends work and checks our
