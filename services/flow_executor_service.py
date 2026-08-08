@@ -9,6 +9,7 @@ import logging
 import re
 import threading
 import time as time_module
+import weakref
 from datetime import datetime, time, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -27,17 +28,38 @@ logger = logging.getLogger(__name__)
 MAX_NODE_DEPTH = 100
 MAX_NODE_VISITS = 500
 
-# Execution locks to prevent concurrent execution
-_workflow_locks: dict[int, threading.Lock] = {}
+# Execution locks to prevent concurrent execution of the same workflow.
+#
+# WeakValueDictionary, not a plain dict: an entry disappears once no caller
+# holds the lock any more, so the registry stays proportional to workflows
+# executing right now rather than to every workflow ever executed (issue #1739).
+#
+# Do NOT replace this with a size-capped dict that evicts entries. Evicting a
+# lock a thread is currently holding hands the next caller a brand-new lock, its
+# `lock.locked()` guard in execute_workflow passes, and the same workflow runs
+# twice concurrently - placing every order in it twice. Weak references cannot
+# do that: while any caller holds the lock, it holds a strong reference, so the
+# entry is guaranteed to survive and every caller sees the same object.
+_workflow_locks: "weakref.WeakValueDictionary[int, threading.Lock]" = (
+    weakref.WeakValueDictionary()
+)
 _locks_mutex = threading.Lock()
 
 
 def get_workflow_lock(workflow_id: int) -> threading.Lock:
-    """Get or create a lock for a workflow"""
+    """Get or create a lock for a workflow.
+
+    Callers must keep the returned lock referenced for as long as they rely on
+    it (``lock = get_workflow_lock(id); with lock:``) - which is what keeps the
+    registry entry alive. Discarding the reference and re-fetching mid-critical
+    section would not be safe.
+    """
     with _locks_mutex:
-        if workflow_id not in _workflow_locks:
-            _workflow_locks[workflow_id] = threading.Lock()
-        return _workflow_locks[workflow_id]
+        lock = _workflow_locks.get(workflow_id)
+        if lock is None:
+            lock = threading.Lock()
+            _workflow_locks[workflow_id] = lock
+        return lock
 
 
 def parse_time_string(
