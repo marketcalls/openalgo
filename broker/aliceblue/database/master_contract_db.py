@@ -178,6 +178,28 @@ def download_csv_aliceblue_data(output_path):
             logger.error(f"Failed to download {key} from {url}. Error: {e}")
 
 
+def _clean_tokens(series):
+    """Coerce a Token column to plain integer strings.
+
+    pd.read_csv infers Token as float64 whenever the column carries a NaN, so
+    the values arrive as 2885.0 and land in the VARCHAR token column as the
+    string "2885.0". That affected 165,576 of 165,690 rows - every tradable
+    exchange; only the index feeds, which load through a different path, were
+    clean.
+
+    Nothing crashed because three call sites defend with
+    str(int(float(token))) - transform_data for order placement, the streaming
+    adapter, and _normalize_token in api/data.py. Those stay as belt and braces,
+    but they are now redundant, and any new code path that used the token
+    without that dance would have sent AliceBlue "2885.0".
+
+    Rows whose token will not parse become an empty string rather than -1: a
+    sentinel integer would look like a real instrument to downstream lookups.
+    """
+    numeric = pd.to_numeric(series, errors="coerce")
+    return numeric.map(lambda v: "" if pd.isna(v) else str(int(v)))
+
+
 def reformat_symbol_detail(s):
     parts = s.split()  # Split the string into parts
     # Reorder and format the parts to match the desired output
@@ -203,7 +225,7 @@ def process_aliceblue_nse_csv(path):
     token_df["name"] = filter_df["Instrument Name"]
     token_df["exchange"] = filter_df["Exch"]
     token_df["brexchange"] = filter_df["Exch"]
-    token_df["token"] = filter_df["Token"]
+    token_df["token"] = _clean_tokens(filter_df["Token"])
     token_df["expiry"] = ""
     token_df["strike"] = 1.0
     token_df["lotsize"] = filter_df["Lot Size"]
@@ -234,7 +256,7 @@ def process_aliceblue_bse_csv(path):
     token_df["name"] = filtered_df["Instrument Name"]
     token_df["exchange"] = filtered_df["Exch"]
     token_df["brexchange"] = filtered_df["Exch"]
-    token_df["token"] = filtered_df["Token"]
+    token_df["token"] = _clean_tokens(filtered_df["Token"])
     token_df["expiry"] = ""
     token_df["strike"] = 1.0
     token_df["lotsize"] = filtered_df["Lot Size"]
@@ -302,7 +324,7 @@ def process_aliceblue_nfo_csv(path):
     token_df["name"] = df["Instrument Name"].values
     token_df["exchange"] = df["Exch"].values
     token_df["brexchange"] = df["Exch"].values
-    token_df["token"] = df["Token"].values
+    token_df["token"] = _clean_tokens(df["Token"])
 
     # Convert 'Expiry Date' to desired format with NaT handling
     token_df["expiry"] = df["Expiry Date"].apply(
@@ -370,7 +392,7 @@ def process_aliceblue_cds_csv(path):
     token_df["name"] = df["Instrument Name"].values
     token_df["exchange"] = df["Exch"].values
     token_df["brexchange"] = df["Exch"].values
-    token_df["token"] = df["Token"].values
+    token_df["token"] = _clean_tokens(df["Token"])
 
     # Convert 'Expiry Date' to desired format with NaT handling
     token_df["expiry"] = df["Expiry Date"].apply(
@@ -418,7 +440,7 @@ def process_aliceblue_bfo_csv(path):
     token_df["name"] = df["Instrument Name"].values
     token_df["exchange"] = df["Exch"].values
     token_df["brexchange"] = df["Exch"].values
-    token_df["token"] = df["Token"].values
+    token_df["token"] = _clean_tokens(df["Token"])
 
     # Convert 'Expiry Date' to desired format with NaT handling
     token_df["expiry"] = df["Expiry Date"].apply(
@@ -490,7 +512,7 @@ def process_aliceblue_mcx_csv(path):
     token_df["name"] = df["Instrument Name"].values
     token_df["exchange"] = df["Exch"].values
     token_df["brexchange"] = df["Exch"].values
-    token_df["token"] = df["Token"].values
+    token_df["token"] = _clean_tokens(df["Token"])
 
     # Convert 'Expiry Date' to desired format with NaT handling
     token_df["expiry"] = df["Expiry Date"].apply(
@@ -560,7 +582,7 @@ def process_aliceblue_bcd_csv(path):
     token_df["name"] = df["Instrument Name"].values
     token_df["exchange"] = df["Exch"].values
     token_df["brexchange"] = df["Exch"].values
-    token_df["token"] = df["Token"].values
+    token_df["token"] = _clean_tokens(df["Token"])
 
     # Convert 'Expiry Date' to desired format with NaT handling
     token_df["expiry"] = df["Expiry Date"].apply(
@@ -596,7 +618,7 @@ def process_aliceblue_indices_csv(path):
     token_df["name"] = df["symbol"].values
     token_df["exchange"] = df["exch"].values
     token_df["brexchange"] = df["exch"].values
-    token_df["token"] = df["token"].values
+    token_df["token"] = _clean_tokens(df["token"])
 
     # Convert 'Expiry Date' to desired format
     token_df["expiry"] = ""
