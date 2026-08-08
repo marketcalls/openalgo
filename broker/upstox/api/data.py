@@ -459,7 +459,7 @@ class BrokerData:
             logger.error(f"API Error: {error_msg}")
             raise Exception(f"API Error: {error_msg}")
 
-        # Also fetch v2 quotes for bid/ask/OI data
+        # Also fetch v2 quotes for bid/ask/OI data (and prev_close — see below)
         v2_quotes = {}
         try:
             client = get_httpx_client()
@@ -512,6 +512,15 @@ class BrokerData:
             best_bid = depth.get("buy", [{}])[0] if depth.get("buy") else {}
             best_ask = depth.get("sell", [{}])[0] if depth.get("sell") else {}
 
+            # prev_close: v3's batch OHLC endpoint often returns an EMPTY prev_ohlc
+            # (unlike the single-symbol get_quotes() path above, which is why single
+            # quotes work but multiquotes came back with prev_close=0 for every
+            # symbol — breaking any %-change screener/ticker). Mirror get_quotes()'s
+            # fallback: prefer v2's ohlc.close, fall back to v3's prev_ohlc.close.
+            v2_ohlc = v2_quote.get("ohlc", {}) or {}
+            prev_close_v2 = v2_ohlc.get("close", 0)
+            prev_close_final = prev_close_v2 or prev_ohlc.get("close", 0)
+
             result_item = {
                 "symbol": original["symbol"],
                 "exchange": original["exchange"],
@@ -522,7 +531,7 @@ class BrokerData:
                     "low": float(live_ohlc.get("low", 0)) if live_ohlc.get("low") else 0,
                     "ltp": float(quote.get("last_price", 0)) if quote.get("last_price") else 0,
                     "open": float(live_ohlc.get("open", 0)) if live_ohlc.get("open") else 0,
-                    "prev_close": float(prev_ohlc.get("close", 0)) if prev_ohlc.get("close") else 0,
+                    "prev_close": float(prev_close_final) if prev_close_final else 0,
                     "volume": int(live_ohlc.get("volume", 0)) if live_ohlc.get("volume") else 0,
                     "oi": int(v2_quote.get("oi", 0)) if v2_quote.get("oi") else 0,
                 },
