@@ -88,7 +88,15 @@ def get_margin_data(auth_token):
     except httpx.HTTPStatusError as e:
         response_text = e.response.text
 
-        # Check if it's a service hours error (423 Locked)
+        # Check if it's a service hours error (423 Locked). Previously this
+        # fabricated a fake all-zero "success" dict, which made the funds
+        # service hours window (5:30 AM - 12:00 AM IST) indistinguishable from
+        # a genuinely live, zero-balance account — the exact same masking bug
+        # patched for Fyers (services/funds_service.py's "empty == error"
+        # contract expects {} on any error/no-data path, never fabricated
+        # values). Log it distinctly for diagnostics but still return {} so an
+        # expired session during this window is correctly reported as invalid,
+        # not silently treated as live.
         if e.response.status_code == 423:
             try:
                 error_data = json.loads(response_text)
@@ -96,17 +104,10 @@ def get_margin_data(auth_token):
                     errors = error_data.get("errors", [])
                     for error in errors:
                         if error.get("errorCode") == "UDAPI100072":
-                            # Return default values for service hours error
                             logger.info(
-                                "Upstox funds service is outside operating hours (5:30 AM to 12:00 AM IST). Returning default values."
+                                "Upstox funds service is outside operating hours (5:30 AM to 12:00 AM IST)."
                             )
-                            return {
-                                "availablecash": "0.00",
-                                "collateral": "0.00",
-                                "m2munrealized": "0.00",
-                                "m2mrealized": "0.00",
-                                "utiliseddebits": "0.00",
-                            }
+                            return {}
             except json.JSONDecodeError:
                 pass
 
