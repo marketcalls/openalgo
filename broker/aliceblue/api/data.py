@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import httpx
 import pandas as pd
 
+from broker.aliceblue.api.rate_limiter import apply_rate_limit
 from database.auth_db import Auth
 from database.token_db import get_br_symbol, get_brexchange, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
@@ -919,6 +920,9 @@ class BrokerData:
             # Make request to historical API
             client = get_httpx_client()
             try:
+                # Historical data is a non-order request, so it draws on the
+                # 1800/15min budget like quotes and books do.
+                apply_rate_limit()
                 response = client.post(HISTORICAL_API_URL, headers=headers, json=payload, timeout=15)
                 response.raise_for_status()
                 data = response.json()

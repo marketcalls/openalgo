@@ -6,6 +6,7 @@ import threading
 import weakref
 import time
 
+from broker.aliceblue.api.rate_limiter import apply_rate_limit
 from broker.aliceblue.mapping.order_data import (
     normalize_holding,
     normalize_order,
@@ -32,8 +33,17 @@ BASE_URL = "https://a3.aliceblueonline.com"
 # ─── API request helper ──────────────────────────────────────────────────────
 
 def get_api_response(endpoint, auth, method="GET", payload=None):
-    """Make API requests to AliceBlue V2 API using shared connection pooling."""
+    """Make API requests to AliceBlue V2 API using shared connection pooling.
+
+    Rate limited. This helper carries the reads - orderbook, tradebook,
+    holdings, positions, funds - which fall under AliceBlue's "all other
+    requests" budget of 1800 per 15 minutes. Placing, modifying and cancelling
+    build their own URLs and never come through here, which is what we want:
+    the broker does not limit those, and throttling an exit to protect a quota
+    would be the wrong trade.
+    """
     try:
+        apply_rate_limit()
         client = get_httpx_client()
         url = f"{BASE_URL}{endpoint}"
 
