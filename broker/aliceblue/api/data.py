@@ -899,6 +899,29 @@ class BrokerData:
                 logger.warning(f"End date {end_date} is in the future. Capping to current time.")
                 end_ts = str(current_time_ms)
 
+            # Daily needs a day boundary, not a wall-clock instant. Verified
+            # against a live account - identical request, only "to" differs:
+            #
+            #   to = midnight            -> 246 rows
+            #   to = now (intraday ms)   -> 0 rows, {"emsg": "No data available"}
+            #
+            # Same for BHEL and RELIANCE, so it is not symbol-specific. Because
+            # the cap above rewrites "to" to the wall clock whenever the range
+            # ends today, and virtually every real request ends today, daily
+            # history came back empty for every cash symbol. Past-year ranges
+            # worked only because their end date was already a past midnight,
+            # which is what made this look like "AliceBlue refuses the current
+            # calendar year" (issue #1775, bug A). It is not the year - it is
+            # the time of day on the "to" timestamp.
+            if timeframe == "D":
+                day_boundary = int(
+                    pd.Timestamp(int(end_ts), unit="ms").normalize().timestamp() * 1000
+                )
+                if day_boundary != int(end_ts):
+                    # Round up to the following midnight so today's session is
+                    # still inside the window.
+                    end_ts = str(day_boundary + 86400000)
+
             # Ensure start and end times are different and valid
             if start_ts == end_ts:
                 logger.warning(
