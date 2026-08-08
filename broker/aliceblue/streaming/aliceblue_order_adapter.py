@@ -26,7 +26,16 @@ from websocket_proxy.order_adapter import BaseOrderUpdateAdapter, to_openalgo_sy
 
 logger = get_logger(__name__)
 
-ALICEBLUE_CREATE_WS_TOKEN_URL = "https://ant.aliceblueonline.com/open-api/order-notify/ws/createWsToken"
+# Host matters here. ant.aliceblueonline.com + /open-api/order-notify/... does
+# NOT 404 - it answers 200 with the SPA's index.html, so raise_for_status()
+# passes and json() dies on "<!DOCTYPE html>" with
+# "Expecting value: line 1 column 1 (char 0)". Verified against a live account:
+#   ant + /open-api/order-notify/ws/createWsToken -> 200 text/html  (3784 bytes)
+#   ant + /order-notify/ws/createWsToken          -> 200 JSON, orderToken
+#   a3  + /open-api/order-notify/ws/createWsToken -> 200 JSON, orderToken
+# a3 is used here to match ALICEBLUE_ORDER_UPDATE_WS_URL below - one host for
+# both legs of the same feed.
+ALICEBLUE_CREATE_WS_TOKEN_URL = "https://a3.aliceblueonline.com/open-api/order-notify/ws/createWsToken"
 ALICEBLUE_ORDER_UPDATE_WS_URL = "wss://a3.aliceblueonline.com/open-api/order-notify/websocket"
 ALICEBLUE_HEARTBEAT_INTERVAL_SECONDS = 55  # under the 60s server timeout
 
@@ -51,6 +60,19 @@ _PRICETYPE_MAP = {"MKT": "MARKET", "L": "LIMIT", "SL": "SL", "SL-M": "SL-M"}
 
 _ACTION_MAP = {"B": "BUY", "S": "SELL"}
 
+#: Give up after this many consecutive token failures. An account without the
+#: Order Status Feed fails identically every time, so retrying past this only
+#: produces a 60s log storm for the life of the worker.
+MAX_CONSECUTIVE_TOKEN_FAILURES = 5
+
+
+class OrderTokenUnavailable(RuntimeError):
+    """createWsToken did not yield a usable orderToken.
+
+    Distinct from a transport error so the adapter can tell "AliceBlue says no"
+    apart from "the network blipped", and stop rather than retry forever.
+    """
+
 
 class AliceBlueOrderUpdateAdapter(BaseOrderUpdateAdapter):
     """Dedicated order-update WebSocket adapter for AliceBlue."""
@@ -60,25 +82,79 @@ class AliceBlueOrderUpdateAdapter(BaseOrderUpdateAdapter):
         self.alice_ucc = alice_ucc
         self.auth_token = auth_token
         self._order_token: str | None = None
+        self._token_failures = 0
 
     def get_ws_url(self) -> str:
-        self._order_token = self._fetch_order_token()
+        try:
+            self._order_token = self._fetch_order_token()
+        except OrderTokenUnavailable as exc:
+            self._token_failures += 1
+            if self._token_failures >= MAX_CONSECUTIVE_TOKEN_FAILURES:
+                # Permanent, not transient. Stop the adapter instead of
+                # reconnecting every 60s for the life of the worker.
+                self.disconnect()
+                self.logger.error(
+                    f"AliceBlue order updates disabled after "
+                    f"{self._token_failures} consecutive token failures: {exc}"
+                )
+            else:
+                self.logger.warning(
+                    f"AliceBlue order token unavailable "
+                    f"({self._token_failures}/{MAX_CONSECUTIVE_TOKEN_FAILURES}): {exc}"
+                )
+            raise
+        self._token_failures = 0
         return ALICEBLUE_ORDER_UPDATE_WS_URL
 
     def get_headers(self):
         return None  # auth handshake happens via a post-connect message
 
     def _fetch_order_token(self) -> str:
+        """Exchange the bearer token for a short-lived orderToken.
+
+        createWsToken answers 200 with an EMPTY body when the account is not
+        enabled for the Order Status Feed, so raise_for_status() passes and
+        response.json() blows up with a bare
+        "Expecting value: line 1 column 1 (char 0)". That told the operator
+        nothing and, because every attempt failed identically, the adapter
+        reconnected every 60s forever (observed past attempt 31).
+
+        Parse defensively and raise something diagnosable instead. The
+        consecutive-failure counter above turns a permanent misconfiguration
+        into one loud message and a stopped adapter, rather than an endless
+        60s retry loop.
+        """
         client = get_httpx_client()
         response = client.get(
             ALICEBLUE_CREATE_WS_TOKEN_URL,
             headers={"Authorization": f"Bearer {self.auth_token}"},
+            timeout=15,
         )
         response.raise_for_status()
-        payload = response.json()
+
+        body = (response.text or "").strip()
+        if not body:
+            raise OrderTokenUnavailable(
+                f"AliceBlue createWsToken returned HTTP {response.status_code} with an empty "
+                f"body. The Order Status Feed is usually not enabled for this account - "
+                f"subscribe to order updates with AliceBlue, or unset ORDER_UPDATES_ENABLED "
+                f"to stop retrying. URL: {ALICEBLUE_CREATE_WS_TOKEN_URL}"
+            )
+
+        try:
+            payload = response.json()
+        except ValueError:
+            raise OrderTokenUnavailable(
+                f"AliceBlue createWsToken returned HTTP {response.status_code} with a "
+                f"non-JSON body: {body[:200]!r}"
+            ) from None
+
         results = payload.get("result") or []
         if not results or not results[0].get("orderToken"):
-            raise RuntimeError("AliceBlue createWsToken did not return an orderToken")
+            raise OrderTokenUnavailable(
+                f"AliceBlue createWsToken did not return an orderToken. "
+                f"status={payload.get('status')!r} message={payload.get('message')!r}"
+            )
         return results[0]["orderToken"]
 
     def on_open_extra(self, ws) -> None:
