@@ -888,6 +888,17 @@ class AliceBlueWebSocket:
                 logger.info(f"Removed subscription: {subscription_key}")
 
             self.subscribed_tokens.discard(subscription_key)
+
+            # Drop the cached tick and depth for this instrument too. These are
+            # keyed "exchange:token" while subscriptions are keyed
+            # "exchange|token", and unsubscribe only ever cleared the latter -
+            # so every option-chain sweep left ~80 quote entries behind
+            # permanently. The connection is now pooled and long-lived, and the
+            # worker never restarts, so that accumulated for the whole session.
+            cache_key = f"{instrument.exchange}:{instrument.token}"
+            self.last_quotes.pop(cache_key, None)
+            self.last_depth.pop(cache_key, None)
+
             subscription_keys.append(subscription_key)
 
         if subscription_keys:
