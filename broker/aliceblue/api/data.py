@@ -742,17 +742,29 @@ class BrokerData:
             elif exchange == "MCX_INDEX":
                 exchange = "MCX"
 
-            # Check for exchange limitations based on AliceBlue API documentation
-            # BSE/BCD equity historical data is not supported by AliceBlue.
-            # BFO (BSE F&O) is allowed through — futures contracts work fine.
-            if exchange in ["BSE", "BCD"]:
-                # If this was an index exchange, try the futures fallback first
-                if original_exchange in ("BSE_INDEX",):
-                    fut_df = self._get_index_history_via_futures(
-                        symbol, original_exchange, timeframe, start_date, end_date
-                    )
-                    if not fut_df.empty:
-                        return fut_df
+            # Check for exchange limitations based on AliceBlue API documentation.
+            #
+            # BSE used to be blocked here alongside BCD. It should not have been:
+            # probed against a live account, BSE serves history on every
+            # timeframe (issue #1775, bug C).
+            #
+            #   BSE RELIANCE  D  365d -> 247 rows
+            #   BSE RELIANCE  5m  30d -> 1621 rows
+            #   BSE RELIANCE  1m   5d -> 1706 rows
+            #
+            # The block meant no BSE history anywhere - charts, /api/v1/history,
+            # Historify, indicators - and it failed before issuing a request, so
+            # nothing in the logs suggested the data was actually available.
+            # BCD stays blocked; that one is genuinely unsupported.
+            # BFO (BSE F&O) was already allowed through.
+            if exchange == "BCD":
+                # No BSE_INDEX fallback needed here any more: BSE_INDEX maps to
+                # exchange "BSE", which no longer lands in this branch. It now
+                # issues a real request and, if AliceBlue returns nothing (it
+                # serves no index history - see #1776), falls through to the
+                # futures proxy on the response-error path below. That ordering
+                # is better: an index that ever does get native history will
+                # start working on its own.
                 logger.error(f"Historical data not available for {exchange} exchange on AliceBlue")
                 return pd.DataFrame()
 
@@ -957,7 +969,7 @@ class BrokerData:
                         logger.error(
                             f"Symbol '{symbol}' might be an expired contract or not a current expiry."
                         )
-                    elif exchange in ["BSE", "BCD"]:
+                    elif exchange == "BCD":
                         logger.error(
                             f"AliceBlue does not support historical data for {exchange} exchange yet."
                         )
