@@ -1032,12 +1032,23 @@ class BrokerData:
 
             # Handle different timeframes for timestamp conversion
             if timeframe == "D":
-                # For daily data, normalize to date only then add IST offset
-                # Match Angel's approach: naive datetime + 5:30, no tz_localize
-                df["timestamp"] = df["timestamp"].dt.normalize()
-                df["timestamp"] = df["timestamp"] + pd.Timedelta(hours=5, minutes=30)
+                # A daily bar is midnight IST. Localize to IST exactly as the
+                # intraday branch below does, rather than adding 5:30 to a naive
+                # value and letting pandas read it as UTC.
+                #
+                # The old form shifted the wrong way: normalize gave
+                # 2026-08-03 00:00 naive, +5:30 made it 05:30, and casting to
+                # int64 treated that as UTC. The SDK then handed back
+                # "2026-08-03 05:30:00", tz-naive, where the same call at 1m
+                # correctly returned "2026-08-07 09:15:00+05:30" as
+                # datetime64[ns, Asia/Kolkata]. Daily was both offset and
+                # missing its timezone, and inconsistent with intraday from the
+                # same broker.
+                import pytz as _pytz_daily
 
-                # Convert directly to Unix epoch (naive → treated as UTC by pandas)
+                _ist_daily = _pytz_daily.timezone("Asia/Kolkata")
+                df["timestamp"] = df["timestamp"].dt.normalize()
+                df["timestamp"] = df["timestamp"].dt.tz_localize(_ist_daily)
                 df["timestamp"] = df["timestamp"].astype("int64") // 10**9
             else:
                 # For intraday data, adjust timestamps to represent the start of the candle
