@@ -648,6 +648,134 @@ def test_nubra_ignores_text_and_foreign_frames():
 
 
 # ---------------------------------------------------------------------------
+# 5Paisa — OrderTradeConfirmations feed
+# (broker-api-docs/fivepaisa-api-docs/08-order-tracking.md)
+# ---------------------------------------------------------------------------
+
+
+def _fivepaisa_adapter():
+    from broker.fivepaisa.streaming.fivepaisa_order_adapter import (
+        FivepaisaOrderUpdateAdapter,
+    )
+
+    return FivepaisaOrderUpdateAdapter(user_id="u", client_code="CC", access_token="t")
+
+
+# The five ReqType samples, verbatim from the docs.
+_5P_PLACE = {
+    "ReqType": "P", "ClientCode": "CC", "Exch": "N", "ExchType": "C", "ScripCode": 1660,
+    "Symbol": "ITC", "Series": "EQ", "BrokerOrderID": 132038757,
+    "ExchOrderID": "1200010221327930", "BuySell": "B", "Qty": 1, "Price": 425,
+    "ReqStatus": 0, "Status": "Placed", "AtMarket": "N", "Product": "D",
+    "WithSL": "N", "SLTriggerRate": 0, "DisclosedQty": 0, "PendingQty": 1, "TradedQty": 0,
+}
+_5P_TRADE = {
+    "ReqType": "T", "ClientCode": "CC", "Exch": "N", "ExchType": "C", "ScripCode": 1660,
+    "Symbol": "ITC", "Series": "EQ", "ExchOrderID": "1200010221327930",
+    "ExchTradeId": "234495", "BuySell": "B", "Qty": 1, "Price": 434.2, "PendingQty": 0,
+    "TotalTradedQty": 1, "OrderQty": 1, "OrderPrice": 434.15, "Product": "D",
+    "ReqStatus": 0, "Status": "Fully Executed",
+}
+_5P_SL = {
+    "ReqType": "S", "ClientCode": "CC", "Exch": "N", "ExchType": "D", "ScripCode": 1660,
+    "Symbol": "ITC", "ExchOrderID": "1100000043224370", "BuySell": "B", "Qty": 1,
+    "OrderPrice": 433.9, "AtMarket": "N", "Product": "D", "ReqStatus": 0,
+    "SLTriggerRate": 433.85, "Status": "SL Triggered",
+}
+
+
+def test_fivepaisa_place_doc_sample():
+    fields = _fivepaisa_adapter().normalize(dict(_5P_PLACE))
+    assert fields["orderid"] == "132038757"
+    assert fields["order_status"] == "open"
+    assert fields["exchange"] == "NSE"
+    assert fields["action"] == "BUY"
+    assert fields["pricetype"] == "LIMIT"
+    assert fields["product"] == "CNC"
+    assert fields["quantity"] == 1
+    assert fields["pending_quantity"] == 1
+
+
+def test_fivepaisa_trade_resolves_broker_order_id_from_earlier_place():
+    """Trade and SL-trigger frames carry only ExchOrderID. They must still
+    report the BrokerOrderID that place_order handed the caller."""
+    adapter = _fivepaisa_adapter()
+    adapter.normalize(dict(_5P_PLACE))
+    fields = adapter.normalize(dict(_5P_TRADE))
+    assert fields["orderid"] == "132038757"  # not the ExchOrderID
+    assert fields["order_status"] == "complete"
+    assert fields["quantity"] == 1          # OrderQty, not this trade's Qty
+    assert fields["filled_quantity"] == 1   # TotalTradedQty
+    assert fields["price"] == 434.15        # OrderPrice
+    assert fields["average_price"] == 434.2  # executed price of the fill
+
+
+def test_fivepaisa_trade_without_a_known_place_falls_back_to_exchange_id():
+    fields = _fivepaisa_adapter().normalize(dict(_5P_TRADE))
+    assert fields["orderid"] == "1200010221327930"
+
+
+def test_fivepaisa_sl_trigger_is_open_not_pending():
+    fields = _fivepaisa_adapter().normalize(dict(_5P_SL))
+    assert fields["order_status"] == "open"
+    assert fields["pricetype"] == "SL"
+    assert fields["trigger_price"] == 433.85
+    assert fields["exchange"] == "NFO"
+    assert fields["product"] == "NRML"
+
+
+def test_fivepaisa_array_frames_publish_every_confirmation():
+    adapter = _fivepaisa_adapter()
+    published = []
+    adapter._publish_event_fields = published.append
+    cancel = dict(_5P_PLACE, BrokerOrderID=222072376, Status="Cancelled", ReqType="C")
+    adapter._handle_message(json.dumps([_5P_PLACE, cancel]))
+    assert [p["orderid"] for p in published] == ["132038757", "222072376"]
+    assert [p["order_status"] for p in published] == ["open", "cancelled"]
+
+
+def test_fivepaisa_ignores_acks_and_unparseable_frames():
+    adapter = _fivepaisa_adapter()
+    published = []
+    adapter._publish_event_fields = published.append
+    for junk in ['{"Status":"Ack"}', '{"Exch":"N","LastRate":1}', "not json", b"\x01\x02"]:
+        adapter._handle_message(junk)
+    assert published == []
+
+
+def test_fivepaisa_after_hours_and_transmit_states_collapse_to_openalgo_vocabulary():
+    from broker.fivepaisa.streaming.fivepaisa_order_adapter import _STATUS_MAP
+
+    # Every status in the docs' "Order Status" table must be mapped; an
+    # unmapped one reaches the UI as raw broker text and loses its meaning.
+    for status, expected in [
+        ("Fully Executed", "complete"), ("Modified", "open"), ("Xmitted", "open"),
+        ("Rejected By 5P", "rejected"), ("AH Cancelled", "cancelled"),
+        ("AH Modified", "open"), ("Rejected by Exch", "rejected"),
+        ("AH Placed", "open"), ("Cancelled", "cancelled"), ("Pending", "open"),
+    ]:
+        assert _STATUS_MAP[status.lower()] == expected, status
+
+
+def test_fivepaisa_feed_url_is_sharded_by_the_token_redirect_server():
+    import base64
+
+    adapter = _fivepaisa_adapter()
+    for server, host in [
+        ("A", "aopenfeed"), ("B", "bopenfeed"), ("C", "openfeed"),
+    ]:
+        body = base64.urlsafe_b64encode(
+            json.dumps({"RedirectServer": server}).encode()
+        ).decode().rstrip("=")
+        adapter.access_token = f"h.{body}.s"
+        assert adapter.get_ws_url().startswith(f"wss://{host}.5paisa.com/")
+        assert adapter.get_ws_url().endswith("|CC")
+
+    adapter.access_token = "not-a-jwt"
+    assert "openfeed.5paisa.com" in adapter.get_ws_url()
+
+
+# ---------------------------------------------------------------------------
 # Postback normalizers (blueprints/postback.py)
 # ---------------------------------------------------------------------------
 

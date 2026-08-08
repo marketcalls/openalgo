@@ -110,11 +110,17 @@ class BrokerData:
     def __init__(self, auth_token):
         """Initialize 5Paisa data handler with authentication token"""
         self.auth_token = auth_token
-        # Map common timeframe format to 5Paisa resolutions
+        # Map common timeframe format to 5Paisa resolutions.
+        #
+        # This table is also what services/intervals_service.py advertises as
+        # 5Paisa's supported intervals, so it must list exactly the intervals
+        # the Historical Candles API accepts: 1m, 5m, 10m, 15m, 30m, 60m, 1d
+        # (broker-api-docs/fivepaisa-api-docs/09-market-data-rest.md). "3m" used
+        # to be advertised here; 5Paisa has no 3-minute candle, and map_interval
+        # quietly fell back to daily, so a 3m request returned daily bars.
         self.timeframe_map = {
             # Minutes
             "1m": "1",
-            "3m": "3",
             "5m": "5",
             "10m": "10",
             "15m": "15",
@@ -643,21 +649,31 @@ class BrokerData:
             logger.error(f"Error processing quotes batch: {e}")
             raise
 
-    def map_interval(self, interval: str) -> str:
-        """Map openalgo interval to 5paisa interval"""
+    def map_interval(self, interval: str) -> str | None:
+        """Map an OpenAlgo interval to the 5Paisa Historical Candles path segment.
+
+        Values are the Interval codes from the docs
+        (broker-api-docs/fivepaisa-api-docs/09-market-data-rest.md): 1m, 5m,
+        10m, 15m, 30m, **60m**, 1d. The hourly code is "60m" — sending "1h"
+        (as this did) is not a code 5Paisa accepts, so hourly history failed.
+
+        Returns None for anything unsupported so get_history raises instead of
+        silently serving daily candles for, say, a 2m request.
+        """
         interval_map = {
             "1m": "1m",
             "5m": "5m",
             "10m": "10m",
             "15m": "15m",
             "30m": "30m",
-            "1h": "1h",
+            "1h": "60m",
+            "60m": "60m",
             # Handle all daily timeframe variants
             "1d": "1d",
             "D": "1d",
             "d": "1d",  # Also map lowercase 'd'
         }
-        return interval_map.get(interval, "1d")
+        return interval_map.get(interval)
 
     def _process_raw_candles(self, raw_data, interval):
         """
@@ -728,7 +744,7 @@ class BrokerData:
             logger.debug(f"Debug: Mapped {interval} to {fivepaisa_interval}")
 
             if not fivepaisa_interval:
-                supported = ["1m", "5m", "15m", "30m", "1h", "1d"]
+                supported = ["1m", "5m", "10m", "15m", "30m", "1h", "1d"]
                 raise Exception(
                     f"Unsupported interval '{interval}'. Supported intervals: {', '.join(supported)}"
                 )
@@ -984,5 +1000,6 @@ class BrokerData:
             raise
 
     def get_supported_intervals(self) -> list:
-        """Get list of supported intervals"""
+        """Get list of supported intervals (mirrors timeframe_map / the
+        Historical Candles Interval codes in the 5Paisa docs)."""
         return ["1m", "5m", "10m", "15m", "30m", "1h", "D"]
