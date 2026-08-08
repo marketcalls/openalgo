@@ -629,72 +629,6 @@ class BrokerData:
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
 
-    def _get_index_history_via_futures(
-        self, symbol: str, original_exchange: str, timeframe: str, start_date: str, end_date: str
-    ) -> pd.DataFrame:
-        """Fallback: fetch nearest-month futures data as proxy for index historical data.
-
-        AliceBlue's historical API doesn't serve index candle data (e.g. NIFTY on NSE).
-        This method finds the nearest expiry futures contract on NFO/BFO and fetches
-        its history instead. The futures price closely tracks the index intraday.
-        """
-        from database.token_db_enhanced import fno_search_symbols
-
-        # Map index exchange to F&O exchange
-        fno_exchange_map = {"NSE_INDEX": "NFO", "BSE_INDEX": "BFO", "MCX_INDEX": "MCX"}
-        fno_exchange = fno_exchange_map.get(original_exchange)
-        if not fno_exchange:
-            return pd.DataFrame()
-
-        try:
-            # Search for futures contracts for this underlying
-            results = fno_search_symbols(
-                underlying=symbol.upper(),
-                exchange=fno_exchange,
-                instrumenttype="FUT",
-                limit=10,
-            )
-            if not results:
-                logger.warning(f"No futures contracts found for {symbol} on {fno_exchange}")
-                return pd.DataFrame()
-
-            # Pick the nearest expiry futures contract
-            from datetime import datetime as _dt
-            nearest = None
-            nearest_expiry = None
-            today = _dt.now().date()
-
-            for r in results:
-                expiry_str = r.get("expiry", "")
-                if not expiry_str:
-                    continue
-                try:
-                    exp_date = _dt.strptime(expiry_str, "%d-%b-%y").date()
-                except ValueError:
-                    continue
-                # Only consider non-expired contracts
-                if exp_date >= today:
-                    if nearest_expiry is None or exp_date < nearest_expiry:
-                        nearest = r
-                        nearest_expiry = exp_date
-
-            if not nearest:
-                logger.warning(f"No active futures contract found for {symbol} on {fno_exchange}")
-                return pd.DataFrame()
-
-            fut_symbol = nearest["symbol"]
-            logger.info(
-                f"Index history fallback: using futures {fut_symbol} on {fno_exchange} "
-                f"(expiry {nearest['expiry']}) as proxy for {symbol}"
-            )
-
-            # Recursively call get_history with the futures symbol on NFO
-            return self.get_history(fut_symbol, fno_exchange, timeframe, start_date, end_date)
-
-        except Exception as e:
-            logger.warning(f"Futures fallback failed for {symbol}: {e}")
-            return pd.DataFrame()
-
     def get_history(
         self, symbol: str, exchange: str, timeframe: str, start_date: str, end_date: str
     ) -> pd.DataFrame:
@@ -716,9 +650,6 @@ class BrokerData:
             logger.debug(f"Date range: {start_date} to {end_date}")
             logger.debug(f"Date types - start_date: {type(start_date)}, end_date: {type(end_date)}")
 
-            # Remember original exchange for index fallback
-            original_exchange = exchange
-
             # Get token for the symbol
             token = get_token(symbol, exchange)
             if not token:
@@ -734,13 +665,33 @@ class BrokerData:
 
             logger.debug(f"Found token {token} for {symbol}:{exchange}")
 
-            # Convert exchange for AliceBlue API (same as Angel)
+            # Convert exchange for AliceBlue API.
+            #
+            # Indices need a "::index" suffix on the exchange - "NSE::index",
+            # not "NSE". Without it the chart API answers "No data available"
+            # for every index token, on every exchange spelling, resolution and
+            # date range, which is what made index history look like a broker
+            # limitation (see #1776). It is not: the suffix is undocumented in
+            # the REST reference but is what AliceBlue's own SDK sends, from
+            # Ant-A3-tradehub-sdk-production TradeMaster/TradeSync.py:
+            #
+            #   "exchange": instrument.exchange if not indices
+            #               else f"{instrument.exchange}::index"
+            #
+            # Verified live: NIFTY 50, NIFTY BANK, INDIA VIX, NIFTY FIN SERVICE,
+            # NIFTY MIDCAP SELECT, SENSEX and BANKEX all return daily and 1m
+            # candles, back 2 years.
+            #
+            # The suffix is index-only - "NSE::index" with an equity token
+            # returns no data, exactly as "NSE" with an index token does.
             if exchange == "NSE_INDEX":
-                exchange = "NSE"
+                exchange = "NSE::index"
             elif exchange == "BSE_INDEX":
-                exchange = "BSE"
+                exchange = "BSE::index"
             elif exchange == "MCX_INDEX":
-                exchange = "MCX"
+                # MCXENERGY and MCXMETAL return nothing either way, so this is
+                # for consistency rather than data we have seen.
+                exchange = "MCX::index"
 
             # Check for exchange limitations based on AliceBlue API documentation.
             #
@@ -758,13 +709,6 @@ class BrokerData:
             # BCD stays blocked; that one is genuinely unsupported.
             # BFO (BSE F&O) was already allowed through.
             if exchange == "BCD":
-                # No BSE_INDEX fallback needed here any more: BSE_INDEX maps to
-                # exchange "BSE", which no longer lands in this branch. It now
-                # issues a real request and, if AliceBlue returns nothing (it
-                # serves no index history - see #1776), falls through to the
-                # futures proxy on the response-error path below. That ordering
-                # is better: an index that ever does get native history will
-                # start working on its own.
                 logger.error(f"Historical data not available for {exchange} exchange on AliceBlue")
                 return pd.DataFrame()
 
@@ -973,15 +917,6 @@ class BrokerData:
             if str(data.get("stat", "")).lower() in ["not_ok", "not ok"] or "result" not in data:
                 error_msg = data.get("emsg", "Unknown error")
                 logger.warning(f"Historical data response for {symbol}:{exchange}: {error_msg}")
-
-                # AliceBlue doesn't serve index historical data (e.g. NIFTY on NSE).
-                # Fallback: use nearest month futures contract as a proxy.
-                if original_exchange in ("NSE_INDEX", "BSE_INDEX", "MCX_INDEX"):
-                    fut_df = self._get_index_history_via_futures(
-                        symbol, original_exchange, timeframe, start_date, end_date
-                    )
-                    if not fut_df.empty:
-                        return fut_df
 
                 # Provide more helpful error messages based on the error
                 if "No data available" in error_msg or "market time" in error_msg.lower() or "Session" in error_msg:
