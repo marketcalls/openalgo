@@ -365,11 +365,28 @@ class BrokerData:
 
             subscribed = True
 
-            # Wait for data to arrive — use higher cap for large batches
-            # (Vol Surface / OI Profile can request 60+ symbols at once)
-            wait_time = min(max(len(instruments) * 0.08, 2), 20)
-            logger.debug(f"Waiting {wait_time:.1f}s for quote data ({len(instruments)} instruments)...")
-            time.sleep(wait_time)
+            # Poll until every subscribed instrument has a quote, rather than
+            # sleeping a fixed duration and hoping. The old code slept
+            # min(max(n * 0.08, 2), 20) unconditionally - 6.4s for an 80-strike
+            # option chain, and a full 2s even for 3 symbols whose ticks had
+            # already arrived. The deadline below is that same worst case, so
+            # nothing waits longer than before; the common case returns as soon
+            # as the data is actually there.
+            deadline_seconds = min(max(len(instruments) * 0.08, 2), 20)
+            poll_interval = 0.05
+            deadline = time.monotonic() + deadline_seconds
+            expected = list(symbol_map.keys())
+
+            while time.monotonic() < deadline:
+                if all(ws.get_quote(*key.split(":")) for key in expected):
+                    break
+                time.sleep(poll_interval)
+
+            waited = deadline_seconds - max(deadline - time.monotonic(), 0)
+            logger.debug(
+                f"Quote data for {len(instruments)} instruments after {waited:.2f}s "
+                f"(deadline {deadline_seconds:.1f}s)"
+            )
 
             # Helper to format a quote dict
             def _format_quote(q):
@@ -401,7 +418,13 @@ class BrokerData:
             # Retry pass for symbols that didn't return data on first attempt
             if missing_keys:
                 logger.info(f"{len(missing_keys)}/{len(symbol_map)} symbols missing after first pass, retrying...")
-                time.sleep(3.0)  # Extra wait for stragglers
+                # Same idea as the first pass: poll for the stragglers up to the
+                # old fixed 3s rather than always burning it.
+                straggler_deadline = time.monotonic() + 3.0
+                while time.monotonic() < straggler_deadline:
+                    if all(ws.get_quote(*key.split(":")) for key in missing_keys):
+                        break
+                    time.sleep(0.05)
 
                 for key in missing_keys:
                     api_exchange, token = key.split(":")
