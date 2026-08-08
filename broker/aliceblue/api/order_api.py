@@ -6,6 +6,7 @@ import threading
 import weakref
 import time
 
+from broker.aliceblue.api.error_codes import describe
 from broker.aliceblue.api.rate_limiter import apply_rate_limit
 from broker.aliceblue.mapping.order_data import (
     normalize_holding,
@@ -95,7 +96,9 @@ def _extract_result(response_data):
         if response_data.get("status") == "Ok":
             return response_data.get("result", [])
         else:
-            msg = response_data.get("message", "Unknown error")
+            # AliceBlue answers with a bare code like "EC912"; expand it so the
+            # log and the surfaced error say what actually went wrong.
+            msg = describe(response_data.get("message", "Unknown error"))
             logger.error(f"API error: {msg}")
             return None
     return response_data  # fallback: return as-is if not a dict
