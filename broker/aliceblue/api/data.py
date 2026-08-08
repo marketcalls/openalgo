@@ -22,6 +22,32 @@ logger = get_logger(__name__)
 BASE_URL = "https://a3.aliceblueonline.com/"
 HISTORICAL_API_URL = BASE_URL + "open-api/od/ChartAPIService/api/chart/history"
 
+# Live market-data WebSocket per broker session, shared across BrokerData
+# instances. It has to live at module scope because quotes_service builds a new
+# BrokerData for every request, so an instance attribute is always empty and the
+# connection got rebuilt from scratch on each call. Keyed by session_id, so a
+# re-login makes a new entry instead of reusing a socket authenticated with a
+# dead token; bounded by the one broker session this instance can hold.
+_WS_REGISTRY: dict = {}
+_WS_REGISTRY_LOCK = threading.Lock()
+
+
+def close_all_websockets():
+    """Disconnect and drop every pooled market-data socket.
+
+    For shutdown and for logout, where the session behind these connections is
+    about to be revoked. Without it the sockets and their reader and heartbeat
+    threads would outlive the session that authenticated them.
+    """
+    with _WS_REGISTRY_LOCK:
+        sockets = list(_WS_REGISTRY.values())
+        _WS_REGISTRY.clear()
+    for ws in sockets:
+        try:
+            ws.disconnect()
+        except Exception as exc:
+            logger.warning(f"Error closing pooled AliceBlue WebSocket: {exc}")
+
 
 class BrokerData:
     """
@@ -65,20 +91,38 @@ class BrokerData:
         Returns:
             AliceBlueWebSocket: WebSocket client instance or None if creation fails
         """
-        # Return existing connection if it's valid and not forced to create a new one
-        if not force_new and hasattr(self, "_websocket") and self._websocket:
-            if hasattr(self._websocket, "is_websocket_connected") and self._websocket.is_websocket_connected():
-                return self._websocket
+        # The live connection lives in a module-level registry, NOT on self.
+        #
+        # services/quotes_service.py constructs a fresh BrokerData per request,
+        # so the old `self._websocket` cache could never hit: every quotes call
+        # invalidated, recreated, reconnected and re-authenticated the whole
+        # session. Measured 692ms of that churn wrapped around 64ms of actual
+        # data, and it spent two REST calls (invalidateWsSess + createWsSess)
+        # each time - against a documented budget of 1800 requests / 15 minutes
+        # for everything except orders, an option chain polling every 5s burned
+        # roughly a fifth of the quota producing nothing.
+        #
+        # Keyed by session_id so a re-login gets a fresh connection rather than
+        # reusing one authenticated with a dead token. Bounded by definition:
+        # OpenAlgo is single-user, single-broker per instance.
+        if not self.session_id:
+            logger.error("Session ID not available. Please login first.")
+            return None
+
+        if not force_new:
+            with _WS_REGISTRY_LOCK:
+                cached = _WS_REGISTRY.get(self.session_id)
+            if cached is not None and cached.is_websocket_connected():
+                return cached
 
         try:
-            if not self.session_id:
-                logger.error("Session ID not available. Please login first.")
-                return None
-
-            # Clean up any existing connection
-            if hasattr(self, "_websocket") and self._websocket:
+            # Drop whatever was registered for this session before replacing it,
+            # so a stale socket and its threads are not left behind.
+            with _WS_REGISTRY_LOCK:
+                stale = _WS_REGISTRY.pop(self.session_id, None)
+            if stale is not None:
                 try:
-                    self._websocket.disconnect()
+                    stale.disconnect()
                 except Exception as e:
                     logger.warning(f"Error closing existing WebSocket: {str(e)}")
 
@@ -104,22 +148,49 @@ class BrokerData:
 
             # Create new websocket connection
             logger.info("Creating new WebSocket connection for AliceBlue")
-            self._websocket = AliceBlueWebSocket(user_id, self.session_id)
-            self._websocket.connect()
+            ws = AliceBlueWebSocket(user_id, self.session_id)
+            ws.connect()
 
-            # Wait for connection to establish
-            wait_time = 0
-            max_wait = 10  # Maximum 10 seconds to wait
-            while wait_time < max_wait and not self._websocket.is_connected:
-                time.sleep(0.5)
-                wait_time += 0.5
+            # Wait for connection to establish. Poll at 50ms rather than 500ms:
+            # the handshake completes in ~250ms live, so the coarse tick was
+            # rounding every connect up to half a second.
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and not ws.is_connected:
+                time.sleep(0.05)
 
-            if not self._websocket.is_connected:
+            if not ws.is_connected:
                 logger.error("Failed to connect WebSocket within timeout")
+                try:
+                    ws.disconnect()
+                except Exception:
+                    pass
                 return None
 
+            # Register this session and evict any other. OpenAlgo is
+            # single-user/single-broker, so a second session_id means the token
+            # rolled over (AliceBlue expires it around 3am) and the previous
+            # socket is authenticated with a dead one. Leaving it registered
+            # would strand a socket plus its reader and heartbeat threads every
+            # single day in a worker that never restarts.
+            with _WS_REGISTRY_LOCK:
+                superseded = [
+                    (sid, sock) for sid, sock in _WS_REGISTRY.items() if sid != self.session_id
+                ]
+                for sid, _ in superseded:
+                    del _WS_REGISTRY[sid]
+                _WS_REGISTRY[self.session_id] = ws
+
+            for _, sock in superseded:
+                logger.info("Closing AliceBlue WebSocket for a superseded session")
+                try:
+                    sock.disconnect()
+                except Exception as exc:
+                    logger.warning(f"Error closing superseded WebSocket: {exc}")
+
+            self._websocket = ws  # kept for callers that still read the attribute
+
             logger.info("WebSocket connection established successfully")
-            return self._websocket
+            return ws
 
         except Exception as e:
             logger.error(f"Error creating WebSocket: {str(e)}")
