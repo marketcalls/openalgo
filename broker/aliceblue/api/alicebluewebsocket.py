@@ -717,27 +717,24 @@ class AliceBlueWebSocket:
             if self._stop_event.is_set():
                 return
 
-            # Grab reference to old thread while holding lock
-            old_thread = self._reconnect_thread
             self.reconnect_count += 1
-            sleep_time = min(2**self.reconnect_count, 30)
 
-        # Join outside lock to avoid deadlock (delayed_reconnect -> connect -> self.lock)
-        if old_thread and old_thread.is_alive():
-            logger.info("Waiting for previous reconnect thread to finish")
-            old_thread.join(timeout=5)
-
-        logger.info(f"Attempting to reconnect in {sleep_time} seconds")
-
-        def delayed_reconnect():
-            time.sleep(sleep_time)
-            if not self._stop_event.is_set():
-                self.connect()
-
-        t = threading.Thread(target=delayed_reconnect, daemon=True)
-        with self.lock:
-            self._reconnect_thread = t
-        t.start()
+        # Reconnection is owned solely by _connection_loop, which already
+        # retries with exponential backoff and stops at MAX_RECONNECT_ATTEMPTS.
+        #
+        # This handler used to spawn its own delayed_reconnect -> connect()
+        # thread as well, and the two owners fed each other: connect() begins by
+        # calling invalidateWsSess, so the second reconnect tore down the socket
+        # the first had just established, which fired on_close again. The result
+        # was a self-sustaining storm - "Connection to remote host was lost"
+        # every few hundred ms, "WebSocket connection thread is already running"
+        # as threads piled up, and "Reconnection attempt 1/5" forever, because
+        # each freshly spawned loop started its own attempt counter at zero so
+        # the cap was never reached.
+        logger.info(
+            f"Connection closed (close #{self.reconnect_count}); "
+            f"_connection_loop owns the retry"
+        )
 
     def subscribe(self, instruments, is_depth=False):
         """Subscribe to market data for given instruments
