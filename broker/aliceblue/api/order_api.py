@@ -3,6 +3,7 @@ import os
 
 import httpx
 import threading
+import weakref
 import time
 
 from broker.aliceblue.mapping.order_data import (
@@ -178,7 +179,22 @@ def get_holdings(auth):
 # --- Per-Symbol Smart Order Lock ---
 # Ensures only one smart order per symbol executes at a time.
 # Others queue and execute sequentially, each getting a fresh position book.
-_symbol_locks = {}          # {symbol_key: threading.Lock}
+#
+# WeakValueDictionary, not a plain dict: the key space is
+# symbol:exchange:product, which is unbounded, and a plain dict kept one
+# threading.Lock per symbol ever smart-ordered for the life of the worker.
+# Entries now disappear once no caller holds the lock, so the registry tracks
+# symbols being ordered right now rather than every symbol ever ordered.
+#
+# Do NOT swap this for a size-capped dict. Evicting a lock a thread is holding
+# hands the next caller a brand-new lock, both run the same symbol's smart
+# order concurrently against a stale position book, and the position is sized
+# twice. Weak references cannot do that: while any caller holds the lock it
+# holds a strong reference, so the entry survives. Same reasoning as
+# services/flow_executor_service._workflow_locks (issue #1739).
+_symbol_locks: "weakref.WeakValueDictionary[str, threading.Lock]" = (
+    weakref.WeakValueDictionary()
+)
 _symbol_locks_lock = threading.Lock()
 
 # --- Position Book Cache ---
@@ -189,12 +205,20 @@ _POSITION_CACHE_TTL = 1.0   # seconds
 
 
 def _get_symbol_lock(symbol, exchange, product):
-    """Get or create a per-symbol lock for serializing smart orders."""
+    """Get or create a per-symbol lock for serializing smart orders.
+
+    Callers must keep the returned lock referenced for the whole critical
+    section (``lock = _get_symbol_lock(...); with lock:``) - that reference is
+    what keeps the registry entry alive. Re-fetching mid-section would not be
+    safe.
+    """
     key = f"{symbol}:{exchange}:{product}"
     with _symbol_locks_lock:
-        if key not in _symbol_locks:
-            _symbol_locks[key] = threading.Lock()
-        return _symbol_locks[key]
+        lock = _symbol_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _symbol_locks[key] = lock
+        return lock
 
 
 def _get_cached_positions(auth):
