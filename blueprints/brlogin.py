@@ -546,6 +546,12 @@ def broker_callback(broker, para=None):
         auth_token, error_message = auth_function(code)
         forward_url = "broker.html"
 
+    elif broker == "smifs":
+        code = "smifs"
+        logger.debug(f"SMIFS God Quant broker - The code is {code}")
+        auth_token, error_message = auth_function(code)
+        forward_url = "broker.html"
+
     elif broker == "groww":
         code = "groww"
         logger.debug(f"Groww broker - The code is {code}")
