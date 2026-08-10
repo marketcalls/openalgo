@@ -367,9 +367,26 @@ class SamcoWebSocket:
         self._sub_dirty.set()
 
     def _start_subscription_flusher(self) -> None:
-        """Start the coalescing worker. Idempotent; one thread per connection."""
-        if self._sub_flush_thread and self._sub_flush_thread.is_alive():
-            return
+        """
+        Start the coalescing worker. Idempotent; one thread per connection.
+
+        A reconnect calls _stop_subscription_flusher() then this, so the previous
+        worker may still be winding down. Returning early on is_alive() alone
+        would leave the stop flag set and start no replacement - killing the
+        flusher for good, and with it every later subscription (a silent dead
+        feed on exactly the path that matters). Wait for a stopping worker
+        instead of skipping the restart.
+        """
+        old = self._sub_flush_thread
+        if old and old.is_alive():
+            if not self._sub_flush_stop.is_set():
+                return  # healthy worker already running
+            old.join(timeout=self.THREAD_JOIN_TIMEOUT)
+            if old.is_alive():
+                self.logger.warning(
+                    "Previous subscription flusher did not exit; starting a new one anyway"
+                )
+
         self._sub_flush_stop.clear()
         self._sub_flush_thread = threading.Thread(
             target=self._subscription_flush_worker, daemon=True, name="samco-sub-flush"
@@ -655,12 +672,28 @@ class SamcoWebSocket:
             self._last_message_time = time.time()
 
     def _start_heartbeat(self) -> None:
-        """Start heartbeat monitoring thread"""
-        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
-            return
+        """
+        Start heartbeat monitoring thread.
+
+        Same restart race as _start_subscription_flusher(): a reconnect stops the
+        old worker and immediately starts a new one, so bailing on is_alive()
+        alone can leave the stop flag set with no thread running - here the cost
+        is losing stale-connection detection.
+        """
+        old = self._heartbeat_thread
+        if old and old.is_alive():
+            if not self._heartbeat_stop_event.is_set():
+                return  # healthy worker already running
+            old.join(timeout=self.THREAD_JOIN_TIMEOUT)
+            if old.is_alive():
+                self.logger.warning(
+                    "Previous heartbeat thread did not exit; starting a new one anyway"
+                )
 
         self._heartbeat_stop_event.clear()
-        self._heartbeat_thread = threading.Thread(target=self._heartbeat_worker, daemon=True)
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_worker, daemon=True, name="samco-heartbeat"
+        )
         self._heartbeat_thread.start()
         self.logger.debug("Heartbeat thread started")
 
