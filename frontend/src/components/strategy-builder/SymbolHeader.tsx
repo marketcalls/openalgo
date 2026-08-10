@@ -112,7 +112,10 @@ export function SymbolHeader({
         <div className="inline-flex items-stretch overflow-hidden rounded-lg border bg-background divide-x">
           {/* Exchange */}
           <Select value={selectedExchange} onValueChange={onExchangeChange}>
-            <SelectTrigger className="h-9 w-[92px] rounded-none border-0 bg-transparent text-xs font-semibold focus:ring-0 focus:ring-offset-0">
+            <SelectTrigger
+              aria-label="Derivative exchange"
+              className="h-9 w-[92px] rounded-none border-0 bg-transparent text-xs font-semibold focus:ring-0 focus:ring-offset-0"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -130,6 +133,7 @@ export function SymbolHeader({
               <Button
                 variant="ghost"
                 role="combobox"
+                aria-label="Underlying"
                 aria-expanded={underlyingOpen}
                 className="h-9 w-[168px] justify-between rounded-none border-0 bg-transparent px-3 text-xs font-bold tracking-wide hover:bg-muted/40"
               >
@@ -170,7 +174,10 @@ export function SymbolHeader({
 
           {/* Expiry */}
           <Select value={selectedExpiry} onValueChange={onExpiryChange}>
-            <SelectTrigger className="h-9 w-[128px] rounded-none border-0 bg-transparent text-xs font-semibold focus:ring-0 focus:ring-offset-0">
+            <SelectTrigger
+              aria-label="Option expiry"
+              className="h-9 w-[128px] rounded-none border-0 bg-transparent text-xs font-semibold focus:ring-0 focus:ring-offset-0"
+            >
               <SelectValue placeholder="Expiry" />
             </SelectTrigger>
             <SelectContent>

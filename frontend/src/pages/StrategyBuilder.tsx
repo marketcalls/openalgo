@@ -30,9 +30,25 @@ import {
 } from '@/components/strategy-builder/TemplateDialog'
 import { TemplateGrid } from '@/components/strategy-builder/TemplateGrid'
 import { ExecuteBasketDialog } from '@/components/trading/ExecuteBasketDialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
+import {
+  type ChainIdentity,
+  chainIdentity,
+  chainMatches,
+  type ListedOptionChainResponse,
+} from '@/lib/strategyContracts'
 import {
   buildFutureSymbol,
   buildOptionSymbol,
@@ -75,6 +91,11 @@ function uid(): string {
   return Math.random().toString(36).slice(2, 10)
 }
 
+interface PendingIdentityChange {
+  kind: 'exchange' | 'underlying'
+  value: string
+}
+
 /**
  * Serialize every broker-backed API call this page issues.
  *
@@ -111,6 +132,10 @@ export default function StrategyBuilder() {
   } = useSupportedExchanges()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
+  const [isHydrating, setIsHydrating] = useState(() => {
+    const loadId = Number(searchParams.get('load'))
+    return searchParams.has('load') && Number.isFinite(loadId)
+  })
 
   const [selectedExchange, setSelectedExchange] = useState(defaultFnoExchange)
   const [underlyings, setUnderlyings] = useState<string[]>(
@@ -124,7 +149,7 @@ export default function StrategyBuilder() {
   const [futureExpiries, setFutureExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState('')
 
-  const [chainData, setChainData] = useState<OptionChainResponse | null>(null)
+  const [chainData, setChainData] = useState<ListedOptionChainResponse | null>(null)
   const [atmIv, setAtmIv] = useState<number | null>(null)
   const [futuresPrice, setFuturesPrice] = useState<number | null>(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -151,23 +176,41 @@ export default function StrategyBuilder() {
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [loadedEntry, setLoadedEntry] = useState<PortfolioEntry | null>(null)
+  const [pendingIdentityChange, setPendingIdentityChange] =
+    useState<PendingIdentityChange | null>(null)
 
   // Basket execution dialog
   const [executeDialogOpen, setExecuteDialogOpen] = useState(false)
+
+  const requestIdRef = useRef(0)
+  const hydratedIdentityRef = useRef<ChainIdentity | null>(null)
+
+  const requestIdentity = useMemo<ChainIdentity>(
+    () => ({
+      exchange: optionExchangeFor(selectedExchange),
+      underlying: selectedUnderlying,
+      expiry: normalizeExpiryCode(selectedExpiry),
+    }),
+    [selectedExchange, selectedUnderlying, selectedExpiry]
+  )
+  const activeChain = useMemo(
+    () => (chainData && chainMatches(chainData, requestIdentity) ? chainData : null),
+    [chainData, requestIdentity]
+  )
 
   // OpenAlgo-symbol → tick size map, built from the live option chain.
   // Powers per-leg price snapping in the Execute Basket dialog so options
   // priced in 0.05 ticks never leak floating-point drift into the order,
   // and crypto legs with 0.0001 / 0.5 ticks are respected too.
   const tickSizeBySymbol = useMemo(() => {
-    if (!chainData?.chain) return {}
+    if (!activeChain?.chain) return {}
     const map: Record<string, number> = {}
-    for (const row of chainData.chain) {
+    for (const row of activeChain.chain) {
       if (row.ce?.symbol && row.ce.tick_size > 0) map[row.ce.symbol] = row.ce.tick_size
       if (row.pe?.symbol && row.pe.tick_size > 0) map[row.pe.symbol] = row.pe.tick_size
     }
     return map
-  }, [chainData])
+  }, [activeChain])
 
   // Dynamic, read-only strategy name sent to /basketorder. Prefers the
   // saved portfolio entry name; otherwise synthesises from current state.
@@ -182,8 +225,6 @@ export default function StrategyBuilder() {
     return parts.join(' ')
   }, [loadedEntry, legs, activeTemplate, selectedUnderlying, selectedExpiry])
 
-  const requestIdRef = useRef(0)
-
   // Reset all expiry- / chain-derived state in the same event handler as the
   // underlying or exchange change so React batches them into a single render.
   // Without this, dependent effects (`/optionchain`, `/syntheticfuture`, ...)
@@ -191,38 +232,90 @@ export default function StrategyBuilder() {
   // still the previous underlying's, and fire an invalid pair at the broker.
   // OptionChain uses the same pattern.
   const resetExpiryAndChainState = useCallback(() => {
+    requestIdRef.current += 1
     setExpiries([])
     setFutureExpiries([])
     setSelectedExpiry('')
     setChainData(null)
     setAtmIv(null)
     setFuturesPrice(null)
+    setIsRefreshing(false)
   }, [])
+
+  const resetStrategyState = useCallback(() => {
+    setLegs([])
+    setSpotShiftPct(0)
+    setIvShiftPct(0)
+    setDaysElapsed(0)
+    setGreeksByLeg({})
+    setMarginRequired(null)
+    setMarginSupported(null)
+    setActiveTemplate(null)
+    setTemplateDialogOpen(false)
+    setEditLegId(null)
+    setLoadedEntry(null)
+  }, [])
+
+  const applyIdentityChange = useCallback(
+    (change: PendingIdentityChange, clearStrategy: boolean) => {
+      if (clearStrategy) resetStrategyState()
+      resetExpiryAndChainState()
+      hydratedIdentityRef.current = null
+      if (change.kind === 'exchange') setSelectedExchange(change.value)
+      else setSelectedUnderlying(change.value)
+      setPendingIdentityChange(null)
+    },
+    [resetExpiryAndChainState, resetStrategyState]
+  )
+
+  const requestIdentityChange = useCallback(
+    (change: PendingIdentityChange) => {
+      const current = change.kind === 'exchange' ? selectedExchange : selectedUnderlying
+      if (change.value === current) return
+      if (legs.length > 0) {
+        setPendingIdentityChange(change)
+        return
+      }
+      applyIdentityChange(change, false)
+    },
+    [applyIdentityChange, legs.length, selectedExchange, selectedUnderlying]
+  )
 
   const handleUnderlyingChange = useCallback(
     (next: string) => {
-      if (next === selectedUnderlying) return
-      setSelectedUnderlying(next)
-      resetExpiryAndChainState()
+      requestIdentityChange({ kind: 'underlying', value: next })
     },
-    [selectedUnderlying, resetExpiryAndChainState]
+    [requestIdentityChange]
   )
 
   const handleExchangeChange = useCallback(
     (next: string) => {
-      if (next === selectedExchange) return
-      setSelectedExchange(next)
-      resetExpiryAndChainState()
+      requestIdentityChange({ kind: 'exchange', value: next })
     },
-    [selectedExchange, resetExpiryAndChainState]
+    [requestIdentityChange]
+  )
+
+  const handleExpiryChange = useCallback(
+    (next: string) => {
+      const normalized = normalizeExpiryCode(next)
+      if (normalized === normalizeExpiryCode(selectedExpiry)) return
+      requestIdRef.current += 1
+      setSelectedExpiry(normalized)
+      setChainData(null)
+      setAtmIv(null)
+      setFuturesPrice(null)
+      setIsRefreshing(false)
+    },
+    [selectedExpiry]
   )
 
   // Re-sync exchange when broker capabilities load async
   useEffect(() => {
+    if (isHydrating) return
     setSelectedExchange((prev) =>
       prev && fnoExchanges.some((ex) => ex.value === prev) ? prev : defaultFnoExchange
     )
-  }, [defaultFnoExchange, fnoExchanges])
+  }, [defaultFnoExchange, fnoExchanges, isHydrating])
 
   // Populate the underlyings dropdown. The hard-coded `defaultUnderlyings`
   // map only covers the major indices (NIFTY / BANKNIFTY / ...), so we mirror
@@ -231,9 +324,21 @@ export default function StrategyBuilder() {
   // TCS, HDFCBANK, etc.) in addition to indices. Defaults are shown
   // immediately for fast paint, then replaced when the API resolves.
   useEffect(() => {
+    if (isHydrating) return
     const defaults = defaultUnderlyings[selectedExchange] || []
-    setUnderlyings(defaults)
-    setSelectedUnderlying((prev) => (defaults.includes(prev) ? prev : defaults[0] || ''))
+    const hydratedIdentity = hydratedIdentityRef.current
+    const preservedUnderlying =
+      hydratedIdentity?.exchange === optionExchangeFor(selectedExchange)
+        ? hydratedIdentity.underlying
+        : null
+    setUnderlyings(
+      preservedUnderlying && !defaults.includes(preservedUnderlying)
+        ? [preservedUnderlying, ...defaults]
+        : defaults
+    )
+    setSelectedUnderlying((prev) =>
+      preservedUnderlying ?? (defaults.includes(prev) ? prev : defaults[0] || '')
+    )
 
     let cancelled = false
     ;(async () => {
@@ -253,7 +358,7 @@ export default function StrategyBuilder() {
     return () => {
       cancelled = true
     }
-  }, [selectedExchange, defaultUnderlyings])
+  }, [selectedExchange, defaultUnderlyings, isHydrating])
 
   // Load expiries (options + futures — different calendars on MCX/CDS especially).
   // Expiries are normalised to the OpenAlgo DDMMMYY format at the source so that
@@ -261,7 +366,7 @@ export default function StrategyBuilder() {
   // consistent string — otherwise the Edit dialog can't match leg.expiry
   // ("21APR26") against the raw API value ("21-APR-2026") and the field blanks.
   useEffect(() => {
-    if (!apiKey || !selectedUnderlying) return
+    if (isHydrating || !apiKey || !selectedUnderlying) return
     // IMPORTANT: clear expiries + selectedExpiry + chainData synchronously
     // BEFORE the fetch starts. Otherwise downstream effects (/optionchain,
     // /syntheticfuture, /optiongreeks) see the previous underlying's
@@ -269,9 +374,23 @@ export default function StrategyBuilder() {
     // selectedUnderlying (BANKNIFTY) and fire an invalid (underlying,
     // expiry) request into the broker, which logs "No strikes found" until
     // the fresh expiries finally arrive.
-    setExpiries([])
+    const hydratedIdentity = hydratedIdentityRef.current
+    const preserveHydratedExpiry =
+      hydratedIdentity !== null &&
+      chainIdentity(
+        hydratedIdentity.exchange,
+        hydratedIdentity.underlying,
+        hydratedIdentity.expiry
+      ) ===
+        chainIdentity(
+          optionExchangeFor(selectedExchange),
+          selectedUnderlying,
+          hydratedIdentity.expiry
+        )
+    const hydratedExpiry = preserveHydratedExpiry ? hydratedIdentity.expiry : ''
+    setExpiries(hydratedExpiry ? [hydratedExpiry] : [])
     setFutureExpiries([])
-    setSelectedExpiry('')
+    setSelectedExpiry(hydratedExpiry)
     setChainData(null)
     setAtmIv(null)
     setFuturesPrice(null)
@@ -320,26 +439,40 @@ export default function StrategyBuilder() {
     return () => {
       cancelled = true
     }
-  }, [apiKey, selectedUnderlying, selectedExchange])
+  }, [apiKey, selectedUnderlying, selectedExchange, isHydrating])
 
   // Load option chain
   const loadOptionChain = useCallback(async () => {
-    if (!apiKey || !selectedUnderlying || !selectedExpiry) return
+    if (isHydrating || !apiKey || !requestIdentity.underlying || !requestIdentity.expiry) return
     // Skip while the expiries list hasn't refreshed for the current
     // underlying yet — e.g. after switching NIFTY → BANKNIFTY, the
     // previous expiry (21APR26) isn't valid for BANKNIFTY.
-    if (expiries.length > 0 && !expiries.includes(selectedExpiry)) return
+    if (expiries.length > 0 && !expiries.includes(requestIdentity.expiry)) return
     const reqId = ++requestIdRef.current
+    const requestedIdentity = requestIdentity
     setIsRefreshing(true)
     try {
-      const exchange = underlyingExchangeFor(selectedExchange, selectedUnderlying)
-      const expiryCode = normalizeExpiryCode(selectedExpiry)
+      const exchange = underlyingExchangeFor(selectedExchange, requestedIdentity.underlying)
       const data = await queuedFetch(() =>
-        optionChainApi.getOptionChain(apiKey, selectedUnderlying, exchange, expiryCode, 20)
+        optionChainApi.getOptionChain(
+          apiKey,
+          requestedIdentity.underlying,
+          exchange,
+          requestedIdentity.expiry,
+          20
+        )
       )
       if (reqId !== requestIdRef.current) return
       if (data.status === 'success') {
-        setChainData(data)
+        const listedData: ListedOptionChainResponse = {
+          ...data,
+          // This is the derivative venue used for listed contracts. The response's
+          // underlying_exchange is only the market-reference venue.
+          exchange: requestedIdentity.exchange,
+        }
+        if (!chainMatches(listedData, requestedIdentity)) return
+        setChainData(listedData)
+        hydratedIdentityRef.current = null
         // ATM IV: mid of CE/PE IV at ATM strike — we'll use the smile service later;
         // for now compute via greeks of ATM CE once legs are known.
       } else {
@@ -350,7 +483,7 @@ export default function StrategyBuilder() {
     } finally {
       if (reqId === requestIdRef.current) setIsRefreshing(false)
     }
-  }, [apiKey, selectedExchange, selectedUnderlying, selectedExpiry, expiries])
+  }, [apiKey, selectedExchange, requestIdentity, expiries, isHydrating])
 
   useEffect(() => {
     loadOptionChain()
@@ -360,8 +493,8 @@ export default function StrategyBuilder() {
   // (The leg-Greeks fetch is gated on having at least one leg, so without this
   // the ATM IV badge would stay blank until the user adds a position.)
   useEffect(() => {
-    if (!apiKey || !chainData || !chainData.atm_strike) return
-    const atmRow = chainData.chain.find((s) => s.strike === chainData.atm_strike)
+    if (!apiKey || !activeChain || !activeChain.atm_strike) return
+    const atmRow = activeChain.chain.find((s) => s.strike === activeChain.atm_strike)
     const atmSymbol = atmRow?.ce?.symbol
     if (!atmSymbol) return
     let cancelled = false
@@ -396,11 +529,11 @@ export default function StrategyBuilder() {
     return () => {
       cancelled = true
     }
-  }, [apiKey, chainData, selectedExchange, selectedUnderlying])
+  }, [apiKey, activeChain, selectedExchange, selectedUnderlying])
 
   // Load synthetic future for the selected expiry
   useEffect(() => {
-    if (!apiKey || !selectedUnderlying || !selectedExpiry) return
+    if (isHydrating || !apiKey || !selectedUnderlying || !selectedExpiry) return
     // Double-check selectedExpiry is actually valid for the current
     // underlying — the expiries-load effect clears selectedExpiry to ''
     // at the start of an underlying switch, but if for any reason this
@@ -436,28 +569,28 @@ export default function StrategyBuilder() {
     return () => {
       cancelled = true
     }
-  }, [apiKey, selectedExchange, selectedUnderlying, selectedExpiry, expiries])
+  }, [apiKey, selectedExchange, selectedUnderlying, selectedExpiry, expiries, isHydrating])
 
   // Derived: ATM strike, lot size, spot
-  const spotPrice = chainData?.underlying_ltp ?? null
-  const atmStrike = chainData?.atm_strike ?? null
+  const spotPrice = activeChain?.underlying_ltp ?? null
+  const atmStrike = activeChain?.atm_strike ?? null
   const lotSize = useMemo(() => {
-    if (!chainData?.chain) return null
-    const atmRow = chainData.chain.find((s) => s.strike === chainData.atm_strike)
+    if (!activeChain?.chain) return null
+    const atmRow = activeChain.chain.find((s) => s.strike === activeChain.atm_strike)
     return atmRow?.ce?.lotsize ?? atmRow?.pe?.lotsize ?? null
-  }, [chainData])
+  }, [activeChain])
 
   // Common strike step — try to detect from chain spacing
   const strikeStep = useMemo(() => {
-    if (!chainData?.chain || chainData.chain.length < 2) return 50
-    const sorted = [...chainData.chain].map((s) => s.strike).sort((a, b) => a - b)
+    if (!activeChain?.chain || activeChain.chain.length < 2) return 50
+    const sorted = [...activeChain.chain].map((s) => s.strike).sort((a, b) => a - b)
     let minDiff = Infinity
     for (let i = 1; i < sorted.length; i++) {
       const d = sorted[i] - sorted[i - 1]
       if (d > 0 && d < minDiff) minDiff = d
     }
     return Number.isFinite(minDiff) ? minDiff : 50
-  }, [chainData])
+  }, [activeChain])
 
   useEffect(() => {
     const interval = window.setInterval(() => setPayoffClock(Date.now()), 60_000)
@@ -736,27 +869,27 @@ export default function StrategyBuilder() {
   // driven re-renders (so ticks don't cascade into PayoffChart/Greeks/etc).
   const fallbackPricesByLeg = useMemo(() => {
     const map: Record<string, number> = {}
-    if (!chainData) return map
+    if (!activeChain) return map
     for (const leg of legs) {
       if (leg.segment !== 'OPTION' || leg.strike === undefined || !leg.optionType) continue
-      const row = chainData.chain.find((s) => s.strike === leg.strike)
+      const row = activeChain.chain.find((s) => s.strike === leg.strike)
       const side = leg.optionType === 'CE' ? row?.ce : row?.pe
       if (side?.ltp !== undefined) map[leg.id] = side.ltp
     }
     return map
-  }, [chainData, legs])
+  }, [activeChain, legs])
 
   // Add legs from a template
   const handleTemplatePick = useCallback(
     (tpl: StrategyTemplate) => {
-      if (!chainData || atmStrike === null) {
+      if (!activeChain || atmStrike === null) {
         showToast.error('Option chain not loaded yet')
         return
       }
       setActiveTemplate(tpl)
       setTemplateDialogOpen(true)
     },
-    [chainData, atmStrike]
+    [activeChain, atmStrike]
   )
 
   const handleTemplateConfirm = useCallback(
@@ -765,13 +898,13 @@ export default function StrategyBuilder() {
         showToast.error('Lot size not detected — load the chain first')
         return
       }
-      if (!apiKey || !chainData) {
+      if (!apiKey || !activeChain) {
         showToast.error('Option chain not loaded yet')
         return
       }
 
       const chainsByExpiry = new Map<string, OptionChainResponse['chain']>([
-        [normalizeExpiryCode(chainData.expiry_date || selectedExpiry), chainData.chain],
+        [normalizeExpiryCode(activeChain.expiry_date || selectedExpiry), activeChain.chain],
       ])
       const requiredExpiries = Array.from(
         new Set(resolved.map((leg) => normalizeExpiryCode(leg.resolvedExpiry)))
@@ -842,7 +975,7 @@ export default function StrategyBuilder() {
       setTemplateDialogOpen(false)
       setActiveTemplate(null)
     },
-    [lotSize, apiKey, chainData, selectedExpiry, selectedUnderlying, selectedExchange]
+    [lotSize, apiKey, activeChain, selectedExpiry, selectedUnderlying, selectedExchange]
   )
 
   // Manual leg add
@@ -860,7 +993,7 @@ export default function StrategyBuilder() {
       // constructing it locally would produce an invalid symbol.
       let symbol: string
       if (draft.segment === 'OPTION' && draft.strike !== undefined && draft.optionType) {
-        const row = chainData?.chain.find((s) => s.strike === draft.strike)
+        const row = activeChain?.chain.find((s) => s.strike === draft.strike)
         const side = draft.optionType === 'CE' ? row?.ce : row?.pe
         symbol =
           side?.symbol ??
@@ -893,7 +1026,7 @@ export default function StrategyBuilder() {
       }
       setLegs((prev) => [...prev, newLeg])
     },
-    [lotSize, selectedUnderlying, futuresPrice, chainData?.chain]
+    [lotSize, selectedUnderlying, futuresPrice, activeChain?.chain]
   )
 
   // Payoff
@@ -971,9 +1104,9 @@ export default function StrategyBuilder() {
       let rebuiltSymbol: string
       if (updated.segment === 'OPTION' && updated.strike !== undefined && updated.optionType) {
         const side =
-          chainData &&
-          canReuseChainContract(normalisedExpiry, chainData.expiry_date || selectedExpiry)
-            ? resolveListedContract(chainData.chain, updated.strike, updated.optionType)
+          activeChain &&
+          canReuseChainContract(normalisedExpiry, activeChain.expiry_date || selectedExpiry)
+            ? resolveListedContract(activeChain.chain, updated.strike, updated.optionType)
             : null
         rebuiltSymbol =
           side?.symbol ??
@@ -994,7 +1127,7 @@ export default function StrategyBuilder() {
       )
       setEditLegId(null)
     },
-    [selectedUnderlying, selectedExpiry, chainData]
+    [selectedUnderlying, selectedExpiry, activeChain]
   )
   const toggleAll = useCallback((active: boolean) => {
     setLegs((prev) => prev.map((l) => ({ ...l, active })))
@@ -1024,10 +1157,21 @@ export default function StrategyBuilder() {
       try {
         const entry = await strategyPortfolioApi.get(id)
         if (cancelled) return
-        // Hydrate primary selectors. They'll trigger their own fetches.
+        const hydratedExpiry = normalizeExpiryCode(entry.expiry ?? '')
+        hydratedIdentityRef.current = {
+          exchange: optionExchangeFor(entry.exchange),
+          underlying: entry.underlying,
+          expiry: hydratedExpiry,
+        }
+        requestIdRef.current += 1
+        // Apply the saved identity and legs in one React batch. Defaulting and
+        // broker-fetch effects stay gated until this complete snapshot exists.
         setSelectedExchange(entry.exchange)
         setSelectedUnderlying(entry.underlying)
-        if (entry.expiry) setSelectedExpiry(entry.expiry)
+        setSelectedExpiry(hydratedExpiry)
+        setChainData(null)
+        setAtmIv(null)
+        setFuturesPrice(null)
         // Hydrate legs. Mark them loaded so we don't overwrite user IV later.
         const restored: StrategyLeg[] = entry.legs.map((l) => ({
           id: l.id ?? uid(),
@@ -1035,7 +1179,7 @@ export default function StrategyBuilder() {
           side: l.side,
           lots: l.lots,
           lotSize: l.lotSize,
-          expiry: l.expiry,
+          expiry: normalizeExpiryCode(l.expiry),
           strike: l.strike,
           optionType: l.optionType,
           price: l.price,
@@ -1045,13 +1189,21 @@ export default function StrategyBuilder() {
           exitPrice: l.exitPrice,
         }))
         setLegs(restored)
+        setSpotShiftPct(0)
+        setIvShiftPct(0)
+        setDaysElapsed(0)
         setLoadedEntry(entry)
+        setIsHydrating(false)
         showToast.success(`Loaded "${entry.name}"`)
         // Remove the ?load param so subsequent state changes don't re-fire.
-        searchParams.delete('load')
-        setSearchParams(searchParams, { replace: true })
+        const nextParams = new URLSearchParams(searchParams)
+        nextParams.delete('load')
+        setSearchParams(nextParams, { replace: true })
       } catch (err) {
-        showToast.error(err instanceof Error ? err.message : 'Failed to load strategy')
+        if (!cancelled) {
+          setIsHydrating(false)
+          showToast.error(err instanceof Error ? err.message : 'Failed to load strategy')
+        }
       }
     })()
     return () => {
@@ -1140,7 +1292,7 @@ export default function StrategyBuilder() {
         onUnderlyingOpenChange={setUnderlyingOpen}
         expiries={expiries}
         selectedExpiry={selectedExpiry}
-        onExpiryChange={setSelectedExpiry}
+        onExpiryChange={handleExpiryChange}
         spotPrice={spotPrice}
         futuresPrice={futuresPrice}
         lotSize={lotSize}
@@ -1161,9 +1313,9 @@ export default function StrategyBuilder() {
 
       {/* Manual leg adder */}
       <ManualLegBuilder
-        expiries={expiries}
-        futureExpiries={futureExpiries}
-        chain={chainData?.chain ?? null}
+        expiries={activeChain ? expiries : []}
+        futureExpiries={activeChain ? futureExpiries : []}
+        chain={activeChain?.chain ?? null}
         selectedExpiry={selectedExpiry}
         atmStrike={atmStrike}
         strikeStep={strikeStep}
@@ -1363,8 +1515,8 @@ export default function StrategyBuilder() {
         template={activeTemplate}
         expiry={selectedExpiry}
         expiries={expiries}
-        onExpiryChange={setSelectedExpiry}
-        chain={chainData?.chain ?? null}
+        onExpiryChange={handleExpiryChange}
+        chain={activeChain?.chain ?? null}
         atmStrike={atmStrike}
         strikeStep={strikeStep}
         onConfirm={handleTemplateConfirm}
@@ -1378,7 +1530,7 @@ export default function StrategyBuilder() {
         leg={legs.find((l) => l.id === editLegId) ?? null}
         optionExpiries={expiries}
         futureExpiries={futureExpiries}
-        chain={chainData?.chain ?? null}
+        chain={activeChain?.chain ?? null}
         chainExpiry={selectedExpiry}
         underlying={selectedUnderlying}
         optionExchange={optionExchangeFor(selectedExchange)}
@@ -1398,6 +1550,33 @@ export default function StrategyBuilder() {
         isUpdate={loadedEntry !== null}
         busy={isSaving}
       />
+
+      <AlertDialog
+        open={pendingIdentityChange !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingIdentityChange(null)
+        }}
+      >
+        <AlertDialogContent role="alertdialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear the current strategy?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Changing the {pendingIdentityChange?.kind} clears every leg and resets the current
+              scenario so contracts cannot be mixed across strategy identities.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingIdentityChange) applyIdentityChange(pendingIdentityChange, true)
+              }}
+            >
+              Clear strategy
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <ExecuteBasketDialog
         open={executeDialogOpen}
