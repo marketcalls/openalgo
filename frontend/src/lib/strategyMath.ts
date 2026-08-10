@@ -1,15 +1,29 @@
 /**
  * Options math for the Strategy Builder.
  *
- * Uses the Black-Scholes model on spot (for intra-expiry "T+0" pricing in the
- * payoff simulator) and a simple intrinsic payoff at expiry. IV / live prices
- * come from the server's Black-76 greeks service — this file only re-prices
- * the same legs under what-if shifts (spot %, IV %, days).
+ * Re-prices per-leg market snapshots under what-if shifts. Options use the
+ * same Black-76 model as the live Greeks service; futures use their selected
+ * contract's live reference price.
  */
+
+import { black76Price } from './optionGreeks'
 
 export type OptionType = 'CE' | 'PE'
 export type Side = 'BUY' | 'SELL'
 export type Segment = 'OPTION' | 'FUTURE'
+
+/**
+ * Valuation time corrected to the latest server clock.
+ *
+ * `clockOffsetMs` is `serverNow - clientNow`; a plain `Date` remains accepted
+ * by valuation callers while the Strategy Builder migration is in progress.
+ */
+export interface ValuationClock {
+  now: Date
+  clockOffsetMs: number
+}
+
+type ValuationTime = Date | ValuationClock
 
 /**
  * Classify a strike's moneyness relative to the ATM strike.
@@ -55,6 +69,18 @@ export interface StrategyLeg {
   active: boolean
   /** Symbol for display / Greeks lookup */
   symbol: string
+  /** Canonical exchange for the resolved contract. */
+  exchange?: string
+  /** Authoritative expiry instant from the option-chain response, in epoch seconds. */
+  expiryTs?: number | null
+  /** Minimum price increment for this contract. */
+  tickSize?: number
+  /** Latest streamed contract price, per share. */
+  marketPrice?: number
+  /** Underlying price at which the per-leg market snapshot was formed. */
+  referenceUnderlying?: number
+  /** Per-expiry forward at which the option IV was solved. */
+  forwardPrice?: number
   /**
    * Exit price (per share). When > 0 the leg is treated as "closed":
    * P&L is frozen at (exitPrice - entryPrice) * qty * sign for every
@@ -127,6 +153,27 @@ export function intrinsic(type: OptionType, spot: number, strike: number): numbe
   return type === 'CE' ? Math.max(spot - strike, 0) : Math.max(strike - spot, 0)
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000
+const YEAR_MS = 365 * DAY_MS
+
+function isFiniteNumber(value: number | undefined | null): value is number {
+  return value !== undefined && value !== null && Number.isFinite(value)
+}
+
+function valuationNow(value: ValuationTime): Date {
+  if (value instanceof Date) return value
+  return new Date(value.now.getTime() + value.clockOffsetMs)
+}
+
+function remainingYears(leg: StrategyLeg, daysElapsed: number, now: ValuationTime): number {
+  const currentNow = valuationNow(now)
+  const valuationMs = currentNow.getTime() + daysElapsed * DAY_MS
+  if (isFiniteNumber(leg.expiryTs) && leg.expiryTs > 0) {
+    return Math.max(0, leg.expiryTs * 1000 - valuationMs) / YEAR_MS
+  }
+  return daysToYears(Math.max(daysToExpiry(leg.expiry, currentNow) - daysElapsed, 0))
+}
+
 /**
  * Payoff of a single leg at a given underlying price, advanced `daysElapsed`
  * from `now`.
@@ -141,7 +188,7 @@ export function legPnlAt(
   underlying: number,
   daysElapsed: number,
   ivOverride?: number,
-  now: Date = new Date()
+  now: ValuationTime = new Date()
 ): number {
   if (!leg.active) return 0
   const sign = leg.side === 'BUY' ? 1 : -1
@@ -154,21 +201,41 @@ export function legPnlAt(
   }
 
   if (leg.segment === 'FUTURE') {
+    if (isFiniteNumber(leg.marketPrice) && isFiniteNumber(leg.referenceUnderlying)) {
+      const futureValue = leg.marketPrice + (underlying - leg.referenceUnderlying)
+      return sign * (futureValue - leg.price) * qty
+    }
     return sign * (underlying - leg.price) * qty
   }
   if (leg.strike === undefined || !leg.optionType) return 0
 
-  // Days of life remaining for THIS leg after advancing calendar time.
-  const legDaysNow = daysToExpiry(leg.expiry, now)
-  const legRemainingDays = Math.max(legDaysNow - daysElapsed, 0)
-  const tLeg = daysToYears(legRemainingDays)
-
-  // At expiry (t=0) use intrinsic value; before that use Black-Scholes.
+  const tLeg = remainingYears(leg, daysElapsed, now)
   const iv = (ivOverride ?? leg.iv) / 100
+  const referenceUnderlying = isFiniteNumber(leg.referenceUnderlying)
+    ? leg.referenceUnderlying
+    : undefined
+  const forwardPrice = isFiniteNumber(leg.forwardPrice) ? leg.forwardPrice : undefined
+  const hasForwardReference = referenceUnderlying !== undefined && forwardPrice !== undefined
+  const scenarioForward = hasForwardReference
+    ? forwardPrice + (underlying - referenceUnderlying)
+    : underlying
+  const modelValue =
+    tLeg <= 1e-8 || iv <= 0
+      ? intrinsic(leg.optionType, scenarioForward, leg.strike)
+      : black76Price(leg.optionType === 'CE' ? 'c' : 'p', scenarioForward, leg.strike, tLeg, 0, iv)
+  const isUnshiftedLiveSnapshot =
+    hasForwardReference &&
+    Math.abs(underlying - referenceUnderlying) <= 1e-8 &&
+    daysElapsed === 0 &&
+    Math.abs((ivOverride ?? leg.iv) - leg.iv) <= 1e-8
   const valueNow =
-    tLeg <= 1e-6
-      ? intrinsic(leg.optionType, underlying, leg.strike)
-      : bsPrice(leg.optionType, { spot: underlying, strike: leg.strike, t: tLeg, iv })
+    isUnshiftedLiveSnapshot &&
+    isFiniteNumber(leg.marketPrice) &&
+    isFiniteNumber(leg.tickSize) &&
+    leg.tickSize > 0 &&
+    Math.abs(modelValue - leg.marketPrice) <= leg.tickSize
+      ? leg.marketPrice
+      : modelValue
 
   return sign * (valueNow - leg.price) * qty
 }
@@ -184,7 +251,7 @@ export function totalPnlAt(
    * curve on first paint. Typically the ATM IV from the option chain.
    */
   fallbackIv: number = 0,
-  now: Date = new Date()
+  now: ValuationTime = new Date()
 ): number {
   let total = 0
   for (const leg of legs) {
@@ -575,12 +642,13 @@ export function computePayoff(
   ivShiftPct: number = 0,
   /** Fallback IV (%) for legs that haven't received their own IV yet. */
   fallbackIv: number = 0,
-  now: Date = new Date()
+  now: ValuationTime = new Date()
 ): PayoffResult {
-  const terminal = isTerminalHorizon(legs, daysAtExpiry, now)
+  const currentNow = valuationNow(now)
+  const terminal = isTerminalHorizon(legs, daysAtExpiry, currentNow)
   const terminalAnalysis = terminal
-    ? analyzeTerminalPayoff(legs, daysAtExpiry, ivShiftPct, fallbackIv, now)
-    : analyzeNonTerminalPayoff(legs, spot, daysAtExpiry, priceRange, ivShiftPct, fallbackIv, now)
+    ? analyzeTerminalPayoff(legs, daysAtExpiry, ivShiftPct, fallbackIv, currentNow)
+    : analyzeNonTerminalPayoff(legs, spot, daysAtExpiry, priceRange, ivShiftPct, fallbackIv, currentNow)
   const strikes = responsiveStrikes(legs)
   const initialBreakevens = terminalAnalysis.breakevens
   const [requestedLo, requestedHi] = priceRange
@@ -594,9 +662,11 @@ export function computePayoff(
   const makeSample = (underlying: number): PayoffSample => ({
     underlying,
     expiry: normalizePayoff(
-      totalPnlAt(legs, underlying, daysAtExpiry, ivShiftPct, fallbackIv, now)
+      totalPnlAt(legs, underlying, daysAtExpiry, ivShiftPct, fallbackIv, currentNow)
     ),
-    tplus0: normalizePayoff(totalPnlAt(legs, underlying, daysAtT0, ivShiftPct, fallbackIv, now)),
+    tplus0: normalizePayoff(
+      totalPnlAt(legs, underlying, daysAtT0, ivShiftPct, fallbackIv, currentNow)
+    ),
   })
   let samples = sampleXs.map(makeSample)
   const breakevens = terminalAnalysis.breakevens

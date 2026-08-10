@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   computePayoff,
+  legPnlAt,
   normCdf,
   payoffPriceRange,
   probabilityOfProfit,
@@ -8,6 +9,7 @@ import {
   type OptionType,
   type Side,
   type StrategyLeg,
+  type ValuationClock,
 } from './strategyMath'
 
 const NOW = new Date('2026-07-28T10:00:00.000Z')
@@ -46,6 +48,95 @@ function ironCondor(): StrategyLeg[] {
     optionLeg('lc', 'BUY', 'CE', 110, 0.5),
   ]
 }
+
+function valuationOptionLeg(overrides: Partial<StrategyLeg> = {}): StrategyLeg {
+  return {
+    ...optionLeg('valuation-option', 'BUY', 'CE', 25_000, 200, 1, '14AUG26'),
+    lotSize: 50,
+    iv: 15,
+    ...overrides,
+  }
+}
+
+function futureLeg(overrides: Partial<StrategyLeg> = {}): StrategyLeg {
+  return {
+    id: 'valuation-future',
+    segment: 'FUTURE',
+    side: 'BUY',
+    lots: 1,
+    lotSize: 25,
+    expiry: '14AUG26',
+    price: 25_100,
+    iv: 0,
+    active: true,
+    symbol: 'NIFTY14AUG26FUT',
+    ...overrides,
+  }
+}
+
+describe('per-leg market valuation', () => {
+  it('reconciles a zero-shift option to its live Black-76 market price', () => {
+    // Independently hand-calculated Black-76: F=25120, K=25000,
+    // t=3.25/365, sigma=15% gives 209.5271, quoted at the ₹0.05 tick as 209.55.
+    const leg = valuationOptionLeg({
+      marketPrice: 209.55,
+      forwardPrice: 25_120,
+      referenceUnderlying: 25_000,
+      expiryTs: 1_786_701_600,
+      tickSize: 0.05,
+    })
+
+    expect(legPnlAt(leg, 25_000, 0, 15, new Date('2026-08-11T04:00:00Z'))).toBeCloseTo(
+      477.5,
+      2
+    )
+  })
+
+  it('values a selected future from its own market reference', () => {
+    const leg = futureLeg({ marketPrice: 25_120, referenceUnderlying: 25_000 })
+
+    expect(legPnlAt(leg, 25_000, 0)).toBe(500)
+    expect(legPnlAt(leg, 25_100, 0)).toBe(3_000)
+  })
+
+  it('uses the server-adjusted authoritative expiry for sub-day valuation', () => {
+    // The client is two minutes fast (04:02), while server time is 04:00 and
+    // the authoritative epoch expiry is 04:30. The hand-calculated Black-76
+    // call values for 30 and 15 minutes at F=K=100, sigma=20% are 0.06028 and
+    // 0.04262 per unit, or 3.014 and 2.131 per 50-unit lot respectively.
+    const serverClock: ValuationClock = {
+      now: new Date('2026-08-11T04:02:00Z'),
+      clockOffsetMs: -120_000,
+    }
+    const leg = valuationOptionLeg({
+      expiry: 'NOT_A_LEGACY_DATE',
+      expiryTs: 1_786_422_600,
+      strike: 100,
+      price: 0,
+      iv: 20,
+      referenceUnderlying: 100,
+      forwardPrice: 100,
+    })
+
+    expect(legPnlAt(leg, 100, 0, 20, serverClock)).toBeCloseTo(3.014, 3)
+    expect(
+      legPnlAt(leg, 100, 0.010416666666666666, 20, serverClock)
+    ).toBeCloseTo(2.131, 3)
+  })
+
+  it('falls back to the legacy expiry string when no expiry timestamp is available', () => {
+    const leg = valuationOptionLeg({
+      expiry: '11AUG26',
+      strike: 100,
+      price: 0,
+      iv: 20,
+      referenceUnderlying: 100,
+      forwardPrice: 100,
+    })
+
+    expect(legPnlAt(leg, 100, 0, 20, new Date('2026-08-11T09:30:00Z'))).toBeCloseTo(3.014, 3)
+  })
+})
 
 describe('payoff geometry and structural risk', () => {
   it('does not invent a breakeven for an empty strategy', () => {
