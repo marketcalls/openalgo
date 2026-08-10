@@ -211,7 +211,7 @@ def parse_option_symbol(
 
     Returns:
         base_symbol: Underlying symbol
-        expiry: Expiry datetime
+        expiry: Expiry datetime, naive and to be read as IST
         strike: Strike price (float, in same units as spot)
         opt_type: CE or PE
     """
@@ -235,13 +235,18 @@ def parse_option_symbol(
         if custom_expiry_time:
             logger.info(f"Using custom expiry time: {custom_expiry_time}")
 
+        # Deliberately naive, and treated as IST by every caller. Callers compare
+        # this against naive timestamps of their own — historical candle times in
+        # iv_chart_service, datetime.now() in vol_surface_service — and Python
+        # refuses to compare naive against aware. calculate_time_to_expiry()
+        # localizes it when it needs a real instant. Use get_expiry_datetime()
+        # instead when you want a timezone-aware expiry.
         expiry = datetime(
             int("20" + year),
             MONTH_MAP[month_str],
             int(day),
             expiry_hour,
             expiry_minute,
-            tzinfo=INDIA_TZ,
         )
 
         # Convert strike to proper format
