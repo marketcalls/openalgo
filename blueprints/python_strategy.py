@@ -6,6 +6,7 @@ Supports: Windows, Linux, macOS
 Note: Each strategy runs in a separate process for complete isolation
 """
 
+import ast
 import json
 import logging
 import os
@@ -43,6 +44,13 @@ from database.market_calendar_db import (
     get_special_session,
     is_market_holiday,
     is_market_open,
+)
+from openalgo_config import (
+    ConfigStore,
+    OCSValidationError,
+    build_runtime_config,
+    normalize_schema,
+    validate_values,
 )
 from utils.constants import CRYPTO_EXCHANGES
 from utils.session import check_session_validity
@@ -92,9 +100,11 @@ def broadcast_status_update(strategy_id: str, status: str, message: str = None):
 
 
 # File paths - use Path for cross-platform compatibility
+APP_ROOT = Path(__file__).resolve().parent.parent
 STRATEGIES_DIR = Path("strategies") / "scripts"
 LOGS_DIR = Path("log") / "strategies"  # Using existing log folder
 CONFIG_FILE = Path("strategies") / "strategy_configs.json"
+OCS_STORE = ConfigStore(Path("strategies") / "configs")
 
 # Detect operating system
 OS_TYPE = platform.system().lower()  # 'windows', 'linux', 'darwin'
@@ -228,10 +238,11 @@ def verify_strategy_ownership(strategy_id, user_id, return_config=False):
 
 def ensure_directories():
     """Ensure all required directories exist"""
-    global STRATEGIES_DIR, LOGS_DIR
+    global STRATEGIES_DIR, LOGS_DIR, OCS_STORE
     try:
         STRATEGIES_DIR.mkdir(parents=True, exist_ok=True)
         LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        OCS_STORE.ensure_dirs()
         logger.debug(f"Directories initialized on {OS_TYPE}")
     except PermissionError as e:
         # If we can't create directories, check if they exist
@@ -244,8 +255,10 @@ def ensure_directories():
             temp_base = Path(tempfile.gettempdir()) / "openalgo"
             STRATEGIES_DIR = temp_base / "strategies" / "scripts"
             LOGS_DIR = temp_base / "log" / "strategies"
+            OCS_STORE = ConfigStore(temp_base / "strategies" / "configs")
             STRATEGIES_DIR.mkdir(parents=True, exist_ok=True)
             LOGS_DIR.mkdir(parents=True, exist_ok=True)
+            OCS_STORE.ensure_dirs()
             logger.warning(f"Using temporary directories due to permission issues: {temp_base}")
     except Exception as e:
         logger.exception(f"Failed to create directories: {e}")
@@ -357,6 +370,235 @@ def create_subprocess_args():
     return args
 
 
+def inject_ocs_environment(strategy_env: dict, strategy_id: str):
+    """Inject OCS schema and resolved values into a strategy subprocess env."""
+    try:
+        schema = OCS_STORE.get_schema(strategy_id)
+        values = build_runtime_config(OCS_STORE, strategy_id)
+    except OCSValidationError as e:
+        logger.warning(f"OCS config invalid for strategy {strategy_id}: {e}")
+        values = {}
+        schema = {"ocs_version": "1.0", "strategy": strategy_id, "fields": []}
+    except Exception as e:
+        logger.warning(f"Could not load OCS config for strategy {strategy_id}: {e}")
+        values = {}
+        schema = {"ocs_version": "1.0", "strategy": strategy_id, "fields": []}
+
+    strategy_env["OPENALGO_CONFIG_JSON"] = json.dumps(values, ensure_ascii=False)
+    strategy_env["OPENALGO_CONFIG_SCHEMA_JSON"] = json.dumps(schema, ensure_ascii=False)
+
+    for key, value in values.items():
+        env_key = f"OPENALGO_CONFIG_{key.upper()}"
+        if isinstance(value, (dict, list)):
+            strategy_env[env_key] = json.dumps(value, ensure_ascii=False)
+        else:
+            strategy_env[env_key] = str(value)
+
+
+def inject_strategy_pythonpath(strategy_env: dict):
+    """Ensure uploaded scripts can import OpenAlgo app-local helper packages."""
+    app_root = str(APP_ROOT)
+    existing = strategy_env.get("PYTHONPATH", "")
+    parts = [part for part in existing.split(os.pathsep) if part]
+    if app_root not in parts:
+        parts.insert(0, app_root)
+    strategy_env["PYTHONPATH"] = os.pathsep.join(parts)
+
+
+UI_FIELD_TYPES = {
+    "int": "int",
+    "float": "float",
+    "bool": "bool",
+    "string": "string",
+    "select": "select",
+    "symbol": "symbol",
+    "exchange": "exchange",
+    "product": "product",
+    "quantity": "quantity",
+}
+
+
+def _literal_node_value(node):
+    try:
+        return ast.literal_eval(node)
+    except (ValueError, SyntaxError):
+        return None
+
+
+def _extract_ui_schema_from_ast(module: ast.Module, strategy_name: str):
+    ui_names = {"ui"}
+    fields = []
+
+    for node in ast.walk(module):
+        if isinstance(node, ast.ImportFrom) and node.module in {
+            "openalgo.config",
+            "openalgo_config",
+            "openalgo_config.ui",
+        }:
+            for alias in node.names:
+                if alias.name == "ui":
+                    ui_names.add(alias.asname or alias.name)
+
+    ui_calls = []
+    for node in ast.walk(module):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            assigned_name = None
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    assigned_name = target.id
+                    break
+            ui_calls.append((node.value, assigned_name))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.value, ast.Call):
+            assigned_name = node.target.id if isinstance(node.target, ast.Name) else None
+            ui_calls.append((node.value, assigned_name))
+        elif isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            ui_calls.append((node.value, None))
+
+    for call_node, assigned_name in ui_calls:
+        if not isinstance(call_node, ast.Call):
+            continue
+        if not isinstance(call_node.func, ast.Attribute) or not isinstance(
+            call_node.func.value, ast.Name
+        ):
+            continue
+        if call_node.func.value.id not in ui_names:
+            continue
+
+        field_type = UI_FIELD_TYPES.get(call_node.func.attr)
+        if not field_type:
+            continue
+
+        key = None
+        if call_node.args:
+            key = _literal_node_value(call_node.args[0])
+        for keyword in call_node.keywords:
+            if keyword.arg in {"key", "name"}:
+                key = _literal_node_value(keyword.value)
+                break
+        if not isinstance(key, str) or not key:
+            continue
+
+        field = {"key": key, "type": field_type}
+        for keyword in call_node.keywords:
+            if keyword.arg in {
+                "default",
+                "label",
+                "required",
+                "min",
+                "max",
+                "step",
+                "options",
+                "description",
+                "placeholder",
+            }:
+                value = _literal_node_value(keyword.value)
+                if value is not None:
+                    field[keyword.arg] = value
+        fields.append(field)
+
+    if not fields:
+        return None
+
+    return {
+        "ocs_version": "1.0",
+        "strategy": strategy_name,
+        "title": strategy_name.replace("_", " ").title(),
+        "fields": fields,
+    }
+
+
+def extract_ocs_schema_from_strategy_file(file_path: Path):
+    """Safely extract SDK ui.* declarations or legacy literal schema from a script."""
+    try:
+        source = file_path.read_text(encoding="utf-8")
+        module = ast.parse(source, filename=str(file_path))
+    except (OSError, SyntaxError) as e:
+        logger.warning(f"Could not parse OCS schema from {file_path}: {e}")
+        return None
+
+    ui_schema = _extract_ui_schema_from_ast(module, file_path.stem)
+    if ui_schema:
+        return ui_schema
+
+    for node in module.body:
+        targets = []
+        value_node = None
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+            value_node = node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+            value_node = node.value
+
+        if not value_node:
+            continue
+
+        for target in targets:
+            if isinstance(target, ast.Name) and target.id in {"DEFAULT_OCS_SCHEMA", "OCS_SCHEMA"}:
+                try:
+                    schema = ast.literal_eval(value_node)
+                except (ValueError, SyntaxError) as e:
+                    logger.warning(f"OCS schema in {file_path} must be a literal dict: {e}")
+                    return None
+                return schema if isinstance(schema, dict) else None
+
+    return None
+
+
+def get_valid_strategy_file_path(config: dict):
+    """Return a valid strategy script path, or None for legacy/corrupt records."""
+    raw_path = str(config.get("file_path") or "").strip()
+    file_name = str(config.get("file_name") or "").strip()
+
+    if raw_path:
+        file_path = Path(raw_path)
+    elif file_name:
+        file_path = STRATEGIES_DIR / file_name
+    else:
+        return None
+
+    try:
+        resolved_path = file_path.resolve()
+        strategies_dir_resolved = STRATEGIES_DIR.resolve()
+    except OSError:
+        return None
+
+    if not resolved_path.is_file() or resolved_path.suffix.lower() != ".py":
+        return None
+
+    try:
+        resolved_path.relative_to(strategies_dir_resolved)
+    except ValueError:
+        return None
+
+    return resolved_path
+
+
+def sync_ocs_schema_from_strategy_file(strategy_id: str, config: dict):
+    """Save an embedded OCS schema for this strategy when the script exposes one."""
+    file_path = get_valid_strategy_file_path(config)
+    if not file_path:
+        return None
+
+    schema = extract_ocs_schema_from_strategy_file(file_path)
+    if not schema:
+        return None
+
+    try:
+        return OCS_STORE.save_schema(strategy_id, schema)
+    except OCSValidationError as e:
+        logger.warning(f"Invalid embedded OCS schema for strategy {strategy_id}: {e.errors}")
+        return None
+
+
+def get_or_sync_ocs_schema(strategy_id: str, config: dict):
+    """Load saved OCS schema, backfilling from script defaults if needed."""
+    schema = OCS_STORE.get_schema(strategy_id)
+    if schema.get("fields"):
+        return schema
+    return sync_ocs_schema_from_strategy_file(strategy_id, config) or schema
+
+
 # Resource limits for strategy processes (Unix only)
 # Prevents buggy strategies from crashing the system
 # Can be overridden via environment variable for low-memory containers
@@ -428,9 +670,9 @@ def start_strategy_process(strategy_id):
         if not config:
             return False, "Strategy configuration not found"
 
-        file_path = Path(config["file_path"])
-        if not file_path.exists():
-            return False, f"Strategy file not found: {file_path}"
+        file_path = get_valid_strategy_file_path(config)
+        if not file_path:
+            return False, "Strategy file not found or invalid"
 
         # Check file permissions
         if not IS_WINDOWS:
@@ -499,7 +741,7 @@ def start_strategy_process(strategy_id):
             subprocess_args = create_subprocess_args()
             subprocess_args["stdout"] = log_handle
             subprocess_args["stderr"] = subprocess.STDOUT
-            subprocess_args["cwd"] = str(Path.cwd())
+            subprocess_args["cwd"] = str(APP_ROOT)
 
             # Inject documented strategy environment variables
             # (per strategies/README.md: STRATEGY_ID, STRATEGY_NAME, OPENALGO_API_KEY, OPENALGO_HOST)
@@ -519,6 +761,8 @@ def start_strategy_process(strategy_id):
                         strategy_env["OPENALGO_API_KEY"] = _api_key
             except Exception as e:
                 logger.warning(f"Could not inject API key for strategy {strategy_id}: {e}")
+            inject_ocs_environment(strategy_env, strategy_id)
+            inject_strategy_pythonpath(strategy_env)
             subprocess_args["env"] = strategy_env
 
             # Start the process
@@ -1729,6 +1973,10 @@ def new_strategy():
                 "schedule_days": schedule_days,
             }
             save_configs()
+            ocs_schema = sync_ocs_schema_from_strategy_file(
+                strategy_id, STRATEGY_CONFIGS[strategy_id]
+            )
+            ocs_field_count = len(ocs_schema.get("fields", [])) if ocs_schema else 0
 
             # Setup scheduler jobs for the new strategy
             schedule_strategy(
@@ -1740,7 +1988,11 @@ def new_strategy():
                     {
                         "status": "success",
                         "message": f'Strategy "{strategy_name}" uploaded successfully',
-                        "data": {"strategy_id": strategy_id},
+                        "data": {
+                            "strategy_id": strategy_id,
+                            "has_config_schema": ocs_field_count > 0,
+                            "config_field_count": ocs_field_count,
+                        },
                     }
                 )
 
@@ -1988,14 +2240,19 @@ def delete_strategy(strategy_id):
 
         # Delete file
         if strategy_id in STRATEGY_CONFIGS:
-            file_path = Path(STRATEGY_CONFIGS[strategy_id].get("file_path", ""))
-            if file_path.exists():
+            file_path = get_valid_strategy_file_path(STRATEGY_CONFIGS[strategy_id])
+            if file_path:
                 try:
                     file_path.unlink()
                 except Exception as e:
                     logger.exception(f"Failed to delete file {file_path}: {e}")
+            else:
+                logger.warning(
+                    f"Skipping strategy file delete for {strategy_id}: missing or invalid file path"
+                )
 
             # Remove from configs
+            OCS_STORE.delete(strategy_id)
             del STRATEGY_CONFIGS[strategy_id]
             save_configs()
 
@@ -2277,6 +2534,191 @@ def get_schedule_status(config):
     return "scheduled", f"Active window: {schedule_start} - {schedule_stop} IST"
 
 
+def _json_body():
+    payload = request.get_json(silent=True)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _ocs_error_response(error: OCSValidationError, status_code: int = 400):
+    return jsonify(
+        {
+            "status": "error",
+            "message": str(error),
+            "errors": error.errors,
+        }
+    ), status_code
+
+
+def _ocs_unexpected_error_response(error: Exception):
+    logger.exception(f"OCS API operation failed: {error}")
+    return jsonify(
+        {
+            "status": "error",
+            "message": "Configuration operation failed",
+        }
+    ), 500
+
+
+def _build_ocs_config_response_values(strategy_id: str):
+    """Return editable draft values plus runtime-valid values when available."""
+    values = OCS_STORE.get_values(strategy_id, allow_invalid=True)
+    try:
+        resolved_values = build_runtime_config(OCS_STORE, strategy_id)
+        validation_errors = []
+    except OCSValidationError as exc:
+        resolved_values = values
+        validation_errors = exc.errors
+    return values, resolved_values, validation_errors
+
+
+@python_strategy_bp.route("/api/config/<strategy_id>", methods=["GET"])
+@check_session_validity
+def api_get_ocs_config(strategy_id):
+    """API: Get OCS schema, raw values, and resolved runtime values."""
+    user_id = session.get("user")
+    if not user_id:
+        return jsonify({"status": "error", "message": "Session expired"}), 401
+
+    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
+    if not is_owner:
+        return error_response
+
+    config = STRATEGY_CONFIGS[strategy_id]
+    try:
+        schema = get_or_sync_ocs_schema(strategy_id, config)
+        values, resolved_values, validation_errors = _build_ocs_config_response_values(strategy_id)
+    except OCSValidationError as e:
+        return _ocs_error_response(e)
+    except Exception as e:
+        return _ocs_unexpected_error_response(e)
+
+    return jsonify(
+        {
+            "status": "success",
+            "schema": schema,
+            "values": values,
+            "resolved_values": resolved_values,
+            "validation_errors": validation_errors,
+        }
+    )
+
+
+@python_strategy_bp.route("/api/config/<strategy_id>/schema", methods=["POST"])
+@check_session_validity
+def api_save_ocs_schema(strategy_id):
+    """API: Save an OCS schema for a Python strategy."""
+    user_id = session.get("user")
+    if not user_id:
+        return jsonify({"status": "error", "message": "Session expired"}), 401
+
+    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id, True)
+    if not is_owner:
+        return error_response
+
+    config = error_response
+    if config.get("is_running"):
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Stop the strategy before changing its configuration schema",
+            }
+        ), 409
+
+    payload = _json_body()
+    schema = payload.get("schema", payload)
+    try:
+        saved_schema = OCS_STORE.save_schema(strategy_id, schema)
+        values, resolved_values, validation_errors = _build_ocs_config_response_values(strategy_id)
+    except OCSValidationError as e:
+        return _ocs_error_response(e)
+    except Exception as e:
+        return _ocs_unexpected_error_response(e)
+
+    return jsonify(
+        {
+            "status": "success",
+            "message": "Configuration schema saved",
+            "schema": saved_schema,
+            "values": values,
+            "resolved_values": resolved_values,
+            "validation_errors": validation_errors,
+            "data": {
+                "schema": saved_schema,
+                "values": values,
+                "resolved_values": resolved_values,
+                "validation_errors": validation_errors,
+            },
+        }
+    )
+
+
+@python_strategy_bp.route("/api/config/<strategy_id>/values", methods=["POST"])
+@check_session_validity
+def api_save_ocs_values(strategy_id):
+    """API: Save validated OCS values for a Python strategy."""
+    user_id = session.get("user")
+    if not user_id:
+        return jsonify({"status": "error", "message": "Session expired"}), 401
+
+    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id, True)
+    if not is_owner:
+        return error_response
+
+    config = error_response
+    if config.get("is_running"):
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Stop the strategy before changing its configuration values",
+            }
+        ), 409
+
+    payload = _json_body()
+    values = payload.get("values", payload)
+    try:
+        saved_values = OCS_STORE.save_values(strategy_id, values)
+    except OCSValidationError as e:
+        return _ocs_error_response(e)
+    except Exception as e:
+        return _ocs_unexpected_error_response(e)
+
+    return jsonify(
+        {
+            "status": "success",
+            "message": "Configuration values saved",
+            "values": saved_values,
+            "resolved_values": saved_values,
+            "data": {"resolved_values": saved_values},
+        }
+    )
+
+
+@python_strategy_bp.route("/api/config/validate", methods=["POST"])
+@check_session_validity
+def api_validate_ocs_config():
+    """API: Validate a draft OCS schema/value payload without saving it."""
+    payload = _json_body()
+    schema = payload.get("schema", {})
+    values = payload.get("values", {})
+
+    try:
+        normalized_schema = normalize_schema(schema)
+        resolved_values = validate_values(normalized_schema, values)
+    except OCSValidationError as e:
+        return _ocs_error_response(e)
+    except Exception as e:
+        return _ocs_unexpected_error_response(e)
+
+    return jsonify(
+        {
+            "status": "success",
+            "message": "Configuration is valid",
+            "schema": normalized_schema,
+            "resolved_values": resolved_values,
+        }
+    )
+
+
 @python_strategy_bp.route("/api/strategies")
 @check_session_validity
 def api_get_strategies():
@@ -2285,6 +2727,12 @@ def api_get_strategies():
     strategies = []
 
     for strategy_id, config in STRATEGY_CONFIGS.items():
+        try:
+            config_schema = get_or_sync_ocs_schema(strategy_id, config)
+            config_field_count = len(config_schema.get("fields", []))
+        except OCSValidationError:
+            config_field_count = 0
+
         # Determine status with detailed schedule info
         if config.get("is_running"):
             status = "running"
@@ -2316,6 +2764,8 @@ def api_get_strategies():
                 "paused_message": config.get("paused_message"),
                 "process_id": config.get("process_id"),
                 "created_at": config.get("created_at"),
+                "has_config_schema": config_field_count > 0,
+                "config_field_count": config_field_count,
             }
         )
 
@@ -2378,6 +2828,11 @@ def api_get_strategy(strategy_id):
         return jsonify({"status": "error", "message": "Strategy not found"}), 404
 
     config = STRATEGY_CONFIGS[strategy_id]
+    try:
+        config_schema = get_or_sync_ocs_schema(strategy_id, config)
+        config_field_count = len(config_schema.get("fields", []))
+    except OCSValidationError:
+        config_field_count = 0
 
     # Determine status with detailed schedule info
     if config.get("is_running"):
@@ -2411,6 +2866,8 @@ def api_get_strategy(strategy_id):
                 "paused_message": config.get("paused_message"),
                 "process_id": config.get("process_id"),
                 "created_at": config.get("created_at"),
+                "has_config_schema": config_field_count > 0,
+                "config_field_count": config_field_count,
             }
         }
     )
@@ -2692,6 +3149,7 @@ def save_strategy(strategy_id):
         # Update config
         config["last_modified"] = get_ist_time().isoformat()
         save_configs()
+        sync_ocs_schema_from_strategy_file(strategy_id, config)
 
         logger.info(f"Strategy {strategy_id} saved successfully")
         return jsonify(

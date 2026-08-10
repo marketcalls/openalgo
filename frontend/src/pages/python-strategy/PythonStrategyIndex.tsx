@@ -11,6 +11,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Settings2,
   Square,
   Trash2,
 } from 'lucide-react'
@@ -405,6 +406,10 @@ export default function PythonStrategyIndex() {
                           <Download className="h-4 w-4 mr-2" />
                           Export
                         </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => navigate(`/python/${strategy.id}/config`)}>
+                          <Settings2 className="h-4 w-4 mr-2" />
+                          Config
+                        </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
                           className="text-red-500"
@@ -537,6 +542,24 @@ export default function PythonStrategyIndex() {
                       {strategy.schedule_start_time && strategy.schedule_stop_time
                         ? `${strategy.schedule_start_time} - ${strategy.schedule_stop_time}`
                         : 'Edit schedule'}
+                    </TooltipContent>
+                  </Tooltip>
+
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant="outline" size="sm" asChild>
+                        <Link
+                          to={`/python/${strategy.id}/config`}
+                          aria-label={`Configure ${strategy.name}`}
+                        >
+                          <Settings2 className="h-4 w-4" />
+                        </Link>
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {strategy.config_field_count
+                        ? `${strategy.config_field_count} config fields`
+                        : 'Configure inputs'}
                     </TooltipContent>
                   </Tooltip>
 
