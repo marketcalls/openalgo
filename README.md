@@ -75,6 +75,7 @@ Order workflows from the REST API, hosted strategies, and Flow can use Analyzer 
 - RMoney
 - Samco
 - Shoonya (Finvasia)
+- SMIFS God Quant
 - Tradejini
 - TradeSmart
 - Upstox

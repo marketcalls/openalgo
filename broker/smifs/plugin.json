@@ -1,0 +1,11 @@
+{
+    "Plugin Name": "smifs",
+    "Plugin URI": "https://smifsgq.smifs.com",
+    "Description": "SMIFS God Quant OpenAlgo Plugin",
+    "Version": "1.0",
+    "Author": "SMIFS Limited",
+    "Author URI": "https://smifsgq.smifs.com",
+    "supported_exchanges": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX"],
+    "broker_type": "IN_stock",
+    "leverage_config": false
+}
