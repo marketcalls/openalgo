@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   computePayoff,
   legPnlAt,
+  nearestLegDays,
   normCdf,
   payoffPriceRange,
   probabilityOfProfit,
@@ -135,6 +136,141 @@ describe('per-leg market valuation', () => {
     })
 
     expect(legPnlAt(leg, 100, 0, 20, new Date('2026-08-11T09:30:00Z'))).toBeCloseTo(3.014, 3)
+  })
+
+  it('uses authoritative expiry metadata for aggregate horizons', () => {
+    // At the server-corrected 04:00, the authoritative expiry is exactly 30
+    // days away. A 30-day Black-76 call worth 1 at expiry crosses zero P&L at
+    // the independently calculated forward of 96.79, not the parsed-expiry
+    // terminal-analysis artefact.
+    const serverClock: ValuationClock = {
+      now: new Date('2026-08-11T04:02:00Z'),
+      clockOffsetMs: -120_000,
+    }
+    const leg = valuationOptionLeg({
+      lotSize: 1,
+      expiry: 'NOT_A_LEGACY_DATE',
+      expiryTs: 1_789_012_800,
+      strike: 100,
+      price: 1,
+      iv: 20,
+      referenceUnderlying: 100,
+      forwardPrice: 100,
+    })
+    const payoff = computePayoff([leg], 100, 0, 0, [90, 110], 120, 0, 20, serverClock)
+
+    expect(payoff.breakevens[0]).toBeCloseTo(96.79, 1)
+    expect(nearestLegDays([leg], serverClock)).toBeCloseTo(30, 8)
+  })
+
+  it('uses forward and futures market bases for a flat-slope nonterminal tail', () => {
+    const now = new Date('2026-08-11T04:00:00Z')
+    const nearExpiry = 1_786_507_200
+    const farExpiry = 1_817_956_800
+    const neutralNearCall = {
+      ...valuationOptionLeg({
+        id: 'near-call',
+        lotSize: 1,
+        expiry: '12AUG26',
+        expiryTs: nearExpiry,
+        strike: 100,
+        price: 0,
+        iv: 100,
+        referenceUnderlying: 100,
+        forwardPrice: 95,
+      }),
+    }
+    const neutralFarCall = {
+      ...neutralNearCall,
+      id: 'far-call',
+      side: 'SELL' as const,
+      // The display string is deliberately stale. The authoritative far expiry
+      // keeps the calendar nonterminal and its time value negative at 200.
+      expiry: '12AUG26',
+      expiryTs: farExpiry,
+      forwardPrice: 100,
+    }
+    const longFuture = futureLeg({
+      id: 'long-future',
+      lots: 1,
+      lotSize: 1,
+      price: 100,
+      marketPrice: 110,
+      referenceUnderlying: 100,
+    })
+    const shortFuture = futureLeg({
+      id: 'short-future',
+      side: 'SELL',
+      lots: 1,
+      lotSize: 1,
+      price: 100,
+      marketPrice: 100,
+      referenceUnderlying: 100,
+    })
+
+    const payoff = computePayoff(
+      [neutralNearCall, neutralFarCall, longFuture, shortFuture],
+      100,
+      0,
+      0,
+      [80, 120],
+      10,
+      0,
+      20,
+      now
+    )
+
+    expect(payoff.breakevens.at(-1)).toBeGreaterThan(200)
+  })
+
+  it('clamps a non-positive scenario forward to the Black-76 boundary', () => {
+    const common = {
+      lotSize: 1,
+      expiryTs: 1_789_012_800,
+      strike: 100,
+      price: 0,
+      iv: 20,
+      referenceUnderlying: 100,
+      forwardPrice: 50,
+    }
+    const call = valuationOptionLeg(common)
+    const put = valuationOptionLeg({ ...common, optionType: 'PE' })
+    const now = new Date('2026-08-11T04:00:00Z')
+
+    expect(legPnlAt(call, -1, 0, 20, now)).toBe(0)
+    expect(legPnlAt(put, -1, 0, 20, now)).toBe(100)
+  })
+
+  it('does not reconcile an out-of-tolerance live quote', () => {
+    const leg = valuationOptionLeg({
+      lotSize: 50,
+      marketPrice: 210,
+      forwardPrice: 25_120,
+      referenceUnderlying: 25_000,
+      expiryTs: 1_786_701_600,
+      tickSize: 0.05,
+    })
+
+    expect(legPnlAt(leg, 25_000, 0, 15, new Date('2026-08-11T04:00:00Z'))).toBeCloseTo(
+      476.36,
+      1
+    )
+  })
+
+  it('keeps spot, IV, and time-shifted scenarios model-priced', () => {
+    const leg = valuationOptionLeg({
+      lotSize: 50,
+      marketPrice: 209.55,
+      forwardPrice: 25_120,
+      referenceUnderlying: 25_000,
+      expiryTs: 1_786_701_600,
+      tickSize: 0.05,
+    })
+    const now = new Date('2026-08-11T04:00:00Z')
+
+    expect(legPnlAt(leg, 25_100, 0, 15, now)).toBeCloseTo(3905.81, 1)
+    expect(legPnlAt(leg, 25_000, 0, 20, now)).toBeCloseTo(2735.7, 1)
+    expect(legPnlAt(leg, 25_000, 1, 15, now)).toBeCloseTo(-632.97, 1)
   })
 })
 

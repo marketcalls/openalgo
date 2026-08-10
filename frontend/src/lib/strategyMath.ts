@@ -165,13 +165,17 @@ function valuationNow(value: ValuationTime): Date {
   return new Date(value.now.getTime() + value.clockOffsetMs)
 }
 
-function remainingYears(leg: StrategyLeg, daysElapsed: number, now: ValuationTime): number {
+function remainingDays(leg: StrategyLeg, daysElapsed: number, now: ValuationTime): number {
   const currentNow = valuationNow(now)
   const valuationMs = currentNow.getTime() + daysElapsed * DAY_MS
   if (isFiniteNumber(leg.expiryTs) && leg.expiryTs > 0) {
-    return Math.max(0, leg.expiryTs * 1000 - valuationMs) / YEAR_MS
+    return Math.max(0, leg.expiryTs * 1000 - valuationMs) / DAY_MS
   }
-  return daysToYears(Math.max(daysToExpiry(leg.expiry, currentNow) - daysElapsed, 0))
+  return Math.max(daysToExpiry(leg.expiry, currentNow) - daysElapsed, 0)
+}
+
+function remainingYears(leg: StrategyLeg, daysElapsed: number, now: ValuationTime): number {
+  return (remainingDays(leg, daysElapsed, now) * DAY_MS) / YEAR_MS
 }
 
 /**
@@ -219,10 +223,14 @@ export function legPnlAt(
   const scenarioForward = hasForwardReference
     ? forwardPrice + (underlying - referenceUnderlying)
     : underlying
+  // Black-76 is defined only for positive forwards. Its F -> 0 limit is the
+  // undiscounted intrinsic value, so clamp a crossed scenario to that boundary
+  // instead of sending a non-positive ratio into log(F / K).
+  const pricingForward = Number.isFinite(scenarioForward) ? Math.max(0, scenarioForward) : 0
   const modelValue =
-    tLeg <= 1e-8 || iv <= 0
-      ? intrinsic(leg.optionType, scenarioForward, leg.strike)
-      : black76Price(leg.optionType === 'CE' ? 'c' : 'p', scenarioForward, leg.strike, tLeg, 0, iv)
+    tLeg <= 1e-8 || iv <= 0 || pricingForward <= 0
+      ? intrinsic(leg.optionType, pricingForward, leg.strike)
+      : black76Price(leg.optionType === 'CE' ? 'c' : 'p', pricingForward, leg.strike, tLeg, 0, iv)
   const isUnshiftedLiveSnapshot =
     hasForwardReference &&
     Math.abs(underlying - referenceUnderlying) <= 1e-8 &&
@@ -410,7 +418,7 @@ function isTerminalHorizon(legs: StrategyLeg[], daysAtExpiry: number, now: Date)
   return legs.every((leg) => {
     if (!leg.active || (leg.exitPrice !== undefined && leg.exitPrice > 0)) return true
     if (leg.segment !== 'OPTION') return true
-    return daysToExpiry(leg.expiry, now) - daysAtExpiry <= 1e-6
+    return remainingDays(leg, daysAtExpiry, now) <= 1e-6
   })
 }
 
@@ -530,9 +538,18 @@ function rightTailValue(legs: StrategyLeg[]): number {
       leg.strike !== undefined &&
       leg.optionType !== undefined
     ) {
-      value += sign * ((leg.optionType === 'CE' ? -leg.strike : 0) - leg.price) * qty
+      const forwardBasis =
+        isFiniteNumber(leg.forwardPrice) && isFiniteNumber(leg.referenceUnderlying)
+          ? leg.forwardPrice - leg.referenceUnderlying
+          : 0
+      const terminalValue = leg.optionType === 'CE' ? forwardBasis - leg.strike : 0
+      value += sign * (terminalValue - leg.price) * qty
     } else if (leg.segment === 'FUTURE') {
-      value += sign * -leg.price * qty
+      const marketBasis =
+        isFiniteNumber(leg.marketPrice) && isFiniteNumber(leg.referenceUnderlying)
+          ? leg.marketPrice - leg.referenceUnderlying
+          : 0
+      value += sign * (marketBasis - leg.price) * qty
     }
   }
   return normalizePayoff(value)
@@ -551,7 +568,7 @@ function analyzeNonTerminalPayoff(
   const maxStrike = Math.max(spot, ...strikes)
   const maxRemainingYears = Math.max(
     0,
-    ...legs.map((leg) => daysToYears(Math.max(daysToExpiry(leg.expiry, now) - daysAtExpiry, 0)))
+    ...legs.map((leg) => remainingYears(leg, daysAtExpiry, now))
   )
   const maxIv =
     Math.max(fallbackIv, ...legs.map((leg) => (leg.iv > 0 ? leg.iv : fallbackIv))) *
@@ -767,12 +784,12 @@ export function daysToExpiry(expiry: string, now: Date = new Date()): number {
  * chart's "At Expiry" curve for calendar / diagonal strategies where
  * multiple expiries are in play.
  */
-export function nearestLegDays(legs: StrategyLeg[], now: Date = new Date()): number {
+export function nearestLegDays(legs: StrategyLeg[], now: ValuationTime = new Date()): number {
   let best = Infinity
   for (const leg of legs) {
     if (!leg.active) continue
     if (leg.exitPrice !== undefined && leg.exitPrice > 0) continue
-    const d = daysToExpiry(leg.expiry, now)
+    const d = remainingDays(leg, 0, now)
     if (d < best) best = d
   }
   return best === Infinity ? 0 : best
