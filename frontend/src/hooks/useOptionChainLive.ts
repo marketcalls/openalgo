@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { chainGreeks, forwardFromParity, priceForGreeks, yearsToExpiry } from '@/lib/optionGreeks'
 import type { OptionChainResponse, OptionStrike } from '@/types/option-chain'
 import { useMarketData } from './useMarketData'
 import { useOptionChainPolling } from './useOptionChainPolling'
@@ -38,18 +39,104 @@ function roundToTickSize(
   return Number((Math.round(price / tickSize) * tickSize).toFixed(2))
 }
 
+/**
+ * Attach Greeks to a merged chain, recomputed from the prices it already holds.
+ *
+ * This runs on every tick batch rather than on the 30s poll, which is what makes
+ * the Greeks stream: they cost no extra network traffic and no broker calls,
+ * because every input is already on the client. A full 80-leg chain is well
+ * under a millisecond.
+ *
+ * Both the forward price and the tenor are recomputed here too, so delta shifts
+ * as the underlying moves and theta decays between polls.
+ */
+function withGreeks(
+  chain: OptionStrike[],
+  polledData: OptionChainResponse,
+  underlyingLtp: number,
+  clockOffsetMs: number,
+  interestRate: number
+): OptionStrike[] {
+  const timeToExpiry = yearsToExpiry(polledData.expiry_ts, clockOffsetMs)
+  if (timeToExpiry <= 0) {
+    return chain
+  }
+
+  // Black-76 prices off the forward. The ATM legs are already streaming, so
+  // put-call parity gives a live forward for free, and it tracks the futures
+  // premium that a spot LTP would miss.
+  const atmRow = chain.find((row) => row.strike === polledData.atm_strike)
+  const forward = forwardFromParity(
+    polledData.atm_strike,
+    atmRow?.ce ? priceForGreeks(atmRow.ce.ltp, atmRow.ce.bid, atmRow.ce.ask) : 0,
+    atmRow?.pe ? priceForGreeks(atmRow.pe.ltp, atmRow.pe.bid, atmRow.pe.ask) : 0,
+    underlyingLtp
+  )
+
+  if (!(forward > 0)) {
+    return chain
+  }
+
+  const greeks = chainGreeks(
+    chain.map((row) => ({
+      strike: row.strike,
+      cePrice: row.ce ? priceForGreeks(row.ce.ltp, row.ce.bid, row.ce.ask) : 0,
+      pePrice: row.pe ? priceForGreeks(row.pe.ltp, row.pe.bid, row.pe.ask) : 0,
+    })),
+    forward,
+    timeToExpiry,
+    interestRate
+  )
+
+  return chain.map((row, i) => {
+    const { ce: ceGreeks, pe: peGreeks } = greeks[i]
+    return {
+      ...row,
+      // Spread onto a fresh object: `row.ce` can still be the polled response's
+      // own object when this leg had no tick, and mutating that would corrupt
+      // the polling hook's state.
+      ce: row.ce
+        ? {
+            ...row.ce,
+            implied_volatility: ceGreeks?.iv,
+            delta: ceGreeks?.delta,
+            gamma: ceGreeks?.gamma,
+            theta: ceGreeks?.theta,
+            vega: ceGreeks?.vega,
+          }
+        : null,
+      pe: row.pe
+        ? {
+            ...row.pe,
+            implied_volatility: peGreeks?.iv,
+            delta: peGreeks?.delta,
+            gamma: peGreeks?.gamma,
+            theta: peGreeks?.theta,
+            vega: peGreeks?.vega,
+          }
+        : null,
+    }
+  })
+}
+
 interface UseOptionChainLiveOptions {
   enabled: boolean
   /** Polling interval for OI/Volume data in ms (default: 30000) */
   oiRefreshInterval?: number
   /** Pause WebSocket and polling when tab is hidden (default: true) */
   pauseWhenHidden?: boolean
+  /**
+   * Risk-free rate as an annualized percentage, used for Greeks.
+   * Defaults to 0, matching the server's DEFAULT_INTEREST_RATES.
+   */
+  interestRate?: number
 }
 
 /**
  * Hook for real-time option chain data using hybrid approach:
  * - WebSocket for real-time LTP/Bid/Ask updates
  * - REST polling for OI/Volume data (less frequent)
+ * - Greeks recomputed locally on every tick from the streaming prices
  *
  * @param apiKey - OpenAlgo API key
  * @param underlying - Underlying symbol (NIFTY, BANKNIFTY, etc.)
@@ -72,7 +159,7 @@ export function useOptionChainLive(
     pauseWhenHidden: true,
   }
 ) {
-  const { enabled, oiRefreshInterval = 30000, pauseWhenHidden = true } = options
+  const { enabled, oiRefreshInterval = 30000, pauseWhenHidden = true, interestRate = 0 } = options
 
   // Track merged data with WebSocket updates
   const [mergedData, setMergedData] = useState<OptionChainResponse | null>(null)
@@ -138,6 +225,17 @@ export function useOptionChainLive(
   // Track last LTP update time using ref to avoid triggering effect loops
   const lastLtpUpdateRef = useRef<number>(0)
 
+  // Time to expiry is computed in the browser, so a skewed client clock would
+  // bias every Greek on the page. Each poll carries the server's clock; the
+  // difference corrects it. Network latency makes this off by roughly half an
+  // RTT, which is irrelevant against a tenor measured in hours or days.
+  const clockOffsetRef = useRef<number>(0)
+  useEffect(() => {
+    if (polledData?.server_ts) {
+      clockOffsetRef.current = polledData.server_ts * 1000 - Date.now()
+    }
+  }, [polledData?.server_ts])
+
   // Merge WebSocket LTP data into polled option chain data
   useEffect(() => {
     if (!polledData) {
@@ -145,9 +243,19 @@ export function useOptionChainLive(
       return
     }
 
-    // If no WebSocket data yet, use polled data as-is
+    // No WebSocket data yet: still compute Greeks off the polled prices so the
+    // first paint is complete rather than showing dashes until the first tick.
     if (wsData.size === 0) {
-      setMergedData(polledData)
+      setMergedData({
+        ...polledData,
+        chain: withGreeks(
+          polledData.chain,
+          polledData,
+          polledData.underlying_ltp,
+          clockOffsetRef.current,
+          interestRate
+        ),
+      })
       return
     }
 
@@ -231,9 +339,15 @@ export function useOptionChainLive(
     setMergedData({
       ...polledData,
       underlying_ltp: underlyingLtp,
-      chain: mergedChain,
+      chain: withGreeks(
+        mergedChain,
+        polledData,
+        underlyingLtp,
+        clockOffsetRef.current,
+        interestRate
+      ),
     })
-  }, [polledData, wsData, optionExchange, underlying])
+  }, [polledData, wsData, optionExchange, underlying, interestRate])
 
   // Determine streaming status
   const isStreaming = isWsConnected && isWsAuthenticated && wsSymbols.length > 0
