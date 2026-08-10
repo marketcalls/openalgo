@@ -18,13 +18,33 @@ async function fetchCSRFToken(): Promise<string> {
 // Use html2canvas-pro which has native oklch color support
 import html2canvas from 'html2canvas-pro'
 import {
-  AreaSeries,
+  BaselineSeries,
   ColorType,
   CrosshairMode,
   createChart,
   type IChartApi,
   type ISeriesApi,
 } from 'lightweight-charts'
+
+// PnL and drawdown are plotted in separate panes rather than sharing one price
+// scale. Drawdown is always <= 0 and usually an order of magnitude smaller than
+// MTM, so overlaying the two flattened both. Split 3:1 in favour of the PnL
+// curve, which is the one being read closely.
+const CHART_HEIGHT = 500
+const PNL_PANE_RATIO = 3
+const DRAWDOWN_PANE_RATIO = 1
+const PNL_PANE_HEIGHT = Math.round(
+  (CHART_HEIGHT * PNL_PANE_RATIO) / (PNL_PANE_RATIO + DRAWDOWN_PANE_RATIO)
+)
+const DRAWDOWN_PANE_HEIGHT = CHART_HEIGHT - PNL_PANE_HEIGHT
+
+// Series colors deliberately mirror the metric cards above the chart, so each
+// card points at the series it summarises: green and red for MTM either side of
+// break-even, amber for drawdown. Tailwind 500-weight hex values, because the
+// canvas cannot parse the oklch CSS tokens the cards use.
+const COLOR_PROFIT = '#22c55e' // green-500, matches a positive Current MTM
+const COLOR_LOSS = '#ef4444' // red-500, matches a negative Current MTM
+const COLOR_DRAWDOWN = '#eab308' // yellow-500, matches the Max Drawdown card
 
 interface PnLDataPoint {
   time: number
@@ -64,8 +84,8 @@ export default function PnLTracker() {
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const screenshotContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
-  const pnlSeriesRef = useRef<ISeriesApi<'Area'> | null>(null)
-  const drawdownSeriesRef = useRef<ISeriesApi<'Area'> | null>(null)
+  const pnlSeriesRef = useRef<ISeriesApi<'Baseline'> | null>(null)
+  const drawdownSeriesRef = useRef<ISeriesApi<'Baseline'> | null>(null)
   const watermarkRef = useRef<HTMLDivElement | null>(null)
   // Stable ref for formatCurrency — always holds the latest function without
   // being a useCallback/useEffect dependency.  The chart price formatter reads
@@ -100,10 +120,15 @@ export default function PnLTracker() {
 
     const chart = createChart(container, {
       width: container.offsetWidth,
-      height: 500,
+      height: CHART_HEIGHT,
       layout: {
         background: { type: ColorType.Solid, color: 'transparent' },
         textColor: isDarkMode ? '#a6adbb' : '#333',
+        panes: {
+          enableResize: true,
+          separatorColor: isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.2)',
+          separatorHoverColor: isDarkMode ? 'rgba(166, 173, 187, 0.4)' : 'rgba(0, 0, 0, 0.35)',
+        },
       },
       grid: {
         vertLines: {
@@ -168,36 +193,77 @@ export default function PnLTracker() {
     // Position watermark
     const positionWatermark = () => {
       if (!watermark || !container) return
+      // Centre within the PnL pane rather than the whole chart, so the 3:1 split
+      // does not leave the watermark straddling the pane separator.
+      //
+      // paneSize() reads live chart internals and throws once the chart has been
+      // disposed — which happens here, because this runs from a setTimeout and
+      // from the resize handler, both of which can outlive a re-init on theme
+      // change. Fall back to the configured height; the watermark is cosmetic
+      // and must never take the resize handler down with it.
+      let topPaneHeight = PNL_PANE_HEIGHT
+      try {
+        topPaneHeight = chart.paneSize(0).height || PNL_PANE_HEIGHT
+      } catch {
+        // Chart already disposed; the constant is still the right answer.
+      }
       watermark.style.left = `${container.offsetWidth / 2 - watermark.offsetWidth / 2}px`
-      watermark.style.top = `${container.offsetHeight / 2 - watermark.offsetHeight / 2}px`
+      watermark.style.top = `${topPaneHeight / 2 - watermark.offsetHeight / 2}px`
     }
     setTimeout(positionWatermark, 0)
 
-    // Create PnL series
-    const pnlSeries = chart.addSeries(AreaSeries, {
-      lineColor: '#570df8',
-      topColor: 'rgba(87, 13, 248, 0.4)',
-      bottomColor: 'rgba(87, 13, 248, 0.0)',
-      lineWidth: 2,
-      priceScaleId: 'right',
-      priceFormat: {
-        type: 'custom',
-        formatter: (price: number) => formatCurrencyRef.current(price),
+    // PnL in the upper pane, split at break-even so the colour itself says
+    // whether the day is green or red, and the crossing point is obvious.
+    const pnlSeries = chart.addSeries(
+      BaselineSeries,
+      {
+        baseValue: { type: 'price', price: 0 },
+        topLineColor: COLOR_PROFIT,
+        topFillColor1: 'rgba(34, 197, 94, 0.28)',
+        topFillColor2: 'rgba(34, 197, 94, 0.02)',
+        bottomLineColor: COLOR_LOSS,
+        bottomFillColor1: 'rgba(239, 68, 68, 0.02)',
+        bottomFillColor2: 'rgba(239, 68, 68, 0.28)',
+        lineWidth: 2,
+        priceScaleId: 'right',
+        priceFormat: {
+          type: 'custom',
+          formatter: (price: number) => formatCurrencyRef.current(price),
+        },
       },
-    })
+      0
+    )
 
-    // Create Drawdown series
-    const drawdownSeries = chart.addSeries(AreaSeries, {
-      lineColor: '#f000b8',
-      topColor: 'rgba(240, 0, 184, 0.0)',
-      bottomColor: 'rgba(240, 0, 184, 0.4)',
-      lineWidth: 2,
-      priceScaleId: 'right',
-      priceFormat: {
-        type: 'custom',
-        formatter: (price: number) => formatCurrencyRef.current(price),
+    // Drawdown in its own pane. Also baselined at zero so the fill hangs from
+    // break-even down to the curve, which reads as depth rather than as a line
+    // floating in the middle of the pane.
+    const drawdownSeries = chart.addSeries(
+      BaselineSeries,
+      {
+        baseValue: { type: 'price', price: 0 },
+        // Drawdown is never positive; the top half is defined but unused.
+        topLineColor: COLOR_DRAWDOWN,
+        topFillColor1: 'rgba(234, 179, 8, 0)',
+        topFillColor2: 'rgba(234, 179, 8, 0)',
+        bottomLineColor: COLOR_DRAWDOWN,
+        bottomFillColor1: 'rgba(234, 179, 8, 0.04)',
+        bottomFillColor2: 'rgba(234, 179, 8, 0.30)',
+        lineWidth: 2,
+        priceScaleId: 'right',
+        priceFormat: {
+          type: 'custom',
+          formatter: (price: number) => formatCurrencyRef.current(price),
+        },
       },
-    })
+      1
+    )
+
+    // Adding the series creates the second pane; size them 3:1 now that it exists.
+    const panes = chart.panes()
+    if (panes.length > 1) {
+      panes[0].setHeight(PNL_PANE_HEIGHT)
+      panes[1].setHeight(DRAWDOWN_PANE_HEIGHT)
+    }
 
     chartRef.current = chart
     pnlSeriesRef.current = pnlSeries
@@ -299,9 +365,39 @@ export default function PnLTracker() {
 
     setIsCapturing(true)
 
+    // html2canvas-pro clones every canvas on the page and reads each one back
+    // with getImageData, but builds those contexts without willReadFrequently,
+    // so Chrome logs a performance warning per canvas on every capture. Opt the
+    // clones in for the duration of the capture only.
+    //
+    // The isConnected guard is what makes this safe: html2canvas' clones are
+    // detached when it asks for their context, while the live chart canvases are
+    // in the document. Without the guard we would also flag the chart's own
+    // context, which pins it to software rendering for the rest of the session.
+    const originalGetContext = HTMLCanvasElement.prototype.getContext
+    HTMLCanvasElement.prototype.getContext = function patchedGetContext(
+      this: HTMLCanvasElement,
+      contextId: string,
+      options?: unknown
+    ) {
+      if (contextId === '2d' && !this.isConnected) {
+        return originalGetContext.call(this, contextId, {
+          ...(options as CanvasRenderingContext2DSettings),
+          willReadFrequently: true,
+        })
+      }
+      return originalGetContext.call(this, contextId, options as never)
+    } as typeof HTMLCanvasElement.prototype.getContext
+
     try {
+      // Match the page's own background instead of a hardcoded slate, so the
+      // exported PNG does not sit on a colour the app never shows. Reading the
+      // computed style also keeps it correct for any future theme.
+      const pageBackground =
+        getComputedStyle(document.body).backgroundColor || (isDarkMode ? '#1f2937' : '#ffffff')
+
       const canvas = await html2canvas(screenshotContainerRef.current, {
-        backgroundColor: isDarkMode ? '#1f2937' : '#ffffff',
+        backgroundColor: pageBackground,
         scale: 2,
         logging: false,
         useCORS: true,
@@ -328,6 +424,9 @@ export default function PnLTracker() {
     } catch (_error) {
       showToast.error('Failed to capture screenshot', 'positions')
     } finally {
+      // Always restore, including on the error path — a leaked prototype patch
+      // would outlive this page and affect every canvas in the app.
+      HTMLCanvasElement.prototype.getContext = originalGetContext
       setIsCapturing(false)
     }
   }
@@ -476,15 +575,19 @@ export default function PnLTracker() {
         {/* Chart Container */}
         <Card>
           <CardHeader>
-            <div className="flex justify-between items-center">
+            <div className="flex flex-wrap justify-between items-center gap-2">
               <CardTitle>Intraday PnL Curve</CardTitle>
               <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                <span className="flex items-center gap-1">
-                  <span className="inline-block w-3 h-3 rounded-full bg-[#570df8]"></span>
+                <span className="flex items-center gap-1.5">
+                  {/* Split swatch: the MTM curve is green above break-even, red below */}
+                  <span className="inline-flex h-3 w-3 overflow-hidden rounded-full">
+                    <span className="h-full w-1/2 bg-green-500" />
+                    <span className="h-full w-1/2 bg-red-500" />
+                  </span>
                   MTM PnL
                 </span>
-                <span className="flex items-center gap-1">
-                  <span className="inline-block w-3 h-3 rounded-full bg-[#f000b8]"></span>
+                <span className="flex items-center gap-1.5">
+                  <span className="inline-block w-3 h-3 rounded-full bg-yellow-500"></span>
                   Drawdown
                 </span>
               </div>
