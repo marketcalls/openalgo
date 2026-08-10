@@ -22,10 +22,16 @@ export function ColumnConfigDropdown({
   onToggleColumn,
   onResetToDefaults,
 }: ColumnConfigDropdownProps) {
-  const ceColumns = COLUMN_DEFINITIONS.filter((col) => col.side === 'ce')
-  const peColumns = COLUMN_DEFINITIONS.filter((col) => col.side === 'pe')
-
   const isColumnVisible = (key: ColumnKey) => visibleColumns.includes(key)
+
+  // Price and Greek columns are listed separately. Both modes draw from the
+  // same pool, so either group can be enabled from either mode.
+  const groups = [
+    { label: 'CALLS Price', side: 'ce', greek: false },
+    { label: 'CALLS Greeks', side: 'ce', greek: true },
+    { label: 'PUTS Price', side: 'pe', greek: false },
+    { label: 'PUTS Greeks', side: 'pe', greek: true },
+  ] as const
 
   return (
     <DropdownMenu>
@@ -35,30 +41,29 @@ export function ColumnConfigDropdown({
           <span className="sr-only">Column settings</span>
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-48">
-        <DropdownMenuLabel>CALLS Columns</DropdownMenuLabel>
-        {ceColumns.map((col) => (
-          <DropdownMenuCheckboxItem
-            key={col.key}
-            checked={isColumnVisible(col.key)}
-            onCheckedChange={() => onToggleColumn(col.key)}
-          >
-            {col.label}
-          </DropdownMenuCheckboxItem>
-        ))}
+      <DropdownMenuContent align="end" className="w-48 max-h-[70vh] overflow-y-auto">
+        {groups.map((group, index) => {
+          const columns = COLUMN_DEFINITIONS.filter(
+            (col) => col.side === group.side && Boolean(col.isGreek) === group.greek
+          )
+          if (columns.length === 0) return null
 
-        <DropdownMenuSeparator />
-
-        <DropdownMenuLabel>PUTS Columns</DropdownMenuLabel>
-        {peColumns.map((col) => (
-          <DropdownMenuCheckboxItem
-            key={col.key}
-            checked={isColumnVisible(col.key)}
-            onCheckedChange={() => onToggleColumn(col.key)}
-          >
-            {col.label}
-          </DropdownMenuCheckboxItem>
-        ))}
+          return (
+            <div key={group.label}>
+              {index > 0 && <DropdownMenuSeparator />}
+              <DropdownMenuLabel>{group.label}</DropdownMenuLabel>
+              {columns.map((col) => (
+                <DropdownMenuCheckboxItem
+                  key={col.key}
+                  checked={isColumnVisible(col.key)}
+                  onCheckedChange={() => onToggleColumn(col.key)}
+                >
+                  {col.label}
+                </DropdownMenuCheckboxItem>
+              ))}
+            </div>
+          )
+        })}
 
         <DropdownMenuSeparator />
 
