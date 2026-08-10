@@ -9,11 +9,11 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import type { ColumnKey } from '@/types/option-chain'
-import { COLUMN_DEFINITIONS } from '@/types/option-chain'
+import { LOGICAL_COLUMNS } from '@/types/option-chain'
 
 interface ColumnConfigDropdownProps {
   visibleColumns: ColumnKey[]
-  onToggleColumn: (columnKey: ColumnKey) => void
+  onToggleColumn: (columnKey: ColumnKey | ColumnKey[]) => void
   onResetToDefaults: () => void
 }
 
@@ -22,15 +22,12 @@ export function ColumnConfigDropdown({
   onToggleColumn,
   onResetToDefaults,
 }: ColumnConfigDropdownProps) {
-  const isColumnVisible = (key: ColumnKey) => visibleColumns.includes(key)
-
-  // Price and Greek columns are listed separately. Both modes draw from the
-  // same pool, so either group can be enabled from either mode.
+  // The chain is mirrored, so each entry covers the CALL and PUT column
+  // together. Listing them per side meant unchecking Delta twice to get it off
+  // the table, and doubled the length of this menu.
   const groups = [
-    { label: 'CALLS Price', side: 'ce', greek: false },
-    { label: 'CALLS Greeks', side: 'ce', greek: true },
-    { label: 'PUTS Price', side: 'pe', greek: false },
-    { label: 'PUTS Greeks', side: 'pe', greek: true },
+    { label: 'Price Columns', greek: false },
+    { label: 'Greeks', greek: true },
   ] as const
 
   return (
@@ -41,11 +38,9 @@ export function ColumnConfigDropdown({
           <span className="sr-only">Column settings</span>
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-48 max-h-[70vh] overflow-y-auto">
+      <DropdownMenuContent align="end" className="w-52 max-h-[70vh] overflow-y-auto">
         {groups.map((group, index) => {
-          const columns = COLUMN_DEFINITIONS.filter(
-            (col) => col.side === group.side && Boolean(col.isGreek) === group.greek
-          )
+          const columns = LOGICAL_COLUMNS.filter((col) => col.isGreek === group.greek)
           if (columns.length === 0) return null
 
           return (
@@ -54,9 +49,9 @@ export function ColumnConfigDropdown({
               <DropdownMenuLabel>{group.label}</DropdownMenuLabel>
               {columns.map((col) => (
                 <DropdownMenuCheckboxItem
-                  key={col.key}
-                  checked={isColumnVisible(col.key)}
-                  onCheckedChange={() => onToggleColumn(col.key)}
+                  key={col.label}
+                  checked={col.keys.some((key) => visibleColumns.includes(key))}
+                  onCheckedChange={() => onToggleColumn(col.keys)}
                 >
                   {col.label}
                 </DropdownMenuCheckboxItem>

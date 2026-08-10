@@ -26,7 +26,8 @@ interface UseOptionChainPreferencesReturn {
   barDataSource: BarDataSource
   barStyle: BarStyle
   setViewMode: (mode: ViewMode) => void
-  toggleColumn: (columnKey: ColumnKey) => void
+  /** Accepts a CE/PE pair so one click hides a column from both sides */
+  toggleColumn: (columnKey: ColumnKey | ColumnKey[]) => void
   reorderColumns: (newOrder: ColumnKey[]) => void
   setStrikeCount: (count: number) => void
   setSelectedUnderlying: (underlying: string) => void
@@ -172,19 +173,25 @@ export function useOptionChainPreferences(): UseOptionChainPreferencesReturn {
   }, [])
 
   const toggleColumn = useCallback(
-    (columnKey: ColumnKey) => {
+    (columnKey: ColumnKey | ColumnKey[]) => {
       // Don't allow hiding the strike column
-      if (columnKey === 'strike') {
+      const keys: ColumnKey[] = (Array.isArray(columnKey) ? columnKey : [columnKey]).filter(
+        (key) => key !== 'strike'
+      )
+      if (keys.length === 0) {
         return
       }
 
       updateActiveMode((mode) => {
-        const isVisible = mode.visibleColumns.includes(columnKey)
+        // Drive every key to the same target rather than flipping each on its
+        // own, so a CE/PE pair that has drifted out of sync converges instead
+        // of swapping which side is visible.
+        const anyVisible = keys.some((key) => mode.visibleColumns.includes(key))
+        const remaining = mode.visibleColumns.filter((key) => !keys.includes(key))
+
         return {
           ...mode,
-          visibleColumns: isVisible
-            ? mode.visibleColumns.filter((key) => key !== columnKey)
-            : [...mode.visibleColumns, columnKey],
+          visibleColumns: anyVisible ? remaining : [...remaining, ...keys],
         }
       })
     },
