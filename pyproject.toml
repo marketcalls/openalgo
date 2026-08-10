@@ -1,7 +1,7 @@
 [project]
 requires-python = ">=3.12"
 name = "openalgoUI"
-version = "2.0.1.6"
+version = "2.0.1.9"
 description = "Broker-agnostic open-source trading automation"
 dependencies = [
   "aniso8601==9.0.1",
@@ -24,7 +24,7 @@ dependencies = [
   "click==8.4.1",
   "colorama==0.4.6",
   "comm==0.2.3",
-  "cryptography==48.0.1",
+  "cryptography==50.0.0",
   "darkdetect==0.8.0",
   "debugpy==1.8.21",
   "decorator==5.3.1",
@@ -45,8 +45,8 @@ dependencies = [
   "Flask-WTF==1.3.0",
   "greenlet==3.3.2",
   "h11==0.16.0",
-  "h2==4.3.0",
-  "hpack==4.1.0",
+  "h2==4.4.1",
+  "hpack==4.2.0",
   "httpcore==1.0.9",
   "httpx[http2]==0.28.1",
   "httpx-sse==0.4.3",
@@ -151,6 +151,7 @@ dependencies = [
   "zipp==3.23.1",
   "zmq==0.0.0",
   "opengreeks>=0.2.0",
+  "openstatz==0.4.1",
 ]
 
 [build-system]
@@ -198,6 +199,9 @@ packages = []
 
 # Pytest configuration
 [tool.pytest.ini_options]
+# The repo root must be importable: tests import `services`, `database`, and
+# `utils` directly, which otherwise only works if PYTHONPATH is set by hand.
+pythonpath = ["."]
 testpaths = ["test"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
@@ -220,6 +224,10 @@ filterwarnings = [
 analysis = [
     "dash>=4.4.1",
     "dash-bootstrap-components>=2.0.4",
+    # Pulled in transitively via streamlit; pinned here to satisfy Dependabot's
+    # advisory on the lockfile (GitPython <=3.1.56 -> >=3.1.57). Nothing in the
+    # main dependency list uses it, so this never reaches a production install.
+    "gitpython>=3.1.57",
     "ipywidgets>=8.1.8",
     "matplotlib>=3.11.1",
     "scipy>=1.18.0",

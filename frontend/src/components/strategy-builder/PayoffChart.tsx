@@ -82,6 +82,10 @@ export function PayoffChart({
     const band = (n: number) => ({ lo: spot - n * sigmaMove, hi: spot + n * sigmaMove })
     const b1 = band(1)
     const b2 = band(2)
+    const domainLo = xs[0]
+    const domainHi = xs[xs.length - 1]
+    const inDomain = (x: number) => x >= domainLo && x <= domainHi
+    const clipToDomain = (x: number) => Math.min(domainHi, Math.max(domainLo, x))
 
     const traces: PlotlyTypes.Data[] = [
       {
@@ -152,47 +156,32 @@ export function PayoffChart({
     // overlays on top of it, producing a visually distinct inner (darker)
     // and outer (lighter) zone rather than one uniform wash.
     if (sigmaMove > 0) {
+      const pushBand = (x0: number, x1: number, fillcolor: string) => {
+        const clippedX0 = clipToDomain(x0)
+        const clippedX1 = clipToDomain(x1)
+        if (clippedX1 <= clippedX0) return
+        shapes.push({
+          type: 'rect',
+          xref: 'x',
+          x0: clippedX0,
+          x1: clippedX1,
+          yref: 'paper',
+          y0: 0,
+          y1: 1,
+          fillcolor,
+          line: { width: 0 },
+          layer: 'below',
+        })
+      }
       // Left outer band: from -2σ to -1σ
-      shapes.push({
-        type: 'rect',
-        xref: 'x',
-        x0: b2.lo,
-        x1: b1.lo,
-        yref: 'paper',
-        y0: 0,
-        y1: 1,
-        fillcolor: colors.sigma2Band,
-        line: { width: 0 },
-        layer: 'below',
-      })
+      pushBand(b2.lo, b1.lo, colors.sigma2Band)
       // Right outer band: from +1σ to +2σ
-      shapes.push({
-        type: 'rect',
-        xref: 'x',
-        x0: b1.hi,
-        x1: b2.hi,
-        yref: 'paper',
-        y0: 0,
-        y1: 1,
-        fillcolor: colors.sigma2Band,
-        line: { width: 0 },
-        layer: 'below',
-      })
+      pushBand(b1.hi, b2.hi, colors.sigma2Band)
       // Inner 1σ band
-      shapes.push({
-        type: 'rect',
-        xref: 'x',
-        x0: b1.lo,
-        x1: b1.hi,
-        yref: 'paper',
-        y0: 0,
-        y1: 1,
-        fillcolor: colors.sigma1Band,
-        line: { width: 0 },
-        layer: 'below',
-      })
+      pushBand(b1.lo, b1.hi, colors.sigma1Band)
       // Thin vertical ticks at each σ boundary
       for (const x of [b2.lo, b1.lo, b1.hi, b2.hi]) {
+        if (!inDomain(x)) continue
         shapes.push({
           type: 'line',
           xref: 'x',
@@ -241,6 +230,7 @@ export function PayoffChart({
         { x: b2.hi, text: '+2σ' },
       ]
       for (const s of sigmaLabels) {
+        if (!inDomain(s.x)) continue
         annotations.push({
           x: s.x,
           y: 1.06,
@@ -306,6 +296,7 @@ export function PayoffChart({
         tickfont: { color: colors.text, size: 10 },
         gridcolor: colors.grid,
         zeroline: false,
+        range: [xs[0], xs[xs.length - 1]],
       },
       yaxis: {
         title: { text: 'Profit / Loss (₹)', font: { color: colors.text, size: 12 } },

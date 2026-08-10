@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
 import { Providers } from '@/app/providers'
 import { AuthSync } from '@/components/auth/AuthSync'
 import { FullWidthLayout } from '@/components/layout/FullWidthLayout'
@@ -11,6 +11,11 @@ import { useBrokerStore } from '@/stores/brokerStore'
 // Lazy load all pages for code splitting
 // Public pages
 const Home = lazy(() => import('@/pages/Home'))
+const PortfolioBacktester = lazy(() => import('@/pages/PortfolioBacktester'))
+const PortfolioBacktesterResults = lazy(() => import('@/pages/PortfolioBacktesterResults'))
+const SipBacktester = lazy(() => import('@/pages/SipBacktester'))
+const SipBacktesterResults = lazy(() => import('@/pages/SipBacktesterResults'))
+const PortfolioAnalyzer = lazy(() => import('@/pages/PortfolioAnalyzer'))
 const Faq = lazy(() => import('@/pages/Faq'))
 const Setup = lazy(() => import('@/pages/Setup'))
 const Login = lazy(() => import('@/pages/Login'))
@@ -191,6 +196,23 @@ function App() {
                 {/* Phase 4: Charts & Webhook Configuration */}
                 <Route path="/platforms" element={<Platforms />} />
                 <Route path="/tradingview" element={<TradingView />} />
+                <Route path="/portfolio-backtester" element={<PortfolioBacktester />} />
+                <Route
+                  path="/portfolio-backtester/results"
+                  element={<PortfolioBacktesterResults />}
+                />
+                {/* The page moved: /portfolio was ambiguous next to the
+                    analyzer. Redirect rather than 404 an existing bookmark. */}
+                <Route
+                  path="/portfolio"
+                  element={<Navigate to="/portfolio-backtester" replace />}
+                />
+                <Route path="/sip-backtester" element={<SipBacktester />} />
+                <Route
+                  path="/sip-backtester/results"
+                  element={<SipBacktesterResults />}
+                />
+                <Route path="/portfolio-analyzer" element={<PortfolioAnalyzer />} />
                 <Route path="/gocharting" element={<GoCharting />} />
                 <Route path="/pnl-tracker" element={<PnLTracker />} />
                 {/* Phase 4: Sandbox & Analyzer */}

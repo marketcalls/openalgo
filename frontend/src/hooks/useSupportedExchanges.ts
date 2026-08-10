@@ -65,11 +65,14 @@ export function useSupportedExchanges() {
       .map((e) => ({ value: e, label: e }))
 
     // Exchanges shown inside /tools pages (Strategy Builder, Option Chain,
-    // OI Tracker, Straddle Chart, Custom Straddle etc.). MCX and CDS are
-    // temporarily excluded — the option chain + quotes plumbing doesn't
-    // fully support them yet. CRYPTO is retained for crypto-only brokers.
+    // OI Tracker, Straddle Chart, Custom Straddle etc.).
+    //
+    // MCX is now included: commodity options have no tradable spot, and the
+    // backend resolves the near-month future as the pricing reference instead,
+    // so chains, quotes and expiries all work. CDS stays out because currency
+    // derivatives are not a retail product here, not because of any gap.
     const toolsFnoExchanges: ExchangeOption[] = fnoExchanges.filter(
-      (e) => e.value !== 'MCX' && e.value !== 'CDS'
+      (e) => e.value !== 'CDS'
     )
 
     // Defaults
@@ -93,8 +96,9 @@ export function useSupportedExchanges() {
       /** Broker-reported F&O exchanges (NFO, BFO, MCX, CDS, CRYPTO). */
       fnoExchanges,
       /**
-       * F&O exchanges allowed in /tools pages today — NFO, BFO, CRYPTO only.
-       * Prefer this over `fnoExchanges` in every route under /tools/* .
+       * F&O exchanges shown in /tools pages: everything the broker reports
+       * except CDS, which retail traders do not deal in. Prefer this over
+       * `fnoExchanges` in every route under /tools/* .
        */
       toolsFnoExchanges,
       /** First trading exchange */

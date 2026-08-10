@@ -6,6 +6,21 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _to_float(value, default=0.0):
+    """Angel's SmartAPI returns numeric fields (netqty, avgnetprice, ltp, pnl, ...)
+    as JSON strings. Coerce to float so downstream arithmetic (e.g. summing P&L)
+    doesn't silently fall back to string concatenation.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_int(value, default=0):
+    return int(_to_float(value, default))
+
+
 def map_order_data(order_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
@@ -224,10 +239,10 @@ def transform_positions_data(positions_data):
             "symbol": position.get("tradingsymbol", ""),
             "exchange": position.get("exchange", ""),
             "product": position.get("producttype", ""),
-            "quantity": position.get("netqty", 0),
-            "average_price": position.get("avgnetprice", 0.0),
-            "ltp": position.get("ltp", 0.0),
-            "pnl": position.get("pnl", 0.0),
+            "quantity": _to_int(position.get("netqty", 0)),
+            "average_price": _to_float(position.get("avgnetprice", 0.0)),
+            "ltp": _to_float(position.get("ltp", 0.0)),
+            "pnl": _to_float(position.get("pnl", 0.0)),
         }
         transformed_data.append(transformed_position)
     return transformed_data
@@ -239,10 +254,10 @@ def transform_holdings_data(holdings_data):
         transformed_position = {
             "symbol": holdings.get("tradingsymbol", ""),
             "exchange": holdings.get("exchange", ""),
-            "quantity": holdings.get("quantity", 0),
+            "quantity": _to_int(holdings.get("quantity", 0)),
             "product": holdings.get("product", ""),
-            "pnl": holdings.get("profitandloss", 0.0),
-            "pnlpercent": holdings.get("pnlpercentage", 0.0),
+            "pnl": _to_float(holdings.get("profitandloss", 0.0)),
+            "pnlpercent": _to_float(holdings.get("pnlpercentage", 0.0)),
         }
         transformed_data.append(transformed_position)
     return transformed_data

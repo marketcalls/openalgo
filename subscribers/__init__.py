@@ -106,6 +106,27 @@ def register_all():
     bus.subscribe("multiorder.completed", telegram_subscriber.on_multiorder_completed, "telegram:multiorder_completed")
     bus.subscribe("multiorder.completed", whatsapp_subscriber.on_multiorder_completed, "whatsapp:multiorder_completed")
 
+    # --- GTT ---
+    # Previously unsubscribed entirely, so the whole GTT surface was invisible:
+    # placements, modifications, cancellations and triggers produced no log row,
+    # no UI refresh and no alert. Only failures were recorded, and only because
+    # they route through analyzer.error. This applies to live and analyze alike -
+    # both publish the same topics.
+    for _topic, _name in (
+        ("gtt.placed", "gtt_placed"),
+        ("gtt.failed", "gtt_failed"),
+        ("gtt.modified", "gtt_modified"),
+        ("gtt.modify_failed", "gtt_modify_failed"),
+        ("gtt.cancelled", "gtt_cancelled"),
+        ("gtt.cancel_failed", "gtt_cancel_failed"),
+        ("gtt.triggered", "gtt_triggered"),
+        ("gtt.expired", "gtt_expired"),
+    ):
+        bus.subscribe(_topic, getattr(log_subscriber, f"on_{_name}"), f"log:{_name}")
+        bus.subscribe(_topic, getattr(socketio_subscriber, f"on_{_name}"), f"socketio:{_name}")
+        bus.subscribe(_topic, getattr(telegram_subscriber, f"on_{_name}"), f"telegram:{_name}")
+        bus.subscribe(_topic, getattr(whatsapp_subscriber, f"on_{_name}"), f"whatsapp:{_name}")
+
     # --- analyzer.error ---
     bus.subscribe("analyzer.error", log_subscriber.on_analyzer_error, "log:analyzer_error")
     bus.subscribe("analyzer.error", socketio_subscriber.on_analyzer_error, "socketio:analyzer_error")

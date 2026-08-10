@@ -147,8 +147,16 @@ def place_order_api(data, auth_token):
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
-    token_id = get_token(data["symbol"], data["exchange"])
-    newdata = transform_data(data, token_id)
+    # Payload construction can reject the order before any network call — an
+    # SL-M with no trigger, or one whose tick size is unresolvable (see
+    # mapping/transform_data.py::_slm_protected_price). Return the same error
+    # shape as the request failures below instead of raising past the caller.
+    try:
+        token_id = get_token(data["symbol"], data["exchange"])
+        newdata = transform_data(data, token_id)
+    except Exception as e:
+        logger.error(f"Error building Kotak order payload: {e}")
+        return None, {"stat": "Not_Ok", "emsg": str(e)}, None
 
     json_string = json.dumps(newdata)
     payload = f"jData={urllib.parse.quote(json_string)}"
@@ -380,8 +388,14 @@ def modify_order(data, auth_token):
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
-    token_id = get_token(data["symbol"], data["exchange"])
-    newdata = transform_modify_order_data(data, token_id)
+    # Same pre-flight rejection as placement (SL-M without a usable trigger or
+    # tick size) — surface it as an error response, not an exception.
+    try:
+        token_id = get_token(data["symbol"], data["exchange"])
+        newdata = transform_modify_order_data(data, token_id)
+    except Exception as e:
+        logger.error(f"Error building Kotak modify payload: {e}")
+        return {"status": "error", "message": str(e)}, 400
 
     logger.debug(f"MODIFY ORDER - Transformed data: {newdata}")
 

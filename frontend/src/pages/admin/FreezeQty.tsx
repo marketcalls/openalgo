@@ -1,6 +1,6 @@
 import { ArrowLeft, Pencil, Plus, Save, Search, Snowflake, Trash2, Upload, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { adminApi } from '@/api/admin'
 import {
   AlertDialog,

@@ -25,7 +25,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { authApi } from '@/api/auth'
 import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
 import { Badge } from '@/components/ui/badge'
@@ -347,7 +347,7 @@ export default function HistorifyCharts() {
               const minutes = istDate.getUTCMinutes().toString().padStart(2, '0')
               return `${hours}:${minutes}`
             } else {
-              // For daily and above: TradingView-style tick marks
+              // For daily and above: calendar-aligned tick marks
               // tickMarkType: 0=Year, 1=Month, 2=DayOfMonth, 3=Time, 4=TimeWithSeconds
               const day = istDate.getUTCDate()
               const monthNames = [

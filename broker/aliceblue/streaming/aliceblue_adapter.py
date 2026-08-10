@@ -104,7 +104,13 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if auth_data:
                 api_key = auth_data.get("api_key")
                 session_id = auth_data.get("session_id")
-                self.logger.info(f"Using auth_data: api_key={api_key}, session_id={session_id}")
+                # Never log api_key or session_id: session_id is the JWT the
+                # susertoken is derived from, so printing it hands over the
+                # WebSocket credential to anyone reading the console or a
+                # pasted log. Presence only.
+                self.logger.info(
+                    f"Using auth_data: api_key=[REDACTED], session_id present={bool(session_id)}"
+                )
                 # For WebSocket auth, client_id should be the BROKER_API_KEY (user_id from credentials)
                 self.client_id = api_key  # This should be the BROKER_API_KEY value like '1412368'
                 # Store session_id (JWT) for WebSocket authentication
@@ -115,8 +121,14 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Fetch authentication tokens from database
                 auth_token = get_auth_token(user_id, bypass_cache=True)
                 feed_token = get_feed_token(user_id)
-                self.logger.info(f"From database: auth_token=[REDACTED], feed_token={feed_token}")
-                self.logger.info(f"feed_token type: {type(feed_token)}, value: {repr(feed_token)}")
+                # Feed tokens are credentials too - CLAUDE.md lists them
+                # alongside API keys and auth tokens as never-log. Report
+                # presence and type, which is what the debugging below needs.
+                self.logger.info(
+                    f"From database: auth_token=[REDACTED], "
+                    f"feed_token=[REDACTED] (present={bool(feed_token)}, "
+                    f"type={type(feed_token).__name__})"
+                )
 
                 if not auth_token:
                     self.logger.error(f"No authentication tokens found for user {user_id}")
@@ -328,11 +340,13 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Second SHA256 hash of the first hash
             susertoken = hashlib.sha256(sha256_encryption1.encode("utf-8")).hexdigest()
 
-            self.logger.info("Generating susertoken from session_id (JWT)")
-            self.logger.info(f"Session ID (first 50 chars): {self.session_id[:50]}...")
-            self.logger.info(f"Session ID length: {len(self.session_id)}")
-            self.logger.info(f"First SHA256: {sha256_encryption1}")
-            self.logger.info(f"Final susertoken: {susertoken}")
+            # susertoken IS the WebSocket credential and the intermediate hash
+            # is one SHA-256 away from it, so neither is logged - nor any slice
+            # of the source JWT. Length alone is enough to tell "empty/truncated
+            # session" apart from "auth rejected" when debugging.
+            self.logger.info(
+                f"Generated susertoken from session_id (JWT length {len(self.session_id)})"
+            )
 
             auth_msg = {
                 "susertoken": susertoken,

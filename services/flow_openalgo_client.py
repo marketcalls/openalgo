@@ -205,6 +205,8 @@ class FlowOpenAlgoClient:
         Args:
             orders: List of order dicts with symbol, exchange, action, quantity, etc.
             strategy: Strategy name for tracking
+            trigger_price: Trigger price for SL / SL-M orders (declared last so
+                existing positional callers keep working)
         """
         from services.basket_order_service import place_basket_order
 
@@ -269,9 +271,26 @@ class FlowOpenAlgoClient:
         interval: str,
         start_date: str = None,
         end_date: str = None,
+        source: str = "api",
     ) -> dict[str, Any]:
-        """Get historical data for a symbol"""
+        """Get historical data for a symbol.
+
+        interval accepts any value the connected broker's `/api/v1/intervals`
+        reports (not a fixed enum) - use the Intervals node to discover them.
+        source="db" routes to the local Historify DuckDB store instead of the
+        broker API, which additionally supports custom research intervals
+        (2m, 4m, W, M, Q) the live broker feed doesn't offer.
+        """
         from services.history_service import get_history
+
+        if source == "db" and not (start_date and end_date):
+            # get_history_from_db feeds these straight into datetime.strptime,
+            # which raises TypeError on None and surfaces as an opaque 500.
+            return {
+                "status": "error",
+                "code": 400,
+                "error": "source='db' requires both start_date and end_date (YYYY-MM-DD)",
+            }
 
         success, response, status_code = get_history(
             symbol=symbol,
@@ -280,6 +299,7 @@ class FlowOpenAlgoClient:
             start_date=start_date,
             end_date=end_date,
             api_key=self.api_key,
+            source=source,
         )
         return self._handle_response(success, response, status_code)
 
@@ -403,6 +423,8 @@ class FlowOpenAlgoClient:
         price: float = 0,
         splitsize: int = 0,
         strategy: str = "flow_workflow",
+        # Appended last so existing positional callers keep working.
+        trigger_price: float = 0,
     ) -> dict[str, Any]:
         """Place an options order with ATM/ITM/OTM offset resolution
 
@@ -435,6 +457,7 @@ class FlowOpenAlgoClient:
             "pricetype": price_type,
             "product": product,
             "price": price,
+            "trigger_price": trigger_price,
             "splitsize": splitsize,
         }
 
@@ -481,49 +504,97 @@ class FlowOpenAlgoClient:
 
     # --- Market Calendar ---
 
-    def holidays(self, exchange: str = "NSE") -> dict[str, Any]:
-        """Get market holidays"""
+    def holidays(self, year: int | None = None) -> dict[str, Any]:
+        """Get market holidays for a year (defaults to the current year)."""
         from services.market_calendar_service import get_holidays
 
-        success, response, status_code = get_holidays(exchange=exchange, api_key=self.api_key)
+        success, response, status_code = get_holidays(year=year)
         return self._handle_response(success, response, status_code)
 
-    def timings(self, exchange: str = "NSE") -> dict[str, Any]:
-        """Get market timings"""
+    def timings(self, date_str: str) -> dict[str, Any]:
+        """Get market timings for a date (YYYY-MM-DD)."""
         from services.market_calendar_service import get_timings
 
-        success, response, status_code = get_timings(exchange=exchange, api_key=self.api_key)
+        success, response, status_code = get_timings(date_str)
         return self._handle_response(success, response, status_code)
 
     # --- Margin ---
 
     def margin(
         self,
-        symbol: str,
-        exchange: str,
-        quantity: int,
+        symbol: str = "",
+        exchange: str = "NSE",
+        quantity: int = 0,
         price: float = 0,
         product_type: str = "MIS",
         action: str = "BUY",
         price_type: str = "MARKET",
+        positions: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Get margin required for an order"""
-        from services.margin_service import get_margin
+        """Margin required for one position, or for a basket.
 
-        order_data = {
-            "symbol": symbol,
-            "exchange": exchange,
-            "quantity": str(quantity),  # Schema expects string
-            "price": str(price),  # Schema expects string
-            "product": product_type,  # Schema expects 'product' not 'product_type'
-            "pricetype": price_type,  # Schema expects 'pricetype' (no underscore)
-            "action": action.upper(),
-        }
+        The service calculates a basket, so a single position is sent as a
+        one-element array. `positions` takes precedence when supplied.
+        """
+        from services.margin_service import calculate_margin
 
-        success, response, status_code = get_margin(order_data, api_key=self.api_key)
+        if not positions:
+            positions = [
+                {
+                    "exchange": exchange,
+                    "symbol": symbol,
+                    "action": action.upper(),
+                    "quantity": str(quantity),
+                    "product": product_type,
+                    "pricetype": price_type,
+                    "price": str(price),
+                }
+            ]
+
+        margin_data = {"apikey": self.api_key, "positions": positions}
+        success, response, status_code = calculate_margin(margin_data, api_key=self.api_key)
         return self._handle_response(success, response, status_code)
 
     # --- Alerts ---
+
+    def whatsapp(self, message: str, to: str | None = None) -> dict[str, Any]:
+        """Send a WhatsApp text message via the paired bot device.
+
+        `to` is E.164-style digits (e.g. "919876543210"); empty/None sends
+        to the paired device's own number (self). Mirrors `telegram()`'s
+        shape but calls WhatsAppBotService directly since /api/v1/whatsapp
+        has no single service-layer facade function (see
+        docs/prompt/services_documentation.md — whatsapp is REST-only).
+        """
+        from services.whatsapp_bot_service import (
+            normalize_phone,
+            phone_to_jid,
+            whatsapp_bot_service,
+        )
+
+        try:
+            if not whatsapp_bot_service.is_ready():
+                return {
+                    "status": "error",
+                    "error": "WhatsApp is not paired or not connected. Pair the device from /whatsapp.",
+                }
+
+            target = None
+            if to:
+                digits = normalize_phone(to)
+                if not digits:
+                    return {"status": "error", "error": f"Invalid WhatsApp phone number: {to}"}
+                target = [phone_to_jid(digits)]
+
+            report = whatsapp_bot_service.send_sync(to=target, text=message)
+            if report.get("failed"):
+                return {"status": "error", "error": report["failed"][0].get("error", "send failed"),
+                        "data": report}
+            return {"status": "success", "data": report}
+
+        except Exception as e:
+            logger.exception(f"Error sending WhatsApp alert: {e}")
+            return {"status": "error", "error": str(e)}
 
     def telegram(self, message: str) -> dict[str, Any]:
         """Send a Telegram alert using existing telegram_alert_service"""

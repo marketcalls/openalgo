@@ -589,7 +589,6 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Unsubscribe from market data."""
         try:
             key = f"{exchange}:{symbol}"
-            is_index = NubraExchangeMapper.is_index_exchange(exchange)
 
             with self.lock:
                 if key not in self.subscribed_symbols:

@@ -1,6 +1,6 @@
 import { ArrowLeft, FileText, Plus, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router'
 import { strategyApi } from '@/api/strategy'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
