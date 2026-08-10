@@ -7,6 +7,8 @@ import StrategyBuilder from './StrategyBuilder'
 
 const mocks = vi.hoisted(() => ({
   apiPost: vi.fn(),
+  fetchRequests: [] as Array<{ url: string; body: Record<string, unknown> }>,
+  marketData: new Map(),
   getExpiries: vi.fn(),
   getOptionChain: vi.fn(),
   getPortfolioEntry: vi.fn(),
@@ -38,6 +40,15 @@ vi.mock('@/api/strategy-portfolio', () => ({
 
 vi.mock('@/stores/authStore', () => ({
   useAuthStore: () => ({ apiKey: 'test-api-key' }),
+}))
+
+vi.mock('@/hooks/useMarketData', () => ({
+  useMarketData: () => ({
+    data: mocks.marketData,
+    isConnected: false,
+    isAuthenticated: false,
+    isPaused: false,
+  }),
 }))
 
 vi.mock('@/components/strategy-builder/PayoffChart', () => ({ PayoffChart: () => null }))
@@ -190,6 +201,9 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+  mocks.fetchRequests.length = 0
+  mocks.marketData = new Map()
   mocks.getUnderlyings.mockResolvedValue({
     status: 'success',
     underlyings: ['NIFTY', 'BANKNIFTY', 'RELIANCE'],
@@ -203,6 +217,18 @@ beforeEach(() => {
   mocks.getOptionChain.mockImplementation(
     async (_apiKey: string, underlying: string, _exchange: string, expiry: string) =>
       chainFixture(underlying, expiry)
+  )
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const body = init?.body ? JSON.parse(String(init.body)) : {}
+      mocks.fetchRequests.push({ url, body })
+      return new Response(
+        JSON.stringify(chainFixture(String(body.underlying), String(body.expiry_date))),
+        { status: 200 }
+      )
+    })
   )
   mocks.apiPost.mockImplementation(async (url: string) => {
     if (url === '/optiongreeks') {
@@ -221,13 +247,105 @@ beforeEach(() => {
   })
 })
 
+function requests(path: string): unknown[] {
+  const fetchCalls = mocks.fetchRequests.filter(({ url }) => url === path)
+  const clientCalls = mocks.apiPost.mock.calls.filter(([url]) => `/api/v1${url}` === path)
+  return [...fetchCalls, ...clientCalls]
+}
+
+describe('StrategyBuilder live request orchestration', () => {
+  it('loads market state through one option-chain request without redundant snapshot calls', async () => {
+    renderBuilder()
+
+    await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(1))
+    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+
+    expect(screen.getByText('Stale')).toBeInTheDocument()
+    expect(screen.queryByText('Live')).not.toBeInTheDocument()
+    expect(requests('/api/v1/syntheticfuture')).toHaveLength(0)
+    expect(requests('/api/v1/optiongreeks')).toHaveLength(0)
+    expect(requests('/api/v1/multioptiongreeks')).toHaveLength(0)
+  })
+
+  it('does not repeat an unchanged margin request when support is confirmed', async () => {
+    const firstMargin = deferred<{
+      status: number
+      data: { status: string; data: { total_margin_required: number } }
+    }>()
+    mocks.apiPost.mockImplementation(async (url: string) => {
+      if (url === '/margin') return firstMargin.promise
+      return { status: 200, data: { status: 'success' } }
+    })
+
+    renderBuilder()
+    await addOneLeg()
+    await waitFor(() => expect(requests('/api/v1/margin')).toHaveLength(1), { timeout: 2_000 })
+
+    await act(async () => {
+      firstMargin.resolve({
+        status: 200,
+        data: { status: 'success', data: { total_margin_required: 10_000 } },
+      })
+      await firstMargin.promise
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 550))
+    expect(requests('/api/v1/margin')).toHaveLength(1)
+  })
+
+  it('immediately refetches the live chain when the page becomes visible again', async () => {
+    renderBuilder()
+    await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(1))
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+
+    await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(2))
+  })
+
+  it('refreshes live market state without overwriting the leg entry price', async () => {
+    let ltp = 125
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const body = JSON.parse(String(init?.body)) as Record<string, string>
+      mocks.fetchRequests.push({ url, body })
+      const response = chainFixture(body.underlying, body.expiry_date)
+      response.underlying_ltp = ltp === 125 ? 24_600 : 24_700
+      if (response.chain[0].ce) {
+        response.chain[0].ce.ltp = ltp
+        response.chain[0].ce.implied_volatility = ltp === 125 ? 12 : 20
+      }
+      return new Response(JSON.stringify(response), { status: 200 })
+    })
+
+    renderBuilder()
+    await addOneLeg()
+    expect(screen.getAllByText('₹125.00').length).toBeGreaterThan(0)
+
+    ltp = 175
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(2))
+    await screen.findByText('24700.00')
+
+    expect(screen.getAllByText('₹125.00').length).toBeGreaterThan(0)
+  })
+})
+
 describe('StrategyBuilder identity orchestration', () => {
   it('disables Add immediately when expiry changes until the matching chain arrives', async () => {
     const nextChain = deferred<OptionChainResponse>()
-    mocks.getOptionChain.mockImplementation(
-      async (_apiKey: string, underlying: string, _exchange: string, expiry: string) =>
-        expiry === '18AUG26' ? nextChain.promise : chainFixture(underlying, expiry)
-    )
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const body = JSON.parse(String(init?.body)) as Record<string, string>
+      mocks.fetchRequests.push({ url, body })
+      const chain =
+        body.expiry_date === '18AUG26'
+          ? await nextChain.promise
+          : chainFixture(body.underlying, body.expiry_date)
+      return new Response(JSON.stringify(chain), { status: 200 })
+    })
 
     renderBuilder()
     const add = await screen.findByRole('button', { name: /Add Buy/ })
@@ -340,13 +458,18 @@ describe('StrategyBuilder identity orchestration', () => {
           ? optionExpiries.promise
           : { status: 'success', data: ['27AUG26'] }
     )
-    mocks.getOptionChain.mockReturnValue(savedChain.promise)
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      mocks.fetchRequests.push({ url, body })
+      return new Response(JSON.stringify(await savedChain.promise), { status: 200 })
+    })
 
     renderBuilder('/strategybuilder?load=17')
 
     expect(mocks.getUnderlyings).not.toHaveBeenCalled()
     expect(mocks.getExpiries).not.toHaveBeenCalled()
-    expect(mocks.getOptionChain).not.toHaveBeenCalled()
+    expect(requests('/api/v1/optionchain')).toHaveLength(0)
 
     await act(async () => {
       portfolio.resolve(savedRelianceStrategy())
@@ -363,7 +486,7 @@ describe('StrategyBuilder identity orchestration', () => {
       optionExpiries.resolve({ status: 'success', data: ['13AUG26', '18AUG26'] })
       await Promise.all([underlyings.promise, optionExpiries.promise])
     })
-    await waitFor(() => expect(mocks.getOptionChain).toHaveBeenCalled())
+    await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(1))
 
     await act(async () => {
       savedChain.resolve(chainFixture('RELIANCE', '18AUG26'))

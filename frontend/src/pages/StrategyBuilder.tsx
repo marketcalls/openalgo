@@ -42,11 +42,13 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useOptionChainLive } from '@/hooks/useOptionChainLive'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import {
   type ChainIdentity,
   chainIdentity,
   chainMatches,
+  contractPriceKey,
   type ListedOptionChainResponse,
 } from '@/lib/strategyContracts'
 import {
@@ -99,9 +101,8 @@ interface PendingIdentityChange {
 /**
  * Serialize every broker-backed API call this page issues.
  *
- * The Strategy Builder fires roughly five requests in parallel on mount
- * (two `/expiry` calls, `/optionchain`, `/syntheticfuture`, and the ATM
- * `/optiongreeks` seed) plus more on leg edits. The backend's shared
+ * The remaining broker APIs on this page (expiry discovery, margin, and
+ * explicitly resolved cross-expiry contracts) share a backend HTTP client.
  * HTTP/2 httpx client occasionally races on stream reads when ~3+
  * requests multiplex simultaneously, surfacing as
  * ``[Errno 35] Resource temporarily unavailable``.
@@ -150,9 +151,6 @@ export default function StrategyBuilder() {
   const [selectedExpiry, setSelectedExpiry] = useState('')
 
   const [chainData, setChainData] = useState<ListedOptionChainResponse | null>(null)
-  const [atmIv, setAtmIv] = useState<number | null>(null)
-  const [futuresPrice, setFuturesPrice] = useState<number | null>(null)
-  const [isRefreshing, setIsRefreshing] = useState(false)
   const [legs, setLegs] = useState<StrategyLeg[]>([])
   const [direction, setDirection] = useState<Direction>('BULLISH')
 
@@ -163,7 +161,6 @@ export default function StrategyBuilder() {
   const [ivShiftPct, setIvShiftPct] = useState(0)
   const [daysElapsed, setDaysElapsed] = useState(0)
 
-  const [greeksByLeg, setGreeksByLeg] = useState<Record<string, LegGreeks>>({})
   const [payoffClock, setPayoffClock] = useState(() => Date.now())
 
   const [editLegId, setEditLegId] = useState<string | null>(null)
@@ -182,9 +179,10 @@ export default function StrategyBuilder() {
   // Basket execution dialog
   const [executeDialogOpen, setExecuteDialogOpen] = useState(false)
 
-  const requestIdRef = useRef(0)
   const marginGenerationRef = useRef(0)
+  const marginSupportedRef = useRef<boolean | null>(null)
   const hydratedIdentityRef = useRef<ChainIdentity | null>(null)
+  const receivedLiveIdentityRef = useRef<ChainIdentity | null>(null)
 
   const requestIdentity = useMemo<ChainIdentity>(
     () => ({
@@ -194,10 +192,67 @@ export default function StrategyBuilder() {
     }),
     [selectedExchange, selectedUnderlying, selectedExpiry]
   )
+
+  const liveEnabled =
+    !isHydrating &&
+    Boolean(apiKey && requestIdentity.underlying && requestIdentity.expiry) &&
+    expiries.includes(requestIdentity.expiry)
+  const {
+    data: liveData,
+    forwardPrice,
+    clockOffsetMs,
+    isLoading: isLiveLoading,
+    isStreaming,
+    isPaused,
+    lastUpdate,
+    refetch: refetchLiveChain,
+  } = useOptionChainLive(
+    apiKey,
+    requestIdentity.underlying,
+    underlyingExchangeFor(selectedExchange, requestIdentity.underlying),
+    requestIdentity.exchange,
+    requestIdentity.expiry,
+    20,
+    { enabled: liveEnabled, oiRefreshInterval: 30_000, pauseWhenHidden: true }
+  )
+
+  // Bind each received snapshot to the request identity that produced its poll.
+  // Depending only on lastUpdate is deliberate: selector changes must not retag
+  // the previous hook value with a new derivative exchange before polling resets.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: identity is captured only when a new poll timestamp arrives; including it would retag the prior snapshot during selector changes
+  useEffect(() => {
+    if (!lastUpdate) {
+      receivedLiveIdentityRef.current = null
+      setChainData(null)
+      return
+    }
+    receivedLiveIdentityRef.current = { ...requestIdentity }
+  }, [lastUpdate])
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: lastUpdate orders identity tagging before liveData is accepted, even though its value is read through receivedLiveIdentityRef
+  useEffect(() => {
+    const receivedIdentity = receivedLiveIdentityRef.current
+    if (!liveData || !receivedIdentity) {
+      setChainData(null)
+      return
+    }
+    const tagged: ListedOptionChainResponse = {
+      ...liveData,
+      exchange: receivedIdentity.exchange,
+    }
+    setChainData(chainMatches(tagged, receivedIdentity) ? tagged : null)
+  }, [liveData, lastUpdate])
+
   const activeChain = useMemo(
     () => (chainData && chainMatches(chainData, requestIdentity) ? chainData : null),
     [chainData, requestIdentity]
   )
+  const connectionStatus = useMemo<'live' | 'refreshing' | 'stale' | 'idle'>(() => {
+    if (isLiveLoading) return 'refreshing'
+    if (!activeChain) return 'idle'
+    const isRecent = lastUpdate !== null && payoffClock - lastUpdate.getTime() <= 60_000
+    return isStreaming && !isPaused && isRecent ? 'live' : 'stale'
+  }, [activeChain, isLiveLoading, isPaused, isStreaming, lastUpdate, payoffClock])
 
   // OpenAlgo-symbol → tick size map, built from the live option chain.
   // Powers per-leg price snapping in the Execute Basket dialog so options
@@ -228,28 +283,24 @@ export default function StrategyBuilder() {
 
   // Reset all expiry- / chain-derived state in the same event handler as the
   // underlying or exchange change so React batches them into a single render.
-  // Without this, dependent effects (`/optionchain`, `/syntheticfuture`, ...)
-  // get one frame where `selectedUnderlying` is new but `selectedExpiry` is
+  // Without this, dependent chain orchestration gets one frame where
+  // `selectedUnderlying` is new but `selectedExpiry` is
   // still the previous underlying's, and fire an invalid pair at the broker.
   // OptionChain uses the same pattern.
   const resetExpiryAndChainState = useCallback(() => {
-    requestIdRef.current += 1
     setExpiries([])
     setFutureExpiries([])
     setSelectedExpiry('')
     setChainData(null)
-    setAtmIv(null)
-    setFuturesPrice(null)
-    setIsRefreshing(false)
   }, [])
 
   const resetStrategyState = useCallback(() => {
     marginGenerationRef.current += 1
+    marginSupportedRef.current = null
     setLegs([])
     setSpotShiftPct(0)
     setIvShiftPct(0)
     setDaysElapsed(0)
-    setGreeksByLeg({})
     setMarginRequired(null)
     setMarginSupported(null)
     setIsMarginLoading(false)
@@ -302,12 +353,8 @@ export default function StrategyBuilder() {
     (next: string) => {
       const normalized = normalizeExpiryCode(next)
       if (normalized === normalizeExpiryCode(selectedExpiry)) return
-      requestIdRef.current += 1
       setSelectedExpiry(normalized)
       setChainData(null)
-      setAtmIv(null)
-      setFuturesPrice(null)
-      setIsRefreshing(false)
     },
     [selectedExpiry]
   )
@@ -371,8 +418,7 @@ export default function StrategyBuilder() {
   useEffect(() => {
     if (isHydrating || !apiKey || !selectedUnderlying) return
     // IMPORTANT: clear expiries + selectedExpiry + chainData synchronously
-    // BEFORE the fetch starts. Otherwise downstream effects (/optionchain,
-    // /syntheticfuture, /optiongreeks) see the previous underlying's
+    // BEFORE the fetch starts. Otherwise live-chain orchestration sees the previous underlying's
     // selectedExpiry (e.g. NIFTY's 21APR26) alongside the new
     // selectedUnderlying (BANKNIFTY) and fire an invalid (underlying,
     // expiry) request into the broker, which logs "No strikes found" until
@@ -395,8 +441,6 @@ export default function StrategyBuilder() {
     setFutureExpiries([])
     setSelectedExpiry(hydratedExpiry)
     setChainData(null)
-    setAtmIv(null)
-    setFuturesPrice(null)
     let cancelled = false
     ;(async () => {
       try {
@@ -444,139 +488,18 @@ export default function StrategyBuilder() {
     }
   }, [apiKey, selectedUnderlying, selectedExchange, isHydrating])
 
-  // Load option chain
-  const loadOptionChain = useCallback(async () => {
-    if (isHydrating || !apiKey || !requestIdentity.underlying || !requestIdentity.expiry) return
-    // Skip while the expiries list hasn't refreshed for the current
-    // underlying yet — e.g. after switching NIFTY → BANKNIFTY, the
-    // previous expiry (21APR26) isn't valid for BANKNIFTY.
-    if (expiries.length > 0 && !expiries.includes(requestIdentity.expiry)) return
-    const reqId = ++requestIdRef.current
-    const requestedIdentity = requestIdentity
-    setIsRefreshing(true)
-    try {
-      const exchange = underlyingExchangeFor(selectedExchange, requestedIdentity.underlying)
-      const data = await queuedFetch(() =>
-        optionChainApi.getOptionChain(
-          apiKey,
-          requestedIdentity.underlying,
-          exchange,
-          requestedIdentity.expiry,
-          20
-        )
-      )
-      if (reqId !== requestIdRef.current) return
-      if (data.status === 'success') {
-        const listedData: ListedOptionChainResponse = {
-          ...data,
-          // This is the derivative venue used for listed contracts. The response's
-          // underlying_exchange is only the market-reference venue.
-          exchange: requestedIdentity.exchange,
-        }
-        if (!chainMatches(listedData, requestedIdentity)) return
-        setChainData(listedData)
-        hydratedIdentityRef.current = null
-        // ATM IV: mid of CE/PE IV at ATM strike — we'll use the smile service later;
-        // for now compute via greeks of ATM CE once legs are known.
-      } else {
-        showToast.error(data.message || 'Failed to load option chain')
-      }
-    } catch (_err) {
-      showToast.error('Failed to load option chain')
-    } finally {
-      if (reqId === requestIdRef.current) setIsRefreshing(false)
-    }
-  }, [apiKey, selectedExchange, requestIdentity, expiries, isHydrating])
-
-  useEffect(() => {
-    loadOptionChain()
-  }, [loadOptionChain])
-
-  // Seed ATM IV directly from the ATM CE as soon as the chain loads.
-  // (The leg-Greeks fetch is gated on having at least one leg, so without this
-  // the ATM IV badge would stay blank until the user adds a position.)
-  useEffect(() => {
-    if (!apiKey || !activeChain || !activeChain.atm_strike) return
-    const atmRow = activeChain.chain.find((s) => s.strike === activeChain.atm_strike)
-    const atmSymbol = atmRow?.ce?.symbol
-    if (!atmSymbol) return
-    let cancelled = false
-    ;(async () => {
-      try {
-        const exchange = optionExchangeFor(selectedExchange)
-        const underlyingExchange = underlyingExchangeFor(selectedExchange, selectedUnderlying)
-        const res = await queuedFetch(() =>
-          apiClient.post<{
-            status: string
-            implied_volatility?: number
-          }>('/optiongreeks', {
-            apikey: apiKey,
-            symbol: atmSymbol,
-            exchange,
-            underlying_symbol: selectedUnderlying,
-            underlying_exchange: underlyingExchange,
-          })
-        )
-        if (cancelled) return
-        if (
-          res.data.status === 'success' &&
-          typeof res.data.implied_volatility === 'number' &&
-          res.data.implied_volatility > 0
-        ) {
-          setAtmIv(res.data.implied_volatility)
-        }
-      } catch {
-        /* non-fatal */
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [apiKey, activeChain, selectedExchange, selectedUnderlying])
-
-  // Load synthetic future for the selected expiry
-  useEffect(() => {
-    if (isHydrating || !apiKey || !selectedUnderlying || !selectedExpiry) return
-    // Double-check selectedExpiry is actually valid for the current
-    // underlying — the expiries-load effect clears selectedExpiry to ''
-    // at the start of an underlying switch, but if for any reason this
-    // effect runs before that clear propagates we skip rather than fire
-    // an invalid (underlying, expiry) pair at the broker.
-    if (expiries.length > 0 && !expiries.includes(selectedExpiry)) return
-    let cancelled = false
-    ;(async () => {
-      try {
-        const exchange = underlyingExchangeFor(selectedExchange, selectedUnderlying)
-        const expiryCode = normalizeExpiryCode(selectedExpiry)
-        const res = await queuedFetch(() =>
-          apiClient.post<{
-            status: string
-            synthetic_future_price?: number
-          }>('/syntheticfuture', {
-            apikey: apiKey,
-            underlying: selectedUnderlying,
-            exchange,
-            expiry_date: expiryCode,
-          })
-        )
-        if (cancelled) return
-        if (res.data.status === 'success' && res.data.synthetic_future_price) {
-          setFuturesPrice(res.data.synthetic_future_price)
-        } else {
-          setFuturesPrice(null)
-        }
-      } catch {
-        if (!cancelled) setFuturesPrice(null)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [apiKey, selectedExchange, selectedUnderlying, selectedExpiry, expiries, isHydrating])
-
   // Derived: ATM strike, lot size, spot
   const spotPrice = activeChain?.underlying_ltp ?? null
   const atmStrike = activeChain?.atm_strike ?? null
+  const futuresPrice = activeChain ? forwardPrice : null
+  const atmIv = useMemo(() => {
+    if (!activeChain) return null
+    const atmRow = activeChain.chain.find((row) => row.strike === activeChain.atm_strike)
+    const ivs = [atmRow?.ce?.implied_volatility, atmRow?.pe?.implied_volatility].filter(
+      (iv): iv is number => typeof iv === 'number' && iv > 0
+    )
+    return ivs.length > 0 ? ivs.reduce((sum, iv) => sum + iv, 0) / ivs.length : null
+  }, [activeChain])
   const lotSize = useMemo(() => {
     if (!activeChain?.chain) return null
     const atmRow = activeChain.chain.find((s) => s.strike === activeChain.atm_strike)
@@ -599,21 +522,25 @@ export default function StrategyBuilder() {
     const interval = window.setInterval(() => setPayoffClock(Date.now()), 60_000)
     return () => window.clearInterval(interval)
   }, [])
+  const marketClock = payoffClock + clockOffsetMs
 
   // DTE of the header-selected expiry (for the metadata badge only).
   const rawDays = useMemo(() => {
     if (!selectedExpiry) return null
+    if (activeChain?.expiry_ts) {
+      return Math.max(0, activeChain.expiry_ts * 1000 - marketClock) / 86_400_000
+    }
     const expiryCode = normalizeExpiryCode(selectedExpiry)
-    return daysToExpiry(expiryCode, new Date(payoffClock))
-  }, [selectedExpiry, payoffClock])
+    return daysToExpiry(expiryCode, new Date(marketClock))
+  }, [selectedExpiry, activeChain?.expiry_ts, marketClock])
 
   // For the payoff curve: "At Expiry" uses the NEAREST leg's days-to-expiry
   // so calendar / diagonal spreads render correctly (the far leg retains
   // remaining time value). Falls back to the header expiry when no legs yet.
   const nearestDays = useMemo(() => {
     if (legs.length === 0) return rawDays ?? 0
-    return nearestLegDays(legs, new Date(payoffClock))
-  }, [legs, rawDays, payoffClock])
+    return nearestLegDays(legs, new Date(marketClock))
+  }, [legs, rawDays, marketClock])
 
   // Simulator caps "days forward" to the nearest expiry so the T+0 slider
   // can't go past the first leg's expiration.
@@ -626,109 +553,93 @@ export default function StrategyBuilder() {
   // Shifted spot for the payoff calculations
   const simulatedSpot = spotPrice !== null ? spotPrice * (1 + spotShiftPct / 100) : 0
 
-  const greeksLegFingerprint = useMemo(
-    () =>
-      legs
-        .filter((leg) => leg.segment === 'OPTION' && leg.symbol)
-        .map((leg) => `${leg.id}:${leg.symbol}:${leg.active ? 1 : 0}`)
-        .join('|'),
-    [legs]
-  )
-
-  // Batch load Greeks for all legs (also used to fill ATM IV for the header)
-  // Refetch when the option contracts or their active state change, while
-  // ignoring payoff-neutral edits such as quantity, side, or entry premium.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: greeksLegFingerprint intentionally captures the contract fields read by this effect without refetching for every leg-object edit
-  useEffect(() => {
-    if (!apiKey || legs.length === 0) {
-      setGreeksByLeg({})
-      return
+  const liveContractsByKey = useMemo(() => {
+    const contracts = new Map<
+      string,
+      NonNullable<ListedOptionChainResponse['chain'][number]['ce']>
+    >()
+    if (!activeChain) return contracts
+    for (const row of activeChain.chain) {
+      if (row.ce) contracts.set(contractPriceKey(activeChain.exchange, row.ce.symbol), row.ce)
+      if (row.pe) contracts.set(contractPriceKey(activeChain.exchange, row.pe.symbol), row.pe)
     }
-    let cancelled = false
-    ;(async () => {
-      try {
-        const exchange = optionExchangeFor(selectedExchange)
-        const underlyingExchange = underlyingExchangeFor(selectedExchange, selectedUnderlying)
-        const symbols = legs
-          .filter((l) => l.segment === 'OPTION' && l.symbol)
-          .map((l) => ({
-            symbol: l.symbol,
-            exchange,
-            underlying_symbol: selectedUnderlying,
-            underlying_exchange: underlyingExchange,
-          }))
-        if (symbols.length === 0) return
-        const res = await queuedFetch(() =>
-          apiClient.post<{
-            status: string
-            data?: Array<{
-              symbol: string
-              implied_volatility?: number
-              greeks?: { delta?: number; gamma?: number; theta?: number; vega?: number }
-            }>
-          }>('/multioptiongreeks', {
-            apikey: apiKey,
-            symbols,
-          })
-        )
-        if (cancelled) return
-        if ((res.data.status === 'success' || res.data.status === 'partial') && res.data.data) {
-          const map: Record<string, LegGreeks> = {}
-          for (const leg of legs) {
-            const hit = res.data.data.find((r) => r.symbol === leg.symbol)
-            map[leg.id] = {
-              legId: leg.id,
-              iv: hit?.implied_volatility ?? null,
-              delta: hit?.greeks?.delta ?? null,
-              gamma: hit?.greeks?.gamma ?? null,
-              theta: hit?.greeks?.theta ?? null,
-              vega: hit?.greeks?.vega ?? null,
-            }
-          }
-          setGreeksByLeg(map)
+    return contracts
+  }, [activeChain])
 
-          // Fill ATM IV for header — use the leg at ATM if we find one, else avg of all IVs
-          const atmLegIv = legs
-            .map((l) => {
-              const grk = map[l.id]
-              if (grk?.iv !== null && grk?.iv !== undefined && l.strike === atmStrike) {
-                return grk.iv
-              }
-              return null
-            })
-            .find((v) => v !== null)
-
-          if (atmLegIv !== null && atmLegIv !== undefined) {
-            setAtmIv(atmLegIv)
-          } else {
-            const ivs = Object.values(map)
-              .map((g) => g.iv)
-              .filter((v): v is number => v !== null && v !== undefined)
-            if (ivs.length > 0) {
-              setAtmIv(ivs.reduce((a, b) => a + b, 0) / ivs.length)
-            }
-          }
-
-          // Backfill IV into legs for simulator pricing if missing
-          setLegs((prev) =>
-            prev.map((l) => {
-              if (l.iv > 0) return l
-              const iv = map[l.id]?.iv
-              return iv ? { ...l, iv } : l
-            })
-          )
-        }
-      } catch {
-        /* non-fatal */
+  const greeksByLeg = useMemo<Record<string, LegGreeks>>(() => {
+    const greeks: Record<string, LegGreeks> = {}
+    for (const leg of legs) {
+      const contract = leg.exchange
+        ? liveContractsByKey.get(contractPriceKey(leg.exchange, leg.symbol))
+        : undefined
+      greeks[leg.id] = {
+        legId: leg.id,
+        iv: contract?.implied_volatility ?? null,
+        delta: contract?.delta ?? null,
+        gamma: contract?.gamma ?? null,
+        theta: contract?.theta ?? null,
+        vega: contract?.vega ?? null,
       }
-    })()
-    return () => {
-      cancelled = true
     }
-  }, [apiKey, greeksLegFingerprint, selectedExchange, selectedUnderlying, atmStrike])
+    return greeks
+  }, [legs, liveContractsByKey])
 
-  // Margin fetch — whenever legs change, call the broker margin service.
-  // Debounced so rapid edits don't hammer the endpoint.
+  // Refresh only market metadata. Entry price is intentionally immutable: a
+  // live tick changes current P&L, never the premium at which the leg was added.
+  useEffect(() => {
+    if (!activeChain) return
+    setLegs((previous) => {
+      let changed = false
+      const next = previous.map((leg) => {
+        if (leg.segment !== 'OPTION' || !leg.exchange) return leg
+        const contract = liveContractsByKey.get(contractPriceKey(leg.exchange, leg.symbol))
+        if (!contract) return leg
+        const market = {
+          marketPrice: contract.ltp,
+          iv: contract.implied_volatility ?? 0,
+          referenceUnderlying: activeChain.underlying_ltp,
+          forwardPrice: activeChain.forward_price ?? undefined,
+          expiryTs: activeChain.expiry_ts ?? null,
+          tickSize: contract.tick_size,
+          lotSize: contract.lotsize,
+        }
+        if (
+          leg.marketPrice === market.marketPrice &&
+          leg.iv === market.iv &&
+          leg.referenceUnderlying === market.referenceUnderlying &&
+          leg.forwardPrice === market.forwardPrice &&
+          leg.expiryTs === market.expiryTs &&
+          leg.tickSize === market.tickSize &&
+          leg.lotSize === market.lotSize
+        ) {
+          return leg
+        }
+        changed = true
+        return { ...leg, ...market }
+      })
+      return changed ? next : previous
+    })
+  }, [activeChain, liveContractsByKey])
+
+  const marginRequestKey = useMemo(() => {
+    const exchange = optionExchangeFor(selectedExchange)
+    return JSON.stringify(
+      legs
+        .filter((leg) => leg.active && !(leg.exitPrice !== undefined && leg.exitPrice > 0))
+        .map((leg) => ({
+          exchange: leg.exchange ?? exchange,
+          symbol: leg.symbol,
+          action: leg.side,
+          quantity: String(leg.lots * leg.lotSize),
+          product: 'NRML',
+          pricetype: leg.price > 0 ? 'LIMIT' : 'MARKET',
+          price: leg.price > 0 ? String(leg.price) : '0',
+        }))
+    )
+  }, [legs, selectedExchange])
+
+  // Margin depends on the normalized broker request, not live market metadata
+  // or the capability response produced by the request itself.
   useEffect(() => {
     const generation = ++marginGenerationRef.current
     let cancelled = false
@@ -738,8 +649,16 @@ export default function StrategyBuilder() {
         cancelled = true
       }
     }
-    const openLegs = legs.filter((l) => l.active && !(l.exitPrice !== undefined && l.exitPrice > 0))
-    if (openLegs.length === 0) {
+    const positions = JSON.parse(marginRequestKey) as Array<{
+      exchange: string
+      symbol: string
+      action: string
+      quantity: string
+      product: string
+      pricetype: string
+      price: string
+    }>
+    if (positions.length === 0) {
       setMarginRequired(null)
       setIsMarginLoading(false)
       return () => {
@@ -748,7 +667,7 @@ export default function StrategyBuilder() {
     }
     // If we've already determined the broker doesn't support margin,
     // don't keep probing — just skip.
-    if (marginSupported === false) {
+    if (marginSupportedRef.current === false) {
       return () => {
         cancelled = true
       }
@@ -758,20 +677,10 @@ export default function StrategyBuilder() {
       if (!isCurrent()) return
       setIsMarginLoading(true)
       try {
-        const exchange = optionExchangeFor(selectedExchange)
         // NOTE: MarginPositionSchema declares `quantity` and `price` as
         // Str fields — sending them as numbers fails Marshmallow validation
         // with a 400 (no descriptive message), which earlier silently
         // suppressed the Margin row. Keep these as strings.
-        const positions = openLegs.map((l) => ({
-          exchange,
-          symbol: l.symbol,
-          action: l.side,
-          quantity: String(l.lots * l.lotSize),
-          product: 'NRML',
-          pricetype: l.price > 0 ? 'LIMIT' : 'MARKET',
-          price: l.price > 0 ? String(l.price) : '0',
-        }))
         const res = await queuedFetch(() =>
           apiClient.post<{
             status: string
@@ -798,6 +707,7 @@ export default function StrategyBuilder() {
           null
         if (res.status === 200 && res.data.status === 'success' && typeof total === 'number') {
           setMarginRequired(total)
+          marginSupportedRef.current = true
           setMarginSupported(true)
         } else {
           // Any non-success response (404/501/error message about unsupported
@@ -810,6 +720,7 @@ export default function StrategyBuilder() {
             msg.includes('unsupported') ||
             msg.includes('not implemented')
           if (unsupported) {
+            marginSupportedRef.current = false
             setMarginSupported(false)
           }
           setMarginRequired(null)
@@ -831,7 +742,7 @@ export default function StrategyBuilder() {
       cancelled = true
       clearTimeout(handle)
     }
-  }, [apiKey, legs, selectedExchange, marginSupported])
+  }, [apiKey, marginRequestKey])
 
   // Backfill price for legs that were added without one (typically the far-
   // expiry leg of a calendar/diagonal — the loaded chain only covers the
@@ -991,6 +902,12 @@ export default function StrategyBuilder() {
           iv: 0,
           active: true,
           symbol: contract.symbol,
+          exchange: optionExchangeFor(selectedExchange),
+          expiryTs: activeChain?.expiry_ts ?? null,
+          tickSize: contract.tick_size,
+          marketPrice: contract.ltp,
+          referenceUnderlying: activeChain?.underlying_ltp,
+          forwardPrice: activeChain?.forward_price ?? undefined,
         }
       })
       setLegs((prev) => [...prev, ...newLegs])
@@ -1014,12 +931,16 @@ export default function StrategyBuilder() {
       // follow the standard BASE[DDMMMYY][STRIKE][CE|PE] concatenation, so
       // constructing it locally would produce an invalid symbol.
       let symbol: string
+      let optionContract: NonNullable<ListedOptionChainResponse['chain'][number]['ce']> | null = null
       if (draft.segment === 'OPTION' && draft.strike !== undefined && draft.optionType) {
         const row = activeChain?.chain.find((s) => s.strike === draft.strike)
         const side = draft.optionType === 'CE' ? row?.ce : row?.pe
-        symbol =
-          side?.symbol ??
-          buildOptionSymbol(selectedUnderlying, expiryCode, draft.strike, draft.optionType)
+        if (!activeChain || !side) {
+          showToast.error('The selected option contract is not available in the active chain')
+          return
+        }
+        optionContract = side
+        symbol = side.symbol
       } else {
         symbol = buildFutureSymbol(selectedUnderlying, expiryCode)
       }
@@ -1045,10 +966,16 @@ export default function StrategyBuilder() {
         iv: 0,
         active: true,
         symbol,
+        exchange: optionExchangeFor(selectedExchange),
+        expiryTs: optionContract ? (activeChain?.expiry_ts ?? null) : undefined,
+        tickSize: optionContract?.tick_size,
+        marketPrice: optionContract?.ltp,
+        referenceUnderlying: optionContract ? activeChain?.underlying_ltp : undefined,
+        forwardPrice: optionContract ? (activeChain?.forward_price ?? undefined) : undefined,
       }
       setLegs((prev) => [...prev, newLeg])
     },
-    [lotSize, selectedUnderlying, futuresPrice, activeChain?.chain]
+    [lotSize, selectedUnderlying, selectedExchange, futuresPrice, activeChain]
   )
 
   // Payoff
@@ -1077,7 +1004,8 @@ export default function StrategyBuilder() {
       range,
       240,
       ivShiftPct,
-      atmIv ?? 0
+      atmIv ?? 0,
+      new Date(marketClock)
     )
   }, [
     legs,
@@ -1087,6 +1015,7 @@ export default function StrategyBuilder() {
     ivShiftPct,
     atmIv,
     simulatedYearsToNearExpiry,
+    marketClock,
   ])
 
   const pop = useMemo(() => {
@@ -1096,8 +1025,15 @@ export default function StrategyBuilder() {
 
   const totalPnlNow = useMemo(() => {
     if (!spotPrice) return 0
-    return totalPnlAt(legs, simulatedSpot, clampedDaysElapsed, ivShiftPct, atmIv ?? 0)
-  }, [legs, simulatedSpot, clampedDaysElapsed, ivShiftPct, spotPrice, atmIv])
+    return totalPnlAt(
+      legs,
+      simulatedSpot,
+      clampedDaysElapsed,
+      ivShiftPct,
+      atmIv ?? 0,
+      new Date(marketClock)
+    )
+  }, [legs, simulatedSpot, clampedDaysElapsed, ivShiftPct, spotPrice, atmIv, marketClock])
 
   const credit = useMemo(() => netCredit(legs), [legs])
   const premium = useMemo(() => totalPremium(legs), [legs])
@@ -1144,12 +1080,19 @@ export default function StrategyBuilder() {
 
       setLegs((prev) =>
         prev.map((l) =>
-          l.id === updated.id ? { ...updated, expiry: normalisedExpiry, symbol: rebuiltSymbol } : l
+          l.id === updated.id
+            ? {
+                ...updated,
+                expiry: normalisedExpiry,
+                symbol: rebuiltSymbol,
+                exchange: updated.exchange ?? optionExchangeFor(selectedExchange),
+              }
+            : l
         )
       )
       setEditLegId(null)
     },
-    [selectedUnderlying, selectedExpiry, activeChain]
+    [selectedUnderlying, selectedExpiry, activeChain, selectedExchange]
   )
   const toggleAll = useCallback((active: boolean) => {
     setLegs((prev) => prev.map((l) => ({ ...l, active })))
@@ -1185,15 +1128,12 @@ export default function StrategyBuilder() {
           underlying: entry.underlying,
           expiry: hydratedExpiry,
         }
-        requestIdRef.current += 1
         // Apply the saved identity and legs in one React batch. Defaulting and
         // broker-fetch effects stay gated until this complete snapshot exists.
         setSelectedExchange(entry.exchange)
         setSelectedUnderlying(entry.underlying)
         setSelectedExpiry(hydratedExpiry)
         setChainData(null)
-        setAtmIv(null)
-        setFuturesPrice(null)
         // Hydrate legs. Mark them loaded so we don't overwrite user IV later.
         const restored: StrategyLeg[] = entry.legs.map((l) => ({
           id: l.id ?? uid(),
@@ -1208,6 +1148,7 @@ export default function StrategyBuilder() {
           iv: l.iv ?? 0,
           active: l.active ?? true,
           symbol: l.symbol,
+          exchange: optionExchangeFor(entry.exchange),
           exitPrice: l.exitPrice,
         }))
         setLegs(restored)
@@ -1320,8 +1261,9 @@ export default function StrategyBuilder() {
         lotSize={lotSize}
         atmIv={atmIv}
         daysToExpiry={rawDays}
-        onRefresh={loadOptionChain}
-        isRefreshing={isRefreshing}
+        onRefresh={refetchLiveChain}
+        isRefreshing={isLiveLoading}
+        connectionStatus={connectionStatus}
       />
 
       {/* Template grid */}

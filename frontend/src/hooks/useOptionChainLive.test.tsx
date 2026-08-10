@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useOptionChainLive } from './useOptionChainLive'
 
@@ -40,6 +40,7 @@ function optionChainResponse() {
 
 describe('useOptionChainLive', () => {
   beforeEach(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
     marketDataCapture.symbols = []
     marketDataCapture.data = new Map()
     lastOptionChainBody = {}
@@ -67,5 +68,33 @@ describe('useOptionChainLive', () => {
     expect(lastOptionChainBody.with_greeks).toBe(true)
     expect(result.current.forwardPrice).toBe(100100)
     expect(result.current.clockOffsetMs).toEqual(expect.any(Number))
+  })
+
+  it('resyncs the server clock immediately after visibility is restored', async () => {
+    let requestCount = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        requestCount += 1
+        return new Response(
+          JSON.stringify({ ...optionChainResponse(), server_ts: 1_796_000_000 + requestCount }),
+          { status: 200 }
+        )
+      })
+    )
+
+    const { result } = renderHook(() =>
+      useOptionChainLive('key', 'BTC', 'CRYPTO', 'CRYPTO', '28AUG26', 20, { enabled: true })
+    )
+    await waitFor(() => expect(requestCount).toBe(1))
+    const firstOffset = result.current.clockOffsetMs
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+
+    await waitFor(() => expect(requestCount).toBe(2))
+    await waitFor(() => expect(result.current.clockOffsetMs).not.toBe(firstOffset))
   })
 })

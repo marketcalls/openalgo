@@ -41,6 +41,7 @@ export interface SymbolHeaderProps {
 
   onRefresh: () => void
   isRefreshing: boolean
+  connectionStatus: 'live' | 'refreshing' | 'stale' | 'idle'
 }
 
 interface MetricCellProps {
@@ -98,8 +99,17 @@ export function SymbolHeader({
   daysToExpiry,
   onRefresh,
   isRefreshing,
+  connectionStatus,
 }: SymbolHeaderProps) {
-  const hasData = spotPrice !== null
+  const statusLabel =
+    connectionStatus === 'live'
+      ? 'Live'
+      : connectionStatus === 'refreshing'
+        ? 'Refreshing'
+        : connectionStatus === 'stale'
+          ? 'Stale'
+          : 'Idle'
+  const isLive = connectionStatus === 'live'
 
   return (
     <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
@@ -197,18 +207,21 @@ export function SymbolHeader({
               <span
                 className={cn(
                   'absolute inline-flex h-full w-full rounded-full opacity-75',
-                  hasData ? 'animate-ping bg-emerald-400' : 'bg-muted-foreground/40'
+                  isLive ? 'animate-ping bg-emerald-400' : 'bg-muted-foreground/40'
                 )}
               />
               <span
                 className={cn(
                   'relative inline-flex h-2 w-2 rounded-full',
-                  hasData ? 'bg-emerald-500' : 'bg-muted-foreground/60'
+                  isLive ? 'bg-emerald-500' : 'bg-muted-foreground/60'
                 )}
               />
             </span>
-            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-              {hasData ? 'Live' : 'Idle'}
+            <span
+              aria-live="polite"
+              className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground"
+            >
+              {statusLabel}
             </span>
           </div>
 

@@ -33,6 +33,7 @@ describe('SymbolHeader selectors', () => {
         daysToExpiry={2}
         onRefresh={vi.fn()}
         isRefreshing={false}
+        connectionStatus="stale"
       />
     )
 
