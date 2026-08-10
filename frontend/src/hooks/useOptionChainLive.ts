@@ -4,29 +4,6 @@ import type { OptionChainResponse, OptionStrike } from '@/types/option-chain'
 import { useMarketData } from './useMarketData'
 import { useOptionChainPolling } from './useOptionChainPolling'
 
-// Index symbols that use NSE_INDEX/BSE_INDEX for quotes (matches backend lists)
-const NSE_INDEX_SYMBOLS = new Set([
-  'NIFTY',
-  'BANKNIFTY',
-  'FINNIFTY',
-  'MIDCPNIFTY',
-  'NIFTYNXT50',
-  'NIFTYIT',
-  'NIFTYPHARMA',
-  'NIFTYBANK',
-])
-const BSE_INDEX_SYMBOLS = new Set(['SENSEX', 'BANKEX', 'SENSEX50'])
-
-function getUnderlyingExchange(symbol: string, optionExchange: string): string {
-  const normalizedExchange = optionExchange.toUpperCase()
-  if (NSE_INDEX_SYMBOLS.has(symbol)) return 'NSE_INDEX'
-  if (BSE_INDEX_SYMBOLS.has(symbol)) return 'BSE_INDEX'
-  if (normalizedExchange === 'CRYPTO') return 'CRYPTO'
-  if (normalizedExchange === 'BFO') return 'BSE'
-  if (normalizedExchange === 'NFO') return 'NSE'
-  return normalizedExchange
-}
-
 // Round price to nearest tick size (e.g., 0.05 for options)
 // Fixes broker WebSocket data that may not be aligned to tick size
 function roundToTickSize(
@@ -180,19 +157,18 @@ export function useOptionChainLive(
     pauseWhenHidden,
   })
 
-  // Build symbol list from polled data for WebSocket subscription
-  // Includes both option symbols AND underlying index for real-time spot price
+  // Build symbol list from the latest option-chain response for subscription.
   const wsSymbols = useMemo(() => {
     const symbols: Array<{ symbol: string; exchange: string }> = []
 
-    // Add underlying symbol for real-time spot price
-    // Use correct exchange based on whether it's an index or stock
+    // Add the canonical underlying reference for real-time price updates.
+    // The backend, rather than this hook, resolves a perpetual or near-month future when needed.
     // For CRYPTO: bare underlying (e.g. BTC) isn't tradeable — use perpetual (e.g. BTCUSDFUT)
-    const underlyingExch = getUnderlyingExchange(underlying, optionExchange)
-    if (underlyingExch === 'CRYPTO') {
-      symbols.push({ symbol: `${underlying}USDFUT`, exchange: underlyingExch })
-    } else {
-      symbols.push({ symbol: underlying, exchange: underlyingExch })
+    if (polledData) {
+      symbols.push({
+        symbol: polledData.underlying_symbol,
+        exchange: polledData.underlying_exchange,
+      })
     }
 
     // Add all option symbols
@@ -208,7 +184,7 @@ export function useOptionChainLive(
     }
 
     return symbols
-  }, [polledData?.chain, optionExchange, underlying])
+  }, [polledData, optionExchange])
 
   // WebSocket for real-time LTP + Depth (Bid/Ask) updates
   const {
@@ -331,8 +307,7 @@ export function useOptionChainLive(
     }
 
     // Get real-time underlying spot price from WebSocket
-    const underlyingExch = getUnderlyingExchange(underlying, optionExchange)
-    const underlyingKey = `${underlyingExch}:${underlying}`
+    const underlyingKey = `${polledData.underlying_exchange}:${polledData.underlying_symbol}`
     const underlyingWsData = wsData.get(underlyingKey)
     const underlyingLtp = underlyingWsData?.data?.ltp ?? polledData.underlying_ltp
 
@@ -347,7 +322,7 @@ export function useOptionChainLive(
         interestRate
       ),
     })
-  }, [polledData, wsData, optionExchange, underlying, interestRate])
+  }, [polledData, wsData, optionExchange, interestRate])
 
   // Determine streaming status
   const isStreaming = isWsConnected && isWsAuthenticated && wsSymbols.length > 0
@@ -370,6 +345,8 @@ export function useOptionChainLive(
     error,
     lastUpdate,
     streamingSymbols: wsSymbols.length,
+    clockOffsetMs: clockOffsetRef.current,
+    forwardPrice: polledData?.forward_price ?? null,
     refetch,
   }
 }

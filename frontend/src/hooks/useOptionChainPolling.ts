@@ -94,6 +94,7 @@ export function useOptionChainPolling(
           exchange,
           expiry_date: expiryDate,
           strike_count: strikeCount,
+          with_greeks: true,
         }),
         signal: controller.signal,
       })

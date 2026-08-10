@@ -1,6 +1,9 @@
 export interface OptionChainResponse {
   status: 'success' | 'error'
   underlying: string
+  /** Exact market-data reference resolved by the backend for the underlying quote. */
+  underlying_symbol: string
+  underlying_exchange: string
   underlying_ltp: number
   underlying_prev_close: number
   expiry_date: string
