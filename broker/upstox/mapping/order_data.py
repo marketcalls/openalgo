@@ -208,15 +208,36 @@ def transform_positions_data(positions_data):
 def transform_holdings_data(holdings_data):
     transformed_data = []
     for holdings in holdings_data:
+        # Upstox documents `average_price` on holdings as the acquisition
+        # price, but it can come back null or 0 -- for shares received rather
+        # than bought (IPO allotments, bonuses, transfers) the broker has no
+        # acquisition price to report.
+        average_price = float(holdings.get("average_price") or 0.0)
+        last_price = float(holdings.get("last_price") or 0.0)
+
+        if average_price == 0:
+            logger.debug(
+                f"Zero average price for holding: {holdings.get('tradingsymbol', 'Unknown')}"
+            )
+            pnlpercent = 0.0
+        else:
+            # Guarded: dividing by the average unconditionally raised
+            # ZeroDivisionError on exactly those holdings and took the whole
+            # holdings response down with it.
+            pnlpercent = round((last_price - average_price) / average_price * 100, 2)
+
         transformed_position = {
             "symbol": holdings.get("tradingsymbol", ""),
             "exchange": holdings.get("exchange", ""),
             "quantity": holdings.get("quantity", 0),
             "product": holdings.get("product", ""),
-            "pnl": holdings.get("pnl", 0.0),
-            "pnlpercent": (holdings.get("last_price", 0) - holdings.get("average_price", 0.0))
-            / holdings.get("average_price", 0.0)
-            * 100,
+            # Both were being dropped, which is why the holdings page showed a
+            # dash for every average and an investment value of zero: the data
+            # was in the Upstox response and never reached the payload.
+            "average_price": average_price,
+            "ltp": last_price,
+            "pnl": round(float(holdings.get("pnl") or 0.0), 2),
+            "pnlpercent": pnlpercent,
         }
         transformed_data.append(transformed_position)
     return transformed_data

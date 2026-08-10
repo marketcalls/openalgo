@@ -11,24 +11,26 @@ from datetime import datetime, timedelta
 import pandas as pd
 import pytz
 
+from database.token_db_enhanced import fno_search_symbols
 from services.history_service import get_history
 from services.option_greeks_service import (
     DEFAULT_INTEREST_RATES,
     parse_option_symbol,
 )
-from services.strategy_chart_service import (
-    _cap_last_n_trading_dates,
-    _resolve_trading_window,
-)
 from services.option_symbol_service import (
+    NO_SPOT_EXCHANGES,
     construct_crypto_option_symbol,
     construct_option_symbol,
     find_atm_strike_from_actual,
     get_available_strikes,
     get_option_exchange,
+    resolve_underlying_quote,
 )
-from database.token_db_enhanced import fno_search_symbols
 from services.quotes_service import get_quotes
+from services.strategy_chart_service import (
+    _cap_last_n_trading_dates,
+    _resolve_trading_window,
+)
 from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
 
@@ -188,6 +190,24 @@ def get_iv_chart_data(
                     404,
                 )
             underlying_quote_symbol = _perp[0]["symbol"]
+        elif exchange.upper() in NO_SPOT_EXCHANGES:
+            # MCX and the currency segments have no tradable spot: the near-month
+            # future is the pricing reference. Without this the quote is fetched
+            # for a symbol that does not exist and the tool renders empty.
+            _resolved = resolve_underlying_quote(base_symbol, exchange.upper())
+            if _resolved is None:
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": (
+                            f"No unexpired futures found for {base_symbol} on "
+                            f"{exchange.upper()}"
+                        ),
+                    },
+                    404,
+                )
+            underlying_quote_symbol, quote_exchange = _resolved
         else:
             underlying_quote_symbol = base_symbol
 
@@ -379,9 +399,17 @@ def _calculate_iv_series(df_option, df_underlying, strike, expiry_dt, flag, inte
     """
     from opengreeks.black76 import (
         delta as black_delta,
+    )
+    from opengreeks.black76 import (
         gamma as black_gamma,
+    )
+    from opengreeks.black76 import (
         implied_volatility as black_iv,
+    )
+    from opengreeks.black76 import (
         theta as black_theta,
+    )
+    from opengreeks.black76 import (
         vega as black_vega,
     )
 
@@ -475,6 +503,24 @@ def get_default_symbols(underlying, exchange, expiry_date, api_key):
                     404,
                 )
             underlying_quote_symbol = _perp[0]["symbol"]
+        elif exchange.upper() in NO_SPOT_EXCHANGES:
+            # MCX and the currency segments have no tradable spot: the near-month
+            # future is the pricing reference. Without this the quote is fetched
+            # for a symbol that does not exist and the tool renders empty.
+            _resolved = resolve_underlying_quote(base_symbol, exchange.upper())
+            if _resolved is None:
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": (
+                            f"No unexpired futures found for {base_symbol} on "
+                            f"{exchange.upper()}"
+                        ),
+                    },
+                    404,
+                )
+            underlying_quote_symbol, quote_exchange = _resolved
         else:
             underlying_quote_symbol = base_symbol
         _build_sym = construct_crypto_option_symbol if exchange.upper() in CRYPTO_EXCHANGES else construct_option_symbol

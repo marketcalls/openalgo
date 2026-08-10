@@ -67,6 +67,55 @@ def create_workflow():
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
+    # Structural validation only, and only over what was actually sent. A new
+    # workflow is created from the editor with just a name - no graph yet - so
+    # requiring nodes/edges here rejected every "New Strategy" click.
+    # Completeness (required fields, one trigger, reachability) is enforced at
+    # import, activation, and execution instead of blocking a save.
+    from services.flow_workflow_validator import validate_workflow
+
+    if not isinstance(data, dict):
+        # A JSON array or string is truthy but has no fields, so the
+        # "was a graph sent?" check below would pass it straight through to
+        # .get() and a 500. Reject it as the malformed payload it is.
+        return jsonify(
+            {
+                "status": "error",
+                "error": "Invalid workflow structure",
+                "message": "Workflow must be a JSON object",
+                "errors": validate_workflow(data),
+            }
+        ), 400
+
+    errors = (
+        validate_workflow(
+            {
+                "name": data.get("name") or "",
+                "nodes": data.get("nodes") or [],
+                "edges": data.get("edges") or [],
+            },
+            require_name=False,
+            strict=False,
+        )
+        if ("nodes" in data or "edges" in data)
+        else []
+    )
+    if errors:
+        # Logged, not just returned: a bare 400 in the browser gives no reason,
+        # which made this class of rejection hard to diagnose.
+        logger.warning(
+            f"Rejected workflow save: {errors[0]['path']} {errors[0]['code']} - "
+            f"{errors[0]['message']}"
+        )
+        return jsonify(
+            {
+                "status": "error",
+                "error": "Invalid workflow structure",
+                "message": errors[0]["message"],
+                "errors": errors,
+            }
+        ), 400
+
     name = data.get("name", "Untitled Workflow")
     description = data.get("description")
     nodes = data.get("nodes", [])
@@ -134,6 +183,43 @@ def update_workflow(workflow_id):
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
+    if not isinstance(data, dict):
+        from services.flow_workflow_validator import validate_workflow as _validate
+
+        return jsonify(
+            {
+                "status": "error",
+                "error": "Invalid workflow structure",
+                "message": "Workflow must be a JSON object",
+                "errors": _validate(data),
+            }
+        ), 400
+
+    # Partial updates (rename, toggle) carry no graph, and the API also accepts
+    # nodes without edges or vice versa. Validate the merged graph so a partial
+    # update is checked against what the workflow will actually become, rather
+    # than being rejected for the half it did not send.
+    if "nodes" in data or "edges" in data:
+        from database.flow_db import get_workflow as _get_workflow
+        from services.flow_workflow_validator import validate_workflow
+
+        existing = _get_workflow(workflow_id)
+        merged = {
+            "name": data.get("name") or (existing.name if existing else ""),
+            "nodes": data.get("nodes", (existing.nodes if existing else []) or []),
+            "edges": data.get("edges", (existing.edges if existing else []) or []),
+        }
+        errors = validate_workflow(merged, require_name=False, strict=False)
+        if errors:
+            return jsonify(
+                {
+                    "status": "error",
+                    "error": "Invalid workflow structure",
+                    "message": errors[0]["message"],
+                    "errors": errors,
+                }
+            ), 400
+
     workflow = update_workflow(workflow_id, **data)
     if not workflow:
         return jsonify({"error": "Workflow not found"}), 404
@@ -161,16 +247,23 @@ def update_workflow(workflow_id):
 def delete_workflow(workflow_id):
     """Delete a workflow"""
     from database.flow_db import delete_workflow, get_workflow
+    from services.flow_order_update_monitor_service import get_flow_order_update_monitor
+    from services.flow_price_monitor_service import get_flow_price_monitor
     from services.flow_scheduler_service import get_flow_scheduler
 
     workflow = get_workflow(workflow_id)
     if not workflow:
         return jsonify({"error": "Workflow not found"}), 404
 
-    # Deactivate if active (removes scheduler job)
+    # Deactivate if active. Every in-memory registration must be torn down
+    # here too - deleting the row alone would strand the watch/alert, which
+    # then keeps matching events and tries to execute a workflow that no
+    # longer exists.
     if workflow.is_active:
         scheduler = get_flow_scheduler()
         scheduler.remove_workflow_job(workflow_id)
+        get_flow_price_monitor().remove_alert(workflow_id)
+        get_flow_order_update_monitor().remove_watch(workflow_id)
 
     if delete_workflow(workflow_id):
         return jsonify({"status": "success", "message": "Workflow deleted"})
@@ -187,6 +280,7 @@ def activate_workflow(workflow_id):
     """Activate a workflow"""
     from database.flow_db import activate_workflow as db_activate
     from database.flow_db import get_workflow, set_schedule_job_id
+    from services.flow_order_update_monitor_service import get_flow_order_update_monitor
     from services.flow_price_monitor_service import get_flow_price_monitor
     from services.flow_scheduler_service import get_flow_scheduler
 
@@ -201,11 +295,20 @@ def activate_workflow(workflow_id):
     if not api_key:
         return jsonify({"error": "API key not configured"}), 400
 
+    blocked = _execution_blocked(workflow)
+    if blocked:
+        return jsonify({**blocked, "error": "Workflow cannot be activated"}), 400
+
     nodes = workflow.nodes or []
 
     # Find trigger node to determine activation type
     trigger_node = next(
-        (n for n in nodes if n.get("type") in ["start", "webhookTrigger", "priceAlert"]), None
+        (
+            n
+            for n in nodes
+            if n.get("type") in ["start", "webhookTrigger", "priceAlert", "orderUpdateTrigger"]
+        ),
+        None,
     )
     if not trigger_node:
         return jsonify({"error": "No trigger node found in workflow"}), 400
@@ -229,6 +332,9 @@ def activate_workflow(workflow_id):
                     execute_at=trigger_data.get("executeAt"),
                     interval_value=trigger_data.get("intervalValue"),
                     interval_unit=trigger_data.get("intervalUnit"),
+                    # Offered by the editor and defaulted on, but never read
+                    # before, so schedules kept firing overnight and at weekends.
+                    market_hours_only=bool(trigger_data.get("marketHoursOnly", False)),
                 )
                 set_schedule_job_id(workflow_id, job_id)
 
@@ -244,7 +350,28 @@ def activate_workflow(workflow_id):
                 price_upper=trigger_data.get("priceUpper"),
                 percentage=trigger_data.get("percentage"),
                 api_key=api_key,
+                # Previously dropped here, so "Every Time" behaved as one-shot
+                # and the expiry window was never applied.
+                trigger=trigger_data.get("trigger", "once"),
+                expiration=trigger_data.get("expiration", "none"),
             )
+
+        elif trigger_type == "orderUpdateTrigger":
+            order_monitor = get_flow_order_update_monitor()
+            try:
+                order_monitor.add_watch(
+                    workflow_id=workflow_id,
+                    api_key=api_key,
+                    order_id=trigger_data.get("orderId") or None,
+                    symbol=trigger_data.get("symbol") or None,
+                    exchange=trigger_data.get("exchange") or None,
+                    status=trigger_data.get("status", "complete"),
+                    trigger=trigger_data.get("trigger", "once"),
+                )
+            except ValueError as e:
+                # Misconfigured node (no Order ID/Symbol, a {{variable}} Order
+                # ID, or an unknown status) is a client error, not a 500.
+                return jsonify({"error": str(e)}), 400
 
         # Update workflow as active and store API key for webhook execution
         db_activate(workflow_id, api_key=api_key)
@@ -264,6 +391,7 @@ def deactivate_workflow(workflow_id):
     """Deactivate a workflow"""
     from database.flow_db import deactivate_workflow as db_deactivate
     from database.flow_db import get_workflow, set_schedule_job_id
+    from services.flow_order_update_monitor_service import get_flow_order_update_monitor
     from services.flow_price_monitor_service import get_flow_price_monitor
     from services.flow_scheduler_service import get_flow_scheduler
 
@@ -278,12 +406,18 @@ def deactivate_workflow(workflow_id):
         # Remove scheduler job if any
         if workflow.schedule_job_id:
             scheduler = get_flow_scheduler()
+            # An already-gone job is expected after a restart or a double click;
+            # remove_job treats that as a no-op.
             scheduler.remove_job(workflow.schedule_job_id)
             set_schedule_job_id(workflow_id, None)
 
         # Remove price alert if any
         price_monitor = get_flow_price_monitor()
         price_monitor.remove_alert(workflow_id)
+
+        # Remove order-update watch if any
+        order_monitor = get_flow_order_update_monitor()
+        order_monitor.remove_watch(workflow_id)
 
         # Update workflow as inactive
         db_deactivate(workflow_id)
@@ -296,6 +430,35 @@ def deactivate_workflow(workflow_id):
 
 
 # === Execution Routes ===
+
+
+def _execution_blocked(workflow):
+    """Structured 400 payload when a workflow is not fit to execute, else None.
+
+    Saving deliberately accepts a half-built graph so the editor stays usable,
+    which means "stored" is not the same as "runnable". Every path that can
+    reach the broker - Run Now, activation, and webhooks - checks completeness
+    here instead. A workflow can also be edited into an invalid state after it
+    was activated, so checking once at activation is not enough.
+    """
+    from services.flow_workflow_validator import validate_workflow
+
+    errors = validate_workflow(
+        {"name": workflow.name, "nodes": workflow.nodes or [], "edges": workflow.edges or []},
+        strict=True,
+    )
+    if not errors:
+        return None
+    logger.warning(
+        f"Workflow {getattr(workflow, 'id', '?')} ({getattr(workflow, 'name', '?')}) "
+        f"blocked: {errors[0]['path']} {errors[0]['code']} - {errors[0]['message']}"
+    )
+    return {
+        "status": "error",
+        "error": "Workflow cannot be executed",
+        "message": errors[0]["message"],
+        "errors": errors,
+    }
 
 
 @flow_bp.route("/api/workflows/<int:workflow_id>/execute", methods=["POST"])
@@ -312,6 +475,10 @@ def execute_workflow_now(workflow_id):
     api_key = get_current_api_key()
     if not api_key:
         return jsonify({"error": "API key not configured"}), 400
+
+    blocked = _execution_blocked(workflow)
+    if blocked:
+        return jsonify(blocked), 400
 
     try:
         result = execute_workflow(workflow_id, api_key=api_key)
@@ -580,6 +747,13 @@ def _execute_webhook(token, webhook_data=None, url_secret=None):
             }
         ), 500
 
+    blocked = _execution_blocked(workflow)
+    if blocked:
+        logger.error(
+            f"Webhook for workflow {workflow.id} rejected: {blocked['message']}"
+        )
+        return jsonify(blocked), 400
+
     try:
         logger.info(f"Webhook triggered for workflow {workflow.id}: {workflow.name}")
         result = execute_workflow(workflow.id, webhook_data=data, api_key=api_key)
@@ -629,11 +803,14 @@ def trigger_webhook_with_symbol(token, symbol):
 @flow_bp.route("/api/monitor/status", methods=["GET"])
 @check_session_validity
 def get_monitor_status():
-    """Get price monitor status"""
+    """Get price monitor and order-update monitor status"""
+    from services.flow_order_update_monitor_service import get_flow_order_update_monitor
     from services.flow_price_monitor_service import get_flow_price_monitor
 
     monitor = get_flow_price_monitor()
-    return jsonify(monitor.get_status())
+    status = monitor.get_status()
+    status["order_updates"] = get_flow_order_update_monitor().get_status()
+    return jsonify(status)
 
 
 # === Export/Import Routes ===
@@ -664,14 +841,39 @@ def export_workflow(workflow_id):
 @flow_bp.route("/api/workflows/import", methods=["POST"])
 @check_session_validity
 def import_workflow():
-    """Import a workflow"""
+    """Import a workflow.
+
+    Validated before persistence: the editor checks the payload, but this
+    endpoint is reachable directly, and a malformed graph stored here fails
+    later - at activation or mid-execution - instead of at import.
+    """
     from database.flow_db import create_workflow
+    from services.flow_workflow_validator import migrate_legacy_node_data, validate_workflow
 
     data = request.get_json()
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    name = data.get("name", "Imported Workflow")
+    # Upgrade legacy node payloads before validating, so an older exported
+    # workflow imports as its canonical shape rather than being stored with a
+    # field no reader honors.
+    migration_notes: list[str] = []
+    if isinstance(data.get("nodes"), list):
+        data = dict(data)
+        data["nodes"], migration_notes = migrate_legacy_node_data(data["nodes"])
+
+    errors = validate_workflow(data)
+    if errors:
+        return jsonify(
+            {
+                "status": "error",
+                "error": "Invalid workflow format",
+                "message": errors[0]["message"],
+                "errors": errors,
+            }
+        ), 400
+
+    name = data.get("name")
     description = data.get("description")
     nodes = data.get("nodes", [])
     edges = data.get("edges", [])
@@ -681,8 +883,117 @@ def import_workflow():
     )
 
     if workflow:
-        return jsonify({"status": "success", "workflow_id": workflow.id}), 201
+        response = {"status": "success", "workflow_id": workflow.id}
+        if migration_notes:
+            response["migrations"] = migration_notes
+        return jsonify(response), 201
     return jsonify({"error": "Failed to import workflow"}), 500
+
+
+@flow_bp.route("/api/workflows/<int:workflow_id>/replace", methods=["POST"])
+@check_session_validity
+def replace_workflow(workflow_id):
+    """Replace an existing workflow's graph from JSON, in place.
+
+    Import always creates a new workflow, which for someone iterating on a
+    strategy as JSON means a trail of copies and a new webhook URL each time.
+    This keeps the workflow's id, webhook token and secret, API key and active
+    state, and swaps only the graph.
+
+    Held to import's rules, not save's: a JSON pasted here is presented as a
+    finished workflow, so completeness is enforced.
+    """
+    from database.flow_db import get_workflow, update_workflow
+    from services.flow_workflow_validator import (
+        migrate_legacy_node_data,
+        trigger_config,
+        validate_workflow,
+    )
+
+    workflow = get_workflow(workflow_id)
+    if not workflow:
+        return jsonify({"error": "Workflow not found"}), 404
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+    if not isinstance(data, dict):
+        return jsonify(
+            {
+                "status": "error",
+                "error": "Invalid workflow structure",
+                "message": "Workflow must be a JSON object",
+            }
+        ), 400
+
+    # Same normalization the import endpoint applies, so a legacy export does
+    # not arrive here still carrying a field no reader honors.
+    migration_notes: list[str] = []
+    payload = dict(data)
+    if isinstance(payload.get("nodes"), list):
+        payload["nodes"], migration_notes = migrate_legacy_node_data(payload["nodes"])
+
+    # The name may legitimately be omitted when replacing only the graph.
+    errors = validate_workflow(
+        {
+            "name": payload.get("name") or workflow.name,
+            "nodes": payload.get("nodes") or [],
+            "edges": payload.get("edges") or [],
+        },
+        strict=True,
+    )
+    if errors:
+        logger.warning(
+            f"Rejected replace of workflow {workflow_id}: {errors[0]['path']} "
+            f"{errors[0]['code']} - {errors[0]['message']}"
+        )
+        return jsonify(
+            {
+                "status": "error",
+                "error": "Invalid workflow format",
+                "message": errors[0]["message"],
+                "errors": errors,
+            }
+        ), 400
+
+    # Captured before the write: reading the row afterwards would compare the
+    # new graph against itself.
+    trigger_changed = trigger_config(workflow.nodes or []) != trigger_config(payload["nodes"])
+    was_active = bool(workflow.is_active)
+
+    fields = {"nodes": payload["nodes"], "edges": payload.get("edges") or []}
+    if payload.get("name"):
+        fields["name"] = payload["name"]
+    if payload.get("description") is not None:
+        fields["description"] = payload["description"]
+
+    updated = update_workflow(workflow_id, **fields)
+    if not updated:
+        return jsonify({"error": "Failed to replace workflow"}), 500
+
+    # The graph is re-read on every run, so node edits apply immediately. The
+    # trigger's schedule and any price/order watch are registered at activation,
+    # so a trigger change needs the workflow reactivated.
+    needs_reactivate = was_active and trigger_changed
+    logger.info(
+        f"Replaced workflow {workflow_id} from JSON "
+        f"(nodes={len(fields['nodes'])} edges={len(fields['edges'])} "
+        f"reactivate={needs_reactivate})"
+    )
+    return jsonify(
+        {
+            "status": "success",
+            "workflow_id": workflow_id,
+            "migrations": migration_notes,
+            "needs_reactivate": needs_reactivate,
+            "message": (
+                "Trigger configuration changed. Deactivate and reactivate so the "
+                "schedule is re-registered."
+                if needs_reactivate
+                else "Workflow replaced. Changes apply from the next run."
+            ),
+        }
+    )
 
 
 # === Index Symbols Lot Size Routes ===

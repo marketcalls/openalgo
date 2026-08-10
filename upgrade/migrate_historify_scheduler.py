@@ -6,6 +6,9 @@ This migration adds scheduler tables to the Historify DuckDB database:
 - historify_schedules: Store schedule configurations
 - historify_schedule_executions: Store execution history
 
+and the scheduler's job store to the main SQLite database (DATABASE_URL):
+- historify_apscheduler_jobs: APScheduler job store for scheduled downloads
+
 Usage:
     cd upgrade
     uv run migrate_historify_scheduler.py           # Apply migration
@@ -161,6 +164,108 @@ def create_scheduler_tables():
         return False
 
 
+#: Lives in DATABASE_URL, not DuckDB - historify_scheduler_service points
+#: SQLAlchemyJobStore at DATABASE_URL while the schedule definitions above are
+#: DuckDB tables.
+JOBSTORE_TABLE = "historify_apscheduler_jobs"
+
+
+def get_sqlite_url():
+    """DATABASE_URL, with a relative sqlite path resolved against the root.
+
+    The documented invocation is `cd upgrade && uv run ...`, and the default
+    "sqlite:///db/openalgo.db" is relative, so left alone it would resolve to
+    upgrade/db/openalgo.db and SQLAlchemy would create an empty database there.
+    """
+    db_url = os.getenv("DATABASE_URL", "sqlite:///db/openalgo.db")
+    prefix = "sqlite:///"
+    if not db_url.startswith(prefix):
+        return db_url
+    path = db_url[len(prefix) :]
+    if not path or path == ":memory:" or os.path.isabs(path):
+        return db_url
+    return prefix + os.path.join(parent_dir, path)
+
+
+def _jobstore_engine(db_url):
+    from sqlalchemy import create_engine
+    from sqlalchemy.pool import NullPool
+
+    if "sqlite" in db_url:
+        return create_engine(db_url, poolclass=NullPool)
+    return create_engine(db_url)
+
+
+def create_jobstore_table():
+    """Create the APScheduler job store table in the main database.
+
+    Built from APScheduler's own table metadata rather than hand-written SQL,
+    so the schema cannot drift from what APScheduler expects and the
+    ix_<tablename>_next_run_time index is created with it.
+
+    Doing this here rather than leaving it to the runtime is the point.
+    SQLAlchemyJobStore.start() issues this CREATE TABLE itself, and at startup
+    that DDL lands in the middle of the boot write burst needing an exclusive
+    write lock. An install that loses that race logs "database is locked", the
+    scheduler never initializes, and since init runs once at boot with no
+    retry, scheduled downloads silently never run. See issue #1750.
+    """
+    from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+    from sqlalchemy import inspect
+
+    db_url = get_sqlite_url()
+    engine = _jobstore_engine(db_url)
+    try:
+        jobs_t = SQLAlchemyJobStore(engine=engine, tablename=JOBSTORE_TABLE).jobs_t
+
+        if JOBSTORE_TABLE in inspect(engine).get_table_names():
+            logger.info(f"{JOBSTORE_TABLE} table already exists - skipping")
+        else:
+            logger.info(f"Creating {JOBSTORE_TABLE} table...")
+            jobs_t.create(engine, checkfirst=True)
+            logger.info(f"Created {JOBSTORE_TABLE} table")
+
+        # checkfirst tests only for the table, so one that exists without its
+        # index would never acquire one and every due-job poll would scan.
+        existing = {idx["name"] for idx in inspect(engine).get_indexes(JOBSTORE_TABLE)}
+        for index in jobs_t.indexes:
+            if index.name not in existing:
+                index.create(engine)
+                logger.info(f"Created index {index.name}")
+        return True
+    except Exception:
+        logger.exception(f"Failed to create {JOBSTORE_TABLE}")
+        return False
+    finally:
+        engine.dispose()
+
+
+def jobstore_status():
+    """Report whether the job store table and its index exist."""
+    from sqlalchemy import inspect
+
+    engine = _jobstore_engine(get_sqlite_url())
+    try:
+        inspector = inspect(engine)
+        if JOBSTORE_TABLE not in inspector.get_table_names():
+            logger.info(f"   {JOBSTORE_TABLE}: MISSING - migration needed")
+            return False
+
+        index_name = f"ix_{JOBSTORE_TABLE}_next_run_time"
+        names = {idx["name"] for idx in inspector.get_indexes(JOBSTORE_TABLE)}
+        if index_name not in names:
+            logger.info(f"   {JOBSTORE_TABLE}: present, but {index_name} is MISSING")
+            return False
+
+        logger.info(f"   {JOBSTORE_TABLE}: present, with index")
+        return True
+    except Exception:
+        logger.exception("Failed to check job store status")
+        return False
+    finally:
+        engine.dispose()
+
+
 def upgrade():
     """Apply the Historify Scheduler migration."""
     try:
@@ -172,6 +277,10 @@ def upgrade():
 
         # Create the scheduler tables
         if not create_scheduler_tables():
+            return False
+
+        # Job store table, in SQLite rather than DuckDB
+        if not create_jobstore_table():
             return False
 
         logger.info(f"Migration {MIGRATION_NAME} completed successfully")
@@ -238,7 +347,7 @@ def status():
             logger.info(f"   Total Executions: {executions_count}")
 
             conn.close()
-            return True
+            return jobstore_status()
 
         except Exception as e:
             logger.error(f"Error checking status: {e}")

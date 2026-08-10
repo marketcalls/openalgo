@@ -2,7 +2,7 @@
  * Drawing-tool catalogue for the trading terminal's rail.
  *
  * A group is one rail button that opens a flyout of its tools — the pattern
- * TradingView uses and the yfinance example follows. Tool ids are the
+ * the openalgo-charts examples follow. Tool ids are the
  * openalgo-charts `draw` tier's registered ids; nothing here knows how a tool
  * behaves, only what to call it and which glyph to show.
  */

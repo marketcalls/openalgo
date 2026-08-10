@@ -285,13 +285,21 @@ def fno_search_symbols_db(
         return []
 
 
-def get_distinct_expiries(exchange: str = None, underlying: str = None) -> list[str]:
+def get_distinct_expiries(
+    exchange: str = None, underlying: str = None, instrumenttype: str = None
+) -> list[str]:
     """
     Get distinct expiry dates for FNO symbols.
 
     Args:
         exchange (str, optional): Exchange to filter by (NFO, BFO, MCX, CDS)
         underlying (str, optional): Underlying symbol name (e.g., "NIFTY")
+        instrumenttype (str, optional): "options" for CE/PE only, "futures" for
+            FUT only. Unset returns every expiry, which is right for a symbol
+            browser and wrong for an option chain: on MCX the two calendars
+            differ - GOLDM futures expire 05-AUG while its options expire
+            28-AUG - so a mixed list offers an options expiry that has no
+            strikes behind it.
 
     Returns:
         List[str]: List of distinct expiry dates sorted chronologically
@@ -308,6 +316,13 @@ def get_distinct_expiries(exchange: str = None, underlying: str = None) -> list[
 
         if underlying:
             query = query.filter(SymToken.name.ilike(underlying.strip().upper()))
+
+        if instrumenttype:
+            wanted = instrumenttype.strip().lower()
+            if wanted in ("options", "option"):
+                query = query.filter(SymToken.instrumenttype.in_(["CE", "PE"]))
+            elif wanted in ("futures", "future", "fut"):
+                query = query.filter(SymToken.instrumenttype == "FUT")
 
         # Only get non-null expiries
         query = query.filter(SymToken.expiry.isnot(None))

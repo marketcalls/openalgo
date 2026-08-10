@@ -81,8 +81,8 @@ from blueprints.oitracker import oitracker_bp  # Import the OI tracker blueprint
 from blueprints.orders import orders_bp
 from blueprints.platforms import platforms_bp
 from blueprints.playground import playground_bp  # Import the API playground blueprint
-from blueprints.postback import postback_bp  # Import broker postback (order updates) blueprint
 from blueprints.pnltracker import pnltracker_bp  # Import the pnl tracker blueprint
+from blueprints.postback import postback_bp  # Import broker postback (order updates) blueprint
 from blueprints.python_strategy import initialize_with_app_context as init_python_strategy
 from blueprints.python_strategy import python_strategy_bp  # Import the python strategy blueprint
 from blueprints.react_app import (  # Import React frontend blueprint
@@ -113,6 +113,7 @@ from csp import apply_csp_middleware  # Import the CSP middleware
 from database.action_center_db import init_db as ensure_action_center_tables_exists
 from database.analyzer_db import init_db as ensure_analyzer_tables_exists
 from database.apilog_db import init_db as ensure_api_log_tables_exists
+from database.apscheduler_jobstore_db import ensure_jobstore_tables_exist
 from database.auth_db import init_db as ensure_auth_tables_exists
 from database.chartink_db import init_db as ensure_chartink_tables_exists
 from database.flow_db import init_db as ensure_flow_tables_exists
@@ -270,6 +271,14 @@ def create_app():
 
     app.register_blueprint(api_v1_bp)
 
+    # Pull openstatz in on a background thread. It costs about 1.4s, almost all
+    # of it matplotlib and seaborn behind its plotting module, which the
+    # portfolio feature never uses -- every chart is drawn in the browser.
+    # Warming here means the first backtest does not pay it and boot does not
+    # block on it.
+    from portfolio import warm_analytics
+    warm_analytics()
+
     # Exempt API endpoints from CSRF protection (they use API key authentication)
     csrf.exempt(api_v1_bp)
 
@@ -411,9 +420,7 @@ def create_app():
                 "can immediately complete OAuth without admin review."
             )
 
-        logger.info(
-            "Remote MCP blueprints registered (OAuth + JSON-RPC dispatch + SSE)."
-        )
+        logger.info("Remote MCP blueprints registered (OAuth + JSON-RPC dispatch + SSE).")
 
     # Exempt webhook endpoints from CSRF protection after app initialization
     with app.app_context():
@@ -437,8 +444,14 @@ def create_app():
         csrf.exempt(app.view_functions["brlogin.samco_ip_status"])
         csrf.exempt(app.view_functions["brlogin.samco_update_ip"])
 
-        # Exempt logout endpoint from CSRF protection (safe - only destroys session)
-        csrf.exempt(app.view_functions["auth.logout"])
+        # auth.logout is deliberately NOT exempt. It is not "safe" in the CSRF
+        # sense: it revokes the broker token, publishes CACHE_INVALIDATE_ALL
+        # (tearing down the shared WebSocket feed), clears every device's
+        # session and flushes the symbol cache. SameSite=Lax alone does not
+        # cover it - ports are not part of the same-site check, so any other
+        # service on the same host could forge the POST. The GET form is
+        # covered separately by the fetch-metadata check in auth.logout, since
+        # Flask-WTF never validates safe methods.
 
         # Exempt health check endpoints from CSRF (for AWS ELB, K8s probes)
         csrf.exempt(app.view_functions["health_bp.simple_health"])
@@ -484,10 +497,7 @@ def create_app():
         from flask import request
 
         # Static assets don't need DB
-        if (
-            request.path.startswith("/static/")
-            or request.path.startswith("/assets/")
-        ):
+        if request.path.startswith("/static/") or request.path.startswith("/assets/"):
             return
 
         # Wait up to 30s for DB init (typically ~3.5s)
@@ -582,9 +592,15 @@ def create_app():
 
         # Skip tracking for common browser/crawler requests that are not attack probes
         safe_prefixes = (
-            "/favicon", "/robots.txt", "/sitemap", "/manifest",
-            "/sw.js", "/.well-known", "/apple-touch-icon",
-            "/service-worker", "/workbox",
+            "/favicon",
+            "/robots.txt",
+            "/sitemap",
+            "/manifest",
+            "/sw.js",
+            "/.well-known",
+            "/apple-touch-icon",
+            "/service-worker",
+            "/workbox",
         )
 
         if not is_authenticated and not path.startswith(safe_prefixes):
@@ -625,7 +641,7 @@ def create_app():
 
     @app.context_processor
     def inject_version():
-        return dict(version=get_version())
+        return {"version": get_version()}
 
     @app.route("/api/config/host")
     def get_host_config():
@@ -701,20 +717,72 @@ def setup_environment(app):
                 ("Scalping DB", ensure_scalping_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),
                 ("Strategy Portfolio DB", ensure_strategy_portfolio_tables_exists),
+                # Created here, not left to APScheduler's own CREATE TABLE in
+                # scheduler.start(). That DDL would otherwise run further down
+                # this function, after db_ready releases the rest of the boot,
+                # and has to win the write lock against it. This phase is
+                # single-threaded, so the same DDL runs uncontended. See #1750.
+                ("Scheduler Job Stores", ensure_jobstore_tables_exist),
             ]
 
             db_init_start = time.time()
-            with ThreadPoolExecutor(max_workers=15) as executor:
+            # max_workers=1 on purpose: 14 of the 20 functions above target the
+            # same file (openalgo.db), and SQLite permits one writer per file,
+            # so running them concurrently made them contend for the write lock
+            # rather than progress in parallel - the "database is locked" seen
+            # on fresh installs. The parallelism was never real; serialising is
+            # measurably faster on the restart path because it stops threads
+            # queueing behind each other. See PR #1734.
+            #
+            # The executor is kept rather than a plain loop so each function
+            # stays its own future: one database failing to initialise must not
+            # abort the other nineteen.
+            with ThreadPoolExecutor(max_workers=1) as executor:
                 futures = {executor.submit(func): name for name, func in db_init_functions}
                 for future in as_completed(futures):
                     db_name = futures[future]
                     try:
                         future.result()
-                    except Exception as e:
-                        logger.error(f"Failed to initialize {db_name}: {e}")
+                    except Exception:
+                        logger.exception(f"Failed to initialize {db_name}")
 
             db_init_time = (time.time() - db_init_start) * 1000
-            logger.debug(f"All databases initialized in parallel ({db_init_time:.0f}ms)")
+            logger.debug(f"All databases initialized ({db_init_time:.0f}ms)")
+
+            # The strategy book must be listening before any order can be
+            # accepted: order.placed carries the only copy of the strategy tag,
+            # so an order placed before this registration loses its attribution
+            # permanently. Registered ahead of db_ready for that reason.
+            # Retried rather than attempted once: the failure that matters here
+            # is a transient one (the DB file briefly unavailable because the
+            # out-of-process websocket proxy holds the write lock), and losing
+            # it means every order placed afterwards is unattributable. Startup
+            # still proceeds if it ultimately fails - a P&L ledger must not keep
+            # the platform from trading - but the book then reports itself
+            # unavailable instead of an innocent zero, so nothing downstream can
+            # mistake it for a flat strategy.
+            for _attempt in range(1, 4):
+                try:
+                    from database.strategy_book_db import init_strategy_book_db
+                    from subscribers.strategy_book_subscriber import (
+                        register as register_strategy_book,
+                    )
+                    from utils.event_bus import bus as _bus
+
+                    init_strategy_book_db()
+                    register_strategy_book(_bus)
+                    break
+                except Exception:
+                    logger.exception(
+                        f"Failed to initialize strategy book (attempt {_attempt} of 3)"
+                    )
+                    time.sleep(0.5 * _attempt)
+            else:
+                logger.error(
+                    "Strategy book unavailable after 3 attempts. Orders will still be "
+                    "placed, but per-strategy P&L will report an error until restart "
+                    "rather than a misleading zero."
+                )
 
             # Signal that DB tables are ready (unblocks cache restoration)
             app.db_ready.set()
@@ -733,6 +801,15 @@ def setup_environment(app):
                 logger.debug("Flow scheduler initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize Flow scheduler: {e}")
+
+            try:
+                from services.flow_order_update_monitor_service import (
+                    restore_order_update_watches,
+                )
+
+                restore_order_update_watches()
+            except Exception:
+                logger.exception("Failed to restore Flow order-update watches")
 
             try:
                 from services.historify_scheduler_service import init_historify_scheduler
@@ -776,6 +853,7 @@ def setup_environment(app):
                     logger.exception("WhatsApp bot auto-start crashed")
 
             import threading as _threading
+
             _threading.Thread(
                 target=_autostart_whatsapp_bot,
                 daemon=True,
@@ -800,6 +878,7 @@ def setup_environment(app):
 
                     def run_catchup():
                         from sandbox.position_manager import catchup_missed_settlements
+
                         catchup_missed_settlements()
                         return ("catchup_settlement", True, "Completed")
 
@@ -814,14 +893,22 @@ def setup_environment(app):
                                 service_name, success, message = future.result()
                                 if service_name == "execution_engine":
                                     if success:
-                                        logger.debug("Execution engine auto-started (Analyzer mode is ON)")
+                                        logger.debug(
+                                            "Execution engine auto-started (Analyzer mode is ON)"
+                                        )
                                     else:
-                                        logger.warning(f"Failed to auto-start execution engine: {message}")
+                                        logger.warning(
+                                            f"Failed to auto-start execution engine: {message}"
+                                        )
                                 elif service_name == "squareoff_scheduler":
                                     if success:
-                                        logger.debug("Square-off scheduler auto-started (Analyzer mode is ON)")
+                                        logger.debug(
+                                            "Square-off scheduler auto-started (Analyzer mode is ON)"
+                                        )
                                     else:
-                                        logger.warning(f"Failed to auto-start square-off scheduler: {message}")
+                                        logger.warning(
+                                            f"Failed to auto-start square-off scheduler: {message}"
+                                        )
                                 elif service_name == "catchup_settlement":
                                     logger.debug("Catch-up settlement check completed on startup")
                             except Exception as e:
@@ -867,7 +954,9 @@ def setup_environment(app):
                             if success:
                                 success, message = telegram_bot_service.start_bot()
                                 if success:
-                                    logger.debug(f"Telegram bot auto-started successfully: {message}")
+                                    logger.debug(
+                                        f"Telegram bot auto-started successfully: {message}"
+                                    )
                                 else:
                                     logger.error(f"Failed to auto-start Telegram bot: {message}")
                             else:
@@ -902,9 +991,12 @@ def _restore_caches_background():
                 symbol_count = cache_result["symbol_cache"].get("symbols_loaded", 0)
                 auth_count = cache_result["auth_cache"].get("tokens_loaded", 0)
                 if symbol_count > 0 or auth_count > 0:
-                    logger.debug(f"Cache restoration: {symbol_count} symbols, {auth_count} auth tokens")
+                    logger.debug(
+                        f"Cache restoration: {symbol_count} symbols, {auth_count} auth tokens"
+                    )
         except Exception as e:
             logger.debug(f"Cache restoration skipped: {e}")
+
 
 threading.Thread(target=_restore_caches_background, daemon=True).start()
 
@@ -912,45 +1004,15 @@ threading.Thread(target=_restore_caches_background, daemon=True).start()
 # Database session cleanup (teardown handler)
 @app.teardown_appcontext
 def shutdown_database_sessions(exception=None):
-    """Remove all scoped sessions after each request to prevent FD leaks"""
-    # All (module, session_variable_name) pairs that use scoped_session.
-    # Each must be removed per-request to release the underlying DB connection
-    # and prevent file descriptor accumulation.
-    _sessions = [
-        # --- Previously cleaned up ---
-        ("database.auth_db", "db_session"),
-        ("database.traffic_db", "logs_session"),
-        ("database.apilog_db", "db_session"),
-        ("database.latency_db", "latency_session"),
-        ("database.health_db", "health_session"),
-        # --- Previously missing (caused FD leak) ---
-        ("database.settings_db", "db_session"),
-        ("database.strategy_db", "db_session"),
-        ("database.user_db", "db_session"),
-        ("database.action_center_db", "db_session"),
-        ("database.qty_freeze_db", "db_session"),
-        ("database.sandbox_db", "db_session"),
-        ("database.analyzer_db", "db_session"),
-        ("database.chart_prefs_db", "db_session"),
-        ("database.chartink_db", "db_session"),
-        ("database.flow_db", "db_session"),
-        ("database.scalping_db", "db_session"),
-        ("database.leverage_db", "db_session"),
-        ("database.strategy_portfolio_db", "db_session"),
-        ("database.market_calendar_db", "db_session"),
-        ("database.telegram_db", "db_session"),
-        ("database.symbol", "db_session"),
-    ]
+    """Remove all scoped sessions after each request to prevent FD leaks.
 
-    for module_name, session_attr in _sessions:
-        try:
-            import importlib
-            mod = importlib.import_module(module_name)
-            session = getattr(mod, session_attr, None)
-            if session is not None:
-                session.remove()
-        except Exception:
-            pass
+    The registry lives in utils/db_sessions.py so that background threads,
+    which have no app context and never reach this handler, release exactly
+    the same set.
+    """
+    from utils.db_sessions import remove_all_scoped_sessions
+
+    remove_all_scoped_sessions()
 
 
 # Integrate the WebSocket proxy server with the Flask app
@@ -988,7 +1050,9 @@ if __name__ == "__main__":
     # FLASK_DEBUG_ALLOW_EXTERNAL=true to opt out of this guard.
     _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
     _allow_external_debug = os.getenv("FLASK_DEBUG_ALLOW_EXTERNAL", "False").lower() in (
-        "true", "1", "t"
+        "true",
+        "1",
+        "t",
     )
     if debug and host_ip not in _LOOPBACK_HOSTS and not _allow_external_debug:
         sys.stderr.write(
@@ -1030,16 +1094,19 @@ if __name__ == "__main__":
     }
     # Suppress Flask/Werkzeug's default startup banner — our banner replaces it
     import flask.cli
+
     flask.cli.show_server_banner = lambda *_: None
 
     # Print startup banner NOW — right before the server starts accepting connections.
     # When the user sees this banner, the portal is ready to load.
     if not debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
         from utils.version import get_version as _get_ver
+
         _ver = _get_ver()
         _dip = host_ip
         if host_ip == "0.0.0.0":
             import socket as _sk
+
             try:
                 _s = _sk.socket(_sk.AF_INET, _sk.SOCK_DGRAM)
                 _s.connect(("8.8.8.8", 80))
@@ -1050,12 +1117,32 @@ if __name__ == "__main__":
         _wu = f"http://{_dip}:{port}"
         _wsu = f"ws://{_dip}:{os.getenv('WEBSOCKET_PORT', 8765)}"
         _du = "https://docs.openalgo.in"
-        G, C, M, W, Y, R, BD, DM = "\033[92m", "\033[96m", "\033[95m", "\033[97m", "\033[93m", "\033[0m", "\033[1m", "\033[2m"
+        G, C, M, W, Y, R, BD, DM = (
+            "\033[92m",
+            "\033[96m",
+            "\033[95m",
+            "\033[97m",
+            "\033[93m",
+            "\033[0m",
+            "\033[1m",
+            "\033[2m",
+        )
         _ae = re.compile(r"\x1B\[[0-9;]*m")
-        def _vl(t): return len(_ae.sub("", t))
+
+        def _vl(t):
+            return len(_ae.sub("", t))
+
         _t = f" OpenAlgo v{_ver} "
         _sl = "Your Personal Algo Trading Platform"
-        _samps = ["", _sl, f"{W}{BD}Endpoints{R}", f"{W}Web App{R}    {C}{_wu}{R}", f"{W}WebSocket{R}  {M}{_wsu}{R}", f"{W}Docs{R}       {Y}{_du}{R}", f"{W}Status{R}     {G}{BD}Ready{R}"]
+        _samps = [
+            "",
+            _sl,
+            f"{W}{BD}Endpoints{R}",
+            f"{W}Web App{R}    {C}{_wu}{R}",
+            f"{W}WebSocket{R}  {M}{_wsu}{R}",
+            f"{W}Docs{R}       {Y}{_du}{R}",
+            f"{W}Status{R}     {G}{BD}Ready{R}",
+        ]
         _iw = max(50, max((_vl(s) for s in _samps), default=0))
         _W = max(_iw + 4, len(_t) + 5)
         _enc = getattr(sys.stdout, "encoding", None) or "utf-8"
@@ -1064,21 +1151,34 @@ if __name__ == "__main__":
             TL, TR, BL, BR, H, V = "\u256d", "\u256e", "\u2570", "\u256f", "\u2500", "\u2502"
         except Exception:
             TL, TR, BL, BR, H, V = "+", "+", "+", "+", "-", "|"
+
         def _ml(t=""):
             p = max(_W - 4 - _vl(t), 0)
-            return f"{C}{V}{R} {t}{' '*p} {C}{V}{R}"
+            return f"{C}{V}{R} {t}{' ' * p} {C}{V}{R}"
+
         _slp = max((_W - 4 - _vl(_sl)) // 2, 0)
         _srp = max(_W - 4 - _vl(_sl) - _slp, 0)
         _td = max(0, _W - 5 - len(_t))
-        print("\n".join(["",
-            f"{C}{TL}{H*3}{G}{BD}{_t}{R}{C}{H*_td}{TR}{R}",
-            _ml(), f"{C}{V}{R} {' '*_slp}{DM}{_sl}{R}{' '*_srp} {C}{V}{R}", _ml(),
-            _ml(f"{W}{BD}Endpoints{R}"),
-            _ml(f"{W}Web App{R}    {C}{_wu}{R}"),
-            _ml(f"{W}WebSocket{R}  {M}{_wsu}{R}"),
-            _ml(f"{W}Docs{R}       {Y}{_du}{R}"), _ml(),
-            _ml(f"{W}Status{R}     {G}{BD}Ready{R}"), _ml(),
-            f"{C}{BL}{H*(_W-2)}{BR}{R}", "",
-        ]), flush=True)
+        print(
+            "\n".join(
+                [
+                    "",
+                    f"{C}{TL}{H * 3}{G}{BD}{_t}{R}{C}{H * _td}{TR}{R}",
+                    _ml(),
+                    f"{C}{V}{R} {' ' * _slp}{DM}{_sl}{R}{' ' * _srp} {C}{V}{R}",
+                    _ml(),
+                    _ml(f"{W}{BD}Endpoints{R}"),
+                    _ml(f"{W}Web App{R}    {C}{_wu}{R}"),
+                    _ml(f"{W}WebSocket{R}  {M}{_wsu}{R}"),
+                    _ml(f"{W}Docs{R}       {Y}{_du}{R}"),
+                    _ml(),
+                    _ml(f"{W}Status{R}     {G}{BD}Ready{R}"),
+                    _ml(),
+                    f"{C}{BL}{H * (_W - 2)}{BR}{R}",
+                    "",
+                ]
+            ),
+            flush=True,
+        )
 
     socketio.run(app, host=host_ip, port=port, debug=debug, reloader_options=reloader_options)

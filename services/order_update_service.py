@@ -53,14 +53,40 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
     "zerodha": ("broker.zerodha.streaming.zerodha_order_adapter", "create_zerodha_order_adapter"),
     "nubra": ("broker.nubra.streaming.nubra_order_adapter", "create_nubra_order_adapter"),
     "arrow": ("broker.arrow.streaming.arrow_order_adapter", "create_arrow_order_adapter"),
+    "kotak": ("broker.kotak.streaming.kotak_order_adapter", "create_kotak_order_adapter"),
     "iiflcapital": (
         "broker.iiflcapital.streaming.iiflcapital_order_adapter",
         "create_iiflcapital_order_adapter",
     ),
+    "shoonya": (
+        "broker.shoonya.streaming.shoonya_order_adapter",
+        "create_shoonya_order_adapter",
+    ),
+    "flattrade": (
+        "broker.flattrade.streaming.flattrade_order_adapter",
+        "create_flattrade_order_adapter",
+    ),
+    "zebu": ("broker.zebu.streaming.zebu_order_adapter", "create_zebu_order_adapter"),
+    "tradesmart": (
+        "broker.tradesmart.streaming.tradesmart_order_adapter",
+        "create_tradesmart_order_adapter",
+    ),
 }
 
-# Brokers with no push mechanism fall back to REST-orderbook polling.
-_POLLING_BROKERS = {"groww"}
+# Brokers with no *usable* push mechanism fall back to REST-orderbook polling.
+#
+# groww: no push feed at all (its public API documents only REST live data).
+#
+# fivepaisa: it does document an OrderTradeConfirmations WebSocket, but 5Paisa
+# permits only ONE feed connection per {access_token, client_code} and a new
+# connection evicts the existing one. A dedicated order socket therefore fights
+# the market-data adapter: each evicts the other ~150ms after connecting, and
+# both flap forever (verified live 2026-08-07 — see the header of
+# broker/fivepaisa/streaming/fivepaisa_order_adapter.py). Multiplexing order
+# updates onto the market-data socket instead is not viable either: that adapter
+# runs in the websocket_proxy *subprocess* under gunicorn+eventlet and Docker, so
+# the OrderUpdateEvent would be published on the wrong process's event bus.
+_POLLING_BROKERS = {"groww", "fivepaisa"}
 
 # user_id -> live adapter (BaseOrderUpdateAdapter or PollingOrderUpdateAdapter)
 _ADAPTERS: dict[str, object] = {}
@@ -123,7 +149,7 @@ def start_order_update_adapter(user_id: str, broker: str) -> bool:
             logger.exception(f"Failed to start order-update adapter for {broker}/{user_id}")
             return False
         _ADAPTERS[user_id] = adapter
-        logger.info(f"Order-update adapter started for {broker}/{user_id}")
+        logger.debug(f"Order-update adapter started for {broker}/{user_id}")
         return True
 
 
@@ -182,7 +208,7 @@ def start_order_update_adapters_on_boot(db_ready=None) -> None:
             from websocket_proxy.connection_manager import SharedZmqPublisher
 
             SharedZmqPublisher().connect()
-            logger.info("Shared ZMQ publisher warmed up for order-update relay")
+            logger.debug("Shared ZMQ publisher warmed up for order-update relay")
         except Exception:
             logger.exception("Failed to warm up shared ZMQ publisher")
 
@@ -200,11 +226,28 @@ def start_order_update_adapters_on_boot(db_ready=None) -> None:
 
         try:
             from database.auth_db import Auth
+            from utils.session import has_login_this_trading_session
 
             sessions = Auth.query.filter_by(is_revoked=False).all()
             for auth_obj in sessions:
-                if auth_obj.name and auth_obj.broker:
-                    start_order_update_adapter(auth_obj.name, auth_obj.broker)
+                if not (auth_obj.name and auth_obj.broker):
+                    continue
+                # is_revoked alone is not proof the token still works. Indian
+                # broker tokens die at the daily rollover (~03:00 IST), but the
+                # row is only flagged revoked by the auto-expiry sweep, which
+                # runs from a before_request hook and therefore needs a browser
+                # request to fire. Between the rollover and the first request,
+                # a restart would otherwise start an adapter on a token the
+                # broker killed hours ago and sit in a 401 reconnect loop.
+                if not has_login_this_trading_session(auth_obj.name):
+                    logger.info(
+                        f"Order-update adapter not started for "
+                        f"{auth_obj.broker}/{auth_obj.name}: no login since today's "
+                        "session rollover, so the stored broker token is stale. "
+                        "It starts on the next broker login."
+                    )
+                    continue
+                start_order_update_adapter(auth_obj.name, auth_obj.broker)
             if not sessions:
                 logger.debug("No active broker sessions found; no order-update adapters started")
         except Exception:

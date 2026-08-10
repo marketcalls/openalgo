@@ -1,19 +1,18 @@
 import json
-import os
 
+from broker.nubra.api.baseurl import get_nubra_headers, get_url
 from broker.nubra.mapping.margin_data import parse_margin_response, transform_margin_positions
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-NUBRA_BASE_URL = "https://api.nubra.io"
 
 def calculate_margin_api(positions, auth):
     """
     Calculate margin requirement for a basket of positions using Nubra API.
 
-    API: POST /orders/v2/margin_required
+    API: POST /sentinel/orders/funds_required
 
     Args:
         positions: List of positions in OpenAlgo format
@@ -23,7 +22,6 @@ def calculate_margin_api(positions, auth):
         Tuple of (response, response_data)
     """
     AUTH_TOKEN = auth
-    device_id = "OPENALGO"
 
     # Transform positions to Nubra format (this returns the full payload)
     payload_data = transform_margin_positions(positions)
@@ -42,12 +40,7 @@ def calculate_margin_api(positions, auth):
         return MockResponse(), error_response
 
     # Prepare headers
-    headers = {
-        "Authorization": f"Bearer {AUTH_TOKEN}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "x-device-id": device_id,
-    }
+    headers = get_nubra_headers(AUTH_TOKEN)
 
     # Prepare JSON payload
     payload = json.dumps(payload_data)
@@ -60,7 +53,7 @@ def calculate_margin_api(positions, auth):
     try:
         # Make the request using the shared client
         response = client.post(
-            f"{NUBRA_BASE_URL}/orders/v2/margin_required",
+            get_url("/sentinel/orders/funds_required"),
             headers=headers,
             content=payload,
         )

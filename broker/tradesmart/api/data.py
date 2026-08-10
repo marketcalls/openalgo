@@ -1,5 +1,4 @@
 import json
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -7,33 +6,16 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 from broker.tradesmart.api.baseurl import post, resolve_uid
+from broker.tradesmart.api.rate_limiter import (
+    MAX_RETRIES,
+    apply_rate_limit,
+    is_rate_limit_error,
+    retry_delay,
+)
 from database.token_db import get_br_symbol, get_token
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
-
-# Global rate limiter — TradeSmart (Noren) caps data APIs at 120 requests/min
-# per user (it returns "... exceeds Limit 120 for user" past that). 0.55s/req
-# ≈ 109/min keeps the whole app — quotes, option chain, OI tracker, scalping,
-# history — under the ceiling through this single shared gate.
-_last_api_call_time = 0.0
-_rate_limit_lock = threading.Lock()
-TRADESMART_MIN_REQUEST_INTERVAL = 0.55  # ~109 req/min, under the 120/min cap
-
-
-def _apply_rate_limit():
-    """Serialize API calls across threads; reserve the slot, sleep outside the lock."""
-    global _last_api_call_time
-    sleep_time = 0.0
-    with _rate_limit_lock:
-        current_time = time.time()
-        elapsed = current_time - _last_api_call_time
-        if elapsed < TRADESMART_MIN_REQUEST_INTERVAL:
-            sleep_time = TRADESMART_MIN_REQUEST_INTERVAL - elapsed
-        _last_api_call_time = current_time + sleep_time
-    if sleep_time > 0:
-        time.sleep(sleep_time)
-
 
 def _normalize_data_exchange(exchange):
     """Map OpenAlgo index pseudo-exchanges to their parent cash exchange for data."""
@@ -44,44 +26,29 @@ def _normalize_data_exchange(exchange):
     return exchange
 
 
-def _is_rate_limit_error(response) -> bool:
-    """Return True when TradeSmart reports a per-minute rate-limit hit.
-
-    Noren returns ``stat=Not_Ok`` with an emsg like "Invalid Input :  Order
-    Recieved 141 in a current minute exceeds Limit 120 for user" once the
-    minute's data-API budget is exhausted.
-    """
-    if not isinstance(response, dict):
-        return False
-    if response.get("stat") != "Not_Ok":
-        return False
-    emsg = response.get("emsg", "")
-    return "exceeds Limit" in emsg or "exceeds limit" in emsg
-
-
 def _get_api_response(endpoint, auth, payload, retry_count=0):
     """Rate-limited POST returning parsed JSON (dict or list).
 
-    Retries with exponential backoff when TradeSmart reports a per-minute
-    rate-limit hit, so a burst of quote requests (e.g. a 90+ symbol option
-    chain or the OI tracker) degrades to slower-but-successful instead of
-    failing the whole batch.
-    """
-    MAX_RETRIES = 3
-    RETRY_DELAY = 2.0  # base seconds for exponential backoff
+    Paced per endpoint class (see broker.tradesmart.api.rate_limiter): quotes
+    bill against a per-second budget, everything else against the older
+    per-minute one.
 
-    _apply_rate_limit()
+    Retries with exponential backoff when TradeSmart reports a rate-limit hit,
+    so a burst of quote requests (e.g. a 90+ symbol option chain or the OI
+    tracker) degrades to slower-but-successful instead of failing the batch.
+    """
+    apply_rate_limit(endpoint)
     payload.setdefault("uid", resolve_uid(auth))
     response = post(endpoint, payload, auth)
     parsed = json.loads(response.text)
 
-    if _is_rate_limit_error(parsed) and retry_count < MAX_RETRIES:
-        retry_delay = RETRY_DELAY * (2**retry_count)
+    if is_rate_limit_error(parsed) and retry_count < MAX_RETRIES:
+        delay = retry_delay(retry_count)
         logger.warning(
-            f"TradeSmart rate limit hit ({parsed.get('emsg')}). "
-            f"Retrying in {retry_delay}s (attempt {retry_count + 1}/{MAX_RETRIES})"
+            f"TradeSmart rate limit hit on {endpoint} ({parsed.get('emsg')}). "
+            f"Retrying in {delay}s (attempt {retry_count + 1}/{MAX_RETRIES})"
         )
-        time.sleep(retry_delay)
+        time.sleep(delay)
         return _get_api_response(endpoint, auth, payload, retry_count + 1)
 
     return parsed
@@ -297,7 +264,7 @@ class BrokerData:
                     "from": str(start_ts),
                     "to": str(end_ts),
                 }
-                _apply_rate_limit()
+                apply_rate_limit("/EODChartData")
                 try:
                     response = json.loads(post("/EODChartData", payload, self.auth_token).text)
                 except Exception as e:
@@ -312,7 +279,7 @@ class BrokerData:
                     "et": str(end_ts),
                     "intrv": self.timeframe_map[interval],
                 }
-                _apply_rate_limit()
+                apply_rate_limit("/TPSeries")
                 response = json.loads(post("/TPSeries", payload, self.auth_token).text)
 
             if isinstance(response, dict):

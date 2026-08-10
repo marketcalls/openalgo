@@ -16,7 +16,7 @@ single broker session and WebSocket feed:
 | Unified Broker API | `/api/v1/` | External platforms (TradingView, Amibroker, ChartInk, Excel, Python, MCP) |
 | Python Strategy Host | `/python` | In-browser editor; scripts scheduled on IST times, run as isolated subprocesses with live logs |
 | Flow (No-Code Builder) | `/flow` | Node graph: market data to indicators to conditions to order execution |
-| Options Trading Suite | `/tools` | 15 analytical tools (Strategy Builder, Option Chain, Option Greeks, OI Tracker, Max Pain, Vol Surface, GEX, IV Smile, Arbitrage, ...) |
+| Options & Portfolio Suite | `/tools` | 18 tools. Options analytics (Option Chain, Greeks, OI Tracker, Max Pain, Vol Surface, GEX, IV Smile, Straddle, Arbitrage, ...) plus portfolio and investment tools (Portfolio Backtester, SIP Backtester, Portfolio Analyzer, Strategy Builder). The registry is `frontend/src/lib/tools.ts` — the home page derives its count from it, so add a tool there and both pages update. |
 | Charting Terminal | `/trading` | Line-based chart trading, powered by the `openalgo-charts` package |
 | Scalping Terminal | `/scalping` | Keyboard-driven options scalping (`blueprints/scalping.py` resolves underlying/expiry/strike; index options only — NRML/MIS, never CNC) |
 
@@ -216,6 +216,29 @@ After a change touching any of these, run the **`fd-audit`** skill before callin
 it done.
 
 **Database access** goes through the SQLAlchemy ORM, not raw SQL.
+
+**Schema changes need a migration script, not just a startup hook.** Users
+upgrade with `cd upgrade && uv run migrate_all.py`, so every schema change ships
+as a script in `upgrade/` registered in that file's `MIGRATIONS` list. Applying
+the change from `init_db()` alone is *not* enough: seeding functions typically
+only run against an empty table, so an existing installation keeps the old
+schema forever and the change silently never reaches the ~290k live deployments.
+
+- **Idempotent, and safe to re-run.** Check whether the change is already
+  present (`PRAGMA table_info`) and return quietly if so.
+- **Support `--status`** to report what would change without changing it.
+- **Never clobber a value the user may have customised.** Guard the update on
+  the old value, so an admin who has already set their own is left alone.
+- **Backfill from the data, not from a default.** A new column defaulted
+  uniformly is usually wrong for existing rows; derive each row's value from
+  what the row already says.
+- **SQLite limits shape the approach.** It cannot alter a `CHECK` constraint or
+  add a `UNIQUE` column in place: rebuild the table (see
+  `migrate_sandbox_trigger_pending.py`) or add a partial unique index instead.
+
+Test it against a *copy of a real database forced back to the old schema*, not
+only a fresh one. A migration that works on an empty database and fails on a
+populated one is the common failure.
 
 **Style.** Python: Ruff (`uv run ruff check . --fix`, `uv run ruff format .`),
 config in `pyproject.toml`; 4 spaces, Google-style docstrings. React/TypeScript:

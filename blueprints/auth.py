@@ -1,3 +1,4 @@
+import hashlib
 import os
 import re
 import secrets
@@ -5,6 +6,7 @@ from datetime import UTC, datetime
 
 from flask import (
     Blueprint,
+    abort,
     current_app,
     flash,
     jsonify,
@@ -28,6 +30,7 @@ from database.user_db import (  # Import the function
 )
 from extensions import socketio
 from limiter import limiter  # Import the limiter instance
+from utils.config import build_external_url
 from utils.email_debug import debug_smtp_connection
 from utils.email_utils import send_password_reset_email, send_test_email
 from utils.ip_helper import get_real_ip
@@ -43,6 +46,28 @@ LOGIN_RATE_LIMIT_HOUR = os.getenv("LOGIN_RATE_LIMIT_HOUR", "25 per hour")
 RESET_RATE_LIMIT = os.getenv("RESET_RATE_LIMIT", "15 per hour")  # Password reset rate limit
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
+
+
+def _hash_reset_token(token: str) -> str:
+    """
+    Hash a password-reset token for storage in the session.
+
+    Flask's default session is a signed - not encrypted - cookie, so anything
+    put in it is readable by whoever holds the cookie. Storing the raw reset
+    token there means the caller who *requested* the reset can read it straight
+    back out of their own cookie, without ever seeing the email it was sent to.
+    Since the reset endpoint is unauthenticated by necessity, that caller may be
+    an attacker who supplied someone else's address. Keeping only the hash means
+    the raw token exists solely in the email (or the TOTP response, which is
+    handed to a user who has already proven possession of the authenticator).
+
+    Args:
+        token: The raw reset token.
+
+    Returns:
+        str: Hex-encoded SHA-256 digest of the token.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def _utcnow_iso() -> str:
@@ -597,11 +622,16 @@ def reset_password():
             try:
                 # Generate a secure token for the email reset
                 token = secrets.token_urlsafe(32)
-                session["reset_token"] = token
+                session["reset_token"] = _hash_reset_token(token)
                 session["reset_email"] = email
 
-                # Create reset link
-                reset_link = url_for("auth.reset_password_email", token=token, _external=True)
+                # Create reset link. Built from HOST_SERVER rather than
+                # url_for(_external=True) so a poisoned Host header cannot
+                # redirect the emailed link - and the token in it - to an
+                # attacker-controlled origin.
+                reset_link = build_external_url(
+                    url_for("auth.reset_password_email", token=token)
+                )
                 send_password_reset_email(email, reset_link, user.username)
                 logger.info(f"Password reset email sent to {email}")
 
@@ -628,7 +658,7 @@ def reset_password():
         if user and user.verify_totp(totp_code):
             # Generate a secure token for the password reset
             token = secrets.token_urlsafe(32)
-            session["reset_token"] = token
+            session["reset_token"] = _hash_reset_token(token)
             session["reset_email"] = email
 
             return jsonify({"status": "success", "message": "TOTP verified", "token": token})
@@ -645,9 +675,13 @@ def reset_password():
             token = request.form.get("token")
             password = request.form.get("password")
 
-        # Verify token from session (handles both TOTP and email reset tokens)
-        valid_token = token == session.get("reset_token") or token == session.get(
-            "email_reset_token"
+        # Verify token against the hashes held in the session (handles both TOTP
+        # and email reset tokens). Constant-time comparison, and a missing
+        # session entry never counts as a match.
+        submitted = _hash_reset_token(token) if token else ""
+        valid_token = any(
+            stored and secrets.compare_digest(submitted, stored)
+            for stored in (session.get("reset_token"), session.get("email_reset_token"))
         )
         if not valid_token or email != session.get("reset_email"):
             return jsonify({"status": "error", "message": "Invalid or expired reset token."}), 400
@@ -699,8 +733,12 @@ def reset_password_email(token):
             flash("Invalid reset link.", "error")
             return redirect("/reset-password?error=invalid_link")
 
-        # Check if this token was issued (stored in session during email send)
-        if token != session.get("reset_token"):
+        # Check if this token was issued (its hash is stored in session during
+        # email send)
+        stored_token = session.get("reset_token")
+        if not stored_token or not secrets.compare_digest(
+            _hash_reset_token(token), stored_token
+        ):
             flash("Invalid or expired reset link.", "error")
             return redirect("/reset-password?error=expired_link")
 
@@ -711,7 +749,7 @@ def reset_password_email(token):
             return redirect("/reset-password?error=session_expired")
 
         # Set up session for password reset (email verification counts as verified)
-        session["email_reset_token"] = token
+        session["email_reset_token"] = _hash_reset_token(token)
 
         # Redirect to React password reset page with token and email in URL
         # React will read these and show the password form
@@ -1225,11 +1263,51 @@ def get_dashboard_data():
         return jsonify({"status": "error", "message": "Internal server error"}), 500
 
 
+def _is_foreign_initiated() -> bool:
+    """True when the request was initiated by a page we do not serve.
+
+    Logout is far more than "destroy a cookie" here: it revokes the broker
+    token, publishes CACHE_INVALIDATE_ALL (tearing down the shared WebSocket
+    feed), clears every device's session and flushes the symbol cache. That
+    makes a forced logout a real availability attack on a live trading session,
+    so it must not be reachable from someone else's page.
+
+    Flask-WTF never CSRF-validates GET, and SESSION_COOKIE_SAMESITE="Lax" still
+    attaches the session cookie to top-level cross-site navigations, so a plain
+    link is enough without this check. Fetch metadata is the signal that covers
+    it. "same-site" is rejected too: OpenAlgo is a single self-hosted origin, so
+    a same-site-but-not-same-origin caller is another app sharing the host -
+    ports are not part of the same-site check, which is exactly the situation on
+    a developer or self-hosted box running several services on localhost.
+
+    A missing header is treated as trusted. Mounting this attack requires a
+    browser (the victim's cookie has to be attached automatically), and every
+    browser new enough to do that sends Sec-Fetch-Site; a client old enough to
+    omit it is not carrying the cookie either.
+    """
+    site = request.headers.get("Sec-Fetch-Site")
+    return site is not None and site not in ("same-origin", "none")
+
+
 @auth_bp.route("/logout", methods=["GET", "POST"])
 def logout():
-    if session.get("logged_in"):
-        username = session["user"]
+    # Checked before anything is torn down, so a rejected request leaves the
+    # session exactly as it was rather than logging the victim out.
+    if _is_foreign_initiated():
+        logger.warning(
+            f"Rejected cross-origin logout from IP={get_real_ip()} "
+            f"Sec-Fetch-Site={request.headers.get('Sec-Fetch-Site')}"
+        )
+        abort(403)
 
+    was_logged_in = bool(session.get("logged_in"))
+    username = session.get("user")
+
+    # Wipe the browser session before teardown so a revocation or notification
+    # failure cannot leave the user stuck in a half-logged-in state.
+    session.clear()
+
+    if was_logged_in and username:
         # Clear cache entries before database update to prevent stale data access
         cache_key_auth = f"auth-{username}"
         cache_key_feed = f"feed-{username}"
@@ -1273,7 +1351,6 @@ def logout():
         })
 
         # Clear entire session to ensure complete logout
-        session.clear()
         logger.info(f"Session cleared for user: {username}")
 
     # For POST requests (AJAX from React), return JSON
