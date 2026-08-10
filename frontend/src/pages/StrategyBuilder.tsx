@@ -183,6 +183,7 @@ export default function StrategyBuilder() {
   const [executeDialogOpen, setExecuteDialogOpen] = useState(false)
 
   const requestIdRef = useRef(0)
+  const marginGenerationRef = useRef(0)
   const hydratedIdentityRef = useRef<ChainIdentity | null>(null)
 
   const requestIdentity = useMemo<ChainIdentity>(
@@ -243,6 +244,7 @@ export default function StrategyBuilder() {
   }, [])
 
   const resetStrategyState = useCallback(() => {
+    marginGenerationRef.current += 1
     setLegs([])
     setSpotShiftPct(0)
     setIvShiftPct(0)
@@ -250,6 +252,7 @@ export default function StrategyBuilder() {
     setGreeksByLeg({})
     setMarginRequired(null)
     setMarginSupported(null)
+    setIsMarginLoading(false)
     setActiveTemplate(null)
     setTemplateDialogOpen(false)
     setEditLegId(null)
@@ -727,17 +730,32 @@ export default function StrategyBuilder() {
   // Margin fetch — whenever legs change, call the broker margin service.
   // Debounced so rapid edits don't hammer the endpoint.
   useEffect(() => {
-    if (!apiKey) return
+    const generation = ++marginGenerationRef.current
+    let cancelled = false
+    const isCurrent = () => !cancelled && generation === marginGenerationRef.current
+    if (!apiKey) {
+      return () => {
+        cancelled = true
+      }
+    }
     const openLegs = legs.filter((l) => l.active && !(l.exitPrice !== undefined && l.exitPrice > 0))
     if (openLegs.length === 0) {
       setMarginRequired(null)
-      return
+      setIsMarginLoading(false)
+      return () => {
+        cancelled = true
+      }
     }
     // If we've already determined the broker doesn't support margin,
     // don't keep probing — just skip.
-    if (marginSupported === false) return
+    if (marginSupported === false) {
+      return () => {
+        cancelled = true
+      }
+    }
 
     const handle = setTimeout(async () => {
+      if (!isCurrent()) return
       setIsMarginLoading(true)
       try {
         const exchange = optionExchangeFor(selectedExchange)
@@ -770,6 +788,7 @@ export default function StrategyBuilder() {
             { validateStatus: () => true }
           )
         )
+        if (!isCurrent()) return
         // Response key varies slightly across brokers — accept any of the
         // three field names the service has been observed to return.
         const total =
@@ -803,12 +822,15 @@ export default function StrategyBuilder() {
         }
       } catch {
         // Network failures shouldn't permanently disable — just clear for now.
-        setMarginRequired(null)
+        if (isCurrent()) setMarginRequired(null)
       } finally {
-        setIsMarginLoading(false)
+        if (isCurrent()) setIsMarginLoading(false)
       }
     }, 400)
-    return () => clearTimeout(handle)
+    return () => {
+      cancelled = true
+      clearTimeout(handle)
+    }
   }, [apiKey, legs, selectedExchange, marginSupported])
 
   // Backfill price for legs that were added without one (typically the far-

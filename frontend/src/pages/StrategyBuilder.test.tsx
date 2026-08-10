@@ -277,6 +277,56 @@ describe('StrategyBuilder identity orchestration', () => {
     expect(screen.getAllByRole('slider')[0]).toHaveValue('0')
   })
 
+  it('does not let an in-flight margin response repopulate state after an identity reset', async () => {
+    const staleMargin = deferred<{
+      status: number
+      data: { status: string; data: { total_margin_required: number } }
+    }>()
+    let marginRequestCount = 0
+    mocks.apiPost.mockImplementation(async (url: string) => {
+      if (url === '/margin') {
+        marginRequestCount += 1
+        if (marginRequestCount === 1) return staleMargin.promise
+        return {
+          status: 200,
+          data: { status: 'success', data: { total_margin_required: 20_000 } },
+        }
+      }
+      if (url === '/optiongreeks') {
+        return { status: 200, data: { status: 'success', implied_volatility: 12 } }
+      }
+      if (url === '/syntheticfuture') {
+        return { status: 200, data: { status: 'success', synthetic_future_price: 24_620 } }
+      }
+      return { status: 200, data: { status: 'success' } }
+    })
+
+    renderBuilder()
+    await addOneLeg()
+    await waitFor(
+      () =>
+        expect(mocks.apiPost.mock.calls.some(([url]) => url === '/margin')).toBe(true),
+      { timeout: 2_000 }
+    )
+
+    await chooseUnderlying('BANKNIFTY')
+    fireEvent.click(screen.getByRole('button', { name: 'Clear strategy' }))
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: 'Underlying' })).toHaveTextContent('BANKNIFTY')
+    )
+
+    await act(async () => {
+      staleMargin.resolve({
+        status: 200,
+        data: { status: 'success', data: { total_margin_required: 10_000 } },
+      })
+      await staleMargin.promise
+    })
+
+    await addOneLeg()
+    expect(screen.queryByText('Margin Req.')).not.toBeInTheDocument()
+  })
+
   it('hydrates a saved non-default identity and legs before defaulting or fetch effects run', async () => {
     const portfolio = deferred<PortfolioEntry>()
     const underlyings = deferred<{ status: 'success'; underlyings: string[] }>()
