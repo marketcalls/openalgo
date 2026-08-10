@@ -316,7 +316,7 @@ get_instruments(exchange=None, api_key=None, format="json")
 get_option_symbol(underlying, exchange, expiry_date, strike_int, offset,
                   option_type, api_key, underlying_ltp=None)
 get_option_chain(underlying, exchange, expiry_date, strike_count, api_key,
-                 with_quotes=True)
+                 with_quotes=True, with_greeks=False, interest_rate=None)
 get_option_greeks(option_symbol, exchange, interest_rate=None,
                   forward_price=None, underlying_symbol=None,
                   underlying_exchange=None, expiry_time=None, api_key=None)
@@ -331,6 +331,14 @@ toggle_analyzer_mode(analyzer_data, api_key=None, auth_token=None, broker=None)
 get_chart_preferences(api_key)
 update_chart_preferences(api_key, data)
 ```
+
+`get_option_chain(..., with_greeks=True)` attaches `implied_volatility` and
+`delta`/`gamma`/`theta`/`vega` to every leg, computed from the quotes the call has
+already fetched. It costs no extra broker requests and is not bound by the
+50-symbol cap that `get_multi_option_greeks` enforces, so prefer it over a second
+Greeks call whenever a whole chain is involved. The response also carries
+`expiry_ts`, `server_ts` and `forward_price`; the forward comes from the ATM call
+and put via put-call parity, not from spot.
 
 ## Payload rules
 
@@ -778,9 +786,13 @@ get_option_exchange(underlying_exchange)
 check_opengreeks_availability()
 parse_option_symbol(symbol, exchange, custom_expiry_time=None)
 get_underlying_exchange(base_symbol, options_exchange)
+get_exchange_expiry_time(exchange, custom_expiry_time=None)
+get_expiry_datetime(expiry_date, exchange, custom_expiry_time=None)
 calculate_time_to_expiry(expiry)
 calculate_greeks(option_symbol, exchange, spot_price, option_price,
                  interest_rate=None, expiry_time=None, api_key=None)
+calculate_chain_greeks(strikes, ce_prices, pe_prices, forward_price,
+                       time_to_expiry_years, interest_rate=None)
 
 # WhatsApp identity and attachment validation
 normalize_phone(raw)
@@ -788,6 +800,13 @@ phone_to_jid(phone_digits)
 jid_to_phone(jid)
 validate_attachment_path(path)
 ```
+
+`calculate_chain_greeks` solves a whole strike ladder in one vectorized pass using
+the `opengreeks.black76` `*_array` batch functions, rather than calling
+`calculate_greeks` per leg. Use it for anything chain-wide. `get_exchange_expiry_time`
+and `get_expiry_datetime` are the single source of truth for expiry cut-off times
+(NFO and BFO 15:30, CDS 12:30, MCX 23:30) — read them instead of re-deriving the
+policy, so time to expiry stays consistent across services.
 
 The following public-named functions are implementation helpers, not stable
 feature contracts: `import_broker_module`, `import_broker_gtt_module`,

@@ -59,7 +59,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/symbol \
 ```json
 {
   "apikey": "<your_app_apikey>",
-  "symbol": "NIFTY30DEC25FUT",
+  "symbol": "NIFTY25AUG26FUT",
   "exchange": "NFO"
 }
 ```
@@ -71,16 +71,16 @@ curl -X POST http://127.0.0.1:5000/api/v1/symbol \
   "status": "success",
   "data": {
     "brexchange": "NSE_FO",
-    "brsymbol": "NIFTY FUT 30 DEC 25",
+    "brsymbol": "NIFTY FUT 25 AUG 26",
     "exchange": "NFO",
-    "expiry": "30-DEC-25",
+    "expiry": "25-AUG-26",
     "freeze_qty": 1800,
     "id": 57900,
     "instrumenttype": "FUT",
     "lotsize": 65,
     "name": "NIFTY",
     "strike": 0,
-    "symbol": "NIFTY30DEC25FUT",
+    "symbol": "NIFTY25AUG26FUT",
     "tick_size": 10,
     "token": "NSE_FO|49543"
   }
