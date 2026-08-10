@@ -1160,7 +1160,7 @@ The route `/broker/your_broker/totp` must be handled by the React router.
 
 ## 13. Authentication Patterns Reference
 
-OpenAlgo supports five distinct authentication patterns:
+OpenAlgo supports six distinct authentication patterns:
 
 ### Pattern A: OAuth2 Redirect Flow
 

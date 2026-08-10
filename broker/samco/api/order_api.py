@@ -331,14 +331,21 @@ def _collect_open_positions(auth):
     fetching only DAY leaves overnight NRML positions behind. Merge both and
     de-duplicate on symbol + exchange + product, since a position that was both
     carried forward and traded today is reported under each type.
+
+    Returns:
+        tuple: (positions, failed_types) - failed_types names the position books
+        that could not be read, so the caller never reports a complete square-off
+        when half the book is unknown.
     """
     merged = {}
+    failed = []
 
     for position_type in ("DAY", "NET"):
         try:
             response = get_positions(auth, position_type)
         except Exception as e:
             logger.error(f"Failed to fetch {position_type} positions: {e}")
+            failed.append(position_type)
             continue
 
         if response.get("status") != "Success":
@@ -346,6 +353,7 @@ def _collect_open_positions(auth):
                 f"Samco {position_type} positions returned "
                 f"{response.get('statusMessage', 'no status message')}"
             )
+            failed.append(position_type)
             continue
 
         for position in response.get("positionDetails") or []:
@@ -358,14 +366,24 @@ def _collect_open_positions(auth):
             # let NET only contribute positions DAY did not report.
             merged.setdefault(key, position)
 
-    return list(merged.values())
+    return list(merged.values()), failed
 
 
 def close_all_positions(current_api_key, auth):
     """
     Close all open positions.
     """
-    positions = _collect_open_positions(auth)
+    positions, failed_types = _collect_open_positions(auth)
+
+    # Never claim a clean square-off on a book we could not read - a failed NET
+    # fetch would otherwise hide still-open carry-forward positions.
+    if failed_types:
+        message = (
+            f"Could not read the {' and '.join(failed_types)} position book, so positions "
+            f"may remain open. No square-off was attempted. Please retry."
+        )
+        logger.error(message)
+        return {"status": "error", "message": message}, 500
 
     if not positions:
         return {"message": "No Open Positions Found"}, 200

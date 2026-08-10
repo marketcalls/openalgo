@@ -75,6 +75,9 @@ export default function SamcoAuth() {
   // GET /ip/whoami - confirms the IP Samco sees matches a registered static IP.
   async function checkIpStatus() {
     setIsCheckingIp(true)
+    // Clear the previous failure so a successful recheck (e.g. after
+    // registering the IP) does not leave the old banner on screen.
+    setError(null)
 
     try {
       const response = await fetch('/samco/ip-status', { credentials: 'include' })

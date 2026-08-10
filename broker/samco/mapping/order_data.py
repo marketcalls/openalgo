@@ -218,9 +218,11 @@ def transform_order_data(orders):
             "timestamp": order.get("orderTime", ""),
             "filled_quantity": filled_qty,
             "pending_quantity": pending_qty,
-            "average_price": _to_float(
-                order.get("averagePrice") or order.get("fillPrice")
-            ),
+            # Parse each candidate before choosing: averagePrice is often the
+            # placeholder "--"/"0.00" on a filled order, and a truthy placeholder
+            # would shadow a usable fillPrice if the fallback ran on raw values.
+            "average_price": _to_float(order.get("averagePrice"))
+            or _to_float(order.get("fillPrice")),
             "rejection_reason": _clean_text(order.get("rejectionReason")),
         }
 

@@ -107,6 +107,9 @@ class SamcoWebSocket:
         self._sub_dirty = threading.Event()
         self._sub_flush_thread = None
         self._sub_flush_stop = threading.Event()
+        # Serialises snapshot+send in the flusher against remove+send in
+        # unsubscribe, so a stale snapshot cannot resurrect a dropped symbol.
+        self._sub_send_lock = threading.Lock()
 
         # Heartbeat management
         self._heartbeat_thread = None
@@ -383,13 +386,23 @@ class SamcoWebSocket:
                 return  # healthy worker already running
             old.join(timeout=self.THREAD_JOIN_TIMEOUT)
             if old.is_alive():
-                self.logger.warning(
-                    "Previous subscription flusher did not exit; starting a new one anyway"
+                # Do not start a replacement: the worker owns its own stop event,
+                # but a second worker would double every subscription frame. The
+                # stalled one still holds the (set) event and will exit on its own.
+                self.logger.error(
+                    "Previous subscription flusher did not exit within "
+                    f"{self.THREAD_JOIN_TIMEOUT}s; not starting a replacement"
                 )
+                return
 
-        self._sub_flush_stop.clear()
+        # A fresh event per worker: clearing a shared one would resurrect a
+        # stalled predecessor instead of stopping it.
+        self._sub_flush_stop = threading.Event()
         self._sub_flush_thread = threading.Thread(
-            target=self._subscription_flush_worker, daemon=True, name="samco-sub-flush"
+            target=self._subscription_flush_worker,
+            args=(self._sub_flush_stop,),
+            daemon=True,
+            name="samco-sub-flush",
         )
         self._sub_flush_thread.start()
 
@@ -397,12 +410,17 @@ class SamcoWebSocket:
         self._sub_flush_stop.set()
         self._sub_dirty.set()  # wake the worker so it can exit promptly
 
-    def _subscription_flush_worker(self) -> None:
-        """Collapse a burst of subscribe() calls into a single frame pair."""
-        while not self._sub_flush_stop.is_set():
+    def _subscription_flush_worker(self, stop_event: threading.Event) -> None:
+        """
+        Collapse a burst of subscribe() calls into a single frame pair.
+
+        Takes its own stop event so a restart cannot revive it (see
+        _start_subscription_flusher).
+        """
+        while not stop_event.is_set():
             if not self._sub_dirty.wait(timeout=1.0):
                 continue
-            if self._sub_flush_stop.is_set():
+            if stop_event.is_set():
                 break
 
             # Let the burst settle: each new subscribe() re-sets the flag, so keep
@@ -411,7 +429,7 @@ class SamcoWebSocket:
                 self._sub_dirty.clear()
                 if not self._sub_dirty.wait(timeout=self.SUB_FLUSH_DEBOUNCE):
                     break
-                if self._sub_flush_stop.is_set():
+                if stop_event.is_set():
                     return
 
             try:
@@ -433,6 +451,10 @@ class SamcoWebSocket:
         if not self._validate_connection_state("subscribe"):
             return
 
+        with self._sub_send_lock:
+            self._send_subscription_state_locked()
+
+    def _send_subscription_state_locked(self) -> None:
         depth_symbols = []
         quote_symbols = []
         for sym_key, sym_info in list(self.subscribed_symbols.items()):
@@ -686,13 +708,20 @@ class SamcoWebSocket:
                 return  # healthy worker already running
             old.join(timeout=self.THREAD_JOIN_TIMEOUT)
             if old.is_alive():
-                self.logger.warning(
-                    "Previous heartbeat thread did not exit; starting a new one anyway"
+                # Same reasoning as the flusher: a replacement would double up
+                # rather than replace, since the stalled worker owns its event.
+                self.logger.error(
+                    "Previous heartbeat thread did not exit within "
+                    f"{self.THREAD_JOIN_TIMEOUT}s; not starting a replacement"
                 )
+                return
 
-        self._heartbeat_stop_event.clear()
+        self._heartbeat_stop_event = threading.Event()
         self._heartbeat_thread = threading.Thread(
-            target=self._heartbeat_worker, daemon=True, name="samco-heartbeat"
+            target=self._heartbeat_worker,
+            args=(self._heartbeat_stop_event,),
+            daemon=True,
+            name="samco-heartbeat",
         )
         self._heartbeat_thread.start()
         self.logger.debug("Heartbeat thread started")
@@ -701,12 +730,17 @@ class SamcoWebSocket:
         """Stop heartbeat monitoring thread immediately"""
         self._heartbeat_stop_event.set()
 
-    def _heartbeat_worker(self) -> None:
-        """Heartbeat worker thread - monitors connection health"""
+    def _heartbeat_worker(self, stop_event: threading.Event) -> None:
+        """
+        Heartbeat worker thread - monitors connection health.
+
+        Takes its own stop event so a restart cannot revive it (see
+        _start_heartbeat).
+        """
         while self.running and self.connected:
             try:
                 # Wait with interrupt support instead of blocking sleep
-                if self._heartbeat_stop_event.wait(timeout=self.HEARTBEAT_INTERVAL):
+                if stop_event.wait(timeout=self.HEARTBEAT_INTERVAL):
                     break  # Stop event was set
 
                 if self.running and self.connected:
@@ -824,58 +858,15 @@ class SamcoWebSocket:
         try:
             symbols_list = []
 
-            for token_group in token_list:
-                exchange = token_group.get("exchangeType", "NSE")
-                tokens = token_group.get("tokens", [])
+            # Held across the removal AND the send: the coalescing flusher
+            # snapshots subscribed_symbols under the same lock, so an in-flight
+            # snapshot can no longer re-subscribe a symbol removed here.
+            with self._sub_send_lock:
+                symbols_list = self._unsubscribe_locked(mode, token_list)
 
-                for token in tokens:
-                    # Build symbol key same way as subscribe
-                    token_str = str(token)
-                    if token_str.startswith("-"):
-                        # Index token - use as-is without exchange suffix
-                        symbol_key = token_str
-                    elif "_" in token_str:
-                        symbol_key = token_str
-                    else:
-                        symbol_key = f"{token_str}_{exchange}"
-
-                    symbols_list.append({"symbol": symbol_key})
-
-                    # Remove from tracking
-                    if symbol_key in self.subscribed_symbols:
-                        del self.subscribed_symbols[symbol_key]
-
-                    # Drop the merged field cache so a later resubscribe cannot
-                    # emit stale prices before the first fresh frame arrives.
-                    with self._tick_state_lock:
-                        self._tick_state.pop(symbol_key, None)
-
-                    # Remove from input_request_dict
-                    if mode in self.input_request_dict:
-                        if exchange in self.input_request_dict[mode]:
-                            if token in self.input_request_dict[mode][exchange]:
-                                self.input_request_dict[mode][exchange].remove(token)
-
-            # Mirror subscribe(): depth symbols were subscribed on BOTH quote2
-            # (ladder) and quote (ltp/ohlc), so both have to be cancelled or the
-            # quote stream keeps delivering ticks for an unsubscribed symbol.
-            if mode == self.DEPTH_MODE:
-                streaming_types = (self.STREAMING_TYPE_QUOTE, "quote")
-            else:
-                streaming_types = ("quote",)
-
-            for streaming_type in streaming_types:
-                request_data = {
-                    "request": {
-                        "streaming_type": streaming_type,
-                        "data": {"symbols": symbols_list},
-                        "request_type": self.REQUEST_UNSUBSCRIBE,
-                        "response_format": "json",
-                    }
-                }
-
-                # Trailing newline must terminate the same frame (see subscribe()).
-                self.ws.send(json.dumps(request_data) + "\n")
+            # Re-flush so the next full-set frame reflects the removal - under
+            # Samco's replace semantics that is what actually drops the symbol.
+            self._request_subscription_flush()
 
             # debug, not info: the proxy unsubscribes one symbol per call, so a
             # teardown of a large option chain logs a line per strike.
@@ -885,6 +876,64 @@ class SamcoWebSocket:
         except Exception as e:
             self.logger.error(f"Error during unsubscribe: {e}")
             return False
+
+    def _unsubscribe_locked(self, mode: int, token_list: list[dict]) -> list:
+        """Remove symbols and send the unsubscribe frames. Caller holds _sub_send_lock."""
+        symbols_list = []
+        for token_group in token_list:
+            exchange = token_group.get("exchangeType", "NSE")
+            tokens = token_group.get("tokens", [])
+
+            for token in tokens:
+                # Build symbol key same way as subscribe
+                token_str = str(token)
+                if token_str.startswith("-"):
+                    # Index token - use as-is without exchange suffix
+                    symbol_key = token_str
+                elif "_" in token_str:
+                    symbol_key = token_str
+                else:
+                    symbol_key = f"{token_str}_{exchange}"
+
+                symbols_list.append({"symbol": symbol_key})
+
+                # Remove from tracking
+                if symbol_key in self.subscribed_symbols:
+                    del self.subscribed_symbols[symbol_key]
+
+                # Drop the merged field cache so a later resubscribe cannot
+                # emit stale prices before the first fresh frame arrives.
+                with self._tick_state_lock:
+                    self._tick_state.pop(symbol_key, None)
+
+                # Remove from input_request_dict
+                if mode in self.input_request_dict:
+                    if exchange in self.input_request_dict[mode]:
+                        if token in self.input_request_dict[mode][exchange]:
+                            self.input_request_dict[mode][exchange].remove(token)
+
+        # Mirror subscribe(): depth symbols were subscribed on BOTH quote2
+        # (ladder) and quote (ltp/ohlc), so both have to be cancelled or the
+        # quote stream keeps delivering ticks for an unsubscribed symbol.
+        if mode == self.DEPTH_MODE:
+            streaming_types = (self.STREAMING_TYPE_QUOTE, "quote")
+        else:
+            streaming_types = ("quote",)
+
+        for streaming_type in streaming_types:
+            request_data = {
+                "request": {
+                    "streaming_type": streaming_type,
+                    "data": {"symbols": symbols_list},
+                    "request_type": self.REQUEST_UNSUBSCRIBE,
+                    "response_format": "json",
+                }
+            }
+
+            # Trailing newline must terminate the same frame (see subscribe()).
+            self.ws.send(json.dumps(request_data) + "\n")
+
+        return symbols_list
 
     def _resubscribe_all(self) -> None:
         """Resubscribe to all previously subscribed symbols after reconnection"""

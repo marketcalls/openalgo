@@ -113,29 +113,36 @@ def resolve_order_type(data, auth_token=None):
             f"Action={action}, TriggerPrice={trigger_price}"
         )
         order_type = "SL"
-        if trigger_price > 0:
-            try:
-                protected, mpp_percentage = _protected_price(
-                    trigger_price, action, symbol, exchange
-                )
-                price = str(protected)
-                logger.info(
-                    f"MPP Conversion: Symbol={symbol}, SL-M->SL, "
-                    f"TriggerPrice={trigger_price}, LimitPrice={protected}, MPP={mpp_percentage}%"
-                )
-            except Exception as e:
-                mpp_percentage = None
-                logger.error(
-                    f"MPP Error: Failed for SL-M Symbol={symbol}, Error={str(e)}. "
-                    f"Falling back to SL order type"
-                )
-        else:
-            logger.warning(
-                f"MPP Warning: Trigger price is 0 for SL-M Symbol={symbol}. "
-                f"Falling back to SL order type"
+        # Samco's SL needs a real limit price. Falling through with price "0"
+        # and triggerPrice "0" builds an order the exchange is guaranteed to
+        # reject, so fail here instead of sending it - same as the MARKET branch.
+        if trigger_price <= 0:
+            raise ValueError(
+                f"SL-M order failed: trigger price is required for Symbol={symbol}"
             )
+        try:
+            protected, mpp_percentage = _protected_price(trigger_price, action, symbol, exchange)
+            price = str(protected)
+            logger.info(
+                f"MPP Conversion: Symbol={symbol}, SL-M->SL, "
+                f"TriggerPrice={trigger_price}, LimitPrice={protected}, MPP={mpp_percentage}%"
+            )
+        except Exception as e:
+            logger.error(f"MPP Error: Failed for SL-M Symbol={symbol}, Error={str(e)}")
+            raise ValueError(f"SL-M order failed: {str(e)}")
 
     return order_type, price, mpp_percentage
+
+
+def _format_market_protection(mpp_percentage):
+    """
+    Render the MPP slab as Samco's marketProtection percentage.
+
+    Must not be int()-truncated: the EQ/FUT slab above Rs 500 is 0.5%, so
+    int() sends "0" - no protection at all - for most large-cap equities and
+    futures. %g keeps 0.5 as "0.5" and 3.0 as "3".
+    """
+    return f"{mpp_percentage:g}"
 
 
 def transform_data(data, token, auth_token=None):
@@ -167,8 +174,8 @@ def transform_data(data, token, auth_token=None):
 
     # Add price for LIMIT and SL orders (and MPP-converted orders)
     if order_type in ["L", "SL"]:
-        if price == "0" and data["pricetype"] in ["LIMIT", "SL"]:
-            price = str(data.get("price", "0"))
+        # resolve_order_type() already set price from data["price"] for LIMIT/SL
+        # and to the MPP-protected price for converted MARKET/SL-M orders.
         transformed["price"] = price
 
     # Add trigger price for SL orders
@@ -177,7 +184,7 @@ def transform_data(data, token, auth_token=None):
 
     # Add marketProtection for MPP-converted orders (dynamic slab percentage)
     if data["pricetype"] in ["MARKET", "SL-M"] and mpp_percentage is not None:
-        transformed["marketProtection"] = str(int(mpp_percentage))
+        transformed["marketProtection"] = _format_market_protection(mpp_percentage)
 
     return transformed
 
@@ -206,8 +213,8 @@ def transform_modify_order_data(data, auth_token=None):
 
     # Add price for LIMIT and SL orders (and MPP-converted orders)
     if order_type in ["L", "SL"]:
-        if price == "0" and data["pricetype"] in ["LIMIT", "SL"]:
-            price = str(data.get("price", "0"))
+        # resolve_order_type() already set price from data["price"] for LIMIT/SL
+        # and to the MPP-protected price for converted MARKET/SL-M orders.
         transformed["price"] = price
 
     # Add trigger price for SL and SL-M orders
@@ -216,7 +223,7 @@ def transform_modify_order_data(data, auth_token=None):
 
     # Add marketProtection for MPP-converted orders (dynamic slab percentage)
     if data["pricetype"] in ["MARKET", "SL-M"] and mpp_percentage is not None:
-        transformed["marketProtection"] = str(int(mpp_percentage))
+        transformed["marketProtection"] = _format_market_protection(mpp_percentage)
 
     return transformed
 
