@@ -393,6 +393,35 @@ export const COLUMN_DEFINITIONS: ColumnDefinition[] = [
 
 export const ALL_COLUMN_KEYS: ColumnKey[] = COLUMN_DEFINITIONS.map((col) => col.key)
 
+/**
+ * A column as a trader thinks of it: one entry covering both sides.
+ *
+ * The chain is a mirrored table, so Delta means the CE and PE delta columns
+ * together. Visibility is toggled through these pairs rather than the
+ * underlying `ce_*` / `pe_*` keys, which would otherwise need unchecking twice
+ * to disappear from the table.
+ *
+ * Ordering stays per side and is handled separately by the reorder panel.
+ */
+export interface LogicalColumn {
+  label: string
+  isGreek: boolean
+  /** The CE and PE keys this entry controls */
+  keys: ColumnKey[]
+}
+
+export const LOGICAL_COLUMNS: LogicalColumn[] = COLUMN_DEFINITIONS.filter(
+  (col) => col.side === 'ce'
+).map((col) => {
+  const base = col.key.slice(3)
+  const peKey = `pe_${base}` as ColumnKey
+  return {
+    label: col.label,
+    isGreek: Boolean(col.isGreek),
+    keys: COLUMN_DEFINITIONS.some((c) => c.key === peKey) ? [col.key, peKey] : [col.key],
+  }
+})
+
 export const DEFAULT_COLUMN_ORDER: ColumnKey[] = ALL_COLUMN_KEYS
 
 export const DEFAULT_VISIBLE_COLUMNS: ColumnKey[] = COLUMN_DEFINITIONS.filter(
