@@ -66,6 +66,112 @@ DEFAULT_INTEREST_RATES = {
     "MCX": 0,  # Commodities
 }
 
+MONTH_MAP = {
+    "JAN": 1,
+    "FEB": 2,
+    "MAR": 3,
+    "APR": 4,
+    "MAY": 5,
+    "JUN": 6,
+    "JUL": 7,
+    "AUG": 8,
+    "SEP": 9,
+    "OCT": 10,
+    "NOV": 11,
+    "DEC": 12,
+}
+
+# Expiry cut-off time (IST wall clock) per exchange. MCX is a default; the real
+# cut-off varies by commodity, which is why callers can override it.
+EXCHANGE_EXPIRY_TIMES = {
+    "MCX": (23, 30),
+    "CDS": (12, 30),
+}
+
+# NFO and BFO, and anything else that follows the equity-derivatives session.
+DEFAULT_EXPIRY_TIME = (15, 30)
+
+
+def get_exchange_expiry_time(
+    exchange: str, custom_expiry_time: str | None = None
+) -> tuple[int, int]:
+    """
+    Resolve the expiry cut-off time for an exchange.
+
+    This is the single source of truth for how far into the expiry day an option
+    still has time value. Both the greeks path and the option chain read it, so
+    the two agree on time to expiry.
+
+    Args:
+        exchange: Exchange code (NFO, BFO, CDS, MCX, ...)
+        custom_expiry_time: Optional override in "HH:MM" format
+
+    Returns:
+        Tuple of (hour, minute) in IST
+
+    Raises:
+        ValueError: If custom_expiry_time is malformed or out of range
+    """
+    if not custom_expiry_time:
+        return EXCHANGE_EXPIRY_TIMES.get(exchange, DEFAULT_EXPIRY_TIME)
+
+    time_parts = custom_expiry_time.split(":")
+    if len(time_parts) != 2:
+        raise ValueError(
+            f"Invalid expiry_time format: {custom_expiry_time}. Use HH:MM format (e.g., '15:30', '19:00')"
+        )
+
+    try:
+        expiry_hour = int(time_parts[0])
+        expiry_minute = int(time_parts[1])
+    except ValueError as e:
+        raise ValueError(f"Failed to parse expiry_time '{custom_expiry_time}': {str(e)}") from e
+
+    if not (0 <= expiry_hour <= 23) or not (0 <= expiry_minute <= 59):
+        raise ValueError(
+            f"Invalid expiry_time values: {custom_expiry_time}. Hour must be 0-23, minute must be 0-59"
+        )
+
+    return expiry_hour, expiry_minute
+
+
+def get_expiry_datetime(
+    expiry_date: str, exchange: str, custom_expiry_time: str | None = None
+) -> datetime:
+    """
+    Build the IST-localized expiry datetime from a DDMMMYY expiry code.
+
+    Args:
+        expiry_date: Expiry in DDMMMYY format (e.g. "28NOV25")
+        exchange: Exchange code, used to pick the cut-off time
+        custom_expiry_time: Optional override in "HH:MM" format
+
+    Returns:
+        Timezone-aware datetime in IST
+
+    Raises:
+        ValueError: If the expiry code cannot be parsed
+    """
+    code = expiry_date.strip().upper()
+    match = re.fullmatch(r"(\d{2})([A-Z]{3})(\d{2})", code)
+    if not match:
+        raise ValueError(f"Invalid expiry format: {expiry_date}. Expected DDMMMYY (e.g. 28NOV25)")
+
+    day, month_str, year = match.groups()
+    if month_str not in MONTH_MAP:
+        raise ValueError(f"Invalid month in expiry: {expiry_date}")
+
+    expiry_hour, expiry_minute = get_exchange_expiry_time(exchange, custom_expiry_time)
+
+    return datetime(
+        int("20" + year),
+        MONTH_MAP[month_str],
+        int(day),
+        expiry_hour,
+        expiry_minute,
+        tzinfo=INDIA_TZ,
+    )
+
 
 def check_opengreeks_availability():
     """Check if opengreeks library is available"""
@@ -105,7 +211,7 @@ def parse_option_symbol(
 
     Returns:
         base_symbol: Underlying symbol
-        expiry: Expiry datetime
+        expiry: Expiry datetime, naive and to be read as IST
         strike: Strike price (float, in same units as spot)
         opt_type: CE or PE
     """
@@ -122,59 +228,25 @@ def parse_option_symbol(
 
         base_symbol, day, month_str, year, strike_str, opt_type = match.groups()
 
-        # Month mapping
-        month_map = {
-            "JAN": 1,
-            "FEB": 2,
-            "MAR": 3,
-            "APR": 4,
-            "MAY": 5,
-            "JUN": 6,
-            "JUL": 7,
-            "AUG": 8,
-            "SEP": 9,
-            "OCT": 10,
-            "NOV": 11,
-            "DEC": 12,
-        }
+        if month_str not in MONTH_MAP:
+            raise ValueError(f"Invalid month in option symbol: {symbol}")
 
-        # Determine expiry time
+        expiry_hour, expiry_minute = get_exchange_expiry_time(exchange, custom_expiry_time)
         if custom_expiry_time:
-            # Parse custom expiry time (format: "HH:MM")
-            try:
-                time_parts = custom_expiry_time.split(":")
-                if len(time_parts) != 2:
-                    raise ValueError(
-                        f"Invalid expiry_time format: {custom_expiry_time}. Use HH:MM format (e.g., '15:30', '19:00')"
-                    )
-                expiry_hour = int(time_parts[0])
-                expiry_minute = int(time_parts[1])
-                if not (0 <= expiry_hour <= 23) or not (0 <= expiry_minute <= 59):
-                    raise ValueError(
-                        f"Invalid expiry_time values: {custom_expiry_time}. Hour must be 0-23, minute must be 0-59"
-                    )
-                logger.info(f"Using custom expiry time: {custom_expiry_time}")
-            except Exception as e:
-                raise ValueError(
-                    f"Failed to parse expiry_time '{custom_expiry_time}': {str(e)}"
-                ) from e
-        else:
-            # Use default expiry time based on exchange:
-            # NFO/BFO: 15:30 (3:30 PM)
-            # CDS: 12:30 (12:30 PM)
-            # MCX: 23:30 (11:30 PM) - Default, but varies by commodity
-            if exchange == "MCX":
-                expiry_hour = 23
-                expiry_minute = 30
-            elif exchange == "CDS":
-                expiry_hour = 12
-                expiry_minute = 30
-            else:  # NFO, BFO
-                expiry_hour = 15
-                expiry_minute = 30
+            logger.info(f"Using custom expiry time: {custom_expiry_time}")
 
+        # Deliberately naive, and treated as IST by every caller. Callers compare
+        # this against naive timestamps of their own — historical candle times in
+        # iv_chart_service, datetime.now() in vol_surface_service — and Python
+        # refuses to compare naive against aware. calculate_time_to_expiry()
+        # localizes it when it needs a real instant. Use get_expiry_datetime()
+        # instead when you want a timezone-aware expiry.
         expiry = datetime(
-            int("20" + year), month_map[month_str], int(day), expiry_hour, expiry_minute
+            int("20" + year),
+            MONTH_MAP[month_str],
+            int(day),
+            expiry_hour,
+            expiry_minute,
         )
 
         # Convert strike to proper format
@@ -345,6 +417,149 @@ def _expired_option_greeks_response(
 def _is_expired_option_response(response: dict[str, Any]) -> bool:
     message = str(response.get("message", "")).lower()
     return "option has expired" in message
+
+
+def calculate_chain_greeks(
+    strikes: list[float],
+    ce_prices: list[float | None],
+    pe_prices: list[float | None],
+    forward_price: float,
+    time_to_expiry_years: float,
+    interest_rate: float | None = None,
+) -> tuple[list[dict[str, float] | None], list[dict[str, float] | None]]:
+    """
+    Compute IV and Greeks for an entire option chain in one vectorized pass.
+
+    Uses the opengreeks Black-76 ``*_array`` batch functions, which solve the
+    whole strike ladder inside a single Rust call rather than one Python call
+    per leg. A 40-strike chain (80 legs) costs roughly 70 microseconds, which is
+    cheap enough to attach to every option-chain response.
+
+    Legs with no time value, and legs whose IV does not converge, fall back to
+    theoretical Greeks (IV 0, delta +/-1, everything else 0) so the numbers
+    agree with calculate_greeks().
+
+    Args:
+        strikes: Strike ladder
+        ce_prices: Call prices aligned to strikes; 0 or None where unavailable
+        pe_prices: Put prices aligned to strikes; 0 or None where unavailable
+        forward_price: Underlying forward or futures price
+        time_to_expiry_years: Time to expiry in years
+        interest_rate: Risk-free rate as an annualized percentage
+
+    Returns:
+        Tuple of (ce_greeks, pe_greeks). Each is aligned to strikes and holds a
+        dict per leg, or None where Greeks are not computable at all.
+    """
+    count = len(strikes)
+    if count == 0:
+        return [], []
+
+    empty: list[dict[str, float] | None] = [None] * count
+
+    try:
+        import numpy as np
+        from opengreeks import black76
+    except ImportError:
+        logger.error("opengreeks not installed; option chain Greeks unavailable")
+        return list(empty), list(empty)
+
+    if forward_price <= 0 or time_to_expiry_years <= 0:
+        logger.warning(
+            f"Cannot compute chain Greeks: forward={forward_price}, t={time_to_expiry_years}"
+        )
+        return list(empty), list(empty)
+
+    rate_decimal = (interest_rate or 0) / 100.0
+    strike_arr = np.asarray(strikes, dtype=float)
+    forward_arr = np.full(count, float(forward_price))
+    tenor_arr = np.full(count, float(time_to_expiry_years))
+
+    def _side(prices: list[float | None], flag: str) -> list[dict[str, float] | None]:
+        price_arr = np.asarray([float(p) if p else 0.0 for p in prices], dtype=float)
+
+        intrinsic = (
+            np.maximum(forward_arr - strike_arr, 0.0)
+            if flag == "c"
+            else np.maximum(strike_arr - forward_arr, 0.0)
+        )
+        time_value = price_arr - intrinsic
+
+        priced = (price_arr > 0) & (strike_arr > 0)
+        # Same rule as calculate_greeks(): with no time value there is nothing to invert.
+        no_time_value = priced & ((time_value <= 0) | ((intrinsic > 0) & (time_value < 0.01)))
+        solvable = priced & ~no_time_value
+
+        sigma = np.full(count, np.nan)
+        solvable_idx = np.flatnonzero(solvable)
+        if solvable_idx.size:
+            try:
+                sigma[solvable_idx] = black76.implied_volatility_array(
+                    price_arr[solvable_idx],
+                    forward_arr[solvable_idx],
+                    strike_arr[solvable_idx],
+                    rate_decimal,
+                    tenor_arr[solvable_idx],
+                    flag,
+                )
+            except Exception:
+                # A whole-array failure is unexpected; per-leg misses come back as NaN.
+                logger.exception("Vectorized IV solve failed for the chain")
+
+        # Non-convergent legs come back NaN and join the theoretical bucket.
+        converged = solvable & np.isfinite(sigma) & (sigma > 0)
+        theoretical = priced & ~converged
+
+        delta = np.zeros(count)
+        gamma = np.zeros(count)
+        theta = np.zeros(count)
+        vega = np.zeros(count)
+
+        converged_idx = np.flatnonzero(converged)
+        if converged_idx.size:
+            args = (
+                flag,
+                forward_arr[converged_idx],
+                strike_arr[converged_idx],
+                tenor_arr[converged_idx],
+                rate_decimal,
+                sigma[converged_idx],
+            )
+            # opengreeks already returns trader units: theta per day, vega per 1% vol.
+            delta[converged_idx] = black76.delta_array(*args)
+            gamma[converged_idx] = black76.gamma_array(*args)
+            theta[converged_idx] = black76.theta_array(*args)
+            vega[converged_idx] = black76.vega_array(*args)
+
+        # Only an in-the-money leg collapses to +/-1 delta. An out-of-the-money
+        # leg whose IV will not converge is worth ~0 and has ~0 delta, so keying
+        # the fallback off the flag alone would invert its sign.
+        signed_delta = 1.0 if flag == "c" else -1.0
+        fallback_delta = np.where(intrinsic > 0, signed_delta, 0.0)
+
+        out: list[dict[str, float] | None] = [None] * count
+
+        for i in range(count):
+            if converged[i]:
+                out[i] = {
+                    "iv": round(float(sigma[i]) * 100.0, 2),
+                    "delta": round(float(delta[i]), 4),
+                    "gamma": round(float(gamma[i]), 6),
+                    "theta": round(float(theta[i]), 4),
+                    "vega": round(float(vega[i]), 4),
+                }
+            elif theoretical[i]:
+                out[i] = {
+                    "iv": 0,
+                    "delta": float(fallback_delta[i]),
+                    "gamma": 0,
+                    "theta": 0,
+                    "vega": 0,
+                }
+
+        return out
+
+    return _side(ce_prices, "c"), _side(pe_prices, "p")
 
 
 def calculate_greeks(
