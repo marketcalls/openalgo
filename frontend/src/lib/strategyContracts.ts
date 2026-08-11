@@ -14,6 +14,8 @@ export interface ResolvedLegMarket {
   expiryTs: number | null
   lotSize: number
   tickSize: number
+  /** Resolution succeeded against the current canonical listing. */
+  contractValid: true
   marketPrice: number
   iv: number
   forwardPrice: number | null
@@ -80,6 +82,7 @@ export function resolveOptionContract(
     expiryTs: response.expiry_ts ?? null,
     lotSize: contract.lotsize,
     tickSize: contract.tick_size,
+    contractValid: true,
     marketPrice: contract.ltp,
     iv: contract.implied_volatility ?? 0,
     forwardPrice: response.forward_price ?? null,

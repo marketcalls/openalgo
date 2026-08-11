@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { isLegClosed, type StrategyLeg } from '@/lib/strategyMath'
+import { isLegExecutable, type StrategyLeg } from '@/lib/strategyMath'
 import { cn } from '@/lib/utils'
 import { showToast } from '@/utils/toast'
 
@@ -58,12 +58,6 @@ export interface ExecuteBasketDialogProps {
   exchange: string
   /** Read-only strategy name — auto-framed by the parent. */
   strategyName: string
-  /**
-   * Per-leg tick size, keyed by the leg's OpenAlgo symbol. Sourced from
-   * the option-chain response (SymToken.tick_size in the DB). Missing
-   * symbols fall back to 0.05, which is the NSE F&O default.
-   */
-  tickSizeBySymbol?: Record<string, number>
   apiKey: string
 }
 
@@ -77,7 +71,7 @@ function tickDecimals(tick: number): number {
 }
 
 /** Snap `value` to the nearest multiple of `tick` and strip binary drift. */
-function roundToTick(value: number, tick = 0.05): number {
+function roundToTick(value: number, tick: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0
   if (!Number.isFinite(tick) || tick <= 0) return value
   const decimals = tickDecimals(tick)
@@ -90,10 +84,9 @@ export function ExecuteBasketDialog({
   legs,
   exchange,
   strategyName,
-  tickSizeBySymbol,
   apiKey,
 }: ExecuteBasketDialogProps) {
-  const activeLegs = useMemo(() => legs.filter((leg) => leg.active && !isLegClosed(leg)), [legs])
+  const executableLegs = useMemo(() => legs.filter(isLegExecutable), [legs])
   const [rows, setRows] = useState<RowState[]>([])
   const [product, setProduct] = useState<ProductType>('NRML')
   const [pricetype, setPricetype] = useState<PriceType>('LIMIT')
@@ -107,8 +100,10 @@ export function ExecuteBasketDialog({
     setProduct('NRML')
     setPricetype('LIMIT')
     setRows(
-      activeLegs.map((leg) => {
-        const tick = tickSizeBySymbol?.[leg.symbol] ?? 0.05
+      executableLegs.map((leg) => {
+        // Executable legs are created only by canonical resolvers, which
+        // provide their contract-specific tick and lot metadata.
+        const tick = leg.tickSize
         return {
           legId: leg.id,
           include: true,
@@ -116,14 +111,14 @@ export function ExecuteBasketDialog({
           action: leg.side,
           segment: leg.segment,
           optionType: leg.optionType,
-          lots: Math.max(1, Math.floor(leg.lots || 1)),
-          lotSize: Math.max(1, Math.floor(leg.lotSize || 1)),
-          price: roundToTick(leg.price || 0, tick),
+          lots: leg.lots,
+          lotSize: leg.lotSize,
+          price: roundToTick(leg.price, tick),
           tickSize: tick,
         }
       })
     )
-  }, [open, activeLegs, tickSizeBySymbol])
+  }, [open, executableLegs])
 
   const updateRow = (legId: string, patch: Partial<RowState>) =>
     setRows((prev) => prev.map((r) => (r.legId === legId ? { ...r, ...patch } : r)))
@@ -143,7 +138,7 @@ export function ExecuteBasketDialog({
       symbol: r.symbol,
       exchange,
       action: r.action,
-      quantity: Math.max(1, Math.floor(r.lots) * Math.max(1, r.lotSize)),
+      quantity: r.lots * r.lotSize,
       pricetype,
       product,
       price: pricetype === 'LIMIT' ? roundToTick(r.price, r.tickSize) : 0,

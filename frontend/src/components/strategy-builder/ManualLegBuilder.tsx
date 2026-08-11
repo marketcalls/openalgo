@@ -36,6 +36,7 @@ export interface LegDraft {
   expiryTs: number | null
   lotSize: number
   tickSize: number
+  contractValid: true
   marketPrice: number
   referenceUnderlying: number
   forwardPrice: number | null
@@ -198,6 +199,7 @@ export function ManualLegBuilder({
       expiryTs: resolvedContract.expiryTs,
       lotSize: resolvedContract.lotSize,
       tickSize: resolvedContract.tickSize,
+      contractValid: resolvedContract.contractValid,
       marketPrice: resolvedContract.marketPrice,
       referenceUnderlying: resolvedContract.referenceUnderlying,
       forwardPrice: resolvedContract.forwardPrice,

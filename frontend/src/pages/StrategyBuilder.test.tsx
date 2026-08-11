@@ -961,4 +961,49 @@ describe('StrategyBuilder identity orchestration', () => {
     expect(screen.getByRole('button', { name: 'Remove position' })).toBeInTheDocument()
     expect(screen.getByText('2500CE')).toBeInTheDocument()
   })
+
+  it('blocks a saved leg while canonical rehydration is pending, then enables execution without changing entry price', async () => {
+    const saved = savedRelianceStrategy()
+    saved.legs[0].price = 100
+    const restoredChain = deferred<OptionChainResponse>()
+    mocks.getPortfolioEntry.mockResolvedValue(saved)
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      mocks.fetchRequests.push({ url, body })
+      return new Response(JSON.stringify(await restoredChain.promise), { status: 200 })
+    })
+
+    renderBuilder('/strategybuilder?load=17')
+
+    await screen.findByRole('button', { name: 'Remove position' })
+    expect(screen.getByRole('button', { name: 'Execute' })).toBeDisabled()
+
+    await act(async () => {
+      restoredChain.resolve(chainFixture('RELIANCE', '18AUG26'))
+      await restoredChain.promise
+    })
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Execute' })).toBeEnabled())
+    expect(screen.getAllByText('₹100.00').length).toBeGreaterThan(0)
+  })
+
+  it('keeps a saved leg blocked when the restored chain cannot resolve its contract', async () => {
+    const saved = savedRelianceStrategy()
+    mocks.getPortfolioEntry.mockResolvedValue(saved)
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      mocks.fetchRequests.push({ url, body })
+      const chain = chainFixture('RELIANCE', '18AUG26')
+      chain.chain = []
+      return new Response(JSON.stringify(chain), { status: 200 })
+    })
+
+    renderBuilder('/strategybuilder?load=17')
+
+    await screen.findByRole('button', { name: 'Remove position' })
+    await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(1))
+    expect(screen.getByRole('button', { name: 'Execute' })).toBeDisabled()
+  })
 })

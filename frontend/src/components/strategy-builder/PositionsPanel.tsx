@@ -1,7 +1,7 @@
 import { Layers, Pencil, RotateCw, Save, Send, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { isLegClosed, type StrategyLeg, strikeMoneyness } from '@/lib/strategyMath'
+import { isLegClosed, isLegExecutable, type StrategyLeg, strikeMoneyness } from '@/lib/strategyMath'
 import { cn } from '@/lib/utils'
 
 export interface PositionsPanelProps {
@@ -126,6 +126,7 @@ export function PositionsPanel({
 }: PositionsPanelProps) {
   const allSelected = legs.length > 0 && legs.every((l) => l.active)
   const activeCount = legs.filter((l) => l.active).length
+  const executableCount = legs.filter(isLegExecutable).length
 
   // Risk / Reward — meaningful only when both ends are finite and on opposite
   // sides of zero. Unlimited strategies have no defined ratio.
@@ -374,10 +375,10 @@ export function PositionsPanel({
             <Button
               size="sm"
               onClick={onExecute}
-              disabled={activeCount === 0 || executeDisabled}
+              disabled={executableCount === 0 || executeDisabled}
               title={
-                activeCount === 0
-                  ? 'Add at least one active leg to execute'
+                executableCount === 0
+                  ? 'Add at least one resolved active leg to execute'
                   : executeDisabled
                     ? 'API key required'
                     : ''

@@ -75,6 +75,11 @@ export interface StrategyLeg {
   expiryTs?: number | null
   /** Minimum price increment for this contract. */
   tickSize?: number
+  /**
+   * Set only when this exact contract was resolved from the current canonical
+   * broker listing. Persisted legs intentionally rehydrate without it.
+   */
+  contractValid?: boolean
   /** Latest streamed contract price, per share. */
   marketPrice?: number
   /** Underlying price at which the per-leg market snapshot was formed. */
@@ -101,6 +106,20 @@ export function isLegClosed<T extends { exitPrice?: number }>(
   leg: T
 ): leg is T & { exitPrice: number } {
   return leg.exitPrice !== undefined && Number.isFinite(leg.exitPrice) && leg.exitPrice >= 0
+}
+
+export type ExecutableStrategyLeg = StrategyLeg & { contractValid: true; tickSize: number }
+
+/** A leg may be sent to the broker only after its exact contract was resolved. */
+export function isLegExecutable(leg: StrategyLeg): leg is ExecutableStrategyLeg {
+  return (
+    leg.active &&
+    !isLegClosed(leg) &&
+    leg.contractValid === true &&
+    typeof leg.tickSize === 'number' &&
+    Number.isFinite(leg.tickSize) &&
+    leg.tickSize > 0
+  )
 }
 
 const SQRT2 = Math.SQRT2

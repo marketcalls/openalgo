@@ -209,6 +209,7 @@ export function EditLegDialog({
       expiryTs: resolvedContract.expiryTs,
       lotSize: resolvedContract.lotSize,
       tickSize: resolvedContract.tickSize,
+      contractValid: resolvedContract.contractValid,
       marketPrice: resolvedContract.marketPrice,
       iv: resolvedContract.iv,
       referenceUnderlying: resolvedContract.referenceUnderlying,

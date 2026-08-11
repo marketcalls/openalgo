@@ -65,6 +65,7 @@ describe('strategy contract resolution', () => {
       expiryTs: 1_787_020_800,
       lotSize: 50,
       tickSize: 0.05,
+      contractValid: true,
       marketPrice: 210.5,
       iv: 14.2,
       forwardPrice: 24_625.5,

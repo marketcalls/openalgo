@@ -185,6 +185,7 @@ export default function StrategyBuilder() {
   const marginGenerationRef = useRef(0)
   const marginSupportedRef = useRef<boolean | null>(null)
   const hydratedIdentityRef = useRef<ChainIdentity | null>(null)
+  const rehydrationGenerationRef = useRef(0)
 
   const requestIdentity = useMemo<ChainIdentity>(
     () => ({
@@ -241,20 +242,6 @@ export default function StrategyBuilder() {
     const isRecent = lastStreamUpdate !== null && payoffClock - lastStreamUpdate.getTime() <= 60_000
     return isStreaming && !isPaused && isRecent ? 'live' : 'stale'
   }, [activeChain, isLiveLoading, isPaused, isStreaming, lastStreamUpdate, payoffClock])
-
-  // OpenAlgo-symbol → tick size map, built from the live option chain.
-  // Powers per-leg price snapping in the Execute Basket dialog so options
-  // priced in 0.05 ticks never leak floating-point drift into the order,
-  // and crypto legs with 0.0001 / 0.5 ticks are respected too.
-  const tickSizeBySymbol = useMemo(() => {
-    if (!activeChain?.chain) return {}
-    const map: Record<string, number> = {}
-    for (const row of activeChain.chain) {
-      if (row.ce?.symbol && row.ce.tick_size > 0) map[row.ce.symbol] = row.ce.tick_size
-      if (row.pe?.symbol && row.pe.tick_size > 0) map[row.pe.symbol] = row.pe.tick_size
-    }
-    return map
-  }, [activeChain])
 
   // Dynamic, read-only strategy name sent to /basketorder. Prefers the
   // saved portfolio entry name; otherwise synthesises from current state.
@@ -596,6 +583,7 @@ export default function StrategyBuilder() {
         expiryTs: null,
         lotSize: listed.lotsize,
         tickSize: listed.tick_size,
+        contractValid: true,
         marketPrice: parsedPrice.value,
         iv: 0,
         forwardPrice: null,
@@ -605,6 +593,77 @@ export default function StrategyBuilder() {
     },
     []
   )
+
+  // A saved strategy carries only the historical selection. Do not trust its
+  // stored symbol, lot, or tick metadata for execution: once the restored
+  // identity has a current chain, resolve every open active leg again and
+  // replace metadata only when the canonical listing confirms that contract.
+  // The generation plus selection key prevents a late response from a prior
+  // identity from making a newly-selected strategy executable.
+  useEffect(() => {
+    if (!activeChain) return
+    const candidates = legs.filter((leg) => leg.active && !isLegClosed(leg) && !leg.contractValid)
+    if (candidates.length === 0) return
+
+    const generation = ++rehydrationGenerationRef.current
+    const identityKey = chainIdentity(
+      requestIdentity.exchange,
+      requestIdentity.underlying,
+      requestIdentity.expiry
+    )
+    let cancelled = false
+
+    void Promise.all(
+      candidates.map(async (leg) => ({
+        id: leg.id,
+        selectionKey: `${leg.segment}|${leg.expiry}|${leg.strike ?? ''}|${leg.optionType ?? ''}`,
+        contract: await resolveLegContract(leg.expiry, leg.segment, leg.strike, leg.optionType),
+      }))
+    ).then((resolved) => {
+      if (
+        cancelled ||
+        generation !== rehydrationGenerationRef.current ||
+        identityKey !==
+          chainIdentity(requestIdentity.exchange, requestIdentity.underlying, requestIdentity.expiry)
+      ) {
+        return
+      }
+      const byId = new Map(resolved.map((item) => [item.id, item]))
+      setLegs((previous) => {
+        let changed = false
+        const next = previous.map((leg) => {
+          const result = byId.get(leg.id)
+          const selectionKey = `${leg.segment}|${leg.expiry}|${leg.strike ?? ''}|${leg.optionType ?? ''}`
+          if (!result || !result.contract || leg.contractValid || result.selectionKey !== selectionKey) {
+            return leg
+          }
+          changed = true
+          return {
+            ...leg,
+            // Keep the saved entry price: rehydration validates the current
+            // contract metadata, it never rewrites the historical fill.
+            exchange: result.contract.exchange,
+            symbol: result.contract.symbol,
+            expiry: result.contract.expiry,
+            expiryTs: result.contract.expiryTs,
+            lotSize: result.contract.lotSize,
+            tickSize: result.contract.tickSize,
+            marketPrice: result.contract.marketPrice,
+            iv: result.contract.iv,
+            referenceUnderlying: result.contract.referenceUnderlying,
+            forwardPrice: result.contract.forwardPrice ?? undefined,
+            marketGreeks: result.contract.greeks,
+            contractValid: true,
+          }
+        })
+        return changed ? next : previous
+      })
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeChain, legs, requestIdentity, resolveLegContract])
 
   useEffect(() => {
     const interval = window.setInterval(() => setPayoffClock(Date.now()), 60_000)
@@ -1025,6 +1084,7 @@ export default function StrategyBuilder() {
           exchange: market.exchange,
           expiryTs: market.expiryTs,
           tickSize: market.tickSize,
+          contractValid: market.contractValid,
           marketPrice: market.marketPrice,
           referenceUnderlying: market.referenceUnderlying,
           forwardPrice: market.forwardPrice ?? undefined,
@@ -1066,6 +1126,7 @@ export default function StrategyBuilder() {
       exchange: draft.exchange,
       expiryTs: draft.expiryTs,
       tickSize: draft.tickSize,
+      contractValid: draft.contractValid,
       marketPrice: draft.marketPrice,
       referenceUnderlying: draft.referenceUnderlying,
       forwardPrice: draft.forwardPrice ?? undefined,
@@ -1209,6 +1270,9 @@ export default function StrategyBuilder() {
           symbol: l.symbol,
           exchange: optionExchangeFor(entry.exchange),
           exitPrice: l.exitPrice,
+          // Saved payloads are not proof that the current broker listing still
+          // has this contract. A fresh canonical resolver must mark it valid.
+          contractValid: false,
         }))
         setLegs(restored)
         setSpotShiftPct(0)
@@ -1606,7 +1670,6 @@ export default function StrategyBuilder() {
         legs={legs}
         exchange={optionExchangeFor(selectedExchange)}
         strategyName={computedStrategyName}
-        tickSizeBySymbol={tickSizeBySymbol}
         apiKey={apiKey ?? ''}
       />
     </div>
