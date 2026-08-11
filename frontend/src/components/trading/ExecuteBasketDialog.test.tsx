@@ -233,4 +233,23 @@ describe('ExecuteBasketDialog', () => {
 
     expect(submitBasket).not.toHaveBeenCalled()
   })
+
+  it('blocks an overflowed tick price instead of submitting its off-tick source value', () => {
+    render(
+      <ExecuteBasketDialog
+        open
+        onOpenChange={vi.fn()}
+        exchange="NFO"
+        strategyName="Overflow price"
+        apiKey="api-key"
+        legs={[leg({ contractValid: true, price: 1.7e308, tickSize: 1e308 })]}
+      />
+    )
+
+    expect(screen.getByText('A: price is outside the supported tick range')).toBeInTheDocument()
+    const execute = screen.getByRole('button', { name: /Execute \(1\)/ })
+    expect(execute).toBeDisabled()
+    fireEvent.click(execute)
+    expect(submitBasket).not.toHaveBeenCalled()
+  })
 })

@@ -47,7 +47,7 @@ interface RowState {
   lots: number
   /** Broker lot size (from the symbol / option-chain service). */
   lotSize: number
-  price: number
+  price: number | null
   tickSize: number
 }
 
@@ -77,9 +77,9 @@ function scaledIntegerToNumber(coefficient: bigint, exponent: number): number {
 }
 
 /** Snap `value` to the nearest multiple of `tick` with exact decimal half-up rounding. */
-function roundToTick(value: number, tick: number): number {
-  if (!Number.isFinite(value) || value <= 0) return 0
-  if (!Number.isFinite(tick) || tick <= 0) return value
+function roundToTick(value: number, tick: number): number | null {
+  if (!Number.isFinite(value) || value <= 0) return null
+  if (!Number.isFinite(tick) || tick <= 0) return null
   const valueParts = toScaledInteger(value)
   const tickParts = toScaledInteger(tick)
   let numerator = valueParts.coefficient
@@ -93,8 +93,7 @@ function roundToTick(value: number, tick: number): number {
   let multiples = numerator / denominator
   if ((numerator % denominator) * 2n >= denominator) multiples += 1n
   const rounded = scaledIntegerToNumber(multiples * tickParts.coefficient, tickParts.exponent)
-  if (!Number.isFinite(rounded)) return value
-  return rounded
+  return Number.isFinite(rounded) && rounded > 0 ? rounded : null
 }
 
 function contractKey(leg: StrategyLeg): string {
@@ -178,8 +177,15 @@ export function ExecuteBasketDialog({
     setRows((prev) => prev.map((r) => (r.legId === legId ? { ...r, ...patch } : r)))
 
   const includedRows = rows.filter((r) => r.include)
+  const hasInvalidLimitPrice =
+    pricetype === 'LIMIT' &&
+    includedRows.some((r) => r.price === null || !Number.isFinite(r.price) || r.price <= 0)
   const canSubmit =
-    !submitting && includedRows.length > 0 && strategyName.trim().length > 0 && !!apiKey
+    !submitting &&
+    includedRows.length > 0 &&
+    strategyName.trim().length > 0 &&
+    !!apiKey &&
+    !hasInvalidLimitPrice
 
   const handleExecute = async () => {
     if (!canSubmit) return
@@ -188,24 +194,28 @@ export function ExecuteBasketDialog({
     // Contract quantity = lots × lotSize — the broker API expects contracts.
     // Final tick-snap here in case the user hit Execute before blurring
     // a manually-edited price input.
-    const orders: BasketOrderItem[] = includedRows.map((r) => ({
-      symbol: r.symbol,
-      exchange,
-      action: r.action,
-      quantity: r.lots * r.lotSize,
-      pricetype,
-      product,
-      price: pricetype === 'LIMIT' ? roundToTick(r.price, r.tickSize) : 0,
-      trigger_price: 0,
+    const normalizedRows = includedRows.map((row) => ({
+      row,
+      price: pricetype === 'LIMIT' ? roundToTick(row.price ?? 0, row.tickSize) : 0,
     }))
-
     if (pricetype === 'LIMIT') {
-      const bad = orders.find((o) => !o.price || (o.price ?? 0) <= 0)
+      const bad = normalizedRows.find(({ price }) => price === null || !Number.isFinite(price) || price <= 0)
       if (bad) {
-        showToast.error(`${bad.symbol}: LIMIT needs a valid price`)
+        updateRow(bad.row.legId, { price: null })
+        showToast.error(`${bad.row.symbol}: LIMIT needs a valid price`)
         return
       }
     }
+    const orders: BasketOrderItem[] = normalizedRows.map(({ row, price }) => ({
+      symbol: row.symbol,
+      exchange,
+      action: row.action,
+      quantity: row.lots * row.lotSize,
+      pricetype,
+      product,
+      price: price ?? 0,
+      trigger_price: 0,
+    }))
 
     setSubmitting(true)
     try {
@@ -442,7 +452,7 @@ export function ExecuteBasketDialog({
                       type="number"
                       min={0}
                       step={r.tickSize}
-                      value={r.price}
+                      value={r.price ?? ''}
                       onChange={(e) => updateRow(r.legId, { price: Number(e.target.value) || 0 })}
                       onBlur={(e) => {
                         const snapped = roundToTick(Number(e.target.value) || 0, r.tickSize)
@@ -452,6 +462,11 @@ export function ExecuteBasketDialog({
                       placeholder={pricetype === 'MARKET' ? 'MKT' : '0.00'}
                       className="h-8 text-right font-mono text-xs"
                     />
+                    {r.price === null && (
+                      <span className="text-[10px] text-rose-600 dark:text-rose-400">
+                        {r.symbol}: price is outside the supported tick range
+                      </span>
+                    )}
                   </div>
                 )
               })

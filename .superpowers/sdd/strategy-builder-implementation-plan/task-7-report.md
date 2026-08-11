@@ -73,3 +73,19 @@
   change, the focused suite passes (5 tests); lint, TypeScript, and the full
   frontend suite pass with 26 files and 393 tests. Production build also
   passes; generated `frontend/dist` output was restored afterward.
+
+## Fix Round 3
+
+- Tick normalization now returns an explicit invalid state when a finite
+  source price would round to a non-finite numeric payload (or either input is
+  invalid). It never falls back to the original, potentially off-tick value.
+- Invalid LIMIT prices are retained in the dialog as an empty/error-marked row
+  (`<symbol>: price is outside the supported tick range`) and disable Execute.
+  A final submit-time normalization guard also marks a just-entered invalid
+  value before omitting the basket request.
+- RED/GREEN evidence: with `1.7e308` at tick `1e308`, the new dialog test
+  initially found no invalid state and an enabled Execute button. It now shows
+  the retained warning, disables execution, and confirms no basket request is
+  sent. Prior exact decimal/scientific fixtures remain covered. Focused dialog
+  tests pass (6); lint, TypeScript, full frontend (26 files, 394 tests), and
+  production build pass; generated `frontend/dist` was restored afterward.
