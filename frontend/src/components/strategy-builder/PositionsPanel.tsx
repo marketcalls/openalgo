@@ -1,7 +1,7 @@
 import { Layers, Pencil, RotateCw, Save, Send, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { type StrategyLeg, strikeMoneyness } from '@/lib/strategyMath'
+import { isLegClosed, isLegExecutable, type StrategyLeg, strikeMoneyness } from '@/lib/strategyMath'
 import { cn } from '@/lib/utils'
 
 export interface PositionsPanelProps {
@@ -13,7 +13,7 @@ export interface PositionsPanelProps {
   onToggleAll: (active: boolean) => void
   onReset: () => void
 
-  probOfProfit: number
+  probOfProfit: number | null
   maxProfit: number
   maxLoss: number
   breakevens: number[]
@@ -41,17 +41,7 @@ export interface PositionsPanelProps {
   isUpdating?: boolean
   /** True when no broker session — disables Execute. */
   executeDisabled?: boolean
-}
-
-function formatCurrency(v: number): string {
-  // Unlimited-profit / unlimited-loss strategies report ±Infinity from
-  // computePayoff. Surface that clearly instead of a generic dash.
-  if (v === Infinity) return 'Unlimited'
-  if (v === -Infinity) return 'Unlimited'
-  if (!Number.isFinite(v)) return '—'
-  const abs = Math.abs(v)
-  const sign = v < 0 ? '-' : v > 0 ? '+' : ''
-  return `${sign}₹${abs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+  formatCurrency: (value: number) => string
 }
 
 function formatPct(v: number): string {
@@ -123,9 +113,11 @@ export function PositionsPanel({
   onExecute,
   isUpdating = false,
   executeDisabled = false,
+  formatCurrency,
 }: PositionsPanelProps) {
   const allSelected = legs.length > 0 && legs.every((l) => l.active)
   const activeCount = legs.filter((l) => l.active).length
+  const executableCount = legs.filter(isLegExecutable).length
 
   // Risk / Reward — meaningful only when both ends are finite and on opposite
   // sides of zero. Unlimited strategies have no defined ratio.
@@ -196,7 +188,7 @@ export function PositionsPanel({
         ) : (
           <ul>
             {legs.map((leg, idx) => {
-              const isClosed = leg.exitPrice !== undefined && leg.exitPrice > 0
+              const isClosed = isLegClosed(leg)
               const sign = leg.side === 'BUY' ? 1 : -1
               const qty = leg.lots * leg.lotSize
               const realisedPnl = isClosed ? sign * ((leg.exitPrice ?? 0) - leg.price) * qty : 0
@@ -306,16 +298,20 @@ export function PositionsPanel({
                           ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
                           : 'bg-rose-500/10 text-rose-700 dark:text-rose-400'
                       )}
-                      title={`Entry ₹${leg.price.toFixed(2)} → Exit ₹${(leg.exitPrice ?? 0).toFixed(2)}`}
+                      title={`Entry ${formatCurrency(leg.price)} → Exit ${formatCurrency(leg.exitPrice ?? 0)}`}
                     >
-                      {realisedPnl >= 0 ? '+' : '-'}₹
-                      {Math.abs(realisedPnl).toLocaleString('en-IN', {
-                        maximumFractionDigits: 0,
-                      })}
+                      {formatCurrency(realisedPnl)}
                     </span>
                   ) : (
-                    <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-                      ₹{leg.price.toFixed(2)}
+                    <span
+                      className="shrink-0 text-[11px] tabular-nums text-muted-foreground"
+                      title={
+                        leg.marketPrice !== undefined
+                          ? `Current mark ${formatCurrency(leg.marketPrice)}`
+                          : undefined
+                      }
+                    >
+                      {formatCurrency(leg.price)}
                     </span>
                   )}
 
@@ -367,10 +363,10 @@ export function PositionsPanel({
             <Button
               size="sm"
               onClick={onExecute}
-              disabled={activeCount === 0 || executeDisabled}
+              disabled={executableCount === 0 || executeDisabled}
               title={
-                activeCount === 0
-                  ? 'Add at least one active leg to execute'
+                executableCount === 0
+                  ? 'Add at least one resolved active leg to execute'
                   : executeDisabled
                     ? 'API key required'
                     : ''
@@ -389,14 +385,31 @@ export function PositionsPanel({
         <dl className="grid grid-cols-2 divide-x divide-y">
           <MetricTile
             label="Max Profit"
-            value={formatCurrency(maxProfit)}
+            value={
+              Number.isFinite(maxProfit)
+                ? formatCurrency(maxProfit)
+                : Math.abs(maxProfit) === Infinity
+                  ? 'Unlimited'
+                  : '—'
+            }
             tone="profit"
             emphasize
           />
-          <MetricTile label="Max Loss" value={formatCurrency(maxLoss)} tone="loss" emphasize />
+          <MetricTile
+            label="Max Loss"
+            value={
+              Number.isFinite(maxLoss)
+                ? formatCurrency(maxLoss)
+                : Math.abs(maxLoss) === Infinity
+                  ? 'Unlimited'
+                  : '—'
+            }
+            tone="loss"
+            emphasize
+          />
           <MetricTile
             label="Prob. of Profit"
-            value={probOfProfit > 0 ? formatPct(probOfProfit * 100) : '—'}
+            value={probOfProfit === null ? '—' : formatPct(probOfProfit * 100)}
           />
           <MetricTile label="Risk : Reward" value={riskReward} />
           <MetricTile
@@ -409,10 +422,7 @@ export function PositionsPanel({
             value={formatCurrency(netCredit)}
             tone={netCredit > 0 ? 'profit' : netCredit < 0 ? 'loss' : 'neutral'}
           />
-          <MetricTile
-            label="Est. Premium"
-            value={`₹${Math.abs(estPremium).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
-          />
+          <MetricTile label="Est. Premium" value={formatCurrency(Math.abs(estPremium))} />
           {marginSupported === true && (
             <MetricTile
               label="Margin Req."
@@ -420,7 +430,7 @@ export function PositionsPanel({
                 isMarginLoading
                   ? 'Calculating…'
                   : marginRequired !== null && marginRequired !== undefined
-                    ? `₹${marginRequired.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+                    ? formatCurrency(marginRequired)
                     : '—'
               }
             />
@@ -438,7 +448,7 @@ export function PositionsPanel({
                 key={i}
                 className="rounded-md border bg-background px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-foreground"
               >
-                {b.toFixed(0)}
+                {formatCurrency(b)}
               </span>
             ))}
           </div>

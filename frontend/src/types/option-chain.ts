@@ -1,6 +1,9 @@
 export interface OptionChainResponse {
   status: 'success' | 'error'
   underlying: string
+  /** Exact market-data reference resolved by the backend for the underlying quote. */
+  underlying_symbol: string
+  underlying_exchange: string
   underlying_ltp: number
   underlying_prev_close: number
   expiry_date: string
@@ -14,6 +17,13 @@ export interface OptionChainResponse {
   greeks_included?: boolean
   chain: OptionStrike[]
   message?: string
+}
+
+/** Immutable derivative request identity attached when an option-chain poll starts. */
+export interface OptionChainDataIdentity {
+  exchange: string
+  underlying: string
+  expiry: string
 }
 
 export interface OptionStrike {
