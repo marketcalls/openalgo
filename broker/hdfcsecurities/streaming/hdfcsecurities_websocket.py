@@ -318,10 +318,10 @@ class HDFCSecuritiesWebSocket:
     def _process_pending_subscriptions(self):
         while self.pending_subscriptions and self.running:
             if not self.connected:
-                # Never drop queued subscriptions here: _resubscribe_all replays
-                # only already-sent scrips, so clearing pending would lose these
-                # permanently. Wait for the (re)connection instead -- the drain
-                # resumes once the feed is back, and stop() ends the wait.
+                # Wait for the (re)connection rather than dropping the queue --
+                # the drain resumes once the feed is back, and stop() ends the
+                # wait. Anything queued is also in `desired`, so the reconnect
+                # replay covers it even if this loop is torn down first.
                 if self._stop_event.wait(1.0):
                     return
                 continue
@@ -393,30 +393,37 @@ class HDFCSecuritiesWebSocket:
                 return False
             wanted = {scrip_id for scrip_id in scrip_ids if scrip_id}
             with self.lock:
-                # Retract the intent BEFORE sending, and purge anything still
-                # queued for these scrips: a pending subscribe drained after
-                # this frame would silently bring the instrument back.
+                # Retract ALL local state before sending, in one step. The
+                # frame can fail, and state split across a failure is what
+                # resurrects an instrument: leaving it in `subscribed` while
+                # `desired` has dropped it means the reconnect replay puts it
+                # back. Purge queued frames for the same reason.
+                payload = [
+                    {
+                        "scripId": scrip_id,
+                        "type": self.subscribed.get(scrip_id, self.desired.get(scrip_id, "ALL")),
+                    }
+                    for scrip_id in scrip_ids
+                    if scrip_id
+                ]
                 for scrip_id in wanted:
                     self.desired.pop(scrip_id, None)
+                    self.subscribed.pop(scrip_id, None)
                 if wanted:
                     self.pending_subscriptions = deque(
                         item for item in self.pending_subscriptions if item[0] not in wanted
                     )
-                payload = [
-                    {"scripId": scrip_id, "type": self.subscribed.get(scrip_id, "ALL")}
-                    for scrip_id in scrip_ids
-                    if scrip_id
-                ]
             if not payload:
                 return True
             if self.connected:
                 # Capital S: the documented key is "unSubscribe".
                 self.ws.send(json.dumps({"heart_beat": False, "unSubscribe": payload}))
-            with self.lock:
-                for scrip_id in scrip_ids:
-                    self.subscribed.pop(scrip_id, None)
             return True
         except Exception as e:
+            # State is already retracted, so a failed frame cannot resurrect
+            # the instrument: the reconnect replay works off `desired`, and a
+            # send failure here means the socket is on its way down anyway --
+            # the broker drops the whole subscription set with it.
             self.logger.error(f"Error unsubscribing: {e}")
             return False
 
@@ -427,11 +434,17 @@ class HDFCSecuritiesWebSocket:
         return self.connected and self.running
 
     def _resubscribe_all(self):
+        """Replay the WANTED subscription set after a reconnect.
+
+        `desired` is the authority, not `subscribed`: replaying what was last
+        successfully sent would resurrect an instrument whose unSubscribe frame
+        failed, and would miss one whose subscribe frame never got out.
+        """
         with self.lock:
-            if not self.subscribed:
+            if not self.desired:
                 return
             by_type: dict[str, list[str]] = {}
-            for scrip_id, sub_type in self.subscribed.items():
+            for scrip_id, sub_type in self.desired.items():
                 by_type.setdefault(sub_type, []).append(scrip_id)
         for sub_type, scrip_ids in by_type.items():
             for start in range(0, len(scrip_ids), self.MAX_SCRIPS_PER_SUBSCRIBE):
@@ -445,6 +458,11 @@ class HDFCSecuritiesWebSocket:
                             }
                         )
                     )
+                    with self.lock:
+                        # Keep `subscribed` (what was sent) in step with
+                        # `desired` (what is wanted) after a replay.
+                        for scrip_id in batch:
+                            self.subscribed[scrip_id] = sub_type
                     if self._stop_event.wait(self.SUBSCRIPTION_DELAY):
                         return
                 except Exception as e:
