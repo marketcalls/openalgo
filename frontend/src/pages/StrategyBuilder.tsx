@@ -12,13 +12,16 @@ import { useNavigate, useSearchParams } from 'react-router'
 import { apiClient } from '@/api/client'
 import { oiProfileApi } from '@/api/oi-profile'
 import { optionChainApi } from '@/api/option-chain'
+import { scalpingApi } from '@/api/scalping'
 import { type PortfolioEntry, strategyPortfolioApi, type Watchlist } from '@/api/strategy-portfolio'
-import {
-  EditLegDialog,
-  invalidateIvWhenContractChanges,
-} from '@/components/strategy-builder/EditLegDialog'
+import { tradingApi } from '@/api/trading'
+import { EditLegDialog } from '@/components/strategy-builder/EditLegDialog'
 import { GreeksTab, type LegGreeks } from '@/components/strategy-builder/GreeksTab'
-import { type LegDraft, ManualLegBuilder } from '@/components/strategy-builder/ManualLegBuilder'
+import {
+  type LegDraft,
+  ManualLegBuilder,
+  type ResolveLegContract,
+} from '@/components/strategy-builder/ManualLegBuilder'
 import MultiStrikeOITab from '@/components/strategy-builder/MultiStrikeOITab'
 import { PayoffChart } from '@/components/strategy-builder/PayoffChart'
 import { PnLTab } from '@/components/strategy-builder/PnLTab'
@@ -53,11 +56,10 @@ import {
   chainMatches,
   contractPriceKey,
   type ListedOptionChainResponse,
+  parseFinitePrice,
   resolveOptionContract,
 } from '@/lib/strategyContracts'
 import {
-  buildFutureSymbol,
-  buildOptionSymbol,
   computePayoff,
   daysToExpiry,
   daysToYears,
@@ -70,11 +72,7 @@ import {
   totalPremium,
 } from '@/lib/strategyMath'
 import type { Direction, StrategyTemplate } from '@/lib/strategyTemplates'
-import {
-  canReuseChainContract,
-  normalizeExpiryCode,
-  resolveListedContract,
-} from '@/lib/templateResolution'
+import { normalizeExpiryCode } from '@/lib/templateResolution'
 import { useAuthStore } from '@/stores/authStore'
 import { showToast } from '@/utils/toast'
 
@@ -176,8 +174,9 @@ export default function StrategyBuilder() {
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [loadedEntry, setLoadedEntry] = useState<PortfolioEntry | null>(null)
-  const [pendingIdentityChange, setPendingIdentityChange] =
-    useState<PendingIdentityChange | null>(null)
+  const [pendingIdentityChange, setPendingIdentityChange] = useState<PendingIdentityChange | null>(
+    null
+  )
 
   // Basket execution dialog
   const [executeDialogOpen, setExecuteDialogOpen] = useState(false)
@@ -238,8 +237,7 @@ export default function StrategyBuilder() {
   const connectionStatus = useMemo<'live' | 'refreshing' | 'stale' | 'idle'>(() => {
     if (isLiveLoading) return 'refreshing'
     if (!activeChain) return 'idle'
-    const isRecent =
-      lastStreamUpdate !== null && payoffClock - lastStreamUpdate.getTime() <= 60_000
+    const isRecent = lastStreamUpdate !== null && payoffClock - lastStreamUpdate.getTime() <= 60_000
     return isStreaming && !isPaused && isRecent ? 'live' : 'stale'
   }, [activeChain, isLiveLoading, isPaused, isStreaming, lastStreamUpdate, payoffClock])
 
@@ -375,8 +373,8 @@ export default function StrategyBuilder() {
         ? [preservedUnderlying, ...defaults]
         : defaults
     )
-    setSelectedUnderlying((prev) =>
-      preservedUnderlying ?? (defaults.includes(prev) ? prev : defaults[0] || '')
+    setSelectedUnderlying(
+      (prev) => preservedUnderlying ?? (defaults.includes(prev) ? prev : defaults[0] || '')
     )
 
     let cancelled = false
@@ -506,6 +504,85 @@ export default function StrategyBuilder() {
     }
     return Number.isFinite(minDiff) ? minDiff : 50
   }, [activeChain])
+
+  const resolveLegContract = useCallback<ResolveLegContract>(
+    async (expiry, segment, strike, optionType) => {
+      if (!apiKey || !selectedUnderlying) return null
+      const normalizedExpiry = normalizeExpiryCode(expiry)
+      const derivativeExchange = optionExchangeFor(selectedExchange)
+      const identity: ChainIdentity = {
+        exchange: derivativeExchange,
+        underlying: selectedUnderlying,
+        expiry: normalizedExpiry,
+      }
+
+      if (segment === 'OPTION') {
+        if (strike === undefined || !optionType) return null
+        let response = activeChain && chainMatches(activeChain, identity) ? activeChain : null
+        if (response === null) {
+          const fetched = await queuedFetch(() =>
+            optionChainApi.getOptionChain(
+              apiKey,
+              selectedUnderlying,
+              underlyingExchangeFor(selectedExchange, selectedUnderlying),
+              normalizedExpiry,
+              20,
+              { withGreeks: true }
+            )
+          )
+          response = { ...fetched, exchange: derivativeExchange }
+        }
+        if (response.status !== 'success' || !chainMatches(response, identity)) return null
+        return resolveOptionContract(response, optionType, strike)
+      }
+
+      if (!futureExpiries.includes(normalizedExpiry)) return null
+      const contracts = await scalpingApi.futures(selectedUnderlying, derivativeExchange)
+      if (contracts.status !== 'success') return null
+      const listed = contracts.data.find(
+        (contract) => normalizeExpiryCode(contract.expiry) === normalizedExpiry
+      )
+      if (
+        !listed ||
+        !Number.isInteger(listed.lotsize) ||
+        listed.lotsize <= 0 ||
+        typeof listed.tick_size !== 'number' ||
+        !Number.isFinite(listed.tick_size) ||
+        listed.tick_size <= 0
+      ) {
+        return null
+      }
+
+      const quote = await queuedFetch(() =>
+        tradingApi.getQuotes(apiKey, listed.symbol, derivativeExchange)
+      )
+      const parsedPrice = parseFinitePrice(quote.data?.ltp ?? '')
+      const referenceUnderlying = activeChain?.underlying_ltp
+      if (
+        quote.status !== 'success' ||
+        parsedPrice.value === null ||
+        typeof referenceUnderlying !== 'number' ||
+        !Number.isFinite(referenceUnderlying)
+      ) {
+        return null
+      }
+
+      return {
+        exchange: derivativeExchange,
+        symbol: listed.symbol,
+        expiry: normalizedExpiry,
+        expiryTs: null,
+        lotSize: listed.lotsize,
+        tickSize: listed.tick_size,
+        marketPrice: parsedPrice.value,
+        iv: 0,
+        forwardPrice: null,
+        referenceUnderlying,
+        greeks: { delta: null, gamma: null, theta: null, vega: null },
+      }
+    },
+    [apiKey, activeChain, futureExpiries, selectedExchange, selectedUnderlying]
+  )
 
   useEffect(() => {
     const interval = window.setInterval(() => setPayoffClock(Date.now()), 60_000)
@@ -751,7 +828,11 @@ export default function StrategyBuilder() {
   useEffect(() => {
     if (!apiKey) return
     const needs = legs.filter(
-      (l) => l.price === 0 && !(l.exitPrice !== undefined && l.exitPrice > 0) && l.symbol
+      (l) =>
+        l.price === 0 &&
+        l.marketPrice === undefined &&
+        !(l.exitPrice !== undefined && l.exitPrice > 0) &&
+        l.symbol
     )
     if (needs.length === 0) return
     const exchange = optionExchangeFor(selectedExchange)
@@ -778,7 +859,7 @@ export default function StrategyBuilder() {
           if (Object.keys(priceBySymbol).length === 0) return
           setLegs((prev) =>
             prev.map((l) => {
-              if (l.price > 0) return l
+              if (l.price > 0 || l.marketPrice !== undefined) return l
               const p = priceBySymbol[l.symbol]
               return p !== undefined ? { ...l, price: p } : l
             })
@@ -802,11 +883,19 @@ export default function StrategyBuilder() {
   const fallbackPricesByLeg = useMemo(() => {
     const map: Record<string, number> = {}
     if (!activeChain) return map
+    const priceByContract = new Map<string, number>()
+    for (const row of activeChain.chain) {
+      if (row.ce) {
+        priceByContract.set(contractPriceKey(activeChain.exchange, row.ce.symbol), row.ce.ltp)
+      }
+      if (row.pe) {
+        priceByContract.set(contractPriceKey(activeChain.exchange, row.pe.symbol), row.pe.ltp)
+      }
+    }
     for (const leg of legs) {
-      if (leg.segment !== 'OPTION' || leg.strike === undefined || !leg.optionType) continue
-      const row = activeChain.chain.find((s) => s.strike === leg.strike)
-      const side = leg.optionType === 'CE' ? row?.ce : row?.pe
-      if (side?.ltp !== undefined) map[leg.id] = side.ltp
+      if (!leg.exchange || !leg.symbol) continue
+      const price = priceByContract.get(contractPriceKey(leg.exchange, leg.symbol))
+      if (price !== undefined) map[leg.id] = price
     }
     return map
   }, [activeChain, legs])
@@ -940,65 +1029,32 @@ export default function StrategyBuilder() {
   )
 
   // Manual leg add
-  const handleAddManualLeg = useCallback(
-    (draft: LegDraft) => {
-      if (!lotSize && draft.segment === 'OPTION') {
-        showToast.error('Lot size not detected')
-        return
-      }
-      const expiryCode = normalizeExpiryCode(draft.expiry)
+  const handleAddManualLeg = useCallback((draft: LegDraft) => {
+    const expiryCode = normalizeExpiryCode(draft.expiry)
 
-      // Prefer the broker-provided symbol from the live chain whenever
-      // possible — some brokers (notably crypto exchanges like Delta) don't
-      // follow the standard BASE[DDMMMYY][STRIKE][CE|PE] concatenation, so
-      // constructing it locally would produce an invalid symbol.
-      let symbol: string
-      let optionContract: NonNullable<ListedOptionChainResponse['chain'][number]['ce']> | null = null
-      if (draft.segment === 'OPTION' && draft.strike !== undefined && draft.optionType) {
-        const row = activeChain?.chain.find((s) => s.strike === draft.strike)
-        const side = draft.optionType === 'CE' ? row?.ce : row?.pe
-        if (!activeChain || !side) {
-          showToast.error('The selected option contract is not available in the active chain')
-          return
-        }
-        optionContract = side
-        symbol = side.symbol
-      } else {
-        symbol = buildFutureSymbol(selectedUnderlying, expiryCode)
-      }
-
-      // For futures, fall back to the synthetic-future price when the draft
-      // didn't carry one — otherwise the payoff calc treats entry as 0 and
-      // returns a runaway positive P&L.
-      let entryPrice = draft.price
-      if (draft.segment === 'FUTURE' && entryPrice <= 0 && futuresPrice !== null) {
-        entryPrice = futuresPrice
-      }
-
-      const newLeg: StrategyLeg = {
-        id: uid(),
-        segment: draft.segment,
-        side: draft.side,
-        lots: draft.lots,
-        lotSize: lotSize ?? 1,
-        expiry: expiryCode,
-        strike: draft.strike,
-        optionType: draft.optionType,
-        price: entryPrice,
-        iv: 0,
-        active: true,
-        symbol,
-        exchange: optionExchangeFor(selectedExchange),
-        expiryTs: optionContract ? (activeChain?.expiry_ts ?? null) : undefined,
-        tickSize: optionContract?.tick_size,
-        marketPrice: optionContract?.ltp,
-        referenceUnderlying: optionContract ? activeChain?.underlying_ltp : undefined,
-        forwardPrice: optionContract ? (activeChain?.forward_price ?? undefined) : undefined,
-      }
-      setLegs((prev) => [...prev, newLeg])
-    },
-    [lotSize, selectedUnderlying, selectedExchange, futuresPrice, activeChain]
-  )
+    const newLeg: StrategyLeg = {
+      id: uid(),
+      segment: draft.segment,
+      side: draft.side,
+      lots: draft.lots,
+      lotSize: draft.lotSize,
+      expiry: expiryCode,
+      strike: draft.strike,
+      optionType: draft.optionType,
+      price: draft.price,
+      iv: draft.iv,
+      active: true,
+      symbol: draft.symbol,
+      exchange: draft.exchange,
+      expiryTs: draft.expiryTs,
+      tickSize: draft.tickSize,
+      marketPrice: draft.marketPrice,
+      referenceUnderlying: draft.referenceUnderlying,
+      forwardPrice: draft.forwardPrice ?? undefined,
+      marketGreeks: draft.greeks,
+    }
+    setLegs((prev) => [...prev, newLeg])
+  }, [])
 
   // Payoff
   const payoff = useMemo(() => {
@@ -1072,49 +1128,13 @@ export default function StrategyBuilder() {
   const removeLeg = useCallback((id: string) => {
     setLegs((prev) => prev.filter((l) => l.id !== id))
   }, [])
-  const saveEditedLeg = useCallback(
-    (updated: StrategyLeg) => {
-      // Normalise expiry to the OpenAlgo DDMMMYY format — the dropdown may
-      // have supplied an API-format value like "21-APR-26" which would wreck
-      // symbol construction and leg-row rendering otherwise.
-      const normalisedExpiry = normalizeExpiryCode(updated.expiry)
-
-      // Prefer the live chain's symbol whenever available so crypto / non-
-      // standard option symbols stay correct across edits.
-      let rebuiltSymbol: string
-      if (updated.segment === 'OPTION' && updated.strike !== undefined && updated.optionType) {
-        const side =
-          activeChain &&
-          canReuseChainContract(normalisedExpiry, activeChain.expiry_date || selectedExpiry)
-            ? resolveListedContract(activeChain.chain, updated.strike, updated.optionType)
-            : null
-        rebuiltSymbol =
-          side?.symbol ??
-          buildOptionSymbol(
-            selectedUnderlying,
-            normalisedExpiry,
-            updated.strike,
-            updated.optionType
-          )
-      } else {
-        rebuiltSymbol = buildFutureSymbol(selectedUnderlying, normalisedExpiry)
-      }
-
-      setLegs((prev) =>
-        prev.map((l) => {
-          if (l.id !== updated.id) return l
-          return invalidateIvWhenContractChanges(l, {
-            ...updated,
-            expiry: normalisedExpiry,
-            symbol: rebuiltSymbol,
-            exchange: updated.exchange ?? optionExchangeFor(selectedExchange),
-          })
-        })
-      )
-      setEditLegId(null)
-    },
-    [selectedUnderlying, selectedExpiry, activeChain, selectedExchange]
-  )
+  const saveEditedLeg = useCallback((updated: StrategyLeg) => {
+    const normalisedExpiry = normalizeExpiryCode(updated.expiry)
+    setLegs((prev) =>
+      prev.map((leg) => (leg.id === updated.id ? { ...updated, expiry: normalisedExpiry } : leg))
+    )
+    setEditLegId(null)
+  }, [])
   const toggleAll = useCallback((active: boolean) => {
     setLegs((prev) => prev.map((l) => ({ ...l, active })))
   }, [])
@@ -1304,6 +1324,7 @@ export default function StrategyBuilder() {
         selectedExpiry={selectedExpiry}
         atmStrike={atmStrike}
         strikeStep={strikeStep}
+        resolveContract={resolveLegContract}
         onAdd={handleAddManualLeg}
       />
 
@@ -1516,12 +1537,9 @@ export default function StrategyBuilder() {
         optionExpiries={expiries}
         futureExpiries={futureExpiries}
         chain={activeChain?.chain ?? null}
-        chainExpiry={selectedExpiry}
-        underlying={selectedUnderlying}
-        optionExchange={optionExchangeFor(selectedExchange)}
-        apiKey={apiKey ?? ''}
         atmStrike={atmStrike}
         strikeStep={strikeStep}
+        resolveContract={resolveLegContract}
         onSave={saveEditedLeg}
         onDelete={removeLeg}
       />

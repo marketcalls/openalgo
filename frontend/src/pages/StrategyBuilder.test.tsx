@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   marketConnectionEpoch: 0,
   getExpiries: vi.fn(),
   getOptionChain: vi.fn(),
+  getFutures: vi.fn(),
   getPortfolioEntry: vi.fn(),
   getUnderlyings: vi.fn(),
 }))
@@ -33,6 +34,10 @@ vi.mock('@/api/option-chain', () => ({
     getExpiries: mocks.getExpiries,
     getOptionChain: mocks.getOptionChain,
   },
+}))
+
+vi.mock('@/api/scalping', () => ({
+  scalpingApi: { futures: mocks.getFutures },
 }))
 
 vi.mock('@/api/strategy-portfolio', () => ({
@@ -235,6 +240,17 @@ beforeEach(() => {
     async (_apiKey: string, underlying: string, _exchange: string, expiry: string) =>
       chainFixture(underlying, expiry)
   )
+  mocks.getFutures.mockResolvedValue({
+    status: 'success',
+    data: [
+      {
+        symbol: 'NIFTY27AUG26FUT',
+        expiry: '27-AUG-26',
+        lotsize: 65,
+        tick_size: 0.05,
+      },
+    ],
+  })
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -248,6 +264,9 @@ beforeEach(() => {
     })
   )
   mocks.apiPost.mockImplementation(async (url: string) => {
+    if (url === '/quotes') {
+      return { status: 200, data: { status: 'success', data: { ltp: 25_142 } } }
+    }
     if (url === '/optiongreeks') {
       return { status: 200, data: { status: 'success', implied_volatility: 12 } }
     }
@@ -271,6 +290,53 @@ function requests(path: string): unknown[] {
 }
 
 describe('StrategyBuilder live request orchestration', () => {
+  it('adds a manual far-expiry option only from that expiry response', async () => {
+    const farChain = chainFixture('NIFTY', '18AUG26')
+    if (farChain.chain[0].ce) {
+      farChain.chain[0].ce.symbol = 'NIFTY18AUG2624600CE'
+      farChain.chain[0].ce.ltp = 225
+    }
+    mocks.getOptionChain.mockResolvedValue(farChain)
+    renderBuilder()
+    await screen.findByText('NIFTY13AUG2624600CE')
+
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Expiry' }), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: '18AUG26' }))
+
+    expect(await screen.findByText('NIFTY18AUG2624600CE')).toBeVisible()
+    expect(mocks.getOptionChain).toHaveBeenCalledWith(
+      'test-api-key',
+      'NIFTY',
+      'NSE_INDEX',
+      '18AUG26',
+      20,
+      { withGreeks: true }
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Add Buy/ }))
+    await screen.findByRole('button', { name: 'Remove position' })
+    expect(screen.getAllByText('₹225.00').length).toBeGreaterThan(0)
+  })
+
+  it('adds the exact listed futures contract at its own quote', async () => {
+    renderBuilder()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Segment' }), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: 'Futures' }))
+
+    expect(await screen.findByText('NIFTY27AUG26FUT')).toBeVisible()
+    expect(mocks.getFutures).toHaveBeenCalledWith('NIFTY', 'NFO')
+    expect(mocks.apiPost).toHaveBeenCalledWith('/quotes', {
+      apikey: 'test-api-key',
+      symbol: 'NIFTY27AUG26FUT',
+      exchange: 'NFO',
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Buy/ }))
+    await screen.findByRole('button', { name: 'Remove position' })
+    expect(screen.getAllByText('₹25142.00').length).toBeGreaterThan(0)
+  })
+
   it('loads market state through one option-chain request without redundant snapshot calls', async () => {
     renderBuilder()
 
@@ -536,7 +602,9 @@ describe('StrategyBuilder live request orchestration', () => {
     fireEvent.click(screen.getByRole('button', { name: /Call Calendar/ }))
     fireEvent.click(await screen.findByRole('button', { name: 'Add Strategy' }))
 
-    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Remove position' })).toHaveLength(2))
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: 'Remove position' })).toHaveLength(2)
+    )
     expect(mocks.getOptionChain).toHaveBeenCalledWith(
       'test-api-key',
       'NIFTY',
@@ -592,8 +660,11 @@ describe('StrategyBuilder live request orchestration', () => {
     const rows = await screen.findAllByRole('row')
     const editedRow = rows.find((row) => row.textContent?.includes('18AUG26 24600PE'))
     expect(editedRow).toBeDefined()
-    const greekCells = within(editedRow as HTMLElement).getAllByRole('cell').slice(1)
-    for (const cell of greekCells) expect(cell).toHaveTextContent('-')
+    const greekCells = within(editedRow as HTMLElement)
+      .getAllByRole('cell')
+      .slice(1)
+    expect(greekCells[0]).toHaveTextContent('12.00')
+    for (const cell of greekCells.slice(1)) expect(cell).toHaveTextContent('-')
     expect(editedRow).not.toHaveTextContent('0.4400')
   })
 })
@@ -639,9 +710,9 @@ describe('StrategyBuilder identity orchestration', () => {
 
     await chooseUnderlying('BANKNIFTY')
     expect(screen.getByRole('alertdialog')).toHaveTextContent('Clear the current strategy')
-    expect(
-      screen.getByRole('combobox', { name: 'Underlying', hidden: true })
-    ).toHaveTextContent('NIFTY')
+    expect(screen.getByRole('combobox', { name: 'Underlying', hidden: true })).toHaveTextContent(
+      'NIFTY'
+    )
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(screen.getByRole('combobox', { name: 'Underlying' })).toHaveTextContent('NIFTY')
@@ -687,8 +758,7 @@ describe('StrategyBuilder identity orchestration', () => {
     renderBuilder()
     await addOneLeg()
     await waitFor(
-      () =>
-        expect(mocks.apiPost.mock.calls.some(([url]) => url === '/margin')).toBe(true),
+      () => expect(mocks.apiPost.mock.calls.some(([url]) => url === '/margin')).toBe(true),
       { timeout: 2_000 }
     )
 
@@ -719,9 +789,7 @@ describe('StrategyBuilder identity orchestration', () => {
     mocks.getUnderlyings.mockReturnValue(underlyings.promise)
     mocks.getExpiries.mockImplementation(
       async (_apiKey: string, _symbol: string, _exchange: string, instrument: string) =>
-        instrument === 'options'
-          ? optionExpiries.promise
-          : { status: 'success', data: ['27AUG26'] }
+        instrument === 'options' ? optionExpiries.promise : { status: 'success', data: ['27AUG26'] }
     )
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)

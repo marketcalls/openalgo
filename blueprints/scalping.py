@@ -546,10 +546,20 @@ def futures():
         return datetime.max
 
     contracts = sorted(
-        ({"symbol": r.symbol, "expiry": r.expiry, "lotsize": r.lotsize} for r in rows),
+        (_serialize_futures_contract(r) for r in rows),
         key=lambda c: parse_expiry(c["expiry"]),
     )
     return jsonify({"status": "success", "data": contracts})
+
+
+def _serialize_futures_contract(row):
+    """Preserve canonical metadata already stored on the master-contract row."""
+    return {
+        "symbol": row.symbol,
+        "expiry": row.expiry,
+        "lotsize": row.lotsize,
+        "tick_size": row.tick_size,
+    }
 
 
 def _resolve_session_auth():

@@ -1,5 +1,5 @@
 import { ListPlus, Minus, Plus, PlusCircle } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -8,6 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import type { ResolvedLegMarket } from '@/lib/strategyContracts'
 import { strikeMoneyness } from '@/lib/strategyMath'
 import { cn } from '@/lib/utils'
 import type { OptionStrike } from '@/types/option-chain'
@@ -25,7 +26,23 @@ export interface LegDraft {
   lots: number
   price: number
   iv: number
+  symbol: string
+  exchange: string
+  expiryTs: number | null
+  lotSize: number
+  tickSize: number
+  marketPrice: number
+  referenceUnderlying: number
+  forwardPrice: number | null
+  greeks: ResolvedLegMarket['greeks']
 }
+
+export type ResolveLegContract = (
+  expiry: string,
+  segment: LegDraftSegment,
+  strike?: number,
+  optionType?: LegDraftType
+) => Promise<ResolvedLegMarket | null>
 
 export interface ManualLegBuilderProps {
   expiries: string[]
@@ -35,6 +52,7 @@ export interface ManualLegBuilderProps {
   atmStrike: number | null
   /** Common strike increment (e.g. 50 for NIFTY) — drives moneyness step labels. */
   strikeStep?: number
+  resolveContract: ResolveLegContract
   onAdd: (draft: LegDraft) => void
 }
 
@@ -53,6 +71,7 @@ export function ManualLegBuilder({
   selectedExpiry,
   atmStrike,
   strikeStep = 0,
+  resolveContract,
   onAdd,
 }: ManualLegBuilderProps) {
   const [segment, setSegment] = useState<LegDraftSegment>('OPTION')
@@ -61,6 +80,10 @@ export function ManualLegBuilder({
   const [optionType, setOptionType] = useState<LegDraftType>('CE')
   const [strike, setStrike] = useState<number | undefined>(undefined)
   const [lots, setLots] = useState(1)
+  const [resolvedContract, setResolvedContract] = useState<ResolvedLegMarket | null>(null)
+  const [contractError, setContractError] = useState<string | null>(null)
+  const [isResolving, setIsResolving] = useState(false)
+  const resolveGenerationRef = useRef(0)
 
   useEffect(() => {
     if (atmStrike === null || !chain) return
@@ -85,22 +108,45 @@ export function ManualLegBuilder({
     return chain.map((s) => s.strike)
   }, [chain])
 
-  const liveLeg = useMemo(() => {
-    if (segment !== 'OPTION' || !chain || strike === undefined) return null
-    const row = chain.find((s) => s.strike === strike)
-    if (!row) return null
-    const rowSide = optionType === 'CE' ? row.ce : row.pe
-    if (!rowSide) return null
-    return { price: rowSide.ltp, symbol: rowSide.symbol }
-  }, [chain, strike, optionType, segment])
+  useEffect(() => {
+    const generation = ++resolveGenerationRef.current
+    setResolvedContract(null)
+    setContractError(null)
 
-  const canAdd =
-    segment === 'FUTURE'
-      ? expiry && lots > 0
-      : expiry && optionType && strike !== undefined && lots > 0
+    const hasSelection =
+      Boolean(expiry) &&
+      availableExpiries.includes(expiry) &&
+      (segment === 'FUTURE' || strike !== undefined)
+    if (!hasSelection) {
+      setIsResolving(false)
+      return
+    }
+
+    setIsResolving(true)
+    void resolveContract(expiry, segment, strike, segment === 'OPTION' ? optionType : undefined)
+      .then((contract) => {
+        if (generation !== resolveGenerationRef.current) return
+        if (contract === null) {
+          setContractError('Contract is not listed for this selection')
+          return
+        }
+        setResolvedContract(contract)
+      })
+      .catch(() => {
+        if (generation === resolveGenerationRef.current) {
+          setContractError('Unable to resolve this contract')
+        }
+      })
+      .finally(() => {
+        if (generation === resolveGenerationRef.current) setIsResolving(false)
+      })
+  }, [availableExpiries, expiry, optionType, resolveContract, segment, strike])
+
+  const canAdd = Boolean(resolvedContract && !isResolving && lots > 0)
 
   const handleAdd = () => {
     if (!canAdd) return
+    if (!resolvedContract) return
     onAdd({
       segment,
       side,
@@ -108,8 +154,17 @@ export function ManualLegBuilder({
       strike: segment === 'OPTION' ? strike : undefined,
       optionType: segment === 'OPTION' ? optionType : undefined,
       lots,
-      price: liveLeg?.price ?? 0,
-      iv: 0,
+      price: resolvedContract.marketPrice,
+      iv: resolvedContract.iv,
+      symbol: resolvedContract.symbol,
+      exchange: resolvedContract.exchange,
+      expiryTs: resolvedContract.expiryTs,
+      lotSize: resolvedContract.lotSize,
+      tickSize: resolvedContract.tickSize,
+      marketPrice: resolvedContract.marketPrice,
+      referenceUnderlying: resolvedContract.referenceUnderlying,
+      forwardPrice: resolvedContract.forwardPrice,
+      greeks: resolvedContract.greeks,
     })
   }
 
@@ -130,13 +185,13 @@ export function ManualLegBuilder({
             </p>
           </div>
         </div>
-        {liveLeg && (
+        {resolvedContract && (
           <div className="hidden items-center gap-2 text-[11px] sm:flex">
             <span className="flex items-center gap-1.5 text-muted-foreground">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
               LTP
               <span className="font-bold tabular-nums text-foreground">
-                ₹{liveLeg.price.toFixed(2)}
+                ₹{resolvedContract.marketPrice.toFixed(2)}
               </span>
             </span>
           </div>
@@ -149,7 +204,7 @@ export function ManualLegBuilder({
         <div className="flex min-w-[120px] flex-col gap-1.5">
           <FieldLabel>Segment</FieldLabel>
           <Select value={segment} onValueChange={(v) => setSegment(v as LegDraftSegment)}>
-            <SelectTrigger className="h-9 text-xs font-medium">
+            <SelectTrigger aria-label="Segment" className="h-9 text-xs font-medium">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -163,7 +218,7 @@ export function ManualLegBuilder({
         <div className="flex min-w-[140px] flex-col gap-1.5">
           <FieldLabel>Expiry</FieldLabel>
           <Select value={expiry} onValueChange={setExpiry}>
-            <SelectTrigger className="h-9 text-xs font-medium">
+            <SelectTrigger aria-label="Expiry" className="h-9 text-xs font-medium">
               <SelectValue placeholder={availableExpiries.length === 0 ? 'None' : 'Select'} />
             </SelectTrigger>
             <SelectContent>
@@ -203,7 +258,7 @@ export function ManualLegBuilder({
                 value={strike !== undefined ? String(strike) : ''}
                 onValueChange={(v) => setStrike(Number(v))}
               >
-                <SelectTrigger className="h-9 text-xs font-medium tabular-nums">
+                <SelectTrigger aria-label="Strike" className="h-9 text-xs font-medium tabular-nums">
                   <SelectValue placeholder="Select" />
                 </SelectTrigger>
                 <SelectContent>
@@ -238,6 +293,7 @@ export function ManualLegBuilder({
                 <button
                   type="button"
                   onClick={() => setOptionType('CE')}
+                  aria-pressed={optionType === 'CE'}
                   className={cn(
                     'rounded-sm px-3 text-[11px] font-bold transition',
                     optionType === 'CE'
@@ -250,6 +306,7 @@ export function ManualLegBuilder({
                 <button
                   type="button"
                   onClick={() => setOptionType('PE')}
+                  aria-pressed={optionType === 'PE'}
                   className={cn(
                     'rounded-sm px-3 text-[11px] font-bold transition',
                     optionType === 'PE'
@@ -350,16 +407,30 @@ export function ManualLegBuilder({
         </div>
       </div>
 
+      {(isResolving || contractError) && (
+        <div
+          className={cn(
+            'border-t px-4 py-2 text-[11px]',
+            contractError ? 'text-destructive' : 'text-muted-foreground'
+          )}
+          role={contractError ? 'alert' : 'status'}
+        >
+          {contractError ?? 'Resolving listed contract…'}
+        </div>
+      )}
+
       {/* Live symbol footer (LTP was moved to header; keep symbol here). */}
-      {liveLeg && (
+      {resolvedContract && (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/20 px-4 py-2">
           <span className="text-[10px] text-muted-foreground sm:hidden">
             LTP
             <span className="ml-1 font-bold tabular-nums text-foreground">
-              ₹{liveLeg.price.toFixed(2)}
+              ₹{resolvedContract.marketPrice.toFixed(2)}
             </span>
           </span>
-          <span className="font-mono text-[10px] text-muted-foreground">{liveLeg.symbol}</span>
+          <span className="font-mono text-[10px] text-muted-foreground">
+            {resolvedContract.symbol}
+          </span>
         </div>
       )}
     </div>
