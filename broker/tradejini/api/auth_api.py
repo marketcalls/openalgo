@@ -56,13 +56,12 @@ API_KEY_MISSING_ERROR = (
 # code all come back as the same bare "Unauthorized". The IP check happens at
 # the gateway, before the credentials are read, so it is listed first.
 UNAUTHORIZED_HINT = (
-    "Unauthorized. Individual apps only accept requests from the static IP "
-    "whitelisted on the app in the Tradejini developer portal (docs: API Basics "
-    "- Static IP Requirement); a non-whitelisted IP returns this same bare 401 "
-    "before the credentials are even checked. Confirm this machine's public IP "
-    "is the one registered on the app, then check that BROKER_API_KEY holds the "
-    "app API key (the login never sends the api secret), that the password is "
-    "your CubePlus account password, and that the TOTP is current."
+    "Unauthorized. Check, in order: the password field takes your CubePlus "
+    "login PIN, not your account password; individual apps only accept requests "
+    "from the static IP whitelisted on the app in the Tradejini developer portal "
+    "(docs: API Basics - Static IP Requirement); BROKER_API_KEY must hold the "
+    "app API key, since the login never sends the api secret; and the TOTP must "
+    "be current. All four fail with this same bare 401."
 )
 
 

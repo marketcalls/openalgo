@@ -36,6 +36,10 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.lock = threading.Lock()
         self.ws_url = None
         self._connect_thread = None
+        # A retry requested while an attempt is still in flight, with the delay
+        # it asked for. The running attempt hands over to it on the way out.
+        self._retry_pending = False
+        self._pending_delay = 0.0
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -126,14 +130,24 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
     # and a token lookup, with the attempt counter stuck at zero.
 
     def _start_connect(self, delay: float = 0) -> None:
-        """Run one connection attempt on a background thread, at most one live."""
+        """
+        Run one connection attempt on a background thread, at most one live.
+
+        A close event can arrive while an attempt is still running - during its
+        backoff sleep, or between connect() returning and the thread exiting.
+        Dropping that retry would leave the adapter disconnected for good, so it
+        is queued and the running attempt starts it as it finishes.
+        """
         if not self.running:
             return
 
         with self.lock:
             if self._connect_thread and self._connect_thread.is_alive():
-                self.logger.debug("Connection attempt already in flight; not starting another")
+                self.logger.debug("Connection attempt in flight; queueing the retry behind it")
+                self._retry_pending = True
+                self._pending_delay = delay
                 return
+            self._retry_pending = False
             thread = threading.Thread(target=self._connect_once, args=(delay,), daemon=True)
             self._connect_thread = thread
 
@@ -141,6 +155,21 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _connect_once(self, delay: float) -> None:
         """Wait out the backoff, refresh the token, and make one attempt."""
+        try:
+            self._attempt_connection(delay)
+        finally:
+            # Release ownership, then hand over to a retry that arrived while
+            # this attempt was running.
+            with self.lock:
+                self._connect_thread = None
+                pending = self._retry_pending
+                pending_delay = self._pending_delay
+                self._retry_pending = False
+            if pending and self.running:
+                self._start_connect(pending_delay)
+
+    def _attempt_connection(self, delay: float) -> None:
+        """Single connection attempt: backoff, fresh token, connect."""
         if delay:
             time.sleep(delay)
         if not self.running:

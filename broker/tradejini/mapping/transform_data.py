@@ -2,6 +2,9 @@
 # Mapping Tradejini API Parameters https://api.tradejini.com/v2
 
 from database.token_db import get_br_symbol
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def transform_data(data, token):
@@ -21,7 +24,7 @@ def transform_data(data, token):
         "product": map_product_type(data["product"]),
         "limitPrice": str(data.get("price", "0")),
         "trigPrice": str(data.get("trigger_price", "0")),
-        "validity": map_validity(data.get("validity", "DAY")),
+        "validity": map_validity(data.get("validity", "DAY"), data.get("exchange")),
         "discQty": str(data.get("disclosed_quantity", "0")),
         # Remarks are capped at 10 characters - anything longer is stripped out
         # by the broker, so truncate here to keep the tag readable.
@@ -70,7 +73,7 @@ def transform_modify_order_data(data, token):
         "orderId": data["orderid"],
         "qty": total_qty,
         "type": map_order_type(data["pricetype"]),
-        "validity": map_validity(data.get("validity", "DAY")),
+        "validity": map_validity(data.get("validity", "DAY"), data.get("exchange")),
         "side": data["action"].lower(),
     }
 
@@ -111,14 +114,28 @@ def map_product_type(product):
     return product_type_mapping.get(product, "intraday")
 
 
-def map_validity(validity):
+# Exchanges on which the API accepts 'eos' (End-of-Session) validity.
+BSE_EXCHANGES = {"BSE", "BFO", "BCD"}
+
+
+def map_validity(validity, exchange=None):
     """
     Maps OpenAlgo validity types to Tradejini validity types.
 
-    'eos' (End-of-Session) is accepted by the API for BSE scrips only.
+    Args:
+        validity: OpenAlgo validity - DAY, IOC, GTC or EOS.
+        exchange: OpenAlgo exchange code. 'eos' (End-of-Session) is accepted for
+            BSE scrips only, so it falls back to 'day' anywhere else rather than
+            being sent and rejected by the exchange.
     """
     validity_mapping = {"DAY": "day", "IOC": "ioc", "GTC": "gtc", "EOS": "eos"}
-    return validity_mapping.get(str(validity).upper(), "day")
+    mapped = validity_mapping.get(str(validity).upper(), "day")
+
+    if mapped == "eos" and str(exchange).upper() not in BSE_EXCHANGES:
+        logger.warning(f"EOS validity is BSE-only; falling back to DAY for exchange {exchange}")
+        return "day"
+
+    return mapped
 
 
 def reverse_map_product_type(product):

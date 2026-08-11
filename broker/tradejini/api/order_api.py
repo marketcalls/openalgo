@@ -22,7 +22,6 @@ from ..mapping.order_data import (
 )
 from ..mapping.transform_data import (
     map_product_type,
-    reverse_map_order_type,
     reverse_map_product_type,
     transform_data,
     transform_modify_order_data,
