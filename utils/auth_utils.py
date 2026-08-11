@@ -295,6 +295,17 @@ def async_master_contract_download(broker):
     try:
         master_contract_status = master_contract_module.master_contract_download()
 
+        # Brokers disagree on what `name` holds for a derivative row - the
+        # underlying root, or the contract description. Every lookup that
+        # resolves an underlying wants the root, so settle it here, on the one
+        # path all 35+ brokers share, before anything reads the table.
+        try:
+            from database.symbol import normalize_derivative_underlyings
+
+            normalize_derivative_underlyings()
+        except Exception as normalize_error:
+            logger.exception(f"Could not normalize derivative underlyings: {normalize_error}")
+
         # Most brokers return the socketio.emit result, we need to check completion
         # by looking at the module's actual completion
 
