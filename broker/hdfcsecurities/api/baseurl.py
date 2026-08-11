@@ -1,7 +1,7 @@
 # broker/hdfcsecurities/api/baseurl.py
 #
-# Central place for HDFC Securities (InvestRight) hosts, the auth-header
-# builder and the client-id helper.
+# Central place for HDFC Securities (InvestRight) hosts and the auth-header
+# builder.
 #
 # InvestRight auth specifics (from the official docs):
 #   - `Authorization: <access_token>` -- NO "Bearer " prefix.
@@ -15,20 +15,12 @@
 # separate hosts, separate apps and separate credentials. Nothing here imports
 # from broker.hdfcsky.
 #
-# The `client_id` is the broker's account id (e.g. "S0190007"). It is carried
-# in the access token's JWT `sub` claim, so it is derived from the token rather
-# than stored separately -- that keeps `authenticate_broker` on the plain
-# 2-tuple contract with no token rewriting in blueprints/brlogin.py.
+# Unlike HDFC Sky, no InvestRight endpoint takes a `client_id` -- the account is
+# implied by the access token throughout -- so there is deliberately no
+# client-id helper here.
 
-import base64
-import binascii
-import json
 import os
 from urllib.parse import urlencode
-
-from utils.logging import get_logger
-
-logger = get_logger(__name__)
 
 # REST host ---------------------------------------------------------------
 ROOT_URL = "https://developer.hdfcsec.com"
@@ -82,37 +74,6 @@ def get_hdfcsecurities_headers(auth_token, with_json=False):
 
 def get_api_key():
     return os.getenv("BROKER_API_KEY")
-
-
-def _b64url_decode(segment):
-    """Decode a base64url JWT segment, restoring stripped '=' padding."""
-    padding = "=" * (-len(segment) % 4)
-    return base64.urlsafe_b64decode(segment + padding)
-
-
-def get_client_id(auth_token):
-    """Extract the InvestRight client id from the access token's JWT `sub` claim.
-
-    The token is NOT verified here -- it was issued to us over TLS and is only
-    being read for its account id. Returns the BROKER_CLIENT_ID fallback when
-    the token is not a JWT.
-    """
-    if not auth_token:
-        return _client_id_from_env()
-    try:
-        parts = str(auth_token).split(".")
-        if len(parts) >= 2:
-            claims = json.loads(_b64url_decode(parts[1]))
-            client_id = claims.get("sub") or claims.get("client_id") or ""
-            if client_id:
-                return str(client_id)
-    except (ValueError, binascii.Error, UnicodeDecodeError) as e:
-        logger.debug(f"Could not read client id from HDFC Securities token: {e}")
-    return _client_id_from_env()
-
-
-def _client_id_from_env():
-    return os.getenv("BROKER_CLIENT_ID", "") or ""
 
 
 def base_params():

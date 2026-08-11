@@ -202,4 +202,5 @@ __all__ = [
     "RMoneyWebSocketAdapter",
     "ArrowWebSocketAdapter",
     "HDFCSkyWebSocketAdapter",
+    "HDFCSecuritiesWebSocketAdapter",
 ]

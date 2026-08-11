@@ -35,7 +35,6 @@ from broker.hdfcsecurities.mapping.transform_data import (
     transform_data,
     transform_modify_order_data,
 )
-from database.token_db import get_oa_symbol
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -371,11 +370,19 @@ def place_smartorder_api(data, auth):
 
 
 def close_all_positions(current_api_key, auth):
-    """Square off every open position with market orders."""
+    """Square off every open position with market orders.
+
+    Every square-off is checked. A rejected or unresolvable leg leaves real
+    open exposure behind, so it must never be reported as closed: any failure
+    returns a non-200 status, which is what close_position_service turns into
+    an error response for the caller.
+    """
     positions = _position_rows(get_positions(auth))
     if not positions:
         return {"message": "No Open Positions Found"}, 200
 
+    closed = []
+    failed = []
     for position in positions:
         net_qty = int(float(position.get("net_qty", 0) or 0))
         if net_qty == 0:
@@ -383,7 +390,9 @@ def close_all_positions(current_api_key, auth):
 
         exchange, symbol = _position_symbol(position)
         if not symbol:
-            logger.warning(f"Skipping unresolvable position: {position.get('security_id')}")
+            security_id = position.get("security_id")
+            logger.warning(f"Skipping unresolvable position: {security_id}")
+            failed.append(f"{exchange}:{security_id} (symbol not resolvable)")
             continue
 
         payload = {
@@ -398,12 +407,30 @@ def close_all_positions(current_api_key, auth):
         }
         logger.debug(f"Close position payload: {payload}")
         try:
-            _, api_response, _ = place_order_api(payload, auth)
+            response, api_response, orderid = place_order_api(payload, auth)
             logger.debug(f"Close position response: {api_response}")
+            # place_order_api rewrites the status code when InvestRight returns
+            # an error payload under HTTP 200, so both checks are meaningful.
+            if getattr(response, "status_code", 0) == 200 and orderid:
+                closed.append(f"{exchange}:{symbol}")
+            else:
+                reason = (api_response or {}).get("message") or "order rejected"
+                logger.error(f"Square-off rejected for {exchange}:{symbol}: {reason}")
+                failed.append(f"{exchange}:{symbol} ({reason})")
         except Exception as e:
             logger.exception(f"Error squaring off {exchange}:{symbol}: {e}")
+            failed.append(f"{exchange}:{symbol} ({e})")
 
     _invalidate_position_cache(auth)
+
+    if failed:
+        message = (
+            f"Squared off {len(closed)} of {len(closed) + len(failed)} positions. "
+            f"Still open: {'; '.join(failed)}"
+        )
+        logger.error(message)
+        return {"status": "error", "message": message}, 500
+
     return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
 
 

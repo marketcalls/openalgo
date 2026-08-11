@@ -173,13 +173,30 @@ def _format_strike(strike):
     return str(int(value)) if value == int(value) else str(value)
 
 
+def _underlying_name(row):
+    """The underlying's display name for a row, or "" when there is none.
+
+    The trade book is the awkward case: it puts the UNDERLYING name in
+    `security_id` ("BANKNIFTY") where the order book puts the broker code
+    ("49599"), and it may carry no `underlying_symbol` / `company_name` at all.
+    An unresolved `security_id` is therefore usable as the underlying, but only
+    when it actually looks like a name -- a numeric broker code would build a
+    nonsense symbol such as "4959930APR2449900CE".
+    """
+    name = str(row.get("underlying_symbol") or row.get("company_name") or "").strip()
+    if name:
+        return name
+    security_id = str(row.get("security_id") or "").strip()
+    return security_id if security_id and not security_id.isdigit() else ""
+
+
 def _reconstruct_symbol(row):
     """Rebuild the OpenAlgo symbol from the parts InvestRight spells out.
 
     Used when `security_id` does not resolve against the master contract, which
     is the normal case for trade-book rows.
     """
-    underlying = str(row.get("underlying_symbol") or row.get("company_name") or "").strip()
+    underlying = _underlying_name(row)
     if not underlying:
         return ""
     expiry = _compact_expiry(row.get("expiry_date"))
@@ -192,7 +209,15 @@ def _reconstruct_symbol(row):
 
 
 def _oa_symbol(row, exchange):
-    """Broker row -> OpenAlgo symbol, never blank when anything is resolvable."""
+    """Broker row -> OpenAlgo symbol, never blank when anything is resolvable.
+
+    Last resort is `isin`: holdings can come back with `security_id`,
+    `company_name` and every other name field empty, leaving the ISIN as the
+    only identifier on the row. It is not a tradable OpenAlgo symbol and
+    InvestRight's security master carries no ISIN column to map it back
+    through, but surfacing it beats returning a blank row the user cannot
+    identify at all.
+    """
     security_id = str(row.get("security_id") or "").strip()
     if security_id:
         try:
@@ -202,7 +227,20 @@ def _oa_symbol(row, exchange):
             resolved = None
         if resolved:
             return resolved
-    return _reconstruct_symbol(row) or security_id
+
+    reconstructed = _reconstruct_symbol(row)
+    if reconstructed:
+        return reconstructed
+    if security_id:
+        return security_id
+
+    isin = str(row.get("isin") or "").strip()
+    if isin:
+        logger.warning(
+            f"HDFC Securities {exchange} row carries no security_id or name; "
+            f"falling back to ISIN {isin} as the symbol"
+        )
+    return isin
 
 
 def _normalise_row(row):

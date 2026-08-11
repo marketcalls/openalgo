@@ -100,12 +100,24 @@ def init_db():
 
 
 def delete_symtoken_table():
-    logger.info("Deleting Symtoken Table")
+    """Clear the table WITHOUT committing.
+
+    The delete and the reinsert deliberately share one transaction (see
+    replace_symtoken_table): committing here would destroy the working master
+    before the replacement is known to be insertable.
+    """
+    logger.info("Clearing Symtoken Table")
     SymToken.query.delete()
-    db_session.commit()
 
 
 def copy_from_dataframe(df):
+    """Insert the processed rows and commit. Raises if the insert fails.
+
+    The failure must propagate: master_contract_download reports success to the
+    UI on return, and the previous master has already been deleted inside this
+    transaction, so swallowing the error would leave every HDFC Securities
+    symbol lookup dead behind a success toast.
+    """
     logger.info("Performing Bulk Insert")
     data_dict = df.to_dict(orient="records")
 
@@ -115,13 +127,34 @@ def copy_from_dataframe(df):
     try:
         if filtered:
             db_session.bulk_insert_mappings(SymToken, filtered)
-            db_session.commit()
-            logger.info(f"Bulk insert completed with {len(filtered)} new records.")
+            logger.info(f"Bulk insert prepared with {len(filtered)} new records.")
         else:
             logger.info("No new records to insert.")
+        db_session.commit()
     except Exception as e:
-        logger.error(f"Error during bulk insert: {e}")
+        logger.exception(f"Error during bulk insert: {e}")
         db_session.rollback()
+        raise
+
+
+def replace_symtoken_table(df):
+    """Swap the master contract atomically.
+
+    The delete and the insert run in a single transaction, so a failure at any
+    point rolls back to the previous master rather than leaving the table
+    empty.
+    """
+    if df is None or df.empty:
+        raise ValueError(
+            "HDFC Securities security master produced no usable instruments; "
+            "keeping the existing master contract."
+        )
+    try:
+        delete_symtoken_table()
+        copy_from_dataframe(df)
+    except Exception:
+        db_session.rollback()
+        raise
 
 
 # --- download -----------------------------------------------------------
@@ -396,8 +429,7 @@ def master_contract_download():
         raw = download_security_master()
         token_df = process_security_master(raw)
 
-        delete_symtoken_table()
-        copy_from_dataframe(token_df)
+        replace_symtoken_table(token_df)
 
         return socketio.emit(
             "master_contract_download",

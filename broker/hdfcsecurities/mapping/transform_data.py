@@ -19,6 +19,8 @@
 # This module also owns the exchange-code translation used across the whole
 # plugin (api/, database/, streaming/).
 
+import itertools
+import threading
 import time
 from datetime import datetime
 
@@ -311,13 +313,22 @@ def reverse_map_option_type(option_type):
     return _OPTION_TYPE_TO_OA.get(str(option_type or "").upper(), "")
 
 
+_reference_counter = itertools.count()
+_reference_lock = threading.Lock()
+
+
 def _external_reference_number():
     """A caller-supplied tracking id: numeric, max 20 characters.
 
-    Millisecond epoch truncated to 12 digits stays unique within a trading day
-    and well inside the field's length limit.
+    Millisecond epoch truncated to 12 digits, suffixed with a rolling 3-digit
+    sequence. The timestamp alone is not enough: a basket or an algo firing
+    several orders back to back lands them inside the same millisecond and
+    would reuse one reference number for all of them. 15 digits stays well
+    inside the field's length limit.
     """
-    return str(int(time.time() * 1000) % 1_000_000_000_000)
+    with _reference_lock:
+        sequence = next(_reference_counter) % 1000
+    return f"{int(time.time() * 1000) % 1_000_000_000_000}{sequence:03d}"
 
 
 def to_order_expiry(expiry):

@@ -9,6 +9,16 @@ NSE_INDEX / BSE_INDEX are first-class: the feed has dedicated NSE_INDEX_ /
 BSE_INDEX_ scripId prefixes, and the publish topic keeps the OpenAlgo exchange
 (the proxy already recognizes both as two-segment prefixes when splitting
 topics).
+
+Two properties of the feed shape the state kept here:
+
+  - `instrumentId` is unique only WITHIN an exchange. 840 tokens in the live
+    security master appear on more than one OpenAlgo exchange, so subscription
+    state is keyed (exchange, token) and the exchange is taken from the tick's
+    packet type, never guessed from the token alone.
+  - The *_CIRC and *_OI packets are partial refreshes carrying no price. They
+    are merged into the last full snapshot for that instrument rather than
+    published as a quote of their own, which would blank the live price.
 """
 
 from broker.hdfcsecurities.mapping.transform_data import ws_scrip_id
@@ -20,9 +30,19 @@ from database.auth_db import get_auth_token
 from database.token_db import get_token
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 
-# OpenAlgo numeric mode -> topic suffix. The proxy fans a higher mode down to
-# lower-mode subscribers, so publishing to the tick's own mode topic suffices.
+# OpenAlgo numeric mode -> topic suffix. The proxy fans a published mode DOWN to
+# lower-mode subscribers (server.py: `for m in range(1, mode + 1)`) and never
+# up, so an instrument must always be published at the HIGHEST mode any client
+# subscribed it at. Publishing at a lower mode starves the higher-mode clients
+# completely.
 _MODE_TO_TOPIC = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}
+
+# Partial-refresh packet kinds and the fields each one is allowed to carry over
+# into the merged snapshot.
+_PARTIAL_TICK_FIELDS = {
+    "circuit": ("lower_limit", "upper_limit"),
+    "oi": ("oi",),
+}
 
 
 class HDFCSecuritiesWebSocketAdapter(BaseBrokerWebSocketAdapter):
@@ -32,8 +52,11 @@ class HDFCSecuritiesWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.user_id = None
         self.ws_client: HDFCSecuritiesWebSocket | None = None
         self.running = False
-        # token(int) -> {"symbol", "exchange", "mode", "scrip_id"}
-        self.token_info: dict[int, dict] = {}
+        # (exchange, token) -> {"symbol", "exchange", "modes", "scrip_id"}
+        self.token_info: dict[tuple[str, int], dict] = {}
+        # (exchange, token) -> last full snapshot, so a partial circuit/OI
+        # packet can be merged instead of replacing the quote.
+        self.last_snapshot: dict[tuple[str, int], dict] = {}
 
     # --- lifecycle ------------------------------------------------------
 
@@ -98,6 +121,11 @@ class HDFCSecuritiesWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             self.logger.exception(f"Error disconnecting HDFC Securities WebSocket: {e}")
         finally:
+            # Drop the merge baselines: they rebuild from the first full tick
+            # after a reconnect, and a pre-disconnect price must never be
+            # republished as current. token_info deliberately survives -- the
+            # client resubscribes its scrips and the ticks still need mapping.
+            self.last_snapshot.clear()
             # Always release ZMQ resources (FD hygiene).
             self.cleanup_zmq()
 
@@ -126,17 +154,20 @@ class HDFCSecuritiesWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "TOKEN_NOT_FOUND", f"No token for {exchange}:{symbol}"
                 )
 
+            key = (exchange, token)
             scrip_id = ws_scrip_id(exchange, token)
-            subscription_type = HDFCSecuritiesCapabilityRegistry.get_subscription_type_for_numeric(
-                mode
-            )
 
-            self.token_info[token] = {
-                "symbol": symbol,
-                "exchange": exchange,
-                "mode": mode,
-                "scrip_id": scrip_id,
-            }
+            # Several clients can hold the same instrument at different modes.
+            # Keep every subscribed mode so publishing (and the broker-side
+            # subscription tier) always follows the highest one.
+            info = self.token_info.setdefault(
+                key,
+                {"symbol": symbol, "exchange": exchange, "modes": set(), "scrip_id": scrip_id},
+            )
+            info["modes"].add(mode)
+            subscription_type = HDFCSecuritiesCapabilityRegistry.get_subscription_type_for_numeric(
+                max(info["modes"])
+            )
             self.ws_client.subscribe_scrips([scrip_id], subscription_type)
 
             # InvestRight publishes 5-level depth only; advertise the actual
@@ -164,8 +195,31 @@ class HDFCSecuritiesWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 return self._create_error_response(
                     "TOKEN_NOT_FOUND", f"No token for {exchange}:{symbol}"
                 )
-            self.ws_client.unsubscribe([ws_scrip_id(exchange, token)])
-            self.token_info.pop(token, None)
+
+            key = (exchange, token)
+            scrip_id = ws_scrip_id(exchange, token)
+            info = self.token_info.get(key)
+            if info is None:
+                # Nothing tracked; still tell the feed to drop it.
+                self.ws_client.unsubscribe([scrip_id])
+                self.last_snapshot.pop(key, None)
+                return self._create_success_response(f"Unsubscribed {exchange}:{symbol}")
+
+            # The proxy only calls this once the last client at THIS mode has
+            # gone; other modes may still have clients, so drop the broker
+            # subscription only when no mode is left.
+            info["modes"].discard(mode)
+            if info["modes"]:
+                self.ws_client.subscribe_scrips(
+                    [scrip_id],
+                    HDFCSecuritiesCapabilityRegistry.get_subscription_type_for_numeric(
+                        max(info["modes"])
+                    ),
+                )
+            else:
+                self.ws_client.unsubscribe([scrip_id])
+                self.token_info.pop(key, None)
+                self.last_snapshot.pop(key, None)
             return self._create_success_response(f"Unsubscribed {exchange}:{symbol}")
         except Exception as e:
             self.logger.exception(f"Error unsubscribing {exchange}:{symbol}: {e}")
@@ -173,12 +227,39 @@ class HDFCSecuritiesWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     # --- tick handling --------------------------------------------------
 
+    def _subscription_key(self, tick):
+        """(exchange, token) for a tick, or None when it is not ours.
+
+        The exchange comes from the packet type. It is absent only for packet
+        types outside the documented enum, and those fall back to a token
+        lookup that is used only when it is unambiguous -- guessing would
+        publish one instrument's ticks under another's symbol.
+        """
+        token = tick.get("token")
+        if token is None:
+            return None
+        exchange = tick.get("exchange")
+        if exchange:
+            key = (exchange, token)
+            return key if key in self.token_info else None
+
+        matches = [key for key in self.token_info if key[1] == token]
+        if len(matches) == 1:
+            return matches[0]
+        if matches:
+            self.logger.debug(
+                f"Dropping HDFC Securities tick for token {token}: no exchange on packet type "
+                f"{tick.get('packet_type')} and {len(matches)} subscribed instruments share it"
+            )
+        return None
+
     def _on_ticks(self, ticks):
         for tick in ticks:
             try:
-                info = self.token_info.get(tick.get("token"))
-                if not info:
+                key = self._subscription_key(tick)
+                if key is None:
                     continue
+                info = self.token_info[key]
                 # Greek packets have no price fields; they arrive alongside the
                 # MBP stream for options and are not part of the OpenAlgo tick
                 # contract, so they are dropped here.
@@ -187,12 +268,47 @@ class HDFCSecuritiesWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                 symbol = info["symbol"]
                 exchange = info["exchange"]
-                topic_mode = _MODE_TO_TOPIC.get(info["mode"], "QUOTE")
+                # Always the highest subscribed mode: the proxy fans down only.
+                topic_mode = _MODE_TO_TOPIC.get(max(info["modes"], default=2), "QUOTE")
+
+                tick = self._merge_partial(key, tick)
+                if tick is None:
+                    continue
 
                 data = self._normalize(tick, symbol, exchange, topic_mode)
                 self.publish_market_data(f"{exchange}_{symbol}_{topic_mode}", data)
             except Exception as e:
                 self.logger.error(f"Error handling HDFC Securities tick: {e}")
+
+    def _merge_partial(self, key, tick):
+        """Resolve a partial circuit/OI packet against the last full snapshot.
+
+        Circuit and OI packets share MBPData with the full quote but populate
+        only their own fields, so every price on them reads as the proto3
+        default of 0. Publishing one as-is would replace a live quote with
+        zeros. Returns the tick to publish, or None when there is no snapshot
+        to merge into yet.
+        """
+        kind = tick.get("kind")
+        fields = _PARTIAL_TICK_FIELDS.get(kind)
+        if fields is None:
+            # A full quote or index packet: this is the new baseline.
+            self.last_snapshot[key] = tick
+            return tick
+
+        snapshot = self.last_snapshot.get(key)
+        if snapshot is None:
+            # Nothing to attach the update to; a standalone band or OI value is
+            # not a publishable tick.
+            return None
+
+        merged = dict(snapshot)
+        for field in fields:
+            if field in tick:
+                merged[field] = tick[field]
+        merged["timestamp"] = tick.get("timestamp", merged.get("timestamp"))
+        self.last_snapshot[key] = merged
+        return merged
 
     def _normalize(self, tick, symbol, exchange, topic_mode):
         """Build the OpenAlgo normalized tick (same key set as the Zerodha
