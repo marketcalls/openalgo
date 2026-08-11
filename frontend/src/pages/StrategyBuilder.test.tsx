@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   marketAuthenticated: false,
   marketPaused: false,
   marketConnectionEpoch: 0,
+  marketSubscriptions: [] as Array<Array<{ symbol: string; exchange: string }>>,
   getExpiries: vi.fn(),
   getOptionChain: vi.fn(),
   getFutures: vi.fn(),
@@ -60,13 +61,16 @@ vi.mock('@/stores/authStore', () => ({
 }))
 
 vi.mock('@/hooks/useMarketData', () => ({
-  useMarketData: () => ({
-    data: mocks.marketData,
-    isConnected: mocks.marketConnected,
-    isAuthenticated: mocks.marketAuthenticated,
-    isPaused: mocks.marketPaused,
-    connectionEpoch: mocks.marketConnectionEpoch,
-  }),
+  useMarketData: ({ symbols }: { symbols: Array<{ symbol: string; exchange: string }> }) => {
+    mocks.marketSubscriptions.push(symbols)
+    return {
+      data: mocks.marketData,
+      isConnected: mocks.marketConnected,
+      isAuthenticated: mocks.marketAuthenticated,
+      isPaused: mocks.marketPaused,
+      connectionEpoch: mocks.marketConnectionEpoch,
+    }
+  },
 }))
 
 vi.mock('@/components/strategy-builder/PayoffChart', () => ({ PayoffChart: () => null }))
@@ -243,6 +247,7 @@ beforeEach(() => {
   mocks.marketAuthenticated = false
   mocks.marketPaused = false
   mocks.marketConnectionEpoch = 0
+  mocks.marketSubscriptions.length = 0
   mocks.strategyChartProps.length = 0
   mocks.multiStrikeOIProps.length = 0
   mocks.broker = null
@@ -1085,6 +1090,166 @@ describe('StrategyBuilder live request orchestration', () => {
     farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
     expect(farRow).toHaveTextContent('53.00')
     intervalSpy.mockRestore()
+  })
+
+  it('recalculates a supplemental-expiry leg from its exact WebSocket contract and parity ticks', async () => {
+    const user = userEvent.setup()
+    const farChain = chainFixture('NIFTY', '18AUG26')
+    farChain.expiry_ts = 1_786_900_000
+    farChain.server_ts = 1_786_000_000
+    farChain.forward_price = 24_620
+    farChain.atm_strike = 24_500
+    if (farChain.chain[0].ce) {
+      farChain.chain[0].ce.symbol = 'NIFTY18AUG2624600CE'
+      farChain.chain[0].ce.ltp = 225
+      farChain.chain[0].ce.implied_volatility = 33
+      farChain.chain[0].ce.delta = 0.44
+      farChain.chain[0].ce.gamma = 0.0012
+      farChain.chain[0].ce.theta = -8
+      farChain.chain[0].ce.vega = 9
+    }
+    if (farChain.chain[0].pe) {
+      farChain.chain[0].pe.symbol = 'NIFTY18AUG2624600PE'
+      farChain.chain[0].pe.ltp = 105
+    }
+    farChain.chain.push({
+      strike: 24_500,
+      ce: option('NIFTY18AUG2624500CE', 260),
+      pe: option('NIFTY18AUG2624500PE', 140),
+    })
+    mocks.getOptionChain.mockResolvedValue(farChain)
+
+    const view = renderBuilder()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: /Neutral/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Call Calendar/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add Strategy' }))
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: 'Remove position' })).toHaveLength(2)
+    )
+
+    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+    let rows = await screen.findAllByRole('row')
+    let farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
+    const initialGreeks = within(farRow as HTMLElement)
+      .getAllByRole('cell')
+      .slice(1)
+      .map((cell) => cell.textContent)
+
+    mocks.marketConnected = true
+    mocks.marketAuthenticated = true
+    mocks.marketConnectionEpoch = 1
+    mocks.marketData = new Map([
+      [
+        'NFO:NIFTY18AUG2624600CE',
+        {
+          exchange: 'NFO',
+          symbol: 'NIFTY18AUG2624600CE',
+          lastUpdate: 1_786_000_099_000,
+          updateSource: 'rest' as const,
+          data: { ltp: 999 },
+        },
+      ],
+    ])
+    view.rerender(
+      <MemoryRouter initialEntries={['/strategybuilder']}>
+        <StrategyBuilder />
+      </MemoryRouter>
+    )
+    rows = await screen.findAllByRole('row')
+    farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
+    expect(
+      within(farRow as HTMLElement)
+        .getAllByRole('cell')
+        .slice(1)
+        .map((cell) => cell.textContent)
+    ).toEqual(initialGreeks)
+
+    mocks.marketData = new Map([
+      [
+        'NFO:NIFTY18AUG2624600CE',
+        {
+          exchange: 'NFO',
+          symbol: 'NIFTY18AUG2624600CE',
+          lastUpdate: 1_786_000_100_000,
+          updateSource: 'websocket' as const,
+          connectionEpoch: 1,
+          data: {
+            ltp: 250,
+            depth: {
+              buy: [{ price: 249, quantity: 75 }],
+              sell: [{ price: 251, quantity: 75 }],
+            },
+          },
+        },
+      ],
+      [
+        'NFO:NIFTY18AUG2624500CE',
+        {
+          exchange: 'NFO',
+          symbol: 'NIFTY18AUG2624500CE',
+          lastUpdate: 1_786_000_100_000,
+          updateSource: 'websocket' as const,
+          connectionEpoch: 1,
+          data: {
+            ltp: 280,
+            depth: {
+              buy: [{ price: 279, quantity: 75 }],
+              sell: [{ price: 281, quantity: 75 }],
+            },
+          },
+        },
+      ],
+      [
+        'NFO:NIFTY18AUG2624500PE',
+        {
+          exchange: 'NFO',
+          symbol: 'NIFTY18AUG2624500PE',
+          lastUpdate: 1_786_000_100_000,
+          updateSource: 'websocket' as const,
+          connectionEpoch: 1,
+          data: {
+            ltp: 130,
+            depth: {
+              buy: [{ price: 129, quantity: 75 }],
+              sell: [{ price: 131, quantity: 75 }],
+            },
+          },
+        },
+      ],
+    ])
+    view.rerender(
+      <MemoryRouter initialEntries={['/strategybuilder']}>
+        <StrategyBuilder />
+      </MemoryRouter>
+    )
+
+    await waitFor(() =>
+      expect(
+        mocks.marketSubscriptions.some(
+          (symbols) =>
+            symbols.some(
+              (item) => item.exchange === 'NFO' && item.symbol === 'NIFTY18AUG2624600CE'
+            ) &&
+            symbols.some(
+              (item) => item.exchange === 'NFO' && item.symbol === 'NIFTY18AUG2624500CE'
+            ) &&
+            symbols.some(
+              (item) => item.exchange === 'NFO' && item.symbol === 'NIFTY18AUG2624500PE'
+            )
+        )
+      ).toBe(true)
+    )
+    rows = await screen.findAllByRole('row')
+    farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
+    const liveGreeks = within(farRow as HTMLElement)
+      .getAllByRole('cell')
+      .slice(1)
+      .map((cell) => cell.textContent)
+    expect(liveGreeks).toHaveLength(initialGreeks.length)
+    liveGreeks.forEach((value, index) => {
+      expect(value).not.toBe(initialGreeks[index])
+    })
   })
 
   it('does not show a prior contract Greek snapshot after editing a calendar leg', async () => {

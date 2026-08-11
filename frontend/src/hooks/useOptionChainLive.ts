@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { SymbolData } from '@/lib/MarketDataManager'
 import { chainGreeks, forwardFromParity, priceForGreeks, yearsToExpiry } from '@/lib/optionGreeks'
 import type { OptionChainResponse, OptionStrike } from '@/types/option-chain'
 import { useMarketData } from './useMarketData'
@@ -33,10 +34,10 @@ function withGreeks(
   underlyingLtp: number,
   clockOffsetMs: number,
   interestRate: number
-): OptionStrike[] {
+): { chain: OptionStrike[]; forwardPrice: number | null } {
   const timeToExpiry = yearsToExpiry(polledData.expiry_ts, clockOffsetMs)
   if (timeToExpiry <= 0) {
-    return chain
+    return { chain, forwardPrice: polledData.forward_price ?? null }
   }
 
   // Black-76 prices off the forward. The ATM legs are already streaming, so
@@ -51,7 +52,7 @@ function withGreeks(
   )
 
   if (!(forward > 0)) {
-    return chain
+    return { chain, forwardPrice: polledData.forward_price ?? null }
   }
 
   const greeks = chainGreeks(
@@ -65,35 +66,123 @@ function withGreeks(
     interestRate
   )
 
-  return chain.map((row, i) => {
-    const { ce: ceGreeks, pe: peGreeks } = greeks[i]
+  return {
+    forwardPrice: forward,
+    chain: chain.map((row, i) => {
+      const { ce: ceGreeks, pe: peGreeks } = greeks[i]
+      return {
+        ...row,
+        // Spread onto a fresh object: `row.ce` can still be the polled response's
+        // own object when this leg had no tick, and mutating that would corrupt
+        // the polling hook's state.
+        ce: row.ce
+          ? {
+              ...row.ce,
+              implied_volatility: ceGreeks?.iv,
+              delta: ceGreeks?.delta,
+              gamma: ceGreeks?.gamma,
+              theta: ceGreeks?.theta,
+              vega: ceGreeks?.vega,
+            }
+          : null,
+        pe: row.pe
+          ? {
+              ...row.pe,
+              implied_volatility: peGreeks?.iv,
+              delta: peGreeks?.delta,
+              gamma: peGreeks?.gamma,
+              theta: peGreeks?.theta,
+              vega: peGreeks?.vega,
+            }
+          : null,
+      }
+    }),
+  }
+}
+
+/**
+ * Merge exact contract ticks into a chain and recompute its complete Greek
+ * vector from that chain's own expiry and ATM parity pair.
+ */
+export function mergeOptionChainMarketData(
+  polledData: OptionChainResponse,
+  optionExchange: string,
+  marketData: Map<string, SymbolData>,
+  clockOffsetMs: number,
+  interestRate = 0,
+  fallbackUnderlyingLtp = polledData.underlying_ltp,
+  recomputeWithoutTicks = true
+): OptionChainResponse {
+  const underlyingKey = `${polledData.underlying_exchange}:${polledData.underlying_symbol}`
+  const hasRelevantTicks =
+    marketData.has(underlyingKey) ||
+    polledData.chain.some(
+      (row) =>
+        (row.ce?.symbol && marketData.has(`${optionExchange}:${row.ce.symbol}`)) ||
+        (row.pe?.symbol && marketData.has(`${optionExchange}:${row.pe.symbol}`))
+    )
+  if (!recomputeWithoutTicks && !hasRelevantTicks) return polledData
+
+  const mergedChain = polledData.chain.map((strike) => {
+    const mergeContract = (contract: typeof strike.ce) => {
+      if (!contract?.symbol) return contract
+      const tick = marketData.get(`${optionExchange}:${contract.symbol}`)?.data
+      if (!tick) return contract
+
+      const depthBuy = tick.depth?.buy?.[0]
+      const depthSell = tick.depth?.sell?.[0]
+      return {
+        ...contract,
+        ltp: roundToTickSize(tick.ltp, contract.tick_size) ?? contract.ltp,
+        bid:
+          roundToTickSize(depthBuy?.price ?? tick.bid_price, contract.tick_size) ?? contract.bid,
+        ask:
+          roundToTickSize(depthSell?.price ?? tick.ask_price, contract.tick_size) ?? contract.ask,
+        bid_qty: depthBuy?.quantity ?? tick.bid_size ?? contract.bid_qty ?? 0,
+        ask_qty: depthSell?.quantity ?? tick.ask_size ?? contract.ask_qty ?? 0,
+      }
+    }
+
     return {
-      ...row,
-      // Spread onto a fresh object: `row.ce` can still be the polled response's
-      // own object when this leg had no tick, and mutating that would corrupt
-      // the polling hook's state.
-      ce: row.ce
-        ? {
-            ...row.ce,
-            implied_volatility: ceGreeks?.iv,
-            delta: ceGreeks?.delta,
-            gamma: ceGreeks?.gamma,
-            theta: ceGreeks?.theta,
-            vega: ceGreeks?.vega,
-          }
-        : null,
-      pe: row.pe
-        ? {
-            ...row.pe,
-            implied_volatility: peGreeks?.iv,
-            delta: peGreeks?.delta,
-            gamma: peGreeks?.gamma,
-            theta: peGreeks?.theta,
-            vega: peGreeks?.vega,
-          }
-        : null,
+      ...strike,
+      ce: mergeContract(strike.ce),
+      pe: mergeContract(strike.pe),
     }
   })
+
+  const underlyingTick = marketData.get(underlyingKey)
+  const underlyingLtp = underlyingTick?.data?.ltp ?? fallbackUnderlyingLtp
+  const repriced = withGreeks(
+    mergedChain,
+    polledData,
+    underlyingLtp,
+    clockOffsetMs,
+    interestRate
+  )
+
+  return {
+    ...polledData,
+    underlying_ltp: underlyingLtp,
+    forward_price: hasRelevantTicks
+      ? repriced.forwardPrice
+      : (polledData.forward_price ?? repriced.forwardPrice),
+    chain: repriced.chain,
+  }
+}
+
+/** Exclude REST fallback values and cache entries from another WS session. */
+export function currentWebSocketMarketData(
+  marketData: Map<string, SymbolData>,
+  isAuthenticated: boolean,
+  connectionEpoch: number
+): Map<string, SymbolData> {
+  if (!isAuthenticated) return new Map()
+  return new Map(
+    Array.from(marketData).filter(
+      ([, symbolData]) =>
+        symbolData.updateSource === 'websocket' && symbolData.connectionEpoch === connectionEpoch
+    )
+  )
 }
 
 interface UseOptionChainLiveOptions {
@@ -200,6 +289,10 @@ export function useOptionChainLive(
     mode: 'Depth', // Get LTP + Bid/Ask depth
     enabled: enabled && wsSymbols.length > 0,
   })
+  const currentWsData = useMemo(
+    () => currentWebSocketMarketData(wsData, isWsAuthenticated, wsConnectionEpoch),
+    [wsData, isWsAuthenticated, wsConnectionEpoch]
+  )
 
   // Track last LTP update time using ref to avoid triggering effect loops
   const lastLtpUpdateRef = useRef<number>(0)
@@ -237,86 +330,10 @@ export function useOptionChainLive(
       return
     }
 
-    // No WebSocket data yet: still compute Greeks off the polled prices so the
-    // first paint is complete rather than showing dashes until the first tick.
-    if (wsData.size === 0) {
-      setMergedData({
-        ...polledData,
-        chain: withGreeks(
-          polledData.chain,
-          polledData,
-          polledData.underlying_ltp,
-          clockOffsetRef.current,
-          interestRate
-        ),
-      })
-      return
-    }
-
-    // Create merged chain with WebSocket LTP updates
-    const mergedChain: OptionStrike[] = polledData.chain.map((strike) => {
-      const newStrike = { ...strike }
-
-      // Update CE data from WebSocket
-      if (strike.ce?.symbol) {
-        const wsKey = `${optionExchange}:${strike.ce.symbol}`
-        const wsSymbolData = wsData.get(wsKey)
-        if (wsSymbolData?.data) {
-          // Try depth data first (dp packets), fallback to quote data (sf packets)
-          // Depth mode: depth.buy[0].price, depth.buy[0].quantity
-          // Quote mode: bid_price, ask_price, bid_size, ask_size
-          const depthBuy = wsSymbolData.data.depth?.buy?.[0]
-          const depthSell = wsSymbolData.data.depth?.sell?.[0]
-          const tickSize = strike.ce.tick_size
-          newStrike.ce = {
-            ...strike.ce,
-            ltp: roundToTickSize(wsSymbolData.data.ltp, tickSize) ?? strike.ce.ltp,
-            bid:
-              roundToTickSize(depthBuy?.price ?? wsSymbolData.data.bid_price, tickSize) ??
-              strike.ce.bid,
-            ask:
-              roundToTickSize(depthSell?.price ?? wsSymbolData.data.ask_price, tickSize) ??
-              strike.ce.ask,
-            bid_qty: depthBuy?.quantity ?? wsSymbolData.data.bid_size ?? strike.ce.bid_qty ?? 0,
-            ask_qty: depthSell?.quantity ?? wsSymbolData.data.ask_size ?? strike.ce.ask_qty ?? 0,
-          }
-        }
-      }
-
-      // Update PE data from WebSocket
-      if (strike.pe?.symbol) {
-        const wsKey = `${optionExchange}:${strike.pe.symbol}`
-        const wsSymbolData = wsData.get(wsKey)
-        if (wsSymbolData?.data) {
-          // Try depth data first (dp packets), fallback to quote data (sf packets)
-          const depthBuy = wsSymbolData.data.depth?.buy?.[0]
-          const depthSell = wsSymbolData.data.depth?.sell?.[0]
-          const tickSize = strike.pe.tick_size
-          newStrike.pe = {
-            ...strike.pe,
-            ltp: roundToTickSize(wsSymbolData.data.ltp, tickSize) ?? strike.pe.ltp,
-            bid:
-              roundToTickSize(depthBuy?.price ?? wsSymbolData.data.bid_price, tickSize) ??
-              strike.pe.bid,
-            ask:
-              roundToTickSize(depthSell?.price ?? wsSymbolData.data.ask_price, tickSize) ??
-              strike.pe.ask,
-            bid_qty: depthBuy?.quantity ?? wsSymbolData.data.bid_size ?? strike.pe.bid_qty ?? 0,
-            ask_qty: depthSell?.quantity ?? wsSymbolData.data.ask_size ?? strike.pe.ask_qty ?? 0,
-          }
-        }
-      }
-
-      return newStrike
-    })
-
     // Only manager-tagged WebSocket updates prove stream freshness. Recent
     // REST fallback/cache updates remain valid prices but must not imply Live.
     let newestLtpUpdate = lastLtpUpdateRef.current
-    for (const [, symbolData] of wsData) {
-      if (!isWsAuthenticated) continue
-      if (symbolData.updateSource !== 'websocket') continue
-      if (symbolData.connectionEpoch !== wsConnectionEpoch) continue
+    for (const [, symbolData] of currentWsData) {
       if (symbolData.lastUpdate && symbolData.lastUpdate > newestLtpUpdate) {
         newestLtpUpdate = symbolData.lastUpdate
       }
@@ -327,29 +344,20 @@ export function useOptionChainLive(
       setLastLtpUpdate(new Date(newestLtpUpdate))
     }
 
-    // Get real-time underlying spot price from WebSocket
-    const underlyingKey = `${polledData.underlying_exchange}:${polledData.underlying_symbol}`
-    const underlyingWsData = wsData.get(underlyingKey)
-    const underlyingLtp = underlyingWsData?.data?.ltp ?? polledData.underlying_ltp
-
-    setMergedData({
-      ...polledData,
-      underlying_ltp: underlyingLtp,
-      chain: withGreeks(
-        mergedChain,
+    setMergedData(
+      mergeOptionChainMarketData(
         polledData,
-        underlyingLtp,
+        optionExchange,
+        currentWsData,
         clockOffsetRef.current,
         interestRate
-      ),
-    })
+      )
+    )
   }, [
     polledData,
-    wsData,
+    currentWsData,
     optionExchange,
     interestRate,
-    isWsAuthenticated,
-    wsConnectionEpoch,
   ])
 
   // Determine streaming status
@@ -376,7 +384,7 @@ export function useOptionChainLive(
     dataIdentity,
     streamingSymbols: wsSymbols.length,
     clockOffsetMs: clockOffsetRef.current,
-    forwardPrice: polledData?.forward_price ?? null,
+    forwardPrice: mergedData?.forward_price ?? null,
     refetch,
   }
 }

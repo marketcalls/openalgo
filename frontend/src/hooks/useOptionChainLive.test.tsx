@@ -43,6 +43,26 @@ function optionChainResponse() {
   }
 }
 
+function option(symbol: string, ltp: number) {
+  return {
+    symbol,
+    label: symbol,
+    ltp,
+    bid: ltp - 1,
+    ask: ltp + 1,
+    bid_qty: 10,
+    ask_qty: 10,
+    open: ltp,
+    high: ltp + 5,
+    low: ltp - 5,
+    prev_close: ltp - 2,
+    volume: 100,
+    oi: 200,
+    lotsize: 1,
+    tick_size: 0.5,
+  }
+}
+
 describe('useOptionChainLive', () => {
   beforeEach(() => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
@@ -83,6 +103,114 @@ describe('useOptionChainLive', () => {
       expiry: '28AUG26',
     })
     expect(result.current.lastStreamUpdate).toBeNull()
+  })
+
+  it('recalculates two different strikes independently from their WebSocket ticks', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_796_000_000_000)
+    const response = {
+      ...optionChainResponse(),
+      chain: [
+        {
+          strike: 100_000,
+          ce: option('BTC28AUG26100000CE', 2_500),
+          pe: option('BTC28AUG26100000PE', 2_400),
+        },
+        {
+          strike: 101_000,
+          ce: option('BTC28AUG26101000CE', 2_050),
+          pe: option('BTC28AUG26101000PE', 2_950),
+        },
+      ],
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(response), { status: 200 }))
+    )
+
+    const { result, rerender } = renderHook(() =>
+      useOptionChainLive('key', 'BTC', 'CRYPTO', 'CRYPTO', '28AUG26', 20, { enabled: true })
+    )
+    await waitFor(() => expect(result.current.data?.chain[1].ce?.delta).toEqual(expect.any(Number)))
+    const initial = result.current.data?.chain.map((row) => ({
+      iv: row.ce?.implied_volatility,
+      delta: row.ce?.delta,
+      gamma: row.ce?.gamma,
+      theta: row.ce?.theta,
+      vega: row.ce?.vega,
+    }))
+
+    marketDataCapture.isConnected = true
+    marketDataCapture.isAuthenticated = true
+    marketDataCapture.connectionEpoch = 1
+    marketDataCapture.data = new Map([
+      [
+        'CRYPTO:BTC28AUG26101000CE',
+        {
+          exchange: 'CRYPTO',
+          symbol: 'BTC28AUG26101000CE',
+          lastUpdate: 1_796_000_000_100,
+          updateSource: 'websocket',
+          connectionEpoch: 1,
+          data: { ltp: 2_250, depth: { buy: [{ price: 2_240 }], sell: [{ price: 2_260 }] } },
+        },
+      ],
+    ])
+    rerender()
+
+    await waitFor(() => expect(result.current.data?.chain[1].ce?.ltp).toBe(2_250))
+    const updated = result.current.data?.chain.map((row) => ({
+      iv: row.ce?.implied_volatility,
+      delta: row.ce?.delta,
+      gamma: row.ce?.gamma,
+      theta: row.ce?.theta,
+      vega: row.ce?.vega,
+    }))
+    expect(marketDataCapture.symbols).toEqual(
+      expect.arrayContaining([
+        { exchange: 'CRYPTO', symbol: 'BTC28AUG26100000CE' },
+        { exchange: 'CRYPTO', symbol: 'BTC28AUG26101000CE' },
+      ])
+    )
+    expect(updated?.[0]).toEqual(initial?.[0])
+    expect(updated?.[1]).not.toEqual(initial?.[1])
+    expect(updated?.[0]).not.toEqual(updated?.[1])
+
+    marketDataCapture.data = new Map([
+      ...marketDataCapture.data,
+      [
+        'CRYPTO:BTC28AUG26100000CE',
+        {
+          exchange: 'CRYPTO',
+          symbol: 'BTC28AUG26100000CE',
+          lastUpdate: 1_796_000_000_101,
+          updateSource: 'websocket' as const,
+          connectionEpoch: 1,
+          data: { ltp: 2_700, depth: { buy: [{ price: 2_690 }], sell: [{ price: 2_710 }] } },
+        },
+      ],
+      [
+        'CRYPTO:BTC28AUG26100000PE',
+        {
+          exchange: 'CRYPTO',
+          symbol: 'BTC28AUG26100000PE',
+          lastUpdate: 1_796_000_000_101,
+          updateSource: 'websocket' as const,
+          connectionEpoch: 1,
+          data: { ltp: 2_300, depth: { buy: [{ price: 2_290 }], sell: [{ price: 2_310 }] } },
+        },
+      ],
+    ])
+    rerender()
+    await waitFor(() => expect(result.current.data?.chain[0].ce?.ltp).toBe(2_700))
+    const parityUpdated = result.current.data?.chain.map((row) => ({
+      iv: row.ce?.implied_volatility,
+      delta: row.ce?.delta,
+      gamma: row.ce?.gamma,
+      theta: row.ce?.theta,
+      vega: row.ce?.vega,
+    }))
+    expect(parityUpdated?.[0]).not.toEqual(initial?.[0])
+    nowSpy.mockRestore()
   })
 
   it('binds data to the derivative exchange that initiated its poll', async () => {
@@ -134,6 +262,7 @@ describe('useOptionChainLive', () => {
 
     expect(result.current.isStreaming).toBe(true)
     expect(result.current.lastStreamUpdate).toBeNull()
+    expect(result.current.data?.underlying_ltp).toBe(100_000)
 
     marketDataCapture.data = new Map([
       [
@@ -153,6 +282,7 @@ describe('useOptionChainLive', () => {
     await waitFor(() =>
       expect(result.current.lastStreamUpdate?.getTime()).toBe(1_796_000_000_001)
     )
+    expect(result.current.data?.underlying_ltp).toBe(100_075)
   })
 
   it('requires a WebSocket tick from the current authentication epoch', async () => {
@@ -190,6 +320,7 @@ describe('useOptionChainLive', () => {
     marketDataCapture.connectionEpoch = 2
     rerender()
     expect(result.current.lastStreamUpdate).toBeNull()
+    await waitFor(() => expect(result.current.data?.underlying_ltp).toBe(100_000))
 
     marketDataCapture.data = new Map([
       [

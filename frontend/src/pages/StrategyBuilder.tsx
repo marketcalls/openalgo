@@ -48,7 +48,12 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { useOptionChainLive } from '@/hooks/useOptionChainLive'
+import { useMarketData } from '@/hooks/useMarketData'
+import {
+  currentWebSocketMarketData,
+  mergeOptionChainMarketData,
+  useOptionChainLive,
+} from '@/hooks/useOptionChainLive'
 import { useSupportedExchanges } from '@/hooks/useSupportedExchanges'
 import {
   type ChainIdentity,
@@ -201,6 +206,7 @@ export default function StrategyBuilder() {
   const rehydrationIdentityRef = useRef<string | null>(null)
   const rehydrationAttemptsRef = useRef(new Set<string>())
   const supplementalChainFreshnessRef = useRef(new Map<string, number>())
+  const supplementalClockOffsetsRef = useRef(new Map<string, number>())
   const supplementalChainGenerationRef = useRef(0)
   const supplementalChainKeysRef = useRef(new Set<string>())
 
@@ -298,6 +304,10 @@ export default function StrategyBuilder() {
       }
       const key = chainIdentity(identity.exchange, identity.underlying, identity.expiry)
       supplementalChainFreshnessRef.current.set(key, Date.now())
+      supplementalClockOffsetsRef.current.set(
+        key,
+        response.server_ts ? response.server_ts * 1000 - Date.now() : 0
+      )
       setSupplementalChains((previous) => {
         if (previous.get(key) === response) return previous
         const next = new Map(previous)
@@ -368,6 +378,9 @@ export default function StrategyBuilder() {
       )
       return retained.size === previous.size ? previous : retained
     })
+    for (const key of supplementalClockOffsetsRef.current.keys()) {
+      if (!requiredKeys.has(key)) supplementalClockOffsetsRef.current.delete(key)
+    }
     if (requiredKeys.size === 0) return
 
     void refreshSupplementalChains(false)
@@ -385,6 +398,103 @@ export default function StrategyBuilder() {
   }, [
     refreshSupplementalChains,
     requiredSupplementalChainKeys,
+  ])
+
+  const supplementalWsSymbols = useMemo(() => {
+    const symbols = new Map<string, { symbol: string; exchange: string }>()
+    const add = (symbol: string | undefined, exchange: string) => {
+      if (!symbol) return
+      symbols.set(contractPriceKey(exchange, symbol), { symbol, exchange })
+    }
+
+    // Subscribe only contracts that can affect displayed positions. Each
+    // owning expiry also needs its ATM pair so put-call parity can supply that
+    // expiry's live forward for Black-76.
+    for (const leg of legs) {
+      if (
+        !leg.active ||
+        isLegClosed(leg) ||
+        leg.segment !== 'OPTION' ||
+        leg.contractValid !== true ||
+        !leg.exchange
+      ) {
+        continue
+      }
+      const expiry = normalizeExpiryCode(leg.expiry)
+      if (expiry === requestIdentity.expiry) continue
+      const key = chainIdentity(leg.exchange, selectedUnderlying, expiry)
+      if (!requiredSupplementalChainKeys.has(key)) continue
+      add(leg.symbol, leg.exchange)
+
+      const chain = supplementalChains.get(key)
+      if (
+        !chain ||
+        !chainMatches(chain, {
+          exchange: leg.exchange,
+          underlying: selectedUnderlying,
+          expiry,
+        })
+      ) {
+        continue
+      }
+      const atm = chain.chain.find((row) => row.strike === chain.atm_strike)
+      add(atm?.ce?.symbol, chain.exchange)
+      add(atm?.pe?.symbol, chain.exchange)
+    }
+
+    return Array.from(symbols.values())
+  }, [
+    legs,
+    requestIdentity.expiry,
+    requiredSupplementalChainKeys,
+    selectedUnderlying,
+    supplementalChains,
+  ])
+
+  const {
+    data: supplementalMarketData,
+    isAuthenticated: isSupplementalWsAuthenticated,
+    connectionEpoch: supplementalWsConnectionEpoch,
+  } = useMarketData({
+    symbols: supplementalWsSymbols,
+    mode: 'Depth',
+    enabled: liveEnabled && supplementalWsSymbols.length > 0,
+  })
+  const currentSupplementalMarketData = useMemo(
+    () =>
+      currentWebSocketMarketData(
+        supplementalMarketData,
+        isSupplementalWsAuthenticated,
+        supplementalWsConnectionEpoch
+      ),
+    [
+      supplementalMarketData,
+      isSupplementalWsAuthenticated,
+      supplementalWsConnectionEpoch,
+    ]
+  )
+
+  const liveSupplementalChains = useMemo(() => {
+    const chains = new Map<string, ListedOptionChainResponse>()
+    for (const [key, chain] of supplementalChains) {
+      if (!requiredSupplementalChainKeys.has(key)) continue
+      const merged = mergeOptionChainMarketData(
+        chain,
+        chain.exchange,
+        currentSupplementalMarketData,
+        supplementalClockOffsetsRef.current.get(key) ?? 0,
+        0,
+        activeChain?.underlying_ltp ?? chain.underlying_ltp,
+        false
+      )
+      chains.set(key, { ...merged, exchange: chain.exchange })
+    }
+    return chains
+  }, [
+    activeChain?.underlying_ltp,
+    requiredSupplementalChainKeys,
+    supplementalChains,
+    currentSupplementalMarketData,
   ])
 
   const connectionStatus = useMemo<'live' | 'refreshing' | 'stale' | 'idle'>(() => {
@@ -416,6 +526,7 @@ export default function StrategyBuilder() {
   const resetExpiryAndChainState = useCallback(() => {
     supplementalChainGenerationRef.current += 1
     supplementalChainFreshnessRef.current.clear()
+    supplementalClockOffsetsRef.current.clear()
     supplementalChainKeysRef.current.clear()
     setExpiries([])
     setFutureExpiries([])
@@ -428,6 +539,7 @@ export default function StrategyBuilder() {
     marginGenerationRef.current += 1
     supplementalChainGenerationRef.current += 1
     supplementalChainFreshnessRef.current.clear()
+    supplementalClockOffsetsRef.current.clear()
     supplementalChainKeysRef.current.clear()
     marginSupportedRef.current = null
     setLegs([])
@@ -913,7 +1025,7 @@ export default function StrategyBuilder() {
       requestIdentity.underlying,
       requestIdentity.expiry
     )
-    const chains = Array.from(supplementalChains)
+    const chains = Array.from(liveSupplementalChains)
       .filter(
         ([key, chain]) =>
           key !== activeIdentityKey &&
@@ -939,7 +1051,7 @@ export default function StrategyBuilder() {
       }
     }
     return contracts
-  }, [activeChain, requestIdentity, requiredSupplementalChainKeys, supplementalChains])
+  }, [activeChain, liveSupplementalChains, requestIdentity, requiredSupplementalChainKeys])
 
   const greeksByLeg = useMemo<Record<string, LegGreeks>>(() => {
     const greeks: Record<string, LegGreeks> = {}

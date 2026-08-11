@@ -80,6 +80,7 @@ vi.mock('@/stores/authStore', () => ({
 }))
 
 vi.mock('@/hooks/useOptionChainLive', () => ({
+  currentWebSocketMarketData: (data: Map<string, unknown>) => data,
   useOptionChainLive: (
     _apiKey: string,
     _underlying: string,
