@@ -23,9 +23,56 @@ describe('Simulators sub-day horizon', () => {
     expect(screen.queryByText('+1d')).not.toBeInTheDocument()
 
     const timeSlider = screen.getAllByRole('slider')[2]
-    expect(timeSlider).toHaveAttribute('max', '0.25')
-    expect(timeSlider).toHaveAttribute('step', `${1 / 24}`)
-    fireEvent.change(timeSlider, { target: { value: '0.25' } })
+    expect(timeSlider).toHaveAttribute('max', '6')
+    expect(timeSlider).toHaveAttribute('step', '1')
+    fireEvent.change(timeSlider, { target: { value: '6' } })
     expect(onDaysElapsedChange).toHaveBeenCalledWith(0.25)
+  })
+
+  it.each([0.02, 0.23])('partitions a %s-day maximum into reachable sub-hour steps', (maxDays) => {
+    const onDaysElapsedChange = vi.fn()
+    render(
+      <Simulators
+        spotShiftPct={0}
+        ivShiftPct={0}
+        daysElapsed={0}
+        maxDays={maxDays}
+        onSpotShiftChange={vi.fn()}
+        onIvShiftChange={vi.fn()}
+        onDaysElapsedChange={onDaysElapsedChange}
+        onReset={vi.fn()}
+      />
+    )
+
+    const timeSlider = screen.getAllByRole('slider')[2]
+    const partitions = Math.ceil(maxDays / (1 / 24))
+
+    expect(timeSlider).toHaveAttribute('min', '0')
+    expect(timeSlider).toHaveAttribute('max', partitions.toString())
+    expect(timeSlider).toHaveAttribute('step', '1')
+
+    fireEvent.change(timeSlider, { target: { value: partitions.toString() } })
+    expect(onDaysElapsedChange).toHaveBeenLastCalledWith(maxDays)
+  })
+
+  it('preserves quarter-day steps for day-mode horizons', () => {
+    const onDaysElapsedChange = vi.fn()
+    render(
+      <Simulators
+        spotShiftPct={0}
+        ivShiftPct={0}
+        daysElapsed={0}
+        maxDays={3.5}
+        onSpotShiftChange={vi.fn()}
+        onIvShiftChange={vi.fn()}
+        onDaysElapsedChange={onDaysElapsedChange}
+        onReset={vi.fn()}
+      />
+    )
+
+    const timeSlider = screen.getAllByRole('slider')[2]
+    expect(timeSlider).toHaveAttribute('step', '0.25')
+    fireEvent.change(timeSlider, { target: { value: '3.5' } })
+    expect(onDaysElapsedChange).toHaveBeenLastCalledWith(3.5)
   })
 })

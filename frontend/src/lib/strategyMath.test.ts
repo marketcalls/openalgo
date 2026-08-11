@@ -309,6 +309,28 @@ describe('payoff geometry and structural risk', () => {
     expect(lognormalPriceBand(110, Number.POSITIVE_INFINITY, 0.25, 1)).toBeNull()
   })
 
+  it('rejects finite IV and horizon values that overflow derived lognormal values', () => {
+    expect(lognormalPriceBand(100, 1e308, 1e308, 2)).toBeNull()
+  })
+
+  it('rejects a finite spot when the returned lognormal band would overflow', () => {
+    expect(lognormalPriceBand(1e308, 100, 1, 2)).toBeNull()
+  })
+
+  it('omits overflowed lognormal bands from the payoff range', () => {
+    const range = payoffPriceRange(100, [], 1e308, 1e308)
+
+    expect(range[0]).toBeCloseTo(90, 10)
+    expect(range[1]).toBeCloseTo(110, 10)
+  })
+
+  it('keeps the payoff range finite when a finite spot overflows its upper baseline', () => {
+    const range = payoffPriceRange(Number.MAX_VALUE, [], 100, 1)
+
+    expect(range.every(Number.isFinite)).toBe(true)
+    expect(range[1]).toBe(Number.MAX_VALUE)
+  })
+
   it('PG-06 expands the shifted display range to include strikes and lognormal two sigma', () => {
     const legs = [optionLeg('put', 'SELL', 'PE', 70, 3), optionLeg('call', 'SELL', 'CE', 130, 3)]
 
@@ -388,6 +410,15 @@ describe('payoff geometry and structural risk', () => {
         1
       )
     ).toBeNull()
+  })
+
+  it('returns unavailable when finite IV and horizon overflow derived PoP math', () => {
+    const alwaysWinning = [
+      { underlying: 80, expiry: 1, tplus0: 1 },
+      { underlying: 120, expiry: 1, tplus0: 1 },
+    ]
+
+    expect(probabilityOfProfit(alwaysWinning, 100, 1e308, 1e308)).toBeNull()
   })
 
   it('treats mixed authoritative and legacy metadata for the same expiry as one event', () => {

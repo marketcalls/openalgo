@@ -838,12 +838,11 @@ describe('StrategyBuilder identity orchestration', () => {
     await waitFor(() =>
       expect(screen.getAllByRole('button', { name: 'Remove position' })).toHaveLength(2)
     )
-    await waitFor(() =>
-      expect(Number((screen.getAllByRole('slider')[2] as HTMLInputElement).value)).toBeLessThan(
-        0.26
-      )
-    )
-    const contractedValue = (screen.getAllByRole('slider')[2] as HTMLInputElement).value
+    await waitFor(() => {
+      const contractedSlider = screen.getAllByRole('slider')[2] as HTMLInputElement
+      expect(contractedSlider).toHaveValue(contractedSlider.max)
+      expect(Number(contractedSlider.max)).toBeLessThanOrEqual(7)
+    })
 
     const removeButtons = screen.getAllByRole('button', { name: 'Remove position' })
     const removeNearLeg = removeButtons.find((button) =>
@@ -855,7 +854,11 @@ describe('StrategyBuilder identity orchestration', () => {
       expect(screen.getAllByRole('button', { name: 'Remove position' })).toHaveLength(1)
     )
     expect(Number(screen.getAllByRole('slider')[2].getAttribute('max'))).toBeGreaterThan(4)
-    await waitFor(() => expect(screen.getAllByRole('slider')[2]).toHaveValue(contractedValue))
+    await waitFor(() => {
+      const persistedDays = Number((screen.getAllByRole('slider')[2] as HTMLInputElement).value)
+      expect(persistedDays).toBeGreaterThan(0.24)
+      expect(persistedDays).toBeLessThan(0.26)
+    })
   })
 
   it('disables Add immediately when expiry changes until the matching chain arrives', async () => {

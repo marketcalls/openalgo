@@ -474,8 +474,13 @@ export function payoffPriceRange(
 ): [number, number] {
   const strikes = responsiveStrikes(legs)
   const expectedMove = lognormalPriceBand(spot, atmIv, tYears, 2)
-  const lowerCandidates = [spot * 0.9, expectedMove?.lower ?? spot, ...strikes]
-  const upperCandidates = [spot * 1.1, expectedMove?.upper ?? spot, ...strikes]
+  const lowerBaseline = spot * 0.9
+  const scaledUpperBaseline = spot * 1.1
+  const upperBaseline = Number.isFinite(scaledUpperBaseline)
+    ? scaledUpperBaseline
+    : Number.MAX_VALUE
+  const lowerCandidates = [lowerBaseline, expectedMove?.lower ?? spot, ...strikes]
+  const upperCandidates = [upperBaseline, expectedMove?.upper ?? spot, ...strikes]
   return [Math.max(0, Math.min(...lowerCandidates)), Math.max(...upperCandidates)]
 }
 
@@ -502,12 +507,23 @@ export function lognormalPriceBand(
     return null
   }
   const sigma = atmIv / 100
-  const drift = -0.5 * sigma * sigma * tYears
-  const spread = standardDeviations * sigma * Math.sqrt(tYears)
-  return {
-    lower: spot * Math.exp(drift - spread),
-    upper: spot * Math.exp(drift + spread),
+  const sqrtT = Math.sqrt(tYears)
+  const variance = sigma * sigma * tYears
+  const sigmaT = sigma * sqrtT
+  const drift = -0.5 * variance
+  const spread = standardDeviations * sigmaT
+  const lowerExponent = drift - spread
+  const upperExponent = drift + spread
+  if (
+    ![sigma, sqrtT, variance, sigmaT, drift, spread, lowerExponent, upperExponent].every(
+      Number.isFinite
+    )
+  ) {
+    return null
   }
+  const lower = spot * Math.exp(lowerExponent)
+  const upper = spot * Math.exp(upperExponent)
+  return Number.isFinite(lower) && Number.isFinite(upper) ? { lower, upper } : null
 }
 
 function analyzeTerminalPayoff(
@@ -804,32 +820,58 @@ export function probabilityOfProfit(
   ) {
     return null
   }
-  const sigmaT = (atmIv / 100) * Math.sqrt(tYears)
-  if (sigmaT <= 0) return null
+  const sigma = atmIv / 100
+  const sqrtT = Math.sqrt(tYears)
+  const variance = sigma * sigma * tYears
+  const sigmaT = sigma * sqrtT
+  const mu = -0.5 * variance
+  if (![sigma, sqrtT, variance, sigmaT, mu].every(Number.isFinite) || sigmaT <= 0) return null
 
   // F(x) = P(S_T <= x) = Phi((ln(x/S0) - (-sigma^2/2) T) / (sigma sqrt T))  (risk-free drift = 0)
-  const cdf = (x: number) => {
+  const cdf = (x: number): number | null => {
     if (x <= 0) return 0
-    const mu = -0.5 * (atmIv / 100) * (atmIv / 100) * tYears
-    return normCdf((Math.log(x / spot) - mu) / sigmaT)
+    const ratio = x / spot
+    const logReturn = Math.log(ratio)
+    const numerator = logReturn - mu
+    const z = numerator / sigmaT
+    if (![ratio, logReturn, numerator, z].every(Number.isFinite)) return null
+    const probability = normCdf(z)
+    return Number.isFinite(probability) ? probability : null
   }
 
   let prob = 0
   for (let i = 0; i < samples.length - 1; i++) {
     const a = samples[i]
     const b = samples[i + 1]
-    const mid = 0.5 * (a.expiry + b.expiry)
+    const mid = a.expiry / 2 + b.expiry / 2
+    if (!Number.isFinite(mid)) return null
     if (mid > 0) {
-      prob += cdf(b.underlying) - cdf(a.underlying)
+      const upperCdf = cdf(b.underlying)
+      const lowerCdf = cdf(a.underlying)
+      if (upperCdf === null || lowerCdf === null) return null
+      const probabilityMass = upperCdf - lowerCdf
+      if (!Number.isFinite(probabilityMass)) return null
+      prob += probabilityMass
+      if (!Number.isFinite(prob)) return null
     }
   }
   // Tail beyond last sample: assume same sign as last point.
   const last = samples[samples.length - 1]
-  if (last.expiry > 0) prob += 1 - cdf(last.underlying)
+  if (last.expiry > 0) {
+    const lastCdf = cdf(last.underlying)
+    if (lastCdf === null) return null
+    prob += 1 - lastCdf
+  }
   const first = samples[0]
-  if (first.expiry > 0) prob += cdf(first.underlying)
+  if (first.expiry > 0) {
+    const firstCdf = cdf(first.underlying)
+    if (firstCdf === null) return null
+    prob += firstCdf
+  }
 
-  return Math.max(0, Math.min(1, prob))
+  if (!Number.isFinite(prob)) return null
+  const clampedProbability = Math.max(0, Math.min(1, prob))
+  return Number.isFinite(clampedProbability) ? clampedProbability : null
 }
 
 /** Days to expiry (approximate, at 15:30 IST expiry close). */

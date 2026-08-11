@@ -78,3 +78,33 @@
 
 - Reproduce near-expiry sigma/spot annotation spacing in real desktop and
   mobile browsers before choosing a pixel threshold or suppression policy.
+
+## Fix Round 1
+
+- RED: the 0.02-day and 0.23-day simulator regressions exposed non-integral
+  native range partitions of `0.48` and `5.52`. Finite `1e308` IV/horizon and
+  spot fixtures also reproduced `NaN`/`Infinity` bands, a contaminated payoff
+  range, and `NaN` PoP. The focused RED run had 6 expected failures.
+- Sub-day simulators now expose a native integer-index range and map each index
+  to an equal positive time increment no larger than one hour. The terminal
+  integer maps back to the exact `maxDays`; day mode retains its quarter-day
+  step.
+- Lognormal bands and PoP now validate sigma, square-root time, variance,
+  sigma-time, drift, spread/exponents, price bounds, CDF ratios/log returns,
+  z-scores, probability masses, accumulation, and the final result. Any
+  non-finite derived value uses the existing unavailable/omitted-band contract.
+- Pre-commit review reproduced a browser-specific step mismatch that DOM
+  `change` alone did not expose: installed Chrome's End key stopped the decimal
+  0.23-day range at `0.191666666666667`, while the integer range reached its
+  terminal index `6`. It also found `spot * 1.1` could overflow independently
+  of the omitted lognormal band.
+- Second RED: three integer-range assertions and one finite extreme-spot range
+  assertion failed. The payoff baseline now saturates an overflowed upper
+  candidate at `Number.MAX_VALUE`, keeping the range finite.
+- GREEN: simulator tests pass 4/4 and math tests pass 28/28. The requested
+  math/simulator/page/chart/positions integration passes 64/64, including the
+  representation-independent stale-horizon regression.
+- Full verification: 28 files and 412 tests passed; lint passed across 386
+  source files; standalone TypeScript and the production build passed.
+  Generated `frontend/dist` was restored to HEAD and ignored build assets were
+  removed afterward.

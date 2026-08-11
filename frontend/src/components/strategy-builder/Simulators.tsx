@@ -127,7 +127,20 @@ export function Simulators({
 }: SimulatorsProps) {
   const maxShiftedDays = Math.max(0, maxDays)
   const isSubDay = maxShiftedDays < 1
-  const timeStep = isSubDay ? 1 / 24 : 0.25
+  const maxHourlyStep = 1 / 24
+  const timePartitions =
+    isSubDay && maxShiftedDays > 0 ? Math.ceil(maxShiftedDays / maxHourlyStep) : 0
+  const timeSliderValue =
+    isSubDay && timePartitions > 0
+      ? Math.round((Math.min(daysElapsed, maxShiftedDays) / maxShiftedDays) * timePartitions)
+      : daysElapsed
+  const timeSliderMax = isSubDay ? timePartitions : maxShiftedDays
+  const timeStep = isSubDay ? 1 : 0.25
+  const sliderValueToDays = (value: number) => {
+    if (!isSubDay || timePartitions === 0) return isSubDay ? 0 : value
+    if (value >= timePartitions) return maxShiftedDays
+    return (value * maxShiftedDays) / timePartitions
+  }
   const formatTime = (value: number) => {
     const totalHours = Math.round(value * 24 * 10) / 10
     if (isSubDay) return `+${totalHours.toLocaleString()}h`
@@ -195,13 +208,13 @@ export function Simulators({
           icon={<Clock className="h-3.5 w-3.5" />}
           label={isSubDay ? 'Hours Forward' : 'Days Forward'}
           sublabel="Advance time toward expiry"
-          value={daysElapsed}
+          value={timeSliderValue}
           min={0}
-          max={maxShiftedDays}
+          max={timeSliderMax}
           step={timeStep}
           accent="blue"
-          formatter={formatTime}
-          onChange={onDaysElapsedChange}
+          formatter={(value) => formatTime(sliderValueToDays(value))}
+          onChange={(value) => onDaysElapsedChange(sliderValueToDays(value))}
         />
       </div>
     </div>
