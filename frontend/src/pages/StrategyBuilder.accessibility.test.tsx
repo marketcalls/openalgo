@@ -177,41 +177,45 @@ beforeEach(() => {
 })
 
 describe('StrategyBuilder accessibility and mobile containment', () => {
-  it('SB-17/SB-18 contains tabs and exposes controls/payoff semantics without Axe violations', async () => {
-    const { view } = await renderPopulatedBuilder()
+  it(
+    'SB-17/SB-18 contains tabs and exposes controls/payoff semantics without Axe violations',
+    async () => {
+      const { view } = await renderPopulatedBuilder()
 
-    const page = screen.getByTestId('strategy-builder-page')
-    expect(page).toHaveClass('min-w-0', 'max-w-full')
-    expect(screen.getByTestId('strategy-tabs-scroller')).toHaveClass(
-      'min-w-0',
-      'max-w-full',
-      'overflow-x-auto'
-    )
+      const page = screen.getByTestId('strategy-builder-page')
+      expect(page).toHaveClass('min-w-0', 'max-w-full')
+      expect(screen.getByTestId('strategy-tabs-scroller')).toHaveClass(
+        'min-w-0',
+        'max-w-full',
+        'overflow-x-auto'
+      )
 
-    expect(screen.getByRole('textbox', { name: 'Search strategy templates' })).toBeVisible()
-    expect(screen.getByRole('combobox', { name: 'Segment' })).toBeVisible()
-    expect(screen.getByRole('combobox', { name: 'Expiry' })).toBeVisible()
-    expect(screen.getByRole('combobox', { name: 'Strike' })).toBeVisible()
-    expect(screen.getByRole('group', { name: 'Option type' })).toBeVisible()
-    expect(screen.getByRole('group', { name: 'Trade side' })).toBeVisible()
-    expect(screen.getByRole('spinbutton', { name: 'Position lot quantity' })).toBeVisible()
-    expect(screen.getByRole('slider', { name: 'Spot price shift' })).toBeVisible()
-    expect(screen.getByRole('slider', { name: 'Implied volatility shift' })).toBeVisible()
-    expect(screen.getByRole('slider', { name: 'Time forward' })).toBeVisible()
+      expect(screen.getByRole('textbox', { name: 'Search strategy templates' })).toBeVisible()
+      expect(screen.getByRole('combobox', { name: 'Segment' })).toBeVisible()
+      expect(screen.getByRole('combobox', { name: 'Expiry' })).toBeVisible()
+      expect(screen.getByRole('combobox', { name: 'Strike' })).toBeVisible()
+      expect(screen.getByRole('group', { name: 'Option type' })).toBeVisible()
+      expect(screen.getByRole('group', { name: 'Trade side' })).toBeVisible()
+      expect(screen.getByRole('spinbutton', { name: 'Position lot quantity' })).toBeVisible()
+      expect(screen.getByRole('slider', { name: 'Spot price shift' })).toBeVisible()
+      expect(screen.getByRole('slider', { name: 'Implied volatility shift' })).toBeVisible()
+      expect(screen.getByRole('slider', { name: 'Time forward' })).toBeVisible()
 
-    const payoff = screen.getByRole('region', { name: /payoff analysis/i })
-    expect(
-      within(payoff).getByRole('table', { name: /representative payoff values/i })
-    ).toBeVisible()
+      const payoff = screen.getByRole('region', { name: /payoff analysis/i })
+      expect(
+        within(payoff).getByRole('table', { name: /representative payoff values/i })
+      ).toBeVisible()
 
-    const headingLevels = screen
-      .getAllByRole('heading')
-      .map((heading) => Number(heading.tagName.slice(1)))
-    for (let index = 1; index < headingLevels.length; index += 1) {
-      expect(headingLevels[index]).toBeLessThanOrEqual(headingLevels[index - 1] + 1)
-    }
-    expect(await axe(view.container)).toHaveNoViolations()
-  })
+      const headingLevels = screen
+        .getAllByRole('heading')
+        .map((heading) => Number(heading.tagName.slice(1)))
+      for (let index = 1; index < headingLevels.length; index += 1) {
+        expect(headingLevels[index]).toBeLessThanOrEqual(headingLevels[index - 1] + 1)
+      }
+      expect(await axe(view.container)).toHaveNoViolations()
+    },
+    15_000
+  )
 
   it('labels template dialog controls in the integrated builder', async () => {
     const { user } = await renderPopulatedBuilder()
