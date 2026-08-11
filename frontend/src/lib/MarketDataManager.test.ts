@@ -17,8 +17,10 @@ function deferred<T>(): Deferred<T> {
 interface ManagerHarness {
   fallbackMode: boolean
   apiKey: string | null
+  enableFallbackMode: () => Promise<void>
   fetchMarketDataViaRest: () => Promise<void>
   disableFallbackMode: () => void
+  startFallbackPolling: () => void
   handleMessage: (event: MessageEvent) => void
 }
 
@@ -30,7 +32,24 @@ describe('MarketDataManager fallback sequencing', () => {
 
   it('does not let an old REST fallback session replace a newer WebSocket tick', async () => {
     const response = deferred<Response>()
-    vi.stubGlobal('fetch', vi.fn(() => response.promise))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === '/api/v1/multiquotes') return response.promise
+        if (url === '/auth/csrf-token') {
+          return Promise.resolve(
+            new Response(JSON.stringify({ csrf_token: 'csrf' }), { status: 200 })
+          )
+        }
+        if (url === '/api/websocket/apikey') {
+          return Promise.resolve(
+            new Response(JSON.stringify({ status: 'success', api_key: 'key' }), { status: 200 })
+          )
+        }
+        return Promise.reject(new Error(`Unexpected fetch: ${url}`))
+      })
+    )
 
     const manager = MarketDataManager.getInstance()
     const received: number[] = []
@@ -54,8 +73,11 @@ describe('MarketDataManager fallback sequencing', () => {
       })
     )
     harness.disableFallbackMode()
-    harness.fallbackMode = true
-    expect(harness.fallbackMode).toBe(true)
+    const startFallbackPolling = vi
+      .spyOn(harness, 'startFallbackPolling')
+      .mockImplementation(() => {})
+    await harness.enableFallbackMode()
+    expect(startFallbackPolling).toHaveBeenCalledOnce()
     response.resolve(
       new Response(
         JSON.stringify({
