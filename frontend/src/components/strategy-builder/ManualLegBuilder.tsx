@@ -103,6 +103,11 @@ export function ManualLegBuilder({
   const [chainError, setChainError] = useState<string | null>(null)
   const resolveGenerationRef = useRef(0)
   const chainGenerationRef = useRef(0)
+  const liveChainRef = useRef(liveChain)
+  liveChainRef.current = liveChain
+  const liveChainIdentity = liveChain
+    ? `${liveChain.status}:${normalizeExpiryCode(liveChain.expiry_date)}`
+    : ''
 
   const availableExpiries = segment === 'FUTURE' ? futureExpiries : expiries
 
@@ -124,11 +129,13 @@ export function ManualLegBuilder({
       setIsChainResolving(false)
       return
     }
+    const currentLiveChain = liveChainRef.current
     if (
-      liveChain?.status === 'success' &&
-      normalizeExpiryCode(liveChain.expiry_date) === normalizeExpiryCode(expiry)
+      liveChainIdentity === `success:${normalizeExpiryCode(expiry)}` &&
+      currentLiveChain?.status === 'success' &&
+      normalizeExpiryCode(currentLiveChain.expiry_date) === normalizeExpiryCode(expiry)
     ) {
-      setResolvedOptionChain(liveChain)
+      setResolvedOptionChain(currentLiveChain)
       setIsChainResolving(false)
       return
     }
@@ -155,7 +162,7 @@ export function ManualLegBuilder({
       .finally(() => {
         if (generation === chainGenerationRef.current) setIsChainResolving(false)
       })
-  }, [expiry, liveChain, resolveOptionChain, segment])
+  }, [expiry, liveChainIdentity, resolveOptionChain, segment])
 
   const matchingResolvedChain =
     resolvedOptionChain &&
@@ -281,7 +288,7 @@ export function ManualLegBuilder({
     })
   }
 
-  const currentMoneyness = strikeMoneyness(strike, atmStrike, strikeStep, optionType)
+  const currentMoneyness = strikeMoneyness(strike, selectionAtmStrike, strikeStep, optionType)
 
   return (
     <div className="min-w-0 max-w-full overflow-hidden rounded-xl border bg-card shadow-sm">
@@ -391,7 +398,7 @@ export function ManualLegBuilder({
                 </SelectTrigger>
                 <SelectContent>
                   {strikeOptions.map((s) => {
-                    const m = strikeMoneyness(s, atmStrike, strikeStep, optionType)
+                    const m = strikeMoneyness(s, selectionAtmStrike, strikeStep, optionType)
                     return (
                       <SelectItem key={s} value={String(s)}>
                         <span className="tabular-nums">{s}</span>

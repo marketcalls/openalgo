@@ -28,7 +28,7 @@ describe('MarketDataManager fallback sequencing', () => {
     vi.unstubAllGlobals()
   })
 
-  it('does not let an old REST fallback response replace a newer WebSocket tick', async () => {
+  it('does not let an old REST fallback session replace a newer WebSocket tick', async () => {
     const response = deferred<Response>()
     vi.stubGlobal('fetch', vi.fn(() => response.promise))
 
@@ -54,6 +54,8 @@ describe('MarketDataManager fallback sequencing', () => {
       })
     )
     harness.disableFallbackMode()
+    harness.fallbackMode = true
+    expect(harness.fallbackMode).toBe(true)
     response.resolve(
       new Response(
         JSON.stringify({

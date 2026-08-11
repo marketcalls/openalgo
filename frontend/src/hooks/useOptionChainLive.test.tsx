@@ -148,6 +148,7 @@ describe('useOptionChainLive', () => {
 
     rerender({ enabled: false })
     await waitFor(() => expect(result.current.lastStreamUpdate).toBeNull())
+    expect(result.current.isStreaming).toBe(false)
   })
 
   it('derives stream freshness only from symbols in the current option chain', async () => {

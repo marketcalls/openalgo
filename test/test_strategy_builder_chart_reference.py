@@ -99,3 +99,48 @@ def test_crypto_uses_option_chain_canonical_reference(monkeypatch, module, servi
         "CRYPTO",
     )
     quote.assert_called_once_with(symbol="BTCUSDFUT", exchange="CRYPTO", api_key="key")
+
+
+@pytest.mark.parametrize(
+    ("module", "service"),
+    [
+        (strategy_chart_service, strategy_chart_service.get_strategy_chart_data),
+        (multi_strike_oi_service, multi_strike_oi_service.get_multi_strike_oi_data),
+    ],
+)
+def test_crypto_without_canonical_fields_resolves_perpetual_reference(monkeypatch, module, service):
+    history = Mock(side_effect=history_response)
+    quote = Mock(return_value=(True, {"data": {"ltp": 101}}, 200))
+    perpetual_search = Mock(return_value=[{"symbol": "BTCUSDFUT", "exchange": "CRYPTO"}])
+    monkeypatch.setattr(module, "get_history", history)
+    monkeypatch.setattr(module, "get_quotes", quote)
+    monkeypatch.setattr(
+        strategy_builder_reference_service,
+        "fno_search_symbols",
+        perpetual_search,
+        raising=False,
+    )
+
+    success, _response, status = service(
+        underlying="BTC",
+        exchange="CRYPTO",
+        legs=[{**LEG, "exchange": "CRYPTO"}],
+        interval="5m",
+        api_key="key",
+        days=1,
+    )
+
+    assert success is True
+    assert status == 200
+    first_history = history.call_args_list[0].kwargs
+    assert (first_history["symbol"], first_history["exchange"]) == (
+        "BTCUSDFUT",
+        "CRYPTO",
+    )
+    quote.assert_called_once_with(symbol="BTCUSDFUT", exchange="CRYPTO", api_key="key")
+    perpetual_search.assert_called_once_with(
+        query="BTCUSDFUT",
+        exchange="CRYPTO",
+        instrumenttype="PERPFUT",
+        limit=1,
+    )

@@ -11,8 +11,9 @@ from services import expiry_service
 from services.expiry_service import get_expiry_dates
 
 _ROWS = [
-    ("GUARSEED31DEC301000CE", "NCDEX", "OPTFUT"),
-    ("USDINR31DEC30100CE", "BCD", "OPTCUR"),
+    ("GUARSEED31DEC301000CE", "NCDEX", "OPTFUT", "31-DEC-30"),
+    ("USDINR31DEC30100CE", "BCD", "OPTCUR", "31-DEC-30"),
+    ("USDINR30NOV30FUT", "BCD", "FUTCUR", "30-NOV-30"),
 ]
 
 
@@ -26,7 +27,7 @@ def isolated_derivative_expiries(monkeypatch):
     Base.metadata.create_all(engine)
     test_session = scoped_session(sessionmaker(bind=engine))
     monkeypatch.setattr(expiry_service, "db_session", test_session)
-    for symbol, exchange, instrumenttype in _ROWS:
+    for symbol, exchange, instrumenttype, expiry in _ROWS:
         test_session.add(
             SymToken(
                 symbol=symbol,
@@ -35,7 +36,7 @@ def isolated_derivative_expiries(monkeypatch):
                 exchange=exchange,
                 brexchange=exchange,
                 token=f"test-{exchange}-{symbol}",
-                expiry="31-DEC-30",
+                expiry=expiry,
                 strike=1000.0,
                 lotsize=1,
                 instrumenttype=instrumenttype,
@@ -78,3 +79,15 @@ def test_expiry_service_returns_options_for_strategy_builder_venue(exchange, sym
     assert success is True
     assert status == 200
     assert response["data"] == ["31-DEC-30"]
+
+
+def test_bcd_expiry_service_keeps_futures_and_options_separate():
+    success, response, status = get_expiry_dates(
+        symbol="USDINR",
+        exchange="BCD",
+        instrumenttype="futures",
+    )
+
+    assert success is True
+    assert status == 200
+    assert response["data"] == ["30-NOV-30"]

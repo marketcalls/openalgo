@@ -241,6 +241,18 @@ describe('PayoffChart exact geometry', () => {
     view.rerender(
       <PayoffChart
         title="Long Call"
+        chartIdentity="NFO:NIFTY:04AUG26"
+        scenario={{ ...BASE_SCENARIO, spot: 101 }}
+        remainingYears={7 / 365}
+        payoff={payoff}
+        formatCurrency={formatCurrency}
+      />
+    )
+    expect(plotCapture.props?.layout.uirevision).toBe('NFO:NIFTY:04AUG26')
+
+    view.rerender(
+      <PayoffChart
+        title="Long Call"
         chartIdentity="NFO:NIFTY:11AUG26"
         scenario={{ ...BASE_SCENARIO, spot: 101 }}
         remainingYears={14 / 365}

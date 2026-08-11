@@ -126,7 +126,7 @@ def get_expiry_dates(
                 query = query.filter(SymToken.instrumenttype.in_(["FUTSTK", "FUTIDX", "FUT"]))
             elif exchange in ["MCX", "NCDEX"]:
                 query = query.filter(SymToken.instrumenttype.in_(["FUTCOM", "FUTENR", "FUT"]))
-            elif exchange == "CDS":
+            elif exchange in ["CDS", "BCD"]:
                 query = query.filter(SymToken.instrumenttype.in_(["FUTCUR", "FUTIRC", "FUT"]))
             elif exchange == "CRYPTO":
                 query = query.filter(SymToken.instrumenttype.in_(["FUT", "PERPFUT"]))
@@ -136,7 +136,7 @@ def get_expiry_dates(
                 query = query.filter(SymToken.instrumenttype.in_(["OPTSTK", "OPTIDX", "CE", "PE"]))
             elif exchange in ["MCX", "NCDEX"]:
                 query = query.filter(SymToken.instrumenttype.in_(["OPTFUT", "CE", "PE"]))
-            elif exchange == "CDS":
+            elif exchange in ["CDS", "BCD"]:
                 query = query.filter(SymToken.instrumenttype.in_(["OPTCUR", "OPTIRC", "CE", "PE"]))
             elif exchange == "CRYPTO":
                 query = query.filter(SymToken.instrumenttype.in_(["CE", "PE"]))

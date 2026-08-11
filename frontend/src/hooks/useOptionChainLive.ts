@@ -373,7 +373,7 @@ export function useOptionChainLive(
   ])
 
   // Determine streaming status
-  const isStreaming = isWsConnected && isWsAuthenticated && wsSymbols.length > 0
+  const isStreaming = enabled && isWsConnected && isWsAuthenticated && wsSymbols.length > 0
   const isPaused = isPollingPaused || isWsPaused
 
   // Combined last update (use LTP update if more recent)

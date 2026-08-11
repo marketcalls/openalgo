@@ -212,19 +212,24 @@ describe('ManualLegBuilder listed contracts', () => {
         : market()
     )
 
-    render(
-      <ManualLegBuilder
-        {...props({ resolveContract })}
-        resolveOptionChain={resolveOptionChain}
-      />
-    )
+    const builderProps = props({
+      resolveContract,
+      resolveOptionChain,
+      liveChain: liveChain(),
+      strikeStep: 50,
+    })
+    const view = render(<ManualLegBuilder {...builderProps} />)
     await screen.findByText('NIFTY13AUG2624600CE')
     await choose('Expiry', '18AUG26')
 
     expect(await screen.findByText('NIFTY18AUG2624750CE')).toBeVisible()
-    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Strike' }), { key: 'ArrowDown' })
-    expect(await screen.findByRole('option', { name: /24750/ })).toBeVisible()
-    expect(screen.queryByRole('option', { name: /24600/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Strike' })).toHaveTextContent('24750')
+    expect(screen.getAllByText('ATM')).toHaveLength(2)
+
+    expect(resolveOptionChain).toHaveBeenCalledTimes(1)
+    view.rerender(<ManualLegBuilder {...builderProps} liveChain={liveChain({ ltp: 140 })} />)
+    await act(async () => {})
+    expect(resolveOptionChain).toHaveBeenCalledTimes(1)
   })
 
   it('keeps only the latest async contract and clears a missing selection', async () => {
