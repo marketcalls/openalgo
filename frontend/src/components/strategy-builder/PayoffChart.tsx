@@ -14,6 +14,7 @@ export interface PayoffChartProps {
   /** If true, show the dashed current-value scenario curve in addition to expiry. */
   showTplus0?: boolean
   height?: number
+  formatCurrency: (value: number) => string
 }
 
 export function PayoffChart({
@@ -24,6 +25,7 @@ export function PayoffChart({
   terminalLabel = 'At Expiry',
   showTplus0 = true,
   height = 440,
+  formatCurrency,
 }: PayoffChartProps) {
   const { mode, appMode } = useThemeStore()
   const isAnalyzer = appMode === 'analyzer'
@@ -98,10 +100,16 @@ export function PayoffChart({
     const currentLabel = formatHorizon(daysElapsed)
     const hoverTemplate = (label: string) =>
       `<b>${label}</b>` +
-      '<br>Underlying: ₹%{x:,.2f}' +
-      '<br>Chg. from Scenario: %{customdata}' +
-      '<br>P&L: ₹%{y:,.2f}' +
+      '<br>Underlying: %{customdata[0]}' +
+      '<br>Chg. from Scenario: %{customdata[1]}' +
+      '<br>P&L: %{customdata[2]}' +
       '<extra></extra>'
+    const hoverData = (values: number[]) =>
+      samples.map((sample, index) => [
+        formatCurrency(sample.underlying),
+        pctFromSpot[index],
+        formatCurrency(values[index]),
+      ])
 
     const traces: PlotlyTypes.Data[] = [
       {
@@ -133,8 +141,8 @@ export function PayoffChart({
         mode: 'lines',
         name: terminalLabel,
         line: { color: colors.expiryLine, width: 2.2 },
-        // customdata carries a pre-formatted percent string per point.
-        customdata: pctFromSpot as unknown as PlotlyTypes.Datum[],
+        // customdata carries broker-aware price/P&L strings and percent change.
+        customdata: hoverData(ysExpiry) as unknown as PlotlyTypes.Datum[],
         hovertemplate: hoverTemplate(terminalLabel),
       },
     ]
@@ -147,7 +155,7 @@ export function PayoffChart({
         mode: 'lines',
         name: currentLabel,
         line: { color: colors.tplus0Line, width: 2, dash: 'dash' },
-        customdata: pctFromSpot as unknown as PlotlyTypes.Datum[],
+        customdata: hoverData(ysT0) as unknown as PlotlyTypes.Datum[],
         hovertemplate: hoverTemplate(currentLabel),
       })
     }
@@ -314,7 +322,7 @@ export function PayoffChart({
         range: [xs[0], xs[xs.length - 1]],
       },
       yaxis: {
-        title: { text: 'Profit / Loss (₹)', font: { color: colors.text, size: 12 } },
+        title: { text: 'Profit / Loss', font: { color: colors.text, size: 12 } },
         tickfont: { color: colors.text, size: 10 },
         gridcolor: colors.grid,
         zeroline: true,
@@ -335,7 +343,17 @@ export function PayoffChart({
         responsive: true,
       } as Partial<PlotlyTypes.Config>,
     }
-  }, [payoff, scenario, remainingYears, terminalLabel, showTplus0, title, colors, isDark])
+  }, [
+    payoff,
+    scenario,
+    remainingYears,
+    terminalLabel,
+    showTplus0,
+    title,
+    colors,
+    isDark,
+    formatCurrency,
+  ])
 
   return (
     <Plot

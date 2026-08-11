@@ -41,17 +41,7 @@ export interface PositionsPanelProps {
   isUpdating?: boolean
   /** True when no broker session — disables Execute. */
   executeDisabled?: boolean
-}
-
-function formatCurrency(v: number): string {
-  // Unlimited-profit / unlimited-loss strategies report ±Infinity from
-  // computePayoff. Surface that clearly instead of a generic dash.
-  if (v === Infinity) return 'Unlimited'
-  if (v === -Infinity) return 'Unlimited'
-  if (!Number.isFinite(v)) return '—'
-  const abs = Math.abs(v)
-  const sign = v < 0 ? '-' : v > 0 ? '+' : ''
-  return `${sign}₹${abs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+  formatCurrency: (value: number) => string
 }
 
 function formatPct(v: number): string {
@@ -123,6 +113,7 @@ export function PositionsPanel({
   onExecute,
   isUpdating = false,
   executeDisabled = false,
+  formatCurrency,
 }: PositionsPanelProps) {
   const allSelected = legs.length > 0 && legs.every((l) => l.active)
   const activeCount = legs.filter((l) => l.active).length
@@ -307,23 +298,20 @@ export function PositionsPanel({
                           ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
                           : 'bg-rose-500/10 text-rose-700 dark:text-rose-400'
                       )}
-                      title={`Entry ₹${leg.price.toFixed(2)} → Exit ₹${(leg.exitPrice ?? 0).toFixed(2)}`}
+                      title={`Entry ${formatCurrency(leg.price)} → Exit ${formatCurrency(leg.exitPrice ?? 0)}`}
                     >
-                      {realisedPnl >= 0 ? '+' : '-'}₹
-                      {Math.abs(realisedPnl).toLocaleString('en-IN', {
-                        maximumFractionDigits: 0,
-                      })}
+                      {formatCurrency(realisedPnl)}
                     </span>
                   ) : (
                     <span
                       className="shrink-0 text-[11px] tabular-nums text-muted-foreground"
                       title={
                         leg.marketPrice !== undefined
-                          ? `Current mark ₹${leg.marketPrice.toFixed(2)}`
+                          ? `Current mark ${formatCurrency(leg.marketPrice)}`
                           : undefined
                       }
                     >
-                      ₹{leg.price.toFixed(2)}
+                      {formatCurrency(leg.price)}
                     </span>
                   )}
 
@@ -397,11 +385,28 @@ export function PositionsPanel({
         <dl className="grid grid-cols-2 divide-x divide-y">
           <MetricTile
             label="Max Profit"
-            value={formatCurrency(maxProfit)}
+            value={
+              Number.isFinite(maxProfit)
+                ? formatCurrency(maxProfit)
+                : Math.abs(maxProfit) === Infinity
+                  ? 'Unlimited'
+                  : '—'
+            }
             tone="profit"
             emphasize
           />
-          <MetricTile label="Max Loss" value={formatCurrency(maxLoss)} tone="loss" emphasize />
+          <MetricTile
+            label="Max Loss"
+            value={
+              Number.isFinite(maxLoss)
+                ? formatCurrency(maxLoss)
+                : Math.abs(maxLoss) === Infinity
+                  ? 'Unlimited'
+                  : '—'
+            }
+            tone="loss"
+            emphasize
+          />
           <MetricTile
             label="Prob. of Profit"
             value={probOfProfit === null ? '—' : formatPct(probOfProfit * 100)}
@@ -417,10 +422,7 @@ export function PositionsPanel({
             value={formatCurrency(netCredit)}
             tone={netCredit > 0 ? 'profit' : netCredit < 0 ? 'loss' : 'neutral'}
           />
-          <MetricTile
-            label="Est. Premium"
-            value={`₹${Math.abs(estPremium).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
-          />
+          <MetricTile label="Est. Premium" value={formatCurrency(Math.abs(estPremium))} />
           {marginSupported === true && (
             <MetricTile
               label="Margin Req."
@@ -428,7 +430,7 @@ export function PositionsPanel({
                 isMarginLoading
                   ? 'Calculating…'
                   : marginRequired !== null && marginRequired !== undefined
-                    ? `₹${marginRequired.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+                    ? formatCurrency(marginRequired)
                     : '—'
               }
             />
@@ -446,7 +448,7 @@ export function PositionsPanel({
                 key={i}
                 className="rounded-md border bg-background px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-foreground"
               >
-                {b.toFixed(0)}
+                {formatCurrency(b)}
               </span>
             ))}
           </div>

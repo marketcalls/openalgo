@@ -76,6 +76,7 @@ import {
 } from '@/lib/strategyMath'
 import type { Direction, StrategyTemplate } from '@/lib/strategyTemplates'
 import { normalizeExpiryCode } from '@/lib/templateResolution'
+import { makeFormatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { showToast } from '@/utils/toast'
 
@@ -129,7 +130,8 @@ function queuedFetch<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 export default function StrategyBuilder() {
-  const { apiKey } = useAuthStore()
+  const { apiKey, user } = useAuthStore()
+  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const {
     toolsFnoExchanges: fnoExchanges,
     defaultToolsFnoExchange: defaultFnoExchange,
@@ -1519,6 +1521,7 @@ export default function StrategyBuilder() {
               onExecute={() => setExecuteDialogOpen(true)}
               isUpdating={loadedEntry !== null}
               executeDisabled={!apiKey}
+              formatCurrency={formatCurrency}
             />
           </div>
 
@@ -1587,6 +1590,7 @@ export default function StrategyBuilder() {
                       remainingYears={simulatedYearsToNearExpiry}
                       terminalLabel={terminalCurveLabel}
                       payoff={payoff}
+                      formatCurrency={formatCurrency}
                     />
                   ) : (
                     <div className="flex h-[440px] items-center justify-center text-sm text-muted-foreground">
@@ -1596,13 +1600,14 @@ export default function StrategyBuilder() {
                 </div>
               </TabsContent>
               <TabsContent value="greeks" className="pt-4">
-                <GreeksTab legs={legs} greeksByLeg={greeksByLeg} />
+                <GreeksTab legs={legs} greeksByLeg={greeksByLeg} formatCurrency={formatCurrency} />
               </TabsContent>
               <TabsContent value="pnl" className="pt-4">
                 <PnLTab
                   legs={legs}
                   fnoExchange={fnoExchange}
                   fallbackPrices={fallbackPricesByLeg}
+                  formatCurrency={formatCurrency}
                 />
               </TabsContent>
               <TabsContent value="strategychart" className="pt-4">

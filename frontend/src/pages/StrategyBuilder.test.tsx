@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   getFutures: vi.fn(),
   getPortfolioEntry: vi.fn(),
   getUnderlyings: vi.fn(),
+  broker: null as string | null,
 }))
 
 vi.mock('@/api/client', () => ({
@@ -49,7 +50,10 @@ vi.mock('@/api/strategy-portfolio', () => ({
 }))
 
 vi.mock('@/stores/authStore', () => ({
-  useAuthStore: () => ({ apiKey: 'test-api-key' }),
+  useAuthStore: () => ({
+    apiKey: 'test-api-key',
+    user: { broker: mocks.broker },
+  }),
 }))
 
 vi.mock('@/hooks/useMarketData', () => ({
@@ -226,6 +230,7 @@ beforeEach(() => {
   mocks.marketAuthenticated = false
   mocks.marketPaused = false
   mocks.marketConnectionEpoch = 0
+  mocks.broker = null
   mocks.getUnderlyings.mockResolvedValue({
     status: 'success',
     underlyings: ['NIFTY', 'BANKNIFTY', 'RELIANCE'],
@@ -290,6 +295,14 @@ function requests(path: string): unknown[] {
 }
 
 describe('StrategyBuilder live request orchestration', () => {
+  it('formats currency output for the authenticated Delta Exchange broker', async () => {
+    mocks.broker = 'deltaexchange'
+    renderBuilder()
+    await addOneLeg()
+
+    expect(screen.getAllByText('$125.00').length).toBeGreaterThan(0)
+  })
+
   it('adds a manual far-expiry option only from that expiry response', async () => {
     const farChain = chainFixture('NIFTY', '18AUG26')
     if (farChain.chain[0].ce) {
@@ -667,10 +680,10 @@ describe('StrategyBuilder live request orchestration', () => {
     const positionRow = greekRows.find((row) => row.textContent?.includes('13AUG26 24600CE'))
     expect(positionRow).toBeDefined()
     expect(positionRow).toHaveTextContent('20.00')
-    expect(positionRow).toHaveTextContent('0.6000')
-    expect(positionRow).toHaveTextContent('-3.0000')
-    expect(positionRow).toHaveTextContent('0.020000')
-    expect(positionRow).toHaveTextContent('5.0000')
+    expect(positionRow).toHaveTextContent('45.00')
+    expect(positionRow).toHaveTextContent('-225.00')
+    expect(positionRow).toHaveTextContent('1.500000')
+    expect(positionRow).toHaveTextContent('375.00')
   })
 
   it('keeps a newer derivative-exchange chain when the prior request resolves late', async () => {
@@ -749,10 +762,10 @@ describe('StrategyBuilder live request orchestration', () => {
     const farGreekRow = greekRows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
     expect(farGreekRow).toBeDefined()
     expect(farGreekRow).toHaveTextContent('33.00')
-    expect(farGreekRow).toHaveTextContent('0.4400')
-    expect(farGreekRow).toHaveTextContent('-8.0000')
-    expect(farGreekRow).toHaveTextContent('0.001200')
-    expect(farGreekRow).toHaveTextContent('9.0000')
+    expect(farGreekRow).toHaveTextContent('22.00')
+    expect(farGreekRow).toHaveTextContent('-400.00')
+    expect(farGreekRow).toHaveTextContent('0.060000')
+    expect(farGreekRow).toHaveTextContent('450.00')
   })
 
   it('does not show a prior contract Greek snapshot after editing a calendar leg', async () => {

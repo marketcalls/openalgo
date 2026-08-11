@@ -2,6 +2,7 @@ import { render } from '@testing-library/react'
 import type * as PlotlyTypes from 'plotly.js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { computePayoff, type ScenarioState, type StrategyLeg } from '@/lib/strategyMath'
+import { makeFormatCurrency } from '@/lib/utils'
 import { PayoffChart } from './PayoffChart'
 
 const plotCapture = vi.hoisted(() => ({
@@ -25,6 +26,7 @@ const BASE_SCENARIO: ScenarioState = {
   daysElapsed: 0,
   valuationTime: NOW,
 }
+const formatCurrency = makeFormatCurrency(null)
 
 function leg(
   id: string,
@@ -78,6 +80,7 @@ describe('PayoffChart exact geometry', () => {
         scenario={BASE_SCENARIO}
         remainingYears={7 / 365}
         payoff={payoff}
+        formatCurrency={formatCurrency}
       />
     )
 
@@ -120,6 +123,7 @@ describe('PayoffChart exact geometry', () => {
         scenario={{ ...BASE_SCENARIO, iv: 30 }}
         remainingYears={1}
         payoff={payoff}
+        formatCurrency={formatCurrency}
       />
     )
 
@@ -151,6 +155,7 @@ describe('PayoffChart exact geometry', () => {
         scenario={{ ...BASE_SCENARIO, iv: 100 }}
         remainingYears={1}
         payoff={payoff}
+        formatCurrency={formatCurrency}
       />
     )
 
@@ -190,6 +195,7 @@ describe('PayoffChart exact geometry', () => {
         remainingYears={0.25}
         terminalLabel="At First Expiry"
         payoff={payoff}
+        formatCurrency={formatCurrency}
       />
     )
 
@@ -227,6 +233,7 @@ describe('PayoffChart exact geometry', () => {
         remainingYears={6.75 / 365}
         terminalLabel="At First Expiry"
         payoff={payoff}
+        formatCurrency={formatCurrency}
       />
     )
 
@@ -235,9 +242,40 @@ describe('PayoffChart exact geometry', () => {
     )
     expect(curves).toHaveLength(2)
     for (const curve of curves) {
-      expect(curve.hovertemplate).toContain('Underlying: ₹%{x:,.2f}')
-      expect(curve.hovertemplate).toContain('Chg. from Scenario: %{customdata}')
-      expect(curve.hovertemplate).toContain('P&L: ₹%{y:,.2f}')
+      expect(curve.hovertemplate).toContain('Underlying: %{customdata[0]}')
+      expect(curve.hovertemplate).toContain('Chg. from Scenario: %{customdata[1]}')
+      expect(curve.hovertemplate).toContain('P&L: %{customdata[2]}')
     }
+  })
+
+  it('formats Delta Exchange hover values in USD without a rupee chart label', () => {
+    const payoff = computePayoff(
+      [leg('call', 'BUY', 'CE', 100, 2)],
+      100,
+      7,
+      0,
+      [80, 120],
+      12,
+      0,
+      20,
+      NOW
+    )
+
+    render(
+      <PayoffChart
+        title="USD Call"
+        scenario={BASE_SCENARIO}
+        remainingYears={7 / 365}
+        payoff={payoff}
+        formatCurrency={makeFormatCurrency('deltaexchange')}
+      />
+    )
+
+    const expiry = plotCapture.props?.data.find((trace) => trace.name === 'At Expiry')
+    const customdata = expiry?.customdata as unknown as string[][]
+    expect(customdata[0][0]).toBe('$80.00')
+    expect(customdata[0][2]).toMatch(/^[-$]/)
+    expect(plotCapture.props?.layout.yaxis?.title?.text).toBe('Profit / Loss')
+    expect(expiry?.hovertemplate).not.toContain('₹')
   })
 })
