@@ -125,7 +125,7 @@ construction would violate the reviewed boundary.
 
 ## Fix Round 1
 
-Reviewed head: `2ee0604ed`
+Fix base: `2ee0604ed`
 
 ### Blocking findings addressed
 
@@ -205,6 +205,88 @@ Exit 0
 
 npm run build
 3013 modules transformed; built in 3.89s. Exit 0
+
+git diff --check
+Exit 0
+```
+
+Build-generated `frontend/dist` changes were restored to `HEAD`.
+
+### Remaining concern
+
+No new concern. Futures still use `expiryTs: null` because the master-contract schema has no
+authoritative expiry cut-off timestamp; canonical date/symbol/lot/tick and the exact contract quote
+remain authoritative.
+
+## Fix Round 2
+
+Fix base: `24d92abcc`
+
+### Same-expiry live metadata refresh
+
+- Manual selection resolution and live market-data refresh now have separate paths. The existing
+  resolver still runs only when the selected contract identity changes.
+- The Manual builder receives the active listed chain as read-only live data. When that chain has
+  the selected option's normalized expiry and exact symbol/exchange identity, it synchronously
+  refreshes price, IV, expiry timestamp, lot size, tick size, underlying/forward references, and
+  Greeks from the already-loaded chain.
+- This refresh never clears the resolved selection, increments the async resolver generation,
+  enters a loading state, or starts another resolver/network request. Far-expiry options and
+  futures ignore active-chain ticks and retain their canonical resolved metadata.
+
+### RED evidence
+
+Manual component before the live-chain refresh path:
+
+```text
+npm run test:run -- src/components/strategy-builder/ManualLegBuilder.test.tsx
+Test Files 1 failed
+Tests 1 failed | 3 passed
+
+Expected refreshed price: ₹140.00
+Received displayed price: ₹125.00
+```
+
+Page flow before the live-chain refresh path:
+
+```text
+npm run test:run -- src/pages/StrategyBuilder.test.tsx -t "refreshes the selected same-expiry manual quote"
+Test Files 1 failed
+Tests 1 failed | 19 skipped
+
+Expected refreshed price: ₹140.00
+Received no matching element.
+```
+
+### GREEN evidence
+
+```text
+npm run test:run -- src/components/strategy-builder/ManualLegBuilder.test.tsx src/pages/StrategyBuilder.test.tsx
+Test Files 2 passed
+Tests 24 passed
+```
+
+The component regression verifies the displayed and submitted price, IV, expiry timestamp, lot
+size, tick size, underlying/forward references, and Greeks while the resolver stays at one call.
+The page regression verifies the WebSocket-driven price reaches both the Manual UI and added
+position without an option-chain request. Existing page regressions continue to verify that active
+chain ticks do not refetch far-expiry options or futures.
+
+### Final verification
+
+```text
+npm run test:run
+Test Files 26 passed
+Tests 385 passed
+
+npm run lint
+Checked 384 files. No fixes applied.
+
+npx tsc -b --pretty false
+Exit 0
+
+npm run build
+3013 modules transformed; built in 4.52s. Exit 0
 
 git diff --check
 Exit 0

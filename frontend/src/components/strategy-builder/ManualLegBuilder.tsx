@@ -8,7 +8,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import type { ResolvedLegMarket } from '@/lib/strategyContracts'
+import {
+  type ListedOptionChainResponse,
+  normalizeExpiryCode,
+  type ResolvedLegMarket,
+  resolveOptionContract,
+} from '@/lib/strategyContracts'
 import { strikeMoneyness } from '@/lib/strategyMath'
 import { cn } from '@/lib/utils'
 import type { OptionStrike } from '@/types/option-chain'
@@ -48,6 +53,8 @@ export interface ManualLegBuilderProps {
   expiries: string[]
   futureExpiries: string[]
   chain: OptionStrike[] | null
+  /** Current live chain, used only to refresh an already-resolved matching option in place. */
+  liveChain: ListedOptionChainResponse | null
   selectedExpiry: string
   atmStrike: number | null
   /** Common strike increment (e.g. 50 for NIFTY) — drives moneyness step labels. */
@@ -68,6 +75,7 @@ export function ManualLegBuilder({
   expiries,
   futureExpiries,
   chain,
+  liveChain,
   selectedExpiry,
   atmStrike,
   strikeStep = 0,
@@ -141,6 +149,35 @@ export function ManualLegBuilder({
         if (generation === resolveGenerationRef.current) setIsResolving(false)
       })
   }, [availableExpiries, expiry, optionType, resolveContract, segment, strike])
+
+  // Selection changes belong to the async resolver above. Live ticks are a
+  // different state transition: refresh only an already-resolved option whose
+  // canonical identity still matches, without clearing it, incrementing the
+  // resolver generation, or issuing another request. Far expiries and futures
+  // deliberately ignore active-chain ticks.
+  useEffect(() => {
+    if (
+      segment !== 'OPTION' ||
+      strike === undefined ||
+      liveChain?.status !== 'success' ||
+      normalizeExpiryCode(liveChain.expiry_date) !== normalizeExpiryCode(expiry)
+    ) {
+      return
+    }
+    const refreshed = resolveOptionContract(liveChain, optionType, strike)
+    if (refreshed === null) return
+    setResolvedContract((current) => {
+      if (
+        current === null ||
+        current.symbol !== refreshed.symbol ||
+        current.exchange !== refreshed.exchange ||
+        normalizeExpiryCode(current.expiry) !== normalizeExpiryCode(refreshed.expiry)
+      ) {
+        return current
+      }
+      return refreshed
+    })
+  }, [expiry, liveChain, optionType, segment, strike])
 
   const canAdd = Boolean(resolvedContract && !isResolving && lots > 0)
 

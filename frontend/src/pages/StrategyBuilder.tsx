@@ -1339,6 +1339,7 @@ export default function StrategyBuilder() {
         expiries={activeChain ? expiries : []}
         futureExpiries={activeChain ? futureExpiries : []}
         chain={activeChain?.chain ?? null}
+        liveChain={activeChain}
         selectedExpiry={selectedExpiry}
         atmStrike={atmStrike}
         strikeStep={strikeStep}

@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import type { ResolvedLegMarket } from '@/lib/strategyContracts'
+import type { ListedOptionChainResponse, ResolvedLegMarket } from '@/lib/strategyContracts'
 import { ManualLegBuilder, type ManualLegBuilderProps } from './ManualLegBuilder'
 
 interface Deferred<T> {
@@ -33,6 +33,64 @@ function market(overrides: Partial<ResolvedLegMarket> = {}): ResolvedLegMarket {
   }
 }
 
+function liveChain(
+  overrides: {
+    ltp?: number
+    iv?: number
+    expiryTs?: number
+    lotSize?: number
+    tickSize?: number
+    underlying?: number
+    forward?: number
+  } = {}
+): ListedOptionChainResponse {
+  const ltp = overrides.ltp ?? 125
+  const underlying = overrides.underlying ?? 24_600
+  return {
+    status: 'success',
+    exchange: 'NFO',
+    underlying: 'NIFTY',
+    underlying_symbol: 'NIFTY',
+    underlying_exchange: 'NSE_INDEX',
+    underlying_ltp: underlying,
+    underlying_prev_close: 24_500,
+    expiry_date: '13AUG26',
+    expiry_ts: overrides.expiryTs ?? 1_786_400_000,
+    server_ts: 1_786_000_000,
+    atm_strike: 24_600,
+    forward_price: overrides.forward ?? 24_620,
+    greeks_included: true,
+    chain: [
+      {
+        strike: 24_600,
+        ce: {
+          symbol: 'NIFTY13AUG2624600CE',
+          label: 'NIFTY13AUG2624600CE',
+          ltp,
+          bid: ltp - 0.5,
+          ask: ltp + 0.5,
+          bid_qty: 75,
+          ask_qty: 75,
+          open: ltp - 2,
+          high: ltp + 5,
+          low: ltp - 5,
+          prev_close: ltp - 1,
+          volume: 1_000,
+          oi: 2_000,
+          lotsize: overrides.lotSize ?? 75,
+          tick_size: overrides.tickSize ?? 0.05,
+          implied_volatility: overrides.iv ?? 12,
+          delta: 0.6,
+          gamma: 0.02,
+          theta: -3,
+          vega: 5,
+        },
+        pe: null,
+      },
+    ],
+  }
+}
+
 function props(overrides: Partial<ManualLegBuilderProps> = {}): ManualLegBuilderProps {
   return {
     expiries: ['13AUG26', '18AUG26'],
@@ -44,6 +102,7 @@ function props(overrides: Partial<ManualLegBuilderProps> = {}): ManualLegBuilder
         pe: null,
       },
     ],
+    liveChain: null,
     selectedExpiry: '13AUG26',
     atmStrike: 24_600,
     resolveContract: vi.fn(async (expiry) => market({ expiry })),
@@ -62,6 +121,50 @@ beforeAll(() => {
 })
 
 describe('ManualLegBuilder listed contracts', () => {
+  it('refreshes matching same-expiry market metadata without resolving the selection again', async () => {
+    const resolveContract = vi.fn(async () => market())
+    const onAdd = vi.fn()
+    const initialProps = props({ resolveContract, onAdd, liveChain: liveChain() })
+    const view = render(<ManualLegBuilder {...initialProps} />)
+    await screen.findByText('NIFTY13AUG2624600CE')
+    expect(resolveContract).toHaveBeenCalledTimes(1)
+
+    view.rerender(
+      <ManualLegBuilder
+        {...initialProps}
+        liveChain={liveChain({
+          ltp: 140,
+          iv: 18,
+          expiryTs: 1_786_500_000,
+          lotSize: 65,
+          tickSize: 0.1,
+          underlying: 24_610,
+          forward: 24_635,
+        })}
+      />
+    )
+
+    expect(await screen.findAllByText('₹140.00')).toHaveLength(2)
+    expect(screen.getByText('NIFTY13AUG2624600CE')).toBeVisible()
+    expect(resolveContract).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Buy/ }))
+    expect(onAdd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symbol: 'NIFTY13AUG2624600CE',
+        price: 140,
+        marketPrice: 140,
+        iv: 18,
+        expiryTs: 1_786_500_000,
+        lotSize: 65,
+        tickSize: 0.1,
+        referenceUnderlying: 24_610,
+        forwardPrice: 24_635,
+        greeks: { delta: 0.6, gamma: 0.02, theta: -3, vega: 5 },
+      })
+    )
+  })
+
   it('renders and adds the canonical option returned for a far expiry', async () => {
     const onAdd = vi.fn()
     const resolveContract = vi.fn(async (expiry: string) =>

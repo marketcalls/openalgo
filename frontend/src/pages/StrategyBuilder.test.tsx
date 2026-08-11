@@ -372,6 +372,52 @@ describe('StrategyBuilder live request orchestration', () => {
     expect(mocks.getOptionChain).toHaveBeenCalledTimes(1)
   })
 
+  it('refreshes the selected same-expiry manual quote without another contract request', async () => {
+    mocks.marketConnected = true
+    mocks.marketAuthenticated = true
+    mocks.marketConnectionEpoch = 1
+    const view = renderBuilder()
+    await screen.findByText('NIFTY13AUG2624600CE')
+    expect(mocks.getOptionChain).not.toHaveBeenCalled()
+
+    mocks.marketData = new Map([
+      [
+        'NFO:NIFTY13AUG2624600CE',
+        {
+          data: { ltp: 140, bid_price: 139.5, ask_price: 140.5 },
+          lastUpdate: Date.now(),
+          updateSource: 'websocket' as const,
+          connectionEpoch: 1,
+        },
+      ],
+      [
+        'NSE_INDEX:NIFTY',
+        {
+          data: { ltp: 24_610 },
+          lastUpdate: Date.now(),
+          updateSource: 'websocket' as const,
+          connectionEpoch: 1,
+        },
+      ],
+    ])
+    view.rerender(
+      <MemoryRouter initialEntries={['/strategybuilder']}>
+        <StrategyBuilder />
+      </MemoryRouter>
+    )
+
+    await screen.findByText('Live')
+    await waitFor(() => expect(screen.getAllByText('₹140.00').length).toBeGreaterThan(0))
+    expect(screen.getByText('NIFTY13AUG2624600CE')).toBeVisible()
+    expect(mocks.getOptionChain).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Buy/ }))
+    const remove = await screen.findByRole('button', { name: 'Remove position' })
+    const position = remove.closest('li')
+    expect(position).not.toBeNull()
+    expect(within(position as HTMLElement).getByText('₹140.00')).toBeVisible()
+  })
+
   it('does not re-fetch a selected future when the active option chain streams a tick', async () => {
     mocks.marketConnected = true
     mocks.marketAuthenticated = true
