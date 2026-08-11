@@ -22,6 +22,10 @@
 #   - Holdings return `security_id` empty, leaving `isin` as the only
 #     identifier on some rows.
 
+import threading
+
+from cachetools import TTLCache
+
 from broker.hdfcsecurities.mapping.transform_data import (
     reverse_map_option_type,
     reverse_map_order_type,
@@ -173,33 +177,83 @@ def _format_strike(strike):
     return str(int(value)) if value == int(value) else str(value)
 
 
-def _underlying_name(row):
+# Underlying names for an exchange are fixed for the trading day; this cache
+# only stops the trade-book mapping from issuing one query per row. Bounded on
+# both size and staleness, per the codebase's cachetools convention.
+_UNDERLYING_NAME_CACHE = TTLCache(maxsize=2048, ttl=3600)
+_UNDERLYING_NAME_LOCK = threading.Lock()
+
+
+def _is_known_underlying(name, exchange):
+    """Whether `name` is a real derivative underlying listed on `exchange`.
+
+    Derivative rows in the master carry the underlying in `name` (BANKNIFTY,
+    CIPLA, GOLD), so this separates a genuine display name from an unresolved
+    broker code.
+    """
+    key = (exchange, name)
+    with _UNDERLYING_NAME_LOCK:
+        cached = _UNDERLYING_NAME_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    from broker.hdfcsecurities.database.master_contract_db import SymToken, db_session
+
+    try:
+        with db_session() as session:
+            found = (
+                session.query(SymToken.id)
+                .filter(SymToken.exchange == exchange, SymToken.name == name)
+                .first()
+                is not None
+            )
+    except Exception as e:
+        # Unverifiable is not the same as verified: refuse the candidate rather
+        # than let a broker code through into a fabricated symbol.
+        logger.debug(f"Could not verify underlying {exchange}:{name}: {e}")
+        return False
+
+    with _UNDERLYING_NAME_LOCK:
+        _UNDERLYING_NAME_CACHE[key] = found
+    return found
+
+
+def _underlying_name(row, exchange, verify_broker_code):
     """The underlying's display name for a row, or "" when there is none.
 
     The trade book is the awkward case: it puts the UNDERLYING name in
     `security_id` ("BANKNIFTY") where the order book puts the broker code
     ("49599"), and it may carry no `underlying_symbol` / `company_name` at all.
-    An unresolved `security_id` is therefore usable as the underlying, but only
-    when it actually looks like a name -- a numeric broker code would build a
-    nonsense symbol such as "4959930APR2449900CE".
+    An unresolved `security_id` is therefore usable as the underlying -- but
+    only after the master confirms it: InvestRight broker codes are mostly
+    alphanumeric ("CIPLTDEQNR", "B843283"), so a shape test alone would splice
+    one into a plausible-looking but entirely fabricated symbol such as
+    "CIPLTDEQNR30APR24100CE". `verify_broker_code` is False when the row has no
+    expiry, where the candidate is returned verbatim either way and the lookup
+    would be pure cost.
     """
     name = str(row.get("underlying_symbol") or row.get("company_name") or "").strip()
     if name:
         return name
-    security_id = str(row.get("security_id") or "").strip()
-    return security_id if security_id and not security_id.isdigit() else ""
+
+    candidate = str(row.get("security_id") or "").strip()
+    if not candidate or candidate.isdigit():
+        return ""
+    if verify_broker_code and not _is_known_underlying(candidate, exchange):
+        return ""
+    return candidate
 
 
-def _reconstruct_symbol(row):
+def _reconstruct_symbol(row, exchange):
     """Rebuild the OpenAlgo symbol from the parts InvestRight spells out.
 
     Used when `security_id` does not resolve against the master contract, which
     is the normal case for trade-book rows.
     """
-    underlying = _underlying_name(row)
+    expiry = _compact_expiry(row.get("expiry_date"))
+    underlying = _underlying_name(row, exchange, verify_broker_code=bool(expiry))
     if not underlying:
         return ""
-    expiry = _compact_expiry(row.get("expiry_date"))
     if not expiry:
         return underlying
     option_type = reverse_map_option_type(row.get("option_type"))
@@ -228,7 +282,7 @@ def _oa_symbol(row, exchange):
         if resolved:
             return resolved
 
-    reconstructed = _reconstruct_symbol(row)
+    reconstructed = _reconstruct_symbol(row, exchange)
     if reconstructed:
         return reconstructed
     if security_id:

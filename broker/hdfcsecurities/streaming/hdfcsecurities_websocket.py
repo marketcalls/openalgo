@@ -68,7 +68,6 @@ _QUOTE_PACKET_TYPES = frozenset(
 )
 _CIRCUIT_PACKET_TYPES = frozenset((pb.NSE_CM_CIRC, pb.NSE_CD_CIRC, pb.NSE_FO_CIRC))
 _OI_PACKET_TYPES = frozenset((pb.NSE_CD_OI, pb.NSE_FO_OI, pb.BSE_FO_OI))
-_MBP_PACKET_TYPES = _QUOTE_PACKET_TYPES | _CIRCUIT_PACKET_TYPES | _OI_PACKET_TYPES
 
 _INDEX_PACKET_TYPES = frozenset((pb.NSE_INDEX, pb.BSE_INDEX))
 _GREEK_PACKET_TYPES = frozenset((pb.NSE_FO_GREEK, pb.BSE_FO_GREEK))
@@ -130,7 +129,12 @@ class HDFCSecuritiesWebSocket:
         self.lock = _real_threading.Lock()
 
         # Subscription state, keyed by scripId ("NSE_2885").
-        self.subscribed: dict[str, str] = {}  # scripId -> subscription type
+        self.subscribed: dict[str, str] = {}  # scripId -> subscription type SENT
+        # scripId -> subscription type WANTED. Written the moment a subscribe
+        # is queued and cleared the moment an unsubscribe is issued, so a frame
+        # that was queued before an unsubscribe cannot resubscribe the
+        # instrument when the drain reaches it.
+        self.desired: dict[str, str] = {}
         self.pending_subscriptions: deque = deque()
         self._subscription_thread: threading.Thread | None = None
 
@@ -294,6 +298,7 @@ class HDFCSecuritiesWebSocket:
 
         with self.lock:
             for scrip_id in scrip_ids:
+                self.desired[scrip_id] = subscription_type
                 self.pending_subscriptions.append((scrip_id, subscription_type))
 
         if not self._subscription_thread or not self._subscription_thread.is_alive():
@@ -354,6 +359,18 @@ class HDFCSecuritiesWebSocket:
         try:
             if not self.connected or not self.ws:
                 return False
+            with self.lock:
+                # Drop anything unsubscribed, or re-queued at another tier,
+                # since this frame was built. Without this a mode downgrade
+                # followed immediately by a full unsubscribe would leave the
+                # instrument live at the broker after OpenAlgo dropped it.
+                scrip_ids = [
+                    scrip_id
+                    for scrip_id in scrip_ids
+                    if self.desired.get(scrip_id) == subscription_type
+                ]
+            if not scrip_ids:
+                return True
             message = {
                 "heart_beat": False,
                 "subscribe": [
@@ -374,7 +391,17 @@ class HDFCSecuritiesWebSocket:
         try:
             if not self.ws:
                 return False
+            wanted = {scrip_id for scrip_id in scrip_ids if scrip_id}
             with self.lock:
+                # Retract the intent BEFORE sending, and purge anything still
+                # queued for these scrips: a pending subscribe drained after
+                # this frame would silently bring the instrument back.
+                for scrip_id in wanted:
+                    self.desired.pop(scrip_id, None)
+                if wanted:
+                    self.pending_subscriptions = deque(
+                        item for item in self.pending_subscriptions if item[0] not in wanted
+                    )
                 payload = [
                     {"scripId": scrip_id, "type": self.subscribed.get(scrip_id, "ALL")}
                     for scrip_id in scrip_ids

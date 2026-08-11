@@ -21,6 +21,9 @@ Two properties of the feed shape the state kept here:
     published as a quote of their own, which would blank the live price.
 """
 
+import sys
+import threading
+
 from broker.hdfcsecurities.mapping.transform_data import ws_scrip_id
 from broker.hdfcsecurities.streaming.hdfcsecurities_mapping import (
     HDFCSecuritiesCapabilityRegistry,
@@ -36,6 +39,16 @@ from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 # subscribed it at. Publishing at a lower mode starves the higher-mode clients
 # completely.
 _MODE_TO_TOPIC = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}
+
+# The feed runs on a real OS thread (see hdfcsecurities_websocket), so the
+# subscription-state lock must be a real lock too -- an eventlet-patched one
+# taken from a foreign thread does not block correctly.
+if "eventlet" in sys.modules:
+    import eventlet
+
+    _real_threading = eventlet.patcher.original("threading")
+else:
+    _real_threading = threading
 
 # Partial-refresh packet kinds and the fields each one is allowed to carry over
 # into the merged snapshot.
@@ -57,6 +70,9 @@ class HDFCSecuritiesWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # (exchange, token) -> last full snapshot, so a partial circuit/OI
         # packet can be merged instead of replacing the quote.
         self.last_snapshot: dict[tuple[str, int], dict] = {}
+        # Serializes subscribe/unsubscribe against each other. The tick thread
+        # never takes it: it only reads immutable entries.
+        self._state_lock = _real_threading.Lock()
 
     # --- lifecycle ------------------------------------------------------
 
@@ -131,6 +147,24 @@ class HDFCSecuritiesWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     # --- subscription ---------------------------------------------------
 
+    def _store_info(self, key, symbol, exchange, scrip_id, modes):
+        """Publish a NEW immutable state entry for an instrument.
+
+        The tick thread reads this map without locking, so an entry is never
+        edited in place: `modes` is a frozenset and the whole dict is replaced,
+        which under the GIL means a reader sees either the old entry or the new
+        one but never a half-updated one. `topic_mode` is precomputed here so
+        the tick path does no iteration at all -- calling max() over a set that
+        subscribe/unsubscribe was mutating is what dropped ticks.
+        """
+        self.token_info[key] = {
+            "symbol": symbol,
+            "exchange": exchange,
+            "scrip_id": scrip_id,
+            "modes": modes,
+            "topic_mode": _MODE_TO_TOPIC.get(max(modes), "QUOTE"),
+        }
+
     def _resolve_token(self, symbol, exchange):
         token = get_token(symbol, exchange)
         if token is None:
@@ -160,13 +194,13 @@ class HDFCSecuritiesWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Several clients can hold the same instrument at different modes.
             # Keep every subscribed mode so publishing (and the broker-side
             # subscription tier) always follows the highest one.
-            info = self.token_info.setdefault(
-                key,
-                {"symbol": symbol, "exchange": exchange, "modes": set(), "scrip_id": scrip_id},
-            )
-            info["modes"].add(mode)
+            with self._state_lock:
+                existing = self.token_info.get(key)
+                modes = (existing["modes"] if existing else frozenset()) | {mode}
+                self._store_info(key, symbol, exchange, scrip_id, modes)
+
             subscription_type = HDFCSecuritiesCapabilityRegistry.get_subscription_type_for_numeric(
-                max(info["modes"])
+                max(modes)
             )
             self.ws_client.subscribe_scrips([scrip_id], subscription_type)
 
@@ -198,28 +232,26 @@ class HDFCSecuritiesWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             key = (exchange, token)
             scrip_id = ws_scrip_id(exchange, token)
-            info = self.token_info.get(key)
-            if info is None:
-                # Nothing tracked; still tell the feed to drop it.
-                self.ws_client.unsubscribe([scrip_id])
-                self.last_snapshot.pop(key, None)
-                return self._create_success_response(f"Unsubscribed {exchange}:{symbol}")
 
-            # The proxy only calls this once the last client at THIS mode has
-            # gone; other modes may still have clients, so drop the broker
-            # subscription only when no mode is left.
-            info["modes"].discard(mode)
-            if info["modes"]:
+            with self._state_lock:
+                info = self.token_info.get(key)
+                # The proxy only calls this once the last client at THIS mode
+                # has gone; other modes may still have clients, so drop the
+                # broker subscription only when no mode is left.
+                modes = (info["modes"] - {mode}) if info else frozenset()
+                if modes:
+                    self._store_info(key, symbol, exchange, scrip_id, modes)
+                else:
+                    self.token_info.pop(key, None)
+                    self.last_snapshot.pop(key, None)
+
+            if modes:
                 self.ws_client.subscribe_scrips(
                     [scrip_id],
-                    HDFCSecuritiesCapabilityRegistry.get_subscription_type_for_numeric(
-                        max(info["modes"])
-                    ),
+                    HDFCSecuritiesCapabilityRegistry.get_subscription_type_for_numeric(max(modes)),
                 )
             else:
                 self.ws_client.unsubscribe([scrip_id])
-                self.token_info.pop(key, None)
-                self.last_snapshot.pop(key, None)
             return self._create_success_response(f"Unsubscribed {exchange}:{symbol}")
         except Exception as e:
             self.logger.exception(f"Error unsubscribing {exchange}:{symbol}: {e}")
@@ -243,7 +275,9 @@ class HDFCSecuritiesWebSocketAdapter(BaseBrokerWebSocketAdapter):
             key = (exchange, token)
             return key if key in self.token_info else None
 
-        matches = [key for key in self.token_info if key[1] == token]
+        # list() snapshots the keys in one C-level step, so a concurrent
+        # subscribe cannot break this scan.
+        matches = [key for key in list(self.token_info) if key[1] == token]
         if len(matches) == 1:
             return matches[0]
         if matches:
@@ -268,8 +302,11 @@ class HDFCSecuritiesWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                 symbol = info["symbol"]
                 exchange = info["exchange"]
-                # Always the highest subscribed mode: the proxy fans down only.
-                topic_mode = _MODE_TO_TOPIC.get(max(info["modes"], default=2), "QUOTE")
+                # Precomputed at subscribe time and always the highest
+                # subscribed mode (the proxy fans down only). Reading it costs
+                # one dict lookup, so a concurrent subscribe/unsubscribe cannot
+                # make the tick path fail mid-iteration.
+                topic_mode = info["topic_mode"]
 
                 tick = self._merge_partial(key, tick)
                 if tick is None:

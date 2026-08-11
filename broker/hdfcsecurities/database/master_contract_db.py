@@ -437,7 +437,16 @@ def master_contract_download():
         )
     except Exception as e:
         logger.exception(f"HDFC Securities master contract download failed: {e}")
-        return socketio.emit("master_contract_download", {"status": "error", "message": str(e)})
+        try:
+            socketio.emit("master_contract_download", {"status": "error", "message": str(e)})
+        except Exception as emit_error:
+            # Never let the notification displace the real cause.
+            logger.debug(f"Could not emit master contract error event: {emit_error}")
+        # Re-raise: utils/auth_utils.async_master_contract_download decides
+        # success purely by "no exception was raised", so returning normally
+        # here would mark the broker ready and kick off symbol cache loading
+        # against a master that was never refreshed.
+        raise
     finally:
         # Runs in a background thread, so the Flask app teardown will not
         # release the scoped session for us.
