@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   getFutures: vi.fn(),
   getPortfolioEntry: vi.fn(),
   getUnderlyings: vi.fn(),
+  strategyChartProps: [] as Array<Record<string, unknown>>,
+  multiStrikeOIProps: [] as Array<Record<string, unknown>>,
   broker: null as string | null,
 }))
 
@@ -68,8 +70,18 @@ vi.mock('@/hooks/useMarketData', () => ({
 
 vi.mock('@/components/strategy-builder/PayoffChart', () => ({ PayoffChart: () => null }))
 vi.mock('@/components/strategy-builder/PnLTab', () => ({ PnLTab: () => null }))
-vi.mock('@/components/strategy-builder/StrategyChartTab', () => ({ default: () => null }))
-vi.mock('@/components/strategy-builder/MultiStrikeOITab', () => ({ default: () => null }))
+vi.mock('@/components/strategy-builder/StrategyChartTab', () => ({
+  default: (props: Record<string, unknown>) => {
+    mocks.strategyChartProps.push(props)
+    return null
+  },
+}))
+vi.mock('@/components/strategy-builder/MultiStrikeOITab', () => ({
+  default: (props: Record<string, unknown>) => {
+    mocks.multiStrikeOIProps.push(props)
+    return null
+  },
+}))
 vi.mock('@/components/trading/ExecuteBasketDialog', () => ({ ExecuteBasketDialog: () => null }))
 vi.mock('@/utils/toast', () => ({
   showToast: { error: vi.fn(), success: vi.fn() },
@@ -230,6 +242,8 @@ beforeEach(() => {
   mocks.marketAuthenticated = false
   mocks.marketPaused = false
   mocks.marketConnectionEpoch = 0
+  mocks.strategyChartProps.length = 0
+  mocks.multiStrikeOIProps.length = 0
   mocks.broker = null
   mocks.getUnderlyings.mockResolvedValue({
     status: 'success',
@@ -295,6 +309,37 @@ function requests(path: string): unknown[] {
 }
 
 describe('StrategyBuilder live request orchestration', () => {
+  it('passes the option-chain canonical reference to both auxiliary chart tabs', async () => {
+    const user = userEvent.setup()
+    const canonical = chainFixture('NIFTY', '13AUG26')
+    canonical.underlying_symbol = 'NIFTY27AUG26FUT'
+    canonical.underlying_exchange = 'NFO'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(canonical), { status: 200 }))
+    )
+    renderBuilder()
+    await addOneLeg()
+
+    await user.click(screen.getByRole('tab', { name: 'Strategy Chart' }))
+    await waitFor(() => expect(mocks.strategyChartProps).not.toHaveLength(0))
+    expect(mocks.strategyChartProps.at(-1)).toEqual(
+      expect.objectContaining({
+        underlyingSymbol: 'NIFTY27AUG26FUT',
+        underlyingExchange: 'NFO',
+      })
+    )
+
+    await user.click(screen.getByRole('tab', { name: 'Multi Strike OI' }))
+    await waitFor(() => expect(mocks.multiStrikeOIProps).not.toHaveLength(0))
+    expect(mocks.multiStrikeOIProps.at(-1)).toEqual(
+      expect.objectContaining({
+        underlyingSymbol: 'NIFTY27AUG26FUT',
+        underlyingExchange: 'NFO',
+      })
+    )
+  })
+
   it('formats currency output for the authenticated Delta Exchange broker', async () => {
     mocks.broker = 'deltaexchange'
     renderBuilder()

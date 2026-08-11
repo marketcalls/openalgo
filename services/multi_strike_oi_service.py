@@ -37,6 +37,8 @@ def get_multi_strike_oi_data(
     interval: str,
     api_key: str,
     days: int = 5,
+    underlying_symbol: str | None = None,
+    underlying_exchange: str | None = None,
 ):
     """
     Compute Multi Strike OI time series for the Strategy Builder.
@@ -68,13 +70,22 @@ def get_multi_strike_oi_data(
                 400,
             )
 
-        quote_exchange = _get_quote_exchange(base_symbol, exchange)
-        underlying_quote_symbol = base_symbol
+        has_canonical_reference = bool(underlying_symbol and underlying_exchange)
+        underlying_quote_symbol = (
+            underlying_symbol.strip().upper()
+            if has_canonical_reference
+            else base_symbol
+        )
+        quote_exchange = (
+            underlying_exchange.strip().upper()
+            if has_canonical_reference
+            else _get_quote_exchange(base_symbol, exchange)
+        )
 
         # multi-strike OI: MCX and the currency segments have no tradable spot, so the
         # near-month future is the pricing reference. Without this the quote is
         # requested for a symbol that does not exist and the tool renders empty.
-        if exchange.upper() in NO_SPOT_EXCHANGES:
+        if not has_canonical_reference and exchange.upper() in NO_SPOT_EXCHANGES:
             _resolved = resolve_underlying_quote(base_symbol, exchange.upper())
             if _resolved is None:
                 return (
@@ -199,7 +210,7 @@ def get_multi_strike_oi_data(
 
         # ── Latest underlying LTP ─────────────────────────────────────
         success_q, quote_resp, _ = get_quotes(
-            symbol=base_symbol,
+            symbol=underlying_quote_symbol,
             exchange=quote_exchange,
             api_key=api_key,
         )

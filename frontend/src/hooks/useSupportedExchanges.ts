@@ -25,8 +25,8 @@ const INDEX_EXCHANGES = new Set([
   'GLOBAL_INDEX',
 ])
 
-/** F&O exchange codes (includes MCX/CDS/NCO which also have options) */
-const FNO_CODES = new Set(['NFO', 'BFO', 'MCX', 'CDS', 'NCO', 'CRYPTO'])
+/** F&O exchange codes (intersected with each broker's reported capabilities below). */
+const FNO_CODES = new Set(['NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NCO', 'NCDEX', 'CRYPTO'])
 
 /** Fallback exchanges when capabilities haven't loaded yet (backward compatible) */
 const FALLBACK_EXCHANGES = ['NSE', 'BSE', 'NFO', 'BFO', 'CDS', 'MCX', 'CRYPTO']
@@ -59,7 +59,7 @@ export function useSupportedExchanges() {
       .filter((e) => !INDEX_EXCHANGES.has(e))
       .map((e) => ({ value: e, label: e }))
 
-    // F&O exchanges: NFO, BFO, or CRYPTO (only those the broker supports)
+    // F&O exchanges (only those the broker reports as supported).
     const fnoExchanges: ExchangeOption[] = supported
       .filter((e) => FNO_CODES.has(e))
       .map((e) => ({ value: e, label: e }))
@@ -93,7 +93,7 @@ export function useSupportedExchanges() {
       allExchanges,
       /** Trading exchanges (no _INDEX) — for TradingView, GoCharting, Search */
       tradingExchanges,
-      /** Broker-reported F&O exchanges (NFO, BFO, MCX, CDS, CRYPTO). */
+      /** Broker-reported F&O exchanges, including commodity/currency derivatives. */
       fnoExchanges,
       /**
        * F&O exchanges shown in /tools pages: everything the broker reports

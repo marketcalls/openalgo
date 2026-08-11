@@ -1614,6 +1614,8 @@ export default function StrategyBuilder() {
                 <StrategyChartTab
                   underlying={selectedUnderlying}
                   exchange={selectedExchange}
+                  underlyingSymbol={activeChain?.underlying_symbol}
+                  underlyingExchange={activeChain?.underlying_exchange}
                   legs={legs}
                   optionExchange={fnoExchange}
                 />
@@ -1622,6 +1624,8 @@ export default function StrategyBuilder() {
                 <MultiStrikeOITab
                   underlying={selectedUnderlying}
                   exchange={selectedExchange}
+                  underlyingSymbol={activeChain?.underlying_symbol}
+                  underlyingExchange={activeChain?.underlying_exchange}
                   legs={legs}
                   optionExchange={fnoExchange}
                 />

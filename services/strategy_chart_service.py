@@ -172,6 +172,8 @@ def get_strategy_chart_data(
     interval: str,
     api_key: str,
     days: int = 5,
+    underlying_symbol: str | None = None,
+    underlying_exchange: str | None = None,
 ):
     """
     Build the Strategy Chart time series for a user-defined options strategy.
@@ -206,14 +208,23 @@ def get_strategy_chart_data(
                 400,
             )
 
-        quote_exchange = _get_quote_exchange(base_symbol, exchange)
+        has_canonical_reference = bool(underlying_symbol and underlying_exchange)
+        reference_symbol = (
+            underlying_symbol.strip().upper()
+            if has_canonical_reference
+            else base_symbol
+        )
+        quote_exchange = (
+            underlying_exchange.strip().upper()
+            if has_canonical_reference
+            else _get_quote_exchange(base_symbol, exchange)
+        )
 
         # MCX and the currency segments have no tradable spot, so the history
         # series for the underlying comes from the near-month future. Asking for
         # "CRUDEOIL" on MCX returns nothing and the chart loses its underlying
         # line entirely.
-        underlying_symbol = base_symbol
-        if exchange.upper() in NO_SPOT_EXCHANGES:
+        if not has_canonical_reference and exchange.upper() in NO_SPOT_EXCHANGES:
             _resolved = resolve_underlying_quote(base_symbol, exchange.upper())
             if _resolved is None:
                 return (
@@ -227,7 +238,7 @@ def get_strategy_chart_data(
                     },
                     404,
                 )
-            underlying_symbol, quote_exchange = _resolved
+            reference_symbol, quote_exchange = _resolved
 
         # ── Underlying history ────────────────────────────────────────
         # Some brokers (e.g., Zerodha's Kite API) don't return intraday
@@ -238,7 +249,7 @@ def get_strategy_chart_data(
         underlying_missing = False
         df_underlying: pd.DataFrame | None = None
         success_u, resp_u, _ = get_history(
-            symbol=underlying_symbol,
+            symbol=reference_symbol,
             exchange=quote_exchange,
             interval=interval,
             start_date=start_date_str,
@@ -362,7 +373,7 @@ def get_strategy_chart_data(
 
         # ── Latest underlying LTP for the info bar ────────────────────
         success_q, quote_resp, _ = get_quotes(
-            symbol=base_symbol,
+            symbol=reference_symbol,
             exchange=quote_exchange,
             api_key=api_key,
         )
