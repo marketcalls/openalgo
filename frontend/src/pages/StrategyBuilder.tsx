@@ -63,6 +63,7 @@ import {
   computePayoff,
   daysToExpiry,
   daysToYears,
+  isLegClosed,
   nearestLegDays,
   netCredit,
   payoffPriceRange,
@@ -493,6 +494,25 @@ export default function StrategyBuilder() {
     return atmRow?.ce?.lotsize ?? atmRow?.pe?.lotsize ?? null
   }, [activeChain])
 
+  // The resolver is passed to child effects. Keep its identity stable across
+  // live chain object refreshes while reading one coherent request snapshot at
+  // invocation time. Otherwise every WebSocket tick looks like a new manual
+  // selection and re-fetches/clears the contract currently shown.
+  const legResolverStateRef = useRef({
+    apiKey,
+    selectedUnderlying,
+    selectedExchange,
+    futureExpiries,
+    activeChain,
+  })
+  legResolverStateRef.current = {
+    apiKey,
+    selectedUnderlying,
+    selectedExchange,
+    futureExpiries,
+    activeChain,
+  }
+
   // Common strike step — try to detect from chain spacing
   const strikeStep = useMemo(() => {
     if (!activeChain?.chain || activeChain.chain.length < 2) return 50
@@ -507,6 +527,8 @@ export default function StrategyBuilder() {
 
   const resolveLegContract = useCallback<ResolveLegContract>(
     async (expiry, segment, strike, optionType) => {
+      const { apiKey, selectedUnderlying, selectedExchange, futureExpiries, activeChain } =
+        legResolverStateRef.current
       if (!apiKey || !selectedUnderlying) return null
       const normalizedExpiry = normalizeExpiryCode(expiry)
       const derivativeExchange = optionExchangeFor(selectedExchange)
@@ -581,7 +603,7 @@ export default function StrategyBuilder() {
         greeks: { delta: null, gamma: null, theta: null, vega: null },
       }
     },
-    [apiKey, activeChain, futureExpiries, selectedExchange, selectedUnderlying]
+    []
   )
 
   useEffect(() => {
@@ -701,7 +723,7 @@ export default function StrategyBuilder() {
     const exchange = optionExchangeFor(selectedExchange)
     return JSON.stringify(
       legs
-        .filter((leg) => leg.active && !(leg.exitPrice !== undefined && leg.exitPrice > 0))
+        .filter((leg) => leg.active && !isLegClosed(leg))
         .map((leg) => ({
           exchange: leg.exchange ?? exchange,
           symbol: leg.symbol,
@@ -828,11 +850,7 @@ export default function StrategyBuilder() {
   useEffect(() => {
     if (!apiKey) return
     const needs = legs.filter(
-      (l) =>
-        l.price === 0 &&
-        l.marketPrice === undefined &&
-        !(l.exitPrice !== undefined && l.exitPrice > 0) &&
-        l.symbol
+      (l) => l.price === 0 && l.marketPrice === undefined && !isLegClosed(l) && l.symbol
     )
     if (needs.length === 0) return
     const exchange = optionExchangeFor(selectedExchange)

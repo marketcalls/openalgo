@@ -117,6 +117,9 @@ describe('ManualLegBuilder listed contracts', () => {
         ? market({
             symbol: 'NIFTY27AUG26FUT',
             expiry: '27AUG26',
+            expiryTs: null,
+            lotSize: 65,
+            tickSize: 0.1,
             marketPrice: 25_142,
             iv: 0,
             forwardPrice: null,
@@ -132,7 +135,15 @@ describe('ManualLegBuilder listed contracts', () => {
     fireEvent.click(screen.getByRole('button', { name: /Add Buy/ }))
 
     expect(onAdd).toHaveBeenCalledWith(
-      expect.objectContaining({ symbol: 'NIFTY27AUG26FUT', marketPrice: 25_142, price: 25_142 })
+      expect.objectContaining({
+        symbol: 'NIFTY27AUG26FUT',
+        expiry: '27AUG26',
+        expiryTs: null,
+        lotSize: 65,
+        tickSize: 0.1,
+        marketPrice: 25_142,
+        price: 25_142,
+      })
     )
   })
 })

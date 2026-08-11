@@ -337,6 +337,76 @@ describe('StrategyBuilder live request orchestration', () => {
     expect(screen.getAllByText('₹25142.00').length).toBeGreaterThan(0)
   })
 
+  it('does not re-fetch a selected far-expiry option when the active chain streams a tick', async () => {
+    mocks.marketConnected = true
+    mocks.marketAuthenticated = true
+    mocks.marketConnectionEpoch = 1
+    const view = renderBuilder()
+    await screen.findByText('NIFTY13AUG2624600CE')
+
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Expiry' }), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: '18AUG26' }))
+    expect(await screen.findByText('NIFTY18AUG2624600CE')).toBeVisible()
+    expect(mocks.getOptionChain).toHaveBeenCalledTimes(1)
+
+    mocks.marketData = new Map([
+      [
+        'NSE_INDEX:NIFTY',
+        {
+          data: { ltp: 24_610 },
+          lastUpdate: Date.now(),
+          updateSource: 'websocket' as const,
+          connectionEpoch: 1,
+        },
+      ],
+    ])
+    view.rerender(
+      <MemoryRouter initialEntries={['/strategybuilder']}>
+        <StrategyBuilder />
+      </MemoryRouter>
+    )
+
+    await screen.findByText('Live')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.getByText('NIFTY18AUG2624600CE')).toBeVisible()
+    expect(mocks.getOptionChain).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not re-fetch a selected future when the active option chain streams a tick', async () => {
+    mocks.marketConnected = true
+    mocks.marketAuthenticated = true
+    mocks.marketConnectionEpoch = 1
+    const view = renderBuilder()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Segment' }), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: 'Futures' }))
+    expect(await screen.findByText('NIFTY27AUG26FUT')).toBeVisible()
+    expect(mocks.getFutures).toHaveBeenCalledTimes(1)
+
+    mocks.marketData = new Map([
+      [
+        'NSE_INDEX:NIFTY',
+        {
+          data: { ltp: 24_611 },
+          lastUpdate: Date.now(),
+          updateSource: 'websocket' as const,
+          connectionEpoch: 1,
+        },
+      ],
+    ])
+    view.rerender(
+      <MemoryRouter initialEntries={['/strategybuilder']}>
+        <StrategyBuilder />
+      </MemoryRouter>
+    )
+
+    await screen.findByText('Live')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.getByText('NIFTY27AUG26FUT')).toBeVisible()
+    expect(mocks.getFutures).toHaveBeenCalledTimes(1)
+  })
+
   it('loads market state through one option-chain request without redundant snapshot calls', async () => {
     renderBuilder()
 
@@ -486,6 +556,18 @@ describe('StrategyBuilder live request orchestration', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 550))
     expect(requests('/api/v1/margin')).toHaveLength(1)
+  })
+
+  it('does not request margin for a hydrated zero-exit leg', async () => {
+    const saved = savedRelianceStrategy()
+    saved.legs[0].exitPrice = 0
+    mocks.getPortfolioEntry.mockResolvedValue(saved)
+
+    renderBuilder('/strategybuilder?load=17')
+    await screen.findByRole('button', { name: 'Remove position' })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+
+    expect(mocks.apiPost.mock.calls.filter(([url]) => url === '/margin')).toHaveLength(0)
   })
 
   it('immediately refetches the live chain when the page becomes visible again', async () => {

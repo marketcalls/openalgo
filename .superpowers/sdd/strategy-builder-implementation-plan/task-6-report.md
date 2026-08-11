@@ -122,3 +122,98 @@ The master-contract schema stores an expiry date string but no authoritative fut
 timestamp. This task deliberately reports `expiryTs: null` for futures. Adding an exchange-aware
 future expiry instant requires a separate authoritative backend contract; local date/time
 construction would violate the reviewed boundary.
+
+## Fix Round 1
+
+Reviewed head: `2ee0604ed`
+
+### Blocking findings addressed
+
+- `resolveLegContract` now has a stable callback identity. A ref carries the latest API key,
+  underlying/exchange, active chain, and futures expiries; every invocation snapshots that state
+  once before resolving. Live active-chain object replacement therefore no longer clears the
+  manual selection or repeats far-option/futures contract requests.
+- Edit no longer trusts a persisted leg as a listed contract. Opening the dialog clears the
+  resolved contract, disables Modify, resolves the exact stored selection, and then canonicalizes
+  symbol and market metadata. A missing/delisted current selection remains cleared with an inline
+  error and cannot be saved. Live metadata updates for the same leg identity do not reset the
+  in-progress form.
+- `isLegClosed` now defines the shared boundary: `undefined` is open; any finite non-negative exit
+  price, including zero, is closed. Payoff geometry/horizons, realised P&L, live subscriptions,
+  margin and multiquote candidates, positions status, basket execution, and portfolio
+  streaming/status/P&L all consume that predicate. Edit hydration preserves a literal zero.
+- Futures forwarding assertions now cover canonical symbol, normalized expiry, lot size, tick
+  size, quote, and the deliberately authoritative `expiryTs: null` value. Flask route tests use an
+  in-memory master-contract table to verify session authentication, underlying/exchange/FUT
+  filtering, chronological sorting, and the full response fields.
+
+### RED evidence
+
+Resolver/edit focused run before production fixes:
+
+```text
+npm run test:run -- src/components/strategy-builder/EditLegDialog.test.tsx
+Test Files 1 failed
+Tests 3 failed | 13 passed
+
+Open validation: expected resolver call, received 0 calls.
+Missing current contract: expected listed-contract error, none rendered.
+Zero reopen: expected exit field "0", received empty string.
+```
+
+The page live-refresh regressions failed independently in the combined focused run:
+
+```text
+selected far option: expected getOptionChain 1 call, received 2
+selected future: expected getFutures 1 call, received 2
+```
+
+Zero-exit cross-flow run before the shared predicate:
+
+```text
+npm run test:run -- src/lib/strategyMath.test.ts src/components/strategy-builder/PnLTab.test.tsx src/components/trading/ExecuteBasketDialog.test.tsx src/pages/StrategyBuilder.test.tsx
+Test Files 4 failed
+Tests 4 failed | 36 passed
+```
+
+The four failures proved that zero exit still responded to scenarios, remained live/open,
+remained executable, and remained in the hydrated margin request.
+
+### GREEN evidence
+
+```text
+npm run test:run -- src/components/strategy-builder/EditLegDialog.test.tsx src/components/strategy-builder/ManualLegBuilder.test.tsx src/components/strategy-builder/PnLTab.test.tsx src/components/trading/ExecuteBasketDialog.test.tsx src/pages/StrategyBuilder.test.tsx src/lib/strategyMath.test.ts
+Test Files 6 passed
+Tests 59 passed
+
+uv run pytest -q test/test_scalping_futures_contracts.py
+3 passed
+```
+
+### Final verification
+
+```text
+npm run test:run
+Test Files 26 passed
+Tests 383 passed
+
+npm run lint
+Checked 384 files. No fixes applied.
+
+npx tsc -b --pretty false
+Exit 0
+
+npm run build
+3013 modules transformed; built in 3.89s. Exit 0
+
+git diff --check
+Exit 0
+```
+
+Build-generated `frontend/dist` changes were restored to `HEAD`.
+
+### Remaining concern
+
+No new concern. Futures still use `expiryTs: null` because the master-contract schema has no
+authoritative expiry cut-off timestamp; canonical date/symbol/lot/tick and the exact contract quote
+remain authoritative.

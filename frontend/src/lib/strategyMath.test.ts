@@ -76,6 +76,23 @@ function futureLeg(overrides: Partial<StrategyLeg> = {}): StrategyLeg {
 }
 
 describe('per-leg market valuation', () => {
+  it('freezes a zero-exit leg at realised P&L and excludes it from open expiry horizons', () => {
+    const leg = valuationOptionLeg({
+      price: 100,
+      exitPrice: 0,
+      lotSize: 50,
+      expiryTs: 1_789_012_800,
+      referenceUnderlying: 25_000,
+      forwardPrice: 25_120,
+      marketPrice: 250,
+    })
+    const now = new Date('2026-08-11T04:00:00Z')
+
+    expect(legPnlAt(leg, 20_000, 0, 15, now)).toBe(-5_000)
+    expect(legPnlAt(leg, 30_000, 3, 40, now)).toBe(-5_000)
+    expect(nearestLegDays([leg], now)).toBe(0)
+  })
+
   it('reconciles a zero-shift option to its live Black-76 market price', () => {
     // Independently hand-calculated Black-76: F=25120, K=25000,
     // t=3.25/365, sigma=15% gives 209.5271, quoted at the ₹0.05 tick as 209.55.
@@ -87,10 +104,7 @@ describe('per-leg market valuation', () => {
       tickSize: 0.05,
     })
 
-    expect(legPnlAt(leg, 25_000, 0, 15, new Date('2026-08-11T04:00:00Z'))).toBeCloseTo(
-      477.5,
-      2
-    )
+    expect(legPnlAt(leg, 25_000, 0, 15, new Date('2026-08-11T04:00:00Z'))).toBeCloseTo(477.5, 2)
   })
 
   it('values a selected future from its own market reference', () => {
@@ -120,9 +134,7 @@ describe('per-leg market valuation', () => {
     })
 
     expect(legPnlAt(leg, 100, 0, 20, serverClock)).toBeCloseTo(3.014, 3)
-    expect(
-      legPnlAt(leg, 100, 0.010416666666666666, 20, serverClock)
-    ).toBeCloseTo(2.131, 3)
+    expect(legPnlAt(leg, 100, 0.010416666666666666, 20, serverClock)).toBeCloseTo(2.131, 3)
   })
 
   it('falls back to the legacy expiry string when no expiry timestamp is available', () => {
@@ -251,10 +263,7 @@ describe('per-leg market valuation', () => {
       tickSize: 0.05,
     })
 
-    expect(legPnlAt(leg, 25_000, 0, 15, new Date('2026-08-11T04:00:00Z'))).toBeCloseTo(
-      476.36,
-      1
-    )
+    expect(legPnlAt(leg, 25_000, 0, 15, new Date('2026-08-11T04:00:00Z'))).toBeCloseTo(476.36, 1)
   })
 
   it('keeps spot, IV, and time-shifted scenarios model-priced', () => {

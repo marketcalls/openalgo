@@ -79,38 +79,62 @@ export function EditLegDialog({
   const [contractError, setContractError] = useState<string | null>(null)
   const [isPriceLoading, setIsPriceLoading] = useState(false)
   const resolveGenerationRef = useRef(0)
+  const legRef = useRef(leg)
+  legRef.current = leg
+  const openLegSelectionKey = leg
+    ? [leg.id, leg.segment, leg.expiry, leg.strike ?? '', leg.optionType ?? ''].join(':')
+    : ''
 
-  // When the dialog opens for a leg, hydrate local state from it.
+  // Hydrate the editable values, but never trust the persisted symbol or
+  // market metadata as proof that the contract is still listed. Resolve the
+  // exact stored selection on every open/leg identity change and keep Modify
+  // disabled until that validation completes.
   useEffect(() => {
-    if (!leg) return
-    setSide(leg.side)
-    setExpiry(leg.expiry)
-    setStrike(leg.strike)
-    setOptionType(leg.optionType ?? 'CE')
-    setLots(leg.lots)
-    setEntryPrice(leg.price.toString())
-    setExitPrice(leg.exitPrice !== undefined && leg.exitPrice > 0 ? leg.exitPrice.toString() : '')
+    const currentLeg = legRef.current
+    const generation = ++resolveGenerationRef.current
+    if (!open || !currentLeg || openLegSelectionKey === '') {
+      setResolvedContract(null)
+      setIsPriceLoading(false)
+      return
+    }
+    const currentType = currentLeg.optionType ?? 'CE'
+    setSide(currentLeg.side)
+    setExpiry(currentLeg.expiry)
+    setStrike(currentLeg.strike)
+    setOptionType(currentType)
+    setLots(currentLeg.lots)
+    setEntryPrice(currentLeg.price.toString())
+    setExitPrice(currentLeg.exitPrice !== undefined ? currentLeg.exitPrice.toString() : '')
     setEntryPriceError(null)
     setExitPriceError(null)
     setContractError(null)
-    setIsPriceLoading(false)
-    resolveGenerationRef.current += 1
-    setResolvedContract({
-      exchange: leg.exchange ?? '',
-      symbol: leg.symbol,
-      expiry: leg.expiry,
-      expiryTs: leg.expiryTs ?? null,
-      lotSize: leg.lotSize,
-      tickSize: leg.tickSize ?? 0,
-      marketPrice: leg.marketPrice ?? leg.price,
-      iv: leg.iv,
-      forwardPrice: leg.forwardPrice ?? null,
-      referenceUnderlying: leg.referenceUnderlying ?? 0,
-      greeks: leg.marketGreeks ?? { delta: null, gamma: null, theta: null, vega: null },
-    })
-  }, [leg])
+    setResolvedContract(null)
+    setIsPriceLoading(true)
+    void resolveContract(
+      currentLeg.expiry,
+      currentLeg.segment,
+      currentLeg.strike,
+      currentLeg.segment === 'OPTION' ? currentType : undefined
+    )
+      .then((contract) => {
+        if (generation !== resolveGenerationRef.current) return
+        if (contract === null) {
+          setContractError('Contract is not listed for this selection')
+          return
+        }
+        setResolvedContract(contract)
+      })
+      .catch(() => {
+        if (generation === resolveGenerationRef.current) {
+          setContractError('Unable to resolve this contract')
+        }
+      })
+      .finally(() => {
+        if (generation === resolveGenerationRef.current) setIsPriceLoading(false)
+      })
+  }, [open, openLegSelectionKey, resolveContract])
 
-  const isClosed = exitPrice.trim() !== '' && Number(exitPrice) > 0
+  const isClosed = exitPrice.trim() !== '' && parseFinitePrice(exitPrice).value !== null
 
   /** Resolve the exact listed selection; only the latest request may update the form. */
   const resolveSelection = (
@@ -123,13 +147,18 @@ export function EditLegDialog({
     setEntryPrice('')
     setEntryPriceError(null)
     setContractError(null)
-    if (!leg || !nextExpiry || (leg.segment === 'OPTION' && nextStrike === undefined)) {
+    const currentLeg = legRef.current
+    if (
+      !currentLeg ||
+      !nextExpiry ||
+      (currentLeg.segment === 'OPTION' && nextStrike === undefined)
+    ) {
       setIsPriceLoading(false)
       return
     }
 
     setIsPriceLoading(true)
-    void resolveContract(nextExpiry, leg.segment, nextStrike, nextType)
+    void resolveContract(nextExpiry, currentLeg.segment, nextStrike, nextType)
       .then((contract) => {
         if (generation !== resolveGenerationRef.current) return
         if (contract === null) {

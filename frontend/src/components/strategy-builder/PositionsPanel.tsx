@@ -1,7 +1,7 @@
 import { Layers, Pencil, RotateCw, Save, Send, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { type StrategyLeg, strikeMoneyness } from '@/lib/strategyMath'
+import { isLegClosed, type StrategyLeg, strikeMoneyness } from '@/lib/strategyMath'
 import { cn } from '@/lib/utils'
 
 export interface PositionsPanelProps {
@@ -196,7 +196,7 @@ export function PositionsPanel({
         ) : (
           <ul>
             {legs.map((leg, idx) => {
-              const isClosed = leg.exitPrice !== undefined && leg.exitPrice > 0
+              const isClosed = isLegClosed(leg)
               const sign = leg.side === 'BUY' ? 1 : -1
               const qty = leg.lots * leg.lotSize
               const realisedPnl = isClosed ? sign * ((leg.exitPrice ?? 0) - leg.price) * qty : 0

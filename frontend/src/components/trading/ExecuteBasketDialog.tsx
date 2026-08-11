@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import type { StrategyLeg } from '@/lib/strategyMath'
+import { isLegClosed, type StrategyLeg } from '@/lib/strategyMath'
 import { cn } from '@/lib/utils'
 import { showToast } from '@/utils/toast'
 
@@ -93,7 +93,7 @@ export function ExecuteBasketDialog({
   tickSizeBySymbol,
   apiKey,
 }: ExecuteBasketDialogProps) {
-  const activeLegs = useMemo(() => legs.filter((l) => l.active), [legs])
+  const activeLegs = useMemo(() => legs.filter((leg) => leg.active && !isLegClosed(leg)), [legs])
   const [rows, setRows] = useState<RowState[]>([])
   const [product, setProduct] = useState<ProductType>('NRML')
   const [pricetype, setPricetype] = useState<PriceType>('LIMIT')

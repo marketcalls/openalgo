@@ -10,7 +10,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useMarketData } from '@/hooks/useMarketData'
-import type { StrategyLeg } from '@/lib/strategyMath'
+import { isLegClosed, type StrategyLeg } from '@/lib/strategyMath'
 import { cn } from '@/lib/utils'
 
 export interface PnLTabProps {
@@ -89,8 +89,7 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
   // Excluded legs don't appear in the table, don't contribute to the total,
   // and don't consume a WebSocket subscription.
   const openLegs = useMemo(
-    () =>
-      legs.filter((l) => l.active && !(l.exitPrice !== undefined && l.exitPrice > 0) && l.symbol),
+    () => legs.filter((l) => l.active && !isLegClosed(l) && l.symbol),
     [legs]
   )
 
@@ -140,7 +139,7 @@ export function PnLTab({ legs, fnoExchange, fallbackPrices }: PnLTabProps) {
     return legs
       .filter((leg) => leg.active)
       .map((leg) => {
-        const isClosed = leg.exitPrice !== undefined && leg.exitPrice > 0
+        const isClosed = isLegClosed(leg)
         let current: number | undefined
         if (!isClosed && leg.symbol) {
           const ws = marketData.get(`${fnoExchange}:${leg.symbol}`)

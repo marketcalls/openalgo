@@ -21,6 +21,19 @@ const original: StrategyLeg = {
   marketGreeks: { delta: 0.5, gamma: 0.01, theta: -2, vega: 4 },
 }
 
+interface Deferred<T> {
+  promise: Promise<T>
+  resolve: (value: T) => void
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
 describe('EditLegDialog payoff market-data invalidation', () => {
   it.each([
     ['strike', { strike: 24500 }],
@@ -71,12 +84,16 @@ function market(overrides: Partial<ResolvedLegMarket> = {}): ResolvedLegMarket {
   }
 }
 
-function renderDialog(resolveContract = vi.fn(async () => market()), onSave = vi.fn()) {
+function renderDialog(
+  resolveContract = vi.fn(async () => market()),
+  onSave = vi.fn(),
+  leg: StrategyLeg = original
+) {
   render(
     <EditLegDialog
       open
       onOpenChange={vi.fn()}
-      leg={original}
+      leg={leg}
       optionExpiries={['04AUG26', '18AUG26']}
       futureExpiries={['27AUG26']}
       chain={null}
@@ -99,15 +116,79 @@ beforeAll(() => {
 })
 
 describe('EditLegDialog listed contracts and price validation', () => {
+  it('resolves the current contract on open and canonicalizes its metadata before save', async () => {
+    const current = deferred<ResolvedLegMarket | null>()
+    const resolveContract = vi.fn(() => current.promise)
+    const { onSave } = renderDialog(resolveContract)
+
+    expect(resolveContract).toHaveBeenCalledWith('04AUG26', 'OPTION', 24000, 'CE')
+    expect(screen.getByRole('button', { name: 'Modify' })).toBeDisabled()
+    expect(screen.queryByText(original.symbol)).not.toBeInTheDocument()
+
+    await act(async () =>
+      current.resolve(
+        market({
+          symbol: 'NIFTY04AUG2624000CE-CANONICAL',
+          expiryTs: 1_786_500_000,
+          lotSize: 50,
+          tickSize: 0.1,
+          marketPrice: 111,
+        })
+      )
+    )
+
+    expect(await screen.findByText('NIFTY04AUG2624000CE-CANONICAL')).toBeVisible()
+    expect(screen.getByLabelText('Entry price')).toHaveValue('100')
+    fireEvent.click(screen.getByRole('button', { name: 'Modify' }))
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symbol: 'NIFTY04AUG2624000CE-CANONICAL',
+        expiryTs: 1_786_500_000,
+        lotSize: 50,
+        tickSize: 0.1,
+        marketPrice: 111,
+        price: 100,
+      })
+    )
+  })
+
+  it('blocks save when the current stored contract is no longer listed', async () => {
+    const onSave = vi.fn()
+    renderDialog(
+      vi.fn(async () => null),
+      onSave
+    )
+
+    expect(await screen.findByText('Contract is not listed for this selection')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Modify' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Modify' }))
+    expect(onSave).not.toHaveBeenCalled()
+  })
+
+  it('reopens an explicitly closed zero-exit leg with zero preserved', async () => {
+    renderDialog(
+      vi.fn(async () => market()),
+      vi.fn(),
+      { ...original, exitPrice: 0 }
+    )
+
+    expect(screen.getByLabelText('Exit price')).toHaveValue('0')
+    expect(await screen.findByText(/leg will be marked as closed/)).toBeVisible()
+  })
+
   it('clears the old price and saves the canonical far-expiry contract', async () => {
     const pending: { resolve?: (value: ResolvedLegMarket | null) => void } = {}
-    const resolveContract = vi.fn(
-      () =>
-        new Promise<ResolvedLegMarket | null>((resolve) => {
-          pending.resolve = resolve
-        })
-    )
+    const resolveContract = vi
+      .fn()
+      .mockResolvedValueOnce(market())
+      .mockImplementationOnce(
+        () =>
+          new Promise<ResolvedLegMarket | null>((resolve) => {
+            pending.resolve = resolve
+          })
+      )
     const { onSave } = renderDialog(resolveContract)
+    await screen.findByText(original.symbol)
 
     await chooseInDialog(0, '18AUG26')
     expect(screen.getByLabelText('Entry price')).toHaveValue('')
@@ -142,6 +223,7 @@ describe('EditLegDialog listed contracts and price validation', () => {
     let resolveCe!: (value: ResolvedLegMarket | null) => void
     const resolveContract = vi
       .fn()
+      .mockResolvedValueOnce(market())
       .mockImplementationOnce(
         () =>
           new Promise<ResolvedLegMarket | null>((resolve) => {
@@ -155,6 +237,7 @@ describe('EditLegDialog listed contracts and price validation', () => {
           })
       )
     renderDialog(resolveContract)
+    await screen.findByText(original.symbol)
 
     await chooseInDialog(2, 'PE')
     await chooseInDialog(2, 'CE')
@@ -174,6 +257,7 @@ describe('EditLegDialog listed contracts and price validation', () => {
   ])('rejects entry price %p with an associated inline error', async (raw, message) => {
     const user = userEvent.setup()
     renderDialog()
+    await screen.findByText(original.symbol)
     const input = screen.getByLabelText('Entry price')
     await user.clear(input)
     if (raw) fireEvent.change(input, { target: { value: raw } })
@@ -187,6 +271,7 @@ describe('EditLegDialog listed contracts and price validation', () => {
   it('accepts a zero entry price without falling back to the stale leg price', async () => {
     const user = userEvent.setup()
     const { onSave } = renderDialog()
+    await screen.findByText(original.symbol)
     const input = screen.getByLabelText('Entry price')
     await user.clear(input)
     await user.type(input, '0')
@@ -197,6 +282,7 @@ describe('EditLegDialog listed contracts and price validation', () => {
 
   it('rejects a non-finite exit price with an associated inline error', async () => {
     const { onSave } = renderDialog()
+    await screen.findByText(original.symbol)
     const input = screen.getByLabelText('Exit price')
     fireEvent.change(input, { target: { value: 'Infinity' } })
     fireEvent.click(screen.getByRole('button', { name: 'Modify' }))
@@ -209,6 +295,7 @@ describe('EditLegDialog listed contracts and price validation', () => {
 
   it('preserves a zero exit price as a valid explicit value', async () => {
     const { onSave } = renderDialog()
+    await screen.findByText(original.symbol)
     fireEvent.change(screen.getByLabelText('Exit price'), { target: { value: '0' } })
     fireEvent.click(screen.getByRole('button', { name: 'Modify' }))
 

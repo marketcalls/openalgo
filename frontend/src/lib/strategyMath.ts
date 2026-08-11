@@ -89,11 +89,18 @@ export interface StrategyLeg {
     vega: number | null
   }
   /**
-   * Exit price (per share). When > 0 the leg is treated as "closed":
+   * Exit price (per share). Any finite value >= 0 treats the leg as "closed":
    * P&L is frozen at (exitPrice - entryPrice) * qty * sign for every
    * underlying value, and it no longer responds to spot/IV/time shifts.
    */
   exitPrice?: number
+}
+
+/** Undefined is the only open exit state; explicit finite non-negative exits are closed. */
+export function isLegClosed<T extends { exitPrice?: number }>(
+  leg: T
+): leg is T & { exitPrice: number } {
+  return leg.exitPrice !== undefined && Number.isFinite(leg.exitPrice) && leg.exitPrice >= 0
 }
 
 const SQRT2 = Math.SQRT2
@@ -207,7 +214,7 @@ export function legPnlAt(
 
   // Closed leg: P&L is locked at the realised exit level and no longer
   // responds to spot / IV / time changes.
-  if (leg.exitPrice !== undefined && leg.exitPrice > 0) {
+  if (isLegClosed(leg)) {
     return sign * (leg.exitPrice - leg.price) * qty
   }
 
@@ -359,7 +366,7 @@ function asymptoticSlopes(legs: StrategyLeg[]): { right: number; left: number } 
   let left = 0
   for (const leg of legs) {
     if (!leg.active) continue
-    if (leg.exitPrice !== undefined && leg.exitPrice > 0) continue
+    if (isLegClosed(leg)) continue
     const qty = leg.lots * leg.lotSize
     const sign = leg.side === 'BUY' ? 1 : -1
 
@@ -401,10 +408,7 @@ function uniqueSorted(values: number[], tolerance = PAYOFF_EPSILON): number[] {
 function responsiveStrikes(legs: StrategyLeg[]): number[] {
   return uniqueSorted(
     legs.flatMap((leg) =>
-      leg.active &&
-      !(leg.exitPrice !== undefined && leg.exitPrice > 0) &&
-      leg.segment === 'OPTION' &&
-      leg.strike !== undefined
+      leg.active && !isLegClosed(leg) && leg.segment === 'OPTION' && leg.strike !== undefined
         ? [leg.strike]
         : []
     )
@@ -415,7 +419,7 @@ function hasResponsiveExposure(legs: StrategyLeg[]): boolean {
   return legs.some(
     (leg) =>
       leg.active &&
-      !(leg.exitPrice !== undefined && leg.exitPrice > 0) &&
+      !isLegClosed(leg) &&
       (leg.segment === 'FUTURE' ||
         (leg.segment === 'OPTION' && leg.strike !== undefined && leg.optionType !== undefined))
   )
@@ -423,7 +427,7 @@ function hasResponsiveExposure(legs: StrategyLeg[]): boolean {
 
 function isTerminalHorizon(legs: StrategyLeg[], daysAtExpiry: number, now: Date): boolean {
   return legs.every((leg) => {
-    if (!leg.active || (leg.exitPrice !== undefined && leg.exitPrice > 0)) return true
+    if (!leg.active || isLegClosed(leg)) return true
     if (leg.segment !== 'OPTION') return true
     return remainingDays(leg, daysAtExpiry, now) <= 1e-6
   })
@@ -538,7 +542,7 @@ function rightTailValue(legs: StrategyLeg[]): number {
     if (!leg.active) continue
     const sign = leg.side === 'BUY' ? 1 : -1
     const qty = leg.lots * leg.lotSize
-    if (leg.exitPrice !== undefined && leg.exitPrice > 0) {
+    if (isLegClosed(leg)) {
       value += sign * (leg.exitPrice - leg.price) * qty
     } else if (
       leg.segment === 'OPTION' &&
@@ -672,7 +676,15 @@ export function computePayoff(
   const terminal = isTerminalHorizon(legs, daysAtExpiry, currentNow)
   const terminalAnalysis = terminal
     ? analyzeTerminalPayoff(legs, daysAtExpiry, ivShiftPct, fallbackIv, currentNow)
-    : analyzeNonTerminalPayoff(legs, spot, daysAtExpiry, priceRange, ivShiftPct, fallbackIv, currentNow)
+    : analyzeNonTerminalPayoff(
+        legs,
+        spot,
+        daysAtExpiry,
+        priceRange,
+        ivShiftPct,
+        fallbackIv,
+        currentNow
+      )
   const strikes = responsiveStrikes(legs)
   const initialBreakevens = terminalAnalysis.breakevens
   const [requestedLo, requestedHi] = priceRange
@@ -795,7 +807,7 @@ export function nearestLegDays(legs: StrategyLeg[], now: ValuationTime = new Dat
   let best = Infinity
   for (const leg of legs) {
     if (!leg.active) continue
-    if (leg.exitPrice !== undefined && leg.exitPrice > 0) continue
+    if (isLegClosed(leg)) continue
     const d = remainingDays(leg, 0, now)
     if (d < best) best = d
   }
