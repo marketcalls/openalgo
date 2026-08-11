@@ -194,6 +194,7 @@ export function useOptionChainLive(
     isConnected: isWsConnected,
     isAuthenticated: isWsAuthenticated,
     isPaused: isWsPaused,
+    connectionEpoch: wsConnectionEpoch,
   } = useMarketData({
     symbols: wsSymbols,
     mode: 'Depth', // Get LTP + Bid/Ask depth
@@ -203,11 +204,20 @@ export function useOptionChainLive(
   // Track last LTP update time using ref to avoid triggering effect loops
   const lastLtpUpdateRef = useRef<number>(0)
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: request identity changes must explicitly invalidate stream freshness even though the values are reset triggers rather than effect inputs
+  // biome-ignore lint/correctness/useExhaustiveDependencies: request/session identity changes must explicitly invalidate stream freshness even though the values are reset triggers rather than effect inputs
   useEffect(() => {
     lastLtpUpdateRef.current = 0
     setLastLtpUpdate(null)
-  }, [apiKey, underlying, exchange, optionExchange, expiryDate, strikeCount])
+  }, [
+    apiKey,
+    underlying,
+    exchange,
+    optionExchange,
+    expiryDate,
+    strikeCount,
+    isWsAuthenticated,
+    wsConnectionEpoch,
+  ])
 
   // Time to expiry is computed in the browser, so a skewed client clock would
   // bias every Greek on the page. Each poll carries the server's clock; the
@@ -304,7 +314,9 @@ export function useOptionChainLive(
     // REST fallback/cache updates remain valid prices but must not imply Live.
     let newestLtpUpdate = lastLtpUpdateRef.current
     for (const [, symbolData] of wsData) {
+      if (!isWsAuthenticated) continue
       if (symbolData.updateSource !== 'websocket') continue
+      if (symbolData.connectionEpoch !== wsConnectionEpoch) continue
       if (symbolData.lastUpdate && symbolData.lastUpdate > newestLtpUpdate) {
         newestLtpUpdate = symbolData.lastUpdate
       }
@@ -331,7 +343,14 @@ export function useOptionChainLive(
         interestRate
       ),
     })
-  }, [polledData, wsData, optionExchange, interestRate])
+  }, [
+    polledData,
+    wsData,
+    optionExchange,
+    interestRate,
+    isWsAuthenticated,
+    wsConnectionEpoch,
+  ])
 
   // Determine streaming status
   const isStreaming = isWsConnected && isWsAuthenticated && wsSymbols.length > 0

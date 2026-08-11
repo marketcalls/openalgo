@@ -8,6 +8,7 @@ const marketDataCapture = vi.hoisted(() => ({
   isConnected: false,
   isAuthenticated: false,
   isPaused: false,
+  connectionEpoch: 0,
 }))
 
 vi.mock('./useMarketData', () => ({
@@ -18,6 +19,7 @@ vi.mock('./useMarketData', () => ({
       isConnected: marketDataCapture.isConnected,
       isAuthenticated: marketDataCapture.isAuthenticated,
       isPaused: marketDataCapture.isPaused,
+      connectionEpoch: marketDataCapture.connectionEpoch,
     }
   },
 }))
@@ -49,6 +51,7 @@ describe('useOptionChainLive', () => {
     marketDataCapture.isConnected = false
     marketDataCapture.isAuthenticated = false
     marketDataCapture.isPaused = false
+    marketDataCapture.connectionEpoch = 0
     lastOptionChainBody = {}
     vi.stubGlobal(
       'fetch',
@@ -110,6 +113,7 @@ describe('useOptionChainLive', () => {
   it('tracks only WebSocket provenance as stream freshness', async () => {
     marketDataCapture.isConnected = true
     marketDataCapture.isAuthenticated = true
+    marketDataCapture.connectionEpoch = 1
     marketDataCapture.data = new Map([
       [
         'CRYPTO:BTCUSD',
@@ -139,6 +143,7 @@ describe('useOptionChainLive', () => {
           symbol: 'BTCUSD',
           lastUpdate: 1_796_000_000_001,
           updateSource: 'websocket',
+          connectionEpoch: 1,
           data: { ltp: 100_075 },
         },
       ],
@@ -147,6 +152,61 @@ describe('useOptionChainLive', () => {
 
     await waitFor(() =>
       expect(result.current.lastStreamUpdate?.getTime()).toBe(1_796_000_000_001)
+    )
+  })
+
+  it('requires a WebSocket tick from the current authentication epoch', async () => {
+    marketDataCapture.isConnected = true
+    marketDataCapture.isAuthenticated = true
+    marketDataCapture.connectionEpoch = 1
+    marketDataCapture.data = new Map([
+      [
+        'CRYPTO:BTCUSD',
+        {
+          exchange: 'CRYPTO',
+          symbol: 'BTCUSD',
+          lastUpdate: 1_796_000_000_010,
+          updateSource: 'websocket',
+          connectionEpoch: 1,
+          data: { ltp: 100_080 },
+        },
+      ],
+    ])
+
+    const { result, rerender } = renderHook(() =>
+      useOptionChainLive('key', 'BTC', 'CRYPTO', 'CRYPTO', '28AUG26', 20, { enabled: true })
+    )
+    await waitFor(() =>
+      expect(result.current.lastStreamUpdate?.getTime()).toBe(1_796_000_000_010)
+    )
+
+    marketDataCapture.isConnected = false
+    marketDataCapture.isAuthenticated = false
+    rerender()
+    await waitFor(() => expect(result.current.lastStreamUpdate).toBeNull())
+
+    marketDataCapture.isConnected = true
+    marketDataCapture.isAuthenticated = true
+    marketDataCapture.connectionEpoch = 2
+    rerender()
+    expect(result.current.lastStreamUpdate).toBeNull()
+
+    marketDataCapture.data = new Map([
+      [
+        'CRYPTO:BTCUSD',
+        {
+          exchange: 'CRYPTO',
+          symbol: 'BTCUSD',
+          lastUpdate: 1_796_000_000_020,
+          updateSource: 'websocket',
+          connectionEpoch: 2,
+          data: { ltp: 100_090 },
+        },
+      ],
+    ])
+    rerender()
+    await waitFor(() =>
+      expect(result.current.lastStreamUpdate?.getTime()).toBe(1_796_000_000_020)
     )
   })
 

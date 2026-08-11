@@ -47,6 +47,8 @@ export interface SymbolData {
   lastUpdate?: number
   /** Origin of the latest cache update; only websocket updates prove stream freshness. */
   updateSource?: 'websocket' | 'rest'
+  /** Authentication epoch that produced the WebSocket update. */
+  connectionEpoch?: number
 }
 
 export type SubscriptionMode = 'LTP' | 'Quote' | 'Depth'
@@ -65,6 +67,7 @@ export type StateListener = (state: {
   isAuthenticated: boolean
   isPaused: boolean
   isFallbackMode: boolean
+  connectionEpoch: number
   error: string | null
 }) => void
 
@@ -126,6 +129,7 @@ export class MarketDataManager {
   private maxReconnectAttempts: number = 10
   private userDisconnected: boolean = false
   private connectAbortController: AbortController | null = null
+  private connectionEpoch: number = 0
 
   // REST API fallback properties
   private fallbackMode: boolean = false
@@ -285,6 +289,7 @@ export class MarketDataManager {
       isAuthenticated: this.connectionState === 'authenticated',
       isPaused: this.connectionState === 'paused',
       isFallbackMode: this.fallbackMode,
+      connectionEpoch: this.connectionEpoch,
       error: this.error,
     }
   }
@@ -549,6 +554,7 @@ export class MarketDataManager {
       switch (type) {
         case 'auth':
           if (data.status === 'success') {
+            this.connectionEpoch += 1
             this.setConnectionState('authenticated')
             this.error = null
             this.consecutiveFailures = 0 // Reset failure count on successful auth
@@ -593,6 +599,7 @@ export class MarketDataManager {
             data: newData,
             lastUpdate: Date.now(),
             updateSource: 'websocket',
+            connectionEpoch: this.connectionEpoch,
           }
           this.dataCache.set(dataKey, updatedSymbolData)
 
@@ -817,6 +824,7 @@ export class MarketDataManager {
             data: newData,
             lastUpdate: Date.now(),
             updateSource: 'rest',
+            connectionEpoch: undefined,
           }
           this.dataCache.set(dataKey, updatedSymbolData)
 

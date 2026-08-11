@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   marketConnected: false,
   marketAuthenticated: false,
   marketPaused: false,
+  marketConnectionEpoch: 0,
   getExpiries: vi.fn(),
   getOptionChain: vi.fn(),
   getPortfolioEntry: vi.fn(),
@@ -52,6 +53,7 @@ vi.mock('@/hooks/useMarketData', () => ({
     isConnected: mocks.marketConnected,
     isAuthenticated: mocks.marketAuthenticated,
     isPaused: mocks.marketPaused,
+    connectionEpoch: mocks.marketConnectionEpoch,
   }),
 }))
 
@@ -218,6 +220,7 @@ beforeEach(() => {
   mocks.marketConnected = false
   mocks.marketAuthenticated = false
   mocks.marketPaused = false
+  mocks.marketConnectionEpoch = 0
   mocks.getUnderlyings.mockResolvedValue({
     status: 'success',
     underlyings: ['NIFTY', 'BANKNIFTY', 'RELIANCE'],
@@ -284,6 +287,7 @@ describe('StrategyBuilder live request orchestration', () => {
   it('does not label an authenticated socket Live before its first stream tick', async () => {
     mocks.marketConnected = true
     mocks.marketAuthenticated = true
+    mocks.marketConnectionEpoch = 1
 
     renderBuilder()
     await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
@@ -295,6 +299,7 @@ describe('StrategyBuilder live request orchestration', () => {
   it('keeps recent REST-cached data Stale until an authenticated WebSocket tick arrives', async () => {
     mocks.marketConnected = true
     mocks.marketAuthenticated = true
+    mocks.marketConnectionEpoch = 1
     mocks.marketData = new Map([
       [
         'NSE_INDEX:NIFTY',
@@ -319,6 +324,7 @@ describe('StrategyBuilder live request orchestration', () => {
           data: { ltp: 24_606 },
           lastUpdate: Date.now() + 1,
           updateSource: 'websocket' as const,
+          connectionEpoch: 1,
         },
       ],
     ])
@@ -330,6 +336,64 @@ describe('StrategyBuilder live request orchestration', () => {
 
     await waitFor(() => expect(screen.getByText('Live')).toBeInTheDocument())
     expect(screen.queryByText('Stale')).not.toBeInTheDocument()
+  })
+
+  it('requires a post-reconnect WebSocket tick before returning to Live', async () => {
+    mocks.marketConnected = true
+    mocks.marketAuthenticated = true
+    mocks.marketConnectionEpoch = 1
+    mocks.marketData = new Map([
+      [
+        'NSE_INDEX:NIFTY',
+        {
+          data: { ltp: 24_610 },
+          lastUpdate: Date.now(),
+          updateSource: 'websocket' as const,
+          connectionEpoch: 1,
+        },
+      ],
+    ])
+
+    const view = renderBuilder()
+    await waitFor(() => expect(screen.getByText('Live')).toBeInTheDocument())
+
+    mocks.marketConnected = false
+    mocks.marketAuthenticated = false
+    view.rerender(
+      <MemoryRouter initialEntries={['/strategybuilder']}>
+        <StrategyBuilder />
+      </MemoryRouter>
+    )
+    await waitFor(() => expect(screen.getByText('Stale')).toBeInTheDocument())
+
+    mocks.marketConnected = true
+    mocks.marketAuthenticated = true
+    mocks.marketConnectionEpoch = 2
+    view.rerender(
+      <MemoryRouter initialEntries={['/strategybuilder']}>
+        <StrategyBuilder />
+      </MemoryRouter>
+    )
+    expect(screen.getByText('Stale')).toBeInTheDocument()
+    expect(screen.queryByText('Live')).not.toBeInTheDocument()
+
+    mocks.marketData = new Map([
+      [
+        'NSE_INDEX:NIFTY',
+        {
+          data: { ltp: 24_611 },
+          lastUpdate: Date.now() + 1,
+          updateSource: 'websocket' as const,
+          connectionEpoch: 2,
+        },
+      ],
+    ])
+    view.rerender(
+      <MemoryRouter initialEntries={['/strategybuilder']}>
+        <StrategyBuilder />
+      </MemoryRouter>
+    )
+    await waitFor(() => expect(screen.getByText('Live')).toBeInTheDocument())
   })
 
   it('does not repeat an unchanged margin request when support is confirmed', async () => {
