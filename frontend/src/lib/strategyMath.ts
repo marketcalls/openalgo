@@ -81,6 +81,13 @@ export interface StrategyLeg {
   referenceUnderlying?: number
   /** Per-expiry forward at which the option IV was solved. */
   forwardPrice?: number
+  /** Last per-contract Greeks snapshot for legs outside the active expiry chain. */
+  marketGreeks?: {
+    delta: number | null
+    gamma: number | null
+    theta: number | null
+    vega: number | null
+  }
   /**
    * Exit price (per share). When > 0 the leg is treated as "closed":
    * P&L is frozen at (exitPrice - entryPrice) * qty * sign for every

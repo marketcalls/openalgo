@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PortfolioEntry } from '@/api/strategy-portfolio'
@@ -9,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   apiPost: vi.fn(),
   fetchRequests: [] as Array<{ url: string; body: Record<string, unknown> }>,
   marketData: new Map(),
+  marketConnected: false,
+  marketAuthenticated: false,
+  marketPaused: false,
   getExpiries: vi.fn(),
   getOptionChain: vi.fn(),
   getPortfolioEntry: vi.fn(),
@@ -45,9 +49,9 @@ vi.mock('@/stores/authStore', () => ({
 vi.mock('@/hooks/useMarketData', () => ({
   useMarketData: () => ({
     data: mocks.marketData,
-    isConnected: false,
-    isAuthenticated: false,
-    isPaused: false,
+    isConnected: mocks.marketConnected,
+    isAuthenticated: mocks.marketAuthenticated,
+    isPaused: mocks.marketPaused,
   }),
 }))
 
@@ -172,6 +176,13 @@ async function chooseUnderlying(underlying: string) {
   fireEvent.click(await screen.findByRole('option', { name: underlying }))
 }
 
+async function chooseExchange(exchange: string) {
+  fireEvent.keyDown(screen.getByRole('combobox', { name: 'Derivative exchange' }), {
+    key: 'ArrowDown',
+  })
+  fireEvent.click(await screen.findByRole('option', { name: exchange }))
+}
+
 async function addOneLeg() {
   const add = await screen.findByRole('button', { name: /Add Buy/ })
   await waitFor(() => expect(add).toBeEnabled())
@@ -204,6 +215,9 @@ beforeEach(() => {
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
   mocks.fetchRequests.length = 0
   mocks.marketData = new Map()
+  mocks.marketConnected = false
+  mocks.marketAuthenticated = false
+  mocks.marketPaused = false
   mocks.getUnderlyings.mockResolvedValue({
     status: 'success',
     underlyings: ['NIFTY', 'BANKNIFTY', 'RELIANCE'],
@@ -267,6 +281,37 @@ describe('StrategyBuilder live request orchestration', () => {
     expect(requests('/api/v1/multioptiongreeks')).toHaveLength(0)
   })
 
+  it('does not label an authenticated socket Live before its first stream tick', async () => {
+    mocks.marketConnected = true
+    mocks.marketAuthenticated = true
+
+    renderBuilder()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+
+    expect(screen.getByText('Stale')).toBeInTheDocument()
+    expect(screen.queryByText('Live')).not.toBeInTheDocument()
+  })
+
+  it('labels the authenticated stream Live only after an actual fresh tick', async () => {
+    mocks.marketConnected = true
+    mocks.marketAuthenticated = true
+    mocks.marketData = new Map([
+      [
+        'NSE_INDEX:NIFTY',
+        {
+          data: { ltp: 24_605 },
+          lastUpdate: Date.now(),
+        },
+      ],
+    ])
+
+    renderBuilder()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+
+    expect(screen.getByText('Live')).toBeInTheDocument()
+    expect(screen.queryByText('Stale')).not.toBeInTheDocument()
+  })
+
   it('does not repeat an unchanged margin request when support is confirmed', async () => {
     const firstMargin = deferred<{
       status: number
@@ -306,6 +351,7 @@ describe('StrategyBuilder live request orchestration', () => {
   })
 
   it('refreshes live market state without overwriting the leg entry price', async () => {
+    const user = userEvent.setup()
     let ltp = 125
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -313,10 +359,16 @@ describe('StrategyBuilder live request orchestration', () => {
       mocks.fetchRequests.push({ url, body })
       const response = chainFixture(body.underlying, body.expiry_date)
       response.underlying_ltp = ltp === 125 ? 24_600 : 24_700
+      response.forward_price = ltp === 125 ? 24_620 : 24_670
       if (response.chain[0].ce) {
         response.chain[0].ce.ltp = ltp
         response.chain[0].ce.implied_volatility = ltp === 125 ? 12 : 20
+        response.chain[0].ce.delta = ltp === 125 ? 0.5 : 0.6
+        response.chain[0].ce.gamma = ltp === 125 ? 0.01 : 0.02
+        response.chain[0].ce.theta = ltp === 125 ? -2 : -3
+        response.chain[0].ce.vega = ltp === 125 ? 4 : 5
       }
+      response.expiry_ts = null
       return new Response(JSON.stringify(response), { status: 200 })
     })
 
@@ -328,8 +380,99 @@ describe('StrategyBuilder live request orchestration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
     await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(2))
     await screen.findByText('24700.00')
+    await screen.findByTitle('Current mark ₹175.00')
 
     expect(screen.getAllByText('₹125.00').length).toBeGreaterThan(0)
+
+    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+    const greekRows = await screen.findAllByRole('row')
+    const positionRow = greekRows.find((row) => row.textContent?.includes('13AUG26 24600CE'))
+    expect(positionRow).toBeDefined()
+    expect(positionRow).toHaveTextContent('20.00')
+    expect(positionRow).toHaveTextContent('0.6000')
+    expect(positionRow).toHaveTextContent('-3.0000')
+    expect(positionRow).toHaveTextContent('0.020000')
+    expect(positionRow).toHaveTextContent('5.0000')
+  })
+
+  it('keeps a newer derivative-exchange chain when the prior request resolves late', async () => {
+    const oldExchangeChain = deferred<OptionChainResponse>()
+    let requestCount = 0
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const body = JSON.parse(String(init?.body)) as Record<string, string>
+      mocks.fetchRequests.push({ url, body })
+      requestCount += 1
+      const response =
+        requestCount === 1
+          ? await oldExchangeChain.promise
+          : chainFixture(body.underlying, body.expiry_date)
+      return new Response(JSON.stringify(response), { status: 200 })
+    })
+
+    renderBuilder()
+    await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(1))
+    await chooseExchange('BFO')
+    await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(2))
+    await screen.findByText('24600.00')
+
+    await act(async () => {
+      oldExchangeChain.resolve(chainFixture('NIFTY', '13AUG26', 11_111))
+      await oldExchangeChain.promise
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.getByText('24600.00')).toBeInTheDocument()
+    expect(screen.queryByText('11111.00')).not.toBeInTheDocument()
+  })
+
+  it('hydrates calendar legs from each expiry response with Greeks requested', async () => {
+    const user = userEvent.setup()
+    const farChain = chainFixture('NIFTY', '18AUG26')
+    farChain.expiry_ts = 1_797_000_000
+    farChain.server_ts = 1_786_000_100
+    farChain.forward_price = 24_880
+    farChain.underlying_ltp = 24_850
+    if (farChain.chain[0].ce) {
+      farChain.chain[0].ce.symbol = 'NIFTY18AUG2624600CE'
+      farChain.chain[0].ce.ltp = 225
+      farChain.chain[0].ce.implied_volatility = 33
+      farChain.chain[0].ce.delta = 0.44
+      farChain.chain[0].ce.gamma = 0.0012
+      farChain.chain[0].ce.theta = -8
+      farChain.chain[0].ce.vega = 9
+      farChain.chain[0].ce.lotsize = 50
+      farChain.chain[0].ce.tick_size = 0.1
+    }
+    mocks.getOptionChain.mockResolvedValue(farChain)
+
+    renderBuilder()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: /Neutral/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Call Calendar/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add Strategy' }))
+
+    await waitFor(() => expect(screen.getAllByRole('button', { name: 'Remove position' })).toHaveLength(2))
+    expect(mocks.getOptionChain).toHaveBeenCalledWith(
+      'test-api-key',
+      'NIFTY',
+      'NSE_INDEX',
+      '18AUG26',
+      20,
+      { withGreeks: true }
+    )
+    expect(screen.getAllByText('18AUG26').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('₹225.00').length).toBeGreaterThan(0)
+
+    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+    const greekRows = await screen.findAllByRole('row')
+    const farGreekRow = greekRows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
+    expect(farGreekRow).toBeDefined()
+    expect(farGreekRow).toHaveTextContent('33.00')
+    expect(farGreekRow).toHaveTextContent('0.4400')
+    expect(farGreekRow).toHaveTextContent('-8.0000')
+    expect(farGreekRow).toHaveTextContent('0.001200')
+    expect(farGreekRow).toHaveTextContent('9.0000')
   })
 })
 

@@ -150,11 +150,13 @@ export function useOptionChainLive(
     isPaused: isPollingPaused,
     error,
     lastUpdate: lastPollUpdate,
+    dataIdentity,
     refetch,
   } = useOptionChainPolling(apiKey, underlying, exchange, expiryDate, strikeCount, {
     enabled,
     refreshInterval: oiRefreshInterval,
     pauseWhenHidden,
+    derivativeExchange: optionExchange,
   })
 
   // Build symbol list from the latest option-chain response for subscription.
@@ -200,6 +202,12 @@ export function useOptionChainLive(
 
   // Track last LTP update time using ref to avoid triggering effect loops
   const lastLtpUpdateRef = useRef<number>(0)
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: request identity changes must explicitly invalidate stream freshness even though the values are reset triggers rather than effect inputs
+  useEffect(() => {
+    lastLtpUpdateRef.current = 0
+    setLastLtpUpdate(null)
+  }, [apiKey, underlying, exchange, optionExchange, expiryDate, strikeCount])
 
   // Time to expiry is computed in the browser, so a skewed client clock would
   // bias every Greek on the page. Each poll carries the server's clock; the
@@ -293,17 +301,16 @@ export function useOptionChainLive(
     })
 
     // Check if any LTP was updated (using ref to avoid loop)
-    let hasLtpUpdate = false
+    let newestLtpUpdate = lastLtpUpdateRef.current
     for (const [, symbolData] of wsData) {
-      if (symbolData.lastUpdate && symbolData.lastUpdate > lastLtpUpdateRef.current) {
-        hasLtpUpdate = true
-        lastLtpUpdateRef.current = symbolData.lastUpdate
-        break
+      if (symbolData.lastUpdate && symbolData.lastUpdate > newestLtpUpdate) {
+        newestLtpUpdate = symbolData.lastUpdate
       }
     }
 
-    if (hasLtpUpdate) {
-      setLastLtpUpdate(new Date())
+    if (newestLtpUpdate > lastLtpUpdateRef.current) {
+      lastLtpUpdateRef.current = newestLtpUpdate
+      setLastLtpUpdate(new Date(newestLtpUpdate))
     }
 
     // Get real-time underlying spot price from WebSocket
@@ -344,6 +351,8 @@ export function useOptionChainLive(
     isPaused,
     error,
     lastUpdate,
+    lastStreamUpdate: lastLtpUpdate,
+    dataIdentity,
     streamingSymbols: wsSymbols.length,
     clockOffsetMs: clockOffsetRef.current,
     forwardPrice: polledData?.forward_price ?? null,

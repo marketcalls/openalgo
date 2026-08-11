@@ -69,6 +69,12 @@ describe('strategy contract resolution', () => {
       iv: 14.2,
       forwardPrice: 24_625.5,
       referenceUnderlying: 24_612.5,
+      greeks: {
+        delta: null,
+        gamma: null,
+        theta: null,
+        vega: null,
+      },
     })
   })
 

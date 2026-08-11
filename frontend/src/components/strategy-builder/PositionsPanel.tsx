@@ -314,7 +314,14 @@ export function PositionsPanel({
                       })}
                     </span>
                   ) : (
-                    <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                    <span
+                      className="shrink-0 text-[11px] tabular-nums text-muted-foreground"
+                      title={
+                        leg.marketPrice !== undefined
+                          ? `Current mark ₹${leg.marketPrice.toFixed(2)}`
+                          : undefined
+                      }
+                    >
                       ₹{leg.price.toFixed(2)}
                     </span>
                   )}

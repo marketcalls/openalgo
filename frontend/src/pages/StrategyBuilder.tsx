@@ -50,6 +50,7 @@ import {
   chainMatches,
   contractPriceKey,
   type ListedOptionChainResponse,
+  resolveOptionContract,
 } from '@/lib/strategyContracts'
 import {
   buildFutureSymbol,
@@ -72,7 +73,6 @@ import {
   resolveListedContract,
 } from '@/lib/templateResolution'
 import { useAuthStore } from '@/stores/authStore'
-import type { OptionChainResponse } from '@/types/option-chain'
 import { showToast } from '@/utils/toast'
 
 function optionExchangeFor(exchange: string): string {
@@ -182,7 +182,6 @@ export default function StrategyBuilder() {
   const marginGenerationRef = useRef(0)
   const marginSupportedRef = useRef<boolean | null>(null)
   const hydratedIdentityRef = useRef<ChainIdentity | null>(null)
-  const receivedLiveIdentityRef = useRef<ChainIdentity | null>(null)
 
   const requestIdentity = useMemo<ChainIdentity>(
     () => ({
@@ -204,7 +203,8 @@ export default function StrategyBuilder() {
     isLoading: isLiveLoading,
     isStreaming,
     isPaused,
-    lastUpdate,
+    lastStreamUpdate,
+    dataIdentity,
     refetch: refetchLiveChain,
   } = useOptionChainLive(
     apiKey,
@@ -216,32 +216,17 @@ export default function StrategyBuilder() {
     { enabled: liveEnabled, oiRefreshInterval: 30_000, pauseWhenHidden: true }
   )
 
-  // Bind each received snapshot to the request identity that produced its poll.
-  // Depending only on lastUpdate is deliberate: selector changes must not retag
-  // the previous hook value with a new derivative exchange before polling resets.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: identity is captured only when a new poll timestamp arrives; including it would retag the prior snapshot during selector changes
   useEffect(() => {
-    if (!lastUpdate) {
-      receivedLiveIdentityRef.current = null
-      setChainData(null)
-      return
-    }
-    receivedLiveIdentityRef.current = { ...requestIdentity }
-  }, [lastUpdate])
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: lastUpdate orders identity tagging before liveData is accepted, even though its value is read through receivedLiveIdentityRef
-  useEffect(() => {
-    const receivedIdentity = receivedLiveIdentityRef.current
-    if (!liveData || !receivedIdentity) {
+    if (!liveData || !dataIdentity) {
       setChainData(null)
       return
     }
     const tagged: ListedOptionChainResponse = {
       ...liveData,
-      exchange: receivedIdentity.exchange,
+      exchange: dataIdentity.exchange,
     }
-    setChainData(chainMatches(tagged, receivedIdentity) ? tagged : null)
-  }, [liveData, lastUpdate])
+    setChainData(chainMatches(tagged, dataIdentity) ? tagged : null)
+  }, [liveData, dataIdentity])
 
   const activeChain = useMemo(
     () => (chainData && chainMatches(chainData, requestIdentity) ? chainData : null),
@@ -250,9 +235,10 @@ export default function StrategyBuilder() {
   const connectionStatus = useMemo<'live' | 'refreshing' | 'stale' | 'idle'>(() => {
     if (isLiveLoading) return 'refreshing'
     if (!activeChain) return 'idle'
-    const isRecent = lastUpdate !== null && payoffClock - lastUpdate.getTime() <= 60_000
+    const isRecent =
+      lastStreamUpdate !== null && payoffClock - lastStreamUpdate.getTime() <= 60_000
     return isStreaming && !isPaused && isRecent ? 'live' : 'stale'
-  }, [activeChain, isLiveLoading, isPaused, isStreaming, lastUpdate, payoffClock])
+  }, [activeChain, isLiveLoading, isPaused, isStreaming, lastStreamUpdate, payoffClock])
 
   // OpenAlgo-symbol → tick size map, built from the live option chain.
   // Powers per-leg price snapping in the Execute Basket dialog so options
@@ -574,11 +560,11 @@ export default function StrategyBuilder() {
         : undefined
       greeks[leg.id] = {
         legId: leg.id,
-        iv: contract?.implied_volatility ?? null,
-        delta: contract?.delta ?? null,
-        gamma: contract?.gamma ?? null,
-        theta: contract?.theta ?? null,
-        vega: contract?.vega ?? null,
+        iv: contract?.implied_volatility ?? (leg.iv > 0 ? leg.iv : null),
+        delta: contract?.delta ?? leg.marketGreeks?.delta ?? null,
+        gamma: contract?.gamma ?? leg.marketGreeks?.gamma ?? null,
+        theta: contract?.theta ?? leg.marketGreeks?.theta ?? null,
+        vega: contract?.vega ?? leg.marketGreeks?.vega ?? null,
       }
     }
     return greeks
@@ -836,8 +822,8 @@ export default function StrategyBuilder() {
         return
       }
 
-      const chainsByExpiry = new Map<string, OptionChainResponse['chain']>([
-        [normalizeExpiryCode(activeChain.expiry_date || selectedExpiry), activeChain.chain],
+      const chainsByExpiry = new Map<string, ListedOptionChainResponse>([
+        [normalizeExpiryCode(activeChain.expiry_date || selectedExpiry), activeChain],
       ])
       const requiredExpiries = Array.from(
         new Set(resolved.map((leg) => normalizeExpiryCode(leg.resolvedExpiry)))
@@ -851,14 +837,29 @@ export default function StrategyBuilder() {
               selectedUnderlying,
               underlyingExchangeFor(selectedExchange, selectedUnderlying),
               legExpiry,
-              20
+              20,
+              { withGreeks: true }
             )
           )
           if (farChain.status !== 'success' || !Array.isArray(farChain.chain)) {
             showToast.error(`Unable to validate option contracts for ${legExpiry}`)
             return
           }
-          chainsByExpiry.set(legExpiry, farChain.chain)
+          const listedFarChain: ListedOptionChainResponse = {
+            ...farChain,
+            exchange: requestIdentity.exchange,
+          }
+          if (
+            !chainMatches(listedFarChain, {
+              exchange: requestIdentity.exchange,
+              underlying: selectedUnderlying,
+              expiry: legExpiry,
+            })
+          ) {
+            showToast.error(`Received a mismatched option chain for ${legExpiry}`)
+            return
+          }
+          chainsByExpiry.set(legExpiry, listedFarChain)
         }
       } catch {
         showToast.error('Unable to validate every template contract')
@@ -867,12 +868,11 @@ export default function StrategyBuilder() {
 
       const validated = resolved.map((leg) => {
         const legExpiry = normalizeExpiryCode(leg.resolvedExpiry)
-        const contract = resolveListedContract(
-          chainsByExpiry.get(legExpiry) ?? [],
-          leg.resolvedStrike,
-          leg.optionType
-        )
-        return contract ? { leg, legExpiry, contract } : null
+        const response = chainsByExpiry.get(legExpiry)
+        const market = response
+          ? resolveOptionContract(response, leg.optionType, leg.resolvedStrike)
+          : null
+        return market ? { leg, legExpiry, market } : null
       })
       const missing = validated.find((item) => item === null)
       if (missing) {
@@ -882,7 +882,7 @@ export default function StrategyBuilder() {
 
       const newLegs: StrategyLeg[] = validated.map((item) => {
         if (item === null) throw new Error('Validated template contract is missing')
-        const { leg: r, legExpiry, contract } = item
+        const { leg: r, legExpiry, market } = item
         // Each leg keeps its own expiry — calendars / diagonals span two.
         // Preserve the template's per-leg ratio (e.g. butterfly body = 2 lots,
         // wings = 1 lot) and scale it by the user's chosen lot multiplier.
@@ -894,27 +894,36 @@ export default function StrategyBuilder() {
           segment: 'OPTION',
           side: r.side,
           lots: legLots,
-          lotSize,
+          lotSize: market.lotSize,
           expiry: legExpiry,
           strike: r.resolvedStrike,
           optionType: r.optionType,
-          price: contract.ltp,
-          iv: 0,
+          price: market.marketPrice,
+          iv: market.iv,
           active: true,
-          symbol: contract.symbol,
-          exchange: optionExchangeFor(selectedExchange),
-          expiryTs: activeChain?.expiry_ts ?? null,
-          tickSize: contract.tick_size,
-          marketPrice: contract.ltp,
-          referenceUnderlying: activeChain?.underlying_ltp,
-          forwardPrice: activeChain?.forward_price ?? undefined,
+          symbol: market.symbol,
+          exchange: market.exchange,
+          expiryTs: market.expiryTs,
+          tickSize: market.tickSize,
+          marketPrice: market.marketPrice,
+          referenceUnderlying: market.referenceUnderlying,
+          forwardPrice: market.forwardPrice ?? undefined,
+          marketGreeks: market.greeks,
         }
       })
       setLegs((prev) => [...prev, ...newLegs])
       setTemplateDialogOpen(false)
       setActiveTemplate(null)
     },
-    [lotSize, apiKey, activeChain, selectedExpiry, selectedUnderlying, selectedExchange]
+    [
+      lotSize,
+      apiKey,
+      activeChain,
+      selectedExpiry,
+      selectedUnderlying,
+      selectedExchange,
+      requestIdentity.exchange,
+    ]
   )
 
   // Manual leg add

@@ -19,6 +19,13 @@ export interface OptionChainResponse {
   message?: string
 }
 
+/** Immutable derivative request identity attached when an option-chain poll starts. */
+export interface OptionChainDataIdentity {
+  exchange: string
+  underlying: string
+  expiry: string
+}
+
 export interface OptionStrike {
   strike: number
   ce: OptionData | null

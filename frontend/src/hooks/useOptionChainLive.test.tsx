@@ -5,6 +5,9 @@ import { useOptionChainLive } from './useOptionChainLive'
 const marketDataCapture = vi.hoisted(() => ({
   symbols: [] as Array<{ symbol: string; exchange: string }>,
   data: new Map(),
+  isConnected: false,
+  isAuthenticated: false,
+  isPaused: false,
 }))
 
 vi.mock('./useMarketData', () => ({
@@ -12,9 +15,9 @@ vi.mock('./useMarketData', () => ({
     marketDataCapture.symbols = symbols
     return {
       data: marketDataCapture.data,
-      isConnected: false,
-      isAuthenticated: false,
-      isPaused: false,
+      isConnected: marketDataCapture.isConnected,
+      isAuthenticated: marketDataCapture.isAuthenticated,
+      isPaused: marketDataCapture.isPaused,
     }
   },
 }))
@@ -43,6 +46,9 @@ describe('useOptionChainLive', () => {
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
     marketDataCapture.symbols = []
     marketDataCapture.data = new Map()
+    marketDataCapture.isConnected = false
+    marketDataCapture.isAuthenticated = false
+    marketDataCapture.isPaused = false
     lastOptionChainBody = {}
     vi.stubGlobal(
       'fetch',
@@ -68,6 +74,61 @@ describe('useOptionChainLive', () => {
     expect(lastOptionChainBody.with_greeks).toBe(true)
     expect(result.current.forwardPrice).toBe(100100)
     expect(result.current.clockOffsetMs).toEqual(expect.any(Number))
+    expect(result.current.dataIdentity).toEqual({
+      exchange: 'CRYPTO',
+      underlying: 'BTC',
+      expiry: '28AUG26',
+    })
+    expect(result.current.lastStreamUpdate).toBeNull()
+  })
+
+  it('binds data to the derivative exchange that initiated its poll', async () => {
+    const requestBodies: Record<string, unknown>[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        requestBodies.push(JSON.parse(String(init?.body)))
+        return new Response(JSON.stringify(optionChainResponse()), { status: 200 })
+      })
+    )
+
+    const { result, rerender } = renderHook(
+      ({ optionExchange }) =>
+        useOptionChainLive('key', 'BTC', 'CRYPTO', optionExchange, '28AUG26', 20, {
+          enabled: true,
+        }),
+      { initialProps: { optionExchange: 'NFO' } }
+    )
+    await waitFor(() => expect(result.current.dataIdentity?.exchange).toBe('NFO'))
+
+    rerender({ optionExchange: 'BFO' })
+
+    await waitFor(() => expect(requestBodies).toHaveLength(2))
+    await waitFor(() => expect(result.current.dataIdentity?.exchange).toBe('BFO'))
+  })
+
+  it('tracks stream freshness separately from a recent REST poll', async () => {
+    marketDataCapture.isConnected = true
+    marketDataCapture.isAuthenticated = true
+    marketDataCapture.data = new Map([
+      [
+        'CRYPTO:BTCUSD',
+        {
+          exchange: 'CRYPTO',
+          symbol: 'BTCUSD',
+          lastUpdate: 1_796_000_000_000,
+          data: { ltp: 100_050 },
+        },
+      ],
+    ])
+
+    const { result } = renderHook(() =>
+      useOptionChainLive('key', 'BTC', 'CRYPTO', 'CRYPTO', '28AUG26', 20, { enabled: true })
+    )
+    await waitFor(() => expect(result.current.data).not.toBeNull())
+
+    expect(result.current.isStreaming).toBe(true)
+    expect(result.current.lastStreamUpdate).toEqual(expect.any(Date))
   })
 
   it('resyncs the server clock immediately after visibility is restored', async () => {

@@ -18,6 +18,12 @@ export interface ResolvedLegMarket {
   iv: number
   forwardPrice: number | null
   referenceUnderlying: number
+  greeks: {
+    delta: number | null
+    gamma: number | null
+    theta: number | null
+    vega: number | null
+  }
 }
 
 /** A fetched option chain paired with the derivative exchange used to fetch it. */
@@ -78,6 +84,12 @@ export function resolveOptionContract(
     iv: contract.implied_volatility ?? 0,
     forwardPrice: response.forward_price ?? null,
     referenceUnderlying: response.underlying_ltp,
+    greeks: {
+      delta: contract.delta ?? null,
+      gamma: contract.gamma ?? null,
+      theta: contract.theta ?? null,
+      vega: contract.vega ?? null,
+    },
   }
 }
 
