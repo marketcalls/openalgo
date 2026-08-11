@@ -23,9 +23,14 @@ def transform_data(data, token):
         "trigPrice": str(data.get("trigger_price", "0")),
         "validity": map_validity(data.get("validity", "DAY")),
         "discQty": str(data.get("disclosed_quantity", "0")),
-        "amo": data.get("amo", False),
-        "remarks": data.get("remarks", ""),
+        # Remarks are capped at 10 characters - anything longer is stripped out
+        # by the broker, so truncate here to keep the tag readable.
+        "remarks": str(data.get("remarks", ""))[:10],
     }
+
+    # 'amo' is optional; only send it when the order really is an AMO
+    if data.get("amo"):
+        transformed["amo"] = "true"
 
     # Add market protection percentage for market and stopmarket orders
     if order_type in ("market", "stopmarket"):
@@ -109,14 +114,44 @@ def map_product_type(product):
 def map_validity(validity):
     """
     Maps OpenAlgo validity types to Tradejini validity types.
+
+    'eos' (End-of-Session) is accepted by the API for BSE scrips only.
     """
-    validity_mapping = {"DAY": "day", "IOC": "ioc", "GTC": "gtc"}
-    return validity_mapping.get(validity, "day")
+    validity_mapping = {"DAY": "day", "IOC": "ioc", "GTC": "gtc", "EOS": "eos"}
+    return validity_mapping.get(str(validity).upper(), "day")
 
 
 def reverse_map_product_type(product):
     """
     Maps Tradejini product types back to OpenAlgo product types.
+
+    Tradejini products are 'delivery', 'intraday', 'normal', 'cover' and
+    'bracket' (order book, trade book and position book all use this set).
     """
-    reverse_product_type_mapping = {"delivery": "CNC", "normal": "NRML", "intraday": "MIS"}
-    return reverse_product_type_mapping.get(product)
+    reverse_product_type_mapping = {
+        "delivery": "CNC",
+        "normal": "NRML",
+        "intraday": "MIS",
+        "cover": "CO",
+        "bracket": "BO",
+        # Legacy / long-form spellings seen on some responses
+        "margin": "NRML",
+        "coverorder": "CO",
+        "bracketorder": "BO",
+    }
+    return reverse_product_type_mapping.get(str(product).lower())
+
+
+def reverse_map_order_type(order_type):
+    """
+    Maps Tradejini price types back to OpenAlgo price types.
+
+    Tradejini uses 'limit', 'market', 'stoplimit' and 'stopmarket'.
+    """
+    reverse_order_type_mapping = {
+        "market": "MARKET",
+        "limit": "LIMIT",
+        "stoplimit": "SL",
+        "stopmarket": "SL-M",
+    }
+    return reverse_order_type_mapping.get(str(order_type).lower(), str(order_type).upper())

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 # Add parent directory to path to allow imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
 
+from broker.tradejini.api.auth_api import get_api_key
 from database.auth_db import get_auth_token
 from database.token_db import get_token
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
@@ -64,7 +65,7 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 raise ValueError(f"No authentication token found for user {user_id}")
 
             # Get API key from environment for Tradejini
-            api_key = os.getenv("BROKER_API_SECRET", "")
+            api_key = get_api_key()
 
             # Format token for Tradejini WebSocket (api_key:access_token)
             if api_key and ":" not in auth_token:
@@ -86,7 +87,7 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 raise ValueError("Missing required authentication data")
 
             # Get API key from environment or auth_data for Tradejini
-            api_key = auth_data.get("api_key", os.getenv("BROKER_API_SECRET", ""))
+            api_key = auth_data.get("api_key") or get_api_key()
 
             # Format token for Tradejini WebSocket (api_key:access_token)
             if api_key and ":" not in auth_token:
@@ -130,7 +131,7 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # the same (api_key:access_token) formatting that initialize() uses.
                 fresh_token = get_auth_token(self.user_id, bypass_cache=True)
                 if fresh_token:
-                    api_key = os.getenv("BROKER_API_SECRET", "")
+                    api_key = get_api_key()
                     if api_key and ":" not in fresh_token:
                         self.ws_token = f"{api_key}:{fresh_token}"
                     else:
@@ -164,6 +165,56 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         # Clean up ZeroMQ resources
         self.cleanup_zmq()
+
+    # --- Feed subscription lists ------------------------------------------
+    # A subscribe request REPLACES the server-side symbol list for that feed;
+    # it does not append to it. subscribeL1([A]) after subscribeL1([A, B])
+    # silently drops B. Likewise unsubscribeL1() cancels every L1 subscription
+    # at once. So every change has to re-send the complete list for the feed.
+
+    def _feed_tokens(self, feed: str) -> list[str]:
+        """Build the full '<token>_<exchange>' list for a feed from state."""
+        modes = (1, 2) if feed == "L1" else (3,)
+        tokens = []
+        for sub in self.subscriptions.values():
+            if sub["mode"] in modes:
+                token_str = f"{sub['token']}_{sub['brexchange']}"
+                if token_str not in tokens:
+                    tokens.append(token_str)
+        return tokens
+
+    def _sync_feed(self, feed: str, cancel_when_empty: bool = True) -> None:
+        """
+        Re-send the complete symbol list for a feed.
+
+        When nothing is left on the feed, cancel it outright - unless this is a
+        reconnect replay, where there is no server-side list to cancel.
+        """
+        if not (self.connected and self.ws_client):
+            return
+
+        with self.lock:
+            tokens = self._feed_tokens(feed)
+
+        if not tokens and not cancel_when_empty:
+            return
+
+        try:
+            if feed == "L1":
+                if tokens:
+                    self.ws_client.subscribeL1(tokens)
+                else:
+                    self.ws_client.unsubscribeL1()
+            else:
+                if tokens:
+                    self.ws_client.subscribeL2(tokens)
+                else:
+                    self.ws_client.unsubscribeL2()
+
+            self.logger.info(f"Synced {feed} feed with {len(tokens)} symbol(s)")
+        except Exception as e:
+            self.logger.error(f"Error syncing {feed} feed: {e}")
+            raise
 
     def subscribe(
         self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5
@@ -237,26 +288,17 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "is_fallback": is_fallback,
             }
 
-        # Subscribe if connected
+        # Subscribe if connected. The request carries every symbol on the feed,
+        # not just this one, because it replaces the server-side list.
         if self.connected and self.ws_client:
             try:
-                # Create token string with exchange segment
-                token_str = f"{token}_{brexchange}"
-
                 self.logger.info(
-                    f"Subscribing to {symbol} with token {token} on {brexchange} (token_str: {token_str})"
+                    f"Subscribing to {symbol} with token {token} on {brexchange} "
+                    f"(token_str: {token}_{brexchange})"
                 )
 
-                # Subscribe based on mode
-                if mode == 1:
-                    # LTP mode - use L1 subscription
-                    self.ws_client.subscribeL1([token_str])
-                elif mode == 2:
-                    # Quote mode - use L1 subscription (full quote)
-                    self.ws_client.subscribeL1([token_str])
-                elif mode == 3:
-                    # Depth mode - use L5 subscription (5 level depth)
-                    self.ws_client.subscribeL2([token_str])
+                # LTP (1) and Quote (2) both ride the L1 feed; Depth (3) uses L5
+                self._sync_feed("L1" if mode in (1, 2) else "L5")
 
             except Exception as e:
                 self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
@@ -294,22 +336,25 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "SYMBOL_NOT_FOUND", f"Symbol {symbol} not found for exchange {exchange}"
             )
 
-        # Generate correlation ID
+        # Generate correlation ID. Depth subscriptions append the depth level,
+        # so match on the prefix rather than an exact key.
         correlation_id = f"{symbol}_{exchange}_{mode}"
 
         # Remove from subscriptions
         with self.lock:
-            if correlation_id in self.subscriptions:
-                del self.subscriptions[correlation_id]
+            for key in [
+                k
+                for k in self.subscriptions
+                if k == correlation_id or k.startswith(f"{correlation_id}_")
+            ]:
+                del self.subscriptions[key]
 
-        # Unsubscribe if connected
+        # Re-send what is left on the feed. Sending nothing would leave the old
+        # list in place, and unsubscribeL1()/unsubscribeL2() cancel the whole
+        # feed - so _sync_feed() only falls back to those when nothing remains.
         if self.connected and self.ws_client:
             try:
-                # Tradejini unsubscribes from all tokens for a given type
-                if mode in [1, 2]:
-                    self.ws_client.unsubscribeL1()
-                elif mode == 3:
-                    self.ws_client.unsubscribeL2()
+                self._sync_feed("L1" if mode in (1, 2) else "L5")
 
             except Exception as e:
                 self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
@@ -327,28 +372,13 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.info("Connected to Tradejini WebSocket")
             self.connected = True
 
-            # Resubscribe to existing subscriptions if reconnecting
-            with self.lock:
-                for correlation_id, sub in self.subscriptions.items():
-                    try:
-                        token_str = f"{sub['token']}_{sub['brexchange']}"
-
-                        self.logger.info(
-                            f"Resubscribing to {sub['symbol']} with token {sub['token']} on {sub['brexchange']} (token_str: {token_str})"
-                        )
-
-                        if sub["mode"] in [1, 2]:
-                            self.ws_client.subscribeL1([token_str])
-                        elif sub["mode"] == 3:
-                            self.ws_client.subscribeL2([token_str])
-
-                        self.logger.info(
-                            f"Resubscribed to {sub['symbol']}.{sub['exchange']} with correlation_id: {correlation_id}"
-                        )
-                    except Exception as e:
-                        self.logger.error(
-                            f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}"
-                        )
+            # Subscriptions do not survive a reconnect, so replay each feed's
+            # complete symbol list - one request per feed, not one per symbol.
+            for feed in ("L1", "L5"):
+                try:
+                    self._sync_feed(feed, cancel_when_empty=False)
+                except Exception as e:
+                    self.logger.error(f"Error replaying {feed} subscriptions: {e}")
 
         elif status == "error":
             self.logger.error(f"Tradejini WebSocket error: {message.get('reason')}")
@@ -359,7 +389,9 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             # Attempt to reconnect if we're still running
             if self.running:
-                self._connect_thread = threading.Thread(target=self._connect_with_retry, daemon=True)
+                self._connect_thread = threading.Thread(
+                    target=self._connect_with_retry, daemon=True
+                )
                 self._connect_thread.start()
 
     def _on_data(self, ws, message) -> None:
