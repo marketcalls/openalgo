@@ -439,8 +439,14 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if mode == 3:
             correlation_id = f"{correlation_id}_{depth_level}"
 
-        # Store subscription for reconnection
+        # Store subscription for reconnection, and work out what actually needs
+        # sending: a method another subscription on this token already holds is
+        # live on the server, so re-sending it is pure redundant traffic (a
+        # quote subscription upgraded to depth would otherwise re-subscribe
+        # MarketFeedV3). Computed BEFORE inserting, so the new subscription does
+        # not mask itself, and mirrored by _methods_still_needed() on the way out.
         with self.lock:
+            already_live = self._methods_still_needed(token)
             self.subscriptions[correlation_id] = {
                 "symbol": symbol,
                 "exchange": exchange,
@@ -452,16 +458,17 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "methods": methods,
                 "scrip_data": scrip_data,
             }
+        to_send = [m for m in methods if m not in already_live]
 
         # Queue for batched sending when connected. When not connected, _on_open
         # re-queues every stored subscription on (re)connect, so we skip here to
         # avoid double-enqueuing the same scrip.
-        if self.connected and self.ws_client:
+        if self.connected and self.ws_client and to_send:
             self.logger.debug(
                 f"Queueing subscription for {symbol} ({exchange}/{brexchange}) - "
-                f"Token: {token}, Methods: {methods}, Exch: {exch_code}, Type: {exch_type}"
+                f"Token: {token}, Methods: {to_send}, Exch: {exch_code}, Type: {exch_type}"
             )
-            self._enqueue_subscriptions([(m, scrip_data[0]) for m in methods])
+            self._enqueue_subscriptions([(m, scrip_data[0]) for m in to_send])
 
         # Return success
         return self._create_success_response(
@@ -597,11 +604,19 @@ class FivepaisaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Depth subscriptions carry two methods (see _methods_for_mode), so
             # resubscribe every one of them or LTP goes back to 0 after a
             # reconnect. Older stored entries only have "method".
-            items = [
-                (m, sub["scrip_data"][0])
-                for sub in self.subscriptions.values()
-                for m in (sub.get("methods") or [sub["method"]])
-            ]
+            #
+            # Deduped on (method, token): several subscriptions can share a
+            # scrip - a quote and a depth stream on the same token both need
+            # MarketFeedV3 - and the server only needs told once.
+            items = []
+            seen = set()
+            for sub in self.subscriptions.values():
+                for m in sub.get("methods") or [sub["method"]]:
+                    key = (m, str(sub["token"]))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    items.append((m, sub["scrip_data"][0]))
         if items:
             self.logger.info(f"Resubscribing {len(items)} subscription(s) in batches")
             self._enqueue_subscriptions(items)

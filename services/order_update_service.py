@@ -77,6 +77,11 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
 #
 # groww: no push feed at all (its public API documents only REST live data).
 #
+# samco: same — Trade API v3.2 exposes exactly one socket (wss://stream.samco.in)
+# and it carries market data only. The documented streaming_type values are
+# "quote" and "quote2"; there is no order/trade confirmation stream, postback or
+# webhook anywhere in the v3.2 reference.
+#
 # fivepaisa: it does document an OrderTradeConfirmations WebSocket, but 5Paisa
 # permits only ONE feed connection per {access_token, client_code} and a new
 # connection evicts the existing one. A dedicated order socket therefore fights
@@ -86,7 +91,7 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
 # updates onto the market-data socket instead is not viable either: that adapter
 # runs in the websocket_proxy *subprocess* under gunicorn+eventlet and Docker, so
 # the OrderUpdateEvent would be published on the wrong process's event bus.
-_POLLING_BROKERS = {"groww", "fivepaisa"}
+_POLLING_BROKERS = {"groww", "fivepaisa", "samco"}
 
 # user_id -> live adapter (BaseOrderUpdateAdapter or PollingOrderUpdateAdapter)
 _ADAPTERS: dict[str, object] = {}
