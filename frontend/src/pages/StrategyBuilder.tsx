@@ -13,7 +13,10 @@ import { apiClient } from '@/api/client'
 import { oiProfileApi } from '@/api/oi-profile'
 import { optionChainApi } from '@/api/option-chain'
 import { type PortfolioEntry, strategyPortfolioApi, type Watchlist } from '@/api/strategy-portfolio'
-import { EditLegDialog } from '@/components/strategy-builder/EditLegDialog'
+import {
+  EditLegDialog,
+  invalidateIvWhenContractChanges,
+} from '@/components/strategy-builder/EditLegDialog'
 import { GreeksTab, type LegGreeks } from '@/components/strategy-builder/GreeksTab'
 import { type LegDraft, ManualLegBuilder } from '@/components/strategy-builder/ManualLegBuilder'
 import MultiStrikeOITab from '@/components/strategy-builder/MultiStrikeOITab'
@@ -583,6 +586,12 @@ export default function StrategyBuilder() {
         const market = {
           marketPrice: contract.ltp,
           iv: contract.implied_volatility ?? 0,
+          marketGreeks: {
+            delta: contract.delta ?? null,
+            gamma: contract.gamma ?? null,
+            theta: contract.theta ?? null,
+            vega: contract.vega ?? null,
+          },
           referenceUnderlying: activeChain.underlying_ltp,
           forwardPrice: activeChain.forward_price ?? undefined,
           expiryTs: activeChain.expiry_ts ?? null,
@@ -592,6 +601,10 @@ export default function StrategyBuilder() {
         if (
           leg.marketPrice === market.marketPrice &&
           leg.iv === market.iv &&
+          leg.marketGreeks?.delta === market.marketGreeks.delta &&
+          leg.marketGreeks?.gamma === market.marketGreeks.gamma &&
+          leg.marketGreeks?.theta === market.marketGreeks.theta &&
+          leg.marketGreeks?.vega === market.marketGreeks.vega &&
           leg.referenceUnderlying === market.referenceUnderlying &&
           leg.forwardPrice === market.forwardPrice &&
           leg.expiryTs === market.expiryTs &&
@@ -1088,16 +1101,15 @@ export default function StrategyBuilder() {
       }
 
       setLegs((prev) =>
-        prev.map((l) =>
-          l.id === updated.id
-            ? {
-                ...updated,
-                expiry: normalisedExpiry,
-                symbol: rebuiltSymbol,
-                exchange: updated.exchange ?? optionExchangeFor(selectedExchange),
-              }
-            : l
-        )
+        prev.map((l) => {
+          if (l.id !== updated.id) return l
+          return invalidateIvWhenContractChanges(l, {
+            ...updated,
+            expiry: normalisedExpiry,
+            symbol: rebuiltSymbol,
+            exchange: updated.exchange ?? optionExchangeFor(selectedExchange),
+          })
+        })
       )
       setEditLegId(null)
     },

@@ -107,7 +107,7 @@ describe('useOptionChainLive', () => {
     await waitFor(() => expect(result.current.dataIdentity?.exchange).toBe('BFO'))
   })
 
-  it('tracks stream freshness separately from a recent REST poll', async () => {
+  it('tracks only WebSocket provenance as stream freshness', async () => {
     marketDataCapture.isConnected = true
     marketDataCapture.isAuthenticated = true
     marketDataCapture.data = new Map([
@@ -117,18 +117,37 @@ describe('useOptionChainLive', () => {
           exchange: 'CRYPTO',
           symbol: 'BTCUSD',
           lastUpdate: 1_796_000_000_000,
+          updateSource: 'rest',
           data: { ltp: 100_050 },
         },
       ],
     ])
 
-    const { result } = renderHook(() =>
+    const { result, rerender } = renderHook(() =>
       useOptionChainLive('key', 'BTC', 'CRYPTO', 'CRYPTO', '28AUG26', 20, { enabled: true })
     )
     await waitFor(() => expect(result.current.data).not.toBeNull())
 
     expect(result.current.isStreaming).toBe(true)
-    expect(result.current.lastStreamUpdate).toEqual(expect.any(Date))
+    expect(result.current.lastStreamUpdate).toBeNull()
+
+    marketDataCapture.data = new Map([
+      [
+        'CRYPTO:BTCUSD',
+        {
+          exchange: 'CRYPTO',
+          symbol: 'BTCUSD',
+          lastUpdate: 1_796_000_000_001,
+          updateSource: 'websocket',
+          data: { ltp: 100_075 },
+        },
+      ],
+    ])
+    rerender()
+
+    await waitFor(() =>
+      expect(result.current.lastStreamUpdate?.getTime()).toBe(1_796_000_000_001)
+    )
   })
 
   it('resyncs the server clock immediately after visibility is restored', async () => {

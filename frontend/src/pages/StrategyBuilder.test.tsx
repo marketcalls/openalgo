@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -292,7 +292,7 @@ describe('StrategyBuilder live request orchestration', () => {
     expect(screen.queryByText('Live')).not.toBeInTheDocument()
   })
 
-  it('labels the authenticated stream Live only after an actual fresh tick', async () => {
+  it('keeps recent REST-cached data Stale until an authenticated WebSocket tick arrives', async () => {
     mocks.marketConnected = true
     mocks.marketAuthenticated = true
     mocks.marketData = new Map([
@@ -301,14 +301,34 @@ describe('StrategyBuilder live request orchestration', () => {
         {
           data: { ltp: 24_605 },
           lastUpdate: Date.now(),
+          updateSource: 'rest' as const,
         },
       ],
     ])
 
-    renderBuilder()
+    const view = renderBuilder()
     await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
 
-    expect(screen.getByText('Live')).toBeInTheDocument()
+    expect(screen.getByText('Stale')).toBeInTheDocument()
+    expect(screen.queryByText('Live')).not.toBeInTheDocument()
+
+    mocks.marketData = new Map([
+      [
+        'NSE_INDEX:NIFTY',
+        {
+          data: { ltp: 24_606 },
+          lastUpdate: Date.now() + 1,
+          updateSource: 'websocket' as const,
+        },
+      ],
+    ])
+    view.rerender(
+      <MemoryRouter initialEntries={['/strategybuilder']}>
+        <StrategyBuilder />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => expect(screen.getByText('Live')).toBeInTheDocument())
     expect(screen.queryByText('Stale')).not.toBeInTheDocument()
   })
 
@@ -473,6 +493,44 @@ describe('StrategyBuilder live request orchestration', () => {
     expect(farGreekRow).toHaveTextContent('-8.0000')
     expect(farGreekRow).toHaveTextContent('0.001200')
     expect(farGreekRow).toHaveTextContent('9.0000')
+  })
+
+  it('does not show a prior contract Greek snapshot after editing a calendar leg', async () => {
+    const user = userEvent.setup()
+    const farChain = chainFixture('NIFTY', '18AUG26')
+    if (farChain.chain[0].ce) {
+      farChain.chain[0].ce.symbol = 'NIFTY18AUG2624600CE'
+      farChain.chain[0].ce.implied_volatility = 33
+      farChain.chain[0].ce.delta = 0.44
+      farChain.chain[0].ce.gamma = 0.0012
+      farChain.chain[0].ce.theta = -8
+      farChain.chain[0].ce.vega = 9
+    }
+    mocks.getOptionChain.mockResolvedValue(farChain)
+
+    renderBuilder()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: /Neutral/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Call Calendar/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add Strategy' }))
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: 'Edit position' })).toHaveLength(2)
+    )
+
+    await user.click(screen.getAllByRole('button', { name: 'Edit position' })[1])
+    const dialog = await screen.findByRole('dialog', { name: 'Edit Position' })
+    const optionType = within(dialog).getAllByRole('combobox')[2]
+    fireEvent.keyDown(optionType, { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: 'PE' }))
+    await user.click(within(dialog).getByRole('button', { name: 'Modify' }))
+
+    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+    const rows = await screen.findAllByRole('row')
+    const editedRow = rows.find((row) => row.textContent?.includes('18AUG26 24600PE'))
+    expect(editedRow).toBeDefined()
+    const greekCells = within(editedRow as HTMLElement).getAllByRole('cell').slice(1)
+    for (const cell of greekCells) expect(cell).toHaveTextContent('-')
+    expect(editedRow).not.toHaveTextContent('0.4400')
   })
 })
 

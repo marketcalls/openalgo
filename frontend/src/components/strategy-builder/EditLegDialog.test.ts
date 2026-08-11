@@ -15,6 +15,7 @@ const original: StrategyLeg = {
   iv: 14.2,
   active: true,
   symbol: 'NIFTY04AUG2624000CE',
+  marketGreeks: { delta: 0.5, gamma: 0.01, theta: -2, vega: 4 },
 }
 
 describe('EditLegDialog payoff market-data invalidation', () => {
@@ -23,7 +24,19 @@ describe('EditLegDialog payoff market-data invalidation', () => {
     ['option type', { optionType: 'PE' as const }],
     ['expiry', { expiry: '11AUG26' }],
   ])('PG-13 clears stale IV when %s changes', (_label, change) => {
-    expect(invalidateIvWhenContractChanges(original, { ...original, ...change }).iv).toBe(0)
+    const result = invalidateIvWhenContractChanges(original, { ...original, ...change })
+    expect(result.iv).toBe(0)
+    expect(result.marketGreeks).toBeUndefined()
+  })
+
+  it('clears the Greek snapshot when the canonical symbol changes', () => {
+    const result = invalidateIvWhenContractChanges(original, {
+      ...original,
+      symbol: 'NIFTY04AUG2624000CE-CANONICAL',
+    })
+
+    expect(result.iv).toBe(0)
+    expect(result.marketGreeks).toBeUndefined()
   })
 
   it('keeps IV for quantity, side, and entry-price-only edits', () => {
@@ -33,7 +46,7 @@ describe('EditLegDialog payoff market-data invalidation', () => {
         side: 'SELL',
         lots: 2,
         price: 101,
-      }).iv
-    ).toBe(14.2)
+      })
+    ).toMatchObject({ iv: 14.2, marketGreeks: original.marketGreeks })
   })
 })

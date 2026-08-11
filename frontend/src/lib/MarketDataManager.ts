@@ -45,6 +45,8 @@ export interface SymbolData {
   exchange: string
   data: MarketData
   lastUpdate?: number
+  /** Origin of the latest cache update; only websocket updates prove stream freshness. */
+  updateSource?: 'websocket' | 'rest'
 }
 
 export type SubscriptionMode = 'LTP' | 'Quote' | 'Depth'
@@ -590,6 +592,7 @@ export class MarketDataManager {
             ...existing,
             data: newData,
             lastUpdate: Date.now(),
+            updateSource: 'websocket',
           }
           this.dataCache.set(dataKey, updatedSymbolData)
 
@@ -813,6 +816,7 @@ export class MarketDataManager {
             ...existing,
             data: newData,
             lastUpdate: Date.now(),
+            updateSource: 'rest',
           }
           this.dataCache.set(dataKey, updatedSymbolData)
 

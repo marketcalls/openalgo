@@ -58,8 +58,9 @@ export function invalidateIvWhenContractChanges(
     original.expiry !== updated.expiry ||
     original.segment !== updated.segment ||
     original.strike !== updated.strike ||
-    original.optionType !== updated.optionType
-  return contractChanged ? { ...updated, iv: 0 } : updated
+    original.optionType !== updated.optionType ||
+    original.symbol !== updated.symbol
+  return contractChanged ? { ...updated, iv: 0, marketGreeks: undefined } : updated
 }
 
 export function EditLegDialog({

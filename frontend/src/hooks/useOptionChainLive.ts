@@ -300,9 +300,11 @@ export function useOptionChainLive(
       return newStrike
     })
 
-    // Check if any LTP was updated (using ref to avoid loop)
+    // Only manager-tagged WebSocket updates prove stream freshness. Recent
+    // REST fallback/cache updates remain valid prices but must not imply Live.
     let newestLtpUpdate = lastLtpUpdateRef.current
     for (const [, symbolData] of wsData) {
+      if (symbolData.updateSource !== 'websocket') continue
       if (symbolData.lastUpdate && symbolData.lastUpdate > newestLtpUpdate) {
         newestLtpUpdate = symbolData.lastUpdate
       }
