@@ -495,6 +495,58 @@ describe('StrategyBuilder live request orchestration', () => {
     expect(screen.getAllByText('₹225.00').length).toBeGreaterThan(0)
   })
 
+  it('does not let a delayed manual response override a newer active expiry chain', async () => {
+    const user = userEvent.setup()
+    const staleManualChain = deferred<OptionChainResponse>()
+    mocks.getOptionChain.mockImplementation(async (_apiKey, underlying, _exchange, expiry) => {
+      if (expiry === '18AUG26') return staleManualChain.promise
+      return chainFixture(underlying, expiry)
+    })
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const body = JSON.parse(String(init?.body)) as Record<string, string>
+      mocks.fetchRequests.push({ url, body })
+      const response = chainFixture(body.underlying, body.expiry_date)
+      if (body.expiry_date === '18AUG26') response.underlying_ltp = 24_650
+      return new Response(JSON.stringify(response), { status: 200 })
+    })
+
+    renderBuilder()
+    await screen.findByText('NIFTY13AUG2624600CE')
+
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Expiry' }), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: '18AUG26' }))
+    await waitFor(() => expect(mocks.getOptionChain).toHaveBeenCalledTimes(1))
+
+    await chooseExpiry('18AUG26')
+    await screen.findByText('24650.00')
+
+    const staleResponse = chainFixture('NIFTY', '18AUG26')
+    if (staleResponse.chain[0].ce) {
+      staleResponse.chain[0].ce.symbol = 'NIFTY18AUG2624600CE'
+      staleResponse.chain[0].ce.ltp = 225
+      staleResponse.chain[0].ce.implied_volatility = 99
+      staleResponse.chain[0].ce.delta = 0.01
+    }
+    await act(async () => {
+      staleManualChain.resolve(staleResponse)
+      await staleManualChain.promise
+    })
+
+    const add = screen.getByRole('button', { name: /Add Buy/ })
+    await waitFor(() => expect(add).toBeEnabled())
+    fireEvent.click(add)
+    await screen.findByRole('button', { name: 'Remove position' })
+    expect(screen.getAllByText('₹125.00').length).toBeGreaterThan(0)
+    expect(screen.queryByText('₹225.00')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+    const rows = await screen.findAllByRole('row')
+    const row = rows.find((item) => item.textContent?.includes('24600CE'))
+    expect(row).toBeDefined()
+    expect(row).not.toHaveTextContent('99.00')
+  })
+
   it('adds the exact listed futures contract at its own quote', async () => {
     renderBuilder()
     await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
@@ -931,6 +983,108 @@ describe('StrategyBuilder live request orchestration', () => {
     expect(farGreekRow).toHaveTextContent('-400.00')
     expect(farGreekRow).toHaveTextContent('0.060000')
     expect(farGreekRow).toHaveTextContent('450.00')
+  })
+
+  it('refreshes each calendar expiry from its own option-chain Greeks response', async () => {
+    const user = userEvent.setup()
+    const intervalSpy = vi.spyOn(window, 'setInterval')
+    let farIv = 33
+    let farDelta = 0.44
+    mocks.getOptionChain.mockImplementation(
+      async (_apiKey: string, underlying: string, _exchange: string, expiry: string) => {
+        const response = chainFixture(underlying, expiry)
+        if (expiry === '18AUG26' && response.chain[0].ce) {
+          response.chain[0].ce.symbol = 'NIFTY18AUG2624600CE'
+          response.chain[0].ce.ltp = farIv === 33 ? 225 : 245
+          response.chain[0].ce.implied_volatility = farIv
+          response.chain[0].ce.delta = farDelta
+          response.chain[0].ce.gamma = farIv === 33 ? 0.0012 : 0.0015
+          response.chain[0].ce.theta = farIv === 33 ? -8 : -9
+          response.chain[0].ce.vega = farIv === 33 ? 9 : 10
+        }
+        return response
+      }
+    )
+
+    renderBuilder()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: /Neutral/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Call Calendar/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add Strategy' }))
+
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: 'Remove position' })).toHaveLength(2)
+    )
+    await waitFor(() => expect(mocks.getOptionChain).toHaveBeenCalledTimes(1))
+    expect(mocks.getOptionChain).toHaveBeenLastCalledWith(
+      'test-api-key',
+      'NIFTY',
+      'NSE_INDEX',
+      '18AUG26',
+      20,
+      { withGreeks: true }
+    )
+
+    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+    let rows = await screen.findAllByRole('row')
+    let farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
+    const nearRow = rows.find((row) => row.textContent?.includes('13AUG26 24600CE'))
+    expect(farRow).toHaveTextContent('33.00')
+    expect(nearRow).not.toHaveTextContent('33.00')
+    const initialFarGreeks = within(farRow as HTMLElement)
+      .getAllByRole('cell')
+      .slice(1)
+      .map((cell) => cell.textContent)
+    const initialNearGreeks = within(nearRow as HTMLElement)
+      .getAllByRole('cell')
+      .slice(1)
+      .map((cell) => cell.textContent)
+    expect(initialFarGreeks).not.toEqual(initialNearGreeks)
+
+    farIv = 41
+    farDelta = 0.52
+    const supplementalTimer = intervalSpy.mock.calls
+      .filter(([, delay]) => delay === 30_000)
+      .at(-1)?.[0]
+    expect(typeof supplementalTimer).toBe('function')
+    act(() => {
+      if (typeof supplementalTimer === 'function') supplementalTimer()
+    })
+
+    await waitFor(() => expect(mocks.getOptionChain).toHaveBeenCalledTimes(2))
+    rows = await screen.findAllByRole('row')
+    farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
+    expect(farRow).toHaveTextContent('41.00')
+    expect(farRow).not.toHaveTextContent('12.00')
+    const refreshedFarGreeks = within(farRow as HTMLElement)
+      .getAllByRole('cell')
+      .slice(1)
+      .map((cell) => cell.textContent)
+    expect(refreshedFarGreeks).toHaveLength(initialFarGreeks.length)
+    refreshedFarGreeks.forEach((value, index) => {
+      expect(value).not.toBe(initialFarGreeks[index])
+    })
+
+    farIv = 47
+    farDelta = 0.57
+    await user.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(mocks.getOptionChain).toHaveBeenCalledTimes(3))
+    rows = await screen.findAllByRole('row')
+    farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
+    expect(farRow).toHaveTextContent('47.00')
+
+    farIv = 53
+    farDelta = 0.61
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+
+    await waitFor(() => expect(mocks.getOptionChain).toHaveBeenCalledTimes(4))
+    rows = await screen.findAllByRole('row')
+    farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
+    expect(farRow).toHaveTextContent('53.00')
+    intervalSpy.mockRestore()
   })
 
   it('does not show a prior contract Greek snapshot after editing a calendar leg', async () => {

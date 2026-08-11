@@ -103,6 +103,11 @@ interface PendingIdentityChange {
   value: string
 }
 
+interface LiveOptionContract {
+  chain: ListedOptionChainResponse
+  contract: NonNullable<ListedOptionChainResponse['chain'][number]['ce']>
+}
+
 /**
  * Serialize every broker-backed API call this page issues.
  *
@@ -157,6 +162,9 @@ export default function StrategyBuilder() {
   const [selectedExpiry, setSelectedExpiry] = useState('')
 
   const [chainData, setChainData] = useState<ListedOptionChainResponse | null>(null)
+  const [supplementalChains, setSupplementalChains] = useState<
+    Map<string, ListedOptionChainResponse>
+  >(() => new Map())
   const [legs, setLegs] = useState<StrategyLeg[]>([])
   const [direction, setDirection] = useState<Direction>('BULLISH')
 
@@ -192,6 +200,9 @@ export default function StrategyBuilder() {
   const rehydrationGenerationRef = useRef(0)
   const rehydrationIdentityRef = useRef<string | null>(null)
   const rehydrationAttemptsRef = useRef(new Set<string>())
+  const supplementalChainFreshnessRef = useRef(new Map<string, number>())
+  const supplementalChainGenerationRef = useRef(0)
+  const supplementalChainKeysRef = useRef(new Set<string>())
 
   const requestIdentity = useMemo<ChainIdentity>(
     () => ({
@@ -201,6 +212,8 @@ export default function StrategyBuilder() {
     }),
     [selectedExchange, selectedUnderlying, selectedExpiry]
   )
+  const requestIdentityRef = useRef(requestIdentity)
+  requestIdentityRef.current = requestIdentity
 
   const liveEnabled =
     !isHydrating &&
@@ -242,6 +255,138 @@ export default function StrategyBuilder() {
     () => (chainData && chainMatches(chainData, requestIdentity) ? chainData : null),
     [chainData, requestIdentity]
   )
+
+  const supplementalExpiries = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          legs
+            .filter(
+              (leg) =>
+                leg.active &&
+                !isLegClosed(leg) &&
+                leg.segment === 'OPTION' &&
+                leg.contractValid === true &&
+                normalizeExpiryCode(leg.expiry) !== requestIdentity.expiry
+            )
+            .map((leg) => normalizeExpiryCode(leg.expiry))
+            .filter(Boolean)
+        )
+      ).sort(),
+    [legs, requestIdentity.expiry]
+  )
+  const supplementalExpiryKey = supplementalExpiries.join('|')
+  const requiredSupplementalChainKeys = useMemo(() => {
+    const derivativeExchange = optionExchangeFor(selectedExchange)
+    return new Set(
+      supplementalExpiryKey.split('|').filter(Boolean).map((expiry) =>
+        chainIdentity(derivativeExchange, selectedUnderlying, expiry)
+      )
+    )
+  }, [selectedExchange, selectedUnderlying, supplementalExpiryKey])
+
+  const rememberSupplementalChain = useCallback(
+    (response: ListedOptionChainResponse, identity: ChainIdentity) => {
+      if (!chainMatches(response, identity)) return false
+      const currentIdentity = requestIdentityRef.current
+      if (
+        currentIdentity.exchange !== identity.exchange ||
+        currentIdentity.underlying !== identity.underlying ||
+        currentIdentity.expiry === normalizeExpiryCode(identity.expiry)
+      ) {
+        return false
+      }
+      const key = chainIdentity(identity.exchange, identity.underlying, identity.expiry)
+      supplementalChainFreshnessRef.current.set(key, Date.now())
+      setSupplementalChains((previous) => {
+        if (previous.get(key) === response) return previous
+        const next = new Map(previous)
+        next.set(key, response)
+        return next
+      })
+      return true
+    },
+    []
+  )
+
+  const refreshSupplementalChains = useCallback(
+    async (force = false) => {
+      if (!apiKey || !selectedUnderlying || supplementalExpiryKey === '') return
+      const derivativeExchange = optionExchangeFor(selectedExchange)
+      const underlyingExchange = underlyingExchangeFor(selectedExchange, selectedUnderlying)
+      const generation = supplementalChainGenerationRef.current
+      const expiriesToRefresh = supplementalExpiryKey.split('|').filter(Boolean)
+
+      await Promise.allSettled(
+        expiriesToRefresh.map(async (expiry) => {
+          const identity: ChainIdentity = {
+            exchange: derivativeExchange,
+            underlying: selectedUnderlying,
+            expiry,
+          }
+          const key = chainIdentity(identity.exchange, identity.underlying, identity.expiry)
+          const lastFetch = supplementalChainFreshnessRef.current.get(key) ?? 0
+          if (!force && Date.now() - lastFetch < 30_000) return
+
+          const fetched = await queuedFetch(() =>
+            optionChainApi.getOptionChain(
+              apiKey,
+              selectedUnderlying,
+              underlyingExchange,
+              expiry,
+              20,
+              { withGreeks: true }
+            )
+          )
+          if (
+            generation !== supplementalChainGenerationRef.current ||
+            !supplementalChainKeysRef.current.has(key)
+          ) {
+            return
+          }
+          const tagged: ListedOptionChainResponse = { ...fetched, exchange: derivativeExchange }
+          if (tagged.status === 'success') rememberSupplementalChain(tagged, identity)
+        })
+      )
+    },
+    [
+      apiKey,
+      rememberSupplementalChain,
+      selectedExchange,
+      selectedUnderlying,
+      supplementalExpiryKey,
+    ]
+  )
+
+  useEffect(() => {
+    supplementalChainGenerationRef.current += 1
+    const requiredKeys = new Set(requiredSupplementalChainKeys)
+    supplementalChainKeysRef.current = requiredKeys
+    setSupplementalChains((previous) => {
+      const retained = new Map(
+        Array.from(previous).filter(([key]) => requiredKeys.has(key))
+      )
+      return retained.size === previous.size ? previous : retained
+    })
+    if (requiredKeys.size === 0) return
+
+    void refreshSupplementalChains(false)
+    const interval = window.setInterval(() => {
+      void refreshSupplementalChains(true)
+    }, 30_000)
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') void refreshSupplementalChains(true)
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
+  }, [
+    refreshSupplementalChains,
+    requiredSupplementalChainKeys,
+  ])
+
   const connectionStatus = useMemo<'live' | 'refreshing' | 'stale' | 'idle'>(() => {
     if (isLiveLoading) return 'refreshing'
     if (!activeChain) return 'idle'
@@ -269,16 +414,24 @@ export default function StrategyBuilder() {
   // still the previous underlying's, and fire an invalid pair at the broker.
   // OptionChain uses the same pattern.
   const resetExpiryAndChainState = useCallback(() => {
+    supplementalChainGenerationRef.current += 1
+    supplementalChainFreshnessRef.current.clear()
+    supplementalChainKeysRef.current.clear()
     setExpiries([])
     setFutureExpiries([])
     setSelectedExpiry('')
     setChainData(null)
+    setSupplementalChains(new Map())
   }, [])
 
   const resetStrategyState = useCallback(() => {
     marginGenerationRef.current += 1
+    supplementalChainGenerationRef.current += 1
+    supplementalChainFreshnessRef.current.clear()
+    supplementalChainKeysRef.current.clear()
     marginSupportedRef.current = null
     setLegs([])
+    setSupplementalChains(new Map())
     setSpotShiftPct(0)
     setIvShiftPct(0)
     setDaysElapsed(0)
@@ -547,7 +700,14 @@ export default function StrategyBuilder() {
           )
           response = { ...fetched, exchange: derivativeExchange }
         }
+        const latestActiveChain = legResolverStateRef.current.activeChain
+        if (latestActiveChain && chainMatches(latestActiveChain, identity)) {
+          response = latestActiveChain
+        }
         if (response.status !== 'success' || !chainMatches(response, identity)) return null
+        if (!activeChain || !chainMatches(activeChain, identity)) {
+          rememberSupplementalChain(response, identity)
+        }
         return resolveOptionContract(response, optionType, strike)
       }
 
@@ -597,15 +757,16 @@ export default function StrategyBuilder() {
         greeks: { delta: null, gamma: null, theta: null, vega: null },
       }
     },
-    []
+    [rememberSupplementalChain]
   )
 
   const refreshContracts = useCallback(() => {
     // A user-requested refresh is an intentional retry boundary for saved
     // contracts that could not be resolved from an earlier listing.
     rehydrationAttemptsRef.current.clear()
+    void refreshSupplementalChains(true)
     return refetchLiveChain()
-  }, [refetchLiveChain])
+  }, [refetchLiveChain, refreshSupplementalChains])
 
   // A saved strategy carries only the historical selection. Do not trust its
   // stored symbol, lot, or tick metadata for execution: once the restored
@@ -746,24 +907,47 @@ export default function StrategyBuilder() {
   }, [legs])
 
   const liveContractsByKey = useMemo(() => {
-    const contracts = new Map<
-      string,
-      NonNullable<ListedOptionChainResponse['chain'][number]['ce']>
-    >()
-    if (!activeChain) return contracts
-    for (const row of activeChain.chain) {
-      if (row.ce) contracts.set(contractPriceKey(activeChain.exchange, row.ce.symbol), row.ce)
-      if (row.pe) contracts.set(contractPriceKey(activeChain.exchange, row.pe.symbol), row.pe)
+    const contracts = new Map<string, LiveOptionContract>()
+    const activeIdentityKey = chainIdentity(
+      requestIdentity.exchange,
+      requestIdentity.underlying,
+      requestIdentity.expiry
+    )
+    const chains = Array.from(supplementalChains)
+      .filter(
+        ([key, chain]) =>
+          key !== activeIdentityKey &&
+          requiredSupplementalChainKeys.has(key) &&
+          key === chainIdentity(chain.exchange, chain.underlying, chain.expiry_date)
+      )
+      .map(([, chain]) => chain)
+    if (activeChain) chains.push(activeChain)
+    for (const chain of chains) {
+      for (const row of chain.chain) {
+        if (row.ce) {
+          contracts.set(contractPriceKey(chain.exchange, row.ce.symbol), {
+            chain,
+            contract: row.ce,
+          })
+        }
+        if (row.pe) {
+          contracts.set(contractPriceKey(chain.exchange, row.pe.symbol), {
+            chain,
+            contract: row.pe,
+          })
+        }
+      }
     }
     return contracts
-  }, [activeChain])
+  }, [activeChain, requestIdentity, requiredSupplementalChainKeys, supplementalChains])
 
   const greeksByLeg = useMemo<Record<string, LegGreeks>>(() => {
     const greeks: Record<string, LegGreeks> = {}
     for (const leg of legs) {
-      const contract = leg.exchange
+      const snapshot = leg.exchange
         ? liveContractsByKey.get(contractPriceKey(leg.exchange, leg.symbol))
         : undefined
+      const contract = snapshot?.contract
       greeks[leg.id] = {
         legId: leg.id,
         iv: contract?.implied_volatility ?? (leg.iv > 0 ? leg.iv : null),
@@ -779,13 +963,14 @@ export default function StrategyBuilder() {
   // Refresh only market metadata. Entry price is intentionally immutable: a
   // live tick changes current P&L, never the premium at which the leg was added.
   useEffect(() => {
-    if (!activeChain) return
     setLegs((previous) => {
       let changed = false
       const next = previous.map((leg) => {
         if (leg.segment !== 'OPTION' || !leg.exchange) return leg
-        const contract = liveContractsByKey.get(contractPriceKey(leg.exchange, leg.symbol))
-        if (!contract) return leg
+        const snapshot = liveContractsByKey.get(contractPriceKey(leg.exchange, leg.symbol))
+        if (!snapshot) return leg
+        const { chain, contract } = snapshot
+        if (normalizeExpiryCode(chain.expiry_date) !== normalizeExpiryCode(leg.expiry)) return leg
         const market = {
           marketPrice: contract.ltp,
           iv: contract.implied_volatility ?? 0,
@@ -795,9 +980,9 @@ export default function StrategyBuilder() {
             theta: contract.theta ?? null,
             vega: contract.vega ?? null,
           },
-          referenceUnderlying: activeChain.underlying_ltp,
-          forwardPrice: activeChain.forward_price ?? undefined,
-          expiryTs: activeChain.expiry_ts ?? null,
+          referenceUnderlying: chain.underlying_ltp,
+          forwardPrice: chain.forward_price ?? undefined,
+          expiryTs: chain.expiry_ts ?? null,
           tickSize: contract.tick_size,
           lotSize: contract.lotsize,
         }
@@ -821,7 +1006,7 @@ export default function StrategyBuilder() {
       })
       return changed ? next : previous
     })
-  }, [activeChain, liveContractsByKey])
+  }, [liveContractsByKey])
 
   const marginRequestKey = useMemo(() => {
     const exchange = optionExchangeFor(selectedExchange)
@@ -1086,6 +1271,11 @@ export default function StrategyBuilder() {
             showToast.error(`Received a mismatched option chain for ${legExpiry}`)
             return
           }
+          rememberSupplementalChain(listedFarChain, {
+            exchange: requestIdentity.exchange,
+            underlying: selectedUnderlying,
+            expiry: legExpiry,
+          })
           chainsByExpiry.set(legExpiry, listedFarChain)
         }
       } catch {
@@ -1151,6 +1341,7 @@ export default function StrategyBuilder() {
       selectedUnderlying,
       selectedExchange,
       requestIdentity.exchange,
+      rememberSupplementalChain,
     ]
   )
 
