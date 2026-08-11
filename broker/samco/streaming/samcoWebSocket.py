@@ -379,6 +379,13 @@ class SamcoWebSocket:
         flusher for good, and with it every later subscription (a silent dead
         feed on exactly the path that matters). Wait for a stopping worker
         instead of skipping the restart.
+
+        A worker that misses the join is ALSO replaced. It can be wedged in
+        ws.send() on a dead socket for far longer than the timeout, and refusing
+        to replace it left the feed dead forever - every later reconnect just
+        re-joined the same corpse. Replacing is safe: the predecessor holds its
+        own (already set) stop event, so after its in-flight send returns it
+        re-checks that event and exits without another send.
         """
         old = self._sub_flush_thread
         if old and old.is_alive():
@@ -386,14 +393,11 @@ class SamcoWebSocket:
                 return  # healthy worker already running
             old.join(timeout=self.THREAD_JOIN_TIMEOUT)
             if old.is_alive():
-                # Do not start a replacement: the worker owns its own stop event,
-                # but a second worker would double every subscription frame. The
-                # stalled one still holds the (set) event and will exit on its own.
-                self.logger.error(
+                self.logger.warning(
                     "Previous subscription flusher did not exit within "
-                    f"{self.THREAD_JOIN_TIMEOUT}s; not starting a replacement"
+                    f"{self.THREAD_JOIN_TIMEOUT}s; starting a replacement with an "
+                    "independent stop event"
                 )
-                return
 
         # A fresh event per worker: clearing a shared one would resurrect a
         # stalled predecessor instead of stopping it.
@@ -708,13 +712,15 @@ class SamcoWebSocket:
                 return  # healthy worker already running
             old.join(timeout=self.THREAD_JOIN_TIMEOUT)
             if old.is_alive():
-                # Same reasoning as the flusher: a replacement would double up
-                # rather than replace, since the stalled worker owns its event.
-                self.logger.error(
+                # Same reasoning as the flusher: replace it rather than leave the
+                # connection with no stale-connection monitor. The predecessor's
+                # own stop event is set, so it exits at its next wait() without
+                # running another health check.
+                self.logger.warning(
                     "Previous heartbeat thread did not exit within "
-                    f"{self.THREAD_JOIN_TIMEOUT}s; not starting a replacement"
+                    f"{self.THREAD_JOIN_TIMEOUT}s; starting a replacement with an "
+                    "independent stop event"
                 )
-                return
 
         self._heartbeat_stop_event = threading.Event()
         self._heartbeat_thread = threading.Thread(
