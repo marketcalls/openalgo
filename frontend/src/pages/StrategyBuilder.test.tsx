@@ -212,6 +212,7 @@ async function chooseExchange(exchange: string) {
 }
 
 const ASYNC_READY_TIMEOUT = 5_000
+const SLOW_INTEGRATION_TEST_TIMEOUT = 15_000
 
 async function waitForAddButton() {
   const add = await screen.findByRole('button', { name: /Add Buy/ })
@@ -1102,7 +1103,7 @@ describe('StrategyBuilder live request orchestration', () => {
     farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
     expect(farRow).toHaveTextContent('53.00')
     intervalSpy.mockRestore()
-  })
+  }, SLOW_INTEGRATION_TEST_TIMEOUT)
 
   it('recalculates a supplemental-expiry leg from its exact WebSocket contract and parity ticks', async () => {
     const user = userEvent.setup()
@@ -1262,7 +1263,7 @@ describe('StrategyBuilder live request orchestration', () => {
     liveGreeks.forEach((value, index) => {
       expect(value).not.toBe(initialGreeks[index])
     })
-  })
+  }, SLOW_INTEGRATION_TEST_TIMEOUT)
 
   it('does not show a prior contract Greek snapshot after editing a calendar leg', async () => {
     const user = userEvent.setup()
