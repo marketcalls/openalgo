@@ -113,49 +113,90 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error("WebSocket client not initialized. Call initialize() first.")
             return
 
-        self._connect_thread = threading.Thread(target=self._connect_with_retry, daemon=True)
-        self._connect_thread.start()
+        self.reconnect_attempts = 0
+        self._start_connect(delay=0)
 
-    def _connect_with_retry(self) -> None:
-        """Connect to Tradejini WebSocket with retry logic"""
-        while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
-            try:
-                self.logger.info(
-                    f"Connecting to Tradejini WebSocket (attempt {self.reconnect_attempts + 1})"
-                )
+    # --- Connection lifecycle ---------------------------------------------
+    # NxtradStream.connect() returns as soon as it has started its own reader
+    # thread, so a failure never surfaces as an exception here - it arrives
+    # later as a "closed" event. Retries are therefore driven from
+    # _on_connection_event, and a single attempt may be in flight at a time.
+    # Looping here instead would spin: a server that hangs up immediately
+    # produced ~18 connection attempts per second, each with a TLS handshake
+    # and a token lookup, with the attempt counter stuck at zero.
 
-                # Re-read a fresh auth token from the database before connecting.
-                # Indian broker tokens roll over daily at ~3 AM IST, so a reconnect after
-                # rollover must not reuse the construction-time token. NxtradStream bakes
-                # this token into the connection URL, so it must be refreshed here. Apply
-                # the same (api_key:access_token) formatting that initialize() uses.
-                fresh_token = get_auth_token(self.user_id, bypass_cache=True)
-                if fresh_token:
-                    api_key = get_api_key()
-                    if api_key and ":" not in fresh_token:
-                        self.ws_token = f"{api_key}:{fresh_token}"
-                    else:
-                        self.ws_token = fresh_token
+    def _start_connect(self, delay: float = 0) -> None:
+        """Run one connection attempt on a background thread, at most one live."""
+        if not self.running:
+            return
+
+        with self.lock:
+            if self._connect_thread and self._connect_thread.is_alive():
+                self.logger.debug("Connection attempt already in flight; not starting another")
+                return
+            thread = threading.Thread(target=self._connect_once, args=(delay,), daemon=True)
+            self._connect_thread = thread
+
+        thread.start()
+
+    def _connect_once(self, delay: float) -> None:
+        """Wait out the backoff, refresh the token, and make one attempt."""
+        if delay:
+            time.sleep(delay)
+        if not self.running:
+            return
+
+        try:
+            self.logger.info(
+                f"Connecting to Tradejini WebSocket (attempt {self.reconnect_attempts + 1})"
+            )
+
+            # Re-read a fresh auth token from the database before connecting.
+            # Indian broker tokens roll over daily at ~3 AM IST, so a reconnect after
+            # rollover must not reuse the construction-time token. NxtradStream bakes
+            # this token into the connection URL, so it must be refreshed here. Apply
+            # the same (api_key:access_token) formatting that initialize() uses.
+            fresh_token = get_auth_token(self.user_id, bypass_cache=True)
+            if fresh_token:
+                api_key = get_api_key()
+                if api_key and ":" not in fresh_token:
+                    self.ws_token = f"{api_key}:{fresh_token}"
                 else:
-                    self.logger.warning(
-                        "Could not fetch fresh auth token from database; "
-                        "reusing existing token for reconnection"
-                    )
-
-                self.ws_client.connect(self.ws_token)
-                self.reconnect_attempts = 0  # Reset attempts on successful connection
-                break
-
-            except Exception as e:
-                self.reconnect_attempts += 1
-                delay = min(
-                    self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
+                    self.ws_token = fresh_token
+            else:
+                self.logger.warning(
+                    "Could not fetch fresh auth token from database; "
+                    "reusing existing token for reconnection"
                 )
-                self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                time.sleep(delay)
 
-        if self.reconnect_attempts >= self.max_reconnect_attempts:
-            self.logger.error("Max reconnection attempts reached. Giving up.")
+            self.ws_client.connect(self.ws_token)
+
+        except Exception as e:
+            # Only a synchronous failure lands here; the connection dropping
+            # later comes back through the close callback instead.
+            self.logger.error(f"Connection attempt failed: {e}")
+            self._schedule_reconnect()
+
+    def _schedule_reconnect(self) -> None:
+        """Queue the next attempt with exponential backoff, honouring the cap."""
+        if not self.running:
+            return
+
+        self.reconnect_attempts += 1
+        if self.reconnect_attempts > self.max_reconnect_attempts:
+            self.logger.error(
+                f"Max reconnection attempts ({self.max_reconnect_attempts}) reached. Giving up."
+            )
+            return
+
+        delay = min(
+            self.reconnect_delay * (2 ** (self.reconnect_attempts - 1)), self.max_reconnect_delay
+        )
+        self.logger.info(
+            f"Reconnecting in {delay}s "
+            f"(attempt {self.reconnect_attempts}/{self.max_reconnect_attempts})"
+        )
+        self._start_connect(delay=delay)
 
     def disconnect(self) -> None:
         """Disconnect from Tradejini WebSocket"""
@@ -371,6 +412,7 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if status == "connected":
             self.logger.info("Connected to Tradejini WebSocket")
             self.connected = True
+            self.reconnect_attempts = 0
 
             # Subscriptions do not survive a reconnect, so replay each feed's
             # complete symbol list - one request per feed, not one per symbol.
@@ -387,12 +429,12 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.info(f"Tradejini WebSocket connection closed: {message.get('reason')}")
             self.connected = False
 
-            # Attempt to reconnect if we're still running
+            # Attempt to reconnect if we're still running. Backoff and the
+            # attempt cap live in _schedule_reconnect - this callback fires on
+            # every drop, so spawning a thread here unconditionally is what
+            # turned a dead connection into a reconnect storm.
             if self.running:
-                self._connect_thread = threading.Thread(
-                    target=self._connect_with_retry, daemon=True
-                )
-                self._connect_thread.start()
+                self._schedule_reconnect()
 
     def _on_data(self, ws, message) -> None:
         """Callback for market data from the WebSocket"""

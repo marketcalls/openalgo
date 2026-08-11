@@ -27,6 +27,11 @@ class TradejiniWebSocket:
         self.last_quote = None
         self.last_depth = None
         self.nxtrad_host = "api.tradejini.com"
+        # Set by close() so the close callback can tell an intentional shutdown
+        # from a dropped connection. The SDK reports both the same way, and
+        # reconnecting after our own close() strands a socket and its thread
+        # with no owner - one leaked descriptor per quote/depth request.
+        self._closing = False
 
         # L1 cache for storing quote data like in original SDK
         self.L1_dict = {}
@@ -42,6 +47,7 @@ class TradejiniWebSocket:
         """Connect to Tradejini WebSocket using official SDK"""
         try:
             self.auth_token = auth_token
+            self._closing = False
 
             # Get API key from environment if not provided in token
             api_key = get_api_key()
@@ -112,11 +118,16 @@ class TradejiniWebSocket:
                 reason = event.get("reason", "Unknown reason")
                 logger.warning(f"WebSocket closed: {reason}")
 
-                # Auto-reconnect if not unauthorized
-                if reason != "Unauthorized Access":
+                # Auto-reconnect only when the connection dropped on its own.
+                # close() is called from the finally block of every quote/depth
+                # request, and reconnecting there resurrects a socket nothing
+                # will ever close.
+                if self._closing:
+                    logger.debug("Close was requested locally - not reconnecting")
+                elif reason != "Unauthorized Access":
                     logger.info("Attempting to reconnect...")
                     time.sleep(5)
-                    if self.nx_stream:
+                    if self.nx_stream and not self._closing:
                         self.nx_stream.reconnect()
 
         except Exception as e:
@@ -210,6 +221,9 @@ class TradejiniWebSocket:
 
     def close(self):
         """Close WebSocket connection"""
+        # Set before disconnect(): the SDK fires the close callback from its
+        # reader thread, and that callback must see the close as intentional.
+        self._closing = True
         try:
             if self.nx_stream:
                 self.nx_stream.disconnect()
