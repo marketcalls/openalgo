@@ -166,7 +166,7 @@ describe('ExecuteBasketDialog', () => {
     )
   })
 
-  it('normalizes decimal and exponent tick sizes without losing precision', async () => {
+  it('rounds decimal and scientific tick prices half-up without binary drift', async () => {
     render(
       <ExecuteBasketDialog
         open
@@ -176,6 +176,20 @@ describe('ExecuteBasketDialog', () => {
         apiKey="api-key"
         legs={[
           leg({ contractValid: true, symbol: 'LARGE_TICK', price: 101.3, tickSize: 2.5 }),
+          leg({
+            id: 'decimal-half',
+            contractValid: true,
+            symbol: 'DECIMAL_HALF',
+            price: 0.15,
+            tickSize: 0.1,
+          }),
+          leg({
+            id: 'cent-half',
+            contractValid: true,
+            symbol: 'CENT_HALF',
+            price: 1.005,
+            tickSize: 0.01,
+          }),
           leg({
             id: 'small-tick',
             contractValid: true,
@@ -187,7 +201,7 @@ describe('ExecuteBasketDialog', () => {
       />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: /Execute \(2\)/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Execute \(4\)/ }))
 
     await waitFor(() =>
       expect(submitBasket).toHaveBeenCalledWith(
@@ -195,9 +209,28 @@ describe('ExecuteBasketDialog', () => {
         'Precise ticks',
         expect.arrayContaining([
           expect.objectContaining({ symbol: 'LARGE_TICK', price: 102.5 }),
+          expect.objectContaining({ symbol: 'DECIMAL_HALF', price: 0.2 }),
+          expect.objectContaining({ symbol: 'CENT_HALF', price: 1.01 }),
           expect.objectContaining({ symbol: 'SMALL_TICK', price: 2e-7 }),
         ])
       )
     )
+  })
+
+  it('does not submit a nonpositive price after tick normalization', () => {
+    render(
+      <ExecuteBasketDialog
+        open
+        onOpenChange={vi.fn()}
+        exchange="NFO"
+        strategyName="Invalid price"
+        apiKey="api-key"
+        legs={[leg({ contractValid: true, price: -1, tickSize: 0.1 })]}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Execute \(1\)/ }))
+
+    expect(submitBasket).not.toHaveBeenCalled()
   })
 })

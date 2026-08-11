@@ -62,28 +62,39 @@ export interface ExecuteBasketDialogProps {
   apiKey: string
 }
 
-/** Decimal places implied by a tick (0.05 → 2, 0.0001 → 4, 0.5 → 1, 1 → 0). */
-function tickDecimals(tick: number): number {
-  if (!Number.isFinite(tick) || tick <= 0) return 2
-  const [coefficient, exponentText] = tick.toString().toLowerCase().split('e')
-  const exponent = exponentText ? Number(exponentText) : 0
-  const dot = coefficient.indexOf('.')
-  const coefficientDecimals = dot === -1 ? 0 : coefficient.length - dot - 1
-  return Math.max(0, coefficientDecimals - exponent)
+function toScaledInteger(value: number): { coefficient: bigint; exponent: number } {
+  const [significand, exponentText] = value.toString().toLowerCase().split('e')
+  const decimalPoint = significand.indexOf('.')
+  const fractionDigits = decimalPoint === -1 ? 0 : significand.length - decimalPoint - 1
+  return {
+    coefficient: BigInt(significand.replace('.', '')),
+    exponent: (exponentText ? Number(exponentText) : 0) - fractionDigits,
+  }
 }
 
-/** Snap `value` to the nearest multiple of `tick` and strip binary drift. */
+function scaledIntegerToNumber(coefficient: bigint, exponent: number): number {
+  return Number(`${coefficient}e${exponent}`)
+}
+
+/** Snap `value` to the nearest multiple of `tick` with exact decimal half-up rounding. */
 function roundToTick(value: number, tick: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0
   if (!Number.isFinite(tick) || tick <= 0) return value
-  const decimals = tickDecimals(tick)
-  const rounded = Math.round(value / tick) * tick
+  const valueParts = toScaledInteger(value)
+  const tickParts = toScaledInteger(tick)
+  let numerator = valueParts.coefficient
+  let denominator = tickParts.coefficient
+  if (valueParts.exponent > tickParts.exponent) {
+    numerator *= 10n ** BigInt(valueParts.exponent - tickParts.exponent)
+  } else if (tickParts.exponent > valueParts.exponent) {
+    denominator *= 10n ** BigInt(tickParts.exponent - valueParts.exponent)
+  }
+
+  let multiples = numerator / denominator
+  if ((numerator % denominator) * 2n >= denominator) multiples += 1n
+  const rounded = scaledIntegerToNumber(multiples * tickParts.coefficient, tickParts.exponent)
   if (!Number.isFinite(rounded)) return value
-  // toFixed handles normal broker ticks while toPrecision keeps exponent
-  // notation (for example 1e-7) from collapsing to zero.
-  return Number(
-    decimals <= 100 ? rounded.toFixed(decimals) : rounded.toPrecision(Math.min(15, decimals + 1))
-  )
+  return rounded
 }
 
 function contractKey(leg: StrategyLeg): string {

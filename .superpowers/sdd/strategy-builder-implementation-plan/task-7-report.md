@@ -58,3 +58,18 @@
   and repeated failed far resolution. Focused dialog/page tests now pass; full
   frontend verification reports 26 files and 392 tests passing, plus lint and
   TypeScript checks.
+
+## Fix Round 2
+
+- Tick snapping now converts finite positive number strings (including
+  scientific notation) into scaled `BigInt` coefficients before calculating
+  the tick quotient. It applies exact decimal half-up rounding, then converts
+  the exact tick multiple back to the numeric order payload.
+- Literal payload regressions cover `101.3 / 2.5 → 102.5`,
+  `0.15 / 0.1 → 0.2`, `1.005 / 0.01 → 1.01`, and
+  `1.5e-7 / 1e-7 → 2e-7`; nonpositive prices remain non-submittable.
+- RED/GREEN evidence: before the change, the new focused dialog test submitted
+  `0.1` and `1` for the two decimal half cases. After the scaled-integer
+  change, the focused suite passes (5 tests); lint, TypeScript, and the full
+  frontend suite pass with 26 files and 393 tests. Production build also
+  passes; generated `frontend/dist` output was restored afterward.
