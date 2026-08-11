@@ -176,7 +176,7 @@ beforeEach(() => {
 })
 
 describe('StrategyBuilder accessibility and mobile containment', () => {
-  it('SB-18 exposes real page controls and payoff semantics without axe violations', async () => {
+  it('SB-17/SB-18 contains tabs and exposes controls/payoff semantics without Axe violations', async () => {
     const { view } = await renderPopulatedBuilder()
 
     const page = screen.getByTestId('strategy-builder-page')
@@ -199,7 +199,9 @@ describe('StrategyBuilder accessibility and mobile containment', () => {
     expect(screen.getByRole('slider', { name: 'Time forward' })).toBeVisible()
 
     const payoff = screen.getByRole('region', { name: /payoff analysis/i })
-    expect(within(payoff).getByRole('table', { name: /representative payoff values/i })).toBeVisible()
+    expect(
+      within(payoff).getByRole('table', { name: /representative payoff values/i })
+    ).toBeVisible()
 
     const headingLevels = screen
       .getAllByRole('heading')
@@ -215,7 +217,9 @@ describe('StrategyBuilder accessibility and mobile containment', () => {
 
     await user.click(screen.getByRole('button', { name: /long call/i }))
     const dialog = await screen.findByRole('dialog', { name: 'Long Call' })
-    expect(within(dialog).getByRole('combobox', { name: /strike for buy call leg 1/i })).toBeVisible()
+    expect(
+      within(dialog).getByRole('combobox', { name: /strike for buy call leg 1/i })
+    ).toBeVisible()
     expect(within(dialog).getByRole('combobox', { name: 'Strategy expiry' })).toBeVisible()
     expect(within(dialog).getByRole('spinbutton', { name: 'Strategy lot quantity' })).toBeVisible()
     expect(await axe(document.body)).toHaveNoViolations()
@@ -228,8 +232,12 @@ describe('StrategyBuilder accessibility and mobile containment', () => {
     const dialog = await screen.findByRole('dialog', { name: /execute basket order/i })
     expect(within(dialog).getByRole('group', { name: 'Product type' })).toBeVisible()
     expect(within(dialog).getByRole('group', { name: 'Price type' })).toBeVisible()
-    expect(within(dialog).getByRole('checkbox', { name: /include nifty04aug26100ce/i })).toBeVisible()
-    expect(within(dialog).getByRole('spinbutton', { name: /lots for nifty04aug26100ce/i })).toBeVisible()
+    expect(
+      within(dialog).getByRole('checkbox', { name: /include nifty04aug26100ce/i })
+    ).toBeVisible()
+    expect(
+      within(dialog).getByRole('spinbutton', { name: /lots for nifty04aug26100ce/i })
+    ).toBeVisible()
 
     const price = within(dialog).getByRole('spinbutton', {
       name: /limit price for nifty04aug26100ce/i,

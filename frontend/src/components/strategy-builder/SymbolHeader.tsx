@@ -112,19 +112,25 @@ export function SymbolHeader({
   const isLive = connectionStatus === 'live'
 
   return (
-    <div className="min-w-0 max-w-full overflow-hidden rounded-xl border bg-card shadow-sm">
+    <div
+      data-testid="symbol-header"
+      className="min-w-0 max-w-full rounded-xl border bg-card shadow-sm"
+    >
       {/* Top bar — breadcrumb-style selectors + live status */}
       <div className="flex flex-wrap items-center gap-3 border-b bg-gradient-to-r from-muted/40 via-background to-background px-4 py-2.5">
         <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
           Analyzing
         </span>
 
-        <div className="inline-flex items-stretch overflow-hidden rounded-lg border bg-background divide-x">
+        <div
+          data-testid="symbol-selectors"
+          className="grid w-full min-w-0 basis-full grid-cols-1 items-stretch rounded-lg border bg-background divide-y sm:w-auto sm:basis-auto sm:grid-cols-[92px_168px_128px] sm:divide-x sm:divide-y-0"
+        >
           {/* Exchange */}
           <Select value={selectedExchange} onValueChange={onExchangeChange}>
             <SelectTrigger
               aria-label="Derivative exchange"
-              className="h-9 w-[92px] rounded-none border-0 bg-transparent text-xs font-semibold focus:ring-0 focus:ring-offset-0"
+              className="h-9 w-full min-w-0 rounded-none border-0 bg-transparent text-xs font-semibold focus:ring-0 focus:ring-offset-0"
             >
               <SelectValue />
             </SelectTrigger>
@@ -145,7 +151,7 @@ export function SymbolHeader({
                 role="combobox"
                 aria-label="Underlying"
                 aria-expanded={underlyingOpen}
-                className="h-9 w-[168px] justify-between rounded-none border-0 bg-transparent px-3 text-xs font-bold tracking-wide hover:bg-muted/40"
+                className="h-9 w-full min-w-0 justify-between rounded-none border-0 bg-transparent px-3 text-xs font-bold tracking-wide hover:bg-muted/40"
               >
                 {selectedUnderlying || 'Select'}
                 <ChevronsUpDown className="ml-2 h-3.5 w-3.5 opacity-50" />
@@ -190,7 +196,7 @@ export function SymbolHeader({
           <Select value={selectedExpiry} onValueChange={onExpiryChange}>
             <SelectTrigger
               aria-label="Option expiry"
-              className="h-9 w-[128px] rounded-none border-0 bg-transparent text-xs font-semibold focus:ring-0 focus:ring-offset-0"
+              className="h-9 w-full min-w-0 rounded-none border-0 bg-transparent text-xs font-semibold focus:ring-0 focus:ring-offset-0"
             >
               <SelectValue placeholder="Expiry" />
             </SelectTrigger>

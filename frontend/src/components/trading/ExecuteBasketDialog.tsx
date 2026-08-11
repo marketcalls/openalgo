@@ -199,7 +199,9 @@ export function ExecuteBasketDialog({
       price: pricetype === 'LIMIT' ? roundToTick(row.price ?? 0, row.tickSize) : 0,
     }))
     if (pricetype === 'LIMIT') {
-      const bad = normalizedRows.find(({ price }) => price === null || !Number.isFinite(price) || price <= 0)
+      const bad = normalizedRows.find(
+        ({ price }) => price === null || !Number.isFinite(price) || price <= 0
+      )
       if (bad) {
         updateRow(bad.row.legId, { price: null })
         showToast.error(`${bad.row.symbol}: LIMIT needs a valid price`)
@@ -386,7 +388,7 @@ export function ExecuteBasketDialog({
                         <span
                           className={cn(
                             'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold text-white',
-                            r.action === 'BUY' ? 'bg-emerald-500' : 'bg-rose-500'
+                            r.action === 'BUY' ? 'bg-emerald-700' : 'bg-rose-700'
                           )}
                         >
                           {r.action === 'BUY' ? 'B' : 'S'}
@@ -395,14 +397,14 @@ export function ExecuteBasketDialog({
                           <span
                             className={cn(
                               'shrink-0 rounded px-1 py-0.5 text-[10px] font-bold text-white',
-                              r.optionType === 'CE' ? 'bg-emerald-600' : 'bg-rose-600'
+                              r.optionType === 'CE' ? 'bg-emerald-700' : 'bg-rose-700'
                             )}
                           >
                             {r.optionType}
                           </span>
                         )}
                         {r.segment === 'FUTURE' && (
-                          <span className="shrink-0 rounded bg-sky-600 px-1 py-0.5 text-[10px] font-bold text-white">
+                          <span className="shrink-0 rounded bg-sky-700 px-1 py-0.5 text-[10px] font-bold text-white">
                             FUT
                           </span>
                         )}

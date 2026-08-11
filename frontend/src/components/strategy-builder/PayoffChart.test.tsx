@@ -309,4 +309,43 @@ describe('PayoffChart exact geometry', () => {
     expect(within(table).getAllByRole('row').length).toBeGreaterThanOrEqual(4)
     expect(within(table).getAllByRole('row').length).toBeLessThan(10)
   })
+
+  it('SB-18 bounds many breakevens and discloses both summary and table omissions', () => {
+    const basePayoff = computePayoff(
+      [leg('call', 'BUY', 'CE', 100, 2)],
+      100,
+      7,
+      0,
+      [80, 120],
+      12,
+      0,
+      20,
+      NOW
+    )
+    const payoff = {
+      ...basePayoff,
+      breakevens: [82, 86, 90, 94, 98, 102, 106, 110, 114, 118],
+    }
+
+    render(
+      <PayoffChart
+        title="Many roots"
+        scenario={BASE_SCENARIO}
+        remainingYears={7 / 365}
+        payoff={payoff}
+        formatCurrency={formatCurrency}
+      />
+    )
+
+    const region = screen.getByRole('region', { name: 'Many roots payoff analysis' })
+    const breakevenSummary = within(region).getByTestId('breakeven-summary')
+    expect(breakevenSummary).toHaveTextContent('4 of 10 shown')
+    expect((breakevenSummary.textContent ?? '').split(' (')[0].split(', ')).toHaveLength(4)
+
+    const table = within(region).getByRole('table', { name: /representative payoff values/i })
+    expect(within(table).getAllByRole('row')).toHaveLength(8)
+    expect(within(region).getByTestId('representative-payoff-disclosure')).toHaveTextContent(
+      '7 of 13 representative points shown'
+    )
+  })
 })

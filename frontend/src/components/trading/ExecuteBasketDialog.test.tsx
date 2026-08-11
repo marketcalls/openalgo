@@ -120,6 +120,42 @@ describe('ExecuteBasketDialog', () => {
     expect(screen.getByRole('button', { name: /Execute \(0\)/ })).toBeDisabled()
   })
 
+  it('SB-18 uses contrast-safe colors for every order and instrument badge state', () => {
+    render(
+      <ExecuteBasketDialog
+        open
+        onOpenChange={vi.fn()}
+        exchange="NFO"
+        strategyName="Badge contrast"
+        apiKey="api-key"
+        legs={[
+          leg({ contractValid: true, symbol: 'BUY_CALL' }),
+          leg({
+            id: 'sell-put',
+            contractValid: true,
+            symbol: 'SELL_PUT',
+            side: 'SELL',
+            optionType: 'PE',
+          }),
+          leg({
+            id: 'future',
+            contractValid: true,
+            symbol: 'NIFTY28AUG26FUT',
+            segment: 'FUTURE',
+            strike: undefined,
+            optionType: undefined,
+          }),
+        ]}
+      />
+    )
+
+    expect(screen.getAllByText('B')[0]).toHaveClass('bg-emerald-700', 'text-white')
+    expect(screen.getByText('S')).toHaveClass('bg-rose-700', 'text-white')
+    expect(screen.getByText('CE')).toHaveClass('bg-emerald-700', 'text-white')
+    expect(screen.getByText('PE')).toHaveClass('bg-rose-700', 'text-white')
+    expect(screen.getByText('FUT')).toHaveClass('bg-sky-700', 'text-white')
+  })
+
   it('preserves row and global choices when live metadata refreshes the same contracts', async () => {
     const props = {
       open: true,

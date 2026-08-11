@@ -17,6 +17,9 @@ export interface PayoffChartProps {
   formatCurrency: (value: number) => string
 }
 
+const MAX_REPRESENTATIVE_ROWS = 7
+const MAX_SUMMARY_BREAKEVENS = 4
+
 function formatHorizon(elapsedDays: number) {
   if (elapsedDays <= 0) return 'T+0'
   const totalHours = Math.round(elapsedDays * 24 * 10) / 10
@@ -25,6 +28,16 @@ function formatHorizon(elapsedDays: number) {
   if (wholeDays === 0) return `T+${hours.toLocaleString()}h`
   if (hours === 0) return `T+${wholeDays}d`
   return `T+${wholeDays}d ${hours.toLocaleString()}h`
+}
+
+function selectEvenly<T>(items: T[], limit: number): T[] {
+  if (items.length <= limit) return items
+  if (limit <= 0) return []
+  if (limit === 1) return [items[Math.floor(items.length / 2)]]
+  return Array.from({ length: limit }, (_, index) => {
+    const sourceIndex = Math.round((index * (items.length - 1)) / (limit - 1))
+    return items[sourceIndex]
+  })
 }
 
 export function PayoffChart({
@@ -357,9 +370,9 @@ export function PayoffChart({
     formatCurrency,
   ])
 
-  const representativeSamples = useMemo(() => {
+  const representativeSelection = useMemo(() => {
     const samples = payoff.samples
-    if (samples.length === 0) return []
+    if (samples.length === 0) return { samples: [], candidateCount: 0 }
     const nearest = (target: number) =>
       samples.reduce((best, sample) =>
         Math.abs(sample.underlying - target) < Math.abs(best.underlying - target) ? sample : best
@@ -370,18 +383,33 @@ export function PayoffChart({
     const minExpiry = samples.reduce((best, sample) =>
       sample.expiry < best.expiry ? sample : best
     )
-    const candidates = [
-      samples[0],
-      nearest(scenario.spot),
-      ...payoff.breakevens.map(nearest),
-      maxExpiry,
-      minExpiry,
-      samples[samples.length - 1],
-    ]
-    return Array.from(new Map(candidates.map((sample) => [sample.underlying, sample])).values()).sort(
+    const candidateMap = new Map(
+      [
+        samples[0],
+        nearest(scenario.spot),
+        ...payoff.breakevens.map(nearest),
+        maxExpiry,
+        minExpiry,
+        samples[samples.length - 1],
+      ].map((sample) => [sample.underlying, sample])
+    )
+    const candidates = Array.from(candidateMap.values()).sort(
       (left, right) => left.underlying - right.underlying
     )
+    const essentialMap = new Map(
+      [samples[0], nearest(scenario.spot), maxExpiry, minExpiry, samples[samples.length - 1]].map(
+        (sample) => [sample.underlying, sample]
+      )
+    )
+    const remainingSlots = Math.max(0, MAX_REPRESENTATIVE_ROWS - essentialMap.size)
+    const optionalCandidates = candidates.filter((sample) => !essentialMap.has(sample.underlying))
+    const selected = [...essentialMap.values(), ...selectEvenly(optionalCandidates, remainingSlots)]
+      .sort((left, right) => left.underlying - right.underlying)
+      .slice(0, MAX_REPRESENTATIVE_ROWS)
+    return { samples: selected, candidateCount: candidates.length }
   }, [payoff, scenario.spot])
+
+  const summaryBreakevens = selectEvenly(payoff.breakevens, MAX_SUMMARY_BREAKEVENS)
 
   const scenarioSample = useMemo(() => {
     if (payoff.samples.length === 0) return null
@@ -397,10 +425,7 @@ export function PayoffChart({
   const currentLabel = formatHorizon(scenario.daysElapsed)
 
   return (
-    <section
-      aria-labelledby={regionHeadingId}
-      className="min-w-0 max-w-full overflow-hidden"
-    >
+    <section aria-labelledby={regionHeadingId} className="min-w-0 max-w-full overflow-hidden">
       <h2 id={regionHeadingId} className="sr-only">
         {title} payoff analysis
       </h2>
@@ -412,21 +437,22 @@ export function PayoffChart({
         style={{ width: '100%', height }}
       />
       <div className="space-y-3 border-t px-3 py-3 text-xs">
-        <output
-          aria-live="polite"
-          aria-atomic="true"
-          className="block text-muted-foreground"
-        >
-          Scenario spot <strong className="text-foreground">{formatCurrency(scenario.spot)}</strong>.
+        <output aria-live="polite" aria-atomic="true" className="block text-muted-foreground">
+          Scenario spot <strong className="text-foreground">{formatCurrency(scenario.spot)}</strong>
+          .
           {scenarioSample && (
             <>
               {' '}
-              {terminalLabel} <strong className="text-foreground">{formatCurrency(scenarioSample.expiry)}</strong>
+              {terminalLabel}{' '}
+              <strong className="text-foreground">{formatCurrency(scenarioSample.expiry)}</strong>
               {showTplus0 && (
                 <>
                   {' '}
                   and {currentLabel}{' '}
-                  <strong className="text-foreground">{formatCurrency(scenarioSample.tplus0)}</strong>.
+                  <strong className="text-foreground">
+                    {formatCurrency(scenarioSample.tplus0)}
+                  </strong>
+                  .
                 </>
               )}
             </>
@@ -444,15 +470,37 @@ export function PayoffChart({
           </div>
           <div className="rounded-md border bg-muted/20 px-2 py-1.5">
             <dt className="text-muted-foreground">Breakevens</dt>
-            <dd className="font-semibold tabular-nums">
+            <dd data-testid="breakeven-summary" className="font-semibold tabular-nums">
               {payoff.breakevens.length > 0
-                ? payoff.breakevens.map(formatCurrency).join(', ')
+                ? `${summaryBreakevens.map(formatCurrency).join(', ')}${
+                    payoff.breakevens.length > summaryBreakevens.length
+                      ? ` (${summaryBreakevens.length} of ${payoff.breakevens.length} shown)`
+                      : ''
+                  }`
                 : 'None in range'}
             </dd>
           </div>
         </dl>
 
-        <table className="w-full table-fixed border-collapse text-left">
+        {representativeSelection.candidateCount > representativeSelection.samples.length && (
+          <p
+            id={`${regionHeadingId}-table-disclosure`}
+            data-testid="representative-payoff-disclosure"
+            className="text-muted-foreground"
+          >
+            {representativeSelection.samples.length} of {representativeSelection.candidateCount}{' '}
+            representative points shown; the interactive chart retains the full sampled payoff.
+          </p>
+        )}
+
+        <table
+          aria-describedby={
+            representativeSelection.candidateCount > representativeSelection.samples.length
+              ? `${regionHeadingId}-table-disclosure`
+              : undefined
+          }
+          className="w-full table-fixed border-collapse text-left"
+        >
           <caption className="sr-only">Representative payoff values</caption>
           <thead>
             <tr className="border-b text-muted-foreground">
@@ -470,7 +518,7 @@ export function PayoffChart({
             </tr>
           </thead>
           <tbody>
-            {representativeSamples.map((sample) => (
+            {representativeSelection.samples.map((sample) => (
               <tr key={sample.underlying} className="border-b last:border-0">
                 <th scope="row" className="break-words px-2 py-1 font-medium tabular-nums">
                   {formatCurrency(sample.underlying)}

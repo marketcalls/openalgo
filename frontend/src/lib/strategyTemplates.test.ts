@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  previewValue,
-  STRATEGY_TEMPLATES,
-  templatePreviewPath,
-} from './strategyTemplates'
+import { previewValue, STRATEGY_TEMPLATES, templatePreviewPath } from './strategyTemplates'
 
 function template(id: string) {
   const found = STRATEGY_TEMPLATES.find((candidate) => candidate.id === id)
@@ -12,7 +8,7 @@ function template(id: string) {
 }
 
 describe('strategy template previews', () => {
-  it('SB-17 shows the Jade Lizard left-tail loss implied by its short put', () => {
+  it('SB-20 shows the Jade Lizard left-tail loss implied by its short put', () => {
     const jadeLizard = template('jade_lizard')
 
     expect(previewValue(jadeLizard, 0)).toBeLessThan(
