@@ -1,5 +1,5 @@
 import type * as PlotlyTypes from 'plotly.js'
-import { useMemo } from 'react'
+import { useId, useMemo } from 'react'
 import Plot from '@/lib/Plot2D'
 import { lognormalPriceBand, type PayoffResult, type ScenarioState } from '@/lib/strategyMath'
 import { useThemeStore } from '@/stores/themeStore'
@@ -17,6 +17,16 @@ export interface PayoffChartProps {
   formatCurrency: (value: number) => string
 }
 
+function formatHorizon(elapsedDays: number) {
+  if (elapsedDays <= 0) return 'T+0'
+  const totalHours = Math.round(elapsedDays * 24 * 10) / 10
+  const wholeDays = Math.floor(totalHours / 24)
+  const hours = Math.round((totalHours - wholeDays * 24) * 10) / 10
+  if (wholeDays === 0) return `T+${hours.toLocaleString()}h`
+  if (hours === 0) return `T+${wholeDays}d`
+  return `T+${wholeDays}d ${hours.toLocaleString()}h`
+}
+
 export function PayoffChart({
   title,
   scenario,
@@ -27,6 +37,7 @@ export function PayoffChart({
   height = 440,
   formatCurrency,
 }: PayoffChartProps) {
+  const regionHeadingId = useId()
   const { mode, appMode } = useThemeStore()
   const isAnalyzer = appMode === 'analyzer'
   const isDark = mode === 'dark' || isAnalyzer
@@ -88,15 +99,6 @@ export function PayoffChart({
     const inDomain = (x: number) => x >= domainLo && x <= domainHi
     const clipToDomain = (x: number) => Math.min(domainHi, Math.max(domainLo, x))
 
-    const formatHorizon = (elapsedDays: number) => {
-      if (elapsedDays <= 0) return 'T+0'
-      const totalHours = Math.round(elapsedDays * 24 * 10) / 10
-      const wholeDays = Math.floor(totalHours / 24)
-      const hours = Math.round((totalHours - wholeDays * 24) * 10) / 10
-      if (wholeDays === 0) return `T+${hours.toLocaleString()}h`
-      if (hours === 0) return `T+${wholeDays}d`
-      return `T+${wholeDays}d ${hours.toLocaleString()}h`
-    }
     const currentLabel = formatHorizon(daysElapsed)
     const hoverTemplate = (label: string) =>
       `<b>${label}</b>` +
@@ -355,13 +357,137 @@ export function PayoffChart({
     formatCurrency,
   ])
 
+  const representativeSamples = useMemo(() => {
+    const samples = payoff.samples
+    if (samples.length === 0) return []
+    const nearest = (target: number) =>
+      samples.reduce((best, sample) =>
+        Math.abs(sample.underlying - target) < Math.abs(best.underlying - target) ? sample : best
+      )
+    const maxExpiry = samples.reduce((best, sample) =>
+      sample.expiry > best.expiry ? sample : best
+    )
+    const minExpiry = samples.reduce((best, sample) =>
+      sample.expiry < best.expiry ? sample : best
+    )
+    const candidates = [
+      samples[0],
+      nearest(scenario.spot),
+      ...payoff.breakevens.map(nearest),
+      maxExpiry,
+      minExpiry,
+      samples[samples.length - 1],
+    ]
+    return Array.from(new Map(candidates.map((sample) => [sample.underlying, sample])).values()).sort(
+      (left, right) => left.underlying - right.underlying
+    )
+  }, [payoff, scenario.spot])
+
+  const scenarioSample = useMemo(() => {
+    if (payoff.samples.length === 0) return null
+    return payoff.samples.reduce((best, sample) =>
+      Math.abs(sample.underlying - scenario.spot) < Math.abs(best.underlying - scenario.spot)
+        ? sample
+        : best
+    )
+  }, [payoff.samples, scenario.spot])
+
+  const formatLimit = (value: number) =>
+    Number.isFinite(value) ? formatCurrency(value) : value > 0 ? 'Unlimited' : 'Unlimited loss'
+  const currentLabel = formatHorizon(scenario.daysElapsed)
+
   return (
-    <Plot
-      data={data}
-      layout={layout}
-      config={config}
-      useResizeHandler
-      style={{ width: '100%', height }}
-    />
+    <section
+      aria-labelledby={regionHeadingId}
+      className="min-w-0 max-w-full overflow-hidden"
+    >
+      <h2 id={regionHeadingId} className="sr-only">
+        {title} payoff analysis
+      </h2>
+      <Plot
+        data={data}
+        layout={layout}
+        config={config}
+        useResizeHandler
+        style={{ width: '100%', height }}
+      />
+      <div className="space-y-3 border-t px-3 py-3 text-xs">
+        <output
+          aria-live="polite"
+          aria-atomic="true"
+          className="block text-muted-foreground"
+        >
+          Scenario spot <strong className="text-foreground">{formatCurrency(scenario.spot)}</strong>.
+          {scenarioSample && (
+            <>
+              {' '}
+              {terminalLabel} <strong className="text-foreground">{formatCurrency(scenarioSample.expiry)}</strong>
+              {showTplus0 && (
+                <>
+                  {' '}
+                  and {currentLabel}{' '}
+                  <strong className="text-foreground">{formatCurrency(scenarioSample.tplus0)}</strong>.
+                </>
+              )}
+            </>
+          )}
+        </output>
+
+        <dl className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <div className="rounded-md border bg-muted/20 px-2 py-1.5">
+            <dt className="text-muted-foreground">Maximum profit</dt>
+            <dd className="font-semibold tabular-nums">{formatLimit(payoff.maxProfit)}</dd>
+          </div>
+          <div className="rounded-md border bg-muted/20 px-2 py-1.5">
+            <dt className="text-muted-foreground">Maximum loss</dt>
+            <dd className="font-semibold tabular-nums">{formatLimit(payoff.maxLoss)}</dd>
+          </div>
+          <div className="rounded-md border bg-muted/20 px-2 py-1.5">
+            <dt className="text-muted-foreground">Breakevens</dt>
+            <dd className="font-semibold tabular-nums">
+              {payoff.breakevens.length > 0
+                ? payoff.breakevens.map(formatCurrency).join(', ')
+                : 'None in range'}
+            </dd>
+          </div>
+        </dl>
+
+        <table className="w-full table-fixed border-collapse text-left">
+          <caption className="sr-only">Representative payoff values</caption>
+          <thead>
+            <tr className="border-b text-muted-foreground">
+              <th scope="col" className="break-words px-2 py-1 font-medium">
+                Underlying
+              </th>
+              <th scope="col" className="break-words px-2 py-1 font-medium">
+                {terminalLabel}
+              </th>
+              {showTplus0 && (
+                <th scope="col" className="break-words px-2 py-1 font-medium">
+                  {currentLabel}
+                </th>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {representativeSamples.map((sample) => (
+              <tr key={sample.underlying} className="border-b last:border-0">
+                <th scope="row" className="break-words px-2 py-1 font-medium tabular-nums">
+                  {formatCurrency(sample.underlying)}
+                </th>
+                <td className="break-words px-2 py-1 tabular-nums">
+                  {formatCurrency(sample.expiry)}
+                </td>
+                {showTplus0 && (
+                  <td className="break-words px-2 py-1 tabular-nums">
+                    {formatCurrency(sample.tplus0)}
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   )
 }

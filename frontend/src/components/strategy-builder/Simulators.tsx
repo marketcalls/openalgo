@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 interface SliderRowProps {
   icon: ReactNode
   label: string
+  accessibleLabel: string
   sublabel: string
   value: number
   min: number
@@ -20,6 +21,7 @@ interface SliderRowProps {
 function SliderRow({
   icon,
   label,
+  accessibleLabel,
   sublabel,
   value,
   min,
@@ -77,6 +79,8 @@ function SliderRow({
       <div className="relative px-1">
         <input
           type="range"
+          aria-label={accessibleLabel}
+          aria-valuetext={formatter(value)}
           min={min}
           max={max}
           step={step}
@@ -181,6 +185,7 @@ export function Simulators({
         <SliderRow
           icon={<TrendingUp className="h-3.5 w-3.5" />}
           label="Spot Price"
+          accessibleLabel="Spot price shift"
           sublabel="Move underlying up or down"
           value={spotShiftPct}
           min={-10}
@@ -194,6 +199,7 @@ export function Simulators({
         <SliderRow
           icon={<Waves className="h-3.5 w-3.5" />}
           label="Implied Volatility"
+          accessibleLabel="Implied volatility shift"
           sublabel="Vol expansion or crush"
           value={ivShiftPct}
           min={-50}
@@ -207,6 +213,7 @@ export function Simulators({
         <SliderRow
           icon={<Clock className="h-3.5 w-3.5" />}
           label={isSubDay ? 'Hours Forward' : 'Days Forward'}
+          accessibleLabel="Time forward"
           sublabel="Advance time toward expiry"
           value={timeSliderValue}
           min={0}

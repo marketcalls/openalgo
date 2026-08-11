@@ -1,4 +1,4 @@
-import { render } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import type * as PlotlyTypes from 'plotly.js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { computePayoff, type ScenarioState, type StrategyLeg } from '@/lib/strategyMath'
@@ -277,5 +277,36 @@ describe('PayoffChart exact geometry', () => {
     expect(customdata[0][2]).toMatch(/^[-$]/)
     expect(plotCapture.props?.layout.yaxis?.title?.text).toBe('Profit / Loss')
     expect(expiry?.hovertemplate).not.toContain('₹')
+  })
+
+  it('SB-18 supplements the visual plot with a named summary and representative payoff table', () => {
+    const payoff = computePayoff(
+      [leg('call', 'BUY', 'CE', 100, 2)],
+      100,
+      7,
+      0,
+      [80, 120],
+      12,
+      0,
+      20,
+      NOW
+    )
+
+    render(
+      <PayoffChart
+        title="Long Call"
+        scenario={BASE_SCENARIO}
+        remainingYears={7 / 365}
+        payoff={payoff}
+        formatCurrency={formatCurrency}
+      />
+    )
+
+    const region = screen.getByRole('region', { name: 'Long Call payoff analysis' })
+    expect(within(region).getByText(/scenario spot/i)).toHaveTextContent('₹100.00')
+    expect(within(region).getByRole('status')).toHaveTextContent(/at expiry/i)
+    const table = within(region).getByRole('table', { name: /representative payoff values/i })
+    expect(within(table).getAllByRole('row').length).toBeGreaterThanOrEqual(4)
+    expect(within(table).getAllByRole('row').length).toBeLessThan(10)
   })
 })

@@ -112,7 +112,7 @@ export function SymbolHeader({
   const isLive = connectionStatus === 'live'
 
   return (
-    <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+    <div className="min-w-0 max-w-full overflow-hidden rounded-xl border bg-card shadow-sm">
       {/* Top bar — breadcrumb-style selectors + live status */}
       <div className="flex flex-wrap items-center gap-3 border-b bg-gradient-to-r from-muted/40 via-background to-background px-4 py-2.5">
         <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
@@ -153,7 +153,11 @@ export function SymbolHeader({
             </PopoverTrigger>
             <PopoverContent className="w-56 p-0">
               <Command>
-                <CommandInput placeholder="Search symbol..." className="h-9 text-xs" />
+                <CommandInput
+                  aria-label="Search underlyings"
+                  placeholder="Search symbol..."
+                  className="h-9 text-xs"
+                />
                 <CommandList>
                   <CommandEmpty>No symbol found.</CommandEmpty>
                   <CommandGroup>

@@ -1387,7 +1387,10 @@ export default function StrategyBuilder() {
   )
 
   return (
-    <div className="space-y-5 py-6">
+    <div
+      data-testid="strategy-builder-page"
+      className="w-full min-w-0 max-w-full space-y-5 overflow-x-clip py-6"
+    >
       {/* Page header — Save/Portfolio actions moved down next to the Payoff
           tabs where the user is actually working, so no scrolling back to
           the top is needed. */}
@@ -1434,6 +1437,7 @@ export default function StrategyBuilder() {
       />
 
       {/* Template grid */}
+      <h2 className="sr-only">Build a strategy</h2>
       <div className="overflow-hidden rounded-xl border bg-card p-5 shadow-sm">
         <TemplateGrid
           direction={direction}
@@ -1530,12 +1534,16 @@ export default function StrategyBuilder() {
 
           {/* Right column: tabs + simulators */}
           <div className="min-w-0 space-y-5">
-            <Tabs defaultValue="payoff" className="w-full">
+            <Tabs defaultValue="payoff" className="w-full min-w-0 max-w-full">
               {/* Tabs on the left, Save/Portfolio actions aligned to the right
                   so they're always visible directly above the Payoff graph —
                   no scrolling back to the page header. */}
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <TabsList className="inline-flex h-10 gap-1 rounded-xl border bg-card p-1 shadow-sm">
+              <div className="flex min-w-0 max-w-full flex-wrap items-center justify-between gap-3">
+                <div
+                  data-testid="strategy-tabs-scroller"
+                  className="min-w-0 max-w-full flex-1 overflow-x-auto pb-1"
+                >
+                  <TabsList className="inline-flex h-10 w-max min-w-max gap-1 rounded-xl border bg-card p-1 shadow-sm">
                   <TabsTrigger
                     value="payoff"
                     className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
@@ -1571,8 +1579,9 @@ export default function StrategyBuilder() {
                     <Layers className="mr-1.5 h-3.5 w-3.5" />
                     Multi Strike OI
                   </TabsTrigger>
-                </TabsList>
-                <div className="flex items-center gap-2">
+                  </TabsList>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
                   <Button
                     variant="outline"
                     size="sm"

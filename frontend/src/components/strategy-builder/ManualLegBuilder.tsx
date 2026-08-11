@@ -181,6 +181,7 @@ export function ManualLegBuilder({
   }, [expiry, liveChain, optionType, segment, strike])
 
   const canAdd = Boolean(resolvedContract && !isResolving && lots > 0)
+  const contractErrorId = 'manual-leg-contract-error'
 
   const handleAdd = () => {
     if (!canAdd) return
@@ -210,7 +211,7 @@ export function ManualLegBuilder({
   const currentMoneyness = strikeMoneyness(strike, atmStrike, strikeStep, optionType)
 
   return (
-    <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+    <div className="min-w-0 max-w-full overflow-hidden rounded-xl border bg-card shadow-sm">
       {/* Header — icon + title only. Buy/Sell moved down next to Add. */}
       <div className="flex items-center justify-between border-b bg-gradient-to-r from-muted/30 to-transparent px-4 py-3">
         <div className="flex items-center gap-2">
@@ -243,7 +244,12 @@ export function ManualLegBuilder({
         <div className="flex min-w-[120px] flex-col gap-1.5">
           <FieldLabel>Segment</FieldLabel>
           <Select value={segment} onValueChange={(v) => setSegment(v as LegDraftSegment)}>
-            <SelectTrigger aria-label="Segment" className="h-9 text-xs font-medium">
+            <SelectTrigger
+              aria-label="Segment"
+              aria-invalid={contractError !== null}
+              aria-describedby={contractError ? contractErrorId : undefined}
+              className="h-9 text-xs font-medium"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -257,7 +263,12 @@ export function ManualLegBuilder({
         <div className="flex min-w-[140px] flex-col gap-1.5">
           <FieldLabel>Expiry</FieldLabel>
           <Select value={expiry} onValueChange={setExpiry}>
-            <SelectTrigger aria-label="Expiry" className="h-9 text-xs font-medium">
+            <SelectTrigger
+              aria-label="Expiry"
+              aria-invalid={contractError !== null}
+              aria-describedby={contractError ? contractErrorId : undefined}
+              className="h-9 text-xs font-medium"
+            >
               <SelectValue placeholder={availableExpiries.length === 0 ? 'None' : 'Select'} />
             </SelectTrigger>
             <SelectContent>
@@ -297,7 +308,12 @@ export function ManualLegBuilder({
                 value={strike !== undefined ? String(strike) : ''}
                 onValueChange={(v) => setStrike(Number(v))}
               >
-                <SelectTrigger aria-label="Strike" className="h-9 text-xs font-medium tabular-nums">
+                <SelectTrigger
+                  aria-label="Strike"
+                  aria-invalid={contractError !== null}
+                  aria-describedby={contractError ? contractErrorId : undefined}
+                  className="h-9 text-xs font-medium tabular-nums"
+                >
                   <SelectValue placeholder="Select" />
                 </SelectTrigger>
                 <SelectContent>
@@ -328,7 +344,11 @@ export function ManualLegBuilder({
             {/* CE / PE */}
             <div className="flex flex-col gap-1.5">
               <FieldLabel>Type</FieldLabel>
-              <div className="inline-flex h-9 overflow-hidden rounded-md border bg-background p-0.5">
+              <fieldset
+                aria-label="Option type"
+                aria-describedby={contractError ? contractErrorId : undefined}
+                className="inline-flex h-9 min-w-0 overflow-hidden rounded-md border bg-background p-0.5"
+              >
                 <button
                   type="button"
                   onClick={() => setOptionType('CE')}
@@ -355,7 +375,7 @@ export function ManualLegBuilder({
                 >
                   PE
                 </button>
-              </div>
+              </fieldset>
             </div>
           </>
         )}
@@ -363,14 +383,18 @@ export function ManualLegBuilder({
         {/* Buy / Sell — now inline, right where mouse already is. */}
         <div className="flex flex-col gap-1.5">
           <FieldLabel>Side</FieldLabel>
-          <div className="inline-flex h-9 overflow-hidden rounded-md border bg-background p-0.5">
+          <fieldset
+            aria-label="Trade side"
+            className="inline-flex h-9 min-w-0 overflow-hidden rounded-md border bg-background p-0.5"
+          >
             <button
               type="button"
               onClick={() => setSide('BUY')}
+              aria-pressed={side === 'BUY'}
               className={cn(
                 'inline-flex items-center gap-1 rounded-sm px-3 text-[11px] font-bold uppercase tracking-wider transition',
                 side === 'BUY'
-                  ? 'bg-emerald-500 text-white shadow-sm'
+                  ? 'bg-emerald-700 text-white shadow-sm dark:bg-emerald-600'
                   : 'text-muted-foreground hover:text-foreground'
               )}
             >
@@ -379,16 +403,17 @@ export function ManualLegBuilder({
             <button
               type="button"
               onClick={() => setSide('SELL')}
+              aria-pressed={side === 'SELL'}
               className={cn(
                 'inline-flex items-center gap-1 rounded-sm px-3 text-[11px] font-bold uppercase tracking-wider transition',
                 side === 'SELL'
-                  ? 'bg-rose-500 text-white shadow-sm'
+                  ? 'bg-rose-700 text-white shadow-sm dark:bg-rose-600'
                   : 'text-muted-foreground hover:text-foreground'
               )}
             >
               Sell
             </button>
-          </div>
+          </fieldset>
         </div>
 
         {/* Lot Qty */}
@@ -405,6 +430,7 @@ export function ManualLegBuilder({
             </button>
             <input
               type="number"
+              aria-label="Position lot quantity"
               min={1}
               value={lots}
               onChange={(e) => setLots(Math.max(1, Number(e.target.value) || 1))}
@@ -432,8 +458,8 @@ export function ManualLegBuilder({
             className={cn(
               'h-9 gap-1.5 px-4 text-xs font-bold uppercase tracking-wider transition',
               side === 'BUY'
-                ? 'bg-emerald-500 text-white hover:bg-emerald-600'
-                : 'bg-rose-500 text-white hover:bg-rose-600'
+                ? 'bg-emerald-700 text-white hover:bg-emerald-800 dark:bg-emerald-600 dark:hover:bg-emerald-700'
+                : 'bg-rose-700 text-white hover:bg-rose-800 dark:bg-rose-600 dark:hover:bg-rose-700'
             )}
           >
             <PlusCircle className="h-3.5 w-3.5" />
@@ -448,6 +474,7 @@ export function ManualLegBuilder({
 
       {(isResolving || contractError) && (
         <div
+          id={contractError ? contractErrorId : undefined}
           className={cn(
             'border-t px-4 py-2 text-[11px]',
             contractError ? 'text-destructive' : 'text-muted-foreground'

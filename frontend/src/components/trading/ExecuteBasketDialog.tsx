@@ -267,16 +267,20 @@ export function ExecuteBasketDialog({
         </DialogHeader>
 
         {/* Global controls — compact inline row */}
-        <div className="flex items-end gap-4 rounded-lg border bg-muted/20 p-3">
+        <div className="flex min-w-0 max-w-full items-end gap-4 rounded-lg border bg-muted/20 p-3">
           <div className="flex-1 space-y-1">
             <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               Product Type
             </Label>
-            <div className="inline-flex h-9 w-full overflow-hidden rounded-md border bg-background">
+            <fieldset
+              aria-label="Product type"
+              className="inline-flex h-9 w-full min-w-0 overflow-hidden rounded-md border bg-background"
+            >
               {PRODUCT_TYPES.map((p, idx) => (
                 <button
                   key={p}
                   type="button"
+                  aria-pressed={product === p}
                   onClick={() => setProduct(p)}
                   disabled={submitting || !!results}
                   className={cn(
@@ -290,15 +294,19 @@ export function ExecuteBasketDialog({
                   {p}
                 </button>
               ))}
-            </div>
+            </fieldset>
           </div>
           <div className="flex-1 space-y-1">
             <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               Price Type
             </Label>
-            <div className="inline-flex h-9 w-full overflow-hidden rounded-md border bg-background">
+            <fieldset
+              aria-label="Price type"
+              className="inline-flex h-9 w-full min-w-0 overflow-hidden rounded-md border bg-background"
+            >
               <button
                 type="button"
+                aria-pressed={pricetype === 'LIMIT'}
                 onClick={() => setPricetype('LIMIT')}
                 disabled={submitting || !!results}
                 className={cn(
@@ -312,6 +320,7 @@ export function ExecuteBasketDialog({
               </button>
               <button
                 type="button"
+                aria-pressed={pricetype === 'MARKET'}
                 onClick={() => setPricetype('MARKET')}
                 disabled={submitting || !!results}
                 className={cn(
@@ -323,7 +332,7 @@ export function ExecuteBasketDialog({
               >
                 MKT
               </button>
-            </div>
+            </fieldset>
           </div>
         </div>
 
@@ -347,6 +356,7 @@ export function ExecuteBasketDialog({
             ) : (
               rows.map((r, idx) => {
                 const result = results?.find((x) => x.symbol === r.symbol)
+                const priceErrorId = `basket-limit-price-error-${idx}`
                 return (
                   <div
                     key={r.legId}
@@ -361,6 +371,7 @@ export function ExecuteBasketDialog({
                     {/* Include */}
                     <div className="flex h-8 items-center justify-center">
                       <Checkbox
+                        aria-label={`Include ${r.symbol}`}
                         checked={r.include}
                         onCheckedChange={(v) => updateRow(r.legId, { include: v === true })}
                         disabled={submitting || !!results}
@@ -433,6 +444,7 @@ export function ExecuteBasketDialog({
                         is computed at payload build time. */}
                     <Input
                       type="number"
+                      aria-label={`Lots for ${r.symbol}`}
                       min={1}
                       step={1}
                       value={r.lots}
@@ -450,6 +462,9 @@ export function ExecuteBasketDialog({
                         drift like 185.85000000000002. */}
                     <Input
                       type="number"
+                      aria-label={`Limit price for ${r.symbol}`}
+                      aria-invalid={r.price === null}
+                      aria-describedby={r.price === null ? priceErrorId : undefined}
                       min={0}
                       step={r.tickSize}
                       value={r.price ?? ''}
@@ -463,7 +478,11 @@ export function ExecuteBasketDialog({
                       className="h-8 text-right font-mono text-xs"
                     />
                     {r.price === null && (
-                      <span className="text-[10px] text-rose-600 dark:text-rose-400">
+                      <span
+                        id={priceErrorId}
+                        role="alert"
+                        className="text-[10px] text-rose-700 dark:text-rose-400"
+                      >
                         {r.symbol}: price is outside the supported tick range
                       </span>
                     )}
