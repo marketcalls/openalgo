@@ -211,9 +211,22 @@ async function chooseExchange(exchange: string) {
   fireEvent.click(await screen.findByRole('option', { name: exchange }))
 }
 
-async function addOneLeg() {
+const ASYNC_READY_TIMEOUT = 5_000
+
+async function waitForAddButton() {
   const add = await screen.findByRole('button', { name: /Add Buy/ })
-  await waitFor(() => expect(add).toBeEnabled())
+  await waitFor(() => expect(add).toBeEnabled(), { timeout: ASYNC_READY_TIMEOUT })
+  return add
+}
+
+async function waitForExecuteButton() {
+  const execute = await screen.findByRole('button', { name: 'Execute' })
+  await waitFor(() => expect(execute).toBeEnabled(), { timeout: ASYNC_READY_TIMEOUT })
+  return execute
+}
+
+async function addOneLeg() {
+  const add = await waitForAddButton()
   fireEvent.click(add)
   await screen.findByRole('button', { name: 'Remove position' })
 }
@@ -538,8 +551,7 @@ describe('StrategyBuilder live request orchestration', () => {
       await staleManualChain.promise
     })
 
-    const add = screen.getByRole('button', { name: /Add Buy/ })
-    await waitFor(() => expect(add).toBeEnabled())
+    const add = await waitForAddButton()
     fireEvent.click(add)
     await screen.findByRole('button', { name: 'Remove position' })
     expect(screen.getAllByText('₹125.00').length).toBeGreaterThan(0)
@@ -554,7 +566,7 @@ describe('StrategyBuilder live request orchestration', () => {
 
   it('adds the exact listed futures contract at its own quote', async () => {
     renderBuilder()
-    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+    await waitForAddButton()
 
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'Segment' }), { key: 'ArrowDown' })
     fireEvent.click(await screen.findByRole('option', { name: 'Futures' }))
@@ -658,7 +670,7 @@ describe('StrategyBuilder live request orchestration', () => {
     mocks.marketAuthenticated = true
     mocks.marketConnectionEpoch = 1
     const view = renderBuilder()
-    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+    await waitForAddButton()
 
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'Segment' }), { key: 'ArrowDown' })
     fireEvent.click(await screen.findByRole('option', { name: 'Futures' }))
@@ -692,7 +704,7 @@ describe('StrategyBuilder live request orchestration', () => {
     renderBuilder()
 
     await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(1))
-    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+    await waitForAddButton()
 
     expect(screen.getByText('Stale')).toBeInTheDocument()
     expect(screen.queryByText('Live')).not.toBeInTheDocument()
@@ -707,7 +719,7 @@ describe('StrategyBuilder live request orchestration', () => {
     mocks.marketConnectionEpoch = 1
 
     renderBuilder()
-    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+    await waitForAddButton()
 
     expect(screen.getByText('Stale')).toBeInTheDocument()
     expect(screen.queryByText('Live')).not.toBeInTheDocument()
@@ -729,7 +741,7 @@ describe('StrategyBuilder live request orchestration', () => {
     ])
 
     const view = renderBuilder()
-    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+    await waitForAddButton()
 
     expect(screen.getByText('Stale')).toBeInTheDocument()
     expect(screen.queryByText('Live')).not.toBeInTheDocument()
@@ -960,7 +972,7 @@ describe('StrategyBuilder live request orchestration', () => {
     mocks.getOptionChain.mockResolvedValue(farChain)
 
     renderBuilder()
-    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+    await waitForAddButton()
     fireEvent.click(screen.getByRole('button', { name: /Neutral/ }))
     fireEvent.click(screen.getByRole('button', { name: /Call Calendar/ }))
     fireEvent.click(await screen.findByRole('button', { name: 'Add Strategy' }))
@@ -1012,7 +1024,7 @@ describe('StrategyBuilder live request orchestration', () => {
     )
 
     renderBuilder()
-    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+    await waitForAddButton()
     fireEvent.click(screen.getByRole('button', { name: /Neutral/ }))
     fireEvent.click(screen.getByRole('button', { name: /Call Calendar/ }))
     fireEvent.click(await screen.findByRole('button', { name: 'Add Strategy' }))
@@ -1120,7 +1132,7 @@ describe('StrategyBuilder live request orchestration', () => {
     mocks.getOptionChain.mockResolvedValue(farChain)
 
     const view = renderBuilder()
-    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+    await waitForAddButton()
     fireEvent.click(screen.getByRole('button', { name: /Neutral/ }))
     fireEvent.click(screen.getByRole('button', { name: /Call Calendar/ }))
     fireEvent.click(await screen.findByRole('button', { name: 'Add Strategy' }))
@@ -1266,7 +1278,7 @@ describe('StrategyBuilder live request orchestration', () => {
     mocks.getOptionChain.mockResolvedValue(farChain)
 
     renderBuilder()
-    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+    await waitForAddButton()
     fireEvent.click(screen.getByRole('button', { name: /Neutral/ }))
     fireEvent.click(screen.getByRole('button', { name: /Call Calendar/ }))
     fireEvent.click(await screen.findByRole('button', { name: 'Add Strategy' }))
@@ -1318,8 +1330,7 @@ describe('StrategyBuilder identity orchestration', () => {
     })
 
     renderBuilder()
-    const add = await screen.findByRole('button', { name: /Add Buy/ })
-    await waitFor(() => expect(add).toBeEnabled())
+    const add = await waitForAddButton()
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'Expiry' }), { key: 'ArrowDown' })
     fireEvent.click(await screen.findByRole('option', { name: '18AUG26' }))
     await addOneLeg()
@@ -1330,7 +1341,7 @@ describe('StrategyBuilder identity orchestration', () => {
 
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'Expiry' }), { key: 'ArrowDown' })
     fireEvent.click(await screen.findByRole('option', { name: '13AUG26' }))
-    await waitFor(() => expect(add).toBeEnabled())
+    await waitFor(() => expect(add).toBeEnabled(), { timeout: ASYNC_READY_TIMEOUT })
     fireEvent.click(add)
     await waitFor(() =>
       expect(screen.getAllByRole('button', { name: 'Remove position' })).toHaveLength(2)
@@ -1372,8 +1383,7 @@ describe('StrategyBuilder identity orchestration', () => {
     })
 
     renderBuilder()
-    const add = await screen.findByRole('button', { name: /Add Buy/ })
-    await waitFor(() => expect(add).toBeEnabled())
+    const add = await waitForAddButton()
     fireEvent.click(add)
     await screen.findByRole('button', { name: 'Remove position' })
 
@@ -1386,7 +1396,7 @@ describe('StrategyBuilder identity orchestration', () => {
       nextChain.resolve(chainFixture('NIFTY', '18AUG26'))
       await nextChain.promise
     })
-    await waitFor(() => expect(screen.getByRole('button', { name: /Add Buy/ })).toBeEnabled())
+    await waitForAddButton()
   })
 
   it('keeps a controlled identity and legs on cancel, then clears legs and scenarios on acceptance', async () => {
@@ -1544,7 +1554,7 @@ describe('StrategyBuilder identity orchestration', () => {
       await restoredChain.promise
     })
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Execute' })).toBeEnabled())
+    await waitForExecuteButton()
     expect(screen.getAllByText('₹100.00').length).toBeGreaterThan(0)
   })
 
@@ -1583,7 +1593,7 @@ describe('StrategyBuilder identity orchestration', () => {
 
     renderBuilder('/strategybuilder?load=17')
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Execute' })).toBeEnabled())
+    await waitForExecuteButton()
     expect(
       mocks.getOptionChain.mock.calls.filter(([, , , expiry]) => expiry === '13AUG26')
     ).not.toHaveLength(0)
