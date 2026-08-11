@@ -54,6 +54,8 @@ def strategy_chart_data():
         data = request.get_json(silent=True) or {}
         underlying = (data.get("underlying") or "").strip()
         exchange = (data.get("exchange") or "").strip()
+        underlying_symbol = (data.get("underlying_symbol") or "").strip() or None
+        underlying_exchange = (data.get("underlying_exchange") or "").strip() or None
         interval = (data.get("interval") or "5m").strip()
         try:
             days = int(data.get("days", 3))
@@ -77,6 +79,8 @@ def strategy_chart_data():
             interval=interval,
             api_key=api_key,
             days=days,
+            underlying_symbol=underlying_symbol,
+            underlying_exchange=underlying_exchange,
         )
         return jsonify(response), status_code
 
@@ -113,6 +117,8 @@ def multi_strike_oi_data():
         data = request.get_json(silent=True) or {}
         underlying = (data.get("underlying") or "").strip()
         exchange = (data.get("exchange") or "").strip()
+        underlying_symbol = (data.get("underlying_symbol") or "").strip() or None
+        underlying_exchange = (data.get("underlying_exchange") or "").strip() or None
         interval = (data.get("interval") or "5m").strip()
         try:
             days = int(data.get("days", 3))
@@ -136,6 +142,8 @@ def multi_strike_oi_data():
             interval=interval,
             api_key=api_key,
             days=days,
+            underlying_symbol=underlying_symbol,
+            underlying_exchange=underlying_exchange,
         )
         return jsonify(response), status_code
 

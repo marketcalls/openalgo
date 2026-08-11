@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import {
   computePayoff,
+  hasMultipleActiveExpiries,
+  isLegExecutable,
+  legPnlAt,
+  lognormalPriceBand,
+  nearestLegDays,
   normCdf,
+  type OptionType,
   payoffPriceRange,
   probabilityOfProfit,
-  totalPnlAt,
-  type OptionType,
   type Side,
   type StrategyLeg,
+  totalPnlAt,
+  type ValuationClock,
 } from './strategyMath'
 
 const NOW = new Date('2026-07-28T10:00:00.000Z')
@@ -47,7 +53,282 @@ function ironCondor(): StrategyLeg[] {
   ]
 }
 
+function valuationOptionLeg(overrides: Partial<StrategyLeg> = {}): StrategyLeg {
+  return {
+    ...optionLeg('valuation-option', 'BUY', 'CE', 25_000, 200, 1, '14AUG26'),
+    lotSize: 50,
+    iv: 15,
+    ...overrides,
+  }
+}
+
+function futureLeg(overrides: Partial<StrategyLeg> = {}): StrategyLeg {
+  return {
+    id: 'valuation-future',
+    segment: 'FUTURE',
+    side: 'BUY',
+    lots: 1,
+    lotSize: 25,
+    expiry: '14AUG26',
+    price: 25_100,
+    iv: 0,
+    active: true,
+    symbol: 'NIFTY14AUG26FUT',
+    ...overrides,
+  }
+}
+
+describe('per-leg market valuation', () => {
+  it.each([
+    ['zero lots', { lots: 0 }],
+    ['fractional lots', { lots: 1.5 }],
+    ['zero lot size', { lotSize: 0 }],
+    ['fractional lot size', { lotSize: 12.5 }],
+  ])('rejects an otherwise valid executable leg with %s', (_label, overrides) => {
+    const candidate = valuationOptionLeg({
+      contractValid: true,
+      tickSize: 0.05,
+      ...overrides,
+    })
+
+    expect(isLegExecutable(candidate)).toBe(false)
+  })
+
+  it('freezes a zero-exit leg at realised P&L and excludes it from open expiry horizons', () => {
+    const leg = valuationOptionLeg({
+      price: 100,
+      exitPrice: 0,
+      lotSize: 50,
+      expiryTs: 1_789_012_800,
+      referenceUnderlying: 25_000,
+      forwardPrice: 25_120,
+      marketPrice: 250,
+    })
+    const now = new Date('2026-08-11T04:00:00Z')
+
+    expect(legPnlAt(leg, 20_000, 0, 15, now)).toBe(-5_000)
+    expect(legPnlAt(leg, 30_000, 3, 40, now)).toBe(-5_000)
+    expect(nearestLegDays([leg], now)).toBe(0)
+  })
+
+  it('reconciles a zero-shift option to its live Black-76 market price', () => {
+    // Independently hand-calculated Black-76: F=25120, K=25000,
+    // t=3.25/365, sigma=15% gives 209.5271, quoted at the ₹0.05 tick as 209.55.
+    const leg = valuationOptionLeg({
+      marketPrice: 209.55,
+      forwardPrice: 25_120,
+      referenceUnderlying: 25_000,
+      expiryTs: 1_786_701_600,
+      tickSize: 0.05,
+    })
+
+    expect(legPnlAt(leg, 25_000, 0, 15, new Date('2026-08-11T04:00:00Z'))).toBeCloseTo(477.5, 2)
+  })
+
+  it('values a selected future from its own market reference', () => {
+    const leg = futureLeg({ marketPrice: 25_120, referenceUnderlying: 25_000 })
+
+    expect(legPnlAt(leg, 25_000, 0)).toBe(500)
+    expect(legPnlAt(leg, 25_100, 0)).toBe(3_000)
+  })
+
+  it('uses the server-adjusted authoritative expiry for sub-day valuation', () => {
+    // The client is two minutes fast (04:02), while server time is 04:00 and
+    // the authoritative epoch expiry is 04:30. The hand-calculated Black-76
+    // call values for 30 and 15 minutes at F=K=100, sigma=20% are 0.06028 and
+    // 0.04262 per unit, or 3.014 and 2.131 per 50-unit lot respectively.
+    const serverClock: ValuationClock = {
+      now: new Date('2026-08-11T04:02:00Z'),
+      clockOffsetMs: -120_000,
+    }
+    const leg = valuationOptionLeg({
+      expiry: 'NOT_A_LEGACY_DATE',
+      expiryTs: 1_786_422_600,
+      strike: 100,
+      price: 0,
+      iv: 20,
+      referenceUnderlying: 100,
+      forwardPrice: 100,
+    })
+
+    expect(legPnlAt(leg, 100, 0, 20, serverClock)).toBeCloseTo(3.014, 3)
+    expect(legPnlAt(leg, 100, 0.010416666666666666, 20, serverClock)).toBeCloseTo(2.131, 3)
+  })
+
+  it('falls back to the legacy expiry string when no expiry timestamp is available', () => {
+    const leg = valuationOptionLeg({
+      expiry: '11AUG26',
+      strike: 100,
+      price: 0,
+      iv: 20,
+      referenceUnderlying: 100,
+      forwardPrice: 100,
+    })
+
+    expect(legPnlAt(leg, 100, 0, 20, new Date('2026-08-11T09:30:00Z'))).toBeCloseTo(3.014, 3)
+  })
+
+  it('uses authoritative expiry metadata for aggregate horizons', () => {
+    // At the server-corrected 04:00, the authoritative expiry is exactly 30
+    // days away. A 30-day Black-76 call worth 1 at expiry crosses zero P&L at
+    // the independently calculated forward of 96.79, not the parsed-expiry
+    // terminal-analysis artefact.
+    const serverClock: ValuationClock = {
+      now: new Date('2026-08-11T04:02:00Z'),
+      clockOffsetMs: -120_000,
+    }
+    const leg = valuationOptionLeg({
+      lotSize: 1,
+      expiry: 'NOT_A_LEGACY_DATE',
+      expiryTs: 1_789_012_800,
+      strike: 100,
+      price: 1,
+      iv: 20,
+      referenceUnderlying: 100,
+      forwardPrice: 100,
+    })
+    const payoff = computePayoff([leg], 100, 0, 0, [90, 110], 120, 0, 20, serverClock)
+
+    expect(payoff.breakevens[0]).toBeCloseTo(96.79, 1)
+    expect(nearestLegDays([leg], serverClock)).toBeCloseTo(30, 8)
+  })
+
+  it('uses forward and futures market bases for a flat-slope nonterminal tail', () => {
+    const now = new Date('2026-08-11T04:00:00Z')
+    const nearExpiry = 1_786_507_200
+    const farExpiry = 1_817_956_800
+    const neutralNearCall = {
+      ...valuationOptionLeg({
+        id: 'near-call',
+        lotSize: 1,
+        expiry: '12AUG26',
+        expiryTs: nearExpiry,
+        strike: 100,
+        price: 0,
+        iv: 100,
+        referenceUnderlying: 100,
+        forwardPrice: 95,
+      }),
+    }
+    const neutralFarCall = {
+      ...neutralNearCall,
+      id: 'far-call',
+      side: 'SELL' as const,
+      // The display string is deliberately stale. The authoritative far expiry
+      // keeps the calendar nonterminal and its time value negative at 200.
+      expiry: '12AUG26',
+      expiryTs: farExpiry,
+      forwardPrice: 100,
+    }
+    const longFuture = futureLeg({
+      id: 'long-future',
+      lots: 1,
+      lotSize: 1,
+      price: 100,
+      marketPrice: 110,
+      referenceUnderlying: 100,
+    })
+    const shortFuture = futureLeg({
+      id: 'short-future',
+      side: 'SELL',
+      lots: 1,
+      lotSize: 1,
+      price: 100,
+      marketPrice: 100,
+      referenceUnderlying: 100,
+    })
+
+    const payoff = computePayoff(
+      [neutralNearCall, neutralFarCall, longFuture, shortFuture],
+      100,
+      0,
+      0,
+      [80, 120],
+      10,
+      0,
+      20,
+      now
+    )
+
+    expect(payoff.breakevens.at(-1)).toBeGreaterThan(200)
+  })
+
+  it('clamps a non-positive scenario forward to the Black-76 boundary', () => {
+    const common = {
+      lotSize: 1,
+      expiryTs: 1_789_012_800,
+      strike: 100,
+      price: 0,
+      iv: 20,
+      referenceUnderlying: 100,
+      forwardPrice: 50,
+    }
+    const call = valuationOptionLeg(common)
+    const put = valuationOptionLeg({ ...common, optionType: 'PE' })
+    const now = new Date('2026-08-11T04:00:00Z')
+
+    expect(legPnlAt(call, -1, 0, 20, now)).toBe(0)
+    expect(legPnlAt(put, -1, 0, 20, now)).toBe(100)
+  })
+
+  it('does not reconcile an out-of-tolerance live quote', () => {
+    const leg = valuationOptionLeg({
+      lotSize: 50,
+      marketPrice: 210,
+      forwardPrice: 25_120,
+      referenceUnderlying: 25_000,
+      expiryTs: 1_786_701_600,
+      tickSize: 0.05,
+    })
+
+    expect(legPnlAt(leg, 25_000, 0, 15, new Date('2026-08-11T04:00:00Z'))).toBeCloseTo(476.36, 1)
+  })
+
+  it('keeps spot, IV, and time-shifted scenarios model-priced', () => {
+    const leg = valuationOptionLeg({
+      lotSize: 50,
+      marketPrice: 209.55,
+      forwardPrice: 25_120,
+      referenceUnderlying: 25_000,
+      expiryTs: 1_786_701_600,
+      tickSize: 0.05,
+    })
+    const now = new Date('2026-08-11T04:00:00Z')
+
+    expect(legPnlAt(leg, 25_100, 0, 15, now)).toBeCloseTo(3905.81, 1)
+    expect(legPnlAt(leg, 25_000, 0, 20, now)).toBeCloseTo(2735.7, 1)
+    expect(legPnlAt(leg, 25_000, 1, 15, now)).toBeCloseTo(-632.97, 1)
+  })
+})
+
 describe('payoff geometry and structural risk', () => {
+  it('finds terminal roots at the option kink expressed in underlying coordinates', () => {
+    const shiftedForwardCall = valuationOptionLeg({
+      lotSize: 1,
+      strike: 100,
+      price: 5,
+      expiryTs: NOW.getTime() / 1000,
+      referenceUnderlying: 100,
+      forwardPrice: 110,
+    })
+
+    const payoff = computePayoff(
+      [shiftedForwardCall],
+      100,
+      0,
+      0,
+      [80, 120],
+      8,
+      0,
+      20,
+      NOW
+    )
+
+    expect(payoff.breakevens).toEqual([95])
+    expect(payoff.maxLoss).toBe(-5)
+    expect(payoff.maxProfit).toBe(Infinity)
+  })
+
   it('does not invent a breakeven for an empty strategy', () => {
     const payoff = computePayoff([], 100, EXPIRY_DAYS, 0, [90, 110], 10, 0, 20, NOW)
 
@@ -56,10 +337,50 @@ describe('payoff geometry and structural risk', () => {
     expect(payoff.maxLoss).toBe(0)
   })
 
-  it('PG-06 expands the display range to include strikes and two sigma', () => {
+  it('uses hand-derived lognormal quantiles for expected-move bands', () => {
+    const oneSigma = lognormalPriceBand(110, 30, 0.25, 1)
+    const twoSigma = lognormalPriceBand(110, 30, 0.25, 2)
+
+    expect(oneSigma?.lower).toBeCloseTo(93.6187202159, 10)
+    expect(oneSigma?.upper).toBeCloseTo(126.3720540374, 10)
+    expect(twoSigma?.lower).toBeCloseTo(80.5783792325, 10)
+    expect(twoSigma?.upper).toBeCloseTo(146.8233797046, 10)
+  })
+
+  it('rejects non-finite lognormal inputs instead of contaminating the chart domain', () => {
+    expect(lognormalPriceBand(Number.NaN, 30, 0.25, 1)).toBeNull()
+    expect(lognormalPriceBand(110, Number.POSITIVE_INFINITY, 0.25, 1)).toBeNull()
+  })
+
+  it('rejects finite IV and horizon values that overflow derived lognormal values', () => {
+    expect(lognormalPriceBand(100, 1e308, 1e308, 2)).toBeNull()
+  })
+
+  it('rejects a finite spot when the returned lognormal band would overflow', () => {
+    expect(lognormalPriceBand(1e308, 100, 1, 2)).toBeNull()
+  })
+
+  it('omits overflowed lognormal bands from the payoff range', () => {
+    const range = payoffPriceRange(100, [], 1e308, 1e308)
+
+    expect(range[0]).toBeCloseTo(90, 10)
+    expect(range[1]).toBeCloseTo(110, 10)
+  })
+
+  it('keeps the payoff range finite when a finite spot overflows its upper baseline', () => {
+    const range = payoffPriceRange(Number.MAX_VALUE, [], 100, 1)
+
+    expect(range.every(Number.isFinite)).toBe(true)
+    expect(range[1]).toBe(Number.MAX_VALUE)
+  })
+
+  it('PG-06 expands the shifted display range to include strikes and lognormal two sigma', () => {
     const legs = [optionLeg('put', 'SELL', 'PE', 70, 3), optionLeg('call', 'SELL', 'CE', 130, 3)]
 
-    expect(payoffPriceRange(100, legs, 30, 1)).toEqual([40, 160])
+    const range = payoffPriceRange(110, legs, 30, 0.25)
+
+    expect(range[0]).toBeCloseTo(70, 10)
+    expect(range[1]).toBeCloseTo(146.8233797046, 10)
   })
 
   it('PG-25 includes every Iron Condor strike and breakeven as an exact sample', () => {
@@ -109,6 +430,50 @@ describe('payoff geometry and structural risk', () => {
 
     expect(probability).toBeCloseTo(cdf(136) - cdf(64), 5)
     expect(probability).toBeLessThan(1)
+  })
+
+  it('distinguishes a finite zero PoP from unavailable distribution inputs', () => {
+    const alwaysLosing = [
+      { underlying: 80, expiry: -1, tplus0: -1 },
+      { underlying: 120, expiry: -1, tplus0: -1 },
+    ]
+
+    expect(probabilityOfProfit(alwaysLosing, 100, 20, 1)).toBe(0)
+    expect(probabilityOfProfit(alwaysLosing, 100, 0, 1)).toBeNull()
+    expect(probabilityOfProfit([], 100, 20, 1)).toBeNull()
+    expect(probabilityOfProfit(alwaysLosing, Number.POSITIVE_INFINITY, 20, 1)).toBeNull()
+    expect(
+      probabilityOfProfit(
+        [
+          { underlying: Number.NaN, expiry: -1, tplus0: -1 },
+          { underlying: 120, expiry: -1, tplus0: -1 },
+        ],
+        100,
+        20,
+        1
+      )
+    ).toBeNull()
+  })
+
+  it('returns unavailable when finite IV and horizon overflow derived PoP math', () => {
+    const alwaysWinning = [
+      { underlying: 80, expiry: 1, tplus0: 1 },
+      { underlying: 120, expiry: 1, tplus0: 1 },
+    ]
+
+    expect(probabilityOfProfit(alwaysWinning, 100, 1e308, 1e308)).toBeNull()
+  })
+
+  it('treats mixed authoritative and legacy metadata for the same expiry as one event', () => {
+    const expiryTs = Date.parse('2026-08-13T10:00:00.000Z') / 1000
+    const sameExpiry = [
+      { ...optionLeg('authoritative', 'BUY', 'CE', 100, 2, 1, '13AUG26'), expiryTs },
+      optionLeg('legacy', 'SELL', 'CE', 105, 1, 1, '13AUG26'),
+    ]
+    const calendar = [...sameExpiry, optionLeg('far', 'BUY', 'CE', 110, 1, 1, '18AUG26')]
+
+    expect(hasMultipleActiveExpiries(sameExpiry)).toBe(false)
+    expect(hasMultipleActiveExpiries(calendar)).toBe(true)
   })
 
   it('PG-15 numerically refines a smooth multi-expiry extremum and preserves unlimited risk', () => {
