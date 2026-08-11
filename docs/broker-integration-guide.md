@@ -1160,7 +1160,7 @@ The route `/broker/your_broker/totp` must be handled by the React router.
 
 ## 13. Authentication Patterns Reference
 
-OpenAlgo supports five distinct authentication patterns:
+OpenAlgo supports six distinct authentication patterns:
 
 ### Pattern A: OAuth2 Redirect Flow
 
@@ -1183,7 +1183,7 @@ User → GET /<broker>/callback → Redirect to /broker/<broker>/totp (React pag
      → auth_api.authenticate_broker(userid, password, totp) → (token, error)
 ```
 
-**Brokers:** Angel, AliceBlue, Firstock, Shoonya, Zebu, Kotak, Samco, Motilal, Nubra, MStock
+**Brokers:** Angel, AliceBlue, Firstock, Shoonya, Zebu, Kotak, Motilal, Nubra, MStock
 
 ### Pattern C: XTS API Key Authentication (No Redirect)
 
@@ -1211,6 +1211,21 @@ User → GET /<broker>/callback → login_step1() sends OTP → Redirect to Reac
      → User enters OTP → POST /<broker>/callback
      → authenticate_broker(otp_token, otp_code, api_secret) → (token, feed_token, user_id, error)
 ```
+
+### Pattern F: Session Token from API Key + Secret (No Redirect, No Input)
+
+```
+User → GET /<broker>/callback → Redirect to a broker connect page
+     → User clicks Connect → POST /<broker>/callback
+     → auth_api.authenticate_broker() → (token, error)
+```
+
+Credentials come entirely from `BROKER_API_KEY` / `BROKER_API_SECRET`, so no
+credential form is shown. The connect page exists to surface setup state — for
+Samco it also calls `GET /samco/ip-status` after connecting, which proxies the
+broker's IP diagnostic so a static-IP mismatch is caught before it rejects orders.
+
+**Brokers:** Samco
 
 ---
 

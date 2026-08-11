@@ -14,8 +14,8 @@ curl -X POST 'http://127.0.0.1:5000/api/v1/multioptiongreeks' \
   -d '{
     "apikey": "<your_app_apikey>",
     "symbols": [
-      {"symbol": "NIFTY30JUL2625000CE", "exchange": "NFO"},
-      {"symbol": "NIFTY30JUL2625000PE", "exchange": "NFO"}
+      {"symbol": "NIFTY25AUG2625000CE", "exchange": "NFO"},
+      {"symbol": "NIFTY25AUG2625000PE", "exchange": "NFO"}
     ],
     "interest_rate": 7.0,
     "expiry_time": "15:30"
@@ -41,7 +41,7 @@ Each `symbols` item requires `symbol` and `exchange`. Valid exchanges are `NFO`,
   "data": [
     {
       "status": "success",
-      "symbol": "NIFTY30JUL2625000CE",
+      "symbol": "NIFTY25AUG2625000CE",
       "exchange": "NFO",
       "implied_volatility": 15.25,
       "greeks": {

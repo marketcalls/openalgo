@@ -126,7 +126,7 @@ response = client.optionsorder(
       strategy="python",
       underlying="NIFTY",
       exchange="NSE_INDEX",
-      expiry_date="28OCT25",
+      expiry_date="25AUG26",
       offset="ATM",
       option_type="CE",
       action="BUY",
@@ -148,8 +148,8 @@ Place Options Order Response
   "option_type": "CE",
   "orderid": "25102800000006",
   "status": "success",
-  "symbol": "NIFTY28OCT2525950CE",
-  "underlying": "NIFTY28OCT25FUT",
+  "symbol": "NIFTY25AUG2625950CE",
+  "underlying": "NIFTY25AUG26FUT",
   "underlying_ltp": 25966.05
 }
 ```
@@ -161,7 +161,7 @@ response = client.optionsorder(
       strategy="python",
       underlying="NIFTY",
       exchange="NSE_INDEX",
-      expiry_date="28OCT25",
+      expiry_date="25AUG26",
       offset="ITM4",
       option_type="PE",
       action="BUY",
@@ -183,8 +183,8 @@ Place Options Order Response
   "option_type": "PE",
   "orderid": "25102800000007",
   "status": "success",
-  "symbol": "NIFTY28OCT2526150PE",
-  "underlying": "NIFTY28OCT25FUT",
+  "symbol": "NIFTY25AUG2626150PE",
+  "underlying": "NIFTY25AUG26FUT",
   "underlying_ltp": 25966.05
 }
 ```
@@ -196,7 +196,7 @@ response = client.optionsorder(
       strategy="python",
       underlying="NIFTY",
       exchange="NSE_INDEX",
-      expiry_date="28OCT25",
+      expiry_date="25AUG26",
       offset="OTM5",
       option_type="CE",
       action="BUY",
@@ -219,8 +219,8 @@ Place Options Order Response
   "option_type": "CE",
   "orderid": "25102800000008",
   "status": "success",
-  "symbol": "NIFTY28OCT2526200CE",
-  "underlying": "NIFTY28OCT25FUT",
+  "symbol": "NIFTY25AUG2626200CE",
+  "underlying": "NIFTY25AUG26FUT",
   "underlying_ltp": 25966.05
 }
 ```
@@ -234,7 +234,7 @@ response = client.optionsmultiorder(
     strategy="Iron Condor Test",
     underlying="NIFTY",
     exchange="NSE_INDEX",
-    expiry_date="25NOV25",
+    expiry_date="25AUG26",
     legs=[
         {"offset": "OTM6", "option_type": "CE", "action": "BUY", "quantity": 75},
         {"offset": "OTM6", "option_type": "PE", "action": "BUY", "quantity": 75},
@@ -262,7 +262,7 @@ Place OptionsMultiOrder Response
             'option_type': 'CE',
             'orderid': '25111996859688',
             'status': 'success',
-            'symbol': 'NIFTY25NOV2526350CE'
+            'symbol': 'NIFTY25AUG2626350CE'
         },
         {
             'action': 'BUY',
@@ -272,7 +272,7 @@ Place OptionsMultiOrder Response
             'option_type': 'PE',
             'orderid': '25111996042210',
             'status': 'success',
-            'symbol': 'NIFTY25NOV2525750PE'
+            'symbol': 'NIFTY25AUG2625750PE'
         },
         {
             'action': 'SELL',
@@ -282,7 +282,7 @@ Place OptionsMultiOrder Response
             'option_type': 'CE',
             'orderid': '25111922189638',
             'status': 'success',
-            'symbol': 'NIFTY25NOV2526250CE'
+            'symbol': 'NIFTY25AUG2626250CE'
         },
         {
             'action': 'SELL',
@@ -292,7 +292,7 @@ Place OptionsMultiOrder Response
             'option_type': 'PE',
             'orderid': '25111919252668',
             'status': 'success',
-            'symbol': 'NIFTY25NOV2525850PE'
+            'symbol': 'NIFTY25AUG2625850PE'
         }
     ]
 }
@@ -307,8 +307,8 @@ response = client.optionsmultiorder(
       underlying="NIFTY",
       exchange="NSE_INDEX",
       legs=[
-          {"offset": "ITM2", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25"},
-          {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "25NOV25"}
+          {"offset": "ITM2", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "29SEP26"},
+          {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "25AUG26"}
       ]
   )
 
@@ -329,7 +329,7 @@ Place OptionsMultiOrder Response
             "option_type": "CE",
             "orderid": "25111933337854",
             "status": "success",
-            "symbol": "NIFTY30DEC2525950CE"
+            "symbol": "NIFTY29SEP2625950CE"
         },
         {
             "action": "SELL",
@@ -339,7 +339,7 @@ Place OptionsMultiOrder Response
             "option_type": "CE",
             "orderid": "25111957475473",
             "status": "success",
-            "symbol": "NIFTY25NOV2526150CE"
+            "symbol": "NIFTY25AUG2626150CE"
         }
     ],
     "status": "success",
@@ -851,196 +851,206 @@ Note : To fetch entire option chain for a expiry remove the strike\_count (optio
 chain = client.optionchain(
     underlying="NIFTY",
     exchange="NSE_INDEX",
-    expiry_date="30DEC25",
+    expiry_date="25AUG26",
     strike_count=10
 )
 ```
 
+Pass `with_greeks=True` for implied volatility and Greeks on every leg. They are
+derived from the quotes the call already fetches, so this adds no extra broker
+requests, and unlike `multioptiongreeks` it is not capped at 50 symbols.
+
+```python
+chain = client.optionchain(
+    underlying="NIFTY",
+    exchange="NSE_INDEX",
+    expiry_date="25AUG26",
+    strike_count=10,
+    with_greeks=True,   # implied_volatility, delta, gamma, theta, vega per leg
+    interest_rate=0     # annualized percentage, defaults to 0
+)
+
+for row in chain["chain"]:
+    ce, pe = row.get("ce") or {}, row.get("pe") or {}
+    print(row["strike"],
+          ce.get("implied_volatility"), ce.get("delta"),
+          pe.get("implied_volatility"), pe.get("delta"))
+```
+
+Greeks use Black-76 and are priced off the forward, which the service derives from
+the ATM call and put via put-call parity and reports as `forward_price`. Vega is per
+1% change in volatility and theta is per calendar day, matching `optiongreeks`. A leg
+whose Greeks are not computable simply omits the fields.
+
 **Symbols Response**
+
+Trimmed to three strikes. The Greek fields appear only when `with_greeks` is set.
 
 ```json
 {
     "status": "success",
     "underlying": "NIFTY",
-    "underlying_ltp": 26215.55,
-    "expiry_date": "30DEC25",
-    "atm_strike": 26200.0,
+    "underlying_ltp": 24560.15,
+    "underlying_prev_close": 24570.65,
+    "expiry_date": "25AUG26",
+    "expiry_ts": 1787652000,
+    "server_ts": 1786356402,
+    "atm_strike": 24550.0,
+    "quotes_included": true,
+    "greeks_included": true,
+    "forward_price": 24580.0,
     "chain": [
         {
-            "strike": 26100.0,
+            "strike": 24450.0,
             "ce": {
-                "symbol": "NIFTY30DEC2526100CE",
-                "label": "ITM2",
-                "ltp": 490,
-                "bid": 490,
-                "ask": 491,
-                "open": 540,
-                "high": 571,
-                "low": 444.75,
-                "prev_close": 496.8,
-                "volume": 1195800,
-                "oi": 0,
-                "lotsize": 75,
-                "tick_size": 0.05
-            },
-            "pe": {
-                "symbol": "NIFTY30DEC2526100PE",
-                "label": "OTM2",
-                "ltp": 193,
-                "bid": 191.2,
-                "ask": 193,
-                "open": 204.1,
-                "high": 229.95,
-                "low": 175.6,
-                "prev_close": 215.95,
-                "volume": 1832700,
-                "oi": 0,
-                "lotsize": 75,
-                "tick_size": 0.05
-            }
-        },
-        {
-            "strike": 26150.0,
-            "ce": {
-                "symbol": "NIFTY30DEC2526150CE",
+                "symbol": "NIFTY25AUG2624450CE",
                 "label": "ITM1",
-                "ltp": 460.5,
-                "bid": 452.9,
-                "ask": 463,
-                "open": 475.8,
-                "high": 535.7,
-                "low": 414.6,
-                "prev_close": 461.05,
-                "volume": 183525,
-                "oi": 0,
+                "ltp": 373.3,
+                "bid": 372.8,
+                "ask": 373.8,
+                "bid_qty": 1500,
+                "ask_qty": 2250,
+                "open": 395.7,
+                "high": 414.35,
+                "low": 343.45,
+                "prev_close": 388.25,
+                "volume": 2841075,
+                "oi": 4218300,
                 "lotsize": 75,
-                "tick_size": 0.05
+                "tick_size": 0.05,
+                "implied_volatility": 15.33,
+                "delta": 0.5739,
+                "gamma": 0.000513,
+                "theta": -9.9854,
+                "vega": 19.5342
             },
             "pe": {
-                "symbol": "NIFTY30DEC2526150PE",
+                "symbol": "NIFTY25AUG2624450PE",
                 "label": "OTM1",
-                "ltp": 208.5,
-                "bid": 207.85,
-                "ask": 210.1,
-                "open": 218.2,
-                "high": 248.8,
-                "low": 190.75,
-                "prev_close": 233.7,
-                "volume": 332100,
-                "oi": 0,
+                "ltp": 243.3,
+                "bid": 242.8,
+                "ask": 243.8,
+                "bid_qty": 2100,
+                "ask_qty": 1875,
+                "open": 231.15,
+                "high": 262.75,
+                "low": 216.55,
+                "prev_close": 236.0,
+                "volume": 3162450,
+                "oi": 5104275,
                 "lotsize": 75,
-                "tick_size": 0.05
+                "tick_size": 0.05,
+                "implied_volatility": 15.33,
+                "delta": -0.4261,
+                "gamma": 0.000513,
+                "theta": -9.9854,
+                "vega": 19.5342
             }
         },
         {
-            "strike": 26200.0,
+            "strike": 24550.0,
             "ce": {
-                "symbol": "NIFTY30DEC2526200CE",
+                "symbol": "NIFTY25AUG2624550CE",
                 "label": "ATM",
-                "ltp": 427,
-                "bid": 425.05,
-                "ask": 427,
-                "open": 449.95,
-                "high": 503.5,
-                "low": 384,
-                "prev_close": 433.2,
-                "volume": 2994000,
-                "oi": 0,
+                "ltp": 311.6,
+                "bid": 311.1,
+                "ask": 312.1,
+                "bid_qty": 1500,
+                "ask_qty": 2250,
+                "open": 330.3,
+                "high": 345.9,
+                "low": 286.65,
+                "prev_close": 324.05,
+                "volume": 2841075,
+                "oi": 4218300,
                 "lotsize": 75,
-                "tick_size": 0.05
+                "tick_size": 0.05,
+                "implied_volatility": 14.92,
+                "delta": 0.5221,
+                "gamma": 0.000536,
+                "theta": -9.8729,
+                "vega": 19.8452
             },
             "pe": {
-                "symbol": "NIFTY30DEC2526200PE",
+                "symbol": "NIFTY25AUG2624550PE",
                 "label": "ATM",
-                "ltp": 227.4,
-                "bid": 227.35,
-                "ask": 228.5,
-                "open": 251.9,
-                "high": 269.15,
-                "low": 205.95,
-                "prev_close": 251.9,
-                "volume": 3745350,
-                "oi": 0,
+                "ltp": 281.6,
+                "bid": 281.1,
+                "ask": 282.1,
+                "bid_qty": 2100,
+                "ask_qty": 1875,
+                "open": 267.5,
+                "high": 304.15,
+                "low": 250.6,
+                "prev_close": 273.15,
+                "volume": 3162450,
+                "oi": 5104275,
                 "lotsize": 75,
-                "tick_size": 0.05
+                "tick_size": 0.05,
+                "implied_volatility": 14.92,
+                "delta": -0.4779,
+                "gamma": 0.000536,
+                "theta": -9.8729,
+                "vega": 19.8452
             }
         },
         {
-            "strike": 26250.0,
+            "strike": 24650.0,
             "ce": {
-                "symbol": "NIFTY30DEC2526250CE",
+                "symbol": "NIFTY25AUG2624650CE",
                 "label": "OTM1",
-                "ltp": 398,
-                "bid": 395.4,
-                "ask": 400.5,
-                "open": 442.1,
-                "high": 468.5,
-                "low": 355.75,
-                "prev_close": 401.9,
-                "volume": 407100,
-                "oi": 0,
+                "ltp": 259.1,
+                "bid": 258.6,
+                "ask": 259.6,
+                "bid_qty": 1500,
+                "ask_qty": 2250,
+                "open": 274.65,
+                "high": 287.6,
+                "low": 238.35,
+                "prev_close": 269.45,
+                "volume": 2841075,
+                "oi": 4218300,
                 "lotsize": 75,
-                "tick_size": 0.05
+                "tick_size": 0.05,
+                "implied_volatility": 14.71,
+                "delta": 0.4679,
+                "gamma": 0.000543,
+                "theta": -9.717,
+                "vega": 19.8115
             },
             "pe": {
-                "symbol": "NIFTY30DEC2526250PE",
+                "symbol": "NIFTY25AUG2624650PE",
                 "label": "ITM1",
-                "ltp": 243.85,
-                "bid": 243.6,
-                "ask": 246.15,
-                "open": 264.25,
-                "high": 288,
-                "low": 222.15,
-                "prev_close": 269.7,
-                "volume": 487575,
-                "oi": 0,
+                "ltp": 329.1,
+                "bid": 328.6,
+                "ask": 329.6,
+                "bid_qty": 2100,
+                "ask_qty": 1875,
+                "open": 312.65,
+                "high": 355.45,
+                "low": 292.9,
+                "prev_close": 319.25,
+                "volume": 3162450,
+                "oi": 5104275,
                 "lotsize": 75,
-                "tick_size": 0.05
-            }
-        },
-        {
-            "strike": 26300.0,
-            "ce": {
-                "symbol": "NIFTY30DEC2526300CE",
-                "label": "OTM2",
-                "ltp": 367.55,
-                "bid": 364,
-                "ask": 367.55,
-                "open": 378,
-                "high": 437.4,
-                "low": 327.25,
-                "prev_close": 371.45,
-                "volume": 2416350,
-                "oi": 0,
-                "lotsize": 75,
-                "tick_size": 0.05
-            },
-            "pe": {
-                "symbol": "NIFTY30DEC2526300PE",
-                "label": "ITM2",
-                "ltp": 266,
-                "bid": 264.2,
-                "ask": 266.5,
-                "open": 263.1,
-                "high": 311.55,
-                "low": 240,
-                "prev_close": 289.85,
-                "volume": 2891100,
-                "oi": 0,
-                "lotsize": 75,
-                "tick_size": 0.05
+                "tick_size": 0.05,
+                "implied_volatility": 14.71,
+                "delta": -0.5321,
+                "gamma": 0.000543,
+                "theta": -9.717,
+                "vega": 19.8115
             }
         }
     ]
 }
-
 ```
+
 
 ### Symbol Example
 
 ```python
 response = client.symbol(
-            symbol="NIFTY30DEC25FUT",
+            symbol="NIFTY25AUG26FUT",
             exchange="NFO"
             )
 print(response)
@@ -1052,16 +1062,16 @@ print(response)
 {
   "data": {
     "brexchange": "NSE_FO",
-    "brsymbol": "NIFTY FUT 30 DEC 25",
+    "brsymbol": "NIFTY FUT 25 AUG 26",
     "exchange": "NFO",
-    "expiry": "30-DEC-25",
+    "expiry": "25-AUG-26",
     "freeze_qty": 1800,
     "id": 57900,
     "instrumenttype": "FUT",
     "lotsize": 75,
     "name": "NIFTY",
     "strike": 0,
-    "symbol": "NIFTY30DEC25FUT",
+    "symbol": "NIFTY25AUG26FUT",
     "tick_size": 10,
     "token": "NSE_FO|49543"
   },
@@ -1083,15 +1093,15 @@ print(response)
   "data": [
     {
       "brexchange": "NSE_FO",
-      "brsymbol": "NIFTY 26000 CE 30 DEC 25",
+      "brsymbol": "NIFTY 26000 CE 25 AUG 26",
       "exchange": "NFO",
-      "expiry": "30-DEC-25",
+      "expiry": "25-AUG-26",
       "freeze_qty": 1800,
       "instrumenttype": "CE",
       "lotsize": 75,
       "name": "NIFTY",
       "strike": 26000,
-      "symbol": "NIFTY30DEC2526000CE",
+      "symbol": "NIFTY25AUG2626000CE",
       "tick_size": 5,
       "token": "NSE_FO|71399"
     },
@@ -1139,15 +1149,15 @@ print(response)
     },
     {
       "brexchange": "NSE_FO",
-      "brsymbol": "FINNIFTY 26000 CE 30 DEC 25",
+      "brsymbol": "FINNIFTY 26000 CE 25 AUG 26",
       "exchange": "NFO",
-      "expiry": "30-DEC-25",
+      "expiry": "25-AUG-26",
       "freeze_qty": 1200,
       "instrumenttype": "CE",
       "lotsize": 65,
       "name": "FINNIFTY",
       "strike": 26000,
-      "symbol": "FINNIFTY30DEC2526000CE",
+      "symbol": "FINNIFTY25AUG2626000CE",
       "tick_size": 5,
       "token": "NSE_FO|61709"
     },
@@ -1193,7 +1203,7 @@ ATM Option
 response = client.optionsymbol(
       underlying="NIFTY",
       exchange="NSE_INDEX",
-      expiry_date="30DEC25",
+      expiry_date="25AUG26",
       offset="ATM",
       option_type="CE"
   )
@@ -1206,7 +1216,7 @@ print(response)
 ```json
 {
   "status": "success",
-  "symbol": "NIFTY30DEC2525950CE",
+  "symbol": "NIFTY25AUG2625950CE",
   "exchange": "NFO",
   "lotsize": 75,
   "tick_size": 5,
@@ -1221,7 +1231,7 @@ ITM Option
 response = client.optionsymbol(
       underlying="NIFTY",
       exchange="NSE_INDEX",
-      expiry_date="30DEC25",
+      expiry_date="25AUG26",
       offset="ITM3",
       option_type="PE"
   )
@@ -1234,7 +1244,7 @@ print(response)
 ```json
 {
   "status": "success",
-  "symbol": "NIFTY30DEC2526100PE",
+  "symbol": "NIFTY25AUG2626100PE",
   "exchange": "NFO",
   "lotsize": 75,
   "tick_size": 5,
@@ -1249,7 +1259,7 @@ OTM Option
 response = client.optionsymbol(
       underlying="NIFTY",
       exchange="NSE_INDEX",
-      expiry_date="30DEC25",
+      expiry_date="25AUG26",
       offset="OTM4",
       option_type="CE"
   )
@@ -1262,7 +1272,7 @@ print(response)
 ```json
 {
   "status": "success",
-  "symbol": "NIFTY30DEC2526150CE",
+  "symbol": "NIFTY25AUG2626150CE",
   "exchange": "NFO",
   "lotsize": 75,
   "tick_size": 5,
@@ -1277,7 +1287,7 @@ print(response)
 response = client.syntheticfuture(
       underlying="NIFTY",
       exchange="NSE_INDEX",
-      expiry_date="25NOV25"
+      expiry_date="25AUG26"
   )
 
 print(response)
@@ -1288,7 +1298,7 @@ SyntheticFuture **Response**
 ```
 {
  'atm_strike': 25900.0,
- 'expiry': '25NOV25',
+ 'expiry': '25AUG26',
  'status': 'success',
  'synthetic_future_price': 25980.05,
  'underlying': 'NIFTY',
@@ -1300,7 +1310,7 @@ SyntheticFuture **Response**
 
 ```python
 response = client.optiongreeks(
-      symbol="NIFTY25NOV2526000CE",
+      symbol="NIFTY25AUG2626000CE",
       exchange="NFO",
       interest_rate=0.00,
       underlying_symbol="NIFTY",
@@ -1329,7 +1339,7 @@ OptionGreeks  **Response**
  'spot_price': 25966.05,
  'status': 'success',
  'strike': 26000.0,
- 'symbol': 'NIFTY25NOV2526000CE',
+ 'symbol': 'NIFTY25AUG2626000CE',
  'underlying': 'NIFTY'
 }
 ```
@@ -1549,7 +1559,7 @@ print(response)
 ```python
 response = client.margin(positions=[
       {
-          "symbol": "NIFTY25NOV2525000CE",
+          "symbol": "NIFTY25AUG2625000CE",
           "exchange": "NFO",
           "action": "BUY",
           "product": "NRML",
@@ -1557,7 +1567,7 @@ response = client.margin(positions=[
           "quantity": "75"
       },
       {
-          "symbol": "NIFTY25NOV2525500CE",
+          "symbol": "NIFTY25AUG2625500CE",
           "exchange": "NFO",
           "action": "SELL",
           "product": "NRML",
