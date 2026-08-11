@@ -998,6 +998,9 @@ export default function StrategyBuilder() {
 
   // F&O exchange for all leg symbols (used for WebSocket subscription).
   const fnoExchange = useMemo(() => optionExchangeFor(selectedExchange), [selectedExchange])
+  const auxiliaryReferenceReady =
+    selectedExchange !== 'CRYPTO' ||
+    Boolean(activeChain?.underlying_symbol && activeChain?.underlying_exchange)
 
   // Chain-derived fallback prices (used until the first WS tick arrives).
   // PnLTab itself handles real-time streaming internally to scope tick-
@@ -1611,24 +1614,36 @@ export default function StrategyBuilder() {
                 />
               </TabsContent>
               <TabsContent value="strategychart" className="pt-4">
-                <StrategyChartTab
-                  underlying={selectedUnderlying}
-                  exchange={selectedExchange}
-                  underlyingSymbol={activeChain?.underlying_symbol}
-                  underlyingExchange={activeChain?.underlying_exchange}
-                  legs={legs}
-                  optionExchange={fnoExchange}
-                />
+                {auxiliaryReferenceReady ? (
+                  <StrategyChartTab
+                    underlying={selectedUnderlying}
+                    exchange={selectedExchange}
+                    underlyingSymbol={activeChain?.underlying_symbol}
+                    underlyingExchange={activeChain?.underlying_exchange}
+                    legs={legs}
+                    optionExchange={fnoExchange}
+                  />
+                ) : (
+                  <div className="rounded-xl border bg-card p-8 text-center text-sm text-muted-foreground shadow-sm">
+                    Resolving the underlying market-data reference...
+                  </div>
+                )}
               </TabsContent>
               <TabsContent value="multistrikeoi" className="pt-4">
-                <MultiStrikeOITab
-                  underlying={selectedUnderlying}
-                  exchange={selectedExchange}
-                  underlyingSymbol={activeChain?.underlying_symbol}
-                  underlyingExchange={activeChain?.underlying_exchange}
-                  legs={legs}
-                  optionExchange={fnoExchange}
-                />
+                {auxiliaryReferenceReady ? (
+                  <MultiStrikeOITab
+                    underlying={selectedUnderlying}
+                    exchange={selectedExchange}
+                    underlyingSymbol={activeChain?.underlying_symbol}
+                    underlyingExchange={activeChain?.underlying_exchange}
+                    legs={legs}
+                    optionExchange={fnoExchange}
+                  />
+                ) : (
+                  <div className="rounded-xl border bg-card p-8 text-center text-sm text-muted-foreground shadow-sm">
+                    Resolving the underlying market-data reference...
+                  </div>
+                )}
               </TabsContent>
             </Tabs>
 

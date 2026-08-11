@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PortfolioEntry } from '@/api/strategy-portfolio'
+import { useBrokerStore } from '@/stores/brokerStore'
 import type { OptionChainResponse, OptionData } from '@/types/option-chain'
 import StrategyBuilder from './StrategyBuilder'
 
@@ -245,6 +246,7 @@ beforeEach(() => {
   mocks.strategyChartProps.length = 0
   mocks.multiStrikeOIProps.length = 0
   mocks.broker = null
+  useBrokerStore.setState({ capabilities: null, isLoaded: false })
   mocks.getUnderlyings.mockResolvedValue({
     status: 'success',
     underlyings: ['NIFTY', 'BANKNIFTY', 'RELIANCE'],
@@ -309,6 +311,124 @@ function requests(path: string): unknown[] {
 }
 
 describe('StrategyBuilder live request orchestration', () => {
+  it('uses broker-reported NCDEX through the real hook and expiry request path', async () => {
+    useBrokerStore.setState({
+      capabilities: {
+        broker_name: 'test',
+        broker_type: 'IN_stock',
+        supported_exchanges: ['NCDEX'],
+        leverage_config: false,
+      },
+      isLoaded: true,
+    })
+    mocks.getUnderlyings.mockResolvedValue({
+      status: 'success',
+      underlyings: ['GUARSEED'],
+    })
+
+    renderBuilder()
+
+    await waitFor(() => expect(mocks.getUnderlyings).toHaveBeenCalledWith('NCDEX'))
+    await waitFor(() =>
+      expect(mocks.getExpiries).toHaveBeenCalledWith(
+        'test-api-key',
+        'GUARSEED',
+        'NCDEX',
+        'options'
+      )
+    )
+    expect(screen.getByRole('combobox', { name: 'Derivative exchange' })).toHaveTextContent(
+      'NCDEX'
+    )
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: 'Option expiry' })).toHaveTextContent(
+        '13AUG26'
+      )
+    )
+  })
+
+  it('does not mount crypto auxiliary requests without a canonical chain reference', async () => {
+    const user = userEvent.setup()
+    const slowChain = deferred<Response>()
+    let slowRequestStarted = false
+    const cryptoChain = (expiry: string) => {
+      const chain = chainFixture('BTC', expiry)
+      chain.underlying_symbol = 'BTCUSDFUT'
+      chain.underlying_exchange = 'CRYPTO'
+      return chain
+    }
+
+    useBrokerStore.setState({
+      capabilities: {
+        broker_name: 'test',
+        broker_type: 'crypto',
+        supported_exchanges: ['CRYPTO'],
+        leverage_config: false,
+      },
+      isLoaded: true,
+    })
+    mocks.getUnderlyings.mockResolvedValue({ status: 'success', underlyings: ['BTC'] })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body))
+        if (body.expiry_date === '18AUG26') {
+          slowRequestStarted = true
+          return slowChain.promise
+        }
+        return new Response(JSON.stringify(cryptoChain(String(body.expiry_date))), { status: 200 })
+      })
+    )
+
+    renderBuilder()
+    await addOneLeg()
+    await user.click(screen.getByRole('tab', { name: 'Strategy Chart' }))
+    await waitFor(() => expect(mocks.strategyChartProps).not.toHaveLength(0))
+    mocks.strategyChartProps.length = 0
+    mocks.multiStrikeOIProps.length = 0
+
+    await chooseExpiry('18AUG26')
+    await waitFor(() => expect(slowRequestStarted).toBe(true))
+    await user.click(screen.getByRole('tab', { name: 'Multi Strike OI' }))
+
+    expect(
+      mocks.strategyChartProps.some(
+        (props) => !props.underlyingSymbol || !props.underlyingExchange
+      )
+    ).toBe(false)
+    expect(
+      mocks.multiStrikeOIProps.some(
+        (props) => !props.underlyingSymbol || !props.underlyingExchange
+      )
+    ).toBe(false)
+
+    await act(async () => {
+      slowChain.resolve(
+        new Response(JSON.stringify(cryptoChain('18AUG26')), {
+          status: 200,
+        })
+      )
+    })
+    await waitFor(() =>
+      expect(mocks.multiStrikeOIProps.at(-1)).toEqual(
+        expect.objectContaining({
+          underlyingSymbol: 'BTCUSDFUT',
+          underlyingExchange: 'CRYPTO',
+        })
+      )
+    )
+
+    await user.click(screen.getByRole('tab', { name: 'Strategy Chart' }))
+    await waitFor(() =>
+      expect(mocks.strategyChartProps.at(-1)).toEqual(
+        expect.objectContaining({
+          underlyingSymbol: 'BTCUSDFUT',
+          underlyingExchange: 'CRYPTO',
+        })
+      )
+    )
+  })
+
   it('passes the option-chain canonical reference to both auxiliary chart tabs', async () => {
     const user = userEvent.setup()
     const canonical = chainFixture('NIFTY', '13AUG26')
