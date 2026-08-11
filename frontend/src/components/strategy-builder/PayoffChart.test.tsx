@@ -1,7 +1,7 @@
 import { render } from '@testing-library/react'
 import type * as PlotlyTypes from 'plotly.js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { computePayoff, type StrategyLeg } from '@/lib/strategyMath'
+import { computePayoff, type ScenarioState, type StrategyLeg } from '@/lib/strategyMath'
 import { PayoffChart } from './PayoffChart'
 
 const plotCapture = vi.hoisted(() => ({
@@ -19,6 +19,12 @@ vi.mock('@/lib/Plot2D', () => ({
 }))
 
 const NOW = new Date('2026-07-28T10:00:00.000Z')
+const BASE_SCENARIO: ScenarioState = {
+  spot: 100,
+  iv: 20,
+  daysElapsed: 0,
+  valuationTime: NOW,
+}
 
 function leg(
   id: string,
@@ -67,7 +73,12 @@ describe('PayoffChart exact geometry', () => {
     )
 
     render(
-      <PayoffChart title="Iron Condor" spot={100} atmIv={20} tYears={7 / 365} payoff={payoff} />
+      <PayoffChart
+        title="Iron Condor"
+        scenario={BASE_SCENARIO}
+        remainingYears={7 / 365}
+        payoff={payoff}
+      />
     )
 
     const traces = plotCapture.props?.data ?? []
@@ -103,7 +114,14 @@ describe('PayoffChart exact geometry', () => {
       NOW
     )
 
-    render(<PayoffChart title="Long Call" spot={100} atmIv={30} tYears={1} payoff={payoff} />)
+    render(
+      <PayoffChart
+        title="Long Call"
+        scenario={{ ...BASE_SCENARIO, iv: 30 }}
+        remainingYears={1}
+        payoff={payoff}
+      />
+    )
 
     expect(plotCapture.props?.layout.xaxis?.range).toEqual([40, 160])
     const sigmaShapes = plotCapture.props?.layout.shapes?.filter(
@@ -127,7 +145,14 @@ describe('PayoffChart exact geometry', () => {
       NOW
     )
 
-    render(<PayoffChart title="High IV Call" spot={100} atmIv={100} tYears={1} payoff={payoff} />)
+    render(
+      <PayoffChart
+        title="High IV Call"
+        scenario={{ ...BASE_SCENARIO, iv: 100 }}
+        remainingYears={1}
+        payoff={payoff}
+      />
+    )
 
     const xShapes = plotCapture.props?.layout.shapes?.filter((shape) => shape.xref === 'x') ?? []
     const xAnnotations =
@@ -143,5 +168,76 @@ describe('PayoffChart exact geometry', () => {
     expect(
       xAnnotations.every((annotation) => typeof annotation.x !== 'number' || annotation.x >= 0)
     ).toBe(true)
+  })
+
+  it('uses the shifted scenario for its marker and hand-derived lognormal bands', () => {
+    const payoff = computePayoff(
+      [leg('call', 'BUY', 'CE', 100, 2)],
+      110,
+      7,
+      0.25,
+      [70, 160],
+      12,
+      0,
+      30,
+      NOW
+    )
+
+    render(
+      <PayoffChart
+        title="Shifted Call"
+        scenario={{ ...BASE_SCENARIO, spot: 110, iv: 30, daysElapsed: 0.25 }}
+        remainingYears={0.25}
+        terminalLabel="At First Expiry"
+        payoff={payoff}
+      />
+    )
+
+    const layout = plotCapture.props?.layout
+    expect(layout?.uirevision).toBe('strategy-payoff')
+    expect(
+      layout?.shapes?.some(
+        (shape) =>
+          shape.type === 'line' && shape.xref === 'x' && shape.x0 === 110 && shape.x1 === 110
+      )
+    ).toBe(true)
+
+    const bands = layout?.shapes?.filter((shape) => shape.type === 'rect') ?? []
+    expect(bands.some((shape) => Math.abs(Number(shape.x0) - 80.5783792325) < 1e-4)).toBe(true)
+    expect(bands.some((shape) => Math.abs(Number(shape.x0) - 93.6187202159) < 1e-4)).toBe(true)
+  })
+
+  it('labels the selected horizon and gives both curves the same precise hover fields', () => {
+    const payoff = computePayoff(
+      [leg('call', 'BUY', 'CE', 100, 2)],
+      100,
+      7,
+      0.25,
+      [80, 120],
+      12,
+      0,
+      20,
+      NOW
+    )
+
+    render(
+      <PayoffChart
+        title="Calendar"
+        scenario={{ ...BASE_SCENARIO, daysElapsed: 0.25 }}
+        remainingYears={6.75 / 365}
+        terminalLabel="At First Expiry"
+        payoff={payoff}
+      />
+    )
+
+    const curves = (plotCapture.props?.data ?? []).filter(
+      (trace) => trace.name === 'At First Expiry' || trace.name === 'T+6h'
+    )
+    expect(curves).toHaveLength(2)
+    for (const curve of curves) {
+      expect(curve.hovertemplate).toContain('Underlying: ₹%{x:,.2f}')
+      expect(curve.hovertemplate).toContain('Chg. from Scenario: %{customdata}')
+      expect(curve.hovertemplate).toContain('P&L: ₹%{y:,.2f}')
+    }
   })
 })

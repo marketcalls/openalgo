@@ -63,11 +63,13 @@ import {
   computePayoff,
   daysToExpiry,
   daysToYears,
+  hasMultipleActiveExpiries,
   isLegClosed,
   nearestLegDays,
   netCredit,
   payoffPriceRange,
   probabilityOfProfit,
+  type ScenarioState,
   type StrategyLeg,
   totalPnlAt,
   totalPremium,
@@ -641,19 +643,30 @@ export default function StrategyBuilder() {
       if (
         generation !== rehydrationGenerationRef.current ||
         identityKey !==
-          chainIdentity(requestIdentity.exchange, requestIdentity.underlying, requestIdentity.expiry)
+          chainIdentity(
+            requestIdentity.exchange,
+            requestIdentity.underlying,
+            requestIdentity.expiry
+          )
       ) {
         return
       }
       const byId = new Map(
-        resolved.flatMap((item) => (item.status === 'fulfilled' ? [item.value] : [])).map((item) => [item.id, item])
+        resolved
+          .flatMap((item) => (item.status === 'fulfilled' ? [item.value] : []))
+          .map((item) => [item.id, item])
       )
       setLegs((previous) => {
         let changed = false
         const next = previous.map((leg) => {
           const result = byId.get(leg.id)
           const selectionKey = `${leg.segment}|${leg.expiry}|${leg.strike ?? ''}|${leg.optionType ?? ''}`
-          if (!result || !result.contract || leg.contractValid || result.selectionKey !== selectionKey) {
+          if (
+            !result ||
+            !result.contract ||
+            leg.contractValid ||
+            result.selectionKey !== selectionKey
+          ) {
             return leg
           }
           changed = true
@@ -678,7 +691,6 @@ export default function StrategyBuilder() {
         return changed ? next : previous
       })
     })
-
   }, [activeChain, legs, requestIdentity, resolveLegContract])
 
   useEffect(() => {
@@ -707,14 +719,29 @@ export default function StrategyBuilder() {
 
   // Simulator caps "days forward" to the nearest expiry so the T+0 slider
   // can't go past the first leg's expiration.
-  const maxSimulatorDays = Math.max(0, Math.floor(nearestDays))
+  const maxSimulatorDays = Math.max(0, nearestDays)
   const clampedDaysElapsed = Math.min(daysElapsed, maxSimulatorDays)
+
+  useEffect(() => {
+    setDaysElapsed((current) => Math.min(current, maxSimulatorDays))
+  }, [maxSimulatorDays])
 
   // Remaining "simulated" years to the near expiry — for σ bands / PoP.
   const simulatedYearsToNearExpiry = daysToYears(Math.max(nearestDays - clampedDaysElapsed, 0))
 
-  // Shifted spot for the payoff calculations
-  const simulatedSpot = spotPrice !== null ? spotPrice * (1 + spotShiftPct / 100) : 0
+  const scenario = useMemo<ScenarioState>(
+    () => ({
+      spot: spotPrice !== null ? spotPrice * (1 + spotShiftPct / 100) : 0,
+      iv: Math.max(0, (atmIv ?? 0) * (1 + ivShiftPct / 100)),
+      daysElapsed: clampedDaysElapsed,
+      valuationTime: new Date(marketClock),
+    }),
+    [spotPrice, spotShiftPct, atmIv, ivShiftPct, clampedDaysElapsed, marketClock]
+  )
+
+  const terminalCurveLabel = useMemo(() => {
+    return hasMultipleActiveExpiries(legs) ? 'At First Expiry' : 'At Expiry'
+  }, [legs])
 
   const liveContractsByKey = useMemo(() => {
     const contracts = new Map<
@@ -1153,7 +1180,7 @@ export default function StrategyBuilder() {
 
   // Payoff
   const payoff = useMemo(() => {
-    if (!spotPrice) {
+    if (scenario.spot <= 0) {
       return {
         samples: [],
         maxProfit: 0,
@@ -1165,48 +1192,44 @@ export default function StrategyBuilder() {
     // Keep every active strike and the complete ±2σ context in view. This
     // prevents wide structures and high-IV expiries from losing breakevens,
     // payoff kinks, or volatility markers outside a fixed percentage window.
-    const range = payoffPriceRange(spotPrice, legs, atmIv ?? 0, simulatedYearsToNearExpiry)
-    // "At Expiry" curve → advance calendar time to the nearest leg's expiry;
+    const range = payoffPriceRange(scenario.spot, legs, scenario.iv, simulatedYearsToNearExpiry)
+    // Terminal curve → advance calendar time to the nearest leg's expiry;
     // far-dated legs (calendar / diagonal) keep their remaining time value.
-    // "T+0" curve → advance by the simulator's days-forward value.
+    // Current-value curve → advance by the simulator's selected horizon.
     return computePayoff(
       legs,
-      spotPrice,
+      scenario.spot,
       nearestDays,
-      clampedDaysElapsed,
+      scenario.daysElapsed,
       range,
       240,
       ivShiftPct,
       atmIv ?? 0,
-      new Date(marketClock)
+      scenario.valuationTime
     )
-  }, [
-    legs,
-    spotPrice,
-    nearestDays,
-    clampedDaysElapsed,
-    ivShiftPct,
-    atmIv,
-    simulatedYearsToNearExpiry,
-    marketClock,
-  ])
+  }, [legs, scenario, nearestDays, ivShiftPct, atmIv, simulatedYearsToNearExpiry])
 
   const pop = useMemo(() => {
-    if (!spotPrice || atmIv === null || simulatedYearsToNearExpiry <= 0) return 0
-    return probabilityOfProfit(payoff.samples, spotPrice, atmIv, simulatedYearsToNearExpiry)
-  }, [payoff.samples, spotPrice, atmIv, simulatedYearsToNearExpiry])
+    if (scenario.spot <= 0 || scenario.iv <= 0 || simulatedYearsToNearExpiry <= 0) return null
+    return probabilityOfProfit(
+      payoff.samples,
+      scenario.spot,
+      scenario.iv,
+      simulatedYearsToNearExpiry
+    )
+  }, [payoff.samples, scenario.spot, scenario.iv, simulatedYearsToNearExpiry])
 
   const totalPnlNow = useMemo(() => {
-    if (!spotPrice) return 0
+    if (scenario.spot <= 0) return 0
     return totalPnlAt(
       legs,
-      simulatedSpot,
-      clampedDaysElapsed,
+      scenario.spot,
+      scenario.daysElapsed,
       ivShiftPct,
       atmIv ?? 0,
-      new Date(marketClock)
+      scenario.valuationTime
     )
-  }, [legs, simulatedSpot, clampedDaysElapsed, ivShiftPct, spotPrice, atmIv, marketClock])
+  }, [legs, scenario, ivShiftPct, atmIv])
 
   const credit = useMemo(() => netCredit(legs), [legs])
   const premium = useMemo(() => totalPremium(legs), [legs])
@@ -1560,9 +1583,9 @@ export default function StrategyBuilder() {
                   {spotPrice ? (
                     <PayoffChart
                       title={`${selectedUnderlying} — ${selectedExpiry || '—'}`}
-                      spot={spotPrice}
-                      atmIv={atmIv ?? 0}
-                      tYears={simulatedYearsToNearExpiry}
+                      scenario={scenario}
+                      remainingYears={simulatedYearsToNearExpiry}
+                      terminalLabel={terminalCurveLabel}
                       payoff={payoff}
                     />
                   ) : (
@@ -1603,7 +1626,7 @@ export default function StrategyBuilder() {
             <Simulators
               spotShiftPct={spotShiftPct}
               ivShiftPct={ivShiftPct}
-              daysElapsed={daysElapsed}
+              daysElapsed={scenario.daysElapsed}
               maxDays={maxSimulatorDays}
               onSpotShiftChange={setSpotShiftPct}
               onIvShiftChange={setIvShiftPct}

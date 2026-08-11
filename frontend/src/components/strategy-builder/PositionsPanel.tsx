@@ -13,7 +13,7 @@ export interface PositionsPanelProps {
   onToggleAll: (active: boolean) => void
   onReset: () => void
 
-  probOfProfit: number
+  probOfProfit: number | null
   maxProfit: number
   maxLoss: number
   breakevens: number[]
@@ -404,7 +404,7 @@ export function PositionsPanel({
           <MetricTile label="Max Loss" value={formatCurrency(maxLoss)} tone="loss" emphasize />
           <MetricTile
             label="Prob. of Profit"
-            value={probOfProfit > 0 ? formatPct(probOfProfit * 100) : '—'}
+            value={probOfProfit === null ? '—' : formatPct(probOfProfit * 100)}
           />
           <MetricTile label="Risk : Reward" value={riskReward} />
           <MetricTile

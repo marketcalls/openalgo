@@ -1,26 +1,27 @@
 import type * as PlotlyTypes from 'plotly.js'
 import { useMemo } from 'react'
 import Plot from '@/lib/Plot2D'
-import type { PayoffResult } from '@/lib/strategyMath'
+import { lognormalPriceBand, type PayoffResult, type ScenarioState } from '@/lib/strategyMath'
 import { useThemeStore } from '@/stores/themeStore'
 
 export interface PayoffChartProps {
   title: string
-  spot: number
-  atmIv: number
-  tYears: number
+  scenario: ScenarioState
+  remainingYears: number
   payoff: PayoffResult
-  /** If true, show a dashed "T+0" curve in addition to expiry. */
+  /** Label the terminal event explicitly for multi-expiry strategies. */
+  terminalLabel?: string
+  /** If true, show the dashed current-value scenario curve in addition to expiry. */
   showTplus0?: boolean
   height?: number
 }
 
 export function PayoffChart({
   title,
-  spot,
-  atmIv,
-  tYears,
+  scenario,
+  remainingYears,
   payoff,
+  terminalLabel = 'At Expiry',
   showTplus0 = true,
   height = 440,
 }: PayoffChartProps) {
@@ -50,6 +51,7 @@ export function PayoffChart({
   )
 
   const { data, layout, config } = useMemo(() => {
+    const { spot, iv, daysElapsed } = scenario
     const { samples } = payoff
     if (samples.length === 0) {
       return {
@@ -77,15 +79,29 @@ export function PayoffChart({
     const profitFill = samples.map((s) => (s.expiry >= 0 ? s.expiry : 0))
     const lossFill = samples.map((s) => (s.expiry < 0 ? s.expiry : 0))
 
-    const sigmaT = (atmIv / 100) * Math.sqrt(Math.max(tYears, 1e-6))
-    const sigmaMove = spot * sigmaT
-    const band = (n: number) => ({ lo: spot - n * sigmaMove, hi: spot + n * sigmaMove })
-    const b1 = band(1)
-    const b2 = band(2)
+    const b1 = lognormalPriceBand(spot, iv, remainingYears, 1)
+    const b2 = lognormalPriceBand(spot, iv, remainingYears, 2)
     const domainLo = xs[0]
     const domainHi = xs[xs.length - 1]
     const inDomain = (x: number) => x >= domainLo && x <= domainHi
     const clipToDomain = (x: number) => Math.min(domainHi, Math.max(domainLo, x))
+
+    const formatHorizon = (elapsedDays: number) => {
+      if (elapsedDays <= 0) return 'T+0'
+      const totalHours = Math.round(elapsedDays * 24 * 10) / 10
+      const wholeDays = Math.floor(totalHours / 24)
+      const hours = Math.round((totalHours - wholeDays * 24) * 10) / 10
+      if (wholeDays === 0) return `T+${hours.toLocaleString()}h`
+      if (hours === 0) return `T+${wholeDays}d`
+      return `T+${wholeDays}d ${hours.toLocaleString()}h`
+    }
+    const currentLabel = formatHorizon(daysElapsed)
+    const hoverTemplate = (label: string) =>
+      `<b>${label}</b>` +
+      '<br>Underlying: ₹%{x:,.2f}' +
+      '<br>Chg. from Scenario: %{customdata}' +
+      '<br>P&L: ₹%{y:,.2f}' +
+      '<extra></extra>'
 
     const traces: PlotlyTypes.Data[] = [
       {
@@ -115,14 +131,11 @@ export function PayoffChart({
         y: ysExpiry,
         type: 'scatter',
         mode: 'lines',
-        name: 'At Expiry',
+        name: terminalLabel,
         line: { color: colors.expiryLine, width: 2.2 },
         // customdata carries a pre-formatted percent string per point.
         customdata: pctFromSpot as unknown as PlotlyTypes.Datum[],
-        hovertemplate:
-          '<b>At Expiry P&L</b> ₹%{y:,.0f}' +
-          '<br>Chg. from Spot: %{customdata}' +
-          '<extra></extra>',
+        hovertemplate: hoverTemplate(terminalLabel),
       },
     ]
 
@@ -132,9 +145,10 @@ export function PayoffChart({
         y: ysT0,
         type: 'scatter',
         mode: 'lines',
-        name: 'T+0',
+        name: currentLabel,
         line: { color: colors.tplus0Line, width: 2, dash: 'dash' },
-        hovertemplate: '<b>T+0 P&L</b> ₹%{y:,.0f}<extra></extra>',
+        customdata: pctFromSpot as unknown as PlotlyTypes.Datum[],
+        hovertemplate: hoverTemplate(currentLabel),
       })
     }
 
@@ -155,7 +169,7 @@ export function PayoffChart({
     // Stepped σ bands: the wider 2σ band is drawn first so the 1σ band
     // overlays on top of it, producing a visually distinct inner (darker)
     // and outer (lighter) zone rather than one uniform wash.
-    if (sigmaMove > 0) {
+    if (b1 && b2) {
       const pushBand = (x0: number, x1: number, fillcolor: string) => {
         const clippedX0 = clipToDomain(x0)
         const clippedX1 = clipToDomain(x1)
@@ -174,13 +188,13 @@ export function PayoffChart({
         })
       }
       // Left outer band: from -2σ to -1σ
-      pushBand(b2.lo, b1.lo, colors.sigma2Band)
+      pushBand(b2.lower, b1.lower, colors.sigma2Band)
       // Right outer band: from +1σ to +2σ
-      pushBand(b1.hi, b2.hi, colors.sigma2Band)
+      pushBand(b1.upper, b2.upper, colors.sigma2Band)
       // Inner 1σ band
-      pushBand(b1.lo, b1.hi, colors.sigma1Band)
+      pushBand(b1.lower, b1.upper, colors.sigma1Band)
       // Thin vertical ticks at each σ boundary
-      for (const x of [b2.lo, b1.lo, b1.hi, b2.hi]) {
+      for (const x of [b2.lower, b1.lower, b1.upper, b2.upper]) {
         if (!inDomain(x)) continue
         shapes.push({
           type: 'line',
@@ -222,12 +236,12 @@ export function PayoffChart({
       font: { size: 12, color: colors.spotLine },
     })
 
-    if (sigmaMove > 0) {
+    if (b1 && b2) {
       const sigmaLabels: Array<{ x: number; text: string }> = [
-        { x: b2.lo, text: '-2σ' },
-        { x: b1.lo, text: '-1σ' },
-        { x: b1.hi, text: '+1σ' },
-        { x: b2.hi, text: '+2σ' },
+        { x: b2.lower, text: '-2σ' },
+        { x: b1.lower, text: '-1σ' },
+        { x: b1.upper, text: '+1σ' },
+        { x: b2.upper, text: '+2σ' },
       ]
       for (const s of sigmaLabels) {
         if (!inDomain(s.x)) continue
@@ -266,6 +280,7 @@ export function PayoffChart({
     })
 
     const chartLayout: Partial<PlotlyTypes.Layout> = {
+      uirevision: 'strategy-payoff',
       title: {
         text: title,
         font: { color: colors.text, size: 14 },
@@ -320,7 +335,7 @@ export function PayoffChart({
         responsive: true,
       } as Partial<PlotlyTypes.Config>,
     }
-  }, [payoff, spot, atmIv, tYears, showTplus0, title, colors, isDark])
+  }, [payoff, scenario, remainingYears, terminalLabel, showTplus0, title, colors, isDark])
 
   return (
     <Plot

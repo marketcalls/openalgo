@@ -125,7 +125,18 @@ export function Simulators({
   onDaysElapsedChange,
   onReset,
 }: SimulatorsProps) {
-  const maxShiftedDays = Math.max(1, Math.floor(maxDays))
+  const maxShiftedDays = Math.max(0, maxDays)
+  const isSubDay = maxShiftedDays < 1
+  const timeStep = isSubDay ? 1 / 24 : 0.25
+  const formatTime = (value: number) => {
+    const totalHours = Math.round(value * 24 * 10) / 10
+    if (isSubDay) return `+${totalHours.toLocaleString()}h`
+    const wholeDays = Math.floor(totalHours / 24)
+    const hours = Math.round((totalHours - wholeDays * 24) * 10) / 10
+    if (hours === 0) return `+${wholeDays}d`
+    if (wholeDays === 0) return `+${hours.toLocaleString()}h`
+    return `+${wholeDays}d ${hours.toLocaleString()}h`
+  }
   const isDirty = spotShiftPct !== 0 || ivShiftPct !== 0 || daysElapsed !== 0
 
   return (
@@ -182,14 +193,14 @@ export function Simulators({
         />
         <SliderRow
           icon={<Clock className="h-3.5 w-3.5" />}
-          label="Days Forward"
+          label={isSubDay ? 'Hours Forward' : 'Days Forward'}
           sublabel="Advance time toward expiry"
           value={daysElapsed}
           min={0}
           max={maxShiftedDays}
-          step={1}
+          step={timeStep}
           accent="blue"
-          formatter={(v) => `+${v}d`}
+          formatter={formatTime}
           onChange={onDaysElapsedChange}
         />
       </div>

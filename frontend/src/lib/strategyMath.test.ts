@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   computePayoff,
+  hasMultipleActiveExpiries,
   legPnlAt,
+  lognormalPriceBand,
   nearestLegDays,
   normCdf,
+  type OptionType,
   payoffPriceRange,
   probabilityOfProfit,
-  totalPnlAt,
-  type OptionType,
   type Side,
   type StrategyLeg,
+  totalPnlAt,
   type ValuationClock,
 } from './strategyMath'
 
@@ -292,10 +294,28 @@ describe('payoff geometry and structural risk', () => {
     expect(payoff.maxLoss).toBe(0)
   })
 
-  it('PG-06 expands the display range to include strikes and two sigma', () => {
+  it('uses hand-derived lognormal quantiles for expected-move bands', () => {
+    const oneSigma = lognormalPriceBand(110, 30, 0.25, 1)
+    const twoSigma = lognormalPriceBand(110, 30, 0.25, 2)
+
+    expect(oneSigma?.lower).toBeCloseTo(93.6187202159, 10)
+    expect(oneSigma?.upper).toBeCloseTo(126.3720540374, 10)
+    expect(twoSigma?.lower).toBeCloseTo(80.5783792325, 10)
+    expect(twoSigma?.upper).toBeCloseTo(146.8233797046, 10)
+  })
+
+  it('rejects non-finite lognormal inputs instead of contaminating the chart domain', () => {
+    expect(lognormalPriceBand(Number.NaN, 30, 0.25, 1)).toBeNull()
+    expect(lognormalPriceBand(110, Number.POSITIVE_INFINITY, 0.25, 1)).toBeNull()
+  })
+
+  it('PG-06 expands the shifted display range to include strikes and lognormal two sigma', () => {
     const legs = [optionLeg('put', 'SELL', 'PE', 70, 3), optionLeg('call', 'SELL', 'CE', 130, 3)]
 
-    expect(payoffPriceRange(100, legs, 30, 1)).toEqual([40, 160])
+    const range = payoffPriceRange(110, legs, 30, 0.25)
+
+    expect(range[0]).toBeCloseTo(70, 10)
+    expect(range[1]).toBeCloseTo(146.8233797046, 10)
   })
 
   it('PG-25 includes every Iron Condor strike and breakeven as an exact sample', () => {
@@ -345,6 +365,41 @@ describe('payoff geometry and structural risk', () => {
 
     expect(probability).toBeCloseTo(cdf(136) - cdf(64), 5)
     expect(probability).toBeLessThan(1)
+  })
+
+  it('distinguishes a finite zero PoP from unavailable distribution inputs', () => {
+    const alwaysLosing = [
+      { underlying: 80, expiry: -1, tplus0: -1 },
+      { underlying: 120, expiry: -1, tplus0: -1 },
+    ]
+
+    expect(probabilityOfProfit(alwaysLosing, 100, 20, 1)).toBe(0)
+    expect(probabilityOfProfit(alwaysLosing, 100, 0, 1)).toBeNull()
+    expect(probabilityOfProfit([], 100, 20, 1)).toBeNull()
+    expect(probabilityOfProfit(alwaysLosing, Number.POSITIVE_INFINITY, 20, 1)).toBeNull()
+    expect(
+      probabilityOfProfit(
+        [
+          { underlying: Number.NaN, expiry: -1, tplus0: -1 },
+          { underlying: 120, expiry: -1, tplus0: -1 },
+        ],
+        100,
+        20,
+        1
+      )
+    ).toBeNull()
+  })
+
+  it('treats mixed authoritative and legacy metadata for the same expiry as one event', () => {
+    const expiryTs = Date.parse('2026-08-13T10:00:00.000Z') / 1000
+    const sameExpiry = [
+      { ...optionLeg('authoritative', 'BUY', 'CE', 100, 2, 1, '13AUG26'), expiryTs },
+      optionLeg('legacy', 'SELL', 'CE', 105, 1, 1, '13AUG26'),
+    ]
+    const calendar = [...sameExpiry, optionLeg('far', 'BUY', 'CE', 110, 1, 1, '18AUG26')]
+
+    expect(hasMultipleActiveExpiries(sameExpiry)).toBe(false)
+    expect(hasMultipleActiveExpiries(calendar)).toBe(true)
   })
 
   it('PG-15 numerically refines a smooth multi-expiry extremum and preserves unlimited risk', () => {

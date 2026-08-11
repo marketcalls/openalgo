@@ -798,6 +798,66 @@ describe('StrategyBuilder live request orchestration', () => {
 })
 
 describe('StrategyBuilder identity orchestration', () => {
+  it('persists a contracted time horizon after the maximum remaining time shrinks', async () => {
+    const timedChain = (underlying: string, expiry: string) => {
+      const chain = chainFixture(underlying, expiry)
+      chain.server_ts = 1_786_000_000
+      chain.expiry_ts = /18.*AUG.*26/i.test(expiry)
+        ? chain.server_ts + 5 * 86_400
+        : chain.server_ts + 0.25 * 86_400
+      return chain
+    }
+    mocks.getOptionChain.mockImplementation(
+      async (_apiKey: string, underlying: string, _exchange: string, expiry: string) =>
+        timedChain(underlying, expiry)
+    )
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const body = JSON.parse(String(init?.body)) as Record<string, string>
+      mocks.fetchRequests.push({ url, body })
+      return new Response(JSON.stringify(timedChain(body.underlying, body.expiry_date)), {
+        status: 200,
+      })
+    })
+
+    renderBuilder()
+    const add = await screen.findByRole('button', { name: /Add Buy/ })
+    await waitFor(() => expect(add).toBeEnabled())
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Expiry' }), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: '18AUG26' }))
+    await addOneLeg()
+
+    const timeSlider = screen.getAllByRole('slider')[2]
+    fireEvent.change(timeSlider, { target: { value: '4' } })
+    expect(timeSlider).toHaveValue('4')
+
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Expiry' }), { key: 'ArrowDown' })
+    fireEvent.click(await screen.findByRole('option', { name: '13AUG26' }))
+    await waitFor(() => expect(add).toBeEnabled())
+    fireEvent.click(add)
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: 'Remove position' })).toHaveLength(2)
+    )
+    await waitFor(() =>
+      expect(Number((screen.getAllByRole('slider')[2] as HTMLInputElement).value)).toBeLessThan(
+        0.26
+      )
+    )
+    const contractedValue = (screen.getAllByRole('slider')[2] as HTMLInputElement).value
+
+    const removeButtons = screen.getAllByRole('button', { name: 'Remove position' })
+    const removeNearLeg = removeButtons.find((button) =>
+      button.closest('li')?.textContent?.includes('13AUG26')
+    )
+    expect(removeNearLeg).toBeDefined()
+    fireEvent.click(removeNearLeg as HTMLButtonElement)
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: 'Remove position' })).toHaveLength(1)
+    )
+    expect(Number(screen.getAllByRole('slider')[2].getAttribute('max'))).toBeGreaterThan(4)
+    await waitFor(() => expect(screen.getAllByRole('slider')[2]).toHaveValue(contractedValue))
+  })
+
   it('disables Add immediately when expiry changes until the matching chain arrives', async () => {
     const nextChain = deferred<OptionChainResponse>()
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1047,7 +1107,9 @@ describe('StrategyBuilder identity orchestration', () => {
     renderBuilder('/strategybuilder?load=17')
 
     await waitFor(() =>
-      expect(mocks.getOptionChain.mock.calls.filter(([, , , expiry]) => expiry === '13AUG26').length).toBeGreaterThan(0)
+      expect(
+        mocks.getOptionChain.mock.calls.filter(([, , , expiry]) => expiry === '13AUG26').length
+      ).toBeGreaterThan(0)
     )
     const farCallsBeforeRefresh = mocks.getOptionChain.mock.calls.filter(
       ([, , , expiry]) => expiry === '13AUG26'

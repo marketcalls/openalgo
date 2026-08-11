@@ -23,7 +23,15 @@ export interface ValuationClock {
   clockOffsetMs: number
 }
 
-type ValuationTime = Date | ValuationClock
+export type ValuationTime = Date | ValuationClock
+
+/** One coherent what-if state shared by every scenario output. */
+export interface ScenarioState {
+  spot: number
+  iv: number
+  daysElapsed: number
+  valuationTime: Date
+}
 
 /**
  * Classify a strike's moneyness relative to the ATM strike.
@@ -465,11 +473,41 @@ export function payoffPriceRange(
   tYears: number
 ): [number, number] {
   const strikes = responsiveStrikes(legs)
-  const sigmaMove =
-    spot > 0 && atmIv > 0 && tYears > 0 ? spot * (atmIv / 100) * Math.sqrt(tYears) : 0
-  const lowerCandidates = [spot * 0.9, spot - 2 * sigmaMove, ...strikes]
-  const upperCandidates = [spot * 1.1, spot + 2 * sigmaMove, ...strikes]
+  const expectedMove = lognormalPriceBand(spot, atmIv, tYears, 2)
+  const lowerCandidates = [spot * 0.9, expectedMove?.lower ?? spot, ...strikes]
+  const upperCandidates = [spot * 1.1, expectedMove?.upper ?? spot, ...strikes]
   return [Math.max(0, Math.min(...lowerCandidates)), Math.max(...upperCandidates)]
+}
+
+/**
+ * Lognormal price boundaries used by both PoP and expected-move overlays.
+ * The zero-rate convention is ln(S_T / S_0) ~ N(-0.5 sigma^2 T, sigma^2 T).
+ */
+export function lognormalPriceBand(
+  spot: number,
+  atmIv: number,
+  tYears: number,
+  standardDeviations: number
+): { lower: number; upper: number } | null {
+  if (
+    !Number.isFinite(spot) ||
+    !Number.isFinite(atmIv) ||
+    !Number.isFinite(tYears) ||
+    !Number.isFinite(standardDeviations) ||
+    spot <= 0 ||
+    atmIv <= 0 ||
+    tYears <= 0 ||
+    standardDeviations <= 0
+  ) {
+    return null
+  }
+  const sigma = atmIv / 100
+  const drift = -0.5 * sigma * sigma * tYears
+  const spread = standardDeviations * sigma * Math.sqrt(tYears)
+  return {
+    lower: spot * Math.exp(drift - spread),
+    upper: spot * Math.exp(drift + spread),
+  }
 }
 
 function analyzeTerminalPayoff(
@@ -753,10 +791,21 @@ export function probabilityOfProfit(
   spot: number,
   atmIv: number,
   tYears: number
-): number {
-  if (samples.length < 2 || atmIv <= 0 || tYears <= 0 || spot <= 0) return 0
+): number | null {
+  if (
+    samples.length < 2 ||
+    !Number.isFinite(spot) ||
+    !Number.isFinite(atmIv) ||
+    !Number.isFinite(tYears) ||
+    spot <= 0 ||
+    atmIv <= 0 ||
+    tYears <= 0 ||
+    samples.some((sample) => !Number.isFinite(sample.underlying) || !Number.isFinite(sample.expiry))
+  ) {
+    return null
+  }
   const sigmaT = (atmIv / 100) * Math.sqrt(tYears)
-  if (sigmaT <= 0) return 0
+  if (sigmaT <= 0) return null
 
   // F(x) = P(S_T <= x) = Phi((ln(x/S0) - (-sigma^2/2) T) / (sigma sqrt T))  (risk-free drift = 0)
   const cdf = (x: number) => {
@@ -815,6 +864,30 @@ export function daysToExpiry(expiry: string, now: Date = new Date()): number {
   if (!d) return 0
   const ms = d.getTime() - now.getTime()
   return Math.max(0, ms / (1000 * 60 * 60 * 24))
+}
+
+function legExpiryIdentity(leg: StrategyLeg): string {
+  if (isFiniteNumber(leg.expiryTs) && leg.expiryTs > 0) {
+    const authoritative = new Date(leg.expiryTs * 1000)
+    if (Number.isFinite(authoritative.getTime())) return authoritative.toISOString().slice(0, 10)
+  }
+  const parsed = parseExpiryDate(leg.expiry)
+  if (parsed) return parsed.toISOString().slice(0, 10)
+  return leg.expiry
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+}
+
+/** True when responsive open legs reach more than one calendar expiry event. */
+export function hasMultipleActiveExpiries(legs: StrategyLeg[]): boolean {
+  const expiries = new Set(
+    legs
+      .filter((leg) => leg.active && !isLegClosed(leg))
+      .map(legExpiryIdentity)
+      .filter(Boolean)
+  )
+  return expiries.size > 1
 }
 
 /**
