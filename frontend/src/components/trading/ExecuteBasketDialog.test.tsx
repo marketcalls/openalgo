@@ -119,4 +119,85 @@ describe('ExecuteBasketDialog', () => {
     expect(screen.queryByText('CLOSED_SYMBOL')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Execute \(0\)/ })).toBeDisabled()
   })
+
+  it('preserves row and global choices when live metadata refreshes the same contracts', async () => {
+    const props = {
+      open: true,
+      onOpenChange: vi.fn(),
+      exchange: 'NFO',
+      strategyName: 'Preserve choices',
+      apiKey: 'api-key',
+    }
+    const initialLegs = [
+      leg({ contractValid: true }),
+      leg({ id: 'leg-b', symbol: 'B', contractValid: true }),
+    ]
+    const view = render(<ExecuteBasketDialog {...props} legs={initialLegs} />)
+
+    fireEvent.change(screen.getAllByDisplayValue('2')[0], { target: { value: '3' } })
+    fireEvent.change(screen.getAllByDisplayValue('10.05')[0], { target: { value: '12.34' } })
+    fireEvent.click(screen.getByRole('button', { name: 'MIS' }))
+    fireEvent.click(screen.getByRole('button', { name: 'MKT' }))
+    fireEvent.click(screen.getAllByRole('checkbox')[1])
+
+    view.rerender(
+      <ExecuteBasketDialog
+        {...props}
+        legs={initialLegs.map((item) => ({ ...item, marketPrice: 99.5 }))}
+      />
+    )
+
+    expect(screen.getByDisplayValue('3')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('12.34')).toBeInTheDocument()
+    expect(screen.getAllByRole('checkbox')[1]).not.toBeChecked()
+    expect(screen.getByRole('button', { name: /Execute \(1\)/ })).toBeEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: /Execute \(1\)/ }))
+    await waitFor(() =>
+      expect(submitBasket).toHaveBeenCalledWith('api-key', 'Preserve choices', [
+        expect.objectContaining({
+          symbol: 'A',
+          quantity: 75,
+          pricetype: 'MARKET',
+          product: 'MIS',
+          price: 0,
+        }),
+      ])
+    )
+  })
+
+  it('normalizes decimal and exponent tick sizes without losing precision', async () => {
+    render(
+      <ExecuteBasketDialog
+        open
+        onOpenChange={vi.fn()}
+        exchange="NFO"
+        strategyName="Precise ticks"
+        apiKey="api-key"
+        legs={[
+          leg({ contractValid: true, symbol: 'LARGE_TICK', price: 101.3, tickSize: 2.5 }),
+          leg({
+            id: 'small-tick',
+            contractValid: true,
+            symbol: 'SMALL_TICK',
+            price: 1.5e-7,
+            tickSize: 1e-7,
+          }),
+        ]}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Execute \(2\)/ }))
+
+    await waitFor(() =>
+      expect(submitBasket).toHaveBeenCalledWith(
+        'api-key',
+        'Precise ticks',
+        expect.arrayContaining([
+          expect.objectContaining({ symbol: 'LARGE_TICK', price: 102.5 }),
+          expect.objectContaining({ symbol: 'SMALL_TICK', price: 2e-7 }),
+        ])
+      )
+    )
+  })
 })

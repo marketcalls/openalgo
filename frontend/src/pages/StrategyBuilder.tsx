@@ -186,6 +186,8 @@ export default function StrategyBuilder() {
   const marginSupportedRef = useRef<boolean | null>(null)
   const hydratedIdentityRef = useRef<ChainIdentity | null>(null)
   const rehydrationGenerationRef = useRef(0)
+  const rehydrationIdentityRef = useRef<string | null>(null)
+  const rehydrationAttemptsRef = useRef(new Set<string>())
 
   const requestIdentity = useMemo<ChainIdentity>(
     () => ({
@@ -594,6 +596,13 @@ export default function StrategyBuilder() {
     []
   )
 
+  const refreshContracts = useCallback(() => {
+    // A user-requested refresh is an intentional retry boundary for saved
+    // contracts that could not be resolved from an earlier listing.
+    rehydrationAttemptsRef.current.clear()
+    return refetchLiveChain()
+  }, [refetchLiveChain])
+
   // A saved strategy carries only the historical selection. Do not trust its
   // stored symbol, lot, or tick metadata for execution: once the restored
   // identity has a current chain, resolve every open active leg again and
@@ -602,18 +611,27 @@ export default function StrategyBuilder() {
   // identity from making a newly-selected strategy executable.
   useEffect(() => {
     if (!activeChain) return
-    const candidates = legs.filter((leg) => leg.active && !isLegClosed(leg) && !leg.contractValid)
-    if (candidates.length === 0) return
-
-    const generation = ++rehydrationGenerationRef.current
     const identityKey = chainIdentity(
       requestIdentity.exchange,
       requestIdentity.underlying,
       requestIdentity.expiry
     )
-    let cancelled = false
-
-    void Promise.all(
+    if (rehydrationIdentityRef.current !== identityKey) {
+      rehydrationIdentityRef.current = identityKey
+      rehydrationGenerationRef.current += 1
+      rehydrationAttemptsRef.current.clear()
+    }
+    const generation = rehydrationGenerationRef.current
+    const candidates = legs.filter((leg) => {
+      if (!leg.active || isLegClosed(leg) || leg.contractValid) return false
+      const selectionKey = `${leg.id}|${leg.segment}|${leg.expiry}|${leg.strike ?? ''}|${leg.optionType ?? ''}`
+      const attemptKey = `${identityKey}|${selectionKey}`
+      if (rehydrationAttemptsRef.current.has(attemptKey)) return false
+      rehydrationAttemptsRef.current.add(attemptKey)
+      return true
+    })
+    if (candidates.length === 0) return
+    void Promise.allSettled(
       candidates.map(async (leg) => ({
         id: leg.id,
         selectionKey: `${leg.segment}|${leg.expiry}|${leg.strike ?? ''}|${leg.optionType ?? ''}`,
@@ -621,14 +639,15 @@ export default function StrategyBuilder() {
       }))
     ).then((resolved) => {
       if (
-        cancelled ||
         generation !== rehydrationGenerationRef.current ||
         identityKey !==
           chainIdentity(requestIdentity.exchange, requestIdentity.underlying, requestIdentity.expiry)
       ) {
         return
       }
-      const byId = new Map(resolved.map((item) => [item.id, item]))
+      const byId = new Map(
+        resolved.flatMap((item) => (item.status === 'fulfilled' ? [item.value] : [])).map((item) => [item.id, item])
+      )
       setLegs((previous) => {
         let changed = false
         const next = previous.map((leg) => {
@@ -660,9 +679,6 @@ export default function StrategyBuilder() {
       })
     })
 
-    return () => {
-      cancelled = true
-    }
   }, [activeChain, legs, requestIdentity, resolveLegContract])
 
   useEffect(() => {
@@ -1384,7 +1400,7 @@ export default function StrategyBuilder() {
         lotSize={lotSize}
         atmIv={atmIv}
         daysToExpiry={rawDays}
-        onRefresh={refetchLiveChain}
+        onRefresh={refreshContracts}
         isRefreshing={isLiveLoading}
         connectionStatus={connectionStatus}
       />

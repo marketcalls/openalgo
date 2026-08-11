@@ -1006,4 +1006,62 @@ describe('StrategyBuilder identity orchestration', () => {
     await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(1))
     expect(screen.getByRole('button', { name: 'Execute' })).toBeDisabled()
   })
+
+  it('rehydrates each saved leg independently when another resolver rejects', async () => {
+    const saved = savedRelianceStrategy()
+    saved.legs.push({
+      ...saved.legs[0],
+      id: 'rejected-far-leg',
+      expiry: '13AUG26',
+      symbol: 'RELIANCE13AUG262500CE',
+    })
+    mocks.getPortfolioEntry.mockResolvedValue(saved)
+    mocks.getOptionChain.mockImplementation(async (_apiKey, underlying, _exchange, expiry) => {
+      if (expiry === '13AUG26') throw new Error('far chain unavailable')
+      return chainFixture(underlying, expiry)
+    })
+
+    renderBuilder('/strategybuilder?load=17')
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Execute' })).toBeEnabled())
+    expect(
+      mocks.getOptionChain.mock.calls.filter(([, , , expiry]) => expiry === '13AUG26')
+    ).not.toHaveLength(0)
+  })
+
+  it('does not retry an unchanged failed far contract on live chain refreshes', async () => {
+    const saved = savedRelianceStrategy()
+    saved.legs.push({
+      ...saved.legs[0],
+      id: 'missing-far-leg',
+      expiry: '13AUG26',
+      symbol: 'RELIANCE13AUG262500CE',
+    })
+    mocks.getPortfolioEntry.mockResolvedValue(saved)
+    mocks.getOptionChain.mockImplementation(async (_apiKey, underlying, _exchange, expiry) => {
+      const chain = chainFixture(underlying, expiry)
+      if (expiry === '13AUG26') chain.chain = []
+      return chain
+    })
+
+    renderBuilder('/strategybuilder?load=17')
+
+    await waitFor(() =>
+      expect(mocks.getOptionChain.mock.calls.filter(([, , , expiry]) => expiry === '13AUG26').length).toBeGreaterThan(0)
+    )
+    const farCallsBeforeRefresh = mocks.getOptionChain.mock.calls.filter(
+      ([, , , expiry]) => expiry === '13AUG26'
+    ).length
+    await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(1))
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+
+    await waitFor(() => expect(requests('/api/v1/optionchain')).toHaveLength(2))
+    expect(
+      mocks.getOptionChain.mock.calls.filter(([, , , expiry]) => expiry === '13AUG26')
+    ).toHaveLength(farCallsBeforeRefresh)
+  })
 })

@@ -1,5 +1,5 @@
 import { CheckCircle2, Send, XCircle } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { type BasketOrderItem, type BasketOrderResult, tradingApi } from '@/api/trading'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -37,6 +37,7 @@ const PRODUCT_TYPES: ProductType[] = ['NRML', 'MIS']
 
 interface RowState {
   legId: string
+  contractKey: string
   include: boolean
   symbol: string
   action: 'BUY' | 'SELL'
@@ -64,10 +65,11 @@ export interface ExecuteBasketDialogProps {
 /** Decimal places implied by a tick (0.05 → 2, 0.0001 → 4, 0.5 → 1, 1 → 0). */
 function tickDecimals(tick: number): number {
   if (!Number.isFinite(tick) || tick <= 0) return 2
-  if (tick >= 1) return 0
-  const s = tick.toString()
-  const dot = s.indexOf('.')
-  return dot === -1 ? 0 : s.length - dot - 1
+  const [coefficient, exponentText] = tick.toString().toLowerCase().split('e')
+  const exponent = exponentText ? Number(exponentText) : 0
+  const dot = coefficient.indexOf('.')
+  const coefficientDecimals = dot === -1 ? 0 : coefficient.length - dot - 1
+  return Math.max(0, coefficientDecimals - exponent)
 }
 
 /** Snap `value` to the nearest multiple of `tick` and strip binary drift. */
@@ -75,7 +77,43 @@ function roundToTick(value: number, tick: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0
   if (!Number.isFinite(tick) || tick <= 0) return value
   const decimals = tickDecimals(tick)
-  return Number((Math.round(value / tick) * tick).toFixed(decimals))
+  const rounded = Math.round(value / tick) * tick
+  if (!Number.isFinite(rounded)) return value
+  // toFixed handles normal broker ticks while toPrecision keeps exponent
+  // notation (for example 1e-7) from collapsing to zero.
+  return Number(
+    decimals <= 100 ? rounded.toFixed(decimals) : rounded.toPrecision(Math.min(15, decimals + 1))
+  )
+}
+
+function contractKey(leg: StrategyLeg): string {
+  return [
+    leg.id,
+    leg.exchange ?? '',
+    leg.symbol,
+    leg.segment,
+    leg.expiry,
+    leg.strike ?? '',
+    leg.optionType ?? '',
+    leg.side,
+  ].join('|')
+}
+
+function rowFromLeg(leg: StrategyLeg): RowState {
+  if (!isLegExecutable(leg)) throw new Error('Rows require executable legs')
+  return {
+    legId: leg.id,
+    contractKey: contractKey(leg),
+    include: true,
+    symbol: leg.symbol,
+    action: leg.side,
+    segment: leg.segment,
+    optionType: leg.optionType,
+    lots: leg.lots,
+    lotSize: leg.lotSize,
+    price: roundToTick(leg.price, leg.tickSize),
+    tickSize: leg.tickSize,
+  }
 }
 
 export function ExecuteBasketDialog({
@@ -92,32 +130,37 @@ export function ExecuteBasketDialog({
   const [pricetype, setPricetype] = useState<PriceType>('LIMIT')
   const [submitting, setSubmitting] = useState(false)
   const [results, setResults] = useState<BasketOrderResult[] | null>(null)
+  const wasOpenRef = useRef(false)
 
-  // Seed rows whenever dialog opens or legs change.
+  // Reset only for a fresh open. While open, market updates reconcile by the
+  // exact contract identity so edits and deselections are never silently lost.
   useEffect(() => {
-    if (!open) return
-    setResults(null)
-    setProduct('NRML')
-    setPricetype('LIMIT')
-    setRows(
-      executableLegs.map((leg) => {
-        // Executable legs are created only by canonical resolvers, which
-        // provide their contract-specific tick and lot metadata.
-        const tick = leg.tickSize
+    if (!open) {
+      wasOpenRef.current = false
+      return
+    }
+    const isFreshOpen = !wasOpenRef.current
+    if (isFreshOpen) {
+      setResults(null)
+      setProduct('NRML')
+      setPricetype('LIMIT')
+    }
+    setRows((previous) => {
+      if (isFreshOpen) return executableLegs.map(rowFromLeg)
+      const previousByContract = new Map(previous.map((row) => [row.contractKey, row]))
+      return executableLegs.map((leg) => {
+        const key = contractKey(leg)
+        const existing = previousByContract.get(key)
+        if (!existing) return rowFromLeg(leg)
         return {
-          legId: leg.id,
-          include: true,
-          symbol: leg.symbol,
-          action: leg.side,
-          segment: leg.segment,
-          optionType: leg.optionType,
-          lots: leg.lots,
+          ...existing,
+          // These are broker-owned metadata, not user choices.
           lotSize: leg.lotSize,
-          price: roundToTick(leg.price, tick),
-          tickSize: tick,
+          tickSize: leg.tickSize,
         }
       })
-    )
+    })
+    wasOpenRef.current = true
   }, [open, executableLegs])
 
   const updateRow = (legId: string, patch: Partial<RowState>) =>
