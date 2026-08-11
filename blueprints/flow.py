@@ -1006,59 +1006,71 @@ def get_index_symbols_lot_sizes():
     Get lot sizes for index symbols from master contract database.
     Returns lot sizes for NSE and BSE index options (NIFTY, BANKNIFTY, etc.)
     """
-    from sqlalchemy import distinct, func
-
     from database.symbol import SymToken, db_session
+    from database.token_db_enhanced import extract_underlying_from_symbol
+    from services.flow_executor_service import symbol_prefix_filter
 
     # Define index symbols to look up
     nse_indices = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"]
     bse_indices = ["SENSEX", "BANKEX", "SENSEX50"]
 
+    def _lot_size(index_name: str, exchange: str) -> int | None:
+        """Lot size for an index from the master contract.
+
+        Matches SymToken.name first - it is the indexed column and is correct on
+        most brokers - then falls back to the OpenAlgo symbol. `name` holds the
+        underlying root only where the broker's master contract put it there;
+        some ship the contract description instead, which left this endpoint
+        returning an empty list and the Options Order node with no underlyings
+        to choose from. The symbol column is normalized by OpenAlgo, so it reads
+        the same on every broker.
+
+        The prefix alone is not enough - symbols starting "NIFTY" also include
+        NIFTYNXT50 at a different lot size - so each candidate is confirmed with
+        the same extractor the underlying dropdown uses.
+        """
+        record = (
+            db_session.query(SymToken.lotsize)
+            .filter(
+                SymToken.name == index_name,
+                SymToken.exchange == exchange,
+                SymToken.lotsize.isnot(None),
+                SymToken.lotsize > 0,
+            )
+            .first()
+        )
+        if record and record[0]:
+            return int(record[0])
+
+        candidates = (
+            db_session.query(SymToken.symbol, SymToken.lotsize)
+            .filter(
+                symbol_prefix_filter(SymToken.symbol, index_name),
+                SymToken.exchange == exchange,
+                SymToken.lotsize.isnot(None),
+                SymToken.lotsize > 0,
+            )
+            .yield_per(200)
+        )
+        for symbol, lotsize in candidates:
+            if extract_underlying_from_symbol(symbol, exchange) == index_name:
+                return int(lotsize)
+        return None
+
     results = []
 
     try:
-        # Get lot sizes for NSE indices (from NFO exchange)
-        for index_name in nse_indices:
-            # Query for any option symbol with this underlying name
-            record = (
-                db_session.query(SymToken.name, SymToken.lotsize)
-                .filter(
-                    SymToken.name == index_name,
-                    SymToken.exchange == "NFO",
-                    SymToken.lotsize.isnot(None),
-                )
-                .first()
-            )
-
-            if record and record.lotsize:
+        for index_name, exchange in [(n, "NFO") for n in nse_indices] + [
+            (n, "BFO") for n in bse_indices
+        ]:
+            lot_size = _lot_size(index_name, exchange)
+            if lot_size:
                 results.append(
                     {
                         "value": index_name,
                         "label": index_name,
-                        "exchange": "NFO",
-                        "lotSize": record.lotsize,
-                    }
-                )
-
-        # Get lot sizes for BSE indices (from BFO exchange)
-        for index_name in bse_indices:
-            record = (
-                db_session.query(SymToken.name, SymToken.lotsize)
-                .filter(
-                    SymToken.name == index_name,
-                    SymToken.exchange == "BFO",
-                    SymToken.lotsize.isnot(None),
-                )
-                .first()
-            )
-
-            if record and record.lotsize:
-                results.append(
-                    {
-                        "value": index_name,
-                        "label": index_name,
-                        "exchange": "BFO",
-                        "lotSize": record.lotsize,
+                        "exchange": exchange,
+                        "lotSize": lot_size,
                     }
                 )
 
