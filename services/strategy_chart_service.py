@@ -200,7 +200,11 @@ def get_strategy_chart_data(
         if not base_symbol:
             return False, {"status": "error", "message": "underlying is required"}, 400
 
-        normalized_legs = [nl for nl in (_normalize_leg(l) for l in (legs or [])) if nl]
+        normalized_legs = [
+            normalized
+            for normalized in (_normalize_leg(leg) for leg in (legs or []))
+            if normalized
+        ]
         if not normalized_legs:
             return (
                 False,
@@ -279,7 +283,7 @@ def get_strategy_chart_data(
 
         # ── Per-leg history (deduped by (symbol, exchange)) ───────────
         leg_price_lookup: dict[tuple[str, str], dict] = {}
-        unique_keys = {(l["symbol"], l["exchange"]) for l in normalized_legs}
+        unique_keys = {(leg["symbol"], leg["exchange"]) for leg in normalized_legs}
 
         for symbol, leg_exchange in unique_keys:
             success_l, resp_l, _ = get_history(

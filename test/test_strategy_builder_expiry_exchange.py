@@ -5,7 +5,6 @@ import pytest
 from restx_api.data_schemas import ExpirySchema
 from services.expiry_service import get_expiry_dates
 
-
 _ROWS = [
     ("GUARSEED31DEC301000CE", "NCDEX", "OPTFUT"),
     ("USDINR31DEC30100CE", "BCD", "OPTCUR"),

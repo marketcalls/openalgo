@@ -6,7 +6,6 @@ import pytest
 
 from services import multi_strike_oi_service, strategy_chart_service
 
-
 LEG = {
     "symbol": "TEST27AUG26100CE",
     "exchange": "MCX",
