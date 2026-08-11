@@ -6,6 +6,8 @@ import { useThemeStore } from '@/stores/themeStore'
 
 export interface PayoffChartProps {
   title: string
+  /** Stable for live updates; changes when the selected strategy identity changes. */
+  chartIdentity?: string
   scenario: ScenarioState
   remainingYears: number
   payoff: PayoffResult
@@ -42,6 +44,7 @@ function selectEvenly<T>(items: T[], limit: number): T[] {
 
 export function PayoffChart({
   title,
+  chartIdentity = title,
   scenario,
   remainingYears,
   payoff,
@@ -303,7 +306,7 @@ export function PayoffChart({
     })
 
     const chartLayout: Partial<PlotlyTypes.Layout> = {
-      uirevision: 'strategy-payoff',
+      uirevision: chartIdentity,
       title: {
         text: title,
         font: { color: colors.text, size: 14 },
@@ -365,6 +368,7 @@ export function PayoffChart({
     terminalLabel,
     showTplus0,
     title,
+    chartIdentity,
     colors,
     isDark,
     formatCurrency,

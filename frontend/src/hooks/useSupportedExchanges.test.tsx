@@ -8,12 +8,12 @@ describe('useSupportedExchanges derivative coverage', () => {
     useBrokerStore.setState({ capabilities: null, isLoaded: false })
   })
 
-  it('includes broker-reported BCD and NCDEX in Strategy Builder exchanges', () => {
+  it('isolates broker-reported BCD and NCDEX to Strategy Builder', () => {
     useBrokerStore.setState({
       capabilities: {
         broker_name: 'test',
         broker_type: 'IN_stock',
-        supported_exchanges: ['NSE', 'NFO', 'BCD', 'NCDEX'],
+        supported_exchanges: ['NSE', 'NFO', 'CDS', 'BCD', 'NCDEX'],
         leverage_config: false,
       },
       isLoaded: true,
@@ -21,11 +21,12 @@ describe('useSupportedExchanges derivative coverage', () => {
 
     const { result } = renderHook(() => useSupportedExchanges())
 
-    expect(result.current.toolsFnoExchanges.map((exchange) => exchange.value)).toEqual([
+    expect(result.current.strategyBuilderExchanges.map((exchange) => exchange.value)).toEqual([
       'NFO',
       'BCD',
       'NCDEX',
     ])
+    expect(result.current.toolsFnoExchanges.map((exchange) => exchange.value)).toEqual(['NFO'])
   })
 
   it('never adds a derivative venue that the broker did not report', () => {
@@ -40,7 +41,7 @@ describe('useSupportedExchanges derivative coverage', () => {
     })
 
     const { result } = renderHook(() => useSupportedExchanges())
-    const exchanges = result.current.toolsFnoExchanges.map((exchange) => exchange.value)
+    const exchanges = result.current.strategyBuilderExchanges.map((exchange) => exchange.value)
 
     expect(exchanges).toContain('BCD')
     expect(exchanges).not.toContain('NCDEX')

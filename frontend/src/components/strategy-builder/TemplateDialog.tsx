@@ -84,14 +84,20 @@ export function TemplateDialog({
   const resolution = useMemo<{
     legs: ResolvedTemplateLeg[]
     errors: string[]
+    strikeErrorIndexes: Set<number>
+    expiryInvalid: boolean
   }>(() => {
-    if (!template || atmStrike === null || chain === null) return { legs: [], errors: [] }
+    if (!template || atmStrike === null || chain === null) {
+      return { legs: [], errors: [], strikeErrorIndexes: new Set(), expiryInvalid: false }
+    }
 
     const unresolvedTopology: Array<{
       strikeOffset: number
       resolvedStrike: number | null
     }> = []
     const errors: string[] = []
+    const strikeErrorIndexes = new Set<number>()
+    let expiryInvalid = false
     const legs = template.legs.map((leg, idx) => {
       const override = strikeOverrides[idx]
       const listedStrike = resolveStrikeOffset(strikes, atmStrike, leg.strikeOffset)
@@ -101,6 +107,7 @@ export function TemplateDialog({
       const offset = leg.expiryOffset ?? 0
       const listedExpiry = resolveExpiryOffset(expiries, expiry, offset)
       if (listedExpiry === null) {
+        expiryInvalid = true
         errors.push(
           offset > 0
             ? `A later expiry is required for ${template.name}.`
@@ -109,6 +116,7 @@ export function TemplateDialog({
       }
       const resolvedExpiry = listedExpiry ?? expiry
       const displayStrike = resolvedStrike ?? atmStrike
+      if (resolvedStrike === null) strikeErrorIndexes.add(idx)
 
       // Chain symbols are only available for the currently-loaded expiry.
       // For legs on a different expiry the caller rebuilds the symbol from
@@ -116,6 +124,7 @@ export function TemplateDialog({
       const canUseChain = resolvedExpiry === expiry
       const side = canUseChain ? resolveListedContract(chain, displayStrike, leg.optionType) : null
       if (canUseChain && resolvedStrike !== null && side === null) {
+        strikeErrorIndexes.add(idx)
         errors.push(
           `The required ${leg.optionType} contract at ${displayStrike} is not available in the loaded option chain.`
         )
@@ -129,12 +138,24 @@ export function TemplateDialog({
       }
     })
 
-    errors.push(...validateTemplateStrikeTopology(unresolvedTopology))
-    return { legs, errors: Array.from(new Set(errors)) }
+    const topologyErrors = validateTemplateStrikeTopology(unresolvedTopology)
+    if (topologyErrors.length > 0) {
+      for (let index = 0; index < template.legs.length; index += 1) {
+        strikeErrorIndexes.add(index)
+      }
+    }
+    errors.push(...topologyErrors)
+    return {
+      legs,
+      errors: Array.from(new Set(errors)),
+      strikeErrorIndexes,
+      expiryInvalid,
+    }
   }, [template, atmStrike, chain, strikes, strikeOverrides, expiry, expiries])
 
   const resolved = resolution.legs
   const validationErrors = resolution.errors
+  const expiryInvalid = resolution.expiryInvalid
   const validationErrorId = 'template-validation-error'
 
   if (!template) return null
@@ -150,6 +171,7 @@ export function TemplateDialog({
         <div className="space-y-3">
           {resolved.map((leg, idx) => {
             const multiExpiry = leg.resolvedExpiry !== expiry
+            const strikeInvalid = resolution.strikeErrorIndexes.has(idx)
             const moneyness = strikeMoneyness(
               leg.resolvedStrike,
               atmStrike,
@@ -178,10 +200,8 @@ export function TemplateDialog({
                 >
                   <SelectTrigger
                     aria-label={`Strike for ${leg.side.toLowerCase()} ${leg.optionType === 'CE' ? 'call' : 'put'} leg ${idx + 1}`}
-                    aria-invalid={validationErrors.length > 0}
-                    aria-describedby={
-                      validationErrors.length > 0 ? validationErrorId : undefined
-                    }
+                    aria-invalid={strikeInvalid}
+                    aria-describedby={strikeInvalid ? validationErrorId : undefined}
                     className="h-8 w-[120px] text-xs"
                   >
                     <SelectValue />
@@ -250,8 +270,8 @@ export function TemplateDialog({
               <Select value={expiry} onValueChange={onExpiryChange}>
                 <SelectTrigger
                   aria-label="Strategy expiry"
-                  aria-invalid={validationErrors.length > 0}
-                  aria-describedby={validationErrors.length > 0 ? validationErrorId : undefined}
+                  aria-invalid={expiryInvalid}
+                  aria-describedby={expiryInvalid ? validationErrorId : undefined}
                   className="h-9 text-xs"
                 >
                   <SelectValue />

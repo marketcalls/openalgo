@@ -174,12 +174,14 @@ export function mergeOptionChainMarketData(
 export function currentWebSocketMarketData(
   marketData: Map<string, SymbolData>,
   isAuthenticated: boolean,
-  connectionEpoch: number
+  connectionEpoch: number,
+  relevantKeys?: ReadonlySet<string>
 ): Map<string, SymbolData> {
   if (!isAuthenticated) return new Map()
   return new Map(
     Array.from(marketData).filter(
-      ([, symbolData]) =>
+      ([key, symbolData]) =>
+        (relevantKeys === undefined || relevantKeys.has(key.toUpperCase())) &&
         symbolData.updateSource === 'websocket' && symbolData.connectionEpoch === connectionEpoch
     )
   )
@@ -289,10 +291,19 @@ export function useOptionChainLive(
     mode: 'Depth', // Get LTP + Bid/Ask depth
     enabled: enabled && wsSymbols.length > 0,
   })
-  const currentWsData = useMemo(
-    () => currentWebSocketMarketData(wsData, isWsAuthenticated, wsConnectionEpoch),
-    [wsData, isWsAuthenticated, wsConnectionEpoch]
-  )
+  const currentWsData = useMemo(() => {
+    const relevantKeys = new Set(
+      wsSymbols.map(({ exchange: symbolExchange, symbol }) =>
+        `${symbolExchange}:${symbol}`.toUpperCase()
+      )
+    )
+    return currentWebSocketMarketData(
+      wsData,
+      isWsAuthenticated && enabled,
+      wsConnectionEpoch,
+      relevantKeys
+    )
+  }, [wsData, isWsAuthenticated, wsConnectionEpoch, wsSymbols, enabled])
 
   // Track last LTP update time using ref to avoid triggering effect loops
   const lastLtpUpdateRef = useRef<number>(0)
@@ -308,6 +319,7 @@ export function useOptionChainLive(
     optionExchange,
     expiryDate,
     strikeCount,
+    enabled,
     isWsAuthenticated,
     wsConnectionEpoch,
   ])

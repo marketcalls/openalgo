@@ -25,11 +25,15 @@ import pandas as pd
 import pytz
 
 from services.history_service import get_history
-from services.option_symbol_service import (
-    NO_SPOT_EXCHANGES,
-    resolve_underlying_quote,
-)
 from services.quotes_service import get_quotes
+from services.strategy_builder_reference_service import (
+    BSE_INDEX_SYMBOLS,
+    NSE_INDEX_SYMBOLS,
+    resolve_strategy_builder_reference,
+)
+from services.strategy_builder_reference_service import (
+    get_quote_exchange as _get_quote_exchange,
+)
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -73,36 +77,6 @@ def _cap_last_n_trading_dates(series: list[dict], n: int, ist_tz: pytz.BaseTzInf
     distinct_dates = sorted({d for d, _ in tagged}, reverse=True)
     keep = set(distinct_dates[:n])
     return [r for d, r in tagged if d in keep]
-
-
-NSE_INDEX_SYMBOLS = {
-    "NIFTY",
-    "BANKNIFTY",
-    "FINNIFTY",
-    "MIDCPNIFTY",
-    "NIFTYNXT50",
-    "NIFTYIT",
-    "NIFTYPHARMA",
-    "NIFTYBANK",
-}
-
-BSE_INDEX_SYMBOLS = {"SENSEX", "BANKEX", "SENSEX50"}
-
-
-def _get_quote_exchange(base_symbol: str, underlying_exchange: str) -> str:
-    """Resolve the exchange to use for fetching underlying quotes/history."""
-    upper = (underlying_exchange or "").upper()
-    if base_symbol in NSE_INDEX_SYMBOLS:
-        return "NSE_INDEX"
-    if base_symbol in BSE_INDEX_SYMBOLS:
-        return "BSE_INDEX"
-    if upper == "NFO":
-        return "NSE"
-    if upper == "BFO":
-        return "BSE"
-    if upper in ("NSE_INDEX", "BSE_INDEX"):
-        return upper
-    return upper
 
 
 def _convert_timestamp_to_ist(df: pd.DataFrame) -> pd.DataFrame | None:
@@ -201,9 +175,7 @@ def get_strategy_chart_data(
             return False, {"status": "error", "message": "underlying is required"}, 400
 
         normalized_legs = [
-            normalized
-            for normalized in (_normalize_leg(leg) for leg in (legs or []))
-            if normalized
+            normalized for normalized in (_normalize_leg(leg) for leg in (legs or [])) if normalized
         ]
         if not normalized_legs:
             return (
@@ -212,37 +184,24 @@ def get_strategy_chart_data(
                 400,
             )
 
-        has_canonical_reference = bool(underlying_symbol and underlying_exchange)
-        reference_symbol = (
-            underlying_symbol.strip().upper()
-            if has_canonical_reference
-            else base_symbol
+        resolved_reference = resolve_strategy_builder_reference(
+            base_symbol,
+            exchange,
+            underlying_symbol,
+            underlying_exchange,
         )
-        quote_exchange = (
-            underlying_exchange.strip().upper()
-            if has_canonical_reference
-            else _get_quote_exchange(base_symbol, exchange)
-        )
-
-        # MCX and the currency segments have no tradable spot, so the history
-        # series for the underlying comes from the near-month future. Asking for
-        # "CRUDEOIL" on MCX returns nothing and the chart loses its underlying
-        # line entirely.
-        if not has_canonical_reference and exchange.upper() in NO_SPOT_EXCHANGES:
-            _resolved = resolve_underlying_quote(base_symbol, exchange.upper())
-            if _resolved is None:
-                return (
-                    False,
-                    {
-                        "status": "error",
-                        "message": (
-                            f"No unexpired futures found for {base_symbol} on "
-                            f"{exchange.upper()}"
-                        ),
-                    },
-                    404,
-                )
-            reference_symbol, quote_exchange = _resolved
+        if resolved_reference is None:
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": (
+                        f"No unexpired futures found for {base_symbol} on {exchange.upper()}"
+                    ),
+                },
+                404,
+            )
+        reference_symbol, quote_exchange = resolved_reference
 
         # ── Underlying history ────────────────────────────────────────
         # Some brokers (e.g., Zerodha's Kite API) don't return intraday

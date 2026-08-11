@@ -8,7 +8,7 @@ Route: `/strategybuilder`
 
 ## Goal
 
-Repair all independently verified Strategy Builder defects SB-01 through SB-24 while preserving the documented OpenAlgo order constants, symbol formats, and WebSocket subscription contract. The result must keep a strategy internally consistent across live market state, scenario valuation, saved-state restoration, order execution, responsive layout, and accessibility.
+Repair all independently verified Strategy Builder defects SB-01 through SB-26 while preserving the documented OpenAlgo order constants, symbol formats, and WebSocket subscription contract. The result must keep a strategy internally consistent across live market state, scenario valuation, saved-state restoration, order execution, responsive layout, and accessibility.
 
 ## Evidence and scope rule
 
@@ -108,7 +108,7 @@ Same-expiry template previews are derived from their leg topology instead of sta
 
 Every production change follows red-green-refactor. Pure tests cover Black-76 reconciliation, futures references, expiry/server-time calculations, PoP zero, contract keys/resolution, numeric validation, exchange selection, template topology/copy, and request generations. Component tests cover identity confirmation, expiry invalidation, closed-leg execution filtering, per-leg metadata, hydration, scenario propagation, currency/Greek labels, accessible controls/table, and mobile tab containment. Backend tests cover canonical underlying-reference metadata and chart no-spot/CRYPTO resolution.
 
-Final verification runs targeted tests, all frontend tests, relevant backend tests, frontend lint/typecheck/build, desktop/mobile browser flows, Axe, request-count inspection, and a fresh SB-01 through SB-24 evidence audit.
+Final verification runs targeted tests, all frontend tests, relevant backend tests, frontend lint/typecheck/build, desktop/mobile browser flows, Axe, request-count inspection, and a fresh SB-01 through SB-26 evidence audit.
 
 ## Non-goals
 

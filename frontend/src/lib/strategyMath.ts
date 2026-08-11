@@ -124,6 +124,10 @@ export function isLegExecutable(leg: StrategyLeg): leg is ExecutableStrategyLeg 
     leg.active &&
     !isLegClosed(leg) &&
     leg.contractValid === true &&
+    Number.isInteger(leg.lots) &&
+    leg.lots > 0 &&
+    Number.isInteger(leg.lotSize) &&
+    leg.lotSize > 0 &&
     typeof leg.tickSize === 'number' &&
     Number.isFinite(leg.tickSize) &&
     leg.tickSize > 0
@@ -442,6 +446,29 @@ function responsiveStrikes(legs: StrategyLeg[]): number[] {
   )
 }
 
+/** Terminal intrinsic kinks expressed in the scenario-underlying coordinate. */
+function terminalBreakpoints(legs: StrategyLeg[]): number[] {
+  return uniqueSorted(
+    legs.flatMap((leg) => {
+      if (
+        !leg.active ||
+        isLegClosed(leg) ||
+        leg.segment !== 'OPTION' ||
+        leg.strike === undefined
+      ) {
+        return []
+      }
+      if (isFiniteNumber(leg.referenceUnderlying) && isFiniteNumber(leg.forwardPrice)) {
+        return [
+          Math.max(0, leg.referenceUnderlying - leg.forwardPrice),
+          Math.max(0, leg.strike - leg.forwardPrice + leg.referenceUnderlying),
+        ]
+      }
+      return [leg.strike]
+    })
+  )
+}
+
 function hasResponsiveExposure(legs: StrategyLeg[]): boolean {
   return legs.some(
     (leg) =>
@@ -533,8 +560,7 @@ function analyzeTerminalPayoff(
   fallbackIv: number,
   now: Date
 ): TerminalAnalysis {
-  const strikes = responsiveStrikes(legs)
-  const candidates = uniqueSorted([0, ...strikes])
+  const candidates = uniqueSorted([0, ...terminalBreakpoints(legs)])
   const valueAt = (underlying: number) =>
     normalizePayoff(totalPnlAt(legs, underlying, daysAtExpiry, ivShiftPct, fallbackIv, now))
   if (!hasResponsiveExposure(legs)) {
@@ -758,7 +784,7 @@ export function computePayoff(
         fallbackIv,
         currentNow
       )
-  const strikes = responsiveStrikes(legs)
+  const strikes = terminal ? terminalBreakpoints(legs) : responsiveStrikes(legs)
   const initialBreakevens = terminalAnalysis.breakevens
   const [requestedLo, requestedHi] = priceRange
   const lo = Math.max(0, Math.min(requestedLo, ...strikes, ...initialBreakevens))

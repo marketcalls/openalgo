@@ -21,6 +21,7 @@ import {
   type LegDraft,
   ManualLegBuilder,
   type ResolveLegContract,
+  type ResolveOptionChain,
 } from '@/components/strategy-builder/ManualLegBuilder'
 import MultiStrikeOITab from '@/components/strategy-builder/MultiStrikeOITab'
 import { PayoffChart } from '@/components/strategy-builder/PayoffChart'
@@ -70,6 +71,7 @@ import {
   daysToYears,
   hasMultipleActiveExpiries,
   isLegClosed,
+  isLegExecutable,
   nearestLegDays,
   netCredit,
   payoffPriceRange,
@@ -143,8 +145,8 @@ export default function StrategyBuilder() {
   const { apiKey, user } = useAuthStore()
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const {
-    toolsFnoExchanges: fnoExchanges,
-    defaultToolsFnoExchange: defaultFnoExchange,
+    strategyBuilderExchanges: fnoExchanges,
+    defaultStrategyBuilderExchange: defaultFnoExchange,
     defaultUnderlyings,
   } = useSupportedExchanges()
   const navigate = useNavigate()
@@ -762,6 +764,7 @@ export default function StrategyBuilder() {
     selectedExchange,
     futureExpiries,
     activeChain,
+    supplementalChains,
   })
   legResolverStateRef.current = {
     apiKey,
@@ -769,6 +772,7 @@ export default function StrategyBuilder() {
     selectedExchange,
     futureExpiries,
     activeChain,
+    supplementalChains,
   }
 
   // Common strike step — try to detect from chain spacing
@@ -783,9 +787,9 @@ export default function StrategyBuilder() {
     return Number.isFinite(minDiff) ? minDiff : 50
   }, [activeChain])
 
-  const resolveLegContract = useCallback<ResolveLegContract>(
-    async (expiry, segment, strike, optionType) => {
-      const { apiKey, selectedUnderlying, selectedExchange, futureExpiries, activeChain } =
+  const resolveOptionChain = useCallback<ResolveOptionChain>(
+    async (expiry) => {
+      const { apiKey, selectedUnderlying, selectedExchange, activeChain, supplementalChains } =
         legResolverStateRef.current
       if (!apiKey || !selectedUnderlying) return null
       const normalizedExpiry = normalizeExpiryCode(expiry)
@@ -795,31 +799,54 @@ export default function StrategyBuilder() {
         underlying: selectedUnderlying,
         expiry: normalizedExpiry,
       }
+      const key = chainIdentity(identity.exchange, identity.underlying, identity.expiry)
+      let response = activeChain && chainMatches(activeChain, identity) ? activeChain : null
+      if (response === null) {
+        const cached = supplementalChains.get(key)
+        if (cached && chainMatches(cached, identity)) response = cached
+      }
+      if (response === null) {
+        const fetched = await queuedFetch(() =>
+          optionChainApi.getOptionChain(
+            apiKey,
+            selectedUnderlying,
+            underlyingExchangeFor(selectedExchange, selectedUnderlying),
+            normalizedExpiry,
+            20,
+            { withGreeks: true }
+          )
+        )
+        response = { ...fetched, exchange: derivativeExchange }
+      }
+
+      const latest = legResolverStateRef.current
+      if (latest.activeChain && chainMatches(latest.activeChain, identity)) {
+        response = latest.activeChain
+      } else {
+        const cached = latest.supplementalChains.get(key)
+        if (cached && chainMatches(cached, identity)) response = cached
+      }
+      if (response.status !== 'success' || !chainMatches(response, identity)) return null
+      if (!activeChain || !chainMatches(activeChain, identity)) {
+        rememberSupplementalChain(response, identity)
+      }
+      return response
+    },
+    [rememberSupplementalChain]
+  )
+
+  const resolveLegContract = useCallback<ResolveLegContract>(
+    async (expiry, segment, strike, optionType) => {
+      const { apiKey, selectedUnderlying, selectedExchange, futureExpiries, activeChain } =
+        legResolverStateRef.current
+      if (!apiKey || !selectedUnderlying) return null
+      const normalizedExpiry = normalizeExpiryCode(expiry)
+      const derivativeExchange = optionExchangeFor(selectedExchange)
 
       if (segment === 'OPTION') {
         if (strike === undefined || !optionType) return null
-        let response = activeChain && chainMatches(activeChain, identity) ? activeChain : null
-        if (response === null) {
-          const fetched = await queuedFetch(() =>
-            optionChainApi.getOptionChain(
-              apiKey,
-              selectedUnderlying,
-              underlyingExchangeFor(selectedExchange, selectedUnderlying),
-              normalizedExpiry,
-              20,
-              { withGreeks: true }
-            )
-          )
-          response = { ...fetched, exchange: derivativeExchange }
-        }
-        const latestActiveChain = legResolverStateRef.current.activeChain
-        if (latestActiveChain && chainMatches(latestActiveChain, identity)) {
-          response = latestActiveChain
-        }
-        if (response.status !== 'success' || !chainMatches(response, identity)) return null
-        if (!activeChain || !chainMatches(activeChain, identity)) {
-          rememberSupplementalChain(response, identity)
-        }
+        const response = await resolveOptionChain(normalizedExpiry)
+        if (response === null) return null
         return resolveOptionContract(response, optionType, strike)
       }
 
@@ -869,7 +896,7 @@ export default function StrategyBuilder() {
         greeks: { delta: null, gamma: null, theta: null, vega: null },
       }
     },
-    [rememberSupplementalChain]
+    [resolveOptionChain]
   )
 
   const refreshContracts = useCallback(() => {
@@ -901,6 +928,12 @@ export default function StrategyBuilder() {
     const generation = rehydrationGenerationRef.current
     const candidates = legs.filter((leg) => {
       if (!leg.active || isLegClosed(leg) || leg.contractValid) return false
+      if (
+        leg.segment === 'FUTURE' &&
+        !futureExpiries.includes(normalizeExpiryCode(leg.expiry))
+      ) {
+        return false
+      }
       const selectionKey = `${leg.id}|${leg.segment}|${leg.expiry}|${leg.strike ?? ''}|${leg.optionType ?? ''}`
       const attemptKey = `${identityKey}|${selectionKey}`
       if (rehydrationAttemptsRef.current.has(attemptKey)) return false
@@ -966,7 +999,7 @@ export default function StrategyBuilder() {
         return changed ? next : previous
       })
     })
-  }, [activeChain, legs, requestIdentity, resolveLegContract])
+  }, [activeChain, futureExpiries, legs, requestIdentity, resolveLegContract])
 
   useEffect(() => {
     const interval = window.setInterval(() => setPayoffClock(Date.now()), 60_000)
@@ -1124,7 +1157,7 @@ export default function StrategyBuilder() {
     const exchange = optionExchangeFor(selectedExchange)
     return JSON.stringify(
       legs
-        .filter((leg) => leg.active && !isLegClosed(leg))
+        .filter(isLegExecutable)
         .map((leg) => ({
           exchange: leg.exchange ?? exchange,
           symbol: leg.symbol,
@@ -1759,6 +1792,7 @@ export default function StrategyBuilder() {
         atmStrike={atmStrike}
         strikeStep={strikeStep}
         resolveContract={resolveLegContract}
+        resolveOptionChain={resolveOptionChain}
         onAdd={handleAddManualLeg}
       />
 
@@ -1901,6 +1935,11 @@ export default function StrategyBuilder() {
                   {spotPrice ? (
                     <PayoffChart
                       title={`${selectedUnderlying} — ${selectedExpiry || '—'}`}
+                      chartIdentity={chainIdentity(
+                        selectedExchange,
+                        selectedUnderlying,
+                        selectedExpiry
+                      )}
                       scenario={scenario}
                       remainingYears={simulatedYearsToNearExpiry}
                       terminalLabel={terminalCurveLabel}

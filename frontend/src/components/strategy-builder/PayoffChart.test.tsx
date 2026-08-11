@@ -191,6 +191,7 @@ describe('PayoffChart exact geometry', () => {
     render(
       <PayoffChart
         title="Shifted Call"
+        chartIdentity="NFO:NIFTY:04AUG26"
         scenario={{ ...BASE_SCENARIO, spot: 110, iv: 30, daysElapsed: 0.25 }}
         remainingYears={0.25}
         terminalLabel="At First Expiry"
@@ -200,7 +201,7 @@ describe('PayoffChart exact geometry', () => {
     )
 
     const layout = plotCapture.props?.layout
-    expect(layout?.uirevision).toBe('strategy-payoff')
+    expect(layout?.uirevision).toBe('NFO:NIFTY:04AUG26')
     expect(
       layout?.shapes?.some(
         (shape) =>
@@ -211,6 +212,43 @@ describe('PayoffChart exact geometry', () => {
     const bands = layout?.shapes?.filter((shape) => shape.type === 'rect') ?? []
     expect(bands.some((shape) => Math.abs(Number(shape.x0) - 80.5783792325) < 1e-4)).toBe(true)
     expect(bands.some((shape) => Math.abs(Number(shape.x0) - 93.6187202159) < 1e-4)).toBe(true)
+  })
+
+  it('keeps zoom for live updates but resets it when the strategy identity changes', () => {
+    const payoff = computePayoff(
+      [leg('call', 'BUY', 'CE', 100, 2)],
+      100,
+      7,
+      0,
+      [80, 120],
+      12,
+      0,
+      20,
+      NOW
+    )
+    const view = render(
+      <PayoffChart
+        title="Long Call"
+        chartIdentity="NFO:NIFTY:04AUG26"
+        scenario={BASE_SCENARIO}
+        remainingYears={7 / 365}
+        payoff={payoff}
+        formatCurrency={formatCurrency}
+      />
+    )
+
+    expect(plotCapture.props?.layout.uirevision).toBe('NFO:NIFTY:04AUG26')
+    view.rerender(
+      <PayoffChart
+        title="Long Call"
+        chartIdentity="NFO:NIFTY:11AUG26"
+        scenario={{ ...BASE_SCENARIO, spot: 101 }}
+        remainingYears={14 / 365}
+        payoff={payoff}
+        formatCurrency={formatCurrency}
+      />
+    )
+    expect(plotCapture.props?.layout.uirevision).toBe('NFO:NIFTY:11AUG26')
   })
 
   it('labels the selected horizon and gives both curves the same precise hover fields', () => {

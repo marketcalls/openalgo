@@ -71,7 +71,14 @@ export function useOptionChainPolling(
   // biome-ignore lint/correctness/useExhaustiveDependencies: these deps are intentional reset triggers — the body only resets state, but it MUST re-fire whenever the request identity (apiKey/underlying/exchange/expiryDate/strikeCount) changes to avoid pairing a stale chain with a newly-switched exchange
   useEffect(() => {
     requestGenerationRef.current += 1
-    setState((prev) => ({ ...prev, data: null, lastUpdate: null, dataIdentity: null }))
+    setState((prev) => ({
+      ...prev,
+      data: null,
+      isLoading: false,
+      error: null,
+      lastUpdate: null,
+      dataIdentity: null,
+    }))
   }, [apiKey, underlying, exchange, derivativeExchange, expiryDate, strikeCount])
 
   // Determine if polling should be active

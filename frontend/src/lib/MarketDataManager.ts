@@ -138,6 +138,8 @@ export class MarketDataManager {
   private apiKey: string | null = null
   private consecutiveFailures: number = 0
   private maxConsecutiveFailures: number = 3 // Switch to fallback after 3 consecutive connection failures
+  /** Invalidates REST responses that belong to an earlier fallback session. */
+  private fallbackGeneration: number = 0
 
   private constructor() {
     // Private constructor for singleton pattern
@@ -504,6 +506,7 @@ export class MarketDataManager {
     }
 
     // Stop fallback polling on disconnect
+    this.fallbackGeneration += 1
     this.stopFallbackPolling()
     this.fallbackMode = false
     this.consecutiveFailures = 0
@@ -698,13 +701,19 @@ export class MarketDataManager {
     if (this.fallbackMode) return
 
     this.fallbackMode = true
+    const generation = ++this.fallbackGeneration
     this.notifyStateListeners()
 
     // Fetch API key for REST calls
     await this.fetchApiKeyForFallback()
 
     // Start polling if we have subscriptions
-    if (this.subscriptions.size > 0 && this.apiKey) {
+    if (
+      this.fallbackMode &&
+      generation === this.fallbackGeneration &&
+      this.subscriptions.size > 0 &&
+      this.apiKey
+    ) {
       this.startFallbackPolling()
     }
   }
@@ -716,6 +725,7 @@ export class MarketDataManager {
     if (!this.fallbackMode) return
 
     this.fallbackMode = false
+    this.fallbackGeneration += 1
     this.stopFallbackPolling()
     this.consecutiveFailures = 0
     this.notifyStateListeners()
@@ -767,7 +777,8 @@ export class MarketDataManager {
    * Fetch market data via REST API (multiquotes endpoint)
    */
   private async fetchMarketDataViaRest(): Promise<void> {
-    if (!this.apiKey || this.subscriptions.size === 0) return
+    if (!this.fallbackMode || !this.apiKey || this.subscriptions.size === 0) return
+    const generation = this.fallbackGeneration
 
     try {
       // Collect unique symbols from subscriptions
@@ -796,6 +807,8 @@ export class MarketDataManager {
       })
 
       const data = (await response.json()) as MultiQuotesApiResponse
+
+      if (!this.fallbackMode || generation !== this.fallbackGeneration) return
 
       if (data.status === 'success' && data.results) {
         // Process each result and update cache + notify subscribers

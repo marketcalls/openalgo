@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import type { ResolvedLegMarket } from '@/lib/strategyContracts'
 import type { StrategyLeg } from '@/lib/strategyMath'
-import { EditLegDialog, invalidateIvWhenContractChanges } from './EditLegDialog'
+import { EditLegDialog } from './EditLegDialog'
 
 const original: StrategyLeg = {
   id: 'leg-1',
@@ -33,39 +33,6 @@ function deferred<T>(): Deferred<T> {
   })
   return { promise, resolve }
 }
-
-describe('EditLegDialog payoff market-data invalidation', () => {
-  it.each([
-    ['strike', { strike: 24500 }],
-    ['option type', { optionType: 'PE' as const }],
-    ['expiry', { expiry: '11AUG26' }],
-  ])('PG-13 clears stale IV when %s changes', (_label, change) => {
-    const result = invalidateIvWhenContractChanges(original, { ...original, ...change })
-    expect(result.iv).toBe(0)
-    expect(result.marketGreeks).toBeUndefined()
-  })
-
-  it('clears the Greek snapshot when the canonical symbol changes', () => {
-    const result = invalidateIvWhenContractChanges(original, {
-      ...original,
-      symbol: 'NIFTY04AUG2624000CE-CANONICAL',
-    })
-
-    expect(result.iv).toBe(0)
-    expect(result.marketGreeks).toBeUndefined()
-  })
-
-  it('keeps IV for quantity, side, and entry-price-only edits', () => {
-    expect(
-      invalidateIvWhenContractChanges(original, {
-        ...original,
-        side: 'SELL',
-        lots: 2,
-        price: 101,
-      })
-    ).toMatchObject({ iv: 14.2, marketGreeks: original.marketGreeks })
-  })
-})
 
 function market(overrides: Partial<ResolvedLegMarket> = {}): ResolvedLegMarket {
   return {
@@ -105,9 +72,11 @@ function renderDialog(
   return { resolveContract, onSave }
 }
 
-async function chooseInDialog(index: number, optionName: string) {
+async function chooseInDialog(selectName: string, optionName: string) {
   const dialog = screen.getByRole('dialog', { name: 'Edit Position' })
-  fireEvent.keyDown(within(dialog).getAllByRole('combobox')[index], { key: 'ArrowDown' })
+  fireEvent.keyDown(within(dialog).getByRole('combobox', { name: selectName }), {
+    key: 'ArrowDown',
+  })
   fireEvent.click(await screen.findByRole('option', { name: optionName }))
 }
 
@@ -190,7 +159,7 @@ describe('EditLegDialog listed contracts and price validation', () => {
     const { onSave } = renderDialog(resolveContract)
     await screen.findByText(original.symbol)
 
-    await chooseInDialog(0, '18AUG26')
+    await chooseInDialog('Expiry', '18AUG26')
     expect(screen.getByLabelText('Entry price')).toHaveValue('')
     expect(screen.queryByText(original.symbol)).not.toBeInTheDocument()
 
@@ -239,8 +208,8 @@ describe('EditLegDialog listed contracts and price validation', () => {
     renderDialog(resolveContract)
     await screen.findByText(original.symbol)
 
-    await chooseInDialog(2, 'PE')
-    await chooseInDialog(2, 'CE')
+    await chooseInDialog('Option type', 'PE')
+    await chooseInDialog('Option type', 'CE')
     await act(async () => resolveCe(null))
     expect(await screen.findByText('Contract is not listed for this selection')).toBeVisible()
     expect(screen.getByRole('button', { name: 'Modify' })).toBeDisabled()

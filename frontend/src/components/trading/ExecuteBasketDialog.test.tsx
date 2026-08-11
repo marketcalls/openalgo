@@ -120,6 +120,45 @@ describe('ExecuteBasketDialog', () => {
     expect(screen.getByRole('button', { name: /Execute \(0\)/ })).toBeDisabled()
   })
 
+  it('excludes legs whose lots or lot size cannot produce an integer broker quantity', () => {
+    render(
+      <ExecuteBasketDialog
+        open
+        onOpenChange={vi.fn()}
+        exchange="NFO"
+        strategyName="Invalid quantities"
+        apiKey="api-key"
+        legs={[
+          leg({ id: 'zero-lots', contractValid: true, symbol: 'ZERO_LOTS', lots: 0 }),
+          leg({
+            id: 'fractional-lots',
+            contractValid: true,
+            symbol: 'FRACTIONAL_LOTS',
+            lots: 1.5,
+          }),
+          leg({
+            id: 'zero-lot-size',
+            contractValid: true,
+            symbol: 'ZERO_LOT_SIZE',
+            lotSize: 0,
+          }),
+          leg({
+            id: 'fractional-lot-size',
+            contractValid: true,
+            symbol: 'FRACTIONAL_LOT_SIZE',
+            lotSize: 12.5,
+          }),
+        ]}
+      />
+    )
+
+    for (const symbol of ['ZERO_LOTS', 'FRACTIONAL_LOTS', 'ZERO_LOT_SIZE', 'FRACTIONAL_LOT_SIZE']) {
+      expect(screen.queryByText(symbol)).not.toBeInTheDocument()
+    }
+    expect(screen.getByRole('button', { name: /Execute \(0\)/ })).toBeDisabled()
+    expect(submitBasket).not.toHaveBeenCalled()
+  })
+
   it('SB-18 uses contrast-safe colors for every order and instrument badge state', () => {
     render(
       <ExecuteBasketDialog

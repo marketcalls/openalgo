@@ -1,8 +1,13 @@
 """Strategy Builder derivative venues must survive the public expiry boundary."""
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import scoped_session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from database.symbol import Base, SymToken
 from restx_api.data_schemas import ExpirySchema
+from services import expiry_service
 from services.expiry_service import get_expiry_dates
 
 _ROWS = [
@@ -11,38 +16,36 @@ _ROWS = [
 ]
 
 
-@pytest.fixture(scope="module", autouse=True)
-def seed_derivative_expiries():
-    from database.symbol import SymToken, db_session, init_db
-
-    try:
-        init_db()
-    except Exception:
-        pass
-
+@pytest.fixture(autouse=True)
+def isolated_derivative_expiries(monkeypatch):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    test_session = scoped_session(sessionmaker(bind=engine))
+    monkeypatch.setattr(expiry_service, "db_session", test_session)
     for symbol, exchange, instrumenttype in _ROWS:
-        if SymToken.query.filter_by(symbol=symbol, exchange=exchange).first() is None:
-            db_session.add(
-                SymToken(
-                    symbol=symbol,
-                    brsymbol=symbol,
-                    name=symbol,
-                    exchange=exchange,
-                    brexchange=exchange,
-                    token=f"test-{exchange}-{symbol}",
-                    expiry="31-DEC-30",
-                    strike=1000.0,
-                    lotsize=1,
-                    instrumenttype=instrumenttype,
-                    tick_size=0.05,
-                )
+        test_session.add(
+            SymToken(
+                symbol=symbol,
+                brsymbol=symbol,
+                name=symbol,
+                exchange=exchange,
+                brexchange=exchange,
+                token=f"test-{exchange}-{symbol}",
+                expiry="31-DEC-30",
+                strike=1000.0,
+                lotsize=1,
+                instrumenttype=instrumenttype,
+                tick_size=0.05,
             )
-    db_session.commit()
+        )
+    test_session.commit()
     yield
-
-    for symbol, exchange, _instrumenttype in _ROWS:
-        SymToken.query.filter_by(symbol=symbol, exchange=exchange).delete()
-    db_session.commit()
+    test_session.remove()
+    engine.dispose()
 
 
 @pytest.mark.parametrize(

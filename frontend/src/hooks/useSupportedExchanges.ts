@@ -64,14 +64,18 @@ export function useSupportedExchanges() {
       .filter((e) => FNO_CODES.has(e))
       .map((e) => ({ value: e, label: e }))
 
-    // Exchanges shown inside /tools pages (Strategy Builder, Option Chain,
-    // OI Tracker, Straddle Chart, Custom Straddle etc.).
+    // Exchanges shown by general /tools pages (Option Chain, OI Tracker,
+    // Straddle Chart, Custom Straddle etc.). Strategy Builder uses its own
+    // broader derivative list below.
     //
     // MCX is now included: commodity options have no tradable spot, and the
     // backend resolves the near-month future as the pricing reference instead,
-    // so chains, quotes and expiries all work. CDS stays out because currency
-    // derivatives are not a retail product here, not because of any gap.
+    // so chains, quotes and expiries all work. CDS, BCD and NCDEX remain out of
+    // the general tools until those routes implement their venue-specific flows.
     const toolsFnoExchanges: ExchangeOption[] = fnoExchanges.filter(
+      (e) => !['CDS', 'BCD', 'NCDEX'].includes(e.value)
+    )
+    const strategyBuilderExchanges: ExchangeOption[] = fnoExchanges.filter(
       (e) => e.value !== 'CDS'
     )
 
@@ -79,6 +83,8 @@ export function useSupportedExchanges() {
     const defaultExchange = tradingExchanges[0]?.value ?? (isCrypto ? 'CRYPTO' : 'NSE')
     const defaultFnoExchange = fnoExchanges[0]?.value ?? (isCrypto ? 'CRYPTO' : 'NFO')
     const defaultToolsFnoExchange = toolsFnoExchanges[0]?.value ?? (isCrypto ? 'CRYPTO' : 'NFO')
+    const defaultStrategyBuilderExchange =
+      strategyBuilderExchanges[0]?.value ?? (isCrypto ? 'CRYPTO' : 'NFO')
 
     // Underlyings filtered to only supported FNO exchanges
     const defaultUnderlyings: Record<string, string[]> = {}
@@ -96,17 +102,20 @@ export function useSupportedExchanges() {
       /** Broker-reported F&O exchanges, including commodity/currency derivatives. */
       fnoExchanges,
       /**
-       * F&O exchanges shown in /tools pages: everything the broker reports
-       * except CDS, which retail traders do not deal in. Prefer this over
-       * `fnoExchanges` in every route under /tools/* .
+       * F&O exchanges shown in general /tools pages. Strategy Builder uses
+       * `strategyBuilderExchanges` because it supports BCD and NCDEX too.
        */
       toolsFnoExchanges,
+      /** Broker-reported derivative venues supported specifically by Strategy Builder. */
+      strategyBuilderExchanges,
       /** First trading exchange */
       defaultExchange,
       /** First F&O exchange */
       defaultFnoExchange,
       /** First tools-supported F&O exchange */
       defaultToolsFnoExchange,
+      /** First Strategy Builder-supported derivative exchange. */
+      defaultStrategyBuilderExchange,
       /** Underlyings map filtered to supported F&O exchanges */
       defaultUnderlyings,
       /** Quick check: is this a crypto broker? */

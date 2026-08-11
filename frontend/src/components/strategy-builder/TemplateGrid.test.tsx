@@ -10,5 +10,8 @@ describe('TemplateGrid preview disclosure', () => {
 
     const calendar = screen.getByRole('button', { name: /call calendar/i })
     expect(within(calendar).getByText('Illustrative')).toBeVisible()
+
+    const sameExpiryStrategy = screen.getByRole('button', { name: /long straddle/i })
+    expect(within(sameExpiryStrategy).queryByText('Illustrative')).not.toBeInTheDocument()
   })
 })

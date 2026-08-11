@@ -40,19 +40,6 @@ export interface EditLegDialogProps {
   onDelete: (id: string) => void
 }
 
-export function invalidateIvWhenContractChanges(
-  original: StrategyLeg,
-  updated: StrategyLeg
-): StrategyLeg {
-  const contractChanged =
-    original.expiry !== updated.expiry ||
-    original.segment !== updated.segment ||
-    original.strike !== updated.strike ||
-    original.optionType !== updated.optionType ||
-    original.symbol !== updated.symbol
-  return contractChanged ? { ...updated, iv: 0, marketGreeks: undefined } : updated
-}
-
 export function EditLegDialog({
   open,
   onOpenChange,

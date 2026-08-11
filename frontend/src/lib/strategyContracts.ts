@@ -74,6 +74,15 @@ export function resolveOptionContract(
 ): ResolvedLegMarket | null {
   const contract = resolveListedOptionData(response.chain, optionType, strike)
   if (contract === null) return null
+  if (
+    !Number.isInteger(contract.lotsize) ||
+    contract.lotsize <= 0 ||
+    typeof contract.tick_size !== 'number' ||
+    !Number.isFinite(contract.tick_size) ||
+    contract.tick_size <= 0
+  ) {
+    return null
+  }
 
   return {
     exchange: response.exchange,

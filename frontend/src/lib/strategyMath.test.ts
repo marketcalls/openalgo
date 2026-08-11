@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   computePayoff,
   hasMultipleActiveExpiries,
+  isLegExecutable,
   legPnlAt,
   lognormalPriceBand,
   nearestLegDays,
@@ -78,6 +79,21 @@ function futureLeg(overrides: Partial<StrategyLeg> = {}): StrategyLeg {
 }
 
 describe('per-leg market valuation', () => {
+  it.each([
+    ['zero lots', { lots: 0 }],
+    ['fractional lots', { lots: 1.5 }],
+    ['zero lot size', { lotSize: 0 }],
+    ['fractional lot size', { lotSize: 12.5 }],
+  ])('rejects an otherwise valid executable leg with %s', (_label, overrides) => {
+    const candidate = valuationOptionLeg({
+      contractValid: true,
+      tickSize: 0.05,
+      ...overrides,
+    })
+
+    expect(isLegExecutable(candidate)).toBe(false)
+  })
+
   it('freezes a zero-exit leg at realised P&L and excludes it from open expiry horizons', () => {
     const leg = valuationOptionLeg({
       price: 100,
@@ -286,6 +302,33 @@ describe('per-leg market valuation', () => {
 })
 
 describe('payoff geometry and structural risk', () => {
+  it('finds terminal roots at the option kink expressed in underlying coordinates', () => {
+    const shiftedForwardCall = valuationOptionLeg({
+      lotSize: 1,
+      strike: 100,
+      price: 5,
+      expiryTs: NOW.getTime() / 1000,
+      referenceUnderlying: 100,
+      forwardPrice: 110,
+    })
+
+    const payoff = computePayoff(
+      [shiftedForwardCall],
+      100,
+      0,
+      0,
+      [80, 120],
+      8,
+      0,
+      20,
+      NOW
+    )
+
+    expect(payoff.breakevens).toEqual([95])
+    expect(payoff.maxLoss).toBe(-5)
+    expect(payoff.maxProfit).toBe(Infinity)
+  })
+
   it('does not invent a breakeven for an empty strategy', () => {
     const payoff = computePayoff([], 100, EXPIRY_DAYS, 0, [90, 110], 10, 0, 20, NOW)
 

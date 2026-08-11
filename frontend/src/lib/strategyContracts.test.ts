@@ -83,6 +83,31 @@ describe('strategy contract resolution', () => {
     expect(resolveOptionContract(chain18Aug, 'PE', 24_600)).toBeNull()
   })
 
+  it.each([
+    ['missing lot size', undefined, 0.05],
+    ['zero lot size', 0, 0.05],
+    ['fractional lot size', 12.5, 0.05],
+    ['missing tick size', 50, undefined],
+    ['zero tick size', 50, 0],
+    ['non-finite tick size', 50, Number.POSITIVE_INFINITY],
+  ])('rejects listed rows with %s', (_label, lotSize, tickSize) => {
+    const response = {
+      ...chain18Aug,
+      chain: [
+        {
+          ...chain18Aug.chain[0],
+          ce: {
+            ...chain18Aug.chain[0].ce,
+            lotsize: lotSize,
+            tick_size: tickSize,
+          },
+        },
+      ],
+    } as unknown as typeof chain18Aug
+
+    expect(resolveOptionContract(response, 'CE', 24_600)).toBeNull()
+  })
+
   it('keys live prices by canonical exchange and symbol', () => {
     expect(contractPriceKey('NFO', 'NIFTY18AUG2624600CE')).toBe('NFO:NIFTY18AUG2624600CE')
   })

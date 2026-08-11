@@ -16,14 +16,12 @@ import pytz
 
 from services.history_service import get_history
 from services.quotes_service import get_quotes
+from services.strategy_builder_reference_service import resolve_strategy_builder_reference
 from services.strategy_chart_service import (
-    NO_SPOT_EXCHANGES,
     _cap_last_n_trading_dates,
     _convert_timestamp_to_ist,
-    _get_quote_exchange,
     _normalize_leg,
     _resolve_trading_window,
-    resolve_underlying_quote,
 )
 from utils.logging import get_logger
 
@@ -63,9 +61,7 @@ def get_multi_strike_oi_data(
             return False, {"status": "error", "message": "underlying is required"}, 400
 
         normalized_legs = [
-            normalized
-            for normalized in (_normalize_leg(leg) for leg in (legs or []))
-            if normalized
+            normalized for normalized in (_normalize_leg(leg) for leg in (legs or [])) if normalized
         ]
         if not normalized_legs:
             return (
@@ -74,36 +70,24 @@ def get_multi_strike_oi_data(
                 400,
             )
 
-        has_canonical_reference = bool(underlying_symbol and underlying_exchange)
-        underlying_quote_symbol = (
-            underlying_symbol.strip().upper()
-            if has_canonical_reference
-            else base_symbol
+        resolved_reference = resolve_strategy_builder_reference(
+            base_symbol,
+            exchange,
+            underlying_symbol,
+            underlying_exchange,
         )
-        quote_exchange = (
-            underlying_exchange.strip().upper()
-            if has_canonical_reference
-            else _get_quote_exchange(base_symbol, exchange)
-        )
-
-        # multi-strike OI: MCX and the currency segments have no tradable spot, so the
-        # near-month future is the pricing reference. Without this the quote is
-        # requested for a symbol that does not exist and the tool renders empty.
-        if not has_canonical_reference and exchange.upper() in NO_SPOT_EXCHANGES:
-            _resolved = resolve_underlying_quote(base_symbol, exchange.upper())
-            if _resolved is None:
-                return (
-                    False,
-                    {
-                        "status": "error",
-                        "message": (
-                            f"No unexpired futures found for {base_symbol} on "
-                            f"{exchange.upper()}"
-                        ),
-                    },
-                    404,
-                )
-            underlying_quote_symbol, quote_exchange = _resolved
+        if resolved_reference is None:
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": (
+                        f"No unexpired futures found for {base_symbol} on {exchange.upper()}"
+                    ),
+                },
+                404,
+            )
+        underlying_quote_symbol, quote_exchange = resolved_reference
 
         # ── Underlying history ────────────────────────────────────────
         # Some brokers (e.g., Zerodha) don't return intraday minute-level
@@ -170,9 +154,7 @@ def get_multi_strike_oi_data(
                                 oi_val = float(row.get("oi", 0) or 0)
                             except (TypeError, ValueError):
                                 oi_val = 0.0
-                            series.append(
-                                {"time": int(ts.timestamp()), "value": round(oi_val, 2)}
-                            )
+                            series.append({"time": int(ts.timestamp()), "value": round(oi_val, 2)})
             oi_lookup[(symbol, leg_exchange)] = series
 
         # ── Assemble per-leg response ─────────────────────────────────
@@ -183,7 +165,7 @@ def get_multi_strike_oi_data(
         # Keep the original leg order from the Strategy Builder so the UI's
         # colour assignment stays stable across add/remove.
         leg_series = []
-        for raw in (legs or []):
+        for raw in legs or []:
             norm = _normalize_leg(raw)
             if not norm:
                 continue
@@ -208,9 +190,7 @@ def get_multi_strike_oi_data(
         # dates rather than hardcoding session close times.
         underlying_series = _cap_last_n_trading_dates(underlying_series, days, ist)
         for leg_entry in leg_series:
-            leg_entry["series"] = _cap_last_n_trading_dates(
-                leg_entry["series"], days, ist
-            )
+            leg_entry["series"] = _cap_last_n_trading_dates(leg_entry["series"], days, ist)
 
         # ── Latest underlying LTP ─────────────────────────────────────
         success_q, quote_resp, _ = get_quotes(

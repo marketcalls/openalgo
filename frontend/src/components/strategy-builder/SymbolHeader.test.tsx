@@ -37,6 +37,7 @@ describe('SymbolHeader selectors', () => {
     expect(header).not.toHaveClass('overflow-hidden')
     expect(selectors).toHaveClass('grid', 'w-full', 'min-w-0', 'grid-cols-1', 'sm:w-auto')
     expect(selectors).not.toHaveClass('overflow-hidden')
+    expect(screen.getByTestId('symbol-metrics')).toHaveClass('overflow-hidden', 'rounded-b-xl')
     for (const name of ['Derivative exchange', 'Underlying', 'Option expiry']) {
       expect(screen.getByRole('combobox', { name })).toHaveClass('w-full', 'min-w-0')
     }

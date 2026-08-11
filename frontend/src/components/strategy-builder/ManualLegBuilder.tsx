@@ -50,6 +50,8 @@ export type ResolveLegContract = (
   optionType?: LegDraftType
 ) => Promise<ResolvedLegMarket | null>
 
+export type ResolveOptionChain = (expiry: string) => Promise<ListedOptionChainResponse | null>
+
 export interface ManualLegBuilderProps {
   expiries: string[]
   futureExpiries: string[]
@@ -61,6 +63,7 @@ export interface ManualLegBuilderProps {
   /** Common strike increment (e.g. 50 for NIFTY) — drives moneyness step labels. */
   strikeStep?: number
   resolveContract: ResolveLegContract
+  resolveOptionChain?: ResolveOptionChain
   onAdd: (draft: LegDraft) => void
 }
 
@@ -81,6 +84,7 @@ export function ManualLegBuilder({
   atmStrike,
   strikeStep = 0,
   resolveContract,
+  resolveOptionChain,
   onAdd,
 }: ManualLegBuilderProps) {
   const [segment, setSegment] = useState<LegDraftSegment>('OPTION')
@@ -92,13 +96,13 @@ export function ManualLegBuilder({
   const [resolvedContract, setResolvedContract] = useState<ResolvedLegMarket | null>(null)
   const [contractError, setContractError] = useState<string | null>(null)
   const [isResolving, setIsResolving] = useState(false)
+  const [resolvedOptionChain, setResolvedOptionChain] = useState<ListedOptionChainResponse | null>(
+    null
+  )
+  const [isChainResolving, setIsChainResolving] = useState(false)
+  const [chainError, setChainError] = useState<string | null>(null)
   const resolveGenerationRef = useRef(0)
-
-  useEffect(() => {
-    if (atmStrike === null || !chain) return
-    const strikeInChain = strike !== undefined && chain.some((s) => s.strike === strike)
-    if (!strikeInChain) setStrike(atmStrike)
-  }, [atmStrike, chain, strike])
+  const chainGenerationRef = useRef(0)
 
   const availableExpiries = segment === 'FUTURE' ? futureExpiries : expiries
 
@@ -112,10 +116,77 @@ export function ManualLegBuilder({
     }
   }, [availableExpiries, expiry])
 
+  useEffect(() => {
+    const generation = ++chainGenerationRef.current
+    setChainError(null)
+    if (segment !== 'OPTION' || !expiry || !resolveOptionChain) {
+      setResolvedOptionChain(null)
+      setIsChainResolving(false)
+      return
+    }
+    if (
+      liveChain?.status === 'success' &&
+      normalizeExpiryCode(liveChain.expiry_date) === normalizeExpiryCode(expiry)
+    ) {
+      setResolvedOptionChain(liveChain)
+      setIsChainResolving(false)
+      return
+    }
+
+    setResolvedOptionChain(null)
+    setIsChainResolving(true)
+    void resolveOptionChain(expiry)
+      .then((response) => {
+        if (generation !== chainGenerationRef.current) return
+        if (
+          response === null ||
+          normalizeExpiryCode(response.expiry_date) !== normalizeExpiryCode(expiry)
+        ) {
+          setChainError('Option chain is not available for this expiry')
+          return
+        }
+        setResolvedOptionChain(response)
+      })
+      .catch(() => {
+        if (generation === chainGenerationRef.current) {
+          setChainError('Unable to load strikes for this expiry')
+        }
+      })
+      .finally(() => {
+        if (generation === chainGenerationRef.current) setIsChainResolving(false)
+      })
+  }, [expiry, liveChain, resolveOptionChain, segment])
+
+  const matchingResolvedChain =
+    resolvedOptionChain &&
+    normalizeExpiryCode(resolvedOptionChain.expiry_date) === normalizeExpiryCode(expiry)
+      ? resolvedOptionChain
+      : null
+  const matchingLiveChain =
+    liveChain && normalizeExpiryCode(liveChain.expiry_date) === normalizeExpiryCode(expiry)
+      ? liveChain
+      : null
+  const selectedChain = matchingLiveChain ?? matchingResolvedChain
+  const selectionStrikes =
+    selectedChain?.chain ??
+    (!resolveOptionChain || normalizeExpiryCode(expiry) === normalizeExpiryCode(selectedExpiry)
+      ? chain
+      : null)
+  const selectionAtmStrike = selectedChain?.atm_strike ?? atmStrike
+  const hasListedSelection =
+    strike !== undefined && Boolean(selectionStrikes?.some((item) => item.strike === strike))
+
+  useEffect(() => {
+    if (selectionAtmStrike === null || !selectionStrikes) return
+    const strikeInChain =
+      strike !== undefined && selectionStrikes.some((item) => item.strike === strike)
+    if (!strikeInChain) setStrike(selectionAtmStrike)
+  }, [selectionAtmStrike, selectionStrikes, strike])
+
   const strikeOptions = useMemo(() => {
-    if (!chain) return []
-    return chain.map((s) => s.strike)
-  }, [chain])
+    if (!selectionStrikes) return []
+    return selectionStrikes.map((item) => item.strike)
+  }, [selectionStrikes])
 
   useEffect(() => {
     const generation = ++resolveGenerationRef.current
@@ -125,7 +196,7 @@ export function ManualLegBuilder({
     const hasSelection =
       Boolean(expiry) &&
       availableExpiries.includes(expiry) &&
-      (segment === 'FUTURE' || strike !== undefined)
+      (segment === 'FUTURE' || hasListedSelection)
     if (!hasSelection) {
       setIsResolving(false)
       return
@@ -149,7 +220,7 @@ export function ManualLegBuilder({
       .finally(() => {
         if (generation === resolveGenerationRef.current) setIsResolving(false)
       })
-  }, [availableExpiries, expiry, optionType, resolveContract, segment, strike])
+  }, [availableExpiries, expiry, hasListedSelection, optionType, resolveContract, segment, strike])
 
   // Selection changes belong to the async resolver above. Live ticks are a
   // different state transition: refresh only an already-resolved option whose
@@ -180,7 +251,9 @@ export function ManualLegBuilder({
     })
   }, [expiry, liveChain, optionType, segment, strike])
 
-  const canAdd = Boolean(resolvedContract && !isResolving && lots > 0)
+  const canAdd = Boolean(
+    resolvedContract && !isResolving && !isChainResolving && !chainError && lots > 0
+  )
   const contractErrorId = 'manual-leg-contract-error'
 
   const handleAdd = () => {
@@ -472,16 +545,18 @@ export function ManualLegBuilder({
         </div>
       </div>
 
-      {(isResolving || contractError) && (
+      {(isResolving || isChainResolving || contractError || chainError) && (
         <div
-          id={contractError ? contractErrorId : undefined}
+          id={contractError || chainError ? contractErrorId : undefined}
           className={cn(
             'border-t px-4 py-2 text-[11px]',
-            contractError ? 'text-destructive' : 'text-muted-foreground'
+            contractError || chainError ? 'text-destructive' : 'text-muted-foreground'
           )}
-          role={contractError ? 'alert' : 'status'}
+          role={contractError || chainError ? 'alert' : 'status'}
         >
-          {contractError ?? 'Resolving listed contract…'}
+          {contractError ??
+            chainError ??
+            (isChainResolving ? 'Loading expiry strikes…' : 'Resolving listed contract…')}
         </div>
       )}
 

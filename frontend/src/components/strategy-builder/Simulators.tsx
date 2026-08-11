@@ -14,6 +14,7 @@ interface SliderRowProps {
   step: number
   formatter: (v: number) => string
   onChange: (v: number) => void
+  disabled?: boolean
   accent?: 'pink' | 'violet' | 'blue'
   centered?: boolean
 }
@@ -29,6 +30,7 @@ function SliderRow({
   step,
   formatter,
   onChange,
+  disabled = false,
   accent = 'violet',
   centered = false,
 }: SliderRowProps) {
@@ -85,10 +87,12 @@ function SliderRow({
           max={max}
           step={step}
           value={value}
+          disabled={disabled}
           onChange={(e) => onChange(Number(e.target.value))}
           className={cn(
             'h-2 w-full cursor-pointer rounded-full bg-muted outline-none',
-            accentTrack
+            accentTrack,
+            disabled && 'cursor-not-allowed opacity-50'
           )}
         />
         {/* Center tick for bipolar sliders */}
@@ -130,6 +134,7 @@ export function Simulators({
   onReset,
 }: SimulatorsProps) {
   const maxShiftedDays = Math.max(0, maxDays)
+  const hasTimeRemaining = maxShiftedDays > 0
   const isSubDay = maxShiftedDays < 1
   const maxHourlyStep = 1 / 24
   const timePartitions =
@@ -146,8 +151,17 @@ export function Simulators({
     return (value * maxShiftedDays) / timePartitions
   }
   const formatTime = (value: number) => {
-    const totalHours = Math.round(value * 24 * 10) / 10
-    if (isSubDay) return `+${totalHours.toLocaleString()}h`
+    const totalSeconds = Math.max(0, Math.round(value * 24 * 60 * 60))
+    const totalHours = Math.round((totalSeconds / (60 * 60)) * 10) / 10
+    if (isSubDay) {
+      if (totalSeconds < 60) return `+${totalSeconds}s`
+      if (totalSeconds < 60 * 60) {
+        const minutes = Math.floor(totalSeconds / 60)
+        const seconds = totalSeconds % 60
+        return seconds === 0 ? `+${minutes}m` : `+${minutes}m ${seconds}s`
+      }
+      return `+${totalHours.toLocaleString()}h`
+    }
     const wholeDays = Math.floor(totalHours / 24)
     const hours = Math.round((totalHours - wholeDays * 24) * 10) / 10
     if (hours === 0) return `+${wholeDays}d`
@@ -219,6 +233,7 @@ export function Simulators({
           min={0}
           max={timeSliderMax}
           step={timeStep}
+          disabled={!hasTimeRemaining}
           accent="blue"
           formatter={(value) => formatTime(sliderValueToDays(value))}
           onChange={(value) => onDaysElapsedChange(sliderValueToDays(value))}

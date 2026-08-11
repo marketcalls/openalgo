@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router'
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PortfolioEntry } from '@/api/strategy-portfolio'
 import { useBrokerStore } from '@/stores/brokerStore'
 import type { OptionChainResponse, OptionData } from '@/types/option-chain'
@@ -321,6 +321,12 @@ beforeEach(() => {
     }
     return { status: 200, data: { status: 'success' } }
   })
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 function requests(path: string): unknown[] {
@@ -827,6 +833,7 @@ describe('StrategyBuilder live request orchestration', () => {
   })
 
   it('does not repeat an unchanged margin request when support is confirmed', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
     const firstMargin = deferred<{
       status: number
       data: { status: string; data: { total_margin_required: number } }
@@ -848,18 +855,23 @@ describe('StrategyBuilder live request orchestration', () => {
       await firstMargin.promise
     })
 
-    await new Promise((resolve) => setTimeout(resolve, 550))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(550)
+    })
     expect(requests('/api/v1/margin')).toHaveLength(1)
   })
 
   it('does not request margin for a hydrated zero-exit leg', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
     const saved = savedRelianceStrategy()
     saved.legs[0].exitPrice = 0
     mocks.getPortfolioEntry.mockResolvedValue(saved)
 
     renderBuilder('/strategybuilder?load=17')
     await screen.findByRole('button', { name: 'Remove position' })
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
 
     expect(mocks.apiPost.mock.calls.filter(([url]) => url === '/margin')).toHaveLength(0)
   })
@@ -1102,7 +1114,6 @@ describe('StrategyBuilder live request orchestration', () => {
     rows = await screen.findAllByRole('row')
     farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
     expect(farRow).toHaveTextContent('53.00')
-    intervalSpy.mockRestore()
   }, SLOW_INTEGRATION_TEST_TIMEOUT)
 
   it('recalculates a supplemental-expiry leg from its exact WebSocket contract and parity ticks', async () => {
@@ -1557,6 +1568,56 @@ describe('StrategyBuilder identity orchestration', () => {
 
     await waitForExecuteButton()
     expect(screen.getAllByText('₹100.00').length).toBeGreaterThan(0)
+  })
+
+  it('retries a saved futures leg after its expiry list arrives', async () => {
+    const saved = savedRelianceStrategy()
+    saved.legs = [
+      {
+        id: 'saved-future',
+        segment: 'FUTURE',
+        side: 'BUY',
+        lots: 1,
+        lotSize: 1,
+        expiry: '27AUG26',
+        price: 25_100,
+        iv: 0,
+        active: true,
+        symbol: 'STALE_FUTURE',
+      },
+    ]
+    const futuresExpiries = deferred<{ status: 'success'; data: string[] }>()
+    mocks.getPortfolioEntry.mockResolvedValue(saved)
+    mocks.getExpiries.mockImplementation(
+      async (_apiKey: string, _symbol: string, _exchange: string, instrument: string) =>
+        instrument === 'futures'
+          ? futuresExpiries.promise
+          : { status: 'success' as const, data: ['18AUG26'] }
+    )
+    mocks.getFutures.mockResolvedValue({
+      status: 'success',
+      data: [
+        {
+          symbol: 'RELIANCE27AUG26FUT',
+          expiry: '27-AUG-26',
+          lotsize: 75,
+          tick_size: 0.05,
+        },
+      ],
+    })
+
+    renderBuilder('/strategybuilder?load=17')
+    await screen.findByRole('button', { name: 'Remove position' })
+    expect(screen.getByRole('button', { name: 'Execute' })).toBeDisabled()
+    expect(mocks.getFutures).not.toHaveBeenCalled()
+
+    await act(async () => {
+      futuresExpiries.resolve({ status: 'success', data: ['27AUG26'] })
+      await futuresExpiries.promise
+    })
+
+    await waitFor(() => expect(mocks.getFutures).toHaveBeenCalledWith('RELIANCE', 'NFO'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Execute' })).toBeEnabled())
   })
 
   it('keeps a saved leg blocked when the restored chain cannot resolve its contract', async () => {

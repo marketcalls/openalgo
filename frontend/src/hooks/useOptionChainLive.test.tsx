@@ -83,6 +83,7 @@ describe('useOptionChainLive', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
 
@@ -105,8 +106,100 @@ describe('useOptionChainLive', () => {
     expect(result.current.lastStreamUpdate).toBeNull()
   })
 
+  it('clears stream freshness when live updates are disabled for the same identity', async () => {
+    const response = {
+      ...optionChainResponse(),
+      chain: [
+        {
+          strike: 100_000,
+          ce: option('BTC28AUG26100000CE', 2_500),
+          pe: option('BTC28AUG26100000PE', 2_400),
+        },
+      ],
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(response), { status: 200 }))
+    )
+    const now = 1_796_000_000_100
+    const { result, rerender } = renderHook(
+      ({ enabled }) =>
+        useOptionChainLive('key', 'BTC', 'CRYPTO', 'CRYPTO', '28AUG26', 20, { enabled }),
+      { initialProps: { enabled: true } }
+    )
+    await waitFor(() => expect(result.current.data).not.toBeNull())
+
+    marketDataCapture.isConnected = true
+    marketDataCapture.isAuthenticated = true
+    marketDataCapture.connectionEpoch = 1
+    marketDataCapture.data = new Map([
+      [
+        'CRYPTO:BTC28AUG26100000CE',
+        {
+          updateSource: 'websocket',
+          connectionEpoch: 1,
+          lastUpdate: now,
+          data: { ltp: 2_600 },
+        },
+      ],
+    ])
+    rerender({ enabled: true })
+    await waitFor(() => expect(result.current.lastStreamUpdate?.getTime()).toBe(now))
+
+    rerender({ enabled: false })
+    await waitFor(() => expect(result.current.lastStreamUpdate).toBeNull())
+  })
+
+  it('derives stream freshness only from symbols in the current option chain', async () => {
+    const response = {
+      ...optionChainResponse(),
+      chain: [
+        {
+          strike: 100_000,
+          ce: option('BTC28AUG26100000CE', 2_500),
+          pe: null,
+        },
+      ],
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(response), { status: 200 }))
+    )
+    marketDataCapture.isConnected = true
+    marketDataCapture.isAuthenticated = true
+    marketDataCapture.connectionEpoch = 1
+    marketDataCapture.data = new Map([
+      [
+        'CRYPTO:OLD_EXPIRY_CONTRACT',
+        {
+          updateSource: 'websocket',
+          connectionEpoch: 1,
+          lastUpdate: 1_796_000_000_900,
+          data: { ltp: 999 },
+        },
+      ],
+      [
+        'CRYPTO:BTC28AUG26100000CE',
+        {
+          updateSource: 'websocket',
+          connectionEpoch: 1,
+          lastUpdate: 1_796_000_000_100,
+          data: { ltp: 2_600 },
+        },
+      ],
+    ])
+
+    const { result } = renderHook(() =>
+      useOptionChainLive('key', 'BTC', 'CRYPTO', 'CRYPTO', '28AUG26', 20, { enabled: true })
+    )
+
+    await waitFor(() =>
+      expect(result.current.lastStreamUpdate?.getTime()).toBe(1_796_000_000_100)
+    )
+  })
+
   it('recalculates two different strikes independently from their WebSocket ticks', async () => {
-    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_796_000_000_000)
+    vi.spyOn(Date, 'now').mockReturnValue(1_796_000_000_000)
     const response = {
       ...optionChainResponse(),
       chain: [
@@ -210,7 +303,6 @@ describe('useOptionChainLive', () => {
       vega: row.ce?.vega,
     }))
     expect(parityUpdated?.[0]).not.toEqual(initial?.[0])
-    nowSpy.mockRestore()
   })
 
   it('binds data to the derivative exchange that initiated its poll', async () => {

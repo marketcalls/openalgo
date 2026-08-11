@@ -69,7 +69,7 @@ describe('TemplateDialog payoff topology guard', () => {
     const template = STRATEGY_TEMPLATES.find((item) => item.id === 'call_calendar')
     const chain: OptionStrike[] = [90, 100, 110].map((strike) => ({
       strike,
-      ce: null,
+      ce: { symbol: `CALL${strike}`, ltp: 5 } as OptionStrike['ce'],
       pe: null,
     }))
 
@@ -89,6 +89,13 @@ describe('TemplateDialog payoff topology guard', () => {
     )
 
     expect(screen.getByRole('alert')).toHaveTextContent(/later expiry is required/i)
+    expect(screen.getByRole('combobox', { name: /strategy expiry/i })).toHaveAttribute(
+      'aria-invalid',
+      'true'
+    )
+    for (const strike of screen.getAllByRole('combobox', { name: /strike for/i })) {
+      expect(strike).toHaveAttribute('aria-invalid', 'false')
+    }
     expect(screen.getByRole('button', { name: 'Add Strategy' })).toBeDisabled()
   })
 
@@ -112,6 +119,14 @@ describe('TemplateDialog payoff topology guard', () => {
     )
 
     expect(screen.getByRole('alert')).toHaveTextContent(/required CE contract/i)
+    expect(screen.getByRole('combobox', { name: /strike for buy call leg 1/i })).toHaveAttribute(
+      'aria-invalid',
+      'true'
+    )
+    expect(screen.getByRole('combobox', { name: /strategy expiry/i })).toHaveAttribute(
+      'aria-invalid',
+      'false'
+    )
     expect(screen.getByRole('button', { name: 'Add Strategy' })).toBeDisabled()
   })
 })

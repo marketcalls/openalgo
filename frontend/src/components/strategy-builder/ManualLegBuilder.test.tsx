@@ -189,6 +189,44 @@ describe('ManualLegBuilder listed contracts', () => {
     )
   })
 
+  it('replaces header-chain strikes with the selected far expiry chain', async () => {
+    const farChain = liveChain()
+    farChain.expiry_date = '18AUG26'
+    farChain.atm_strike = 24_750
+    farChain.chain = [
+      {
+        strike: 24_750,
+        ce: {
+          ...farChain.chain[0].ce!,
+          symbol: 'NIFTY18AUG2624750CE',
+        },
+        pe: null,
+      },
+    ]
+    const resolveOptionChain = vi.fn(async (expiry: string) =>
+      expiry === '18AUG26' ? farChain : liveChain()
+    )
+    const resolveContract = vi.fn(async (expiry: string, _segment: string, strike?: number) =>
+      expiry === '18AUG26' && strike === 24_750
+        ? market({ expiry, symbol: 'NIFTY18AUG2624750CE' })
+        : market()
+    )
+
+    render(
+      <ManualLegBuilder
+        {...props({ resolveContract })}
+        resolveOptionChain={resolveOptionChain}
+      />
+    )
+    await screen.findByText('NIFTY13AUG2624600CE')
+    await choose('Expiry', '18AUG26')
+
+    expect(await screen.findByText('NIFTY18AUG2624750CE')).toBeVisible()
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Strike' }), { key: 'ArrowDown' })
+    expect(await screen.findByRole('option', { name: /24750/ })).toBeVisible()
+    expect(screen.queryByRole('option', { name: /24600/ })).not.toBeInTheDocument()
+  })
+
   it('keeps only the latest async contract and clears a missing selection', async () => {
     const first = deferred<ResolvedLegMarket | null>()
     const second = deferred<ResolvedLegMarket | null>()

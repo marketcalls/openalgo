@@ -249,7 +249,10 @@ export function SymbolHeader({
       </div>
 
       {/* Metrics grid — hairline divisions, big primary numbers */}
-      <div className="grid grid-cols-2 divide-x divide-y sm:grid-cols-3 sm:divide-y-0 lg:grid-cols-5">
+      <div
+        data-testid="symbol-metrics"
+        className="grid grid-cols-2 divide-x divide-y overflow-hidden rounded-b-xl sm:grid-cols-3 sm:divide-y-0 lg:grid-cols-5"
+      >
         <MetricCell
           label="Spot"
           value={spotPrice !== null ? spotPrice.toFixed(2) : '—'}
