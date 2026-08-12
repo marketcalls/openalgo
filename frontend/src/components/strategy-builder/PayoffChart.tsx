@@ -1,29 +1,59 @@
 import type * as PlotlyTypes from 'plotly.js'
-import { useMemo } from 'react'
+import { useId, useMemo } from 'react'
 import Plot from '@/lib/Plot2D'
-import type { PayoffResult } from '@/lib/strategyMath'
+import { lognormalPriceBand, type PayoffResult, type ScenarioState } from '@/lib/strategyMath'
 import { useThemeStore } from '@/stores/themeStore'
 
 export interface PayoffChartProps {
   title: string
-  spot: number
-  atmIv: number
-  tYears: number
+  /** Stable for live updates; changes when the selected strategy identity changes. */
+  chartIdentity?: string
+  scenario: ScenarioState
+  remainingYears: number
   payoff: PayoffResult
-  /** If true, show a dashed "T+0" curve in addition to expiry. */
+  /** Label the terminal event explicitly for multi-expiry strategies. */
+  terminalLabel?: string
+  /** If true, show the dashed current-value scenario curve in addition to expiry. */
   showTplus0?: boolean
   height?: number
+  formatCurrency: (value: number) => string
+}
+
+const MAX_REPRESENTATIVE_ROWS = 7
+const MAX_SUMMARY_BREAKEVENS = 4
+
+function formatHorizon(elapsedDays: number) {
+  if (elapsedDays <= 0) return 'T+0'
+  const totalHours = Math.round(elapsedDays * 24 * 10) / 10
+  const wholeDays = Math.floor(totalHours / 24)
+  const hours = Math.round((totalHours - wholeDays * 24) * 10) / 10
+  if (wholeDays === 0) return `T+${hours.toLocaleString()}h`
+  if (hours === 0) return `T+${wholeDays}d`
+  return `T+${wholeDays}d ${hours.toLocaleString()}h`
+}
+
+function selectEvenly<T>(items: T[], limit: number): T[] {
+  if (items.length <= limit) return items
+  if (limit <= 0) return []
+  if (limit === 1) return [items[Math.floor(items.length / 2)]]
+  return Array.from({ length: limit }, (_, index) => {
+    const sourceIndex = Math.round((index * (items.length - 1)) / (limit - 1))
+    return items[sourceIndex]
+  })
 }
 
 export function PayoffChart({
   title,
-  spot,
-  atmIv,
-  tYears,
+  chartIdentity = title,
+  scenario,
+  remainingYears,
   payoff,
+  terminalLabel = 'At Expiry',
   showTplus0 = true,
   height = 440,
+  formatCurrency,
 }: PayoffChartProps) {
+  const regionHeadingId = useId()
   const { mode, appMode } = useThemeStore()
   const isAnalyzer = appMode === 'analyzer'
   const isDark = mode === 'dark' || isAnalyzer
@@ -50,6 +80,7 @@ export function PayoffChart({
   )
 
   const { data, layout, config } = useMemo(() => {
+    const { spot, iv, daysElapsed } = scenario
     const { samples } = payoff
     if (samples.length === 0) {
       return {
@@ -77,15 +108,26 @@ export function PayoffChart({
     const profitFill = samples.map((s) => (s.expiry >= 0 ? s.expiry : 0))
     const lossFill = samples.map((s) => (s.expiry < 0 ? s.expiry : 0))
 
-    const sigmaT = (atmIv / 100) * Math.sqrt(Math.max(tYears, 1e-6))
-    const sigmaMove = spot * sigmaT
-    const band = (n: number) => ({ lo: spot - n * sigmaMove, hi: spot + n * sigmaMove })
-    const b1 = band(1)
-    const b2 = band(2)
+    const b1 = lognormalPriceBand(spot, iv, remainingYears, 1)
+    const b2 = lognormalPriceBand(spot, iv, remainingYears, 2)
     const domainLo = xs[0]
     const domainHi = xs[xs.length - 1]
     const inDomain = (x: number) => x >= domainLo && x <= domainHi
     const clipToDomain = (x: number) => Math.min(domainHi, Math.max(domainLo, x))
+
+    const currentLabel = formatHorizon(daysElapsed)
+    const hoverTemplate = (label: string) =>
+      `<b>${label}</b>` +
+      '<br>Underlying: %{customdata[0]}' +
+      '<br>Chg. from Scenario: %{customdata[1]}' +
+      '<br>P&L: %{customdata[2]}' +
+      '<extra></extra>'
+    const hoverData = (values: number[]) =>
+      samples.map((sample, index) => [
+        formatCurrency(sample.underlying),
+        pctFromSpot[index],
+        formatCurrency(values[index]),
+      ])
 
     const traces: PlotlyTypes.Data[] = [
       {
@@ -115,14 +157,11 @@ export function PayoffChart({
         y: ysExpiry,
         type: 'scatter',
         mode: 'lines',
-        name: 'At Expiry',
+        name: terminalLabel,
         line: { color: colors.expiryLine, width: 2.2 },
-        // customdata carries a pre-formatted percent string per point.
-        customdata: pctFromSpot as unknown as PlotlyTypes.Datum[],
-        hovertemplate:
-          '<b>At Expiry P&L</b> ₹%{y:,.0f}' +
-          '<br>Chg. from Spot: %{customdata}' +
-          '<extra></extra>',
+        // customdata carries broker-aware price/P&L strings and percent change.
+        customdata: hoverData(ysExpiry) as unknown as PlotlyTypes.Datum[],
+        hovertemplate: hoverTemplate(terminalLabel),
       },
     ]
 
@@ -132,9 +171,10 @@ export function PayoffChart({
         y: ysT0,
         type: 'scatter',
         mode: 'lines',
-        name: 'T+0',
+        name: currentLabel,
         line: { color: colors.tplus0Line, width: 2, dash: 'dash' },
-        hovertemplate: '<b>T+0 P&L</b> ₹%{y:,.0f}<extra></extra>',
+        customdata: hoverData(ysT0) as unknown as PlotlyTypes.Datum[],
+        hovertemplate: hoverTemplate(currentLabel),
       })
     }
 
@@ -155,7 +195,7 @@ export function PayoffChart({
     // Stepped σ bands: the wider 2σ band is drawn first so the 1σ band
     // overlays on top of it, producing a visually distinct inner (darker)
     // and outer (lighter) zone rather than one uniform wash.
-    if (sigmaMove > 0) {
+    if (b1 && b2) {
       const pushBand = (x0: number, x1: number, fillcolor: string) => {
         const clippedX0 = clipToDomain(x0)
         const clippedX1 = clipToDomain(x1)
@@ -174,13 +214,13 @@ export function PayoffChart({
         })
       }
       // Left outer band: from -2σ to -1σ
-      pushBand(b2.lo, b1.lo, colors.sigma2Band)
+      pushBand(b2.lower, b1.lower, colors.sigma2Band)
       // Right outer band: from +1σ to +2σ
-      pushBand(b1.hi, b2.hi, colors.sigma2Band)
+      pushBand(b1.upper, b2.upper, colors.sigma2Band)
       // Inner 1σ band
-      pushBand(b1.lo, b1.hi, colors.sigma1Band)
+      pushBand(b1.lower, b1.upper, colors.sigma1Band)
       // Thin vertical ticks at each σ boundary
-      for (const x of [b2.lo, b1.lo, b1.hi, b2.hi]) {
+      for (const x of [b2.lower, b1.lower, b1.upper, b2.upper]) {
         if (!inDomain(x)) continue
         shapes.push({
           type: 'line',
@@ -222,12 +262,12 @@ export function PayoffChart({
       font: { size: 12, color: colors.spotLine },
     })
 
-    if (sigmaMove > 0) {
+    if (b1 && b2) {
       const sigmaLabels: Array<{ x: number; text: string }> = [
-        { x: b2.lo, text: '-2σ' },
-        { x: b1.lo, text: '-1σ' },
-        { x: b1.hi, text: '+1σ' },
-        { x: b2.hi, text: '+2σ' },
+        { x: b2.lower, text: '-2σ' },
+        { x: b1.lower, text: '-1σ' },
+        { x: b1.upper, text: '+1σ' },
+        { x: b2.upper, text: '+2σ' },
       ]
       for (const s of sigmaLabels) {
         if (!inDomain(s.x)) continue
@@ -266,6 +306,7 @@ export function PayoffChart({
     })
 
     const chartLayout: Partial<PlotlyTypes.Layout> = {
+      uirevision: chartIdentity,
       title: {
         text: title,
         font: { color: colors.text, size: 14 },
@@ -299,7 +340,7 @@ export function PayoffChart({
         range: [xs[0], xs[xs.length - 1]],
       },
       yaxis: {
-        title: { text: 'Profit / Loss (₹)', font: { color: colors.text, size: 12 } },
+        title: { text: 'Profit / Loss', font: { color: colors.text, size: 12 } },
         tickfont: { color: colors.text, size: 10 },
         gridcolor: colors.grid,
         zeroline: true,
@@ -320,15 +361,185 @@ export function PayoffChart({
         responsive: true,
       } as Partial<PlotlyTypes.Config>,
     }
-  }, [payoff, spot, atmIv, tYears, showTplus0, title, colors, isDark])
+  }, [
+    payoff,
+    scenario,
+    remainingYears,
+    terminalLabel,
+    showTplus0,
+    title,
+    chartIdentity,
+    colors,
+    isDark,
+    formatCurrency,
+  ])
+
+  const representativeSelection = useMemo(() => {
+    const samples = payoff.samples
+    if (samples.length === 0) return { samples: [], candidateCount: 0 }
+    const nearest = (target: number) =>
+      samples.reduce((best, sample) =>
+        Math.abs(sample.underlying - target) < Math.abs(best.underlying - target) ? sample : best
+      )
+    const maxExpiry = samples.reduce((best, sample) =>
+      sample.expiry > best.expiry ? sample : best
+    )
+    const minExpiry = samples.reduce((best, sample) =>
+      sample.expiry < best.expiry ? sample : best
+    )
+    const candidateMap = new Map(
+      [
+        samples[0],
+        nearest(scenario.spot),
+        ...payoff.breakevens.map(nearest),
+        maxExpiry,
+        minExpiry,
+        samples[samples.length - 1],
+      ].map((sample) => [sample.underlying, sample])
+    )
+    const candidates = Array.from(candidateMap.values()).sort(
+      (left, right) => left.underlying - right.underlying
+    )
+    const essentialMap = new Map(
+      [samples[0], nearest(scenario.spot), maxExpiry, minExpiry, samples[samples.length - 1]].map(
+        (sample) => [sample.underlying, sample]
+      )
+    )
+    const remainingSlots = Math.max(0, MAX_REPRESENTATIVE_ROWS - essentialMap.size)
+    const optionalCandidates = candidates.filter((sample) => !essentialMap.has(sample.underlying))
+    const selected = [...essentialMap.values(), ...selectEvenly(optionalCandidates, remainingSlots)]
+      .sort((left, right) => left.underlying - right.underlying)
+      .slice(0, MAX_REPRESENTATIVE_ROWS)
+    return { samples: selected, candidateCount: candidates.length }
+  }, [payoff, scenario.spot])
+
+  const summaryBreakevens = selectEvenly(payoff.breakevens, MAX_SUMMARY_BREAKEVENS)
+
+  const scenarioSample = useMemo(() => {
+    if (payoff.samples.length === 0) return null
+    return payoff.samples.reduce((best, sample) =>
+      Math.abs(sample.underlying - scenario.spot) < Math.abs(best.underlying - scenario.spot)
+        ? sample
+        : best
+    )
+  }, [payoff.samples, scenario.spot])
+
+  const formatLimit = (value: number) =>
+    Number.isFinite(value) ? formatCurrency(value) : value > 0 ? 'Unlimited' : 'Unlimited loss'
+  const currentLabel = formatHorizon(scenario.daysElapsed)
 
   return (
-    <Plot
-      data={data}
-      layout={layout}
-      config={config}
-      useResizeHandler
-      style={{ width: '100%', height }}
-    />
+    <section aria-labelledby={regionHeadingId} className="min-w-0 max-w-full overflow-hidden">
+      <h2 id={regionHeadingId} className="sr-only">
+        {title} payoff analysis
+      </h2>
+      <Plot
+        data={data}
+        layout={layout}
+        config={config}
+        useResizeHandler
+        style={{ width: '100%', height }}
+      />
+      <div className="space-y-3 border-t px-3 py-3 text-xs">
+        <output aria-live="polite" aria-atomic="true" className="block text-muted-foreground">
+          Scenario spot <strong className="text-foreground">{formatCurrency(scenario.spot)}</strong>
+          .
+          {scenarioSample && (
+            <>
+              {' '}
+              {terminalLabel}{' '}
+              <strong className="text-foreground">{formatCurrency(scenarioSample.expiry)}</strong>
+              {showTplus0 && (
+                <>
+                  {' '}
+                  and {currentLabel}{' '}
+                  <strong className="text-foreground">
+                    {formatCurrency(scenarioSample.tplus0)}
+                  </strong>
+                  .
+                </>
+              )}
+            </>
+          )}
+        </output>
+
+        <dl className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <div className="rounded-md border bg-muted/20 px-2 py-1.5">
+            <dt className="text-muted-foreground">Maximum profit</dt>
+            <dd className="font-semibold tabular-nums">{formatLimit(payoff.maxProfit)}</dd>
+          </div>
+          <div className="rounded-md border bg-muted/20 px-2 py-1.5">
+            <dt className="text-muted-foreground">Maximum loss</dt>
+            <dd className="font-semibold tabular-nums">{formatLimit(payoff.maxLoss)}</dd>
+          </div>
+          <div className="rounded-md border bg-muted/20 px-2 py-1.5">
+            <dt className="text-muted-foreground">Breakevens</dt>
+            <dd data-testid="breakeven-summary" className="font-semibold tabular-nums">
+              {payoff.breakevens.length > 0
+                ? `${summaryBreakevens.map(formatCurrency).join(', ')}${
+                    payoff.breakevens.length > summaryBreakevens.length
+                      ? ` (${summaryBreakevens.length} of ${payoff.breakevens.length} shown)`
+                      : ''
+                  }`
+                : 'None in range'}
+            </dd>
+          </div>
+        </dl>
+
+        {representativeSelection.candidateCount > representativeSelection.samples.length && (
+          <p
+            id={`${regionHeadingId}-table-disclosure`}
+            data-testid="representative-payoff-disclosure"
+            className="text-muted-foreground"
+          >
+            {representativeSelection.samples.length} of {representativeSelection.candidateCount}{' '}
+            representative points shown; the interactive chart retains the full sampled payoff.
+          </p>
+        )}
+
+        <table
+          aria-describedby={
+            representativeSelection.candidateCount > representativeSelection.samples.length
+              ? `${regionHeadingId}-table-disclosure`
+              : undefined
+          }
+          className="w-full table-fixed border-collapse text-left"
+        >
+          <caption className="sr-only">Representative payoff values</caption>
+          <thead>
+            <tr className="border-b text-muted-foreground">
+              <th scope="col" className="break-words px-2 py-1 font-medium">
+                Underlying
+              </th>
+              <th scope="col" className="break-words px-2 py-1 font-medium">
+                {terminalLabel}
+              </th>
+              {showTplus0 && (
+                <th scope="col" className="break-words px-2 py-1 font-medium">
+                  {currentLabel}
+                </th>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {representativeSelection.samples.map((sample) => (
+              <tr key={sample.underlying} className="border-b last:border-0">
+                <th scope="row" className="break-words px-2 py-1 font-medium tabular-nums">
+                  {formatCurrency(sample.underlying)}
+                </th>
+                <td className="break-words px-2 py-1 tabular-nums">
+                  {formatCurrency(sample.expiry)}
+                </td>
+                {showTplus0 && (
+                  <td className="break-words px-2 py-1 tabular-nums">
+                    {formatCurrency(sample.tplus0)}
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   )
 }

@@ -73,6 +73,14 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _reference_metadata(symbol: str, exchange: str) -> dict[str, str]:
+    """Expose the exact quote identity selected while resolving the chain."""
+    return {
+        "underlying_symbol": symbol,
+        "underlying_exchange": exchange,
+    }
+
+
 def get_strikes_with_labels(
     available_strikes: list[float], atm_strike: float, strike_count: int | None = None
 ) -> list[dict[str, Any]]:
@@ -687,6 +695,7 @@ def get_option_chain(
             {
                 "status": "success",
                 "underlying": base_symbol,
+                **_reference_metadata(quote_symbol, quote_exchange),
                 "underlying_ltp": underlying_ltp,
                 "underlying_prev_close": underlying_prev_close,
                 "expiry_date": final_expiry,

@@ -381,6 +381,68 @@ def get_distinct_underlyings(exchange: str = None) -> list[str]:
         return []
 
 
+def normalize_derivative_underlyings() -> int:
+    """Rewrite `name` to the underlying root on derivative rows. Returns the count changed.
+
+    For FUT/CE/PE rows `name` is meant to hold the underlying root ("NIFTY"),
+    and every lookup that resolves an underlying depends on it: the Options
+    Order lot size, the scalping terminal's MCX/CDS chain, expiry lists, and the
+    options tools' underlying dropdown. Whether it actually holds that is up to
+    each broker's master contract, and they disagree - Fyers ships the contract
+    description ("NIFTY 11 Aug 26 24450 CE") in every column that could carry
+    one, so on Fyers none of those lookups matched and the dropdown was offered
+    76,981 descriptions in place of ~190 underlyings.
+
+    Correcting that in each of 35+ broker plugins does not scale and leaves the
+    next broker to repeat it, so normalize once here, on the one path every
+    broker's download already runs through. The root is derived from the
+    OpenAlgo symbol - normalized by OpenAlgo itself, so it reads the same
+    everywhere - with the same extractor that builds the dropdown, which is what
+    makes the value offered and the value resolved agree.
+
+    EQUITY and INDEX rows are untouched: there `name` is the company or index
+    name that powers search-by-name.
+
+    Rows are only written where the derived root differs from what is stored, so
+    on a broker that already populates `name` correctly this is a read-only pass.
+    A row whose symbol cannot be parsed keeps whatever it had, rather than being
+    blanked.
+    """
+    from database.token_db_enhanced import extract_underlying_from_symbol
+    from utils.constants import FNO_EXCHANGES
+
+    updates = []
+    try:
+        rows = (
+            db_session.query(SymToken.id, SymToken.symbol, SymToken.exchange, SymToken.name)
+            .filter(SymToken.exchange.in_(FNO_EXCHANGES))
+            .yield_per(5000)
+        )
+        for row_id, symbol, exchange, name in rows:
+            derived = extract_underlying_from_symbol(symbol, exchange)
+            if derived and derived != name:
+                updates.append({"id": row_id, "name": derived})
+
+        for start in range(0, len(updates), 5000):
+            db_session.bulk_update_mappings(SymToken, updates[start : start + 5000])
+        db_session.commit()
+
+        if updates:
+            logger.info(
+                f"Master contract: normalized the underlying on {len(updates)} derivative row(s)"
+            )
+        return len(updates)
+    except Exception:
+        db_session.rollback()
+        # A failure here leaves `name` as the broker supplied it, which is what
+        # every release before this behaved like - worth logging, not worth
+        # failing the login over.
+        logger.exception("Could not normalize derivative underlyings")
+        return 0
+    finally:
+        db_session.remove()
+
+
 def init_db():
     """Initialize the master contract database tables.
 
