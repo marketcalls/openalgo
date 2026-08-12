@@ -40,6 +40,9 @@ export interface StrategyChartLegInput {
 export interface StrategyChartRequest {
   underlying: string
   exchange: string
+  /** Exact quote reference previously resolved by the option-chain backend. */
+  underlying_symbol?: string
+  underlying_exchange?: string
   legs: StrategyChartLegInput[]
   interval: string
   days: number

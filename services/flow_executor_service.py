@@ -13,6 +13,8 @@ import weakref
 from datetime import datetime, time, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+from sqlalchemy import and_
+
 from database.flow_db import (
     add_execution_log,
     create_execution,
@@ -27,6 +29,19 @@ logger = logging.getLogger(__name__)
 # Execution limits
 MAX_NODE_DEPTH = 100
 MAX_NODE_VISITS = 500
+
+
+def symbol_prefix_filter(column, prefix: str):
+    """Index-friendly "this column starts with `prefix`" predicate.
+
+    `column.like("NIFTY%")` reads better but is the wrong tool here: SQLite's
+    LIKE is case-insensitive by default, so it cannot seek the index and pays a
+    case-folding comparison on every candidate row - 1460ms against the NFO rows
+    of a full master contract, versus 23ms for the half-open range below, which
+    compares on the default BINARY collation and seeks. OpenAlgo symbols are
+    always upper-case, so the case-insensitivity buys nothing.
+    """
+    return and_(column >= prefix, column < prefix[:-1] + chr(ord(prefix[-1]) + 1))
 
 # Execution locks to prevent concurrent execution of the same workflow.
 #
@@ -405,6 +420,7 @@ class NodeExecutor:
             LotSizeUnavailable: the lot size cannot be established.
         """
         from database.symbol import SymToken, db_session
+        from database.token_db_enhanced import extract_underlying_from_symbol
 
         try:
             row = (
@@ -419,6 +435,33 @@ class NodeExecutor:
             )
             if row and row[0]:
                 return int(row[0])
+
+            # `name` holds the underlying root only where the broker's master
+            # contract put it there. Some ship the contract description instead
+            # ("NIFTY 11 Aug 26 24450 CE"), so `name == "NIFTY"` matches nothing
+            # and an order that should have gone through fails. Rather than
+            # correct this in each of 35+ broker plugins, fall back to the
+            # OpenAlgo symbol, which OpenAlgo normalizes itself and so reads the
+            # same on every broker - the same reason expiry_service and
+            # option_symbol_service key off it.
+            #
+            # The prefix alone is not sufficient: symbols starting "NIFTY" also
+            # include NIFTYNXT50, whose lot size differs (25 vs 65). Confirm each
+            # candidate with the same extractor the underlying dropdown uses, so
+            # the value offered and the value resolved come from one function.
+            candidates = (
+                db_session.query(SymToken.symbol, SymToken.lotsize)
+                .filter(
+                    symbol_prefix_filter(SymToken.symbol, underlying),
+                    SymToken.exchange == fo_exchange,
+                    SymToken.lotsize.isnot(None),
+                    SymToken.lotsize > 0,
+                )
+                .yield_per(200)
+            )
+            for symbol, lotsize in candidates:
+                if extract_underlying_from_symbol(symbol, fo_exchange) == underlying:
+                    return int(lotsize)
             # Distinguish "this exchange has no contracts loaded" from "this
             # underlying is not one of them". Only the former is a fallback case.
             exchange_seeded = (

@@ -1,5 +1,8 @@
 import type { OptionType } from './strategyMath'
+import { normalizeExpiryCode, resolveListedOptionData } from './strategyContracts'
 import type { OptionData, OptionStrike } from '@/types/option-chain'
+
+export { normalizeExpiryCode }
 
 export interface StrikeTopologyLeg {
   strikeOffset: number
@@ -8,15 +11,6 @@ export interface StrikeTopologyLeg {
 
 function uniqueSorted(values: number[]): number[] {
   return Array.from(new Set(values.filter(Number.isFinite))).sort((a, b) => a - b)
-}
-
-export function normalizeExpiryCode(expiry: string): string {
-  if (!expiry) return ''
-  const parts = expiry.split('-')
-  if (parts.length === 3) {
-    return `${parts[0]}${parts[1].toUpperCase()}${parts[2].slice(-2)}`
-  }
-  return expiry.replace(/-/g, '').toUpperCase()
 }
 
 export function canReuseChainContract(editedExpiry: string, loadedExpiry: string): boolean {
@@ -28,8 +22,7 @@ export function resolveListedContract(
   strike: number,
   optionType: OptionType
 ): OptionData | null {
-  const row = chain.find((item) => item.strike === strike)
-  return (optionType === 'CE' ? row?.ce : row?.pe) ?? null
+  return resolveListedOptionData(chain, optionType, strike)
 }
 
 export function resolveStrikeOffset(

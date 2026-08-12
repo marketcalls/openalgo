@@ -260,7 +260,13 @@ const brokerFields: Record<string, BrokerConfig> = {
   },
   tradejini: {
     fields: [
-      { name: 'password', label: 'Password', type: 'password', placeholder: 'Enter your Password' },
+      {
+        name: 'password',
+        label: 'PIN',
+        type: 'password',
+        placeholder: 'Enter your login PIN',
+        hint: 'The PIN you use to log in to CubePlus, not your account password',
+      },
       {
         name: 'twofa',
         label: '2FA Code / TOTP',

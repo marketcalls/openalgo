@@ -1,7 +1,8 @@
-import { render } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import type * as PlotlyTypes from 'plotly.js'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { computePayoff, type StrategyLeg } from '@/lib/strategyMath'
+import { computePayoff, type ScenarioState, type StrategyLeg } from '@/lib/strategyMath'
+import { makeFormatCurrency } from '@/lib/utils'
 import { PayoffChart } from './PayoffChart'
 
 const plotCapture = vi.hoisted(() => ({
@@ -19,6 +20,13 @@ vi.mock('@/lib/Plot2D', () => ({
 }))
 
 const NOW = new Date('2026-07-28T10:00:00.000Z')
+const BASE_SCENARIO: ScenarioState = {
+  spot: 100,
+  iv: 20,
+  daysElapsed: 0,
+  valuationTime: NOW,
+}
+const formatCurrency = makeFormatCurrency(null)
 
 function leg(
   id: string,
@@ -67,7 +75,13 @@ describe('PayoffChart exact geometry', () => {
     )
 
     render(
-      <PayoffChart title="Iron Condor" spot={100} atmIv={20} tYears={7 / 365} payoff={payoff} />
+      <PayoffChart
+        title="Iron Condor"
+        scenario={BASE_SCENARIO}
+        remainingYears={7 / 365}
+        payoff={payoff}
+        formatCurrency={formatCurrency}
+      />
     )
 
     const traces = plotCapture.props?.data ?? []
@@ -103,7 +117,15 @@ describe('PayoffChart exact geometry', () => {
       NOW
     )
 
-    render(<PayoffChart title="Long Call" spot={100} atmIv={30} tYears={1} payoff={payoff} />)
+    render(
+      <PayoffChart
+        title="Long Call"
+        scenario={{ ...BASE_SCENARIO, iv: 30 }}
+        remainingYears={1}
+        payoff={payoff}
+        formatCurrency={formatCurrency}
+      />
+    )
 
     expect(plotCapture.props?.layout.xaxis?.range).toEqual([40, 160])
     const sigmaShapes = plotCapture.props?.layout.shapes?.filter(
@@ -127,7 +149,15 @@ describe('PayoffChart exact geometry', () => {
       NOW
     )
 
-    render(<PayoffChart title="High IV Call" spot={100} atmIv={100} tYears={1} payoff={payoff} />)
+    render(
+      <PayoffChart
+        title="High IV Call"
+        scenario={{ ...BASE_SCENARIO, iv: 100 }}
+        remainingYears={1}
+        payoff={payoff}
+        formatCurrency={formatCurrency}
+      />
+    )
 
     const xShapes = plotCapture.props?.layout.shapes?.filter((shape) => shape.xref === 'x') ?? []
     const xAnnotations =
@@ -143,5 +173,229 @@ describe('PayoffChart exact geometry', () => {
     expect(
       xAnnotations.every((annotation) => typeof annotation.x !== 'number' || annotation.x >= 0)
     ).toBe(true)
+  })
+
+  it('uses the shifted scenario for its marker and hand-derived lognormal bands', () => {
+    const payoff = computePayoff(
+      [leg('call', 'BUY', 'CE', 100, 2)],
+      110,
+      7,
+      0.25,
+      [70, 160],
+      12,
+      0,
+      30,
+      NOW
+    )
+
+    render(
+      <PayoffChart
+        title="Shifted Call"
+        chartIdentity="NFO:NIFTY:04AUG26"
+        scenario={{ ...BASE_SCENARIO, spot: 110, iv: 30, daysElapsed: 0.25 }}
+        remainingYears={0.25}
+        terminalLabel="At First Expiry"
+        payoff={payoff}
+        formatCurrency={formatCurrency}
+      />
+    )
+
+    const layout = plotCapture.props?.layout
+    expect(layout?.uirevision).toBe('NFO:NIFTY:04AUG26')
+    expect(
+      layout?.shapes?.some(
+        (shape) =>
+          shape.type === 'line' && shape.xref === 'x' && shape.x0 === 110 && shape.x1 === 110
+      )
+    ).toBe(true)
+
+    const bands = layout?.shapes?.filter((shape) => shape.type === 'rect') ?? []
+    expect(bands.some((shape) => Math.abs(Number(shape.x0) - 80.5783792325) < 1e-4)).toBe(true)
+    expect(bands.some((shape) => Math.abs(Number(shape.x0) - 93.6187202159) < 1e-4)).toBe(true)
+  })
+
+  it('keeps zoom for live updates but resets it when the strategy identity changes', () => {
+    const payoff = computePayoff(
+      [leg('call', 'BUY', 'CE', 100, 2)],
+      100,
+      7,
+      0,
+      [80, 120],
+      12,
+      0,
+      20,
+      NOW
+    )
+    const view = render(
+      <PayoffChart
+        title="Long Call"
+        chartIdentity="NFO:NIFTY:04AUG26"
+        scenario={BASE_SCENARIO}
+        remainingYears={7 / 365}
+        payoff={payoff}
+        formatCurrency={formatCurrency}
+      />
+    )
+
+    expect(plotCapture.props?.layout.uirevision).toBe('NFO:NIFTY:04AUG26')
+    view.rerender(
+      <PayoffChart
+        title="Long Call"
+        chartIdentity="NFO:NIFTY:04AUG26"
+        scenario={{ ...BASE_SCENARIO, spot: 101 }}
+        remainingYears={7 / 365}
+        payoff={payoff}
+        formatCurrency={formatCurrency}
+      />
+    )
+    expect(plotCapture.props?.layout.uirevision).toBe('NFO:NIFTY:04AUG26')
+
+    view.rerender(
+      <PayoffChart
+        title="Long Call"
+        chartIdentity="NFO:NIFTY:11AUG26"
+        scenario={{ ...BASE_SCENARIO, spot: 101 }}
+        remainingYears={14 / 365}
+        payoff={payoff}
+        formatCurrency={formatCurrency}
+      />
+    )
+    expect(plotCapture.props?.layout.uirevision).toBe('NFO:NIFTY:11AUG26')
+  })
+
+  it('labels the selected horizon and gives both curves the same precise hover fields', () => {
+    const payoff = computePayoff(
+      [leg('call', 'BUY', 'CE', 100, 2)],
+      100,
+      7,
+      0.25,
+      [80, 120],
+      12,
+      0,
+      20,
+      NOW
+    )
+
+    render(
+      <PayoffChart
+        title="Calendar"
+        scenario={{ ...BASE_SCENARIO, daysElapsed: 0.25 }}
+        remainingYears={6.75 / 365}
+        terminalLabel="At First Expiry"
+        payoff={payoff}
+        formatCurrency={formatCurrency}
+      />
+    )
+
+    const curves = (plotCapture.props?.data ?? []).filter(
+      (trace) => trace.name === 'At First Expiry' || trace.name === 'T+6h'
+    )
+    expect(curves).toHaveLength(2)
+    for (const curve of curves) {
+      expect(curve.hovertemplate).toContain('Underlying: %{customdata[0]}')
+      expect(curve.hovertemplate).toContain('Chg. from Scenario: %{customdata[1]}')
+      expect(curve.hovertemplate).toContain('P&L: %{customdata[2]}')
+    }
+  })
+
+  it('formats Delta Exchange hover values in USD without a rupee chart label', () => {
+    const payoff = computePayoff(
+      [leg('call', 'BUY', 'CE', 100, 2)],
+      100,
+      7,
+      0,
+      [80, 120],
+      12,
+      0,
+      20,
+      NOW
+    )
+
+    render(
+      <PayoffChart
+        title="USD Call"
+        scenario={BASE_SCENARIO}
+        remainingYears={7 / 365}
+        payoff={payoff}
+        formatCurrency={makeFormatCurrency('deltaexchange')}
+      />
+    )
+
+    const expiry = plotCapture.props?.data.find((trace) => trace.name === 'At Expiry')
+    const customdata = expiry?.customdata as unknown as string[][]
+    expect(customdata[0][0]).toBe('$80.00')
+    expect(customdata[0][2]).toMatch(/^[-$]/)
+    expect(plotCapture.props?.layout.yaxis?.title?.text).toBe('Profit / Loss')
+    expect(expiry?.hovertemplate).not.toContain('₹')
+  })
+
+  it('SB-18 supplements the visual plot with a named summary and representative payoff table', () => {
+    const payoff = computePayoff(
+      [leg('call', 'BUY', 'CE', 100, 2)],
+      100,
+      7,
+      0,
+      [80, 120],
+      12,
+      0,
+      20,
+      NOW
+    )
+
+    render(
+      <PayoffChart
+        title="Long Call"
+        scenario={BASE_SCENARIO}
+        remainingYears={7 / 365}
+        payoff={payoff}
+        formatCurrency={formatCurrency}
+      />
+    )
+
+    const region = screen.getByRole('region', { name: 'Long Call payoff analysis' })
+    expect(within(region).getByText(/scenario spot/i)).toHaveTextContent('₹100.00')
+    expect(within(region).getByRole('status')).toHaveTextContent(/at expiry/i)
+    const table = within(region).getByRole('table', { name: /representative payoff values/i })
+    expect(within(table).getAllByRole('row').length).toBeGreaterThanOrEqual(4)
+    expect(within(table).getAllByRole('row').length).toBeLessThan(10)
+  })
+
+  it('SB-18 bounds many breakevens and discloses both summary and table omissions', () => {
+    const basePayoff = computePayoff(
+      [leg('call', 'BUY', 'CE', 100, 2)],
+      100,
+      7,
+      0,
+      [80, 120],
+      12,
+      0,
+      20,
+      NOW
+    )
+    const payoff = {
+      ...basePayoff,
+      breakevens: [82, 86, 90, 94, 98, 102, 106, 110, 114, 118],
+    }
+
+    render(
+      <PayoffChart
+        title="Many roots"
+        scenario={BASE_SCENARIO}
+        remainingYears={7 / 365}
+        payoff={payoff}
+        formatCurrency={formatCurrency}
+      />
+    )
+
+    const region = screen.getByRole('region', { name: 'Many roots payoff analysis' })
+    const breakevenSummary = within(region).getByTestId('breakeven-summary')
+    expect(breakevenSummary).toHaveTextContent('4 of 10 shown')
+    expect((breakevenSummary.textContent ?? '').split(' (')[0].split(', ')).toHaveLength(4)
+
+    const table = within(region).getByRole('table', { name: /representative payoff values/i })
+    expect(within(table).getAllByRole('row')).toHaveLength(8)
+    expect(within(region).getByTestId('representative-payoff-disclosure')).toHaveTextContent(
+      '7 of 13 representative points shown'
+    )
   })
 })
