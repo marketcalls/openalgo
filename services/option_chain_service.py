@@ -529,6 +529,8 @@ def get_option_chain(
         # cache/DB and live prices stream over the WebSocket feed, avoiding a slow
         # per-strike broker multiquote (e.g. Flattrade throttles to 10 quotes/sec).
         quotes_map = {}
+        quotes_response: dict = {}
+        success = False
         if with_quotes:
             logger.info(f"Fetching quotes for {len(symbols_to_fetch)} option symbols")
             if exchange.upper() in CRYPTO_EXCHANGES:
@@ -605,16 +607,19 @@ def get_option_chain(
                         symbols=symbols_to_fetch, api_key=api_key
                     )
 
-                    # Build quote lookup map
-                    if success and "results" in quotes_response:
-                        for result in quotes_response["results"]:
-                            symbol = result.get("symbol")
-                            if symbol:
-                                # Handle both formats: direct data or nested data
-                                if "data" in result:
-                                    quotes_map[symbol] = result["data"]
-                                elif "error" not in result:
-                                    quotes_map[symbol] = result
+            # Build the quote lookup map from whichever branch produced results.
+            # The Fyers fast path is the only one that fills quotes_map itself;
+            # both the crypto per-symbol loop and the generic multiquotes call
+            # hand back a results list that still has to be indexed here.
+            if not quotes_map and success and "results" in quotes_response:
+                for result in quotes_response["results"]:
+                    symbol = result.get("symbol")
+                    if symbol:
+                        # Handle both formats: direct data or nested data
+                        if "data" in result:
+                            quotes_map[symbol] = result["data"]
+                        elif "error" not in result:
+                            quotes_map[symbol] = result
         else:
             logger.info(
                 f"Structure-only option chain ({len(symbols_to_fetch)} symbols); skipping live quotes"
