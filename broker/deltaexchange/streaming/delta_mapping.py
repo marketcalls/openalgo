@@ -34,16 +34,23 @@ class DeltaExchangeMapper:
 class DeltaModeMapper:
     """Maps OpenAlgo subscription mode integers to Delta Exchange channel names."""
 
-    # OpenAlgo mode → Delta WS channel name
+    # OpenAlgo mode → Delta WS channels.
+    #
+    # Depth mode subscribes to ob_l2 *and* ticker: ob_l2 carries price/size
+    # levels only, so without the ticker a depth subscriber would publish
+    # ltp/oi/ohlc as zero and blank out those columns wherever a depth
+    # subscription is the only one for the symbol (the option chain does
+    # exactly this).
     MODE_CHANNELS = {
-        1: "v2/ticker",    # LTP mode
-        2: "v2/ticker",    # Quote mode (also uses ticker; provides bid/ask/OI)
-        3: "l2_orderbook", # Depth mode
+        1: ("ticker",),            # LTP mode
+        2: ("ticker",),            # Quote mode (ticker carries bid/ask + sizes + OI)
+        3: ("ob_l2", "ticker"),    # Depth mode
     }
 
     @staticmethod
-    def get_channel(mode: int) -> str:
-        return DeltaModeMapper.MODE_CHANNELS.get(mode, "v2/ticker")
+    def get_channels(mode: int) -> tuple[str, ...]:
+        """Return every Delta channel a subscription mode needs."""
+        return DeltaModeMapper.MODE_CHANNELS.get(mode, ("ticker",))
 
     @staticmethod
     def get_mode_str(mode: int) -> str:
@@ -62,7 +69,7 @@ class DeltaCapabilityRegistry:
     subscription_modes = [1, 2, 3]
 
     depth_support = {
-        "CRYPTO": [1, 5],  # up to 5-level depth via l2_orderbook channel
+        "CRYPTO": [1, 5],  # ob_l2 publishes 15 levels; OpenAlgo consumes the top 5
     }
 
     @classmethod
