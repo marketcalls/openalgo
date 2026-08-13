@@ -246,25 +246,45 @@ def quota_reset_seconds(headers) -> float | None:
         return None
 
 
-def retry_delay_from_headers(headers, attempt: int) -> float:
-    """How long to wait before retrying a 429.
+def server_requested_delay(headers) -> float | None:
+    """The wait the server asked for, in seconds and UNCAPPED.
 
     Delta documents X-RATE-LIMIT-RESET (milliseconds until the window resets)
     and does not send Retry-After; Retry-After is still read in case that
-    changes. Falls back to an exponential ladder when neither is present.
+    changes, and because a CDN or proxy in front of the API may send it.
+    None when neither header is present or parseable.
+
+    Callers use this to decide *whether* a retry is worth attempting, which is
+    a different question from how long to sleep — see retry_delay_from_headers.
     """
     reset = quota_reset_seconds(headers)
     if reset is not None:
-        return max(min(reset, MAX_WAIT_SECONDS), 0.05)
+        return reset
 
     retry_after = headers.get("Retry-After") or headers.get("retry-after") if headers else None
     if retry_after:
         try:
-            return max(float(retry_after), 0.05)
+            return max(float(retry_after), 0.0)
         except (TypeError, ValueError):
             pass
 
-    return BASE_BACKOFF * (2**attempt)
+    return None
+
+
+def retry_delay_from_headers(headers, attempt: int) -> float:
+    """How long to sleep before retrying a 429, never more than MAX_WAIT_SECONDS.
+
+    Every branch is capped, including Retry-After: a server or proxy asking for
+    a ten-minute wait must not park a web request for ten minutes. When the
+    requested wait exceeds the ceiling the caller should stop retrying rather
+    than sleep the capped amount and try anyway — server_requested_delay()
+    reports the uncapped figure for exactly that decision.
+    """
+    requested = server_requested_delay(headers)
+    if requested is not None:
+        return max(min(requested, MAX_WAIT_SECONDS), 0.05)
+
+    return min(BASE_BACKOFF * (2**attempt), MAX_WAIT_SECONDS)
 
 
 def snapshot() -> dict:

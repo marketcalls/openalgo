@@ -21,8 +21,8 @@ from broker.deltaexchange.api.rate_limiter import (
     PUBLIC,
     consume,
     note_429,
-    quota_reset_seconds,
     retry_delay_from_headers,
+    server_requested_delay,
 )
 from database.token_db import get_token
 from utils.httpx_client import get_httpx_client
@@ -95,16 +95,19 @@ def _public_get(path: str, timeout: float = 15.0, params: dict | None = None):
         if resp.status_code == 429:
             note_429(resp.headers, bucket=PUBLIC)
             wait = retry_delay_from_headers(resp.headers, attempt)
-            reset = quota_reset_seconds(resp.headers)
+            requested = server_requested_delay(resp.headers)
 
-            # Only retry when the window actually reopens within the limiter's
-            # wait ceiling. Past that, sleeping is pure delay: the next
-            # consume() would refuse the call anyway, so return the 429 and let
-            # the caller report it.
-            if attempt >= _MAX_RETRIES or (reset is not None and reset > MAX_WAIT_SECONDS):
+            # Only retry when the wait the server asked for is short enough to
+            # be worth sitting through. Past the ceiling, sleeping is pure
+            # delay: the next consume() would refuse the call anyway, so return
+            # the 429 and let the caller report it. This covers Retry-After as
+            # well as X-RATE-LIMIT-RESET -- either can name a wait far longer
+            # than a request should ever block for.
+            if attempt >= _MAX_RETRIES or (requested is not None
+                                           and requested > MAX_WAIT_SECONDS):
                 logger.warning(
-                    "Delta rate-limited (429) on %s; quota resets in %ss, not retrying",
-                    path, round(reset) if reset is not None else "unknown",
+                    "Delta rate-limited (429) on %s; server asked for %ss, not retrying",
+                    path, round(requested) if requested is not None else "unknown",
                 )
                 return resp
 
