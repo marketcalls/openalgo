@@ -42,6 +42,9 @@ def _get_positions_pnl(api_key, api_secret):
     path = "/v2/positions/margined"
     url = BASE_URL + path
     try:
+        # consume() before signing: it can block on the quota window and Delta
+        # rejects signatures older than 5 seconds ("SignatureExpired").
+        consume(path, method="GET", bucket=PRIVATE)
         headers = get_auth_headers(
             method="GET",
             path=path,
@@ -50,7 +53,6 @@ def _get_positions_pnl(api_key, api_secret):
             api_key=api_key,
             api_secret=api_secret,
         )
-        consume(path, method="GET", bucket=PRIVATE)
         client = get_httpx_client()
         response = client.get(url, headers=headers, timeout=30.0)
         if response.status_code != 200:
@@ -115,6 +117,9 @@ def get_margin_data(auth_token):
     url = BASE_URL + path
 
     try:
+        # consume() before signing: it can block on the quota window and Delta
+        # rejects signatures older than 5 seconds ("SignatureExpired").
+        consume(path, method="GET", bucket=PRIVATE)
         headers = get_auth_headers(
             method="GET",
             path=path,
@@ -124,7 +129,6 @@ def get_margin_data(auth_token):
             api_secret=api_secret,
         )
 
-        consume(path, method="GET", bucket=PRIVATE)
         client = get_httpx_client()
         response = client.get(url, headers=headers, timeout=30.0)
 

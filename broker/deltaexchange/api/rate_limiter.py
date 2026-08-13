@@ -28,6 +28,7 @@ kept on ``self`` is discarded before it can pace the next caller.
 import threading
 import time
 
+from broker.deltaexchange.api.baseurl import BASE_URL
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -53,6 +54,11 @@ MAX_WAIT_SECONDS = 30.0
 
 MAX_RETRIES  = 3
 BASE_BACKOFF = 1.0   # seconds; fallback ladder when no reset header: 1, 2, 4
+
+# Sleeps allowed inside one consume() call before giving up. A window reset
+# frees the whole budget, so one wait is normally enough; the cap stops a
+# clock jump or a contended bucket from parking a caller indefinitely.
+_MAX_SLEEPS = 2
 
 # Endpoint weights, longest prefix wins. Anything unlisted costs 1 unit.
 # Method-specific entries are keyed (method, prefix) and take precedence.
@@ -127,55 +133,62 @@ def consume(endpoint: str, method: str = "GET", bucket: str = PUBLIC) -> None:
 
     Raises DeltaRateLimitError when the window reset is further away than
     MAX_WAIT_SECONDS, so a caller fails cleanly instead of hanging for minutes.
+
+    IMPORTANT: this can sleep, and Delta rejects any signature older than 5
+    seconds ("SignatureExpired"). Authenticated callers must call this BEFORE
+    building their HMAC headers, never between signing and sending.
     """
     weight = endpoint_weight(endpoint, method)
+    probed = False
+    slept = 0
 
-    with _lock:
-        now = time.time()
-        _reset_if_window_elapsed(bucket, now)
-        state = _state[bucket]
+    # Re-evaluated every pass: the reservation and the budget check have to
+    # happen in the same locked section, or concurrent callers each decide
+    # there is room, sleep, and then all add their weight on top of a budget
+    # that only had space for one of them.
+    while True:
+        with _lock:
+            now = time.time()
+            _reset_if_window_elapsed(bucket, now)
+            state = _state[bucket]
 
-        if state["used"] + weight <= BUDGET:
-            state["used"] += weight
-            return
-
-        wait = max(0.0, state["window_start"] + WINDOW_SECONDS - now)
-
-    # Budget looks spent. Delta's window is fixed and ours floats, so before
-    # parking anyone, spend 3 units asking the exchange where the real window
-    # stands — it is often further along than the local view.
-    #
-    # Only for the public bucket: the quota endpoint is unauthenticated, so it
-    # reports the IP allowance. Applying that answer to the per-user bucket
-    # would hand back a quota the user may not have, and would undo a 429 the
-    # exchange has already returned on an authenticated call.
-    if bucket == PUBLIC:
-        server = _fetch_server_quota(bucket)
-        if server is not None:
-            used, wait = server
-            with _lock:
-                state = _state[bucket]
-                state["used"] = used + weight
-                state["window_start"] = time.time() - (WINDOW_SECONDS - wait)
-            if used + weight <= BUDGET:
+            if state["used"] + weight <= BUDGET:
+                state["used"] += weight
                 return
 
-    if wait > MAX_WAIT_SECONDS:
-        raise DeltaRateLimitError(
-            f"Delta {bucket} rate-limit quota exhausted ({BUDGET} units in a "
-            f"{int(WINDOW_SECONDS)}s window); resets in {wait:.0f}s"
+            wait = max(0.0, state["window_start"] + WINDOW_SECONDS - now)
+
+        # Budget looks spent. Delta's window is fixed and ours floats, so
+        # before parking anyone, spend 3 units asking the exchange where the
+        # real window stands — it is often further along than the local view.
+        #
+        # Only for the public bucket: the quota endpoint is unauthenticated, so
+        # it reports the IP allowance. Applying that answer to the per-user
+        # bucket would hand back a quota the user may not have, and would undo
+        # a 429 the exchange has already returned on an authenticated call.
+        if bucket == PUBLIC and not probed:
+            probed = True
+            server = _fetch_server_quota(bucket)
+            if server is not None:
+                used, left = server
+                with _lock:
+                    state = _state[bucket]
+                    state["used"] = used
+                    state["window_start"] = time.time() - (WINDOW_SECONDS - left)
+                continue   # re-check under the lock with the exchange's numbers
+
+        if wait > MAX_WAIT_SECONDS or slept >= _MAX_SLEEPS:
+            raise DeltaRateLimitError(
+                f"Delta {bucket} rate-limit quota exhausted ({BUDGET} units in a "
+                f"{int(WINDOW_SECONDS)}s window); resets in {wait:.0f}s"
+            )
+
+        logger.warning(
+            "Delta %s quota exhausted; waiting %ss for the window to reset before %s",
+            bucket, round(wait, 1), endpoint,
         )
-
-    logger.warning(
-        "Delta %s quota exhausted; waiting %.1fs for the window to reset before %s",
-        bucket, wait, endpoint,
-    )
-    time.sleep(wait)
-
-    with _lock:
-        now = time.time()
-        _reset_if_window_elapsed(bucket, now)
-        _state[bucket]["used"] += weight
+        time.sleep(wait)
+        slept += 1
 
 
 def _fetch_server_quota(bucket: str) -> tuple[int, float] | None:
@@ -186,7 +199,7 @@ def _fetch_server_quota(bucket: str) -> tuple[int, float] | None:
     """
     try:
         resp = get_httpx_client().get(
-            "https://api.india.delta.exchange/v2/rate_limits/quota",
+            f"{BASE_URL}/v2/rate_limits/quota",
             headers={"Accept": "application/json"},
             timeout=5.0,
         )
@@ -210,15 +223,18 @@ def note_429(headers, bucket: str = PUBLIC) -> None:
     with _lock:
         state = _state[bucket]
         state["used"] = BUDGET
-        reset = _reset_seconds(headers)
+        reset = quota_reset_seconds(headers)
         if reset is not None:
             # Pin the local window to the exchange's, so the wait computed by
             # consume() matches when the quota actually comes back.
             state["window_start"] = time.time() - (WINDOW_SECONDS - reset)
 
 
-def _reset_seconds(headers) -> float | None:
-    """Seconds until the quota resets, from X-RATE-LIMIT-RESET (milliseconds)."""
+def quota_reset_seconds(headers) -> float | None:
+    """Seconds until the quota resets, from X-RATE-LIMIT-RESET (milliseconds).
+
+    None when the header is absent or unparseable.
+    """
     raw = None
     if headers:
         raw = headers.get("X-RATE-LIMIT-RESET") or headers.get("x-rate-limit-reset")
@@ -237,7 +253,7 @@ def retry_delay_from_headers(headers, attempt: int) -> float:
     and does not send Retry-After; Retry-After is still read in case that
     changes. Falls back to an exponential ladder when neither is present.
     """
-    reset = _reset_seconds(headers)
+    reset = quota_reset_seconds(headers)
     if reset is not None:
         return max(min(reset, MAX_WAIT_SECONDS), 0.05)
 

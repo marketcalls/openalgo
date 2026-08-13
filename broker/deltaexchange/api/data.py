@@ -17,9 +17,11 @@ import pandas as pd
 
 from broker.deltaexchange.api.baseurl import BASE_URL
 from broker.deltaexchange.api.rate_limiter import (
+    MAX_WAIT_SECONDS,
     PUBLIC,
     consume,
     note_429,
+    quota_reset_seconds,
     retry_delay_from_headers,
 )
 from database.token_db import get_token
@@ -92,12 +94,23 @@ def _public_get(path: str, timeout: float = 15.0, params: dict | None = None):
 
         if resp.status_code == 429:
             note_429(resp.headers, bucket=PUBLIC)
-            if attempt >= _MAX_RETRIES:
-                return resp
             wait = retry_delay_from_headers(resp.headers, attempt)
+            reset = quota_reset_seconds(resp.headers)
+
+            # Only retry when the window actually reopens within the limiter's
+            # wait ceiling. Past that, sleeping is pure delay: the next
+            # consume() would refuse the call anyway, so return the 429 and let
+            # the caller report it.
+            if attempt >= _MAX_RETRIES or (reset is not None and reset > MAX_WAIT_SECONDS):
+                logger.warning(
+                    "Delta rate-limited (429) on %s; quota resets in %ss, not retrying",
+                    path, round(reset) if reset is not None else "unknown",
+                )
+                return resp
+
             logger.warning(
-                "Delta rate-limited (429) on %s (attempt %s/%s); retrying in %.1fs",
-                path, attempt + 1, _MAX_RETRIES + 1, wait,
+                "Delta rate-limited (429) on %s (attempt %s/%s); retrying in %ss",
+                path, attempt + 1, _MAX_RETRIES + 1, round(wait, 1),
             )
             time.sleep(wait)
             continue

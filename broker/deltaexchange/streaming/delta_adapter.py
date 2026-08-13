@@ -157,7 +157,7 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.running = False
 
         # Cancel the batch timer and drop queued work — the socket is going
-        # away, and DeltaWebSocket replays its own registry on reconnect.
+        # away, so nothing queued can still reach the wire.
         with self._lock:
             if self.batch_timer:
                 self.batch_timer.cancel()
@@ -167,6 +167,12 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         for client in (self.public_ws, self.ws_client):
             if client:
+                # Drop the replay registry too. It exists to restore streams
+                # after a dropped connection, but this is an explicit teardown:
+                # a queued unsubscribe was just discarded above, so replaying
+                # the registry on a later connect() would resubscribe symbols
+                # that no longer have a subscriber.
+                client.forget_subscriptions()
                 client.close_connection()
         self.cleanup_zmq()
 
@@ -535,40 +541,62 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         The channel publishes no traded volume — REST /v2/tickers still does,
         so anything polling quotes keeps showing it.
+
+        A field Delta omits is left out of the update entirely rather than sent
+        as 0.  The two are not the same thing: a genuine zero bid size has to
+        reach subscribers (the book really is empty), while a missing mark
+        price must not overwrite the last good LTP with 0.
         """
         entries = msg.get("d")
         if not isinstance(entries, list):
             entries = []
         # Spot price is per-frame, not per-contract; it is the LTP fallback for
         # instruments that publish no mark price.
-        spot = _f(msg.get("sp"))
+        spot = msg.get("sp")
+
+        def _at(seq, idx):
+            return seq[idx] if isinstance(seq, (list, tuple)) and len(seq) > idx else None
+
+        def _put(fields, key, raw, cast=_f):
+            """Record a scalar field only when Delta actually sent a value."""
+            if raw is not None:
+                fields[key] = cast(raw)
+
+        def _put_from(fields, container, key, raw, cast=_f):
+            """Record a field carried inside an array.
+
+            A present array is authoritative: a null element inside it means
+            "no value right now" (an emptied side of the book quotes null for
+            best_ask), so it publishes as 0 instead of leaving the last traded
+            size on screen forever.  A missing array says nothing at all, so
+            its fields are omitted and the previous values stand.
+            """
+            if container is not None:
+                fields[key] = cast(raw)
 
         updates: list[tuple[str, dict]] = []
         for entry in entries:
             if not isinstance(entry, dict):
                 continue
             br_symbol = entry.get("s") or msg.get("sy") or ""
-            ohlc      = entry.get("ohlc") or []
-            oi        = entry.get("oi") or []
-            quotes    = entry.get("q") or []
+            ohlc      = entry.get("ohlc")
+            oi        = entry.get("oi")
+            quotes    = entry.get("q")
 
-            def _at(seq, idx):
-                return seq[idx] if len(seq) > idx else None
+            fields: dict = {"average_price": 0, "oi_change": 0}
 
-            updates.append((br_symbol, {
-                "ltp":           _f(entry.get("m")) or spot,
-                "open":          _f(_at(ohlc, 0)),
-                "high":          _f(_at(ohlc, 1)),
-                "low":           _f(_at(ohlc, 2)),
-                "close":         _f(_at(ohlc, 3)),
-                "oi":            _f(_at(oi, 0)),
-                "bid_price":     _f(_at(quotes, 2)),
-                "bid_qty":       _i(_at(quotes, 3)),
-                "ask_price":     _f(_at(quotes, 0)),
-                "ask_qty":       _i(_at(quotes, 1)),
-                "average_price": 0,
-                "oi_change":     0,
-            }))
+            _put(fields, "ltp", entry.get("m") if entry.get("m") is not None else spot)
+            _put_from(fields, ohlc, "open",  _at(ohlc, 0))
+            _put_from(fields, ohlc, "high",  _at(ohlc, 1))
+            _put_from(fields, ohlc, "low",   _at(ohlc, 2))
+            _put_from(fields, ohlc, "close", _at(ohlc, 3))
+            _put_from(fields, oi, "oi",      _at(oi, 0))
+            _put_from(fields, quotes, "bid_price", _at(quotes, 2))
+            _put_from(fields, quotes, "bid_qty",   _at(quotes, 3), _i)
+            _put_from(fields, quotes, "ask_price", _at(quotes, 0))
+            _put_from(fields, quotes, "ask_qty",   _at(quotes, 1), _i)
+
+            updates.append((br_symbol, fields))
 
         return updates
 
@@ -603,16 +631,16 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _merge_into_cache(self, cache_key: str, fields: dict) -> dict:
         """Fold a normalised update into the symbol's cache and return the whole.
 
-        Zero-valued scalars are dropped rather than written, so a ticker frame
-        that omits a field cannot blank out a value another frame supplied.
-        Depth is written whole, including empty sides — a book that has emptied
-        must be published as empty, not left stale.
+        Every field present in the update is written, zeros included — an empty
+        book or a zero bid size is real information and must reach subscribers.
+        Absent fields are what the normalisers omit, so a ticker frame that
+        carries no mark price cannot blank the last good LTP.  The two channels
+        write disjoint key sets (ticker: price/OI/quotes, ob_l2: depth), so
+        neither can overwrite the other's values.
         """
         with self._lock:
             cached = self.last_values.setdefault(cache_key, {})
-            for key, value in fields.items():
-                if key in ("depth", "totalbuyqty", "totalsellqty") or value:
-                    cached[key] = value
+            cached.update(fields)
             return dict(cached)
 
     # ── helpers ───────────────────────────────────────────────────────────────

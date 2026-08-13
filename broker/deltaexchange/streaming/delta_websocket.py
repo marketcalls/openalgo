@@ -195,41 +195,43 @@ class DeltaWebSocket:
             for i in range(0, len(symbols), size)
         ]
 
-    def _send_all(self, msgs: list[str]) -> None:
-        """Send frames, or buffer them for replay when the socket is down.
+    def _send_all_locked(self, msgs: list[str]) -> None:
+        """Send frames, or drop them when the socket is down. Caller must hold _lock.
 
-        Why the lock spans both the registry read AND the sends:
-          Holding it across the sends prevents the TOCTOU race where
-          _ws_on_close flips _connected=False between our check and the send,
-          causing frames to be dropped from the wire while the registry still
-          claims they are active.
+        Why the lock spans both the registry write AND the sends:
+          It prevents the TOCTOU race where _ws_on_close flips _connected=False
+          between our check and the send, causing frames to be dropped from the
+          wire while the registry still claims they are active. It also keeps
+          wire order matching registry order — otherwise an overlapping
+          subscribe and unsubscribe for the same symbol could update the
+          registry in one order and reach Delta in the other, leaving the
+          exchange streaming a symbol the registry says was dropped.
         """
-        with self._lock:
-            if not self._connected or not self.wsapp:
-                logger.debug("DeltaWS[%s] buffered %s frame(s) (not connected)",
-                             self.name, len(msgs))
-                return
-            for msg in msgs:
-                try:
-                    self.wsapp.send(msg)
-                except Exception as exc:
-                    logger.error("DeltaWS[%s] _send error: %s", self.name, exc)
-                    # Send failed mid-flight; the symbol is already in
-                    # _active_symbols and will be replayed on reconnect.
+        if not self._connected or not self.wsapp:
+            logger.debug("DeltaWS[%s] buffered %s frame(s) (not connected)",
+                         self.name, len(msgs))
+            return
+        for msg in msgs:
+            try:
+                self.wsapp.send(msg)
+            except Exception as exc:
+                logger.error("DeltaWS[%s] _send error: %s", self.name, exc)
+                # Send failed mid-flight; the symbol is already in
+                # _active_symbols and will be replayed on reconnect.
 
     # ── public API ────────────────────────────────────────────────────────────
 
     def _subscribe(self, channel: str, symbols: list[str]) -> None:
         with self._lock:
             self._active_symbols.setdefault(channel, set()).update(symbols)
-        self._send_all(self._frames(channel, symbols))
+            self._send_all_locked(self._frames(channel, symbols))
 
     def _unsubscribe(self, channel: str, symbols: list[str]) -> None:
         with self._lock:
             active = self._active_symbols.get(channel)
             if active:
                 active.difference_update(symbols)
-        self._send_all(self._frames(channel, symbols, unsub=True))
+            self._send_all_locked(self._frames(channel, symbols, unsub=True))
 
     def subscribe_ticker(self, symbols: list[str]) -> None:
         """Subscribe to the ticker channel for the given symbols."""
@@ -244,6 +246,18 @@ class DeltaWebSocket:
 
     def unsubscribe_orderbook(self, symbols: list[str]) -> None:
         self._unsubscribe(self.CHANNEL_OB_L2, symbols)
+
+    def forget_subscriptions(self) -> None:
+        """Drop the replay registry.
+
+        The registry deliberately survives a dropped connection so the retry
+        loop can restore every stream on reconnect.  An explicit teardown is
+        different: the subscriptions are gone, so anything left here would be
+        resubscribed by a later connect() with no client behind it.
+        """
+        with self._lock:
+            self._active_symbols.clear()
+            self._active_private.clear()
 
     # ── private (authenticated) channel subscriptions ─────────────────────────
 
@@ -266,7 +280,7 @@ class DeltaWebSocket:
         msg = self._build_private_sub_msg(channel)
         with self._lock:
             self._active_private[channel] = msg
-        self._send_all([msg])
+            self._send_all_locked([msg])
 
     def subscribe_orders_channel(self) -> None:
         """Subscribe to the authenticated 'orders' channel.

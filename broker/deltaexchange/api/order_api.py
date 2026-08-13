@@ -53,15 +53,6 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
 
     body = payload if payload else ""
 
-    headers = get_auth_headers(
-        method=method.upper(),
-        path=endpoint,
-        query_string=query_string,
-        payload=body,
-        api_key=auth,
-        api_secret=api_secret,
-    )
-
     # Build full URL (include query string inline so the signed string matches exactly)
     url = get_url(endpoint)
     full_url = url + query_string if query_string else url
@@ -77,12 +68,25 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
 
     for _attempt in range(MAX_RETRIES + 1):
         # Weighted quota accounting; authenticated calls draw on the per-user
-        # bucket, which public market data cannot exhaust.
+        # bucket, which public market data cannot exhaust.  This runs BEFORE the
+        # request is signed: consume() can block waiting for the quota window,
+        # and Delta rejects any signature more than 5 seconds old
+        # ("SignatureExpired"), so a signature made first would be dead on
+        # arrival.
         try:
             consume(endpoint, method=method, bucket=PRIVATE)
         except DeltaRateLimitError as exc:
             logger.error(f"[DeltaExchange] {exc}")
             return {"success": False, "error": {"code": "rate_limited", "message": str(exc)}}
+
+        headers = get_auth_headers(
+            method=method.upper(),
+            path=endpoint,
+            query_string=query_string,
+            payload=body,
+            api_key=auth,
+            api_secret=api_secret,
+        )
 
         try:
             m = method.upper()
@@ -110,15 +114,7 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
                 f"(attempt {_attempt + 1}/{MAX_RETRIES}). Retrying in {wait:.1f}s ..."
             )
             time.sleep(wait)
-            # Re-sign with a fresh timestamp before the next attempt
-            headers = get_auth_headers(
-                method=method.upper(),
-                path=endpoint,
-                query_string=query_string,
-                payload=body,
-                api_key=auth,
-                api_secret=api_secret,
-            )
+            # The next pass re-signs with a fresh timestamp after consume().
             continue
         break  # success, non-429, or retries exhausted
 

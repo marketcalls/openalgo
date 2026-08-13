@@ -35,6 +35,9 @@ def authenticate_broker(code):
 
         # Verify credentials with a live signed request to GET /v2/profile
         path = "/v2/profile"
+        # consume() before signing: it can block on the quota window and Delta
+        # rejects signatures older than 5 seconds ("SignatureExpired").
+        consume(path, method="GET", bucket=PRIVATE)
         headers = get_auth_headers(
             method="GET",
             path=path,
@@ -48,7 +51,6 @@ def authenticate_broker(code):
         client = get_httpx_client()
 
         logger.info("Verifying Delta Exchange credentials via GET /v2/profile")
-        consume(path, method="GET", bucket=PRIVATE)
         response = client.get(url, headers=headers)
 
         logger.debug(f"Profile response status: {response.status_code}")
