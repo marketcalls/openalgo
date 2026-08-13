@@ -102,6 +102,11 @@ _oi_cache = {}  # {(segment, token): (oi, monotonic_ts)}
 _oi_cache_lock = threading.Lock()
 _OI_CACHE_TTL = 60.0  # seconds
 
+# History chunks are retried on transient failures - dropping one silently
+# removes up to a full chunk (30 days of 1m candles) from the series.
+CHUNK_FETCH_ATTEMPTS = 3
+CHUNK_RETRY_BACKOFF = 0.5  # seconds; grows 0.5, 1.0 between attempts
+
 
 def fetch_latest_oi(segment, token, api_session_key):
     """Fetch latest open interest for a derivative from its last minute candle.
@@ -608,7 +613,13 @@ class BrokerData:
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
 
-            logger.debug(f"Debug - Broker Symbol: {br_symbol}, Token: {token}")
+            # Field is named `instrument` rather than `token` on purpose: the log
+            # sanitizer redacts any `*token=` value as a credential, which would
+            # hide the very identifier needed to replay a request upstream.
+            logger.debug(
+                f"Definedge history request: {symbol}@{exchange} -> brsymbol={br_symbol} "
+                f"instrument={token} interval={interval} range={start_date}..{end_date}"
+            )
 
             # Check for unsupported timeframes
             if interval not in self.timeframe_map:
@@ -625,12 +636,15 @@ class BrokerData:
             from_date = pd.to_datetime(start_date)
             to_date = pd.to_datetime(end_date)
 
-            # For intraday data, set specific times
+            # For intraday data, span the whole calendar day of each boundary.
+            # Anchoring to NSE session hours (09:15-15:30) silently drops candles:
+            # MCX runs 09:00-23:30 and CDS/BCD 09:00-17:00, so a 15:30 end cut off
+            # the entire evening session on the last requested day, and a 09:15
+            # start cut off the 09:00-09:14 candles on the first one.
             if interval != "D":
-                # Set start time to 09:15 (market open) for the start date
-                from_date = from_date.replace(hour=9, minute=15)
+                from_date = from_date.replace(hour=0, minute=0)
 
-                # If end_date is today, set the end time to current time.
+                # If end_date is today, stop at the current time.
                 # Anchor "now" to IST wall-clock (not the server's local time) so
                 # the client-side clip below stays correct on UTC/non-IST hosts.
                 # Definedge candle timestamps are naive IST; comparing them against
@@ -640,8 +654,8 @@ class BrokerData:
                 if to_date.date() == current_time.date():
                     to_date = current_time.replace(second=0, microsecond=0)
                 else:
-                    # For past dates, set end time to 15:30 (market close)
-                    to_date = to_date.replace(hour=15, minute=30)
+                    # For any other date, run to the end of that day
+                    to_date = to_date.replace(hour=23, minute=59)
             else:
                 # For daily data, use 00:00
                 from_date = from_date.replace(hour=0, minute=0)
@@ -678,6 +692,19 @@ class BrokerData:
                 # Calculate chunk end date
                 current_end = min(current_start + timedelta(days=chunk_days - 1), to_date)
 
+                if interval == "D":
+                    next_start = current_end + timedelta(days=1)
+                else:
+                    # A chunk end must sit at the END of its calendar day.
+                    # timedelta arithmetic carries the start time-of-day forward, so
+                    # the boundary landed mid-session and every candle after it on the
+                    # chunk's last day was never requested - one whole trading day lost
+                    # per chunk (30 days for 1m). That hole only became visible once
+                    # Definedge started honoring the `to` boundary, which it previously
+                    # ignored (see the clip below and issue #1753).
+                    current_end = min(current_end.replace(hour=23, minute=59), to_date)
+                    next_start = current_end.normalize() + timedelta(days=1)
+
                 # Format dates for Definedge API (ddMMyyyyHHmm)
                 from_date_str = current_start.strftime("%d%m%Y%H%M")
                 to_date_str = current_end.strftime("%d%m%Y%H%M")
@@ -696,30 +723,50 @@ class BrokerData:
 
                 url = f"{DATA_URL}/history/{segment}/{token}/{timeframe}/{from_date_str}/{to_date_str}"
 
-                logger.debug(f"Debug - Fetching chunk from {current_start} to {current_end}")
-                logger.debug(f"Debug - API URL: {url}")
-                logger.debug(f"Debug - Headers: Authorization key present: {bool(api_session_key)}")
+                # Log the exact upstream call so a gap can be replayed verbatim in
+                # curl/Bruno. The api_session_key is deliberately never logged -
+                # only whether one is present.
+                logger.debug(
+                    f"Definedge history chunk {current_start} -> {current_end} | "
+                    f"segment={segment} instrument={token} timeframe={timeframe} "
+                    f"from={from_date_str} to={to_date_str} | "
+                    f"GET {url} | auth_key_present={bool(api_session_key)}"
+                )
 
                 try:
                     # Use httpx client for consistency
                     from utils.httpx_client import get_httpx_client
 
-                    client = get_httpx_client()
-
                     headers = {"Authorization": api_session_key}
 
-                    response = rate_limited_request(client, "GET", url, headers=headers)
+                    # Retry transient failures. A dropped chunk is a silent hole of
+                    # up to `chunk_days` in the returned series, so a timeout or a
+                    # 5xx must not be accepted on the first try. 4xx is terminal
+                    # (expired session, unknown token) and is not retried.
+                    response = None
+                    fetch_error = None
+                    for attempt in range(CHUNK_FETCH_ATTEMPTS):
+                        try:
+                            client = get_httpx_client()
+                            response = rate_limited_request(client, "GET", url, headers=headers)
+                            if response.status_code == 200:
+                                break
+                            fetch_error = f"HTTP {response.status_code}: {response.text[:200]}"
+                            if 400 <= response.status_code < 500:
+                                break
+                        except Exception as request_error:
+                            response = None
+                            fetch_error = str(request_error)
+                        if attempt < CHUNK_FETCH_ATTEMPTS - 1:
+                            time.sleep(CHUNK_RETRY_BACKOFF * (attempt + 1))
 
-                    logger.debug(f"Debug - Response status: {response.status_code}")
-                    logger.debug(f"Debug - Response headers: {dict(response.headers)}")
-                    logger.debug(f"Debug - Response text length: {len(response.text)}")
-
-                    if response.status_code != 200:
+                    if response is None or response.status_code != 200:
                         logger.warning(
-                            f"Debug - Definedge API returned status {response.status_code}"
+                            f"Definedge history chunk {current_start} to {current_end} for "
+                            f"{symbol}@{exchange} failed ({fetch_error}); "
+                            "these candles will be missing from the result"
                         )
-                        logger.warning(f"Debug - Response body: {response.text}")
-                        current_start = current_end + timedelta(days=1)
+                        current_start = next_start
                         continue
 
                     # Parse CSV response
@@ -727,11 +774,19 @@ class BrokerData:
                     # Format for tick: UTC(seconds), LTP, LTQ, OI
                     csv_data = response.text.strip()
 
+                    # Row count straight off the wire, before any parsing - this is
+                    # what distinguishes an upstream gap from one we introduce.
+                    raw_rows = csv_data.count("\n") + 1 if csv_data else 0
+                    logger.debug(
+                        f"Definedge history response: instrument={token} status={response.status_code} "
+                        f"bytes={len(response.text)} raw_rows={raw_rows}"
+                    )
+
                     if not csv_data:
                         logger.debug(
                             f"Debug - Empty response for chunk {current_start} to {current_end}"
                         )
-                        current_start = current_end + timedelta(days=1)
+                        current_start = next_start
                         continue
 
                     # Log first few lines of CSV for debugging
@@ -821,7 +876,15 @@ class BrokerData:
                         # Drop the datetime column
                         chunk_df = chunk_df.drop("datetime", axis=1)
 
-                        # Remove rows with invalid timestamps
+                        # Remove rows with invalid timestamps. Surface the count -
+                        # an unparseable date format is otherwise a silent data loss
+                        # (this is how the int64 leading-zero bug hid for months).
+                        unparsed = int(chunk_df["timestamp"].isna().sum())
+                        if unparsed:
+                            logger.warning(
+                                f"Definedge history: dropped {unparsed} of {len(chunk_df)} rows "
+                                f"for {symbol}@{exchange} with unparseable timestamps"
+                            )
                         chunk_df = chunk_df.dropna(subset=["timestamp"])
 
                     # Log DataFrame info after parsing
@@ -838,7 +901,7 @@ class BrokerData:
                             f"No valid data after parsing CSV for {timeframe} timeframe"
                         )
                         logger.debug("This might be due to incorrect date parsing")
-                        current_start = current_end + timedelta(days=1)
+                        current_start = next_start
                         continue
 
                     # For minute intervals other than 1m, we need to resample
@@ -917,11 +980,11 @@ class BrokerData:
                     logger.error(
                         f"Debug - Error fetching chunk {current_start} to {current_end}: {str(chunk_error)}"
                     )
-                    current_start = current_end + timedelta(days=1)
+                    current_start = next_start
                     continue
 
                 # Move to next chunk
-                current_start = current_end + timedelta(days=1)
+                current_start = next_start
 
             # If no data was found, return empty DataFrame
             if not dfs:
