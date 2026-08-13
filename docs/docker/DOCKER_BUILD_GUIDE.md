@@ -17,11 +17,11 @@ docker-build.bat
 ```
 
 The automated script will:
-- ✅ Verify environment configuration
-- ✅ Build Docker image with all dependencies
-- ✅ Run comprehensive tests
-- ✅ Start the container
-- ✅ Verify numba/llvmlite/scipy work correctly
+- Verify environment configuration
+- Build Docker image with all dependencies
+- Run comprehensive tests
+- Start the container
+- Verify numba/llvmlite/scipy work correctly
 
 ### Option 2: Manual Build with Docker Compose
 
@@ -36,7 +36,7 @@ docker-compose build --no-cache
 docker-compose up -d
 
 # Verify it's working
-docker-compose exec openalgo python -c "import numba; import llvmlite; import scipy; print('✓ Success')"
+docker-compose exec openalgo python -c "import numba; import llvmlite; import scipy; print('Success')"
 ```
 
 ### Option 3: Manual Build with Docker CLI
@@ -167,7 +167,7 @@ Expected output: HTTP 200 response
 
 **Test imports:**
 ```bash
-docker-compose exec openalgo python -c "import numba; import llvmlite; import scipy; print('✓ Imports successful')"
+docker-compose exec openalgo python -c "import numba; import llvmlite; import scipy; print('Imports successful')"
 ```
 
 **Test numba JIT:**
@@ -187,7 +187,7 @@ def calculate_ema(prices, period):
 
 prices = np.random.randn(100)
 ema = calculate_ema(prices, 20)
-print(f'✓ EMA calculated: {ema[-1]:.4f}')
+print(f'EMA calculated: {ema[-1]:.4f}')
 "
 ```
 
@@ -196,7 +196,7 @@ print(f'✓ EMA calculated: {ema[-1]:.4f}')
 docker-compose exec openalgo python -c "
 from scipy import stats
 result = stats.norm.cdf(0)
-print(f'✓ SciPy works: {result:.4f}')
+print(f'SciPy works: {result:.4f}')
 "
 ```
 

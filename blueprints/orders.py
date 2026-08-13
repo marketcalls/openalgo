@@ -8,7 +8,6 @@ from flask import Blueprint, Response, jsonify, redirect, render_template, reque
 from database.auth_db import get_api_key_for_tradingview, get_auth_token
 from database.settings_db import get_analyze_mode
 from limiter import limiter
-from services.close_position_service import close_position
 from services.holdings_service import get_holdings
 from services.orderbook_service import get_orderbook
 from services.place_smart_order_service import place_smart_order
@@ -1018,7 +1017,9 @@ def approve_pending_order_route(order_id):
                 {
                     "status": "success",
                     "message": "Order approved and executed successfully",
-                    "broker_order_id": response_data.get("orderid"),
+                    "broker_order_id": response_data.get("broker_order_id")
+                    or response_data.get("orderid")
+                    or response_data.get("trigger_id"),
                 }
             )
         else:

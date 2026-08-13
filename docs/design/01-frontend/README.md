@@ -1,377 +1,85 @@
 # 01 - Frontend Architecture
 
-## Overview
+## Stack
 
-OpenAlgo features a modern React 19 Single Page Application (SPA) built with TypeScript, Vite, and Tailwind CSS 4. The frontend provides a responsive trading interface with real-time market data, visual workflow automation, and comprehensive strategy management.
+The frontend is a React 19 TypeScript SPA built with Vite 8. Current package constraints are read from `frontend/package.json`.
 
-## Technology Stack
+| Concern | Implementation |
+|---|---|
+| Routing | `react-router-dom` 7.15 |
+| Server state | TanStack Query 5 |
+| Client state | Zustand 5 |
+| Styling | Tailwind CSS 4 and local shadcn-style components |
+| Icons | Lucide React |
+| Forms/editors | Radix primitives, CodeMirror |
+| Flow canvas | XYFlow 12 |
+| Charts | Plotly 3 and Lightweight Charts 5 |
+| Live app events | Socket.IO client |
+| Tests | Vitest 4, Testing Library, axe, Playwright |
+| Formatting/lint | Biome 2 |
 
-| Technology | Version | Purpose |
-|------------|---------|---------|
-| React | 19.2.3 | UI framework |
-| TypeScript | 5.9.3 | Type safety |
-| Vite | 8.0.16 | Build tool & dev server |
-| Tailwind CSS | 4.1.18 | Utility-first styling |
-| React Router | 7.12.0 | Client-side routing |
-| Zustand | 5.0.9 | Client state management |
-| TanStack Query | 5.90.16 | Server state & caching |
-| Axios | 1.13.5 | HTTP client |
-| Socket.IO Client | 4.8.3 | Real-time events |
-| @xyflow/react | 12.3.6 | Flow editor canvas |
-| Plotly.js | react-plotly.js | Interactive analytics charts |
-| Radix UI | Latest | Accessible UI primitives |
+Supported Node versions are `>=20.20.0 || >=22.22.0 || >=24.13.0`.
 
-## Architecture Diagram
+## Composition
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                           React Application                                   │
-│                                                                               │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │                      React Router v7.12                                 │  │
-│  │                                                                         │  │
-│  │   Public Routes          Protected Routes         Full-Width Routes     │  │
-│  │   /, /login, /setup      /dashboard, /positions   /flow/editor/:id      │  │
-│  │   /broker, /download     /orderbook, /strategy    /playground           │  │
-│  └────────────────────────────────┬───────────────────────────────────────┘  │
-│                                   │                                           │
-│                                   ▼                                           │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │                         Component Layer                                 │  │
-│  │                                                                         │  │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌────────────┐  │  │
-│  │  │   Layouts    │  │    Pages     │  │     UI       │  │    Flow    │  │  │
-│  │  │  - Standard  │  │  (60+ lazy   │  │  (30+ shadcn │  │  (50+ node │  │  │
-│  │  │  - FullWidth │  │   loaded)    │  │   components)│  │   types)   │  │  │
-│  │  │  - Public    │  │              │  │              │  │            │  │  │
-│  │  └──────────────┘  └──────────────┘  └──────────────┘  └────────────┘  │  │
-│  └────────────────────────────────────────────────────────────────────────┘  │
-│                                   │                                           │
-│                                   ▼                                           │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │                      State Management Layer                             │  │
-│  │                                                                         │  │
-│  │  ┌─────────────────┐  ┌──────────────────┐  ┌────────────────────────┐ │  │
-│  │  │     Zustand     │  │  TanStack Query  │  │       Context          │ │  │
-│  │  │  (Client State) │  │  (Server State)  │  │  (Component Scope)     │ │  │
-│  │  │                 │  │                  │  │                        │ │  │
-│  │  │  - authStore    │  │  - positions     │  │  - SocketProvider      │ │  │
-│  │  │  - themeStore   │  │  - orders        │  │  - ThemeProvider       │ │  │
-│  │  │  - flowStore    │  │  - strategies    │  │                        │ │  │
-│  │  └─────────────────┘  └──────────────────┘  └────────────────────────┘ │  │
-│  └────────────────────────────────────────────────────────────────────────┘  │
-│                                   │                                           │
-│                                   ▼                                           │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │                          API Layer                                      │  │
-│  │                                                                         │  │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                  │  │
-│  │  │  apiClient   │  │  webClient   │  │  authClient  │                  │  │
-│  │  │  /api/v1/*   │  │  Session +   │  │  Form data + │                  │  │
-│  │  │  API Key     │  │  CSRF        │  │  CSRF        │                  │  │
-│  │  └──────────────┘  └──────────────┘  └──────────────┘                  │  │
-│  └────────────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                    │
-              ┌─────────────────────┴─────────────────────┐
-              ▼                                           ▼
-    ┌─────────────────┐                         ┌─────────────────┐
-    │   Socket.IO     │                         │    WebSocket    │
-    │ (Flask Events)  │                         │  (Market Data)  │
-    │  :5000          │                         │    :8765        │
-    └─────────────────┘                         └─────────────────┘
-```
+`frontend/src/main.tsx` mounts the app. `frontend/src/app/providers.tsx` composes TanStack Query, theme, tooltips, Socket.IO, market-data state, and browser toasts. `frontend/src/App.tsx` lazy-loads route modules and applies public/authenticated/full-width layout boundaries.
 
-## Directory Structure
+The Flask backend serves the production bundle through `blueprints/react_app.py` when `frontend/dist` exists. Vite's development server runs on port 5173 and proxies backend requests according to `frontend/vite.config.ts`.
 
-```
-frontend/
-├── src/
-│   ├── api/                    # API integration modules
-│   │   ├── client.ts           # Axios clients (apiClient, webClient, authClient)
-│   │   ├── auth.ts             # Authentication API
-│   │   ├── trading.ts          # Trading operations API
-│   │   ├── strategy.ts         # Strategy management API
-│   │   ├── flow.ts             # Flow workflow API
-│   │   ├── gex.ts              # GEX analytics API
-│   │   ├── iv-chart.ts         # IV Chart API
-│   │   ├── iv-smile.ts         # IV Smile API
-│   │   ├── oi-profile.ts       # OI Profile API
-│   │   ├── oi-tracker.ts       # OI Tracker API
-│   │   ├── straddle-chart.ts   # ATM Straddle Chart API
-│   │   ├── vol-surface.ts      # 3D Volatility Surface API
-│   │   ├── option-chain.ts     # Option chain API
-│   │   ├── health.ts           # Health monitoring API
-│   │   ├── chartink.ts         # Chartink API
-│   │   ├── python-strategy.ts  # Python strategy API
-│   │   ├── telegram.ts         # Telegram API
-│   │   └── admin.ts            # Admin API
-│   │
-│   ├── app/
-│   │   └── providers.tsx       # TanStack Query & theme providers
-│   │
-│   ├── components/
-│   │   ├── auth/
-│   │   │   └── AuthSync.tsx    # Flask session ↔ Zustand sync
-│   │   ├── flow/
-│   │   │   ├── nodes/          # 50+ flow node components
-│   │   │   ├── edges/          # Edge components
-│   │   │   └── panels/         # Config, Palette, Execution panels
-│   │   ├── layout/
-│   │   │   ├── Layout.tsx      # Main protected layout
-│   │   │   ├── FullWidthLayout.tsx
-│   │   │   ├── Navbar.tsx
-│   │   │   ├── Footer.tsx
-│   │   │   └── MobileBottomNav.tsx
-│   │   ├── socket/
-│   │   │   └── SocketProvider.tsx
-│   │   └── ui/                 # 30+ shadcn/ui components
-│   │
-│   ├── hooks/                  # Custom React hooks
-│   │   ├── useSocket.ts        # Socket.IO connection
-│   │   ├── useLivePrice.ts     # Live price feed
-│   │   ├── useLiveQuote.ts     # Live quote feed
-│   │   ├── useMarketData.ts    # WebSocket market data
-│   │   ├── useMarketStatus.ts  # Market status tracking
-│   │   ├── useOptionChainLive.ts    # Live option chain data
-│   │   ├── useOptionChainPolling.ts # Option chain polling
-│   │   ├── useOrderEventRefresh.ts  # Order event refresh
-│   │   └── usePageVisibility.ts     # Page visibility tracking
-│   │
-│   ├── pages/                  # Page components (60+ all lazy-loaded)
-│   │   ├── Dashboard.tsx       # Main dashboard
-│   │   ├── Positions.tsx       # Position management
-│   │   ├── Tools.tsx           # Analytics tools hub
-│   │   ├── GEXDashboard.tsx    # Gamma Exposure dashboard
-│   │   ├── IVSmile.tsx         # IV Smile analysis
-│   │   ├── IVChart.tsx         # IV Chart
-│   │   ├── OIProfile.tsx       # OI Profile analysis
-│   │   ├── OITracker.tsx       # Open Interest tracker
-│   │   ├── MaxPain.tsx         # Max Pain analysis
-│   │   ├── StraddleChart.tsx   # ATM Straddle chart
-│   │   ├── VolSurface.tsx      # 3D Volatility Surface
-│   │   ├── OptionChain.tsx     # Option chain viewer
-│   │   ├── strategy/           # Strategy pages
-│   │   ├── flow/               # Flow editor pages
-│   │   ├── admin/              # Admin pages
-│   │   ├── monitoring/         # Monitoring dashboards
-│   │   ├── python-strategy/    # Python strategy pages
-│   │   ├── chartink/           # Chartink pages
-│   │   └── telegram/           # Telegram pages
-│   │
-│   ├── stores/                 # Zustand state stores
-│   │   ├── authStore.ts        # Authentication state
-│   │   ├── themeStore.ts       # Theme preferences
-│   │   └── flowWorkflowStore.ts
-│   │
-│   ├── types/                  # TypeScript type definitions
-│   │
-│   ├── App.tsx                 # Route definitions
-│   ├── main.tsx                # Entry point
-│   └── index.css               # Global styles + CSS variables
-│
-├── vite.config.ts              # Vite configuration
-├── tsconfig.app.json           # TypeScript config
-├── biome.json                  # Linter/formatter config
-└── package.json
-```
+## Route Families
 
-## State Management
+| Family | Examples |
+|---|---|
+| Public/auth | `/login`, `/setup`, `/reset-password`, broker callbacks |
+| Trading state | `/dashboard`, `/orderbook`, `/tradebook`, `/positions`, `/holdings` |
+| Automation | `/strategy`, `/chartink`, `/python`, `/flow` |
+| Tools | `/optionchain`, `/strategybuilder`, `/ivchart`, `/oitracker`, `/gex`, `/gammadensity`, `/oirange`, `/arbitrage`, `/scalping` |
+| Monitoring | `/pnltracker`, `/latency`, `/traffic`, `/health`, `/security` |
+| Admin/integrations | `/admin`, `/apikey`, `/playground`, `/telegram`, `/whatsapp` |
 
-### 1. Zustand (Client State)
+The exact route list is in `frontend/src/App.tsx`; navigation visibility is defined separately in `frontend/src/config/navigation.ts`.
 
-Lightweight state management for UI state that persists across sessions.
+## State Boundaries
 
-```typescript
-// stores/authStore.ts
-interface AuthStore {
-  user: User | null
-  apiKey: string | null
-  isAuthenticated: boolean
+| Store/context | Responsibility |
+|---|---|
+| `authStore.ts` | User and OpenAlgo API key for client calls |
+| `brokerStore.ts` | Active broker capability metadata |
+| `sessionStore.ts` | Active app-session count |
+| `themeStore.ts` | Theme, accent, live/analyzer presentation mode |
+| `flowWorkflowStore.ts` | Flow editor graph state |
+| `MarketDataContext.tsx` | Shared market-data manager lifecycle |
 
-  login: (username: string, broker: string) => void
-  logout: () => void
-  checkSession: () => boolean  // 3 AM IST expiry
-}
+TanStack Query owns fetched server data. Zustand is reserved for cross-page client state; feature-local state remains in components.
 
-// Usage in component
-const { user, isAuthenticated } = useAuthStore()
-```
+## Data And Live Updates
 
-**Stores:**
-- `authStore` - User session, API key, authentication state
-- `themeStore` - Dark/light mode, analyzer mode toggle
-- `alertStore` - Toast notification state and management
-- `flowWorkflowStore` - Flow editor nodes, edges, selection state
+Feature clients under `frontend/src/api/` call Flask blueprint or REST resources with credentials. `AuthSync` reads `/auth/session-status`, restores user/broker/API-key state, synchronizes analyzer mode, and records the active-session count.
 
-### 2. TanStack Query (Server State)
+Market data uses `MarketDataManager` and hooks such as `useLivePrice`, `useLiveQuote`, `useMarketData`, and `useOptionChainLive`. Order lifecycle refreshes are triggered by Socket.IO events through `useOrderEventRefresh`, avoiding high-frequency account polling where an event is available.
 
-Handles all server data fetching with automatic caching and refetching.
+## Build And Test Commands
 
-```typescript
-// Configuration (app/providers.tsx)
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 60 * 1000,      // 1 minute
-      refetchOnWindowFocus: true,
-      retry: 1,
-    },
-  },
-})
-
-// Usage in component
-const { data: positions, isLoading } = useQuery({
-  queryKey: ['positions'],
-  queryFn: () => tradingApi.getPositions()
-})
-```
-
-## API Integration
-
-### Three Axios Clients
-
-```typescript
-// 1. apiClient - For /api/v1/* endpoints (API key auth)
-const apiClient = axios.create({
-  baseURL: '/api/v1',
-  headers: { 'Content-Type': 'application/json' }
-})
-
-// 2. webClient - For session-based routes (CSRF required)
-const webClient = axios.create({
-  baseURL: '',
-  withCredentials: true
-})
-
-// 3. authClient - For login/setup (form data + CSRF)
-const authClient = axios.create({
-  baseURL: '',
-  headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-})
-```
-
-### CSRF Protection
-
-```typescript
-// Automatic CSRF token injection
-webClient.interceptors.request.use(async (config) => {
-  if (['post', 'put', 'delete'].includes(config.method)) {
-    const csrfToken = await fetchCSRFToken()
-    config.headers['X-CSRFToken'] = csrfToken
-  }
-  return config
-})
-```
-
-## Routing Structure
-
-### Route Categories
-
-| Category | Example Routes | Layout |
-|----------|---------------|--------|
-| Public | `/`, `/login`, `/setup`, `/download` | None |
-| Broker Auth | `/broker`, `/broker/:broker/totp` | None |
-| Protected | `/dashboard`, `/positions`, `/strategy` | Standard Layout |
-| Analytics | `/tools`, `/gex`, `/ivsmile`, `/oitracker`, `/maxpain`, `/volsurface` | Standard Layout |
-| Full-Width | `/flow/editor/:id`, `/playground`, `/historify` | Full-Width Layout |
-
-### Code Splitting
-
-All pages are lazy-loaded for optimal bundle size:
-
-```typescript
-const Dashboard = lazy(() => import('@/pages/Dashboard'))
-const Positions = lazy(() => import('@/pages/Positions'))
-
-// With Suspense fallback
-<Suspense fallback={<PageLoader />}>
-  <Routes>
-    <Route path="/dashboard" element={<Dashboard />} />
-  </Routes>
-</Suspense>
-```
-
-## Real-Time Communication
-
-### Socket.IO (Order Events)
-
-```typescript
-// hooks/useSocket.ts
-socket.on('order_event', (data) => {
-  playAlertSound()
-  toast.success(`Order ${data.status}: ${data.symbol}`)
-  queryClient.invalidateQueries(['orders'])
-})
-```
-
-**Events:** `order_event`, `cancel_order_event`, `modify_order_event`, `close_position_event`
-
-### WebSocket (Market Data)
-
-```typescript
-// hooks/useMarketData.ts
-const ws = new WebSocket('ws://localhost:8765')
-ws.send(JSON.stringify({
-  action: 'subscribe',
-  symbols: ['NSE:SBIN-EQ'],
-  mode: 'ltp'
-}))
-
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data)
-  // Update price state
-}
-```
-
-## Component Library (shadcn/ui)
-
-Built on Radix UI primitives with Tailwind styling:
-
-| Category | Components |
-|----------|------------|
-| Form | Button, Input, Select, Checkbox, Switch, Label |
-| Display | Card, Table, Badge, Avatar, Skeleton |
-| Overlay | Dialog, Sheet, Popover, Tooltip, DropdownMenu |
-| Custom | JsonEditor, PythonEditor, LogViewer, PageLoader |
-
-## Build & Development
+Run from `frontend/`:
 
 ```bash
-# Development
-npm run dev          # Vite dev server on :5173
-
-# Production build
-npm run build        # Output to /frontend/dist/
-
-# Testing
-npm test             # Vitest watch mode
-npm run e2e          # Playwright E2E tests
-
-# Code quality
-npm run lint         # Biome linting
-npm run format       # Biome formatting
+npm ci
+npm run lint
+npm run test:run
+npm run build
+npm run e2e -- --project=chromium
 ```
 
-## Bundle Optimization
+`npm run build` runs TypeScript project builds before Vite. CI uploads `frontend/dist`, and main-branch automation rebuilds and commits the production bundle.
 
-Vite splits the bundle into chunks:
-
-| Chunk | Contents |
-|-------|----------|
-| vendor-react | React, ReactDOM |
-| vendor-router | React Router |
-| vendor-radix | Radix UI components |
-| vendor-icons | Lucide React icons |
-| vendor-syntax | Code highlighter (loaded on demand) |
-
-## Key Files Reference
+## Key Files
 
 | File | Purpose |
-|------|---------|
-| `src/App.tsx` | Route definitions |
-| `src/api/client.ts` | Axios clients configuration |
-| `src/stores/authStore.ts` | Authentication state |
-| `src/components/layout/Layout.tsx` | Main layout with Navbar/Footer |
-| `src/components/auth/AuthSync.tsx` | Flask session sync |
-| `vite.config.ts` | Build configuration |
+|---|---|
+| `frontend/src/App.tsx` | Route graph and lazy modules |
+| `frontend/src/app/providers.tsx` | Global providers |
+| `frontend/src/config/navigation.ts` | Sidebar/tool navigation |
+| `frontend/src/api/client.ts` | Shared HTTP client behavior |
+| `frontend/src/components/auth/AuthSync.tsx` | Flask session synchronization |
+| `frontend/src/lib/MarketDataManager.ts` | Shared WebSocket market-data lifecycle |
+| `frontend/vite.config.ts` | Build and development proxy |

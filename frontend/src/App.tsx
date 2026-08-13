@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
 import { Providers } from '@/app/providers'
 import { AuthSync } from '@/components/auth/AuthSync'
 import { FullWidthLayout } from '@/components/layout/FullWidthLayout'
@@ -11,6 +11,11 @@ import { useBrokerStore } from '@/stores/brokerStore'
 // Lazy load all pages for code splitting
 // Public pages
 const Home = lazy(() => import('@/pages/Home'))
+const PortfolioBacktester = lazy(() => import('@/pages/PortfolioBacktester'))
+const PortfolioBacktesterResults = lazy(() => import('@/pages/PortfolioBacktesterResults'))
+const SipBacktester = lazy(() => import('@/pages/SipBacktester'))
+const SipBacktesterResults = lazy(() => import('@/pages/SipBacktesterResults'))
+const PortfolioAnalyzer = lazy(() => import('@/pages/PortfolioAnalyzer'))
 const Faq = lazy(() => import('@/pages/Faq'))
 const Setup = lazy(() => import('@/pages/Setup'))
 const Login = lazy(() => import('@/pages/Login'))
@@ -49,7 +54,10 @@ const Sandbox = lazy(() => import('@/pages/Sandbox'))
 const SandboxPnL = lazy(() => import('@/pages/SandboxPnL'))
 const Analyzer = lazy(() => import('@/pages/Analyzer'))
 const WebSocketTest = lazy(() => import('@/pages/WebSocketTest'))
+const WebSocketOrder = lazy(() => import('@/pages/WebSocketOrder'))
+const ChartTest = lazy(() => import('@/pages/ChartTest'))
 const Playground = lazy(() => import('@/pages/Playground'))
+const Trading = lazy(() => import('@/pages/Trading'))
 const Historify = lazy(() => import('@/pages/Historify'))
 const HistorifyCharts = lazy(() => import('@/pages/HistorifyCharts'))
 
@@ -57,7 +65,10 @@ const HistorifyCharts = lazy(() => import('@/pages/HistorifyCharts'))
 const Tools = lazy(() => import('@/pages/Tools'))
 const OptionChain = lazy(() => import('@/pages/OptionChain'))
 const IVChart = lazy(() => import('@/pages/IVChart'))
+const Scalping = lazy(() => import('@/pages/Scalping'))
 const OITracker = lazy(() => import('@/pages/OITracker'))
+const OIRange = lazy(() => import('@/pages/OIRange'))
+const GammaDensity = lazy(() => import('@/pages/GammaDensity'))
 const MaxPain = lazy(() => import('@/pages/MaxPain'))
 const StraddleChart = lazy(() => import('@/pages/StraddleChart'))
 const CustomStraddle = lazy(() => import('@/pages/CustomStraddle'))
@@ -65,6 +76,7 @@ const VolSurface = lazy(() => import('@/pages/VolSurface'))
 const GEXDashboard = lazy(() => import('@/pages/GEXDashboard'))
 const IVSmile = lazy(() => import('@/pages/IVSmile'))
 const OIProfile = lazy(() => import('@/pages/OIProfile'))
+const Arbitrage = lazy(() => import('@/pages/Arbitrage'))
 const StrategyBuilder = lazy(() => import('@/pages/StrategyBuilder'))
 const StrategyPortfolio = lazy(() => import('@/pages/StrategyPortfolio'))
 
@@ -184,6 +196,23 @@ function App() {
                 {/* Phase 4: Charts & Webhook Configuration */}
                 <Route path="/platforms" element={<Platforms />} />
                 <Route path="/tradingview" element={<TradingView />} />
+                <Route path="/portfolio-backtester" element={<PortfolioBacktester />} />
+                <Route
+                  path="/portfolio-backtester/results"
+                  element={<PortfolioBacktesterResults />}
+                />
+                {/* The page moved: /portfolio was ambiguous next to the
+                    analyzer. Redirect rather than 404 an existing bookmark. */}
+                <Route
+                  path="/portfolio"
+                  element={<Navigate to="/portfolio-backtester" replace />}
+                />
+                <Route path="/sip-backtester" element={<SipBacktester />} />
+                <Route
+                  path="/sip-backtester/results"
+                  element={<SipBacktesterResults />}
+                />
+                <Route path="/portfolio-analyzer" element={<PortfolioAnalyzer />} />
                 <Route path="/gocharting" element={<GoCharting />} />
                 <Route path="/pnl-tracker" element={<PnLTracker />} />
                 {/* Phase 4: Sandbox & Analyzer */}
@@ -191,9 +220,12 @@ function App() {
                 <Route path="/sandbox/mypnl" element={<SandboxPnL />} />
                 <Route path="/analyzer" element={<Analyzer />} />
                 <Route path="/tools" element={<Tools />} />
+                <Route path="/scalping" element={<Scalping />} />
                 <Route path="/optionchain" element={<OptionChain />} />
                 <Route path="/ivchart" element={<IVChart />} />
                 <Route path="/oitracker" element={<OITracker />} />
+                <Route path="/oirange" element={<OIRange />} />
+                <Route path="/gammadensity" element={<GammaDensity />} />
                 <Route path="/maxpain" element={<MaxPain />} />
                 <Route path="/straddle" element={<StraddleChart />} />
                 <Route path="/straddlepnl" element={<CustomStraddle />} />
@@ -201,6 +233,7 @@ function App() {
                 <Route path="/gex" element={<GEXDashboard />} />
                 <Route path="/ivsmile" element={<IVSmile />} />
                 <Route path="/oiprofile" element={<OIProfile />} />
+                <Route path="/arbitrage" element={<Arbitrage />} />
                 <Route path="/strategybuilder" element={<StrategyBuilder />} />
                 <Route path="/strategybuilder/portfolio" element={<StrategyPortfolio />} />
                 {/* Legacy /tools/strategy paths — redirect to the new route. */}
@@ -213,6 +246,8 @@ function App() {
                   element={<Navigate to="/strategybuilder/portfolio" replace />}
                 />
                 <Route path="/websocket/test" element={<WebSocketTest />} />
+                <Route path="/websocket/order" element={<WebSocketOrder />} />
+                <Route path="/chart/test" element={<ChartTest />} />
                 <Route path="/websocket/test/20" element={<WebSocketTest depthLevel={20} />} />
                 <Route path="/websocket/test/30" element={<WebSocketTest depthLevel={30} />} />
                 <Route path="/websocket/test/50" element={<WebSocketTest depthLevel={50} />} />
@@ -271,6 +306,7 @@ function App() {
               {/* Full-width protected routes */}
               <Route element={<FullWidthLayout />}>
                 <Route path="/playground" element={<Playground />} />
+                <Route path="/trading" element={<Trading />} />
                 <Route path="/historify" element={<Historify />} />
                 <Route path="/historify/charts" element={<HistorifyCharts />} />
                 <Route path="/historify/charts/:symbol" element={<HistorifyCharts />} />

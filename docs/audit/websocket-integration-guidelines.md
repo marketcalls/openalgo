@@ -79,31 +79,31 @@ REST API
 
 ### 2.1 Use WebSocket (via `useLivePrice`) When:
 
-✅ Displaying live market prices (LTP, bid/ask)
-✅ Real-time P&L calculations
-✅ Market depth visualization
-✅ Price alerts or triggers
-✅ High-frequency data updates needed
+Displaying live market prices (LTP, bid/ask)
+Real-time P&L calculations
+Market depth visualization
+Price alerts or triggers
+High-frequency data updates needed
 
 ### 2.2 Use REST API Only When:
 
-✅ Initial page load data
-✅ Historical data (candles, past trades)
-✅ Order placement/modification (actions)
-✅ Account information (funds, margins)
-✅ Static data (symbols, expiries)
+Initial page load data
+Historical data (candles, past trades)
+Order placement/modification (actions)
+Account information (funds, margins)
+Static data (symbols, expiries)
 
 ### 2.3 Decision Matrix
 
 | Data Type | WebSocket | REST | Polling |
 |-----------|-----------|------|---------|
-| Current LTP | ✅ Primary | Fallback | Every 30s |
-| Positions list | ❌ | ✅ Primary | Every 10-30s |
-| Position P&L | ✅ (recalculate) | Initial | - |
-| Order book | ❌ | ✅ Primary | Every 10s |
-| Order status | Socket.IO | ✅ | On-demand |
-| Holdings list | ❌ | ✅ Primary | Every 10-30s |
-| Holding value | ✅ (recalculate) | Initial | - |
+| Current LTP | Primary | Fallback | Every 30s |
+| Positions list | No | Primary | Every 10-30s |
+| Position P&L | (recalculate) | Initial | - |
+| Order book | No | Primary | Every 10s |
+| Order status | Socket.IO | Yes | On-demand |
+| Holdings list | No | Primary | Every 10-30s |
+| Holding value | (recalculate) | Initial | - |
 
 ---
 

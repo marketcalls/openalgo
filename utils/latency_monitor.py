@@ -1,14 +1,47 @@
 import time
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 
 from flask import g, request
 from flask_restx import Resource
 
+from database.auth_db import db_session as auth_db_session
 from database.auth_db import get_broker_name
 from database.latency_db import OrderLatency, init_latency_db, latency_session, purge_old_data_logs
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Shared single-worker executor: the latency record commit (SQLite fsync) runs
+# off the request thread so it never delays the order response. One worker
+# keeps writes serialized and bounds the scoped sessions to a single
+# long-lived thread.
+_latency_log_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="latency-log")
+
+
+def _log_latency_async(api_key, order_id, user_id, symbol, order_type, latencies, status, error):
+    """Resolve broker name and persist the latency record. Runs on the executor thread."""
+    try:
+        broker_name = get_broker_name(api_key) if api_key else None
+        OrderLatency.log_latency(
+            order_id=order_id,
+            user_id=user_id,
+            broker=broker_name,
+            symbol=symbol,
+            order_type=order_type,
+            latencies=latencies,
+            request_body=None,  # Not storing to save database space
+            response_body=None,  # Not storing to save database space
+            status=status,
+            error=error,
+        )
+    except Exception as e:
+        logger.exception(f"Error logging latency asynchronously: {e}")
+    finally:
+        # Both sessions must be removed on this thread: an unremoved scoped
+        # session keeps its read transaction (and SQLite lock) open.
+        latency_session.remove()
+        auth_db_session.remove()
 
 
 class LatencyTracker:
@@ -114,10 +147,12 @@ def track_latency(api_type):
                 # Start response processing stage
                 tracker.start_stage("broker_response")
 
-                # Get response data
-                if hasattr(response, "json"):
+                # Get response data. A file download (e.g. the portfolio
+                # tearsheet) has a `.json` property but isn't JSON, so it
+                # resolves to None rather than raising.
+                if hasattr(response, "json") and isinstance(response.json, dict):
                     response_data = response.json
-                elif isinstance(response, tuple) and len(response) > 0:
+                elif isinstance(response, tuple) and len(response) > 0 and isinstance(response[0], dict):
                     response_data = response[0]
                 else:
                     response_data = {}
@@ -162,28 +197,24 @@ def track_latency(api_type):
                 if order_id is None:
                     order_id = response_data.get("request_id", "unknown")
 
-                # Get broker name from auth_db using API key
-                broker_name = None
-                if "apikey" in request_data:
-                    broker_name = get_broker_name(request_data["apikey"])
-
-                OrderLatency.log_latency(
-                    order_id=order_id,
-                    user_id=g.get("user_id"),
-                    broker=broker_name,
-                    symbol=request_data.get("symbol"),
-                    order_type=api_type,
-                    latencies={
+                # Persist off the request thread: broker-name lookup and the
+                # SQLite commit must not delay the order response.
+                _latency_log_executor.submit(
+                    _log_latency_async,
+                    request_data.get("apikey"),
+                    order_id,
+                    g.get("user_id"),
+                    request_data.get("symbol"),
+                    api_type,
+                    {
                         "rtt": rtt,  # Round-trip time (comparable to Postman/Bruno)
                         "validation": tracker.stage_times.get("validation", 0),
                         "broker_response": tracker.stage_times.get("broker_response", 0),
                         "overhead": overhead,
                         "total": total,
                     },
-                    request_body=None,  # Not storing to save database space
-                    response_body=None,  # Not storing to save database space
-                    status="SUCCESS" if status_code < 400 else "FAILED",
-                    error=response_data.get("message") if status_code >= 400 else None,
+                    "SUCCESS" if status_code < 400 else "FAILED",
+                    response_data.get("message") if status_code >= 400 else None,
                 )
 
                 return response
@@ -203,33 +234,25 @@ def track_latency(api_type):
                     rtt = tracker.get_rtt()
                     overhead = tracker.get_overhead()
 
-                # Get broker name from auth_db using API key if available
-                broker_name = None
-                if "request_data" in locals() and "apikey" in request_data:
-                    broker_name = get_broker_name(request_data["apikey"])
-
-                OrderLatency.log_latency(
-                    order_id="error",
-                    user_id=g.get("user_id"),
-                    broker=broker_name,
-                    symbol=request_data.get("symbol") if "request_data" in locals() else None,
-                    order_type=api_type,
-                    latencies={
+                has_request_data = "request_data" in locals()
+                _latency_log_executor.submit(
+                    _log_latency_async,
+                    request_data.get("apikey") if has_request_data else None,
+                    "error",
+                    g.get("user_id"),
+                    request_data.get("symbol") if has_request_data else None,
+                    api_type,
+                    {
                         "rtt": rtt,
                         "validation": tracker.stage_times.get("validation", 0),
                         "broker_response": 0,
                         "overhead": overhead,
                         "total": total_time,
                     },
-                    request_body=None,  # Not storing to save database space
-                    response_body=None,  # Not storing to save database space
-                    status="FAILED",
-                    error=str(e),
+                    "FAILED",
+                    str(e),
                 )
                 raise
-
-            finally:
-                latency_session.remove()
 
         return wrapped
 
@@ -272,6 +295,13 @@ def init_latency_monitoring(app):
         "split_order": "SPLIT",
         "options_order": "OPTIONS",
         "options_multiorder": "OPTIONS_MULTI",
+        # GTT. These were already being wrapped - an unmapped namespace falls
+        # back to its uppercased name - but as PLACE_GTT_ORDER etc, which does
+        # not match the ORDER_TYPES set below, so GTT latency was being purged
+        # after 7 days as though it were a data query.
+        "place_gtt_order": "GTT_PLACE",
+        "modify_gtt_order": "GTT_MODIFY",
+        "cancel_gtt_order": "GTT_CANCEL",
         # Data/Account endpoints (auto-purge after 7 days)
         "quotes": "QUOTES",
         "history": "HISTORY",
@@ -313,6 +343,12 @@ def init_latency_monitoring(app):
         "SPLIT",
         "OPTIONS",
         "OPTIONS_MULTI",
+        # A GTT is an order instruction, not a data query. It can also rest for
+        # a year before firing, so purging its placement latency after a week
+        # would discard the record long before the order it describes exists.
+        "GTT_PLACE",
+        "GTT_MODIFY",
+        "GTT_CANCEL",
     }
 
     # Wrap all API endpoints with latency tracking

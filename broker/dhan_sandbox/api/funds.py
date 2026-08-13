@@ -134,9 +134,18 @@ def get_margin_data(auth_token):
 
             total_realised, total_unrealised = sum_realised_unrealised(position_book)
 
+        # Dhan's "availabelBalance" (their spelling) includes pledged
+        # collateral, confirmed against a live account -- double-counting
+        # against the separately reported "collateral" field below, same
+        # class of bug as GitHub issue #1582. Subtract collateralAmount to
+        # get the actual cash-only balance.
+        available_cash = (margin_data.get("availabelBalance") or 0) - (
+            margin_data.get("collateralAmount") or 0
+        )
+
         # Construct and return the processed margin data with null checks
         processed_margin_data = {
-            "availablecash": "{:.2f}".format(margin_data.get("availabelBalance") or 0),
+            "availablecash": f"{available_cash:.2f}",
             "collateral": "{:.2f}".format(margin_data.get("collateralAmount") or 0),
             "m2munrealized": f"{total_unrealised or 0:.2f}",
             "m2mrealized": f"{total_realised or 0:.2f}",

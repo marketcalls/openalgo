@@ -8,14 +8,14 @@ adapters use for market data. The websocket proxy's existing SUB
 listener picks it up via the `CACHE_INVALIDATE_*` topic prefix and
 clears its local auth caches.
 
-Fix history — issue #1374:
-Earlier this module created its own `zmq.PUB` socket and `connect()`ed
-to the ZMQ port. That collided with `SharedZmqPublisher` (also a PUB,
-but `bind`-ing the same endpoint) — two PUBs on one wire is an invalid
-ZMQ topology and messages were silently dropped. The fix routes
-publishes through the existing `SharedZmqPublisher` singleton, so there
-is exactly one PUB on the wire and the proxy's SUB receives both market
-data and cache invalidations through the same pipe. No new port, no new
+Fix history — issue #1374 / WS fan-in:
+This module publishes through the shared `SharedZmqPublisher`, the same
+publisher the broker market-data adapters use. Under the fan-in ZMQ
+topology the proxy's SUB is the sole binder and every publisher CONNECTs
+to it — the market-data publisher (in the WS proxy process) and this
+cache-invalidation publisher (in the Flask/gunicorn process). So the
+proxy's SUB receives both market data and cache invalidations over one
+bus, across the process boundary, with no bind race and no extra port or
 env var.
 """
 
@@ -60,8 +60,8 @@ class CacheInvalidationPublisher:
             from websocket_proxy.connection_manager import SharedZmqPublisher
 
             publisher = SharedZmqPublisher()
-            if not publisher._bound:
-                publisher.bind()  # idempotent — only binds first time
+            if not publisher._connected:
+                publisher.connect()  # idempotent — connects to the proxy SUB once
 
             topic = f"{CACHE_INVALIDATION_PREFIX}_{cache_type}_{user_id}"
             message = {

@@ -58,8 +58,13 @@ class FyersDataMapper:
 
             # Apply segment-specific conversion
             segment_divisor = 1
-            if exchange in ["BSE", "MCX", "NSE", "NFO"]:
-                segment_divisor = 100  # These exchanges send prices in paisa/paise format
+            if exchange in ["BSE", "MCX", "NSE", "NFO", "CDS", "BCD"]:
+                # These exchanges send prices in paisa/paise format. CDS/BCD
+                # were missing here: currency ticks passed through 100x too
+                # large, and the sandbox WS fill path booked USDINR at 9654.75
+                # instead of 96.5475 (caught by live QA on 2026-07-23; the
+                # REST-quote fill path masked it because REST returns rupees).
+                segment_divisor = 100
 
             # Convert to actual price
             if multiplier > 0:
@@ -125,8 +130,10 @@ class FyersDataMapper:
 
             # Apply segment-specific conversion
             segment_divisor = 1
-            if not is_index and exchange in ["BSE", "MCX", "NSE", "NFO"]:
-                segment_divisor = 100  # These exchanges send prices in paisa/paise format
+            if not is_index and exchange in ["BSE", "MCX", "NSE", "NFO", "CDS", "BCD"]:
+                # CDS/BCD included: currency feed is paise-scaled like the
+                # others (verified empirically -- see LTP mapping above).
+                segment_divisor = 100
 
             def convert_price(value):
                 if not value or multiplier <= 0:
@@ -203,14 +210,11 @@ class FyersDataMapper:
 
             # Apply segment-specific conversion based on exchange
             segment_divisor = 1
-            if exchange == "BSE":
-                segment_divisor = 100  # BSE prices are in paisa
-            elif exchange == "MCX":
-                segment_divisor = 100  # MCX also needs division by 100
-            elif exchange == "NSE":
-                segment_divisor = 100  # NSE prices also in paisa format
-            elif exchange == "NFO":
-                segment_divisor = 100  # NFO prices also in paisa format
+            if exchange in ("BSE", "MCX", "NSE", "NFO", "CDS", "BCD"):
+                # All paise-scaled segments, including currency (CDS/BCD --
+                # previously missing, which let 100x-scaled depth prices
+                # through to the sandbox fill path).
+                segment_divisor = 100
 
             def convert_price(value):
                 if value and multiplier > 0:

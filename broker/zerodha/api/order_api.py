@@ -120,7 +120,7 @@ def _get_cached_positions(auth):
         now = time.monotonic()
         cached = _position_cache.get(auth)
         if cached and (now - cached["timestamp"]) < _POSITION_CACHE_TTL:
-            logger.info("Position book served from cache")
+            logger.debug("Position book served from cache")
             return cached["data"]
 
     # Cache miss or expired — fetch from broker
@@ -153,7 +153,7 @@ def get_open_position(tradingsymbol, exchange, product, auth):
                 and position.get("product") == product
             ):
                 net_qty = position.get("quantity", "0")
-                logger.info(f"Net Quantity {net_qty}")
+                logger.debug(f"Net Quantity {net_qty}")
                 break  # Assuming you need the first match
 
     return net_qty
@@ -183,11 +183,11 @@ def place_order_api(data, auth):
         "tag": newdata["tag"],
     }
 
-    logger.info(f"Payload for place_order_api: {payload}")
+    logger.debug(f"Payload for place_order_api: {payload}")
 
     # URL-encode the payload
     payload_encoded = urllib.parse.urlencode(payload)
-    logger.info(f"Encoded payload to Zerodha: {payload_encoded}")
+    logger.debug(f"Encoded payload to Zerodha: {payload_encoded}")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -204,11 +204,11 @@ def place_order_api(data, auth):
     )
 
     # Log raw response
-    logger.info(f"Zerodha raw response: status={response.status_code}, body={response.text}")
+    logger.debug(f"Zerodha raw response: status={response.status_code}, body={response.text}")
 
     # Parse the response
     response_data = response.json()
-    logger.info(f"Response from place_order_api: {response_data}")
+    logger.debug(f"Response from place_order_api: {response_data}")
 
     # Handle the response
     if response_data["status"] == "success":
@@ -238,7 +238,7 @@ def place_smartorder_api(data, auth):
         product = data.get("product")
 
         if not all([symbol, exchange, product]):
-            logger.info("Missing required parameters in place_smartorder_api")
+            logger.debug("Missing required parameters in place_smartorder_api")
             return res, response_data, orderid
 
         # Per-symbol lock: only one smart order per symbol executes at a time.
@@ -253,8 +253,8 @@ def place_smartorder_api(data, auth):
                 get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
             )
 
-            logger.info(f"position_size: {position_size}")
-            logger.info(f"Open Position: {current_position}")
+            logger.debug(f"position_size: {position_size}")
+            logger.debug(f"Open Position: {current_position}")
 
             # Determine action based on position_size and current_position
             action = None
@@ -295,7 +295,7 @@ def place_smartorder_api(data, auth):
 
                 return res, response, orderid
             else:
-                logger.info("No action required or invalid quantity")
+                logger.debug("No action required or invalid quantity")
                 response_data = {"status": "success", "message": "No action needed. Position already matched."}
                 return res, response_data, orderid
 
@@ -343,12 +343,12 @@ def close_all_positions(current_api_key, auth):
                 "quantity": str(quantity),
             }
 
-            logger.info(f"Close position payload: {place_order_payload}")
+            logger.debug(f"Close position payload: {place_order_payload}")
 
             # Place the order to close the position
             _, api_response, _ = place_order_api(place_order_payload, AUTH_TOKEN)
 
-            logger.info(f"Close position response: {api_response}")
+            logger.debug(f"Close position response: {api_response}")
 
             # Note: Ensure place_order_api handles any errors and logs accordingly
 
@@ -382,7 +382,7 @@ def cancel_order(orderid, auth):
 
         response.raise_for_status()
         data = response.json()
-        logger.info(f"Cancel order response: {data}")
+        logger.debug(f"Cancel order response: {data}")
 
         # Check if the request was successful
         if data.get("status"):
@@ -419,7 +419,7 @@ def modify_order(data, auth):
     if newdata.get("trigger_price"):
         payload["trigger_price"] = str(newdata["trigger_price"])
 
-    logger.info(f"Modify order payload: {payload}")
+    logger.debug(f"Modify order payload: {payload}")
 
     # URL-encode the payload
     payload_encoded = urllib.parse.urlencode(payload)
@@ -442,7 +442,7 @@ def modify_order(data, auth):
 
     # Parse the response
     response_data = response.json()
-    logger.info(f"Modify order response: {response_data}")
+    logger.debug(f"Modify order response: {response_data}")
 
     # Add status attribute to maintain backward compatibility
     response.status = response.status_code
@@ -469,7 +469,7 @@ def cancel_all_orders_api(data, auth):
         for order in order_book_response.get("data", [])
         if order["status"] in ["OPEN", "TRIGGER PENDING"]
     ]
-    logger.info(f"{orders_to_cancel}")
+    logger.debug(f"{orders_to_cancel}")
     canceled_orders = []
     failed_cancellations = []
 

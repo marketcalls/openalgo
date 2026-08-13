@@ -34,6 +34,23 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.running = False
         self.lock = threading.Lock()
         self.last_values = {}  # Cache for retaining last known values
+        # Guard so only one reconnect loop runs at a time. Without it, every
+        # on_close spawns a fresh thread (each blocking in its own run_forever),
+        # accumulating threads and sockets on a flapping feed.
+        self._reconnect_lock = threading.Lock()
+        self._reconnecting = False
+        # Handle to the running reconnect loop so a re-initialize can wait for
+        # it to finish (and clear _reconnecting) before starting a fresh one.
+        self._reconnect_thread = None
+        # Set on disconnect so the reconnect backoff sleep is interruptible and
+        # the loop exits promptly instead of lingering up to max_reconnect_delay.
+        self._stop_event = threading.Event()
+        # Batch subscription management: collect per-symbol subscribe() calls
+        # arriving in quick succession (e.g. a full option chain) and send them
+        # grouped by mode in a few frames instead of one frame per symbol.
+        self.subscription_queue = []
+        self.batch_timer = None
+        self.batch_delay = 0.5  # 500ms window to collect subscriptions into a batch
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -51,6 +68,29 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         self.user_id = user_id
         self.broker_name = broker_name
+
+        # If re-initializing a live adapter, tear down the previous client first
+        # so we don't orphan its open socket and reconnect thread.
+        if self.ws_client is not None:
+            self.logger.info("Re-initializing: closing previous WebSocket client")
+            self.running = False
+            self._stop_event.set()
+            self._cancel_batch_timer()
+            with self.lock:
+                self.subscription_queue.clear()
+            try:
+                self.ws_client.close_connection()
+            except Exception as e:
+                self.logger.warning(f"Error closing previous ws_client on re-init: {e}")
+            self.ws_client = None
+            # Wait for the previous reconnect loop to unwind so its _reconnecting
+            # guard is cleared before a fresh connect() starts a new loop.
+            # Otherwise the next connect() would see the guard still set, no-op,
+            # and leave the new client permanently unconnected.
+            prev_thread = self._reconnect_thread
+            if prev_thread is not None and prev_thread.is_alive():
+                prev_thread.join(timeout=10)
+            self._reconnect_thread = None
 
         # Get access token from database if not provided
         if not auth_data:
@@ -104,43 +144,154 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error("WebSocket client not initialized. Call initialize() first.")
             return
 
-        threading.Thread(target=self._connect_with_retry, daemon=True).start()
+        self._start_reconnect_thread()
+
+    def _start_reconnect_thread(self) -> None:
+        """Start the single (re)connect loop, ensuring only one runs at a time.
+
+        ws_client.connect() blocks in run_forever until the socket drops, so a
+        single thread owns the whole connect -> drop -> reconnect lifecycle. The
+        _reconnecting guard stops any second thread (and thus a second socket)
+        from ever being started.
+        """
+        with self._reconnect_lock:
+            if not self.running:
+                return
+            if self._reconnecting:
+                self.logger.debug("Reconnect loop already running; not starting another")
+                return
+            self._reconnecting = True
+            # Fresh loop: clear any stop signal left by a previous disconnect.
+            self._stop_event.clear()
+            self._reconnect_thread = threading.Thread(
+                target=self._connect_with_retry, daemon=True
+            )
+            self._reconnect_thread.start()
 
     def _connect_with_retry(self) -> None:
-        """Connect to INDmoney WebSocket with retry logic"""
-        while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
-            try:
-                # Refresh the client's token before connecting so a reconnect
-                # after the daily token rollover uses a live token.
-                if self.ws_client:
-                    self.ws_client._refresh_access_token()
+        """Own the connect/reconnect lifecycle in a single thread.
 
-                self.logger.info(
-                    f"Connecting to INDmoney WebSocket (attempt {self.reconnect_attempts + 1})"
-                )
-                self.ws_client.connect()
-                self.reconnect_attempts = 0  # Reset attempts on successful connection
-                break
+        connect() blocks until the socket drops; when it returns we reconnect
+        here (rather than spawning a new thread from on_close) so there is never
+        more than one live socket. reconnect_attempts is reset in _on_open when
+        a connection successfully opens.
+        """
+        try:
+            while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
+                try:
+                    # Refresh the client's token before connecting so a reconnect
+                    # after the daily token rollover uses a live token.
+                    if self.ws_client:
+                        self.ws_client._refresh_access_token()
 
-            except Exception as e:
-                self.reconnect_attempts += 1
-                delay = min(
-                    self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
-                )
-                self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                time.sleep(delay)
+                    self.logger.info(
+                        f"Connecting to INDmoney WebSocket (attempt {self.reconnect_attempts + 1})"
+                    )
+                    # Blocks until the socket drops or an error is raised.
+                    self.ws_client.connect()
 
-        if self.reconnect_attempts >= self.max_reconnect_attempts:
-            self.logger.error("Max reconnection attempts reached. Giving up.")
+                    # connect() returned => socket closed. If we're shutting
+                    # down, exit; otherwise treat as an unexpected drop.
+                    if not self.running:
+                        break
+                    self.reconnect_attempts += 1
+                except Exception as e:
+                    self.reconnect_attempts += 1
+                    self.logger.error(f"Connection error: {e}")
+
+                if self.running and self.reconnect_attempts < self.max_reconnect_attempts:
+                    delay = min(
+                        self.reconnect_delay * (2**self.reconnect_attempts),
+                        self.max_reconnect_delay,
+                    )
+                    self.logger.warning(f"Disconnected; reconnecting in {delay} seconds...")
+                    # Interruptible sleep: returns immediately if disconnect()
+                    # signals a stop, so the thread doesn't linger for up to
+                    # max_reconnect_delay after shutdown.
+                    if self._stop_event.wait(delay):
+                        break
+
+            if self.running and self.reconnect_attempts >= self.max_reconnect_attempts:
+                self.logger.error("Max reconnection attempts reached. Giving up.")
+        finally:
+            with self._reconnect_lock:
+                self._reconnecting = False
 
     def disconnect(self) -> None:
         """Disconnect from INDmoney WebSocket"""
         self.running = False
+        # Wake an in-progress reconnect backoff so the loop exits promptly.
+        self._stop_event.set()
+        # Cancel any pending batch-subscription timer so its thread doesn't fire
+        # after shutdown.
+        self._cancel_batch_timer()
         if hasattr(self, "ws_client") and self.ws_client:
             self.ws_client.close_connection()
 
         # Clean up ZeroMQ resources
         self.cleanup_zmq()
+
+    def _start_batch_timer(self) -> None:
+        """(Re)start the batch-collection timer. Caller must hold self.lock."""
+        if self.batch_timer:
+            self.batch_timer.cancel()
+        self.batch_timer = threading.Timer(self.batch_delay, self._process_batch_subscriptions)
+        self.batch_timer.daemon = True
+        self.batch_timer.start()
+
+    def _cancel_batch_timer(self) -> None:
+        """Cancel the batch timer if one is pending."""
+        with self.lock:
+            if self.batch_timer:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+
+    @staticmethod
+    def _segment_of(instrument_token: str) -> str:
+        """Segment prefix of a SEGMENT:TOKEN instrument (e.g. 'NFO')."""
+        return str(instrument_token).split(":", 1)[0]
+
+    def _process_batch_subscriptions(self) -> None:
+        """Flush queued subscriptions to the client, grouped by mode AND segment,
+        so a burst of per-symbol subscribe() calls becomes a few frames instead
+        of one per symbol.
+
+        Segment is part of the grouping key deliberately: a single frame mixing
+        NSE/BSE/NFO/BFO instruments has been observed to deliver ticks only for
+        the first segment in the list. One frame per (mode, segment) costs a
+        handful of extra small messages and removes the ordering dependency.
+        """
+        with self.lock:
+            if not self.subscription_queue:
+                self.batch_timer = None
+                return
+            # Group queued instruments by (mode, segment), dedup within the batch
+            groups: dict[tuple[str, str], list[str]] = {}
+            for sub in self.subscription_queue:
+                token = sub["instrument_token"]
+                key = (sub["mode"], self._segment_of(token))
+                bucket = groups.setdefault(key, [])
+                if token not in bucket:
+                    bucket.append(token)
+            self.subscription_queue.clear()
+            self.batch_timer = None
+
+        if not (self.connected and self.ws_client):
+            # Not connected: items remain in self.subscriptions and are
+            # resubscribed by _on_open when the socket opens.
+            self.logger.info("Batch flush skipped (not connected); will resubscribe on open")
+            return
+
+        for (mode, segment), instruments in groups.items():
+            try:
+                self.logger.info(
+                    f"Batch subscribing {len(instruments)} {segment} instruments in {mode} mode"
+                )
+                self.ws_client.subscribe(instruments=instruments, mode=mode)
+            except Exception as e:
+                self.logger.error(
+                    f"Batch subscription failed for {segment} in {mode} mode: {e}"
+                )
 
     def subscribe(
         self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 1
@@ -173,8 +324,22 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         token = token_info["token"]
         brexchange = token_info["brexchange"]
 
-        # Create INDmoney instrument token (SEGMENT:TOKEN format)
-        instrument_token = IndmoneyExchangeMapper.create_instrument_token(brexchange, token)
+        # Create INDmoney instrument token (SEGMENT:TOKEN format).
+        #
+        # Build this from the OpenAlgo `exchange`, NOT `brexchange`. brexchange
+        # is the PARENT venue - the master contract stores NFO under brexchange
+        # "NSE" and BFO under "BSE" - so using it subscribes every F&O token as
+        # "NSE:<token>"/"BSE:<token>". The server has no such instrument in the
+        # cash segment and simply never sends a tick, which looks like a silent
+        # feed rather than an error. NSE equity was the only case that worked,
+        # because there alone exchange == brexchange.
+        instrument_token = IndmoneyExchangeMapper.create_instrument_token(exchange, token)
+        if not instrument_token:
+            return self._create_error_response(
+                "UNSUPPORTED_EXCHANGE",
+                f"INDmoney does not provide a market data feed for {exchange}. "
+                f"Supported: {', '.join(IndmoneyExchangeMapper.EXCHANGE_SEGMENTS)}",
+            )
 
         # Convert mode to INDmoney format
         indmoney_mode = IndmoneyModeMapper.get_indmoney_mode(mode)
@@ -195,20 +360,18 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "depth_level": depth_level,
             }
 
-        # Subscribe if connected
-        self.logger.info(
-            f"Checking connection status: connected={self.connected}, ws_client={self.ws_client is not None}"
-        )
+        # Queue for batch processing. If connected, the batch timer flushes the
+        # queue (grouped by mode) shortly; if not, _on_open resubscribes from
+        # self.subscriptions when the connection opens.
         if self.connected and self.ws_client:
-            try:
-                self.logger.info(
-                    f"ATTEMPTING SUBSCRIPTION: {symbol}.{exchange}, instrument_token={instrument_token}, mode={indmoney_mode}"
+            with self.lock:
+                self.subscription_queue.append(
+                    {"instrument_token": instrument_token, "mode": indmoney_mode}
                 )
-                self.ws_client.subscribe(instruments=[instrument_token], mode=indmoney_mode)
-                self.logger.info(f"SUBSCRIPTION SENT: {symbol}.{exchange} in {indmoney_mode} mode")
-            except Exception as e:
-                self.logger.error(f"SUBSCRIPTION ERROR for {symbol}.{exchange}: {e}", exc_info=True)
-                return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+                # First item in an empty queue starts the collection window.
+                if len(self.subscription_queue) == 1:
+                    self._start_batch_timer()
+            self.logger.info(f"QUEUED SUBSCRIPTION: {symbol}.{exchange} in {indmoney_mode} mode")
         else:
             self.logger.warning(
                 "NOT CONNECTED YET - subscription will be sent when connection opens"
@@ -243,10 +406,15 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             )
 
         token = token_info["token"]
-        brexchange = token_info["brexchange"]
 
-        # Create INDmoney instrument token
-        instrument_token = IndmoneyExchangeMapper.create_instrument_token(brexchange, token)
+        # Create INDmoney instrument token. Must match what subscribe() sent -
+        # built from the OpenAlgo `exchange`, not the parent `brexchange`.
+        instrument_token = IndmoneyExchangeMapper.create_instrument_token(exchange, token)
+        if not instrument_token:
+            return self._create_error_response(
+                "UNSUPPORTED_EXCHANGE",
+                f"INDmoney does not provide a market data feed for {exchange}",
+            )
 
         # Convert mode to INDmoney format
         indmoney_mode = IndmoneyModeMapper.get_indmoney_mode(mode)
@@ -259,6 +427,16 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         with self.lock:
             if correlation_id in self.subscriptions:
                 del self.subscriptions[correlation_id]
+            # Drop any still-queued (not-yet-flushed) subscription for this
+            # instrument+mode so a subscribe→unsubscribe within the 500ms batch
+            # window doesn't end up subscribing after the unsubscribe.
+            self.subscription_queue = [
+                s
+                for s in self.subscription_queue
+                if not (
+                    s["instrument_token"] == instrument_token and s["mode"] == indmoney_mode
+                )
+            ]
             # Check if all subscriptions are removed
             if len(self.subscriptions) == 0:
                 should_disconnect = True
@@ -290,14 +468,17 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.info("==================== WEBSOCKET OPENED ====================")
         self.logger.info("Connection established to INDmoney WebSocket")
         self.connected = True
+        # A healthy open resets the retry budget so a long-lived connection that
+        # drops occasionally doesn't eventually exhaust max_reconnect_attempts.
+        self.reconnect_attempts = 0
 
         # Resubscribe to existing subscriptions if reconnecting
         with self.lock:
             self.logger.info(f"Number of stored subscriptions: {len(self.subscriptions)}")
 
-            # Group subscriptions by mode for efficient resubscription
-            ltp_instruments = []
-            quote_instruments = []
+            # Group by (mode, segment) - see _process_batch_subscriptions for why
+            # segment is part of the key.
+            groups: dict[tuple[str, str], list[str]] = {}
 
             for correlation_id, sub in self.subscriptions.items():
                 instrument_token = sub["instrument_token"]
@@ -306,32 +487,24 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     f"  - {correlation_id}: instrument={instrument_token}, mode={mode}"
                 )
 
-                if mode == "ltp":
-                    ltp_instruments.append(instrument_token)
-                elif mode == "quote":
-                    quote_instruments.append(instrument_token)
+                if mode in ("ltp", "quote"):
+                    groups.setdefault((mode, self._segment_of(instrument_token)), []).append(
+                        instrument_token
+                    )
 
             # Resubscribe in batches
             try:
-                if ltp_instruments:
+                for (mode, segment), instruments in groups.items():
                     self.logger.info(
-                        f"RESUBSCRIBING to {len(ltp_instruments)} LTP instruments: {ltp_instruments}"
+                        f"RESUBSCRIBING to {len(instruments)} {segment} instruments "
+                        f"in {mode} mode: {instruments}"
                     )
-                    self.ws_client.subscribe(instruments=ltp_instruments, mode="ltp")
+                    self.ws_client.subscribe(instruments=instruments, mode=mode)
                     self.logger.info(
-                        f"Resubscribed to {len(ltp_instruments)} instruments in LTP mode"
-                    )
-
-                if quote_instruments:
-                    self.logger.info(
-                        f"RESUBSCRIBING to {len(quote_instruments)} QUOTE instruments: {quote_instruments}"
-                    )
-                    self.ws_client.subscribe(instruments=quote_instruments, mode="quote")
-                    self.logger.info(
-                        f"Resubscribed to {len(quote_instruments)} instruments in QUOTE mode"
+                        f"Resubscribed to {len(instruments)} {segment} instruments in {mode} mode"
                     )
 
-                if not ltp_instruments and not quote_instruments:
+                if not groups:
                     self.logger.warning(
                         "No subscriptions to resubscribe (subscriptions list is empty)"
                     )
@@ -346,13 +519,19 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.error(f"INDmoney WebSocket error: {error}")
 
     def _on_close(self, wsapp) -> None:
-        """Callback when connection is closed"""
+        """Callback when connection is closed.
+
+        Do NOT spawn a reconnect thread here — that produced a second socket
+        while the connect loop was still active. The single _connect_with_retry
+        loop reconnects on its own when ws_client.connect() returns. If for any
+        reason no loop is running (e.g. connect() raised before blocking), the
+        guarded starter is a safe no-op when one is already active.
+        """
         self.logger.info("INDmoney WebSocket connection closed")
         self.connected = False
 
-        # Attempt to reconnect if we're still running
         if self.running:
-            threading.Thread(target=self._connect_with_retry, daemon=True).start()
+            self._start_reconnect_thread()
 
     def _on_message(self, wsapp, message) -> None:
         """Callback for text messages from the WebSocket"""
@@ -395,14 +574,36 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.warning(f"[WARN] Message missing instrument or mode: {message}")
                 return
 
-            # Find the subscription that matches this instrument
+            # Find the subscription that matches this instrument.
+            #
+            # Ticks may carry either the full "SEGMENT:TOKEN" or just the bare
+            # token. A bare token is ambiguous - the docs define separate NSE:/
+            # BSE:/NFO:/BFO:/NIDX:/BIDX: prefixes precisely because token
+            # numbers are only unique *within* a segment - so match the full
+            # instrument token first and only fall back to the bare token, and
+            # then only when exactly one subscription claims it.
             subscription = None
             with self.lock:
-                for sub in self.subscriptions.values():
-                    # INDmoney returns only the token part, not the full SEGMENT:TOKEN
-                    if sub["token"] == instrument:
-                        subscription = sub
-                        break
+                subs = list(self.subscriptions.values())
+
+            for sub in subs:
+                if sub["instrument_token"] == instrument:
+                    subscription = sub
+                    break
+
+            if subscription is None:
+                token_matches = [s for s in subs if s["token"] == instrument]
+                if len(token_matches) == 1:
+                    subscription = token_matches[0]
+                elif len(token_matches) > 1:
+                    # Same token number subscribed on more than one segment;
+                    # guessing would attribute the tick to the wrong symbol.
+                    self.logger.warning(
+                        f"Ambiguous tick for token {instrument}: subscribed on "
+                        f"{[s['exchange'] for s in token_matches]}. Dropping - the feed "
+                        "did not qualify it with a segment prefix."
+                    )
+                    return
 
             if not subscription:
                 self.logger.debug(f"Received data for unsubscribed instrument: {instrument}")

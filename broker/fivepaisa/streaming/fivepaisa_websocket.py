@@ -10,6 +10,46 @@ import logzero
 import websocket
 from logzero import logger
 
+# WebSocket hosts, keyed by the RedirectServer claim in the access-token JWT.
+# 5Paisa shards the feed: order updates are only pushed on the host matching
+# the token's RedirectServer (docs 08-order-tracking.md, "Web Socket Trade
+# Confirmation"). Module-level so the order-update adapter can resolve the same
+# URL without constructing a market-data client.
+WEBSOCKET_URLS = {
+    "A": "wss://aopenfeed.5paisa.com/feeds/api/chat",
+    "B": "wss://bopenfeed.5paisa.com/feeds/api/chat",
+    "C": "wss://openfeed.5paisa.com/feeds/api/chat",
+    "default": "wss://openfeed.5paisa.com/Feeds/api/chat",
+}
+
+
+def decode_redirect_server(token: str) -> str:
+    """Read the RedirectServer claim (A/B/C) out of a 5Paisa access-token JWT.
+
+    Returns "default" when the token is not a decodable JWT or carries no
+    RedirectServer claim.
+    """
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return "default"
+
+        # Base64url payload, re-padded to a multiple of 4.
+        payload = parts[1]
+        padding = len(payload) % 4
+        if padding:
+            payload += "=" * (4 - padding)
+
+        payload_data = json.loads(base64.urlsafe_b64decode(payload))
+        return payload_data.get("RedirectServer", "default")
+    except Exception:
+        return "default"
+
+
+def get_feed_url(redirect_server: str) -> str:
+    """Map a RedirectServer value to its feed WebSocket URL."""
+    return WEBSOCKET_URLS.get(redirect_server, WEBSOCKET_URLS["default"])
+
 
 class FivePaisaWebSocket:
     """
@@ -17,15 +57,11 @@ class FivePaisaWebSocket:
     Based on 5Paisa API documentation
     """
 
-    # WebSocket URLs based on redirect server
-    WEBSOCKET_URLS = {
-        "A": "wss://aopenfeed.5paisa.com/feeds/api/chat",
-        "B": "wss://bopenfeed.5paisa.com/feeds/api/chat",
-        "C": "wss://openfeed.5paisa.com/feeds/api/chat",
-        "default": "wss://openfeed.5paisa.com/Feeds/api/chat",
-    }
-
-    HEART_BEAT_INTERVAL = 10  # seconds
+    HEART_BEAT_INTERVAL = 10  # seconds (websocket ping interval)
+    # Pong deadline; must be < HEART_BEAT_INTERVAL. Without it, a half-open
+    # (dead-but-not-closed) TCP connection is never detected: run_forever blocks
+    # forever, on_close never fires, the socket FD leaks and no reconnect occurs.
+    PING_TIMEOUT = 5  # seconds
 
     # Subscription Methods
     MARKET_FEED = "MarketFeedV3"
@@ -95,31 +131,12 @@ class FivePaisaWebSocket:
         --------
         str: RedirectServer value (A, B, C, or default)
         """
-        try:
-            # JWT tokens have 3 parts separated by dots
-            parts = token.split(".")
-            if len(parts) != 3:
-                self.logger.warning("Invalid JWT token format, using default server")
-                return "default"
-
-            # Decode the payload (second part)
-            # Add padding if needed
-            payload = parts[1]
-            padding = len(payload) % 4
-            if padding:
-                payload += "=" * (4 - padding)
-
-            decoded = base64.urlsafe_b64decode(payload)
-            payload_data = json.loads(decoded)
-
-            # Extract RedirectServer
-            redirect_server = payload_data.get("RedirectServer", "default")
+        redirect_server = decode_redirect_server(token)
+        if redirect_server == "default":
+            self.logger.warning("Could not read RedirectServer from token, using default server")
+        else:
             self.logger.debug(f"Decoded RedirectServer: {redirect_server}")
-            return redirect_server
-
-        except Exception as e:
-            self.logger.error(f"Error decoding token: {e}")
-            return "default"
+        return redirect_server
 
     def _get_feed_url(self, redirect_server: str) -> str:
         """
@@ -134,7 +151,7 @@ class FivePaisaWebSocket:
         --------
         str: WebSocket URL
         """
-        url = self.WEBSOCKET_URLS.get(redirect_server, self.WEBSOCKET_URLS["default"])
+        url = get_feed_url(redirect_server)
         self.logger.debug(f"Using WebSocket URL: {url}")
         return url
 
@@ -158,9 +175,13 @@ class FivePaisaWebSocket:
                 on_close=self._on_close,
             )
 
-            # Run the WebSocket connection
+            # Run the WebSocket connection. ping_timeout enforces a pong deadline
+            # so a half-open connection is detected and closed (freeing the FD and
+            # triggering reconnect) instead of blocking run_forever indefinitely.
             self.wsapp.run_forever(
-                sslopt={"cert_reqs": ssl.CERT_NONE}, ping_interval=self.HEART_BEAT_INTERVAL
+                sslopt={"cert_reqs": ssl.CERT_NONE},
+                ping_interval=self.HEART_BEAT_INTERVAL,
+                ping_timeout=self.PING_TIMEOUT,
             )
 
         except Exception as e:
@@ -168,10 +189,23 @@ class FivePaisaWebSocket:
             raise e
 
     def close_connection(self):
-        """Close the WebSocket connection"""
-        if self.wsapp:
-            self.connected = False
-            self.wsapp.close()
+        """Close the WebSocket connection.
+
+        Idempotent and exception-safe: callers (reconnect, token rebuild,
+        adapter disconnect) may invoke this on an already-closed or partially
+        initialized client. We always clear state and never propagate, so a
+        failed close can't leak the handle or break the caller.
+        """
+        self.connected = False
+        wsapp = self.wsapp
+        if wsapp is None:
+            return
+        # Drop our reference first so a second call is a no-op even if close() blocks.
+        self.wsapp = None
+        try:
+            wsapp.close()
+        except Exception as e:
+            self.logger.debug(f"Error closing 5Paisa WebSocket: {e}")
 
     def subscribe(self, method: str, scrip_data: list[dict]) -> None:
         """

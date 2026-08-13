@@ -8,11 +8,12 @@ import shutil
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import Column, Float, Index, Integer, Sequence, String, create_engine
+from sqlalchemy import Column, Float, Index, Integer, Sequence, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
 from database.auth_db import get_auth_token
+from database.engine_factory import create_db_engine
 from extensions import socketio  # Import SocketIO
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -72,7 +73,7 @@ data_types = {
 
 DATABASE_URL = os.getenv("DATABASE_URL")  # Replace with your database path
 
-engine = create_engine(DATABASE_URL)
+engine = create_db_engine(DATABASE_URL)
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
@@ -177,6 +178,28 @@ def download_csv_aliceblue_data(output_path):
             logger.error(f"Failed to download {key} from {url}. Error: {e}")
 
 
+def _clean_tokens(series):
+    """Coerce a Token column to plain integer strings.
+
+    pd.read_csv infers Token as float64 whenever the column carries a NaN, so
+    the values arrive as 2885.0 and land in the VARCHAR token column as the
+    string "2885.0". That affected 165,576 of 165,690 rows - every tradable
+    exchange; only the index feeds, which load through a different path, were
+    clean.
+
+    Nothing crashed because three call sites defend with
+    str(int(float(token))) - transform_data for order placement, the streaming
+    adapter, and _normalize_token in api/data.py. Those stay as belt and braces,
+    but they are now redundant, and any new code path that used the token
+    without that dance would have sent AliceBlue "2885.0".
+
+    Rows whose token will not parse become an empty string rather than -1: a
+    sentinel integer would look like a real instrument to downstream lookups.
+    """
+    numeric = pd.to_numeric(series, errors="coerce")
+    return numeric.map(lambda v: "" if pd.isna(v) else str(int(v)))
+
+
 def reformat_symbol_detail(s):
     parts = s.split()  # Split the string into parts
     # Reorder and format the parts to match the desired output
@@ -202,7 +225,7 @@ def process_aliceblue_nse_csv(path):
     token_df["name"] = filter_df["Instrument Name"]
     token_df["exchange"] = filter_df["Exch"]
     token_df["brexchange"] = filter_df["Exch"]
-    token_df["token"] = filter_df["Token"]
+    token_df["token"] = _clean_tokens(filter_df["Token"])
     token_df["expiry"] = ""
     token_df["strike"] = 1.0
     token_df["lotsize"] = filter_df["Lot Size"]
@@ -233,7 +256,7 @@ def process_aliceblue_bse_csv(path):
     token_df["name"] = filtered_df["Instrument Name"]
     token_df["exchange"] = filtered_df["Exch"]
     token_df["brexchange"] = filtered_df["Exch"]
-    token_df["token"] = filtered_df["Token"]
+    token_df["token"] = _clean_tokens(filtered_df["Token"])
     token_df["expiry"] = ""
     token_df["strike"] = 1.0
     token_df["lotsize"] = filtered_df["Lot Size"]
@@ -275,6 +298,12 @@ def process_aliceblue_nfo_csv(path):
 
         return f"{row['Symbol']}{date_str}{Strike_price}"
 
+    # Futures rows in the NFO master carry Instrument Type 'FUTSTK'/'FUTIDX'
+    # with a NaN Option Type. Map them to 'XX' so the futures symbol logic
+    # below picks them up (mirrors the BFO/MCX processors).
+    df.loc[df["Instrument Type"] == "FUTSTK", "Option Type"] = "XX"
+    df.loc[df["Instrument Type"] == "FUTIDX", "Option Type"] = "XX"
+
     # Apply the function to rows where 'Option Type' is 'XX'
     df.loc[df["Option Type"] == "XX", "symbol"] = df["Trading Symbol"] + "UT"
 
@@ -295,7 +324,7 @@ def process_aliceblue_nfo_csv(path):
     token_df["name"] = df["Instrument Name"].values
     token_df["exchange"] = df["Exch"].values
     token_df["brexchange"] = df["Exch"].values
-    token_df["token"] = df["Token"].values
+    token_df["token"] = _clean_tokens(df["Token"])
 
     # Convert 'Expiry Date' to desired format with NaT handling
     token_df["expiry"] = df["Expiry Date"].apply(
@@ -339,6 +368,10 @@ def process_aliceblue_cds_csv(path):
 
         return f"{row['Symbol']}{date_str}{Strike_price}"
 
+    # Currency futures carry Instrument Type 'FUTCUR' with a NaN Option Type.
+    # Map them to 'XX' so the futures symbol logic below picks them up.
+    df.loc[df["Instrument Type"] == "FUTCUR", "Option Type"] = "XX"
+
     # Apply the function to rows where 'Option Type' is 'XX'
     df.loc[df["Option Type"] == "XX", "symbol"] = df["Trading Symbol"] + "UT"
 
@@ -359,7 +392,7 @@ def process_aliceblue_cds_csv(path):
     token_df["name"] = df["Instrument Name"].values
     token_df["exchange"] = df["Exch"].values
     token_df["brexchange"] = df["Exch"].values
-    token_df["token"] = df["Token"].values
+    token_df["token"] = _clean_tokens(df["Token"])
 
     # Convert 'Expiry Date' to desired format with NaT handling
     token_df["expiry"] = df["Expiry Date"].apply(
@@ -407,7 +440,7 @@ def process_aliceblue_bfo_csv(path):
     token_df["name"] = df["Instrument Name"].values
     token_df["exchange"] = df["Exch"].values
     token_df["brexchange"] = df["Exch"].values
-    token_df["token"] = df["Token"].values
+    token_df["token"] = _clean_tokens(df["Token"])
 
     # Convert 'Expiry Date' to desired format with NaT handling
     token_df["expiry"] = df["Expiry Date"].apply(
@@ -479,7 +512,7 @@ def process_aliceblue_mcx_csv(path):
     token_df["name"] = df["Instrument Name"].values
     token_df["exchange"] = df["Exch"].values
     token_df["brexchange"] = df["Exch"].values
-    token_df["token"] = df["Token"].values
+    token_df["token"] = _clean_tokens(df["Token"])
 
     # Convert 'Expiry Date' to desired format with NaT handling
     token_df["expiry"] = df["Expiry Date"].apply(
@@ -549,7 +582,7 @@ def process_aliceblue_bcd_csv(path):
     token_df["name"] = df["Instrument Name"].values
     token_df["exchange"] = df["Exch"].values
     token_df["brexchange"] = df["Exch"].values
-    token_df["token"] = df["Token"].values
+    token_df["token"] = _clean_tokens(df["Token"])
 
     # Convert 'Expiry Date' to desired format with NaT handling
     token_df["expiry"] = df["Expiry Date"].apply(
@@ -569,41 +602,8 @@ def process_aliceblue_bcd_csv(path):
     return token_df
 
 
-def process_aliceblue_indices_csv(path):
-    """
-    Processes the Aliceblue CSV file to fit the existing database schema and performs exchange name mapping.
-    """
-    logger.info("Processing Aliceblue INDICES CSV Data")
-    file_path = f"{path}/INDICES.csv"
-
-    df = pd.read_csv(file_path)
-
-    # Create token_df with the relevant columns
-    token_df = df[["symbol"]].copy()
-
-    token_df["brsymbol"] = df["symbol"].values
-    token_df["name"] = df["symbol"].values
-    token_df["exchange"] = df["exch"].values
-    token_df["brexchange"] = df["exch"].values
-    token_df["token"] = df["token"].values
-
-    # Convert 'Expiry Date' to desired format
-    token_df["expiry"] = ""
-    token_df["strike"] = 1.0
-    token_df["lotsize"] = 1
-    token_df["instrumenttype"] = df["exch"].map(
-        {"NSE": "NSE_INDEX", "BSE": "BSE_INDEX", "MCX": "MCX_INDEX"}
-    )
-    token_df["exchange"] = df["exch"].map(
-        {"NSE": "NSE_INDEX", "BSE": "BSE_INDEX", "MCX": "MCX_INDEX"}
-    )
-    token_df["tick_size"] = 0.01
-    # Step 1: Remove all spaces from symbol names (handles most NSE index mappings automatically)
-    token_df["symbol"] = token_df["symbol"].str.replace(" ", "", regex=False)
-
-    # Step 2: Apply only the special mappings that involve actual renaming (not just space removal)
-    token_df["symbol"] = token_df["symbol"].replace(
-        {
+#: Broker index code -> OpenAlgo symbol (docs/prompt/symbol-format.md).
+_INDEX_SYMBOL_ALIASES = {
             # NSE Index Symbols requiring renaming (not just space removal)
             "NIFTY50": "NIFTY",
             "NIFTYNEXT50": "NIFTYNXT50",
@@ -642,7 +642,73 @@ def process_aliceblue_indices_csv(path):
             "TECK": "BSETECK",
             "TELCOM": "BSETELECOM",
         }
+
+
+def process_aliceblue_indices_csv(path):
+    """
+    Processes the Aliceblue CSV file to fit the existing database schema and performs exchange name mapping.
+    """
+    logger.info("Processing Aliceblue INDICES CSV Data")
+    file_path = f"{path}/INDICES.csv"
+
+    df = pd.read_csv(file_path)
+
+    # Create token_df with the relevant columns
+    token_df = df[["symbol"]].copy()
+
+    token_df["brsymbol"] = df["symbol"].values
+    token_df["name"] = df["symbol"].values
+    token_df["exchange"] = df["exch"].values
+    token_df["brexchange"] = df["exch"].values
+    token_df["token"] = _clean_tokens(df["token"])
+
+    # Convert 'Expiry Date' to desired format
+    token_df["expiry"] = ""
+    token_df["strike"] = 1.0
+    token_df["lotsize"] = 1
+    token_df["instrumenttype"] = df["exch"].map(
+        {"NSE": "NSE_INDEX", "BSE": "BSE_INDEX", "MCX": "MCX_INDEX"}
     )
+    token_df["exchange"] = df["exch"].map(
+        {"NSE": "NSE_INDEX", "BSE": "BSE_INDEX", "MCX": "MCX_INDEX"}
+    )
+    token_df["tick_size"] = 0.01
+    # Step 1: Apply the explicit broker -> OpenAlgo renames FIRST.
+    #
+    # This used to run AFTER a blanket space-strip, which silently killed every
+    # alias whose key contains a space: "BSE CD" had already become "BSECD" by
+    # the time the map was consulted, so it never matched and the raw broker
+    # code was stored. That is why BSECD, BSEHC, BSEIT and BSECG appeared in
+    # place of BSECONSUMERDURABLES, BSEHEALTHCARE, BSEINFORMATIONTECHNOLOGY and
+    # BSECAPITALGOODS - the mappings were right, they just ran too late.
+    token_df["symbol"] = token_df["symbol"].replace(_INDEX_SYMBOL_ALIASES)
+
+    # Step 2: Strip spaces from whatever the renames did not cover. This is what
+    # turns "NIFTY IT" into NIFTYIT and handles most NSE indices automatically.
+    token_df["symbol"] = token_df["symbol"].str.replace(" ", "", regex=False)
+
+    # Step 2b: Apply the renames again on the space-stripped form. The two alias
+    # families disagree about spacing - BSE keys carry them ("BSE CD"), NSE keys
+    # assume they are already gone ("NIFTY50" for the broker's "NIFTY 50") - so
+    # neither ordering alone satisfies both. Running the map on each side is
+    # idempotent: a value rewritten in step 1 is no longer a key here.
+    token_df["symbol"] = token_df["symbol"].replace(_INDEX_SYMBOL_ALIASES)
+
+    # Step 3: Bring through the indices AliceBlue ships that the documented list
+    # does not name - ALLCAP, BSEDSI, MFG, UTILS and friends. Dropping them
+    # would make those feeds unreachable; leaving them bare would put unprefixed
+    # codes in the BSE_INDEX namespace. Prefix with BSE to match the convention
+    # every documented BSE index follows (docs/prompt/symbol-format.md), unless
+    # they already carry it or are a well-known standalone name.
+    _KEEP_AS_IS = {"SENSEX", "BANKEX", "SENSEX50"}
+
+    def _namespace_bse(row):
+        sym = row["symbol"]
+        if row["exchange"] != "BSE_INDEX" or sym in _KEEP_AS_IS or sym.startswith("BSE"):
+            return sym
+        return f"BSE{sym}"
+
+    token_df["symbol"] = token_df.apply(_namespace_bse, axis=1)
 
     # Filter out rows with NaN symbol values (which would violate DB NOT NULL constraints)
     token_df = token_df.dropna(subset=["symbol"])

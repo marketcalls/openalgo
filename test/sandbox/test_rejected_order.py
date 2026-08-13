@@ -31,7 +31,7 @@ if not funds:
     db_session.add(funds)
     db_session.commit()
 
-print("🧪 Testing Rejected Order in Orderbook")
+print("Testing Rejected Order in Orderbook")
 print("=" * 60)
 
 # Create order manager
@@ -54,7 +54,7 @@ print(f"Response: {response}")
 print(f"Success: {success}, Code: {code}")
 
 # Check orderbook
-print("\n📋 Checking Orderbook...")
+print("\n Checking Orderbook...")
 orders = SandboxOrders.query.filter_by(user_id=user_id).all()
 
 print(f"Found {len(orders)} order(s):")
@@ -69,8 +69,8 @@ for order in orders:
     print(f"  Margin Blocked: {order.margin_blocked}")
 
 if orders and orders[0].order_status == "rejected":
-    print("\n✅ SUCCESS: Rejected order appears in orderbook!")
+    print("\n SUCCESS: Rejected order appears in orderbook!")
 else:
-    print("\n❌ FAIL: Rejected order not in orderbook")
+    print("\n FAIL: Rejected order not in orderbook")
 
 print("=" * 60)

@@ -17,7 +17,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/syntheticfuture
   "apikey": "<your_app_apikey>",
   "underlying": "NIFTY",
   "exchange": "NSE_INDEX",
-  "expiry_date": "25NOV25"
+  "expiry_date": "25AUG26"
 }
 ```
 
@@ -30,7 +30,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/syntheticfuture \
   "apikey": "<your_app_apikey>",
   "underlying": "NIFTY",
   "exchange": "NSE_INDEX",
-  "expiry_date": "25NOV25"
+  "expiry_date": "25AUG26"
 }'
 ```
 
@@ -41,7 +41,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/syntheticfuture \
   "status": "success",
   "underlying": "NIFTY",
   "underlying_ltp": 25910.05,
-  "expiry": "25NOV25",
+  "expiry": "25AUG26",
   "atm_strike": 25900.0,
   "synthetic_future_price": 25980.05
 }

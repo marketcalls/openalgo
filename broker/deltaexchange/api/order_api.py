@@ -5,6 +5,14 @@ import threading
 import time
 
 from broker.deltaexchange.api.baseurl import get_auth_headers, get_url
+from broker.deltaexchange.api.rate_limiter import (
+    MAX_RETRIES,
+    PRIVATE,
+    DeltaRateLimitError,
+    consume,
+    note_429,
+    retry_delay_from_headers,
+)
 from broker.deltaexchange.mapping.transform_data import (
     map_exchange_type,
     map_product_type,
@@ -45,15 +53,6 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
 
     body = payload if payload else ""
 
-    headers = get_auth_headers(
-        method=method.upper(),
-        path=endpoint,
-        query_string=query_string,
-        payload=body,
-        api_key=auth,
-        api_secret=api_secret,
-    )
-
     # Build full URL (include query string inline so the signed string matches exactly)
     url = get_url(endpoint)
     full_url = url + query_string if query_string else url
@@ -61,14 +60,34 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
     client = get_httpx_client()
     logger.debug(f"[DeltaExchange] {method.upper()} {full_url}")
 
-    # Retry up to 3 times on HTTP 429 (rate limit) with exponential backoff + jitter.
-    # The Retry-After header is honoured when present.  On each retry the HMAC
-    # signature is rebuilt with a fresh timestamp.
-    _MAX_RETRIES = 3
-    _RETRY_BASE  = 1.0  # seconds; doubles each attempt
+    # Retry up to MAX_RETRIES times on HTTP 429.  Delta reports the wait in
+    # X-RATE-LIMIT-RESET (milliseconds until the 5-minute quota window resets),
+    # not Retry-After, so the delay comes from the shared rate limiter.  On each
+    # retry the HMAC signature is rebuilt with a fresh timestamp.
     response = None
 
-    for _attempt in range(_MAX_RETRIES + 1):
+    for _attempt in range(MAX_RETRIES + 1):
+        # Weighted quota accounting; authenticated calls draw on the per-user
+        # bucket, which public market data cannot exhaust.  This runs BEFORE the
+        # request is signed: consume() can block waiting for the quota window,
+        # and Delta rejects any signature more than 5 seconds old
+        # ("SignatureExpired"), so a signature made first would be dead on
+        # arrival.
+        try:
+            consume(endpoint, method=method, bucket=PRIVATE)
+        except DeltaRateLimitError as exc:
+            logger.error(f"[DeltaExchange] {exc}")
+            return {"success": False, "error": {"code": "rate_limited", "message": str(exc)}}
+
+        headers = get_auth_headers(
+            method=method.upper(),
+            path=endpoint,
+            query_string=query_string,
+            payload=body,
+            api_key=auth,
+            api_secret=api_secret,
+        )
+
         try:
             m = method.upper()
             if m == "GET":
@@ -85,26 +104,17 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
             logger.error(f"[DeltaExchange] Request error: {e}")
             return {"success": False, "error": {"code": "request_error", "message": str(e)}}
 
-        if response.status_code == 429 and _attempt < _MAX_RETRIES:
-            retry_after = response.headers.get("Retry-After")
-            wait = (
-                float(retry_after) if retry_after
-                else (_RETRY_BASE * (2 ** _attempt)) + random.uniform(0.0, 0.5)
-            )
+        if response.status_code == 429:
+            note_429(response.headers, bucket=PRIVATE)
+            if _attempt >= MAX_RETRIES:
+                break
+            wait = retry_delay_from_headers(response.headers, _attempt) + random.uniform(0.0, 0.5)
             logger.warning(
                 f"[DeltaExchange] HTTP 429 rate-limit on {endpoint} "
-                f"(attempt {_attempt + 1}/{_MAX_RETRIES}). Retrying in {wait:.1f}s ..."
+                f"(attempt {_attempt + 1}/{MAX_RETRIES}). Retrying in {wait:.1f}s ..."
             )
             time.sleep(wait)
-            # Re-sign with a fresh timestamp before the next attempt
-            headers = get_auth_headers(
-                method=method.upper(),
-                path=endpoint,
-                query_string=query_string,
-                payload=body,
-                api_key=auth,
-                api_secret=api_secret,
-            )
+            # The next pass re-signs with a fresh timestamp after consume().
             continue
         break  # success, non-429, or retries exhausted
 
@@ -382,7 +392,7 @@ def _set_leverage(product_id: int, leverage: str, auth: str) -> None:
     payload = json.dumps({"leverage": leverage})
     result = get_api_response(endpoint, auth, method="POST", payload=payload)
     if result.get("success"):
-        logger.info(
+        logger.debug(
             f"[DeltaExchange] Leverage set to {leverage}x for product_id={product_id}"
         )
     else:
@@ -408,7 +418,7 @@ def place_order_api(data, auth):
         can recover the product_id without an additional API call.
     """
     token = get_token(data["symbol"], data["exchange"])
-    logger.info(f"[DeltaExchange] place_order: symbol={data['symbol']} token={token}")
+    logger.debug(f"[DeltaExchange] place_order: symbol={data['symbol']} token={token}")
 
     if not token:
         msg = f"[DeltaExchange] Symbol '{data['symbol']}' not found in master contract DB for exchange '{data['exchange']}'. Run master contract sync first."
@@ -436,7 +446,7 @@ def place_order_api(data, auth):
 
     newdata = transform_data(data, token)
     payload = json.dumps(newdata)
-    logger.info(f"[DeltaExchange] POST /v2/orders payload: {payload}")
+    logger.debug(f"[DeltaExchange] POST /v2/orders payload: {payload}")
 
     result = get_api_response("/v2/orders", auth, method="POST", payload=payload)
     logger.debug(f"[DeltaExchange] place_order response: {result}")
@@ -447,7 +457,7 @@ def place_order_api(data, auth):
         raw_id = order.get("id")
         product_id = order.get("product_id", newdata.get("product_id", ""))
         orderid = f"{product_id}:{raw_id}"
-        logger.info(f"[DeltaExchange] Order placed. composite orderid={orderid}")
+        logger.debug(f"[DeltaExchange] Order placed. composite orderid={orderid}")
         response_dict = {"orderid": orderid, "status": "success"}
     else:
         error = result.get("error", {})
@@ -520,7 +530,7 @@ def place_smartorder_api(data, auth):
         current_position = float(
             get_open_position(symbol, exchange, map_product_type(product), auth)
         )
-        logger.info(
+        logger.debug(
             f"[DeltaExchange] SmartOrder: target={position_size} current={current_position}"
         )
 
@@ -588,7 +598,7 @@ def cancel_order(orderid, auth):
     result = get_api_response("/v2/orders", auth, method="DELETE", payload=json.dumps(body))
 
     if result.get("success"):
-        logger.info(f"[DeltaExchange] Order {orderid} cancelled")
+        logger.debug(f"[DeltaExchange] Order {orderid} cancelled")
         return {"status": "success", "orderid": orderid}, 200
     else:
         error = result.get("error", {})
@@ -612,7 +622,7 @@ def cancel_all_orders_api(data, auth):
     }
     result = get_api_response("/v2/orders/all", auth, method="DELETE", payload=json.dumps(body))
     if result.get("success"):
-        logger.info("[DeltaExchange] All open orders cancelled via /v2/orders/all")
+        logger.debug("[DeltaExchange] All open orders cancelled via /v2/orders/all")
         return ["all"], []
 
     # Fallback: cancel individually
@@ -646,7 +656,7 @@ def modify_order(data, auth):
     orderid = data["orderid"]
     transformed = transform_modify_order_data(data)
     payload = json.dumps(transformed)
-    logger.info(f"[DeltaExchange] PUT /v2/orders payload: {payload}")
+    logger.debug(f"[DeltaExchange] PUT /v2/orders payload: {payload}")
 
     result = get_api_response("/v2/orders", auth, method="PUT", payload=payload)
 
@@ -693,7 +703,7 @@ def close_all_positions(current_api_key, auth):
             symbol = get_oa_symbol(product_symbol, "CRYPTO") or product_symbol
         else:
             symbol = get_symbol(str(product_id), "CRYPTO") or product_symbol
-        logger.info(f"[DeltaExchange] Close: {action} {quantity} {symbol}")
+        logger.debug(f"[DeltaExchange] Close: {action} {quantity} {symbol}")
 
         order_payload = {
             "apikey": current_api_key,

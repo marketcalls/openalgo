@@ -1,16 +1,18 @@
 #database/master_contract_db.py
 
 import os
-import pandas as pd
-import requests
 from datetime import datetime
 
-from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, Index
-from sqlalchemy.orm import scoped_session, sessionmaker
+import pandas as pd
+from sqlalchemy import Column, Float, Index, Integer, Sequence, String
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import scoped_session, sessionmaker
 
-from database.auth_db import get_auth_token, Auth
+from broker.nubra.api.baseurl import INDEX_MASTER_PATH, get_nubra_headers, get_url
+from database.auth_db import Auth, get_auth_token
+from database.engine_factory import create_db_engine
 from extensions import socketio
+from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -18,7 +20,7 @@ logger = get_logger(__name__)
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
-engine = create_engine(DATABASE_URL)
+engine = create_db_engine(DATABASE_URL)
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
@@ -75,7 +77,7 @@ def copy_from_dataframe(df):
 
 def download_nubra_instruments(output_path):
     """
-    Downloads instrument data from Nubra API for NSE and BSE exchanges.
+    Downloads instrument data from Nubra API for NSE, BSE and MCX exchanges.
     """
     date = datetime.now().strftime('%Y-%m-%d')
 
@@ -90,18 +92,20 @@ def download_nubra_instruments(output_path):
     if not auth_token:
         raise Exception(f"No valid auth token found for user '{login_username}'. Please login first.")
 
-    headers = {
-        'Authorization': f'Bearer {auth_token}',
-        'x-device-id': 'OPENALGO'
-    }
+    headers = get_nubra_headers(auth_token, with_json=False)
+
+    # Shared pooled HTTP/2 client. The per-exchange refdata payload is large
+    # (NSE alone is ~75k instruments), so give it a longer explicit timeout than
+    # an ordinary API call rather than inheriting the client default.
+    client = get_httpx_client()
 
     all_data = []
 
-    for exchange in ['NSE', 'BSE']:
-        url = f'https://api.nubra.io/refdata/refdata/{date}?exchange={exchange}'
+    for exchange in ['NSE', 'BSE', 'MCX']:
+        url = get_url(f'/refdata/refdata/{date}?exchange={exchange}')
         logger.info(f"Downloading Nubra instruments for {exchange}")
 
-        response = requests.get(url, headers=headers, timeout=15)
+        response = client.get(url, headers=headers, timeout=120)
 
         if response.status_code != 200:
             logger.error(f"{exchange} failed: {response.text}")
@@ -127,11 +131,16 @@ def process_nubra_json(path):
     Rules:
     - NSE + non-STOCK  -> exchange = NFO, brexchange = NSE
     - BSE + non-STOCK  -> exchange = BFO, brexchange = BSE
+    - MCX (commodity FUT/OPT) -> exchange stays MCX, brexchange = MCX
     - STOCK instruments keep their original exchange
     - Expiry column remains in DB as DD-MMM-YY
     - Symbol format follows OpenAlgo F&O spec:
-        FUT : [BASE][DDMMMYY]FUT
-        OPT : [BASE][DDMMMYY][STRIKE][CE/PE]
+        FUT : [BASE][DDMMMYY]FUT       e.g. CRUDEOILM20MAY24FUT (MCX)
+        OPT : [BASE][DDMMMYY][STRIKE][CE/PE]  e.g. CRUDEOIL17APR246750CE (MCX)
+
+    Note: strike_price and tick_size are scaled by /100 (paise) uniformly across
+    NSE/BSE/MCX per Nubra's unified refdata schema. Verify MCX strike/tick
+    scaling against a live MCX master download (commodity scaling can differ).
     """
 
     df = pd.read_json(path)
@@ -230,21 +239,21 @@ def process_nubra_json(path):
 def download_nubra_indexes(output_path):
     """
     Downloads index data from Nubra public API (no authentication required).
-    URL: https://api.nubra.io/public/indexes?format=csv
+    Path: /public/indexes?format=csv
     """
-    url = 'https://api.nubra.io/public/indexes?format=csv'
+    url = get_url(INDEX_MASTER_PATH)
     logger.info("Downloading Nubra index data")
-    
-    response = requests.get(url, timeout=15)
-    
+
+    response = get_httpx_client().get(url, timeout=30)
+
     if response.status_code != 200:
         logger.error(f"Failed to download index data: {response.text}")
         raise Exception(f"Index data download failed with status {response.status_code}")
-    
+
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, 'wb') as f:
         f.write(response.content)
-    
+
     logger.info("Index data download complete")
 
 
@@ -270,7 +279,7 @@ def process_nubra_indexes(path):
     Common BSE Index Symbols: SENSEX, BANKEX, SENSEX50
     """
     df = pd.read_csv(path)
-    
+
     # Map CSV columns to OpenAlgo database schema
     df = df.rename(columns={
         'EXCHANGE': 'brexchange',
@@ -278,10 +287,10 @@ def process_nubra_indexes(path):
         'ZANSKAR_INDEX_SYMBOL': 'brsymbol',
         'INDEX_NAME': 'name'
     })
-    
+
     # Use broker symbol as token
     df['token'] = df['brsymbol'].astype(str)
-    
+
     # Map to OpenAlgo index exchange format
     # NSE indexes → NSE_INDEX, BSE indexes → BSE_INDEX
     df['exchange'] = df['brexchange'].apply(
@@ -291,7 +300,7 @@ def process_nubra_indexes(path):
             else x + '_INDEX'
         )
     )
-    
+
     # Common Index Symbol Formats - map Nubra INDEX_SYMBOL to OpenAlgo standard
     # Reference: OpenAlgo symbols.md
     nubra_to_openalgo_index = {
@@ -363,14 +372,14 @@ def process_nubra_indexes(path):
         'TELCOM': 'BSETELECOM',
     }
     df['symbol'] = df['symbol'].replace(nubra_to_openalgo_index)
-    
+
     # Index-specific fields
     df['instrumenttype'] = 'INDEX'
     df['expiry'] = None
     df['strike'] = 0.0
     df['lotsize'] = 0
     df['tick_size'] = 0.05  # Default tick size for indexes
-    
+
     return df[[
         'symbol',
         'brsymbol',
@@ -401,21 +410,21 @@ def master_contract_download():
     logger.info("Downloading Master Contract")
     instruments_path = 'tmp/nubra_instruments.json'
     indexes_path = 'tmp/nubra_indexes.csv'
-    
+
     try:
         # Download and process instrument data
         download_nubra_instruments(instruments_path)
         instruments_df = process_nubra_json(instruments_path)
         delete_nubra_temp_data(instruments_path)
-        
+
         # Download and process index data
         download_nubra_indexes(indexes_path)
         indexes_df = process_nubra_indexes(indexes_path)
         delete_nubra_temp_data(indexes_path)
-        
+
         # Combine both dataframes
         combined_df = pd.concat([instruments_df, indexes_df], ignore_index=True)
-        
+
         # Clear existing data and insert combined data
         delete_symtoken_table()
         copy_from_dataframe(combined_df)

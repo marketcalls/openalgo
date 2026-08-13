@@ -1,7 +1,14 @@
 import re
+import time
 from types import SimpleNamespace
 from typing import Any
 
+from broker.iiflcapital.api.rate_limiter import (
+    MAX_RETRIES,
+    apply_rate_limit,
+    is_rate_limited,
+    retry_delay_from_headers,
+)
 from broker.iiflcapital.baseurl import BASE_URL
 from broker.iiflcapital.mapping.transform_data import (
     map_exchange,
@@ -65,9 +72,30 @@ def _headers(auth: str) -> dict:
     }
 
 
-def _request(endpoint: str, auth: str, method: str = "GET", payload=None, params=None):
+def _request(
+    endpoint: str,
+    auth: str,
+    method: str = "GET",
+    payload=None,
+    params=None,
+    _retry_count: int = 0,
+):
+    """
+    Issue an HTTP request to an IIFL Capital order/account endpoint through
+    the shared connection pool.
+
+    This is the single choke point every order_api.py HTTP call goes through
+    (place/modify/cancel order, order book, trade book, positions, holdings).
+    It keeps its own request plumbing separate from data.py's _post, but both
+    route through the same process-wide pacer (broker.iiflcapital.api.rate_limiter)
+    so order and data calls share one clock. On a rate-limit rejection (HTTP
+    429, detected primarily; a generic retry-hint message as fallback) this
+    retries with backoff before returning control to the caller.
+    """
     client = get_httpx_client()
     url = f"{BASE_URL}{endpoint}"
+
+    apply_rate_limit()
 
     if method == "GET":
         response = client.get(url, headers=_headers(auth), params=params)
@@ -84,6 +112,16 @@ def _request(endpoint: str, auth: str, method: str = "GET", payload=None, params
         data = response.json()
     except Exception:
         data = {"status": "error", "message": response.text}
+
+    message = data.get("message") if isinstance(data, dict) else None
+    if is_rate_limited(response.status_code, message) and _retry_count < MAX_RETRIES:
+        delay = retry_delay_from_headers(response.headers, _retry_count)
+        logger.warning(
+            f"IIFL Capital order API rate limited on {endpoint}. Retrying in "
+            f"{delay:.2f}s (attempt {_retry_count + 1}/{MAX_RETRIES})"
+        )
+        time.sleep(delay)
+        return _request(endpoint, auth, method, payload, params, _retry_count + 1)
 
     return response, data
 
@@ -264,7 +302,7 @@ def place_order_api(data, auth):
     payload = order_payload if isinstance(order_payload, list) else [order_payload]
     logger.debug(f"IIFL Capital place order payload: {payload}")
     response, response_data = _request("/orders", auth, method="POST", payload=payload)
-    logger.info(f"IIFL Capital place order response status: {response.status_code}")
+    logger.debug(f"IIFL Capital place order response status: {response.status_code}")
     # Raw body may include broker order IDs / account context — debug only.
     logger.debug(f"IIFL Capital place order raw response: {response_data}")
 

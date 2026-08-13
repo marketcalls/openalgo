@@ -316,5 +316,7 @@ HOST_SERVER=http://127.0.0.1:5000  # Base URL for internal API calls
 |------|---------|
 | `blueprints/strategy.py` | Strategy blueprint and webhook handler |
 | `database/strategy_db.py` | Strategy database models |
-| `templates/strategy/` | Strategy UI templates |
-| `frontend/src/pages/Strategy.tsx` | React strategy management |
+| `frontend/src/pages/strategy/StrategyIndex.tsx` | Strategy list |
+| `frontend/src/pages/strategy/NewStrategy.tsx` | Strategy creation |
+| `frontend/src/pages/strategy/ViewStrategy.tsx` | Strategy details |
+| `frontend/src/pages/strategy/ConfigureSymbols.tsx` | Symbol mappings |

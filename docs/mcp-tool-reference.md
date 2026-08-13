@@ -2,7 +2,7 @@
 
 Companion reference to the main MCP setup guide. Once the MCP server is wired into Claude Desktop, Cursor, Windsurf, Antigravity, or any other MCP-capable client, you can ask for these operations in plain English — the client decides which tool to call.
 
-All **40 tools** shipped by the server are listed below with:
+The currently supported tools are listed below. The live MCP `tools/list` schema remains authoritative for the installed revision.
 
 - What the tool does
 - Key parameters (required / optional)
@@ -15,9 +15,18 @@ All **40 tools** shipped by the server are listed below with:
 - **Exchange codes**: `NSE`, `BSE`, `NFO`, `BFO`, `CDS`, `BCD`, `MCX` + `NSE_INDEX` / `BSE_INDEX` for index values.
 - **Lot size**: never hardcoded. The model will call `get_option_symbol` / `get_option_chain` / `get_symbol_info` to read the live `lotsize` from the broker master contract, then compute `quantity = lots × lotsize` for you.
 
+## Response Format and Safety Controls
+
+Applies to every tool below. Full detail in the [MCP Server Setup Guide](../mcp/README.md).
+
+- **Annotations**: each tool declares `readOnlyHint` / `destructiveHint`, so your client can tell `get_quote` apart from `cancel_all_orders` before asking you to approve a call.
+- **Trust envelope**: responses arrive as `{"_openalgo_mcp_security": {...}, "data": {...}}`. The payload you care about is under `data`; the wrapper tells the model not to treat broker-relayed text as instructions.
+- **Structured errors**: failures return `{"error": {"message": ..., "error_type": ...}}`. A timed-out write is reported separately from a rejection, with `retry_safe: false`, because an order that timed out may still have reached the broker.
+- **Narrowing the server**: `OPENALGO_MCP_READ_ONLY=1` exposes only the read-only tools; `OPENALGO_MCP_TOOLSETS=marketdata,research` limits it further. Both are enforced at startup, so unlike analyzer mode the assistant cannot switch them off.
+
 ---
 
-## 📦 Order Management
+## Order Management
 
 ### `place_order`
 
@@ -132,7 +141,7 @@ Change price / quantity / type / trigger on a working order.
 
 ---
 
-## 📊 Positions & Holdings
+## Positions & Holdings
 
 ### `close_all_positions`
 
@@ -178,7 +187,7 @@ Cash, collateral, realized/unrealized M2M, utilized margin.
 
 ---
 
-## 📋 Order Tracking
+## Order Tracking
 
 ### `get_order_status`
 
@@ -204,7 +213,7 @@ Only executed fills.
 
 ---
 
-## 📈 Market Data
+## Market Data
 
 ### `get_quote`
 
@@ -255,7 +264,7 @@ Real-time chain with CE/PE data per strike — LTP, bid/ask, OHLC, volume, OI, `
 
 ---
 
-## 🔍 Instrument Search & Symbols
+## Instrument Search & Symbols
 
 ### `search_instruments`
 
@@ -341,7 +350,7 @@ Returns the full standardized OpenAlgo index symbol list (57 NSE + 40 BSE), roll
 
 ---
 
-## 💰 Margin
+## Margin
 
 ### `calculate_margin`
 
@@ -353,7 +362,7 @@ SPAN + exposure margin for a hypothetical position set. Accepts an array of legs
 
 ---
 
-## 🧪 Analyzer
+## Analyzer
 
 ### `analyzer_status`
 
@@ -373,7 +382,7 @@ Flip between simulated and live trading. Analyzer mode returns `SB-xxx` pseudo-o
 
 ---
 
-## 📅 Market Calendar
+## Market Calendar
 
 ### `get_holidays`
 
@@ -393,17 +402,7 @@ Exchange open/close epoch timestamps for a given date (date optional → default
 
 ---
 
-### `check_holiday`
-
-Quick pre-trade check: is a given date a holiday on a specific exchange?
-
-**Prompts:**
-- *"Is 26 Jan 2026 a holiday on NSE?"*
-- *"Is tomorrow a trading day on MCX?"*
-
----
-
-## 🛠️ Utilities
+## Utilities
 
 ### `get_openalgo_version`
 
@@ -417,8 +416,6 @@ Quick cheat-sheet of valid exchanges, product types, price types, actions, and i
 
 **Prompt:** *"Remind me of the valid product types and price types"*
 
----
-
 ### `send_telegram_alert`
 
 Push a Telegram notification via the OpenAlgo Telegram bot (must be configured in OpenAlgo settings first). Supports `priority` 1–10.
@@ -429,7 +426,67 @@ Push a Telegram notification via the OpenAlgo Telegram bot (must be configured i
 
 ---
 
-## 🧠 Worked Multi-Tool Workflows
+## Technical Research
+
+Research tools fetch broker or Historify history and calculate compact results on the OpenAlgo server. Common optional controls are `interval`, `start_date`, `end_date`, `lookback_bars`, `lookback_days`, and `source` (`api` or `db`).
+
+### `calculate_indicator`
+
+Run an `openalgo.ta` indicator by name. Supply `symbol`, `exchange`, and `indicator`; use `params` for indicator arguments, `inputs` when automatic OHLCV input detection is insufficient, and `bars` to limit returned rows.
+
+**Prompt:** *"Calculate RSI(14) and the latest 20 values for RELIANCE daily candles"*
+
+### `get_trend_snapshot`
+
+Return a one-call trend bundle containing SMA, EMA, Supertrend, ADX/DMI, and Ichimoku values.
+
+**Prompt:** *"Give me a daily trend snapshot for NIFTY"*
+
+### `get_momentum_snapshot`
+
+Return RSI, MACD, Stochastic, CCI, and Williams %R values for one symbol and interval.
+
+**Prompt:** *"Show a 15-minute momentum snapshot for SBIN"*
+
+### `get_volatility_snapshot`
+
+Return ATR, NATR, Bollinger, Keltner, Donchian, and historical-volatility values.
+
+**Prompt:** *"Compare the current volatility measures for INFY on daily candles"*
+
+### `get_support_resistance`
+
+Calculate pivot points, Donchian levels, and rolling highest-high and lowest-low values. `period` defaults to 20.
+
+**Prompt:** *"Find 20-day support and resistance levels for RELIANCE"*
+
+### `detect_signals`
+
+Find recent bullish and bearish events for `ema_cross`, `sma_cross`, `macd_cross`, `supertrend_flip`, or `rsi_threshold`. Use `limit` to bound returned events.
+
+**Prompt:** *"Find the latest EMA 20/50 cross signals for TCS"*
+
+### `screen_instruments`
+
+Evaluate a modest list of `{symbol, exchange}` pairs against RSI, price-versus-SMA, or Supertrend conditions. History is fetched per symbol, so keep broker-backed lists small.
+
+**Prompt:** *"Screen RELIANCE, INFY, TCS, and SBIN for RSI below 35"*
+
+### `multi_timeframe_analysis`
+
+Compute one indicator across several timeframes. The default timeframes are `5m`, `15m`, `1h`, and `D`.
+
+**Prompt:** *"Check RSI confluence for NIFTY across 5m, 15m, 1h, and daily"*
+
+### `correlation_beta`
+
+Align two symbols on common timestamps and return rolling correlation, rolling beta, linear-regression slope, and full-sample Pearson correlation.
+
+**Prompt:** *"Calculate 60-day correlation and beta for RELIANCE versus NIFTY"*
+
+---
+
+## Worked Multi-Tool Workflows
 
 Real strength shows when the assistant chains tools on its own. Example prompts:
 
@@ -443,7 +500,7 @@ The assistant will chain: `get_expiry_dates` → `get_option_chain` → `get_opt
 
 > *"Before I start trading: is the market open today on NSE and MCX, what's my free cash, what's my current position book, and what's NIFTY spot right now?"*
 
-Chains: `check_holiday` → `get_timings` → `get_funds` → `get_position_book` → `get_quote`.
+Chains: `get_timings` → `get_funds` → `get_position_book` → `get_quote`.
 
 **3. Options greeks scan:**
 

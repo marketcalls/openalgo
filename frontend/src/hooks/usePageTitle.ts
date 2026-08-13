@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router'
 
 const PAGE_TITLES: Record<string, string> = {
   '/': 'Home',
@@ -30,6 +30,8 @@ const PAGE_TITLES: Record<string, string> = {
   '/optionchain': 'Option Chain',
   '/ivchart': 'IV Chart',
   '/oitracker': 'OI Tracker',
+  '/oirange': 'OI Range',
+  '/gammadensity': 'Gamma Density',
   '/maxpain': 'Max Pain',
   '/straddle': 'Straddle Chart',
   '/straddlepnl': 'Straddle P&L',
@@ -38,6 +40,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/ivsmile': 'IV Smile',
   '/oiprofile': 'OI Profile',
   '/websocket/test': 'WebSocket Test',
+  '/websocket/order': 'Order Stream',
   '/strategy': 'Strategies',
   '/strategy/new': 'New Strategy',
   '/python': 'Python Strategies',

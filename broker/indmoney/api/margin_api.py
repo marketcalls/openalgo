@@ -1,12 +1,14 @@
 import json
-import os
 
 from broker.indmoney.api.baseurl import get_url
+from broker.indmoney.api.rate_limiter import rate_limited_request
 from broker.indmoney.mapping.margin_data import parse_margin_response, transform_margin_positions
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
 
 
 def calculate_margin_api(positions, auth):
@@ -66,13 +68,10 @@ def calculate_margin_api(positions, auth):
 
             logger.info(f"Margin calculation payload for {position.get('securityID')}: {payload}")
 
-            # Make the GET request with JSON body (as per IndMoney API spec)
-            response = client.request(
-                method="GET", url=get_url("/margin"), headers=headers, content=payload
+            # Make the GET request with JSON body (as per IndMoney API spec), 429-aware
+            response = rate_limited_request(
+                client, "GET", get_url("/margin"), headers=headers, content=payload
             )
-
-            # Add status attribute for compatibility
-            response.status = response.status_code
 
             # Parse the JSON response
             try:

@@ -1,6 +1,5 @@
 import asyncio
-import http.client
-import json
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
@@ -8,8 +7,11 @@ from datetime import datetime, timedelta
 import httpx
 import pandas as pd
 
-from database.token_db import get_br_symbol, get_oa_symbol, get_token
+from broker.definedge.api.baseurl import DATA_URL, get_url
+from broker.definedge.api.rate_limiter import MIN_INTERVAL, rate_limited_request
+from database.token_db import get_br_symbol, get_token
 from utils.logging import get_logger
+
 
 # Auto-detect eventlet environment (Docker/standalone uses gunicorn+eventlet)
 # asyncio.run() cannot be called under eventlet's monkey-patched event loop
@@ -67,12 +69,10 @@ def get_quotes(symbol, exchange, auth_token):
 
         headers = {"Authorization": api_session_key}
 
-        # Use the correct Definedge quotes endpoint: /dart/v1/quotes/{exchange}/{token}
-        # According to API docs, the relative URL is /quotes/{exchange}/{token}
-        # But the full path includes /dart/v1
-        url = f"https://integrate.definedgesecurities.com/dart/v1/quotes/{api_exchange}/{token_id}"
+        # Definedge quotes endpoint: /quotes/{exchange}/{token}
+        url = get_url(f"/quotes/{api_exchange}/{token_id}")
 
-        response = client.get(url, headers=headers)
+        response = rate_limited_request(client, "GET", url, headers=headers)
 
         logger.debug(f"Quotes API Response Status: {response.status_code}")
 
@@ -91,42 +91,120 @@ def get_quotes(symbol, exchange, auth_token):
         return {"status": "error", "message": str(e)}
 
 
+# --- Open Interest backfill ---
+# Definedge's REST quotes API returns NO open interest field (confirmed against
+# both the API docs and live derivative responses). OI is only available from
+# the websocket touchline feed and from the historical data API's OI column.
+# For REST consumers (option chain, OI tracker, multiquotes) we backfill OI
+# from the last minute candle of the history API, cached briefly per token.
+_DERIVATIVE_EXCHANGES = {"NFO", "BFO", "MCX", "CDS", "BCD"}
+_oi_cache = {}  # {(segment, token): (oi, monotonic_ts)}
+_oi_cache_lock = threading.Lock()
+_OI_CACHE_TTL = 60.0  # seconds
+
+# History chunks are retried on transient failures - dropping one silently
+# removes up to a full chunk (30 days of 1m candles) from the series.
+CHUNK_FETCH_ATTEMPTS = 3
+CHUNK_RETRY_BACKOFF = 0.5  # seconds; grows 0.5, 1.0 between attempts
+# 4xx is normally terminal (expired session, unknown token), but 408 Request
+# Timeout and 425 Too Early are timing rather than client error, and this loop is
+# their only handler - rate_limited_request passes both straight through.
+# 429 is deliberately absent: rate_limited_request already owns it with four
+# requests and 1/2/4s backoff that honors Retry-After. Retrying it again here
+# would issue twelve requests against an endpoint asking us to slow down, on a
+# weaker 0.5s backoff than the one that just failed.
+_TRANSIENT_4XX = {408, 425}
+
+# Session open per segment, used as the resampling origin. Definedge serves
+# NSE/BSE/NFO/BFO (09:15) plus CDS/MCX (09:00); commodity and currency segments
+# open on the hour, so resampling them from a 09:15 origin buckets the
+# 09:00-09:14 candles into a bar stamped before the market opened.
+_SESSION_OPEN_MINUTE = {"MCX": 0, "MCX_INDEX": 0, "CDS": 0, "BCD": 0, "NCDEX": 0}
+_DEFAULT_SESSION_OPEN_MINUTE = 15  # NSE/BSE/NFO/BFO open at 09:15
+
+
+def fetch_latest_oi(segment, token, api_session_key):
+    """Fetch latest open interest for a derivative from its last minute candle.
+
+    Returns 0 if OI cannot be determined (equity tokens, API errors, no data).
+    """
+    with _oi_cache_lock:
+        cached = _oi_cache.get((segment, token))
+        if cached and time.monotonic() - cached[1] < _OI_CACHE_TTL:
+            return cached[0]
+
+    oi = 0
+    try:
+        from utils.httpx_client import get_httpx_client
+
+        client = get_httpx_client()
+        now = datetime.now()
+        # 4-day window survives weekends/holiday clusters; we only read the last row
+        from_str = (now - timedelta(days=4)).strftime("%d%m%Y") + "0915"
+        to_str = now.strftime("%d%m%Y%H%M")
+        url = f"{DATA_URL}/history/{segment}/{token}/minute/{from_str}/{to_str}"
+
+        response = rate_limited_request(
+            client, "GET", url, headers={"Authorization": api_session_key}
+        )
+        if response.status_code == 200:
+            text = response.text.strip()
+            if text:
+                # CSV row: Dateandtime, Open, High, Low, Close, Volume, OI
+                last_row = text.rsplit("\n", 1)[-1].split(",")
+                if len(last_row) >= 7:
+                    oi = int(float(last_row[6]))
+    except Exception as e:
+        logger.debug(f"OI backfill failed for {segment}/{token}: {e}")
+
+    with _oi_cache_lock:
+        _oi_cache[(segment, token)] = (oi, time.monotonic())
+    return oi
+
+
 def get_security_info(symbol, exchange, auth_token):
-    """Get security information"""
+    """Get security information via GET /securityinfo/{exchange}/{token}"""
     try:
         api_session_key, susertoken, api_token = auth_token.split(":::")
 
-        conn = http.client.HTTPSConnection("integrate.definedgesecurities.com")
+        from utils.httpx_client import get_httpx_client
 
-        headers = {"Authorization": api_session_key, "Content-Type": "application/json"}
+        client = get_httpx_client()
 
-        payload = json.dumps({"exchange": exchange, "tradingsymbol": symbol})
+        token_id = get_token(symbol, exchange)
+        if not token_id:
+            return {"status": "error", "message": f"Could not resolve token for {symbol}"}
 
-        conn.request("POST", "/dart/v1/security_info", payload, headers)
-        res = conn.getresponse()
-        data = res.read().decode("utf-8")
+        headers = {"Authorization": api_session_key}
+        url = get_url(f"/securityinfo/{exchange}/{token_id}")
 
-        return json.loads(data)
+        response = rate_limited_request(client, "GET", url, headers=headers)
+        return response.json()
 
     except Exception as e:
         logger.error(f"Error getting security info: {e}")
         return {"status": "error", "message": str(e)}
 
 
-def get_margin_info(auth_token):
-    """Get margin information"""
+def get_margin_info(auth_token, basket_payload):
+    """Get order margin for a basket of orders via POST /margin.
+
+    basket_payload must follow the API's Basket Margin Request format:
+    {"basketlists": [{exchange, tradingsymbol, quantity, price, product_type, order_type, price_type}, ...]}
+    """
     try:
         api_session_key, susertoken, api_token = auth_token.split(":::")
 
-        conn = http.client.HTTPSConnection("integrate.definedgesecurities.com")
+        from utils.httpx_client import get_httpx_client
+
+        client = get_httpx_client()
 
         headers = {"Authorization": api_session_key, "Content-Type": "application/json"}
 
-        conn.request("GET", "/dart/v1/margin", "", headers)
-        res = conn.getresponse()
-        data = res.read().decode("utf-8")
-
-        return json.loads(data)
+        response = rate_limited_request(
+            client, "POST", get_url("/margin"), json=basket_payload, headers=headers
+        )
+        return response.json()
 
     except Exception as e:
         logger.error(f"Error getting margin info: {e}")
@@ -138,15 +216,14 @@ def get_limits(auth_token):
     try:
         api_session_key, susertoken, api_token = auth_token.split(":::")
 
-        conn = http.client.HTTPSConnection("integrate.definedgesecurities.com")
+        from utils.httpx_client import get_httpx_client
 
-        headers = {"Authorization": api_session_key, "Content-Type": "application/json"}
+        client = get_httpx_client()
 
-        conn.request("GET", "/dart/v1/limits", "", headers)
-        res = conn.getresponse()
-        data = res.read().decode("utf-8")
+        headers = {"Authorization": api_session_key}
 
-        return json.loads(data)
+        response = rate_limited_request(client, "GET", get_url("/limits"), headers=headers)
+        return response.json()
 
     except Exception as e:
         logger.error(f"Error getting limits: {e}")
@@ -205,6 +282,14 @@ class BrokerData:
             # - volume -> volume
             # - OI is not in equity but might be in derivatives
 
+            # Quotes API has no OI field - backfill from history for derivatives
+            oi = 0
+            if exchange in _DERIVATIVE_EXCHANGES:
+                api_session_key = self.auth_token.split(":::")[0]
+                token = get_token(symbol, exchange)
+                if token:
+                    oi = fetch_latest_oi(exchange, token, api_session_key)
+
             return {
                 "bid": float(response.get("best_bid_price1", 0)),
                 "ask": float(response.get("best_ask_price1", 0)),
@@ -215,8 +300,8 @@ class BrokerData:
                 "prev_close": float(
                     response.get("day_open", response.get("ltp", 0))
                 ),  # Use day_open as prev_close
-                "volume": int(response.get("volume", 0)),
-                "oi": 0,  # OI might not be available for equity, set to 0
+                "volume": int(response.get("volume") or 0),
+                "oi": oi,
             }
 
         except Exception as e:
@@ -236,9 +321,9 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            # Definedge rate limit: 20 concurrent requests per batch
+            # Bound concurrency per batch; request pacing itself is handled by
+            # the shared per-host rate limiter, so no extra inter-batch sleep
             BATCH_SIZE = 20  # Process 20 symbols per batch
-            RATE_LIMIT_DELAY = 1.0  # 1 second delay between batches
 
             if len(symbols) > BATCH_SIZE:
                 logger.debug(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
@@ -252,10 +337,6 @@ class BrokerData:
 
                     batch_results = self._process_quotes_batch(batch)
                     all_results.extend(batch_results)
-
-                    # Rate limit delay between batches
-                    if i + BATCH_SIZE < len(symbols):
-                        time.sleep(RATE_LIMIT_DELAY)
 
                 logger.debug(
                     f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches"
@@ -275,14 +356,14 @@ class BrokerData:
         Fetch quote for a single symbol synchronously (for ThreadPoolExecutor)
         """
         try:
-            url = f"https://integrate.definedgesecurities.com/dart/v1/quotes/{api_exchange}/{token}"
+            url = get_url(f"/quotes/{api_exchange}/{token}")
             headers = {"Authorization": api_session_key}
 
             # Use shared httpx client for connection pooling
             from utils.httpx_client import get_httpx_client
 
             client = get_httpx_client()
-            http_response = client.get(url, headers=headers, timeout=10.0)
+            http_response = rate_limited_request(client, "GET", url, headers=headers, timeout=10.0)
 
             if http_response.status_code != 200:
                 return {
@@ -327,12 +408,18 @@ class BrokerData:
         api_exchange: str,
         token: str,
         api_session_key: str,
+        stagger: float = 0.0,
     ) -> dict:
         """
-        Fetch quote for a single symbol asynchronously
+        Fetch quote for a single symbol asynchronously.
+        stagger delays this request so concurrent batch requests stay paced
+        without blocking the event loop.
         """
         try:
-            url = f"https://integrate.definedgesecurities.com/dart/v1/quotes/{api_exchange}/{token}"
+            if stagger > 0:
+                await asyncio.sleep(stagger)
+
+            url = get_url(f"/quotes/{api_exchange}/{token}")
             headers = {"Authorization": api_session_key}
 
             http_response = await client.get(url, headers=headers)
@@ -390,8 +477,9 @@ class BrokerData:
                     item["api_exchange"],
                     item["token"],
                     api_session_key,
+                    stagger=i * MIN_INTERVAL,
                 )
-                for item in symbols
+                for i, item in enumerate(symbols)
             ]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -493,6 +581,32 @@ class BrokerData:
                 ]
                 results = [f.result() for f in futures]
 
+        # Step 3: Backfill OI for derivative symbols (quotes API carries no OI).
+        # fetch_latest_oi caches per token, so repeated chain refreshes are cheap.
+        token_map = {item["symbol"]: item for item in prepared_symbols}
+        oi_targets = [
+            r
+            for r in results
+            if r.get("data") is not None and r.get("exchange") in _DERIVATIVE_EXCHANGES
+        ]
+        if oi_targets:
+            with ThreadPoolExecutor(max_workers=min(len(oi_targets), 10)) as executor:
+                oi_futures = {
+                    executor.submit(
+                        fetch_latest_oi,
+                        token_map[r["symbol"]]["api_exchange"],
+                        token_map[r["symbol"]]["token"],
+                        api_session_key,
+                    ): r
+                    for r in oi_targets
+                    if r["symbol"] in token_map
+                }
+                for future, result in oi_futures.items():
+                    try:
+                        result["data"]["oi"] = future.result()
+                    except Exception as e:
+                        logger.debug(f"OI backfill failed for {result['symbol']}: {e}")
+
         return skipped_symbols + results
 
     def get_history(
@@ -514,7 +628,13 @@ class BrokerData:
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
 
-            logger.debug(f"Debug - Broker Symbol: {br_symbol}, Token: {token}")
+            # Field is named `instrument` rather than `token` on purpose: the log
+            # sanitizer redacts any `*token=` value as a credential, which would
+            # hide the very identifier needed to replay a request upstream.
+            logger.debug(
+                f"Definedge history request: {symbol}@{exchange} -> brsymbol={br_symbol} "
+                f"instrument={token} interval={interval} range={start_date}..{end_date}"
+            )
 
             # Check for unsupported timeframes
             if interval not in self.timeframe_map:
@@ -531,18 +651,26 @@ class BrokerData:
             from_date = pd.to_datetime(start_date)
             to_date = pd.to_datetime(end_date)
 
-            # For intraday data, set specific times
+            # For intraday data, span the whole calendar day of each boundary.
+            # Anchoring to NSE session hours (09:15-15:30) silently drops candles:
+            # MCX runs 09:00-23:30 and CDS/BCD 09:00-17:00, so a 15:30 end cut off
+            # the entire evening session on the last requested day, and a 09:15
+            # start cut off the 09:00-09:14 candles on the first one.
             if interval != "D":
-                # Set start time to 09:15 (market open) for the start date
-                from_date = from_date.replace(hour=9, minute=15)
+                from_date = from_date.replace(hour=0, minute=0)
 
-                # If end_date is today, set the end time to current time
-                current_time = pd.Timestamp.now()
+                # If end_date is today, stop at the current time.
+                # Anchor "now" to IST wall-clock (not the server's local time) so
+                # the client-side clip below stays correct on UTC/non-IST hosts.
+                # Definedge candle timestamps are naive IST; comparing them against
+                # a server-local now() would truncate the most recent candles by the
+                # host's UTC offset (~5.5h of missing data on a UTC deployment).
+                current_time = pd.Timestamp.now(tz="Asia/Kolkata").tz_localize(None)
                 if to_date.date() == current_time.date():
                     to_date = current_time.replace(second=0, microsecond=0)
                 else:
-                    # For past dates, set end time to 15:30 (market close)
-                    to_date = to_date.replace(hour=15, minute=30)
+                    # For any other date, run to the end of that day
+                    to_date = to_date.replace(hour=23, minute=59)
             else:
                 # For daily data, use 00:00
                 from_date = from_date.replace(hour=0, minute=0)
@@ -579,6 +707,19 @@ class BrokerData:
                 # Calculate chunk end date
                 current_end = min(current_start + timedelta(days=chunk_days - 1), to_date)
 
+                if interval == "D":
+                    next_start = current_end + timedelta(days=1)
+                else:
+                    # A chunk end must sit at the END of its calendar day.
+                    # timedelta arithmetic carries the start time-of-day forward, so
+                    # the boundary landed mid-session and every candle after it on the
+                    # chunk's last day was never requested - one whole trading day lost
+                    # per chunk (30 days for 1m). That hole only became visible once
+                    # Definedge started honoring the `to` boundary, which it previously
+                    # ignored (see the clip below and issue #1753).
+                    current_end = min(current_end.replace(hour=23, minute=59), to_date)
+                    next_start = current_end.normalize() + timedelta(days=1)
+
                 # Format dates for Definedge API (ddMMyyyyHHmm)
                 from_date_str = current_start.strftime("%d%m%Y%H%M")
                 to_date_str = current_end.strftime("%d%m%Y%H%M")
@@ -595,32 +736,55 @@ class BrokerData:
                 elif segment == "MCX_INDEX":
                     segment = "MCX"
 
-                url = f"https://data.definedgesecurities.com/sds/history/{segment}/{token}/{timeframe}/{from_date_str}/{to_date_str}"
+                url = f"{DATA_URL}/history/{segment}/{token}/{timeframe}/{from_date_str}/{to_date_str}"
 
-                logger.debug(f"Debug - Fetching chunk from {current_start} to {current_end}")
-                logger.debug(f"Debug - API URL: {url}")
-                logger.debug(f"Debug - Headers: Authorization key present: {bool(api_session_key)}")
+                # Log the exact upstream call so a gap can be replayed verbatim in
+                # curl/Bruno. The api_session_key is deliberately never logged -
+                # only whether one is present.
+                logger.debug(
+                    f"Definedge history chunk {current_start} -> {current_end} | "
+                    f"segment={segment} instrument={token} timeframe={timeframe} "
+                    f"from={from_date_str} to={to_date_str} | "
+                    f"GET {url} | auth_key_present={bool(api_session_key)}"
+                )
 
                 try:
                     # Use httpx client for consistency
                     from utils.httpx_client import get_httpx_client
 
-                    client = get_httpx_client()
-
                     headers = {"Authorization": api_session_key}
 
-                    response = client.get(url, headers=headers)
+                    # Retry transient failures. A dropped chunk is a silent hole of
+                    # up to `chunk_days` in the returned series, so a timeout or a
+                    # 5xx must not be accepted on the first try. 4xx is terminal
+                    # (expired session, unknown token) and is not retried.
+                    response = None
+                    fetch_error = None
+                    for attempt in range(CHUNK_FETCH_ATTEMPTS):
+                        try:
+                            client = get_httpx_client()
+                            response = rate_limited_request(client, "GET", url, headers=headers)
+                            if response.status_code == 200:
+                                break
+                            fetch_error = f"HTTP {response.status_code}: {response.text[:200]}"
+                            if (
+                                400 <= response.status_code < 500
+                                and response.status_code not in _TRANSIENT_4XX
+                            ):
+                                break
+                        except Exception as request_error:
+                            response = None
+                            fetch_error = str(request_error)
+                        if attempt < CHUNK_FETCH_ATTEMPTS - 1:
+                            time.sleep(CHUNK_RETRY_BACKOFF * (attempt + 1))
 
-                    logger.debug(f"Debug - Response status: {response.status_code}")
-                    logger.debug(f"Debug - Response headers: {dict(response.headers)}")
-                    logger.debug(f"Debug - Response text length: {len(response.text)}")
-
-                    if response.status_code != 200:
+                    if response is None or response.status_code != 200:
                         logger.warning(
-                            f"Debug - Definedge API returned status {response.status_code}"
+                            f"Definedge history chunk {current_start} to {current_end} for "
+                            f"{symbol}@{exchange} failed ({fetch_error}); "
+                            "these candles will be missing from the result"
                         )
-                        logger.warning(f"Debug - Response body: {response.text}")
-                        current_start = current_end + timedelta(days=1)
+                        current_start = next_start
                         continue
 
                     # Parse CSV response
@@ -628,11 +792,19 @@ class BrokerData:
                     # Format for tick: UTC(seconds), LTP, LTQ, OI
                     csv_data = response.text.strip()
 
+                    # Row count straight off the wire, before any parsing - this is
+                    # what distinguishes an upstream gap from one we introduce.
+                    raw_rows = csv_data.count("\n") + 1 if csv_data else 0
+                    logger.debug(
+                        f"Definedge history response: instrument={token} status={response.status_code} "
+                        f"bytes={len(response.text)} raw_rows={raw_rows}"
+                    )
+
                     if not csv_data:
                         logger.debug(
                             f"Debug - Empty response for chunk {current_start} to {current_end}"
                         )
-                        current_start = current_end + timedelta(days=1)
+                        current_start = next_start
                         continue
 
                     # Log first few lines of CSV for debugging
@@ -722,7 +894,15 @@ class BrokerData:
                         # Drop the datetime column
                         chunk_df = chunk_df.drop("datetime", axis=1)
 
-                        # Remove rows with invalid timestamps
+                        # Remove rows with invalid timestamps. Surface the count -
+                        # an unparseable date format is otherwise a silent data loss
+                        # (this is how the int64 leading-zero bug hid for months).
+                        unparsed = int(chunk_df["timestamp"].isna().sum())
+                        if unparsed:
+                            logger.warning(
+                                f"Definedge history: dropped {unparsed} of {len(chunk_df)} rows "
+                                f"for {symbol}@{exchange} with unparseable timestamps"
+                            )
                         chunk_df = chunk_df.dropna(subset=["timestamp"])
 
                     # Log DataFrame info after parsing
@@ -739,7 +919,7 @@ class BrokerData:
                             f"No valid data after parsing CSV for {timeframe} timeframe"
                         )
                         logger.debug("This might be due to incorrect date parsing")
-                        current_start = current_end + timedelta(days=1)
+                        current_start = next_start
                         continue
 
                     # For minute intervals other than 1m, we need to resample
@@ -759,16 +939,18 @@ class BrokerData:
                                 if not chunk_df.empty:
                                     chunk_df = chunk_df.set_index("timestamp")
 
-                                    # Create a custom offset to align with market open at 09:15
-                                    # This ensures 30m candles start at 09:15, not 09:00
-                                    offset_minutes = (
-                                        15  # Market opens at 09:15, so offset by 15 minutes
+                                    # Align bins to the segment's own session open, not
+                                    # a hardcoded 09:15. MCX/CDS/BCD open at 09:00, so a
+                                    # 15-minute origin buckets their 09:00-09:14 candles
+                                    # into bars stamped 08:45 (30m) and 08:15 (1h) -
+                                    # before the market opened. 5m and 15m are unaffected
+                                    # either way since 15 divides evenly into both.
+                                    offset_minutes = _SESSION_OPEN_MINUTE.get(
+                                        exchange.upper(), _DEFAULT_SESSION_OPEN_MINUTE
                                     )
 
                                     # Resample with the offset to align with market hours
                                     resample_rule = f"{interval_minutes[interval]}min"
-                                    # Use offset parameter to shift the bins to start at :15 and :45 for 30m
-                                    # For other intervals, the offset ensures proper market alignment
                                     resampled = chunk_df.resample(
                                         resample_rule, offset=f"{offset_minutes}min"
                                     )
@@ -818,11 +1000,11 @@ class BrokerData:
                     logger.error(
                         f"Debug - Error fetching chunk {current_start} to {current_end}: {str(chunk_error)}"
                     )
-                    current_start = current_end + timedelta(days=1)
+                    current_start = next_start
                     continue
 
                 # Move to next chunk
-                current_start = current_end + timedelta(days=1)
+                current_start = next_start
 
             # If no data was found, return empty DataFrame
             if not dfs:
@@ -969,6 +1151,14 @@ class BrokerData:
             totalbuyqty = sum(bid["quantity"] for bid in bids)
             totalsellqty = sum(ask["quantity"] for ask in asks)
 
+            # Quotes API has no OI field - backfill from history for derivatives
+            oi = 0
+            if exchange in _DERIVATIVE_EXCHANGES:
+                api_session_key = self.auth_token.split(":::")[0]
+                token = get_token(symbol, exchange)
+                if token:
+                    oi = fetch_latest_oi(exchange, token, api_session_key)
+
             # Return depth data in common format
             return {
                 "bids": bids,
@@ -976,11 +1166,11 @@ class BrokerData:
                 "high": float(response.get("day_high", 0)),
                 "low": float(response.get("day_low", 0)),
                 "ltp": float(response.get("ltp", 0)),
-                "ltq": int(response.get("last_traded_qty", 0)),
+                "ltq": int(response.get("last_traded_qty") or 0),
                 "open": float(response.get("day_open", 0)),
                 "prev_close": float(response.get("day_open", 0)),  # Use day_open as prev_close
-                "volume": int(response.get("volume", 0)),
-                "oi": 0,  # OI might not be available for equity
+                "volume": int(response.get("volume") or 0),
+                "oi": oi,
                 "totalbuyqty": totalbuyqty,
                 "totalsellqty": totalsellqty,
             }

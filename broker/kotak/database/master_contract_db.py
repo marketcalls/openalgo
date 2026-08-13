@@ -9,11 +9,12 @@ import shutil
 import httpx
 import numpy as np
 import pandas as pd
-from sqlalchemy import Column, Float, Index, Integer, Sequence, String, create_engine
+from sqlalchemy import Column, Float, Index, Integer, Sequence, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
 from database.auth_db import get_auth_token
+from database.engine_factory import create_db_engine
 from database.user_db import find_user_by_username
 from extensions import socketio  # Import SocketIO
 from utils.httpx_client import get_httpx_client
@@ -24,7 +25,7 @@ logger = get_logger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL")  # Replace with your database path
 
-engine = create_engine(DATABASE_URL)
+engine = create_db_engine(DATABASE_URL)
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
@@ -357,7 +358,7 @@ def get_kotak_master_filepaths():
                                 file_dict["NSE_COM"] = url
 
                         logger.info(
-                            f"✅ Successfully retrieved {len(file_dict)} master contract files from {base_url_attempt}"
+                            f"Successfully retrieved {len(file_dict)} master contract files from {base_url_attempt}"
                         )
                         logger.info(f"Available files: {list(file_dict.keys())}")
                         return file_dict
@@ -403,13 +404,13 @@ def get_kotak_master_filepaths():
             response = client.head(url, timeout=10, follow_redirects=True)
             if response.status_code == 200:
                 accessible_urls[key] = url
-                logger.info(f"✅ Direct URL accessible: {key}")
+                logger.info(f"Direct URL accessible: {key}")
             else:
-                logger.warning(f"❌ Direct URL returned {response.status_code}: {key}")
+                logger.warning(f"Direct URL returned {response.status_code}: {key}")
         except httpx.HTTPError as e:
-            logger.warning(f"❌ Direct URL HTTP error: {key} - {e}")
+            logger.warning(f"Direct URL HTTP error: {key} - {e}")
         except Exception as e:
-            logger.warning(f"❌ Direct URL failed: {key} - {e}")
+            logger.warning(f"Direct URL failed: {key} - {e}")
 
     if accessible_urls:
         logger.info(f"Using {len(accessible_urls)} direct URLs")

@@ -18,7 +18,7 @@ OpenAlgo provides comprehensive log viewing and management through the web inter
 │  │   API Logs      │  │  Analyzer Logs  │  │  Application    │             │
 │  │   /logs         │  │                 │  │  Logs           │             │
 │  │                 │  │                 │  │                 │             │
-│  │  - placeorder   │  │  - Virtual      │  │  - log/*.log    │             │
+│  │  - placeorder   │  │  - Analyzer     │  │  - log/*.log    │             │
 │  │  - cancelorder  │  │    orders       │  │  - Console      │             │
 │  │  - modifyorder  │  │  - Sandbox      │  │  - Rotating     │             │
 │  │  - Response     │  │    trades       │  │                 │             │
@@ -28,7 +28,7 @@ OpenAlgo provides comprehensive log viewing and management through the web inter
 │                                │                                             │
 │                                ▼                                             │
 │           ┌─────────────────────────────────────────────────────────┐       │
-│           │               Logs Database (logs.db)                    │       │
+│           │               Main Database (openalgo.db)                │       │
 │           │               order_logs / analyzer_logs                 │       │
 │           └─────────────────────────────────────────────────────────┘       │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -51,10 +51,10 @@ Displays all API request/response pairs for order operations.
 │ ┌─────────────────────────────────────────────────────────────────────────┐│
 │ │ Time          │ API Type    │ Request          │ Response      │ Status ││
 │ ├───────────────┼─────────────┼──────────────────┼───────────────┼────────┤│
-│ │ 09:30:15 IST  │ placeorder  │ SBIN BUY 100 MIS │ orderid: 123  │ ✓      ││
-│ │ 09:31:20 IST  │ placeorder  │ INFY SELL 50 CNC │ orderid: 124  │ ✓      ││
-│ │ 09:35:45 IST  │ cancelorder │ orderid: 124     │ Cancelled     │ ✓      ││
-│ │ 10:15:00 IST  │ placeorder  │ RELIANCE BUY 25  │ Margin error  │ ✗      ││
+│ │ 09:30:15 IST  │ placeorder  │ SBIN BUY 100 MIS │ orderid: 123  │ ││
+│ │ 09:31:20 IST  │ placeorder  │ INFY SELL 50 CNC │ orderid: 124  │ ││
+│ │ 09:35:45 IST  │ cancelorder │ orderid: 124     │ Cancelled     │ ││
+│ │ 10:15:00 IST  │ placeorder  │ RELIANCE BUY 25  │ Margin error  │ ││
 │ └─────────────────────────────────────────────────────────────────────────┘│
 │                                                                             │
 │ Pagination: [< Prev] Page 1 of 25 [Next >]                                 │
@@ -302,7 +302,7 @@ def sanitize_log_data(request_data):
 
 | File | Purpose |
 |------|---------|
-| `blueprints/logs.py` | Log viewer routes |
+| `blueprints/log.py` | Log viewer routes |
 | `database/apilog_db.py` | Order logs model |
 | `database/analyzer_db.py` | Analyzer logs model |
 | `utils/logging.py` | Logging configuration |

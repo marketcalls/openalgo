@@ -97,14 +97,14 @@ curl -X POST http://127.0.0.1:5000/api/v1/splitorder \
 | Parameter | Description | Mandatory/Optional | Default Value |
 |-----------|-------------|-------------------|---------------|
 | apikey | Your OpenAlgo API key | Mandatory | - |
-| strategy | Strategy identifier | Optional | - |
+| strategy | Strategy identifier | Mandatory | - |
 | symbol | Trading symbol | Mandatory | - |
-| exchange | Exchange code: NSE, BSE, NFO, BFO, CDS, BCD, MCX | Mandatory | - |
+| exchange | Exchange code accepted by the shared validation constants | Mandatory | - |
 | action | Order action: BUY or SELL | Mandatory | - |
-| quantity | Total quantity to split | Mandatory | - |
+| quantity | Positive numeric quantity to split | Mandatory | - |
 | splitsize | Size of each split order | Mandatory | - |
-| pricetype | Price type: MARKET, LIMIT, SL, SL-M | Mandatory | - |
-| product | Product type: MIS, CNC, NRML | Mandatory | - |
+| pricetype | Price type: MARKET, LIMIT, SL, SL-M | Optional | MARKET |
+| product | Product type: MIS, CNC, NRML | Optional | MIS |
 | price | Order price (for LIMIT orders) | Optional | 0 |
 | trigger_price | Trigger price (for SL orders) | Optional | 0 |
 
@@ -146,7 +146,8 @@ Total: 105 units
 
 - **Maximum 100 orders** per split request
 - The last order contains the **remainder** (quantity % splitsize)
-- Orders are placed **sequentially** with a small delay between them
+- Live child orders are placed sequentially using a delay derived from `ORDER_RATE_LIMIT`; analyzer mode prefetches one quote and uses the sandbox path.
+- Fractional total quantities are accepted only for `CRYPTO`; non-crypto total quantities must be whole numbers. `splitsize` is always a positive integer.
 - Use for:
   - **Large F&O orders**: Splitting to stay within freeze quantity limits
   - **Reducing market impact**: Spreading execution over multiple orders
@@ -154,16 +155,7 @@ Total: 105 units
 - If splitsize is larger than quantity, a single order is placed
 - All split orders share the same price type and price
 
-## Freeze Quantity Reference
-
-Common freeze quantities for popular F&O contracts:
-
-| Contract | Freeze Quantity |
-|----------|-----------------|
-| NIFTY | 1800 lots |
-| BANKNIFTY | 900 lots |
-| FINNIFTY | 1200 lots |
-| Stock Options | Varies by stock |
+Freeze quantities change and are loaded from `data/qtyfreeze.csv`; do not hard-code the example values from older releases.
 
 ---
 

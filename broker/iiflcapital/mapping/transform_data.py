@@ -1,4 +1,89 @@
+import math
+from decimal import Decimal
 from typing import Any
+
+from database.token_db import get_symbol_info
+from utils.logging import get_logger
+from utils.mpp_slab import get_instrument_type_from_symbol, get_mpp_percentage
+
+logger = get_logger(__name__)
+
+
+def _tick_decimals(tick: float) -> int:
+    """Number of decimal places implied by a tick size (0.05 -> 2, 0.0025 -> 4)."""
+    return max(0, -Decimal(str(tick)).as_tuple().exponent)
+
+
+def _snap_to_tick(value: float, tick: float, direction: str) -> float:
+    """Snap ``value`` to a multiple of ``tick``.
+
+    direction ``"floor"`` rounds down, ``"ceil"`` rounds up — used to keep the
+    protective limit strictly on the required side of the trigger after
+    snapping (nearest-tick rounding could otherwise land it back on the
+    trigger).
+    """
+    ratio = round(value / tick, 6)  # tame float noise before the floor/ceil
+    k = math.floor(ratio) if direction == "floor" else math.ceil(ratio)
+    return round(k * tick, _tick_decimals(tick))
+
+
+def _slm_protected_price(symbol: str, exchange: str, action: str, trigger_price: float) -> float:
+    """
+    Derive a protective stop-limit price for an SL-M order from its trigger price.
+
+    IIFL Capital's live API does not honor a bare SLM (stop-loss market) order
+    -- placed directly, it is blocked under the same SEBI market-protection
+    regime that also blocks a bare stop-market order on Dhan (see
+    broker/dhan/mapping/transform_data.py::_slm_protected_price, GitHub issue
+    #1647, for the reference case this mirrors).
+
+    To place a stop that actually rests, SL-M is mapped to IIFL's SL
+    (stop-limit) orderType with a limit price offset by the standard SEBI MPP
+    percentage beyond the trigger, in the fill direction (SELL below the
+    trigger, BUY above it), so it stays marketable once triggered. Uses the
+    same shared utils/mpp_slab.py percentage table as Dhan (and samco) --
+    these are exchange-mandated slabs, not broker-specific, so the percentage
+    calculation itself is not IIFL-specific even though the order-field
+    plumbing is.
+
+    The limit is snapped to the instrument's exchange tick in the
+    beyond-trigger direction (SELL floors, BUY ceils) and forced at least one
+    tick past the trigger, so it can never round back onto/through the
+    trigger or collapse to zero on low-priced options. Fails closed if the
+    tick size can't be resolved -- a 2-decimal guess risks a tick-size
+    rejection.
+    """
+    instrument_type = get_instrument_type_from_symbol(symbol)
+
+    symbol_info = get_symbol_info(symbol, exchange)
+    try:
+        tick_size = float(getattr(symbol_info, "tick_size", None)) if symbol_info else 0.0
+    except (TypeError, ValueError):
+        tick_size = 0.0
+    if not math.isfinite(tick_size) or tick_size <= 0:
+        raise ValueError(
+            f"Cannot resolve tick size from DB for {symbol}/{exchange}; required to "
+            f"build a valid SL-M protective limit price"
+        )
+
+    pct = (get_mpp_percentage(trigger_price, instrument_type) or 0) / 100.0
+
+    if action.upper() == "SELL":
+        # Strictly BELOW trigger, >= one tick away, tick-aligned (floor), and
+        # strictly positive.
+        raw = min(trigger_price * (1 - pct), trigger_price - tick_size)
+        limit = _snap_to_tick(raw, tick_size, "floor")
+        if limit <= 0:
+            raise ValueError(
+                f"SL-M SELL trigger {trigger_price} for {symbol}/{exchange} is too low "
+                f"to derive a positive protective limit at tick {tick_size}"
+            )
+    else:
+        # Strictly ABOVE trigger, >= one tick away, tick-aligned (ceil).
+        raw = max(trigger_price * (1 + pct), trigger_price + tick_size)
+        limit = _snap_to_tick(raw, tick_size, "ceil")
+
+    return limit
 
 
 def map_exchange(exchange: str) -> str:
@@ -100,6 +185,25 @@ def transform_data(data: dict, token: str) -> dict:
     if transformed["orderType"] in ("SL", "SLM"):
         transformed["slTriggerPrice"] = _to_float(data.get("trigger_price", 0.0))
 
+        # IIFL blocks a bare SLM (stop-loss market) order placed directly --
+        # same SEBI market-protection wall Dhan hit (see _slm_protected_price
+        # above). Convert to SL (stop-limit) with a protective limit price so
+        # the stop actually rests and fills instead of being rejected.
+        if transformed["orderType"] == "SLM":
+            trigger_price = transformed["slTriggerPrice"]
+            protected_price = _slm_protected_price(
+                data.get("symbol", ""),
+                data.get("exchange", ""),
+                data.get("action", ""),
+                trigger_price,
+            )
+            transformed["orderType"] = "SL"
+            transformed["price"] = protected_price
+            logger.info(
+                f"IIFL SL-M -> SL: Symbol={data.get('symbol')}, Action={data.get('action')}, "
+                f"Trigger={trigger_price}, ProtectedLimit={protected_price}"
+            )
+
     # Coerce to int via float so zero-equivalent strings ("0", "0.0", " ")
     # don't slip through and surface as a meaningless `disclosedQuantity: 0`
     # field to the broker. NaN / inf / bad input fall back to 0 cleanly
@@ -131,6 +235,25 @@ def transform_modify_order_data(data: dict) -> dict:
 
         if order_type in ("SL", "SLM"):
             transformed["slTriggerPrice"] = _to_float(data.get("trigger_price", 0.0))
+
+            # Same SL-M -> protective SL conversion as placement (see
+            # _slm_protected_price), so a modified SL-M also rests instead of
+            # being blocked.
+            if order_type == "SLM":
+                trigger_price = transformed["slTriggerPrice"]
+                protected_price = _slm_protected_price(
+                    data.get("symbol", ""),
+                    data.get("exchange", ""),
+                    data.get("action", ""),
+                    trigger_price,
+                )
+                transformed["orderType"] = "SL"
+                transformed["price"] = protected_price
+                logger.info(
+                    f"IIFL SL-M modify -> SL: Symbol={data.get('symbol')}, "
+                    f"Action={data.get('action')}, Trigger={trigger_price}, "
+                    f"ProtectedLimit={protected_price}"
+                )
 
     if "validity" in data:
         transformed["validity"] = map_validity(data.get("validity", "DAY"))

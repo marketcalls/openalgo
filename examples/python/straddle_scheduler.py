@@ -1,16 +1,17 @@
+import os
 import time
 
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from openalgo import api
 
-print("🔁 OpenAlgo Python Bot is running.")
+print("OpenAlgo Python Bot is running.")
 
 # ===============================
 # OpenAlgo Client
 # ===============================
 client = api(
-    api_key="83ad96143dd5081d033abcfd20e9108daee5708fbea404121a762bed1e498dd0",
+    api_key=os.getenv("OPENALGO_API_KEY"),
     host="http://127.0.0.1:5000",
 )
 
@@ -34,7 +35,7 @@ def place_nifty_straddle_0920():
             strategy="NIFTY_09DEC25_STRADDLE_0920",
             underlying="NIFTY",
             exchange="NSE_INDEX",
-            expiry_date="09DEC25",  # FIXED EXPIRY
+            expiry_date="30JUN26",  # FIXED EXPIRY
             legs=[
                 {
                     "offset": "ATM",
@@ -77,7 +78,7 @@ def schedule_straddle():
     )
 
     scheduler.start()
-    print("✅ Scheduled NIFTY 09DEC25 ATM Straddle for 09:20 IST (Mon–Sun).")
+    print("Scheduled NIFTY 09DEC25 ATM Straddle for 09:20 IST (Mon–Sun).")
 
     return scheduler
 

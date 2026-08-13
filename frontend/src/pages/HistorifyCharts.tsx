@@ -25,7 +25,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { authApi } from '@/api/auth'
 import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
 import { Badge } from '@/components/ui/badge'
@@ -55,7 +55,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { profileMenuItems } from '@/config/navigation'
+import { useProfileMenuItems } from '@/hooks/useProfileMenuItems'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
@@ -85,6 +85,8 @@ export default function HistorifyCharts() {
   const navigate = useNavigate()
   const { mode, toggleMode, appMode, toggleAppMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
+  // Filtered by broker capabilities (hides crypto-only Leverage on Indian brokers, issue #1480)
+  const profileMenuItems = useProfileMenuItems()
   const isDarkMode = mode === 'dark' || appMode === 'analyzer'
   const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const { symbol: urlSymbol } = useParams()
@@ -345,7 +347,7 @@ export default function HistorifyCharts() {
               const minutes = istDate.getUTCMinutes().toString().padStart(2, '0')
               return `${hours}:${minutes}`
             } else {
-              // For daily and above: TradingView-style tick marks
+              // For daily and above: calendar-aligned tick marks
               // tickMarkType: 0=Year, 1=Month, 2=DayOfMonth, 3=Time, 4=TimeWithSeconds
               const day = istDate.getUTCDate()
               const monthNames = [
@@ -473,13 +475,7 @@ export default function HistorifyCharts() {
         chartRef.current = null
       }
     }
-  }, [
-    isDarkMode,
-    chartData,
-    isIntradayInterval,
-    isCustomInterval,
-    customIntervalUnit,
-  ])
+  }, [isDarkMode, chartData, isIntradayInterval, isCustomInterval, customIntervalUnit])
 
   const loadCatalog = async () => {
     try {

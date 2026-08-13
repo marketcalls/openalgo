@@ -8,16 +8,48 @@ This migration adds the tables required for Flow workflow automation:
 - flow_apscheduler_jobs: APScheduler job store for scheduled workflows
 
 This migration is idempotent - safe to run multiple times.
+
+Usage:
+    cd upgrade
+    uv run migrate_flow.py           # Apply migration
+    uv run migrate_flow.py --status  # Check status without changing anything
 """
 
+import argparse
 import os
 import sys
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, PROJECT_ROOT)
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.pool import NullPool
+
+#: Job store tables are named per scheduler so Flow and Historify do not share
+#: a queue. Both live in DATABASE_URL, which is where the schedulers point.
+FLOW_JOBSTORE_TABLE = "flow_apscheduler_jobs"
+
+
+def resolve_sqlite_path(db_url):
+    """Make a relative sqlite:/// path absolute against the project root.
+
+    The documented invocation is `cd upgrade && uv run migrate_flow.py`, and
+    DATABASE_URL is relative by default ("sqlite:///db/openalgo.db"). Left
+    relative it resolves against the current directory, so running from
+    upgrade/ would point at upgrade/db/openalgo.db - which SQLAlchemy creates
+    empty on connect. The migration would then report success having created
+    its tables in a database the app never opens. migrate_all.py happens to
+    avoid this by running each script with cwd set to the project root.
+    """
+    prefix = "sqlite:///"
+    if not db_url.startswith(prefix):
+        return db_url
+    path = db_url[len(prefix) :]
+    if not path or path == ":memory:" or os.path.isabs(path):
+        return db_url
+    return prefix + os.path.join(PROJECT_ROOT, path)
 
 
 def get_database_url():
@@ -25,7 +57,7 @@ def get_database_url():
     from dotenv import load_dotenv
 
     load_dotenv()
-    return os.getenv("DATABASE_URL", "sqlite:///db/openalgo.db")
+    return resolve_sqlite_path(os.getenv("DATABASE_URL", "sqlite:///db/openalgo.db"))
 
 
 def table_exists(engine, table_name):
@@ -172,8 +204,86 @@ def create_indexes(engine):
     return True
 
 
+def ensure_jobstore_index(engine, jobs_t, tablename):
+    """Create the job store's next_run_time index if the table predates it.
+
+    Table.create(checkfirst=True) tests only for the table, so a job store
+    table that exists without its index would never acquire one and every
+    due-job poll would scan. Checked separately for that reason.
+    """
+    existing = {idx["name"] for idx in inspect(engine).get_indexes(tablename)}
+    for index in jobs_t.indexes:
+        if index.name in existing:
+            print(f"  [SKIP] Index {index.name} already exists")
+            continue
+        index.create(engine)
+        print(f"  [OK] Created index {index.name}")
+
+
+def create_apscheduler_jobstore_table(engine, tablename):
+    """Create an APScheduler job store table.
+
+    Built from APScheduler's own table metadata rather than hand-written SQL,
+    so the schema cannot drift from whatever APScheduler expects and the
+    ix_<tablename>_next_run_time index is created with it.
+
+    Creating this in the migration rather than leaving it to the runtime is the
+    point of the change. SQLAlchemyJobStore.start() issues this CREATE TABLE
+    itself, and at startup that DDL lands in the middle of the boot write burst
+    needing an exclusive write lock on the database. An install that loses that
+    race logs "database is locked", the scheduler never initializes, and since
+    init runs once at boot with no retry, scheduled workflows silently never
+    run for the life of the process. See issue #1750.
+    """
+    from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+
+    # engine= rather than url= so this reuses the caller's engine instead of
+    # opening a second one that would then have to be disposed.
+    jobs_t = SQLAlchemyJobStore(engine=engine, tablename=tablename).jobs_t
+
+    if table_exists(engine, tablename):
+        print(f"  [SKIP] {tablename} table already exists")
+    else:
+        print(f"  [CREATE] Creating {tablename} table...")
+        jobs_t.create(engine, checkfirst=True)
+        print(f"  [OK] {tablename} table created")
+
+    ensure_jobstore_index(engine, jobs_t, tablename)
+    return True
+
+
+def status(engine):
+    """Report what exists without changing anything."""
+    print()
+    print("Flow migration status")
+    print("-" * 40)
+
+    applied = True
+    for table in ("flow_workflows", "flow_workflow_executions", FLOW_JOBSTORE_TABLE):
+        present = table_exists(engine, table)
+        print(f"  {table:<26} {'present' if present else 'MISSING'}")
+        applied = applied and present
+
+    if table_exists(engine, FLOW_JOBSTORE_TABLE):
+        index_name = f"ix_{FLOW_JOBSTORE_TABLE}_next_run_time"
+        names = {idx["name"] for idx in inspect(engine).get_indexes(FLOW_JOBSTORE_TABLE)}
+        present = index_name in names
+        print(f"  {index_name:<26} {'present' if present else 'MISSING'}")
+        applied = applied and present
+
+    print("-" * 40)
+    print("All changes applied." if applied else "Migration needed.")
+    return applied
+
+
 def main():
     """Run the migration"""
+    parser = argparse.ArgumentParser(description="Flow workflow tables migration")
+    parser.add_argument(
+        "--status", action="store_true", help="Report status without changing anything"
+    )
+    args = parser.parse_args()
+
     print()
     print("Flow Workflow Tables Migration")
     print("-" * 40)
@@ -189,11 +299,15 @@ def main():
         else:
             engine = create_engine(db_url)
 
+        if args.status:
+            return 0 if status(engine) else 1
+
         # Run migrations
         print()
         print("Creating tables...")
         create_flow_workflows_table(engine)
         create_flow_workflow_executions_table(engine)
+        create_apscheduler_jobstore_table(engine, FLOW_JOBSTORE_TABLE)
 
         print()
         print("Creating indexes...")

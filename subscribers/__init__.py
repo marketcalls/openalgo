@@ -9,6 +9,7 @@ from subscribers import (
     socketio_subscriber,
     telegram_subscriber,
     whatsapp_subscriber,
+    wsproxy_subscriber,
 )
 from utils.event_bus import bus
 from utils.logging import get_logger
@@ -67,6 +68,14 @@ def register_all():
     bus.subscribe("orders.all_cancelled", telegram_subscriber.on_all_orders_cancelled, "telegram:all_cancelled")
     bus.subscribe("orders.all_cancelled", whatsapp_subscriber.on_all_orders_cancelled, "whatsapp:all_cancelled")
 
+    # --- order.update (async broker postback/order-WS fills+rejections, and
+    # sandbox engine-internal transitions). Engine/broker-driven, not a user
+    # API call — like sandbox.order_filled below, only socketio + the new
+    # ZMQ relay are wired; there's no request/response pair for order_logs
+    # or analyzer_logs to record, and it would be noise on Telegram.
+    bus.subscribe("order.update", socketio_subscriber.on_order_update, "socketio:order_update")
+    bus.subscribe("order.update", wsproxy_subscriber.on_order_update, "wsproxy:order_update")
+
     # --- position.closed ---
     bus.subscribe("position.closed", log_subscriber.on_position_closed, "log:position_closed")
     bus.subscribe("position.closed", socketio_subscriber.on_position_closed, "socketio:position_closed")
@@ -96,6 +105,27 @@ def register_all():
     bus.subscribe("multiorder.completed", socketio_subscriber.on_multiorder_completed, "socketio:multiorder_completed")
     bus.subscribe("multiorder.completed", telegram_subscriber.on_multiorder_completed, "telegram:multiorder_completed")
     bus.subscribe("multiorder.completed", whatsapp_subscriber.on_multiorder_completed, "whatsapp:multiorder_completed")
+
+    # --- GTT ---
+    # Previously unsubscribed entirely, so the whole GTT surface was invisible:
+    # placements, modifications, cancellations and triggers produced no log row,
+    # no UI refresh and no alert. Only failures were recorded, and only because
+    # they route through analyzer.error. This applies to live and analyze alike -
+    # both publish the same topics.
+    for _topic, _name in (
+        ("gtt.placed", "gtt_placed"),
+        ("gtt.failed", "gtt_failed"),
+        ("gtt.modified", "gtt_modified"),
+        ("gtt.modify_failed", "gtt_modify_failed"),
+        ("gtt.cancelled", "gtt_cancelled"),
+        ("gtt.cancel_failed", "gtt_cancel_failed"),
+        ("gtt.triggered", "gtt_triggered"),
+        ("gtt.expired", "gtt_expired"),
+    ):
+        bus.subscribe(_topic, getattr(log_subscriber, f"on_{_name}"), f"log:{_name}")
+        bus.subscribe(_topic, getattr(socketio_subscriber, f"on_{_name}"), f"socketio:{_name}")
+        bus.subscribe(_topic, getattr(telegram_subscriber, f"on_{_name}"), f"telegram:{_name}")
+        bus.subscribe(_topic, getattr(whatsapp_subscriber, f"on_{_name}"), f"whatsapp:{_name}")
 
     # --- analyzer.error ---
     bus.subscribe("analyzer.error", log_subscriber.on_analyzer_error, "log:analyzer_error")

@@ -48,12 +48,23 @@ def cancel_gtt_order_with_auth(
     api_key = original_data.get("apikey", "")
 
     if get_analyze_mode():
-        error_response = {
-            "mode": "analyze",
-            "status": "error",
-            "message": "Sandbox GTT support not yet implemented",
-        }
-        return False, error_response, 501
+        from services.sandbox_service import sandbox_cancel_gtt_order
+
+        success, response, status_code = sandbox_cancel_gtt_order(trigger_id, api_key)
+        if success:
+            bus.publish(GTTCancelledEvent(
+                mode="analyze", api_type=API_TYPE,
+                trigger_id=trigger_id,
+                request_data=order_request_data, response_data=response, api_key=api_key,
+            ))
+        else:
+            bus.publish(GTTCancelFailedEvent(
+                mode="analyze", api_type=API_TYPE,
+                trigger_id=trigger_id,
+                error_message=response.get("message", "GTT cancel failed"),
+                request_data=order_request_data, response_data=response, api_key=api_key,
+            ))
+        return success, response, status_code
 
     broker_module = import_broker_gtt_module(broker)
     if broker_module is None:

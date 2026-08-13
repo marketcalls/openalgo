@@ -63,7 +63,6 @@ class DefinedGeWebSocket:
         # Connection state
         self.connected = False
         self.authenticated = False
-        self.should_reconnect = True  # Control auto-reconnect
 
         # Callbacks
         self.on_connect = None
@@ -77,15 +76,21 @@ class DefinedGeWebSocket:
         self.subscriptions = {}
         self.subscription_lock = threading.Lock()
 
-        # Connection management
-        self.reconnect_attempts = 0
-        self.max_reconnect_attempts = 5
-        self.reconnect_delay = 5
-
-        # Heartbeat management
+        # Heartbeat management. API docs allow up to 50s between heartbeats;
+        # fleet norm is 30s (see flattrade) for faster silent-stall detection.
         self.heartbeat_thread = None
-        self.heartbeat_interval = 50  # 50 seconds as per API docs
+        self.heartbeat_interval = 30
+        self.heartbeat_timeout = 120  # close socket if no message received for this long
         self.heartbeat_running = False
+        self._last_message_time = None
+        self._last_message_lock = threading.Lock()
+
+        # WS-level ping keeps NAT/proxy paths alive between app heartbeats
+        self.ping_interval = 30
+        self.ping_timeout = 10
+
+        # Reconnection is owned exclusively by the adapter (single owner,
+        # see issue #1359) - this layer only reports close via on_disconnect.
 
     def _refresh_tokens(self):
         """Re-read fresh auth tokens from the DB via token_provider.
@@ -132,10 +137,15 @@ class DefinedGeWebSocket:
                 on_close=self._on_close,
             )
 
-            # Start WebSocket connection in a separate thread
+            # Start WebSocket connection in a separate thread.
+            # WS-level ping/pong detects dead connections between app heartbeats.
             self.ws_thread = threading.Thread(
                 target=self.ws.run_forever,
-                kwargs={"sslopt": {"cert_reqs": ssl.CERT_NONE} if not ssl_verify else {}},
+                kwargs={
+                    "sslopt": {"cert_reqs": ssl.CERT_NONE} if not ssl_verify else {},
+                    "ping_interval": self.ping_interval,
+                    "ping_timeout": self.ping_timeout,
+                },
             )
             self.ws_thread.daemon = True
             self.ws_thread.start()
@@ -160,11 +170,8 @@ class DefinedGeWebSocket:
             return False
 
     def disconnect(self):
-        """Disconnect from WebSocket and prevent reconnection"""
+        """Disconnect from WebSocket"""
         try:
-            # Disable auto-reconnect first
-            self.should_reconnect = False
-
             # Stop heartbeat
             self.heartbeat_running = False
             if self.heartbeat_thread and self.heartbeat_thread.is_alive():
@@ -177,7 +184,6 @@ class DefinedGeWebSocket:
             # Reset connection state
             self.connected = False
             self.authenticated = False
-            self.reconnect_attempts = 0
 
             # Clear subscriptions
             with self.subscription_lock:
@@ -191,7 +197,7 @@ class DefinedGeWebSocket:
         """WebSocket connection opened"""
         logger.info("DefinedGe WebSocket connection opened")
         self.connected = True
-        self.reconnect_attempts = 0
+        self._update_last_message_time()
 
         # Authenticate after connection
         self._authenticate()
@@ -208,27 +214,18 @@ class DefinedGeWebSocket:
         self.connected = False
         self.authenticated = False
 
+        # Stop the heartbeat for this dead connection; a fresh one starts on
+        # the next successful authenticate.
+        self.heartbeat_running = False
+
+        # Reconnection is owned by the adapter's on_disconnect handler - do
+        # NOT reconnect here as well, or two competing retry loops each spawn
+        # their own socket (issue #1359, dual reconnect).
         if self.on_disconnect:
             try:
                 self.on_disconnect(self, close_status_code, close_msg)
             except Exception as e:
                 logger.error(f"Error in on_disconnect callback: {e}")
-
-        # Only reconnect if should_reconnect is True (not manually disconnected)
-        if self.should_reconnect and self.reconnect_attempts < self.max_reconnect_attempts:
-            self.reconnect_attempts += 1
-            logger.info(f"Attempting to reconnect... (attempt {self.reconnect_attempts})")
-
-            def delayed_reconnect():
-                time.sleep(self.reconnect_delay)
-                if self.should_reconnect:
-                    # Re-read fresh token from DB before reconnecting
-                    self._refresh_tokens()
-                    self.connect()
-
-            threading.Thread(target=delayed_reconnect, daemon=True).start()
-        elif not self.should_reconnect:
-            logger.info("Auto-reconnect disabled - not attempting reconnection")
 
     def _on_error(self, ws, error):
         """WebSocket error occurred"""
@@ -240,8 +237,14 @@ class DefinedGeWebSocket:
             except Exception as e:
                 logger.error(f"Error in on_error callback: {e}")
 
+    def _update_last_message_time(self):
+        """Record the time of the last received message for stall detection"""
+        with self._last_message_lock:
+            self._last_message_time = time.time()
+
     def _on_message(self, ws, message):
         """Process incoming WebSocket message"""
+        self._update_last_message_time()
         try:
             data = json.loads(message)
             message_type = data.get("t", "")  # DefinEdge uses 't' for type
@@ -379,19 +382,9 @@ class DefinedGeWebSocket:
         if has_ohlc_in_ack:
             logger.debug(f"OHLC provided in ACK for {exchange}|{token}")
         else:
-            # Check current time to see if market is open
-            import datetime
-
-            now = datetime.datetime.now()
-            market_open = now.replace(hour=9, minute=15, second=0)
-            market_close = now.replace(hour=15, minute=30, second=0)
-
-            if now < market_open or now > market_close:
-                logger.warning(
-                    f"Market closed - No OHLC expected (Current: {now.strftime('%H:%M')})"
-                )
-            else:
-                logger.warning(f"Market open but NO OHLC in ACK for {exchange}|{token}")
+            # Expected outside market hours and for illiquid scrips; the
+            # touchline feed backfills OHLC once trades occur
+            logger.debug(f"No OHLC in ACK for {exchange}|{token}")
 
         logger.debug(f"Full ACK message: {data}")
 
@@ -418,16 +411,32 @@ class DefinedGeWebSocket:
         logger.info("Heartbeat thread started")
 
     def _heartbeat_loop(self):
-        """Send heartbeat every 50 seconds to keep connection alive"""
+        """Send app heartbeat every 30s and detect silently-stalled connections"""
         while self.heartbeat_running and self.connected:
             try:
                 time.sleep(self.heartbeat_interval)
-                if self.connected and self.ws:
-                    heartbeat_msg = {"t": "h"}
-                    self.ws.send(json.dumps(heartbeat_msg))
-                    logger.debug("Heartbeat sent")
+                if not (self.heartbeat_running and self.connected and self.ws):
+                    break
+
+                heartbeat_msg = {"t": "h"}
+                self.ws.send(json.dumps(heartbeat_msg))
+                logger.debug("Heartbeat sent")
+
+                # Stall detection: if nothing has arrived for heartbeat_timeout,
+                # the connection is silently dead - close it so the adapter's
+                # on_disconnect handler reconnects.
+                with self._last_message_lock:
+                    last = self._last_message_time
+                if last and (time.time() - last) > self.heartbeat_timeout:
+                    logger.error(
+                        f"No messages received for {self.heartbeat_timeout}s - closing stalled connection"
+                    )
+                    if self.ws:
+                        self.ws.close()
+                    break
             except Exception as e:
                 logger.error(f"Error sending heartbeat: {e}")
+                break
 
     def subscribe(self, subscription_type, tokens):
         """Subscribe to market data using DefinEdge format"""

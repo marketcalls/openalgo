@@ -1,9 +1,12 @@
+import hashlib
 import os
 import re
 import secrets
+from datetime import UTC, datetime
 
 from flask import (
     Blueprint,
+    abort,
     current_app,
     flash,
     jsonify,
@@ -27,6 +30,7 @@ from database.user_db import (  # Import the function
 )
 from extensions import socketio
 from limiter import limiter  # Import the limiter instance
+from utils.config import build_external_url
 from utils.email_debug import debug_smtp_connection
 from utils.email_utils import send_password_reset_email, send_test_email
 from utils.ip_helper import get_real_ip
@@ -42,6 +46,28 @@ LOGIN_RATE_LIMIT_HOUR = os.getenv("LOGIN_RATE_LIMIT_HOUR", "25 per hour")
 RESET_RATE_LIMIT = os.getenv("RESET_RATE_LIMIT", "15 per hour")  # Password reset rate limit
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
+
+
+def _hash_reset_token(token: str) -> str:
+    """
+    Hash a password-reset token for storage in the session.
+
+    Flask's default session is a signed - not encrypted - cookie, so anything
+    put in it is readable by whoever holds the cookie. Storing the raw reset
+    token there means the caller who *requested* the reset can read it straight
+    back out of their own cookie, without ever seeing the email it was sent to.
+    Since the reset endpoint is unauthenticated by necessity, that caller may be
+    an attacker who supplied someone else's address. Keeping only the hash means
+    the raw token exists solely in the email (or the TOTP response, which is
+    handed to a user who has already proven possession of the authenticator).
+
+    Args:
+        token: The raw reset token.
+
+    Returns:
+        str: Hex-encoded SHA-256 digest of the token.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def _utcnow_iso() -> str:
@@ -509,7 +535,18 @@ def two_factor_configure():
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_login():
     if session.get("logged_in"):
-        return redirect("/dashboard")
+        # Only bounce to the dashboard when the stored broker token is still
+        # valid. When it is revoked/expired (daily rollover, broker-side
+        # revocation), this page is the canonical re-auth entry point --
+        # unconditionally redirecting away left users stranded with no UI
+        # path to reconnect (issue #1400).
+        from database.auth_db import get_auth_token
+
+        if get_auth_token(session.get("user")):
+            return redirect("/dashboard")
+        logger.info(
+            f"Broker token invalid for {session.get('user')} - allowing re-authentication"
+        )
     if request.method == "GET":
         if "user" not in session:
             return redirect("/login")
@@ -585,11 +622,16 @@ def reset_password():
             try:
                 # Generate a secure token for the email reset
                 token = secrets.token_urlsafe(32)
-                session["reset_token"] = token
+                session["reset_token"] = _hash_reset_token(token)
                 session["reset_email"] = email
 
-                # Create reset link
-                reset_link = url_for("auth.reset_password_email", token=token, _external=True)
+                # Create reset link. Built from HOST_SERVER rather than
+                # url_for(_external=True) so a poisoned Host header cannot
+                # redirect the emailed link - and the token in it - to an
+                # attacker-controlled origin.
+                reset_link = build_external_url(
+                    url_for("auth.reset_password_email", token=token)
+                )
                 send_password_reset_email(email, reset_link, user.username)
                 logger.info(f"Password reset email sent to {email}")
 
@@ -616,7 +658,7 @@ def reset_password():
         if user and user.verify_totp(totp_code):
             # Generate a secure token for the password reset
             token = secrets.token_urlsafe(32)
-            session["reset_token"] = token
+            session["reset_token"] = _hash_reset_token(token)
             session["reset_email"] = email
 
             return jsonify({"status": "success", "message": "TOTP verified", "token": token})
@@ -633,9 +675,13 @@ def reset_password():
             token = request.form.get("token")
             password = request.form.get("password")
 
-        # Verify token from session (handles both TOTP and email reset tokens)
-        valid_token = token == session.get("reset_token") or token == session.get(
-            "email_reset_token"
+        # Verify token against the hashes held in the session (handles both TOTP
+        # and email reset tokens). Constant-time comparison, and a missing
+        # session entry never counts as a match.
+        submitted = _hash_reset_token(token) if token else ""
+        valid_token = any(
+            stored and secrets.compare_digest(submitted, stored)
+            for stored in (session.get("reset_token"), session.get("email_reset_token"))
         )
         if not valid_token or email != session.get("reset_email"):
             return jsonify({"status": "error", "message": "Invalid or expired reset token."}), 400
@@ -687,8 +733,12 @@ def reset_password_email(token):
             flash("Invalid reset link.", "error")
             return redirect("/reset-password?error=invalid_link")
 
-        # Check if this token was issued (stored in session during email send)
-        if token != session.get("reset_token"):
+        # Check if this token was issued (its hash is stored in session during
+        # email send)
+        stored_token = session.get("reset_token")
+        if not stored_token or not secrets.compare_digest(
+            _hash_reset_token(token), stored_token
+        ):
             flash("Invalid or expired reset link.", "error")
             return redirect("/reset-password?error=expired_link")
 
@@ -699,7 +749,7 @@ def reset_password_email(token):
             return redirect("/reset-password?error=session_expired")
 
         # Set up session for password reset (email verification counts as verified)
-        session["email_reset_token"] = token
+        session["email_reset_token"] = _hash_reset_token(token)
 
         # Redirect to React password reset page with token and email in URL
         # React will read these and show the password form
@@ -906,6 +956,40 @@ def debug_smtp():
         ), 500
 
 
+# Throttle active-session heartbeat DB writes to at most one per device per
+# this many seconds. The SPA polls /session-status frequently; without a throttle
+# every poll would write to active_sessions.last_seen.
+HEARTBEAT_THROTTLE_SECONDS = 30
+
+
+def _touch_session_heartbeat():
+    """Refresh last_seen for this device's active session (throttled).
+
+    Wired into the SPA's /session-status poll so active_sessions.last_seen
+    tracks real liveness instead of staying frozen at login_time. See the
+    multi-session audit (finding #2). Throttled via the Flask session cookie
+    so a busy poll loop doesn't write to the DB on every request.
+    """
+    sid = session.get("session_id")
+    if not sid:
+        return
+    now = datetime.now(UTC)
+    last = session.get("last_heartbeat")
+    if last:
+        try:
+            if (now - datetime.fromisoformat(last)).total_seconds() < HEARTBEAT_THROTTLE_SECONDS:
+                return
+        except (ValueError, TypeError):
+            pass
+    try:
+        from database.auth_db import update_session_last_seen
+
+        update_session_last_seen(sid)
+        session["last_heartbeat"] = now.isoformat()
+    except Exception as e:
+        logger.warning(f"Error updating session heartbeat: {e}")
+
+
 @auth_bp.route("/session-status", methods=["GET"])
 def get_session_status():
     """Return current session status for React SPA."""
@@ -916,19 +1000,39 @@ def get_session_status():
             {"status": "success", "message": "Not authenticated", "authenticated": False, "logged_in": False}
         ), 200
 
+    # Refresh this device's liveness heartbeat on every poll (throttled).
+    if session.get("logged_in"):
+        _touch_session_heartbeat()
+
     # If session claims to be logged in with broker, validate the auth token exists
     if session.get("logged_in") and session.get("broker"):
         from database.auth_db import get_api_key_for_tradingview, get_auth_token
 
         auth_token = get_auth_token(session.get("user"))
         if auth_token is None:
-            logger.warning(
-                f"Session status: stale session detected for user {session.get('user')} - no auth token"
+            # The BROKER token is gone (daily rollover / revocation) but the
+            # APP session is still valid. Do NOT clear or downgrade the
+            # session here: `logged_in` doubles as the app-session flag in
+            # utils/session.is_session_valid(), so popping it makes every
+            # @check_session_validity route (including /auth/dashboard-data)
+            # hard-logout the user before the reconnect UI can render
+            # (issue #1400). Keep the session intact and just flag the state;
+            # /auth/dashboard-data returns BROKER_SESSION_EXPIRED and the
+            # dashboard renders the Reconnect Broker action, while
+            # /auth/broker admits the user for re-authentication.
+            logger.info(
+                f"Session status: broker token invalid for user {session.get('user')} - "
+                "broker reconnect required"
             )
-            # Clear the stale session
-            session.clear()
             return jsonify(
-                {"status": "success", "message": "Session expired", "authenticated": False, "logged_in": False}
+                {
+                    "status": "success",
+                    "authenticated": True,
+                    "logged_in": True,
+                    "user": session.get("user"),
+                    "broker": session.get("broker"),
+                    "broker_session_expired": True,
+                }
             ), 200
 
         # Get API key for the user
@@ -1090,7 +1194,16 @@ def get_dashboard_data():
         return jsonify({"status": "error", "message": "Not authenticated"}), 401
 
     if not session.get("logged_in"):
-        return jsonify({"status": "error", "message": "Broker not connected"}), 401
+        # App session valid, broker not connected (fresh login or downgraded
+        # by session-status after a token rollover) -- the right CTA is the
+        # broker reconnect flow, not /login (issue #1400).
+        return jsonify(
+            {
+                "status": "error",
+                "code": "BROKER_SESSION_EXPIRED",
+                "message": "Broker not connected - please connect your broker",
+            }
+        ), 401
 
     login_username = session["user"]
     broker = session.get("broker")
@@ -1106,8 +1219,18 @@ def get_dashboard_data():
         AUTH_TOKEN = get_auth_token(login_username)
 
         if AUTH_TOKEN is None:
+            # The APP session is still valid -- it is the BROKER token that is
+            # revoked/expired. The machine-readable code lets the dashboard
+            # point the user at /broker (reconnect) instead of /login, which
+            # would just bounce them back (issue #1400).
             logger.warning(f"No auth token found for user {login_username}")
-            return jsonify({"status": "error", "message": "Session expired"}), 401
+            return jsonify(
+                {
+                    "status": "error",
+                    "code": "BROKER_SESSION_EXPIRED",
+                    "message": "Broker session expired - please reconnect your broker",
+                }
+            ), 401
 
         # Check if in analyze mode
         if get_analyze_mode():
@@ -1140,11 +1263,51 @@ def get_dashboard_data():
         return jsonify({"status": "error", "message": "Internal server error"}), 500
 
 
+def _is_foreign_initiated() -> bool:
+    """True when the request was initiated by a page we do not serve.
+
+    Logout is far more than "destroy a cookie" here: it revokes the broker
+    token, publishes CACHE_INVALIDATE_ALL (tearing down the shared WebSocket
+    feed), clears every device's session and flushes the symbol cache. That
+    makes a forced logout a real availability attack on a live trading session,
+    so it must not be reachable from someone else's page.
+
+    Flask-WTF never CSRF-validates GET, and SESSION_COOKIE_SAMESITE="Lax" still
+    attaches the session cookie to top-level cross-site navigations, so a plain
+    link is enough without this check. Fetch metadata is the signal that covers
+    it. "same-site" is rejected too: OpenAlgo is a single self-hosted origin, so
+    a same-site-but-not-same-origin caller is another app sharing the host -
+    ports are not part of the same-site check, which is exactly the situation on
+    a developer or self-hosted box running several services on localhost.
+
+    A missing header is treated as trusted. Mounting this attack requires a
+    browser (the victim's cookie has to be attached automatically), and every
+    browser new enough to do that sends Sec-Fetch-Site; a client old enough to
+    omit it is not carrying the cookie either.
+    """
+    site = request.headers.get("Sec-Fetch-Site")
+    return site is not None and site not in ("same-origin", "none")
+
+
 @auth_bp.route("/logout", methods=["GET", "POST"])
 def logout():
-    if session.get("logged_in"):
-        username = session["user"]
+    # Checked before anything is torn down, so a rejected request leaves the
+    # session exactly as it was rather than logging the victim out.
+    if _is_foreign_initiated():
+        logger.warning(
+            f"Rejected cross-origin logout from IP={get_real_ip()} "
+            f"Sec-Fetch-Site={request.headers.get('Sec-Fetch-Site')}"
+        )
+        abort(403)
 
+    was_logged_in = bool(session.get("logged_in"))
+    username = session.get("user")
+
+    # Wipe the browser session before teardown so a revocation or notification
+    # failure cannot leave the user stuck in a half-logged-in state.
+    session.clear()
+
+    if was_logged_in and username:
         # Clear cache entries before database update to prevent stale data access
         cache_key_auth = f"auth-{username}"
         cache_key_feed = f"feed-{username}"
@@ -1188,7 +1351,6 @@ def logout():
         })
 
         # Clear entire session to ensure complete logout
-        session.clear()
         logger.info(f"Session cleared for user: {username}")
 
     # For POST requests (AJAX from React), return JSON

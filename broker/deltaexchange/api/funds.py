@@ -10,6 +10,7 @@
 import os
 
 from broker.deltaexchange.api.baseurl import BASE_URL, get_auth_headers
+from broker.deltaexchange.api.rate_limiter import PRIVATE, consume
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -41,6 +42,9 @@ def _get_positions_pnl(api_key, api_secret):
     path = "/v2/positions/margined"
     url = BASE_URL + path
     try:
+        # consume() before signing: it can block on the quota window and Delta
+        # rejects signatures older than 5 seconds ("SignatureExpired").
+        consume(path, method="GET", bucket=PRIVATE)
         headers = get_auth_headers(
             method="GET",
             path=path,
@@ -113,6 +117,9 @@ def get_margin_data(auth_token):
     url = BASE_URL + path
 
     try:
+        # consume() before signing: it can block on the quota window and Delta
+        # rejects signatures older than 5 seconds ("SignatureExpired").
+        consume(path, method="GET", bucket=PRIVATE)
         headers = get_auth_headers(
             method="GET",
             path=path,

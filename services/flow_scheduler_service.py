@@ -4,8 +4,6 @@ Flow Workflow Scheduler Service
 Handles scheduled workflow execution using APScheduler (Flask/sync version)
 """
 
-import logging
-import os
 import threading
 from collections.abc import Callable
 from datetime import datetime
@@ -17,7 +15,15 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-logger = logging.getLogger(__name__)
+from database.apscheduler_jobstore_db import (
+    FLOW_JOBSTORE_TABLE,
+    ensure_jobstore_table,
+    get_database_url,
+)
+from database.engine_factory import create_db_engine
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class FlowScheduler:
@@ -46,13 +52,29 @@ class FlowScheduler:
                 return
 
             if db_url is None:
-                db_url = os.getenv("DATABASE_URL", "sqlite:///db/openalgo.db")
+                db_url = get_database_url()
 
             self._api_key = api_key
 
             try:
+                # Create the job store table before APScheduler would. Its own
+                # DDL in start() is one-shot: an install that loses the boot
+                # write-lock race never initializes the scheduler, and every
+                # scheduled workflow then silently never runs for the life of
+                # the process (issue #1750). app.py normally creates this during
+                # the serialized database-init phase, which leaves the call
+                # below a read-only no-op; it retries here for any caller that
+                # starts the scheduler outside that path.
+                ensure_jobstore_table(FLOW_JOBSTORE_TABLE, database_url=db_url)
+
+                # engine= rather than url= so the job store uses the project
+                # NullPool policy instead of SQLAlchemy's default QueuePool,
+                # which would hold connections open for the life of the
+                # process. See database/engine_factory.py.
                 jobstores = {
-                    "default": SQLAlchemyJobStore(url=db_url, tablename="flow_apscheduler_jobs")
+                    "default": SQLAlchemyJobStore(
+                        engine=create_db_engine(db_url), tablename=FLOW_JOBSTORE_TABLE
+                    )
                 }
                 self._scheduler = BackgroundScheduler(
                     jobstores=jobstores,
@@ -91,6 +113,7 @@ class FlowScheduler:
         interval_value: int | None = None,
         interval_unit: str | None = None,
         func: Callable = None,
+        market_hours_only: bool = False,
     ) -> str:
         """Add a workflow job to the scheduler
 
@@ -106,7 +129,8 @@ class FlowScheduler:
         """
         job_id = f"flow_workflow_{workflow_id}"
 
-        # Remove existing job if any
+        # Clear any previous job for this workflow. A brand-new workflow has
+        # none, which remove_job treats as a normal no-op.
         self.remove_job(job_id)
 
         # Use default function if not provided
@@ -164,7 +188,14 @@ class FlowScheduler:
             func,
             trigger=trigger,
             id=job_id,
-            args=[workflow_id, self._api_key],
+            # Only the default executor takes the market-hours flag. A custom
+            # callback still receives the documented (workflow_id, api_key)
+            # pair, which passing a third positional argument would break.
+            args=(
+                [workflow_id, self._api_key, market_hours_only]
+                if func is execute_workflow_scheduled
+                else [workflow_id, self._api_key]
+            ),
             replace_existing=True,
             name=f"Workflow {workflow_id}",
         )
@@ -173,17 +204,29 @@ class FlowScheduler:
         return job_id
 
     def remove_job(self, job_id: str) -> bool:
-        """Remove a job from the scheduler"""
+        """Remove a job from the scheduler. Returns False if there was none.
+
+        A job that does not exist is not an error for any caller: activating a
+        workflow clears any prior job first (a new workflow has none), and
+        deactivating may find it already gone after a restart. Logging that as
+        an ERROR with a traceback made a perfectly normal activation look
+        broken. A real jobstore failure is still logged with its traceback.
+        """
+        from apscheduler.jobstores.base import JobLookupError
+
         try:
             self.scheduler.remove_job(job_id)
             logger.info(f"Removed job {job_id}")
             return True
-        except Exception as e:
-            logger.exception(f"Failed to remove job {job_id}: {e}")
+        except JobLookupError:
+            logger.debug(f"No scheduler job {job_id} to remove")
+            return False
+        except Exception:
+            logger.exception(f"Failed to remove job {job_id}")
             return False
 
     def remove_workflow_job(self, workflow_id: int) -> bool:
-        """Remove a workflow job"""
+        """Remove a workflow job. A job that is already gone is not a failure."""
         job_id = f"flow_workflow_{workflow_id}"
         return self.remove_job(job_id)
 
@@ -235,7 +278,112 @@ class FlowScheduler:
             logger.info("Flow Scheduler shutdown")
 
 
-def execute_workflow_scheduled(workflow_id: int, api_key: str = None):
+#: Exchange whose calendar is consulted when the trigger node names none. This
+#: selects a calendar, not a time - the hours themselves always come from the
+#: market-calendar tables.
+DEFAULT_MARKET_HOURS_EXCHANGE = "NSE"
+
+
+def _parse_hhmm(value) -> int | None:
+    """"HH:MM" as minutes past midnight, or None if it is not a valid time.
+
+    Returning None rather than a fallback time matters: the caller then falls
+    through to the exchange calendar instead of silently trading to a time
+    nobody configured.
+    """
+    if value is None:
+        return None
+    try:
+        hours, minutes = (int(part) for part in str(value).strip().split(":", 1))
+    except (ValueError, TypeError):
+        return None
+    if not (0 <= hours <= 23 and 0 <= minutes <= 59):
+        return None
+    return hours * 60 + minutes
+
+
+def is_within_market_hours(
+    now: datetime | None = None,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    exchange: str | None = None,
+) -> bool:
+    """Whether ``now`` falls inside the workflow's trading window (IST).
+
+    The editor offers a "market hours only" switch on the schedule trigger and
+    defaults it on, but nothing read it, so an interval schedule kept firing
+    overnight and at weekends.
+
+    No trading time is hardcoded here. The day is resolved through
+    ``get_effective_session_window``, the same calendar the rest of the
+    platform uses, so weekends, trading holidays, muhurat and other special
+    sessions, and per-exchange hours are all inherited rather than restated.
+    That calendar knows MCX runs to 23:55 and CRYPTO never closes, which a
+    fixed 09:15-15:30 window got wrong for every non-equity workflow.
+
+    Args:
+        now: IST-aware instant to test. Defaults to the current time.
+        start: Optional "HH:MM" override from the workflow's trigger node.
+        end: Optional "HH:MM" override from the workflow's trigger node.
+        exchange: Calendar to consult. Defaults to NSE.
+
+    Returns:
+        False whenever the exchange is shut that day, regardless of any
+        override - an override narrows or extends the clock, it does not
+        reopen a holiday.
+    """
+    import pytz
+
+    from database.market_calendar_db import get_effective_session_window
+
+    ist = pytz.timezone("Asia/Kolkata")
+    now = now or datetime.now(ist)
+
+    exch = (exchange or DEFAULT_MARKET_HOURS_EXCHANGE).upper()
+    window = get_effective_session_window(now.date(), exch)
+    if window is None:
+        # Shut that day: weekend, or a trading holiday for this exchange.
+        return False
+
+    start_minutes = _parse_hhmm(start)
+    end_minutes = _parse_hhmm(end)
+
+    if start_minutes is None or end_minutes is None:
+        session_start = datetime.fromtimestamp(window["start_ms"] / 1000, ist)
+        session_end = datetime.fromtimestamp(window["end_ms"] / 1000, ist)
+        if start_minutes is None:
+            start_minutes = session_start.hour * 60 + session_start.minute
+        if end_minutes is None:
+            end_minutes = session_end.hour * 60 + session_end.minute
+
+    minutes = now.hour * 60 + now.minute
+    return start_minutes <= minutes <= end_minutes
+
+
+def get_market_hours_config(workflow) -> dict:
+    """Market-hours settings from a workflow's trigger node.
+
+    Read from the graph on every run rather than baked into the scheduler job,
+    so editing the times in the flow JSON takes effect on the next run - the
+    same way node edits already do - instead of needing a deactivate and
+    reactivate cycle.
+    """
+    for node in getattr(workflow, "nodes", None) or []:
+        if node.get("type") == "start":
+            data = node.get("data") or {}
+            return {
+                "enabled": bool(data.get("marketHoursOnly", False)),
+                "start": data.get("marketHoursStart") or None,
+                "end": data.get("marketHoursEnd") or None,
+                "exchange": data.get("marketHoursExchange") or None,
+            }
+    return {"enabled": False, "start": None, "end": None, "exchange": None}
+
+
+def execute_workflow_scheduled(
+    workflow_id: int, api_key: str = None, market_hours_only: bool = False
+):
     """Execute a workflow from scheduler (synchronous)"""
     from services.flow_executor_service import execute_workflow
 
@@ -245,6 +393,37 @@ def execute_workflow_scheduled(workflow_id: int, api_key: str = None):
         logger.error(f"No API key available for workflow {workflow_id}")
         return
 
+    # The window is read from the workflow's trigger node on every run, so
+    # changing the times in the flow JSON applies from the next run. The
+    # market_hours_only argument is what older jobs stored in the jobstore and
+    # is honoured when the graph does not set the switch itself.
+    config = {"enabled": market_hours_only, "start": None, "end": None, "exchange": None}
+    try:
+        from database.flow_db import get_workflow
+
+        workflow = get_workflow(workflow_id)
+        if workflow is not None:
+            from_graph = get_market_hours_config(workflow)
+            if from_graph["enabled"] or any(
+                from_graph[k] for k in ("start", "end", "exchange")
+            ):
+                config = from_graph
+    except Exception:
+        # A lookup failure must not silently drop the gate and let a workflow
+        # trade at 3am, so the stored flag stands.
+        logger.exception(
+            f"Could not read market-hours config for workflow {workflow_id}; "
+            "using the schedule's stored setting"
+        )
+
+    if config["enabled"] and not is_within_market_hours(
+        start=config["start"], end=config["end"], exchange=config["exchange"]
+    ):
+        logger.debug(
+            f"Skipping scheduled workflow {workflow_id}: outside market hours"
+        )
+        return
+
     try:
         result = execute_workflow(workflow_id, api_key=api_key)
         logger.info(
@@ -252,6 +431,13 @@ def execute_workflow_scheduled(workflow_id: int, api_key: str = None):
         )
     except Exception as e:
         logger.exception(f"Scheduled execution failed for workflow {workflow_id}: {e}")
+    finally:
+        # APScheduler runs this on its own worker thread with no Flask app
+        # context, so teardown_appcontext never fires and the sessions this run
+        # touched would stay bound to that thread.
+        from utils.db_sessions import remove_all_scoped_sessions
+
+        remove_all_scoped_sessions()
 
 
 # Global scheduler instance

@@ -215,7 +215,7 @@ OpenAlgo uses standardized exchange codes to identify trading venues.
 
 ## Common Index Symbols
 
-OpenAlgo has rolled out a **standardized index symbol set across all supported brokers**. Use exchange code `NSE_INDEX` or `BSE_INDEX` when placing orders or fetching quotes for these symbols — the same symbol works identically on every broker.
+OpenAlgo uses standardized index symbols with exchange code `NSE_INDEX` or `BSE_INDEX`. Use only index exchanges declared by the active plugin; some plugins expose one index exchange, both, or neither.
 
 ### NSE Indices (Exchange: `NSE_INDEX`)
 
@@ -477,30 +477,30 @@ POST /api/v1/search
 ### Mistake 1: Wrong Date Format
 
 ```
-❌ NIFTY25JAN2521500CE      (missing day)
-❌ NIFTYJAN2521500CE        (missing day and year format)
-✅ NIFTY30JAN2521500CE      (correct)
+NIFTY25JAN2521500CE      (missing day)
+NIFTYJAN2521500CE        (missing day and year format)
+NIFTY30JAN2521500CE      (correct)
 ```
 
 ### Mistake 2: Wrong Exchange Code
 
 ```
-❌ symbol: "NIFTY30JAN2521500CE", exchange: "NSE"  (wrong exchange)
-✅ symbol: "NIFTY30JAN2521500CE", exchange: "NFO"  (correct)
+symbol: "NIFTY30JAN2521500CE", exchange: "NSE"  (wrong exchange)
+symbol: "NIFTY30JAN2521500CE", exchange: "NFO"  (correct)
 ```
 
 ### Mistake 3: Wrong Product Type
 
 ```
-❌ Options with product: "CNC"  (CNC is for equity only)
-✅ Options with product: "NRML" (correct for F&O)
+Options with product: "CNC"  (CNC is for equity only)
+Options with product: "NRML" (correct for F&O)
 ```
 
 ### Mistake 4: Case Sensitivity
 
 ```
-❌ "sbin", "Sbin"  (lowercase/mixed case)
-✅ "SBIN"          (uppercase - correct)
+"sbin", "Sbin"  (lowercase/mixed case)
+"SBIN"          (uppercase - correct)
 ```
 
 ## Troubleshooting

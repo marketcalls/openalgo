@@ -7,7 +7,12 @@ Run with: python -m pytest test/test_action_center.py -v
 import json
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import scoped_session, sessionmaker
+from sqlalchemy.pool import NullPool
 
+import database.action_center_db as action_center_db
+import database.auth_db as auth_db
 from database.action_center_db import (
     approve_pending_order,
     create_pending_order,
@@ -18,39 +23,86 @@ from database.action_center_db import (
     reject_pending_order,
     update_broker_status,
 )
-from database.auth_db import get_order_mode, update_order_mode
+from database.auth_db import get_order_mode, update_order_mode, upsert_api_key
 from services.action_center_service import get_action_center_data
 from services.order_router_service import queue_order, should_route_to_pending
+
+
+@pytest.fixture(autouse=True)
+def isolated_action_center_database(tmp_path, monkeypatch):
+    """Run every test against a temporary database, never db/openalgo.db."""
+    test_engine = create_engine(
+        f"sqlite:///{tmp_path / 'action-center.db'}",
+        poolclass=NullPool,
+        connect_args={"check_same_thread": False},
+    )
+    action_center_session = scoped_session(
+        sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+    )
+    auth_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=test_engine))
+    action_center_query = action_center_db.Base.__dict__["query"]
+    auth_query = auth_db.Base.__dict__["query"]
+
+    monkeypatch.setattr(action_center_db, "engine", test_engine)
+    monkeypatch.setattr(action_center_db, "db_session", action_center_session)
+    monkeypatch.setattr(auth_db, "engine", test_engine)
+    monkeypatch.setattr(auth_db, "db_session", auth_session)
+    action_center_db.Base.query = action_center_session.query_property()
+    auth_db.Base.query = auth_session.query_property()
+
+    action_center_db.Base.metadata.create_all(bind=test_engine)
+    auth_db.Base.metadata.create_all(bind=test_engine)
+    auth_db.order_mode_cache.clear()
+    auth_db.verified_api_key_cache.clear()
+    auth_db.invalid_api_key_cache.clear()
+
+    try:
+        yield
+    finally:
+        action_center_session.remove()
+        auth_session.remove()
+        test_engine.dispose()
+        action_center_db.Base.query = action_center_query
+        auth_db.Base.query = auth_query
+        auth_db.order_mode_cache.clear()
+        auth_db.verified_api_key_cache.clear()
+        auth_db.invalid_api_key_cache.clear()
 
 
 class TestOrderModeDatabase:
     """Test order mode database functions"""
 
+    user_id = "action_center_mode_test"
+
+    def setup_method(self):
+        upsert_api_key(self.user_id, "action-center-test-api-key")
+        update_order_mode(self.user_id, "auto")
+
     def test_get_order_mode_default(self):
         """Test default order mode is 'auto'"""
-        mode = get_order_mode("test_user")
+        mode = get_order_mode(self.user_id)
         assert mode == "auto", "Default order mode should be 'auto'"
 
     def test_update_order_mode_to_semi_auto(self):
         """Test updating order mode to semi_auto"""
-        success = update_order_mode("test_user", "semi_auto")
+        success = update_order_mode(self.user_id, "semi_auto")
         assert success is True, "Should successfully update to semi_auto"
 
-        mode = get_order_mode("test_user")
+        mode = get_order_mode(self.user_id)
         assert mode == "semi_auto", "Order mode should be updated to semi_auto"
 
     def test_update_order_mode_to_auto(self):
         """Test updating order mode back to auto"""
-        update_order_mode("test_user", "semi_auto")
-        success = update_order_mode("test_user", "auto")
+        update_order_mode(self.user_id, "semi_auto")
+        success = update_order_mode(self.user_id, "auto")
         assert success is True, "Should successfully update to auto"
 
-        mode = get_order_mode("test_user")
+        mode = get_order_mode(self.user_id)
         assert mode == "auto", "Order mode should be updated to auto"
 
     def test_update_order_mode_invalid(self):
         """Test updating order mode with invalid value"""
-        success = update_order_mode("test_user", "invalid_mode")
+        success = update_order_mode(self.user_id, "invalid_mode")
         assert success is False, "Should fail with invalid mode"
 
 
@@ -97,7 +149,7 @@ class TestPendingOrdersDatabase:
         order_data = {"symbol": "HDFC", "action": "BUY"}
         order_id = create_pending_order("test_user", "placeorder", order_data)
 
-        success = approve_pending_order(order_id, approved_by="test_approver")
+        success = approve_pending_order(order_id, approved_by="test_approver", user_id="test_user")
         assert success is True, "Should successfully approve order"
 
         order = get_pending_order_by_id(order_id)
@@ -111,7 +163,9 @@ class TestPendingOrdersDatabase:
         order_id = create_pending_order("test_user", "placeorder", order_data)
 
         reason = "Market conditions unfavorable"
-        success = reject_pending_order(order_id, reason, rejected_by="test_rejector")
+        success = reject_pending_order(
+            order_id, reason, rejected_by="test_rejector", user_id="test_user"
+        )
         assert success is True, "Should successfully reject order"
 
         order = get_pending_order_by_id(order_id)
@@ -126,10 +180,10 @@ class TestPendingOrdersDatabase:
         order_id = create_pending_order("test_user", "placeorder", order_data)
 
         # Approve first
-        approve_pending_order(order_id, approved_by="test_user")
+        approve_pending_order(order_id, approved_by="test_user", user_id="test_user")
 
         # Delete
-        success = delete_pending_order(order_id)
+        success = delete_pending_order(order_id, user_id="test_user")
         assert success is True, "Should successfully delete approved order"
 
         order = get_pending_order_by_id(order_id)
@@ -140,7 +194,7 @@ class TestPendingOrdersDatabase:
         order_data = {"symbol": "WIPRO", "action": "BUY"}
         order_id = create_pending_order("test_user", "placeorder", order_data)
 
-        success = delete_pending_order(order_id)
+        success = delete_pending_order(order_id, user_id="test_user")
         assert success is False, "Should not delete order in pending status"
 
     def test_update_broker_status(self):
@@ -148,7 +202,7 @@ class TestPendingOrdersDatabase:
         order_data = {"symbol": "TCS", "action": "BUY"}
         order_id = create_pending_order("test_user", "placeorder", order_data)
 
-        approve_pending_order(order_id, approved_by="test_user")
+        approve_pending_order(order_id, approved_by="test_user", user_id="test_user")
 
         success = update_broker_status(order_id, "BROKER123456", "open")
         assert success is True, "Should successfully update broker status"

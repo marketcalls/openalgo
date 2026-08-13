@@ -117,7 +117,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/history \
 ## Notes
 
 - Historical data availability depends on broker
-- Timestamps are in **IST (Indian Standard Time)**
+- Response timestamps are Unix timestamps. Convert them to the timezone required by the client; do not treat the numeric value itself as an IST-local timestamp.
 - For intraday intervals, data is typically available for the last 30-90 days
 - For daily data, longer history may be available
 - Use [Intervals](./intervals.md) endpoint to check available intervals for your broker

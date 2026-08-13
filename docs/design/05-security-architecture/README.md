@@ -1,518 +1,111 @@
 # 05 - Security Architecture
 
-## Overview
+## Trust Boundaries
 
-OpenAlgo implements defense-in-depth security with multiple layers protecting the application from various attack vectors. The security architecture covers authentication, authorization, transport security, input validation, and monitoring.
+OpenAlgo is a self-hosted trading application. The application enforces authentication, request validation, rate limits, IP bans, browser protections, and encrypted token persistence. The operator owns host hardening, TLS termination, reverse-proxy trust, firewall policy, secrets, backups, and broker-account controls.
 
-## Security Layers Diagram
-
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                          Security Architecture                                │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-                              Internet
-                                 │
-                                 ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  Layer 1: Transport Security                                                  │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │  HTTPS (TLS 1.2+) │ WSS for WebSocket │ Secure Cookies (__Secure-)     │  │
-│  └────────────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                 │
-                                 ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  Layer 2: Network Security                                                    │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │  IP Banning (SecurityMiddleware) │ Rate Limiting (Flask-Limiter)       │  │
-│  │  404 Tracking (Error404Tracker)  │ Invalid API Key Tracking            │  │
-│  └────────────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                 │
-                                 ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  Layer 3: Browser Security                                                    │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │  CSP Headers │ CORS Policy │ Referrer Policy │ Permissions Policy      │  │
-│  │  Clickjacking (frame-ancestors) │ XSS Protection                       │  │
-│  └────────────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                 │
-                                 ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  Layer 4: Application Security                                                │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │  CSRF Protection │ Session Management │ Password Hashing (Argon2)      │  │
-│  │  API Key Hashing │ Token Encryption (Fernet) │ Input Validation        │  │
-│  └────────────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                 │
-                                 ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  Layer 5: Data Security                                                       │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │  Encrypted Auth Tokens │ Peppered Hashes │ Secure Key Storage          │  │
-│  │  Database Isolation (5 DBs) │ Sensitive Data Redaction                 │  │
-│  └────────────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────────┘
+```text
+client
+  -> TLS/reverse proxy and host firewall
+  -> Flask security and IP-ban middleware
+  -> session, API-key, webhook, or OAuth authentication
+  -> schema/CSRF/rate-limit policy
+  -> service and broker/sandbox boundary
+  -> isolated local stores
 ```
 
-## Layer 1: Transport Security
-
-### HTTPS Configuration
-
-```python
-# app.py
-HOST_SERVER = os.getenv('HOST_SERVER', 'http://127.0.0.1:5000')
-USE_HTTPS = HOST_SERVER.startswith('https://')
-
-# Dynamic cookie security based on HTTPS
-app.config.update(
-    SESSION_COOKIE_SECURE=USE_HTTPS,
-    WTF_CSRF_COOKIE_SECURE=USE_HTTPS,
-)
-
-# Secure cookie prefix for HTTPS
-if USE_HTTPS:
-    app.config['SESSION_COOKIE_NAME'] = f'__Secure-{session_cookie_name}'
-```
-
-### Cookie Security Attributes
-
-| Attribute | Value | Purpose |
-|-----------|-------|---------|
-| `HttpOnly` | True | Prevents JavaScript access (XSS protection) |
-| `SameSite` | Lax | CSRF protection while allowing top-level navigation |
-| `Secure` | True (HTTPS) | Cookies only sent over HTTPS |
-| `__Secure-` prefix | HTTPS only | Additional browser validation |
-
-## Layer 2: Network Security
-
-### IP Banning System
-
-**Location:** `utils/security_middleware.py`
-
-```python
-class SecurityMiddleware:
-    """WSGI middleware to check for banned IPs"""
-
-    def __call__(self, environ, start_response):
-        client_ip = get_real_ip_from_environ(environ)
-
-        if IPBan.is_ip_banned(client_ip):
-            # Return 403 Forbidden for banned IPs
-            status = '403 Forbidden'
-            headers = [('Content-Type', 'text/plain')]
-            start_response(status, headers)
-            logger.warning(f"Blocked banned IP: {client_ip}")
-            return [b'Access Denied: Your IP has been banned']
-
-        return self.app(environ, start_response)
-```
-
-**IP Ban Model:**
-```python
-# database/traffic_db.py
-class IPBan(LogBase):
-    __tablename__ = 'ip_bans'
-
-    id = Column(Integer, primary_key=True)
-    ip_address = Column(String(50), unique=True, index=True)
-    ban_reason = Column(String(200))
-    ban_count = Column(Integer, default=1)      # Track repeat offenses
-    banned_at = Column(DateTime)
-    expires_at = Column(DateTime)               # NULL = permanent
-    is_permanent = Column(Boolean, default=False)
-    created_by = Column(String(50))             # 'system' or 'manual'
-
-    @staticmethod
-    def is_ip_banned(ip_address):
-        """Check if IP is currently banned"""
-        ban = IPBan.query.filter_by(ip_address=ip_address).first()
-        if not ban:
-            return False
-        if ban.is_permanent:
-            return True
-        if ban.expires_at and datetime.utcnow() < ban.expires_at:
-            return True
-        return False
-```
-
-### Rate Limiting
-
-**Location:** `limiter.py`
-
-```python
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-
-limiter = Limiter(
-    key_func=get_remote_address,
-    storage_uri="memory://",
-    strategy="moving-window"
-)
-```
-
-**Rate Limit Configuration:**
-
-| Endpoint | Limit | Purpose |
-|----------|-------|---------|
-| `/auth/login` | 5/min, 25/hour | Brute force protection |
-| `/{broker}/callback` | 5/min, 25/hour | OAuth abuse prevention |
-| `/auth/reset-password` | 15/hour | Password reset spam |
-| `/api/v1/*` | Per-endpoint | API abuse prevention |
-
-**Usage Example:**
-```python
-@auth_bp.route('/login', methods=['POST'])
-@limiter.limit("5 per minute")
-@limiter.limit("25 per hour")
-def login():
-    # Login logic
-    pass
-```
-
-### 404 Error Tracking
-
-Tracks suspicious 404 errors for potential attack detection:
-
-```python
-class Error404Tracker(LogBase):
-    __tablename__ = 'error_404_tracker'
-
-    id = Column(Integer, primary_key=True)
-    ip_address = Column(String(50), index=True)
-    requested_path = Column(String(500))
-    timestamp = Column(DateTime)
-    user_agent = Column(String(500))
-    referrer = Column(String(500))
-```
-
-## Layer 3: Browser Security
-
-### Content Security Policy (CSP)
-
-**Location:** `csp.py`
-
-```python
-def get_csp_config():
-    """Get CSP configuration from environment variables"""
-    return {
-        'default-src': os.getenv('CSP_DEFAULT_SRC', "'self'"),
-        'script-src': os.getenv('CSP_SCRIPT_SRC', "'self' https://cdn.socket.io"),
-        'style-src': os.getenv('CSP_STYLE_SRC', "'self' 'unsafe-inline'"),
-        'img-src': os.getenv('CSP_IMG_SRC', "'self' data:"),
-        'connect-src': os.getenv('CSP_CONNECT_SRC', "'self' wss: ws:"),
-        'font-src': os.getenv('CSP_FONT_SRC', "'self'"),
-        'object-src': os.getenv('CSP_OBJECT_SRC', "'none'"),
-        'frame-ancestors': os.getenv('CSP_FRAME_ANCESTORS', "'self'"),
-        'form-action': os.getenv('CSP_FORM_ACTION', "'self'"),
-        'base-uri': os.getenv('CSP_BASE_URI', "'self'"),
-    }
-
-@app.after_request
-def add_security_headers(response):
-    csp_header = build_csp_header(get_csp_config())
-    response.headers['Content-Security-Policy'] = csp_header
-    return response
-```
-
-**CSP Directives:**
-
-| Directive | Default Value | Purpose |
-|-----------|---------------|---------|
-| `default-src` | 'self' | Fallback for all resources |
-| `script-src` | 'self' https://cdn.socket.io | JavaScript sources |
-| `style-src` | 'self' 'unsafe-inline' | CSS sources |
-| `connect-src` | 'self' wss: ws: | API and WebSocket connections |
-| `img-src` | 'self' data: | Image sources |
-| `object-src` | 'none' | Block plugins (Flash, etc.) |
-| `frame-ancestors` | 'self' | Clickjacking protection |
-
-### CORS Configuration
-
-**Location:** `cors.py`
-
-```python
-def get_cors_config():
-    cors_config = {}
-
-    if os.getenv('CORS_ENABLED', 'FALSE').upper() == 'TRUE':
-        cors_config['origins'] = os.getenv('CORS_ALLOWED_ORIGINS', '').split(',')
-        cors_config['methods'] = os.getenv('CORS_ALLOWED_METHODS', 'GET,POST').split(',')
-        cors_config['allow_headers'] = os.getenv('CORS_ALLOWED_HEADERS', '').split(',')
-        cors_config['supports_credentials'] = os.getenv('CORS_ALLOW_CREDENTIALS') == 'TRUE'
-
-    return cors_config
-
-cors = CORS(resources={r"/api/*": get_cors_config()})
-```
-
-### Additional Security Headers
-
-```python
-def get_security_headers():
-    return {
-        'Referrer-Policy': 'strict-origin-when-cross-origin',
-        'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()'
-    }
-```
-
-## Layer 4: Application Security
-
-### CSRF Protection
-
-**Location:** `app.py`
-
-```python
-from flask_wtf.csrf import CSRFProtect
-
-csrf = CSRFProtect(app)
-
-# CSRF configuration
-app.config.update(
-    WTF_CSRF_ENABLED=True,
-    WTF_CSRF_COOKIE_HTTPONLY=True,
-    WTF_CSRF_COOKIE_SAMESITE='Lax',
-)
-```
-
-**CSRF Token Flow:**
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  React Client   │────►│ GET /auth/      │────►│ Return CSRF     │
-│                 │     │ csrf-token      │     │ Token           │
-└────────┬────────┘     └─────────────────┘     └─────────────────┘
-         │
-         │ Include X-CSRFToken header
-         ▼
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  POST /api/...  │────►│ CSRF Validation │────►│ Process Request │
-│                 │     │                 │     │                 │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-```
-
-**Frontend Implementation:**
-```typescript
-// api/client.ts
-webClient.interceptors.request.use(async (config) => {
-  if (['post', 'put', 'delete'].includes(config.method)) {
-    const csrfToken = await fetchCSRFToken()
-    config.headers['X-CSRFToken'] = csrfToken
-  }
-  return config
-})
-```
-
-### Password Security
-
-**Argon2 Hashing with Pepper:**
-
-```python
-# database/user_db.py
-from argon2 import PasswordHasher
-
-PEPPER = os.getenv('API_KEY_PEPPER')  # Minimum 32 characters
-
-class User:
-    def set_password(self, password):
-        peppered = f"{password}{PEPPER}"
-        self.password_hash = PasswordHasher().hash(peppered)
-
-    def check_password(self, password):
-        peppered = f"{password}{PEPPER}"
-        try:
-            return PasswordHasher().verify(self.password_hash, peppered)
-        except:
-            return False
-```
-
-**Password Requirements:**
-```python
-def validate_password_strength(password):
-    """
-    Requirements:
-    - Minimum 8 characters
-    - At least 1 uppercase letter (A-Z)
-    - At least 1 lowercase letter (a-z)
-    - At least 1 number (0-9)
-    - At least 1 special character (!@#$%^&*)
-    """
-```
-
-### API Key Security
-
-**Three-Level Verification:**
-```
-1. Check invalid_api_key_cache (5min TTL) → Fast rejection
-2. Check verified_api_key_cache (10hr TTL) → Fast acceptance
-3. Database Argon2 verification → Expensive but secure
-```
-
-```python
-# database/auth_db.py
-def verify_api_key(api_key: str) -> Optional[str]:
-    key_hash = hashlib.sha256(api_key.encode()).hexdigest()
-
-    # Level 1: Invalid cache (fast rejection)
-    if key_hash in invalid_api_key_cache:
-        return None
-
-    # Level 2: Valid cache (fast acceptance)
-    if key_hash in verified_api_key_cache:
-        return verified_api_key_cache[key_hash]
-
-    # Level 3: Database verification
-    user_id = db_verify_api_key_argon2(api_key)
-
-    if user_id:
-        verified_api_key_cache[key_hash] = user_id
-    else:
-        invalid_api_key_cache[key_hash] = True
-
-    return user_id
-```
-
-### Session Security
-
-```python
-# app.py
-app.config.update(
-    SESSION_COOKIE_HTTPONLY=True,    # No JavaScript access
-    SESSION_COOKIE_SAMESITE='Lax',   # CSRF protection
-    SESSION_COOKIE_SECURE=USE_HTTPS, # HTTPS only
-)
-
-# Session expiry at 3:30 AM IST
-app.config['PERMANENT_SESSION_LIFETIME'] = get_session_expiry_time()
-session.permanent = True
-```
-
-## Layer 5: Data Security
-
-### Auth Token Encryption
-
-**Fernet Encryption for Broker Tokens:**
-
-```python
-# database/auth_db.py
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-
-def get_encryption_key():
-    """Generate Fernet key from pepper"""
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=b'openalgo_static_salt',
-        iterations=100000,
-    )
-    key = base64.urlsafe_b64encode(kdf.derive(PEPPER.encode()))
-    return Fernet(key)
-
-fernet = get_encryption_key()
-
-def encrypt_token(token):
-    return fernet.encrypt(token.encode()).decode()
-
-def decrypt_token(encrypted_token):
-    return fernet.decrypt(encrypted_token.encode()).decode()
-```
-
-### Database Isolation
-
-Five separate databases prevent cross-contamination:
-
-| Database | Contents | Sensitivity |
-|----------|----------|-------------|
-| `openalgo.db` | Users, auth tokens, orders | High |
-| `logs.db` | Traffic logs, IP bans | Medium |
-| `latency.db` | Performance metrics | Low |
-| `sandbox.db` | Sandbox trading data | Medium |
-| `historify.duckdb` | Historical market data | Low |
-
-### Sensitive Data Protection
-
-**Log Redaction:**
-```python
-# Sensitive fields never logged in plaintext
-SENSITIVE_FIELDS = ['password', 'api_key', 'auth_token', 'access_token']
-
-def redact_sensitive_data(data):
-    for field in SENSITIVE_FIELDS:
-        if field in data:
-            data[field] = '***REDACTED***'
-    return data
-```
-
-## Security Configuration Summary
-
-### Environment Variables
-
-```bash
-# Required Security Keys
-APP_KEY=<32+ character secret key>
-API_KEY_PEPPER=<32+ character pepper>
-
-# HTTPS Configuration
-HOST_SERVER=https://your-domain.com
-
-# Session
-SESSION_EXPIRY_TIME=03:00
-SESSION_COOKIE_NAME=session
-
-# CSRF
-CSRF_ENABLED=TRUE
-
-# CSP
-CSP_ENABLED=TRUE
-CSP_DEFAULT_SRC='self'
-CSP_SCRIPT_SRC='self' https://cdn.socket.io
-
-# CORS
-CORS_ENABLED=FALSE
-CORS_ALLOWED_ORIGINS=https://your-domain.com
-
-# Rate Limiting
-LOGIN_RATE_LIMIT_MIN=5 per minute
-LOGIN_RATE_LIMIT_HOUR=25 per hour
-```
-
-## Security Checklist
-
-### Startup Validation
-
-```python
-# database/auth_db.py
-# Fails fast if security requirements not met
-
-if not os.getenv('API_KEY_PEPPER'):
-    raise RuntimeError("CRITICAL: API_KEY_PEPPER not set")
-
-if len(os.getenv('API_KEY_PEPPER')) < 32:
-    raise RuntimeError("CRITICAL: API_KEY_PEPPER must be at least 32 characters")
-```
-
-### Security Best Practices
-
-1. **Always use HTTPS in production**
-2. **Never log sensitive data (passwords, tokens)**
-3. **Use rate limiting on all authentication endpoints**
-4. **Implement IP banning for abusive IPs**
-5. **Keep API_KEY_PEPPER secure and backed up**
-6. **Monitor 404 errors for attack detection**
-7. **Use secure cookie attributes**
-8. **Implement proper CSRF protection**
-
-## Key Files Reference
-
-| File | Purpose |
-|------|---------|
-| `app.py` | Security initialization |
-| `csp.py` | Content Security Policy |
-| `cors.py` | CORS configuration |
-| `limiter.py` | Rate limiting |
-| `utils/security_middleware.py` | IP banning middleware |
-| `database/auth_db.py` | Password/API key hashing |
-| `database/traffic_db.py` | IP ban model |
+The internal ZeroMQ market-data endpoint is unauthenticated and must remain private. The public market-data WebSocket has its own API-key authentication handshake.
+
+## Application Authentication
+
+Application passwords are Argon2-hashed with `API_KEY_PEPPER`. TOTP can be required independently for login, Remote MCP write authorization, and password reset.
+
+Device sessions and the installation-wide broker session are separate:
+
+- at most five active application sessions are retained per user;
+- same-user/same-IP login replaces the existing device row;
+- session-status polling refreshes `last_seen` no more than once every 30 seconds;
+- broker-token expiry preserves a valid app session and reports reconnect state;
+- password changes revoke active device sessions.
+
+The default daily session boundary is `03:00` IST. `DISABLE_SESSION_EXPIRY=true` supports deliberately continuous deployments such as crypto, but it expands session lifetime and should be an explicit decision.
+
+## API Keys And Tokens
+
+OpenAlgo generates one current 64-character hexadecimal API key per user. `database/auth_db.py` stores:
+
+- an Argon2 hash for verification;
+- an encrypted copy for authenticated UI and integration retrieval;
+- hashed cache keys for positive and negative verification caches.
+
+Regeneration invalidates the prior key. The key has no per-operation scopes; public REST operations remain subject to schemas, Analyzer Mode, Action Center policy, services, and rate limits.
+
+Broker auth/feed tokens and other supported token fields use Fernet. The key is derived from `API_KEY_PEPPER` and the per-install `FERNET_SALT`. A legacy static-salt fallback exists only for migration compatibility and must not be documented as the normal installation design.
+
+Static broker application credentials remain in `.env`; masking them in Profile responses does not encrypt that file.
+
+## Browser And REST Policy
+
+- HTTPS deployments use Secure, HTTP-only, SameSite session cookies and the `__Secure-` prefix where configured.
+- Session-authenticated state changes use CSRF protection unless a route has a specific callback/webhook exemption.
+- `/api/v1` is CSRF-exempt because it uses API-key request authentication.
+- CORS, CSP, referrer, permissions, framing, and related response headers are configured centrally.
+- Debug mode is rejected on externally bound hosts unless the operator explicitly overrides the guard.
+
+Most REST schemas require `apikey` in the JSON body. Only endpoints that explicitly implement another location should accept a header or query parameter.
+
+## IP Security
+
+`SecurityMiddleware` checks the resolved client IP against `logs.db` before Flask handles the request. `TRUST_PROXY_HEADERS` is false by default; forwarded headers are accepted only when it is enabled. Enabling it without an enforced reverse-proxy boundary permits IP spoofing.
+
+Automatic banning is persisted in application settings and is off by default:
+
+| Setting | Default |
+|---|---:|
+| 404 threshold in 24 hours | 100 |
+| 404 ban duration | 0 hours (permanent) |
+| Invalid API-key threshold in 24 hours | 100 |
+| Invalid API-key ban duration | 0 hours (permanent) |
+| Repeat-offender limit | 2 bans |
+
+Localhost addresses are excluded from automatic bans. There is no general CIDR allowlist in the application middleware. See [23 IP Security](../23-ip-security/).
+
+## Traffic And Audit Boundaries
+
+Traffic logging stores timestamp, client IP, method, path, status, duration, host, optional middleware error, and user ID when available. It does not store request/response bodies, headers, user agents, or a processing timeline.
+
+Order, analyzer, login, MCP, latency, health, and notification events use separate persistence or logging paths. `logs.db` traffic rows are therefore not a complete audit trail of every state change.
+
+## WebSocket And MCP Security
+
+The public market-data proxy requires an API-key authentication message within `WS_AUTH_GRACE_SECONDS`. Per-client queue size, ping interval, timeout, and subscription capacity are bounded by configuration. Private order, position, and margin topics are not fanned out as public market data.
+
+Remote MCP is opt-in. Its OAuth boundary implements exact redirect-URI checks, S256-only PKCE, signed access tokens, refresh-token rotation, and token-family revocation after refresh-token reuse. The sample keeps HTTP off but has approval off and write scope enabled if only the master switch is changed; the Docker enable helper applies approval on and write scope off. Write authorization can require fresh TOTP.
+
+## Data Protection
+
+Five SQLite databases and one DuckDB store isolate operational domains; this is not database-wide encryption. Backups must protect all stores together with `.env`, Fernet material, strategy secrets, and MCP signing keys.
+
+| Store | Security-relevant contents |
+|---|---|
+| `openalgo.db` | Users, hashes, encrypted tokens/API key copy, settings, sessions, OAuth and application state |
+| `logs.db` | Traffic metadata, login/security trackers, IP bans |
+| `latency.db` | Timing telemetry |
+| `health.db` | Runtime health telemetry |
+| `sandbox.db` | Simulated account and order state |
+| `historify.duckdb` | Historical market data and Historify metadata |
+
+## Key Files
+
+| File | Responsibility |
+|---|---|
+| `app.py` | Security initialization, CSRF exemptions, headers, teardown |
+| `database/user_db.py` | Password/TOTP user model |
+| `database/auth_db.py` | API-key verification, encrypted tokens, sessions |
+| `database/traffic_db.py` | Traffic and IP security persistence |
+| `database/settings_db.py` | Persisted automatic-ban settings |
+| `utils/security_middleware.py` | Pre-Flask ban enforcement |
+| `utils/ip_helper.py` | Trusted client-IP resolution |
+| `utils/session.py` | Session-expiry guards |
+| `blueprints/security.py` | Security dashboard controls |
+| `blueprints/mcp_oauth.py` | Remote MCP OAuth boundary |

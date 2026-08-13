@@ -534,10 +534,23 @@ class BrokerData:
                     # For multiple days, split into chunks
                     date_chunks = self._get_intraday_chunks(start_date, end_date)
 
+                    # Track per-chunk candle counts (in chunk order) so we can detect
+                    # interior gaps: an empty chunk bracketed by data-bearing chunks is
+                    # almost certainly a bad empty-200 response, not a genuine absence.
+                    chunk_results = []
+
                     for chunk_start, chunk_end in date_chunks:
-                        # Skip if both dates are non-trading days
-                        if not self._is_trading_day(chunk_start) and not self._is_trading_day(
-                            chunk_end
+                        # Skip only if the ENTIRE chunk range contains no trading day.
+                        # The old check looked at the two endpoints only, which silently
+                        # discarded a whole ~90-day chunk whenever both the start and end
+                        # happened to fall on a weekend -- losing ~63 trading days inside
+                        # it. That endpoint-only gate was the root cause of the recurring
+                        # interior gaps (e.g. 2021-12-12..2022-03-12, both Sun/Sat).
+                        cs_dt = datetime.strptime(chunk_start, "%Y-%m-%d")
+                        ce_dt = datetime.strptime(chunk_end, "%Y-%m-%d")
+                        if not any(
+                            (cs_dt + timedelta(days=n)).weekday() < 5
+                            for n in range((ce_dt - cs_dt).days + 1)
                         ):
                             continue
 
@@ -559,38 +572,106 @@ class BrokerData:
                         logger.debug(f"Making intraday history request to {endpoint}")
                         logger.debug(f"Request data: {json.dumps(request_data, indent=2)}")
 
-                        try:
-                            response = get_api_response(
-                                endpoint, self.auth_token, "POST", json.dumps(request_data)
+                        # Retry each chunk independently. get_api_response already
+                        # retries Dhan error 805 (rate limit) internally; this outer
+                        # loop covers transient network/5xx errors, exhausted 805
+                        # retries, AND empty HTTP-200 responses (Dhan occasionally
+                        # returns 200 with no candles for a valid window). A silently
+                        # dropped 90-day chunk would otherwise leave a permanent hole
+                        # in the stored history while the download still reported
+                        # success, so we retry and ultimately surface the failure.
+                        CHUNK_MAX_RETRIES = 3
+                        last_error = None
+                        chunk_candle_count = 0
+                        for attempt in range(CHUNK_MAX_RETRIES):
+                            try:
+                                response = get_api_response(
+                                    endpoint, self.auth_token, "POST", json.dumps(request_data)
+                                )
+
+                                # Build this chunk's candles separately so a retry
+                                # never double-appends a partially processed chunk.
+                                timestamps = response.get("timestamp", [])
+                                opens = response.get("open", [])
+                                highs = response.get("high", [])
+                                lows = response.get("low", [])
+                                closes = response.get("close", [])
+                                volumes = response.get("volume", [])
+                                openinterest = response.get("open_interest", [])
+                                chunk_rows = []
+                                for i in range(len(timestamps)):
+                                    # Convert UTC timestamp to IST
+                                    ist_timestamp = self._convert_timestamp_to_ist(timestamps[i])
+                                    chunk_rows.append(
+                                        {
+                                            "timestamp": ist_timestamp,
+                                            "open": float(opens[i]) if opens[i] else 0,
+                                            "high": float(highs[i]) if highs[i] else 0,
+                                            "low": float(lows[i]) if lows[i] else 0,
+                                            "close": float(closes[i]) if closes[i] else 0,
+                                            "volume": int(float(volumes[i])) if volumes[i] else 0,
+                                            "oi": int(float(openinterest[i])) if openinterest[i] else 0,
+                                        }
+                                    )
+
+                                # An empty 200 over a window that passed the trading-day
+                                # gate is suspicious -- retry before accepting it.
+                                if not chunk_rows and attempt < CHUNK_MAX_RETRIES - 1:
+                                    backoff = 2.0 * (2**attempt)
+                                    logger.warning(
+                                        f"Chunk {chunk_start} to {chunk_end} returned 0 "
+                                        f"candles (attempt {attempt + 1}/{CHUNK_MAX_RETRIES}); "
+                                        f"retrying in {backoff:.1f}s"
+                                    )
+                                    time.sleep(backoff)
+                                    continue
+
+                                all_candles.extend(chunk_rows)
+                                chunk_candle_count = len(chunk_rows)
+                                last_error = None
+                                break
+                            except Exception as e:
+                                last_error = e
+                                if attempt < CHUNK_MAX_RETRIES - 1:
+                                    backoff = 2.0 * (2**attempt)
+                                    logger.warning(
+                                        f"Error fetching chunk {chunk_start} to {chunk_end} "
+                                        f"(attempt {attempt + 1}/{CHUNK_MAX_RETRIES}): {str(e)}. "
+                                        f"Retrying in {backoff:.1f}s"
+                                    )
+                                    time.sleep(backoff)
+
+                        if last_error is not None:
+                            # Do NOT swallow the failure -- propagate so the caller
+                            # (e.g. Historify) marks the symbol failed and can retry,
+                            # instead of persisting a partial range as a success.
+                            raise Exception(
+                                f"Failed to fetch chunk {chunk_start} to {chunk_end} "
+                                f"after {CHUNK_MAX_RETRIES} attempts: {str(last_error)}"
                             )
 
-                            # Process response
-                            timestamps = response.get("timestamp", [])
-                            opens = response.get("open", [])
-                            highs = response.get("high", [])
-                            lows = response.get("low", [])
-                            closes = response.get("close", [])
-                            volumes = response.get("volume", [])
-                            openinterest = response.get("open_interest", [])
-                            for i in range(len(timestamps)):
-                                # Convert UTC timestamp to IST
-                                ist_timestamp = self._convert_timestamp_to_ist(timestamps[i])
-                                all_candles.append(
-                                    {
-                                        "timestamp": ist_timestamp,
-                                        "open": float(opens[i]) if opens[i] else 0,
-                                        "high": float(highs[i]) if highs[i] else 0,
-                                        "low": float(lows[i]) if lows[i] else 0,
-                                        "close": float(closes[i]) if closes[i] else 0,
-                                        "volume": int(float(volumes[i])) if volumes[i] else 0,
-                                        "oi": int(float(openinterest[i])) if openinterest[i] else 0,
-                                    }
-                                )
-                        except Exception as e:
-                            logger.error(
-                                f"Error fetching chunk {chunk_start} to {chunk_end}: {str(e)}"
+                        chunk_results.append((chunk_start, chunk_end, chunk_candle_count))
+
+                    # Detect interior gaps: an empty chunk that has data-bearing chunks
+                    # both before and after it. Leading empty chunks (before a symbol's
+                    # listing date) and trailing ones (today's partial / post-delisting)
+                    # are legitimate and left alone; only a hole *inside* a symbol's live
+                    # history indicates a bad empty-200 response we must not persist.
+                    nonempty_idx = [i for i, (_, _, c) in enumerate(chunk_results) if c > 0]
+                    if nonempty_idx:
+                        first_data, last_data = nonempty_idx[0], nonempty_idx[-1]
+                        interior_empty = [
+                            (s, e)
+                            for i, (s, e, c) in enumerate(chunk_results)
+                            if c == 0 and first_data < i < last_data
+                        ]
+                        if interior_empty:
+                            ranges = ", ".join(f"{s} to {e}" for s, e in interior_empty)
+                            raise Exception(
+                                f"Dhan returned empty data for interior chunk(s) "
+                                f"({ranges}) while surrounding chunks had data; refusing "
+                                f"to persist a partial history with a gap. Retry the symbol."
                             )
-                            continue
 
             # For daily timeframe, check if today's date is within the range
             if interval == "D":

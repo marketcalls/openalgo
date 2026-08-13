@@ -1,6 +1,6 @@
 import { ArrowLeft, Calendar, ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { adminApi } from '@/api/admin'
 import {
   AlertDialog,

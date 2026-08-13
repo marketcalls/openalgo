@@ -231,7 +231,7 @@ Before you install, confirm:
 - [ ] At least 2 GB RAM available
 - [ ] At least 1 GB free disk space
 - [ ] Stable internet connection
-- [ ] Python 3.11+ installed (or will install)
+- [ ] Python 3.12+ installed (or will install)
 - [ ] Know which broker you'll use
 - [ ] Have broker API credentials ready
 
@@ -243,7 +243,7 @@ Minimum Setup:
 │ • 2 GB RAM                  │
 │ • 1 vCPU                    │
 │ • 1 GB Storage              │
-│ • Python 3.11+              │
+│ • Python 3.12+              │
 │ • Stable Internet           │
 └─────────────────────────────┘
 
@@ -260,6 +260,6 @@ Recommended Setup:
 
 ---
 
-**Previous**: [02 - Key Concepts](../02-key-concepts/README.md)
+**Previous**: [03 - Key Concepts](../03-key-concepts/README.md)
 
 **Next**: [04 - Installation Guide](../04-installation/README.md)

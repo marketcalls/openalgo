@@ -51,7 +51,7 @@ def test_nifty_call_greeks():
         print(json.dumps(result, indent=2))
 
         if result.get("status") == "success":
-            print("\n📊 Greeks Summary:")
+            print("\n Greeks Summary:")
             print(f"   Delta: {result['greeks']['delta']}")
             print(f"   Gamma: {result['greeks']['gamma']}")
             print(f"   Theta: {result['greeks']['theta']}")
@@ -83,7 +83,7 @@ def test_banknifty_put_greeks():
         print(json.dumps(result, indent=2))
 
         if result.get("status") == "success":
-            print("\n📊 Greeks Summary:")
+            print("\n Greeks Summary:")
             print(f"   Delta: {result['greeks']['delta']} (Put delta is negative)")
             print(f"   Theta: {result['greeks']['theta']} (Time decay)")
             print(f"   Days to Expiry: {result['days_to_expiry']}")
@@ -118,7 +118,7 @@ def test_custom_interest_rate():
         print(json.dumps(result, indent=2))
 
         if result.get("status") == "success":
-            print(f"\n📊 Using Interest Rate: {result['interest_rate']}%")
+            print(f"\n Using Interest Rate: {result['interest_rate']}%")
             print(f"   Rho: {result['greeks']['rho']} (Interest rate sensitivity)")
 
     except Exception as e:
@@ -174,7 +174,7 @@ def test_currency_option_greeks():
         print(json.dumps(result, indent=2))
 
         if result.get("status") == "success":
-            print("\n💱 Currency Option:")
+            print("\n Currency Option:")
             print(f"   Spot: {result['spot_price']}")
             print(f"   Strike: {result['strike']}")
 
@@ -223,7 +223,7 @@ def test_mcx_custom_expiry_time():
 
     print("\nRequest Payload:")
     print(json.dumps(payload, indent=2))
-    print("\n⚠️  Note: Gold expires at 17:00 (5 PM), not the default 23:30")
+    print("\n Note: Gold expires at 17:00 (5 PM), not the default 23:30")
     print("   Using custom expiry_time for accurate Greeks calculation")
 
     try:
@@ -234,7 +234,7 @@ def test_mcx_custom_expiry_time():
         print(json.dumps(result, indent=2))
 
         if result.get("status") == "success":
-            print("\n📊 MCX Commodity Greeks:")
+            print("\n MCX Commodity Greeks:")
             print(f"   Days to Expiry: {result['days_to_expiry']}")
             print(f"   Theta: {result['greeks']['theta']} (Time decay)")
             print(f"   Delta: {result['greeks']['delta']}")
@@ -334,7 +334,7 @@ def test_compare_call_put_greeks():
     put_payload = {"apikey": API_KEY, "symbol": "NIFTY28NOV2424000PE", "exchange": "NFO"}
 
     try:
-        print("\n📞 CALL Option:")
+        print("\n CALL Option:")
         call_response = requests.post(url, json=call_payload)
         call_result = call_response.json()
 
@@ -343,7 +343,7 @@ def test_compare_call_put_greeks():
             print(f"   Gamma: {call_result['greeks']['gamma']}")
             print(f"   IV: {call_result['implied_volatility']}%")
 
-        print("\n📉 PUT Option:")
+        print("\n PUT Option:")
         put_response = requests.post(url, json=put_payload)
         put_result = put_response.json()
 
@@ -353,7 +353,7 @@ def test_compare_call_put_greeks():
             print(f"   IV: {put_result['implied_volatility']}%")
 
         if call_result.get("status") == "success" and put_result.get("status") == "success":
-            print("\n✓ Put-Call Parity Check:")
+            print("\n Put-Call Parity Check:")
             print(
                 f"   Gamma should be equal: {call_result['greeks']['gamma']:.6f} vs {put_result['greeks']['gamma']:.6f}"
             )
@@ -371,7 +371,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print(f"\nBase URL: {BASE_URL}")
     print(f"API Key: {API_KEY[:10]}..." if len(API_KEY) > 10 else f"API Key: {API_KEY}")
-    print("\n⚠️  Prerequisites:")
+    print("\n Prerequisites:")
     print("  1. Install mibian: pip install mibian")
     print("  2. OpenAlgo must be running")
     print("  3. Markets should be open for live prices")
@@ -382,9 +382,9 @@ if __name__ == "__main__":
     try:
         import mibian
 
-        print("\n✓ mibian library is installed")
+        print("\n mibian library is installed")
     except ImportError:
-        print("\n✗ mibian library NOT installed!")
+        print("\n mibian library NOT installed!")
         print("  Install with: pip install mibian")
         print("  Or with uv: uv pip install mibian")
         print("\nExiting...")

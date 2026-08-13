@@ -1,7 +1,7 @@
 import json
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 import httpx
@@ -46,8 +46,12 @@ def normalize_exchange_for_query(symbol: str, exchange: str) -> str:
         "INDIAVIX",
     ]
 
-    # Check if symbol is an index
-    if symbol.upper() in index_symbols or "NIFTY" in symbol.upper() or "SENSEX" in symbol.upper():
+    # Match only on an EXACT symbol name. A substring test ("NIFTY" in symbol)
+    # is too broad: it wrongly remaps tradeable cash instruments such as
+    # NIFTYBEES / JUNIORBEES to *_INDEX, so their (non-index) token is never
+    # found and history comes back empty. Real index spot names are enumerated
+    # above, so exact membership is both sufficient and safe.
+    if symbol.upper() in index_symbols:
         if exchange == "NSE":
             return "NSE_INDEX"
         elif exchange == "BSE":
@@ -106,11 +110,17 @@ class BrokerData:
     def __init__(self, auth_token):
         """Initialize 5Paisa data handler with authentication token"""
         self.auth_token = auth_token
-        # Map common timeframe format to 5Paisa resolutions
+        # Map common timeframe format to 5Paisa resolutions.
+        #
+        # This table is also what services/intervals_service.py advertises as
+        # 5Paisa's supported intervals, so it must list exactly the intervals
+        # the Historical Candles API accepts: 1m, 5m, 10m, 15m, 30m, 60m, 1d
+        # (broker-api-docs/fivepaisa-api-docs/09-market-data-rest.md). "3m" used
+        # to be advertised here; 5Paisa has no 3-minute candle, and map_interval
+        # quietly fell back to daily, so a 3m request returned daily bars.
         self.timeframe_map = {
             # Minutes
             "1m": "1",
-            "3m": "3",
             "5m": "5",
             "10m": "10",
             "15m": "15",
@@ -469,7 +479,7 @@ class BrokerData:
 
                 for i in range(0, len(symbols), BATCH_SIZE):
                     batch = symbols[i : i + BATCH_SIZE]
-                    logger.info(
+                    logger.debug(
                         f"Processing batch {i // BATCH_SIZE + 1}: symbols {i + 1} to {min(i + BATCH_SIZE, len(symbols))}"
                     )
 
@@ -639,21 +649,39 @@ class BrokerData:
             logger.error(f"Error processing quotes batch: {e}")
             raise
 
-    def map_interval(self, interval: str) -> str:
-        """Map openalgo interval to 5paisa interval"""
+    def map_interval(self, interval: str) -> str | None:
+        """Map an OpenAlgo interval to the 5Paisa Historical Candles path segment.
+
+        Keys are OpenAlgo's public interval aliases; values are the Interval
+        codes 5Paisa's URL expects
+        (broker-api-docs/fivepaisa-api-docs/09-market-data-rest.md): 1m, 5m,
+        10m, 15m, 30m, **60m**, 1d. The hourly code is "60m" — sending "1h"
+        (as this did) is not a code 5Paisa accepts, so hourly history failed.
+
+        Note the keys deliberately stay in step with `timeframe_map`, which
+        services/intervals_service.py publishes as this broker's supported set:
+        accepting an alias that is never advertised (or vice versa) leaves
+        clients guessing. "1h" is OpenAlgo's public name for hourly across the
+        brokers here, and intervals_service buckets by suffix — so also
+        accepting "60m" would have meant advertising the same timeframe twice,
+        once under minutes and once under hours.
+
+        Returns None for anything unsupported so get_history raises instead of
+        silently serving daily candles for, say, a 2m request.
+        """
         interval_map = {
             "1m": "1m",
             "5m": "5m",
             "10m": "10m",
             "15m": "15m",
             "30m": "30m",
-            "1h": "1h",
+            "1h": "60m",
             # Handle all daily timeframe variants
             "1d": "1d",
             "D": "1d",
             "d": "1d",  # Also map lowercase 'd'
         }
-        return interval_map.get(interval, "1d")
+        return interval_map.get(interval)
 
     def _process_raw_candles(self, raw_data, interval):
         """
@@ -683,7 +711,7 @@ class BrokerData:
         # Reorder columns
         df = df[["timestamp", "open", "high", "low", "close", "volume"]]
 
-        logger.info(f"Processed {len(df)} candles from raw data")
+        logger.debug(f"Processed {len(df)} candles from raw data")
         return df
 
     def get_history(
@@ -709,15 +737,22 @@ class BrokerData:
                 interval = "1d"  # Always use 1d internally for daily
                 logger.debug(f"Debug: Converted interval from {original_interval} to {interval}")
 
+            # Normalize exchange for index symbols. Index tokens are stored under
+            # NSE_INDEX / BSE_INDEX in the symbol DB, so looking them up with the
+            # raw NSE / BSE exchange returns the wrong (or no) token and the
+            # historical API then returns nothing.
+            normalized_exchange = normalize_exchange_for_query(symbol, exchange)
+            is_index = normalized_exchange.endswith("_INDEX")
+
             # Get token from symbol
-            token = get_token(symbol, exchange)
+            token = get_token(symbol, normalized_exchange)
 
             # Map interval
             fivepaisa_interval = self.map_interval(interval)
             logger.debug(f"Debug: Mapped {interval} to {fivepaisa_interval}")
 
             if not fivepaisa_interval:
-                supported = ["1m", "5m", "15m", "30m", "1h", "1d"]
+                supported = ["1m", "5m", "10m", "15m", "30m", "1h", "1d"]
                 raise Exception(
                     f"Unsupported interval '{interval}'. Supported intervals: {', '.join(supported)}"
                 )
@@ -782,7 +817,7 @@ class BrokerData:
 
                     candles = response.get("data", {}).get("candles", [])
                     if not candles:
-                        logger.info(f"No data for chunk {chunk_start} to {chunk_end}")
+                        logger.debug(f"No data for chunk {chunk_start} to {chunk_end}")
                         current_start = current_end + pd.Timedelta(days=1)
                         continue
 
@@ -794,10 +829,10 @@ class BrokerData:
                             if len(candle) < 6:
                                 continue
 
-                            # Parse date and values
+                            # Parse the candle datetime. 5Paisa historical candles
+                            # are stamped in IST wall-clock (e.g. 2026-06-17T09:15:00),
+                            # so keep it naive here and localize per-branch below.
                             dt = datetime.strptime(candle[0], "%Y-%m-%dT%H:%M:%S")
-                            # Make the datetime timezone-aware (UTC)
-                            dt = pytz.UTC.localize(dt)
 
                             open_price = float(candle[1])
                             high_price = float(candle[2])
@@ -809,17 +844,36 @@ class BrokerData:
                             # 1. Zero volume
                             # 2. All prices are zero
                             # 3. High = Low (usually indicates no trading)
-                            if (
-                                volume == 0
-                                or (
-                                    open_price == 0
-                                    and high_price == 0
-                                    and low_price == 0
-                                    and close_price == 0
-                                )
-                                or (high_price == low_price)
-                            ):
-                                continue
+                            #
+                            # Indices (NIFTY, SENSEX, INDIAVIX, ...) have no traded
+                            # volume, so a zero-volume candle is valid data for them.
+                            # Applying the volume/high==low filters to indices drops
+                            # every candle. For indices we only skip fully-empty
+                            # (all-zero OHLC) candles.
+                            all_prices_zero = (
+                                open_price == 0
+                                and high_price == 0
+                                and low_price == 0
+                                and close_price == 0
+                            )
+                            if is_index:
+                                # Indices have no traded volume; only fully-empty.
+                                if all_prices_zero:
+                                    continue
+                            elif interval.upper() == "D":
+                                # Daily non-index: a holiday/no-trade day shows up as
+                                # flat or empty data, so the stricter filter is correct
+                                # at this resolution.
+                                if volume == 0 or all_prices_zero or (high_price == low_price):
+                                    continue
+                            else:
+                                # Intraday non-index: a quiet minute legitimately has
+                                # volume == 0 and/or high == low. Dropping those candles
+                                # (combined with the old index-based timestamp rebuild)
+                                # made intraday series appear to stop mid-session. Only
+                                # drop genuinely empty candles.
+                                if all_prices_zero:
+                                    continue
 
                             # For daily candles, create timestamp at midnight UTC like Angel does
                             if interval.upper() == "D":
@@ -832,28 +886,13 @@ class BrokerData:
                                 dt_midnight = pytz.UTC.localize(dt_midnight)
                                 timestamp_sec = int(dt_midnight.timestamp())
                             else:
-                                # For intraday candles, convert to IST and fix market hours
+                                # Intraday: localize the API's IST wall-clock time
+                                # directly and keep it. We use the REAL candle time
+                                # (no market-hours shifting, no index-based rebuild),
+                                # so missing/filtered candles leave honest gaps instead
+                                # of silently shifting the whole series earlier.
                                 ist = pytz.timezone("Asia/Kolkata")
-                                dt = dt.astimezone(ist)
-
-                                # Make sure we handle the timing correctly
-                                # Create a reference time at 9:15 AM on the same date
-                                market_open = dt.replace(hour=9, minute=15, second=0)
-
-                                # Check if the timestamp is outside of valid market hours
-                                if (
-                                    dt.hour < 9
-                                    or (dt.hour == 9 and dt.minute < 15)
-                                    or dt.hour > 15
-                                    or (dt.hour == 15 and dt.minute > 30)
-                                ):
-                                    # Shift to market hours by making it relative to market open
-                                    minutes_offset = (dt.hour * 60 + dt.minute) % (
-                                        6 * 60 + 15
-                                    )  # 6h15m market duration
-                                    dt = market_open + timedelta(minutes=minutes_offset)
-
-                                # Convert to Unix timestamp in seconds
+                                dt = ist.localize(dt)
                                 timestamp_sec = int(dt.timestamp())
 
                             transformed_candle = {
@@ -879,7 +918,7 @@ class BrokerData:
                             )
                             continue
                         dfs.append(chunk_df)
-                        logger.info(f"Added {len(transformed_candles)} candles from chunk")
+                        logger.debug(f"Added {len(transformed_candles)} candles from chunk")
 
                 except Exception as e:
                     logger.error(f"Error processing chunk {chunk_start} to {chunk_end}: {e}")
@@ -922,16 +961,12 @@ class BrokerData:
                     f"Debug: First timestamp value: {df['timestamp'].iloc[0] if len(df) > 0 else 'empty'}"
                 )
             else:
-                # For intraday data, apply timestamp fixing
-                if interval == "10m" and not df.empty:
-                    logger.debug("Debug: Fixing 10m timestamps")
-                    df = self.fix_timestamps(df, "10m")
-                else:
-                    logger.debug(f"Debug: Fixing timestamps for {interval}")
-                    df = self.fix_timestamps(df, interval)
-
-                # Convert back to Unix timestamp in seconds
-                df["timestamp"] = df["timestamp"].astype("int64") // 10**9
+                # Intraday timestamps are already the real IST candle times stored
+                # as epoch seconds. Keep them verbatim — do NOT renumber by row
+                # index (the old fix_timestamps() rebuilt every timestamp as
+                # 09:15 + i*interval, which assumed a gapless series and truncated
+                # the session whenever any candle was filtered out).
+                df["timestamp"] = df["timestamp"].astype("int64")
 
             # Log first timestamp after processing
             if len(df) > 0:
@@ -972,108 +1007,7 @@ class BrokerData:
 
             raise
 
-    def fix_timestamps(self, df, interval):
-        """
-        Helper function to fix timestamps in any DataFrame
-        Args:
-            df: DataFrame with timestamp column
-            interval: Time interval (e.g., 1m, 5m, 15m, 30m, 1h, 1d)
-        Returns:
-            DataFrame with fixed timestamps
-        """
-        # Make a copy to avoid modifying the original
-        df = df.copy()
-
-        # Ensure timestamp is a pandas datetime
-        if pd.api.types.is_numeric_dtype(df["timestamp"]):
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
-        elif not pd.api.types.is_datetime64_dtype(df["timestamp"]):
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
-
-        # Add timezone info if not present
-        if df["timestamp"].dt.tz is None:
-            # Assume timestamps are in IST
-            ist = pytz.timezone("Asia/Kolkata")
-            df["timestamp"] = df["timestamp"].dt.tz_localize(ist)
-
-        # Extract unique dates
-        dates = df["timestamp"].dt.date.unique()
-
-        # Check if we're getting daily candles with intraday interval
-        is_daily_data = True
-        # Group by date and check if there's only one candle per date
-        date_counts = df.groupby(df["timestamp"].dt.date).size()
-        if (date_counts > 1).any():
-            # If any date has more than one candle, it's not daily data
-            is_daily_data = False
-
-        # Get interval in minutes
-        interval_minutes = 5
-        # Standardize how we check for daily interval
-        is_daily_interval = interval.upper() == "D" or interval == "1d" or interval == "d"
-        logger.debug(
-            f"Debug: is_daily_interval={is_daily_interval}, is_daily_data={is_daily_data}, interval={interval}"
-        )
-
-        if is_daily_interval or is_daily_data:
-            # For daily or data that looks like daily (1 candle per day),
-            # set all to 9:15 AM
-            df["timestamp"] = df["timestamp"].apply(
-                lambda ts: ts.replace(hour=9, minute=15, second=0)
-            )
-            return df
-        else:
-            # Parse interval
-            if "m" in interval.lower():
-                try:
-                    interval_minutes = int(interval.lower().replace("m", ""))
-                except Exception:
-                    interval_minutes = 5
-            elif "h" in interval.lower():
-                try:
-                    interval_minutes = int(interval.lower().replace("h", "")) * 60
-                except Exception:
-                    interval_minutes = 60
-
-        # Create new timestamps dictionary by date
-        new_timestamps = {}
-
-        for date in dates:
-            # Get candles for this date
-            mask = df["timestamp"].dt.date == date
-            date_candles = df[mask]
-
-            # Create proper sequence of timestamps based on interval
-            # Market always opens at 9:15 AM
-            market_open_hour = 9
-            first_candle_minute = 15  # 9:15 AM
-
-            market_open = pd.Timestamp(date).replace(
-                hour=market_open_hour, minute=first_candle_minute, second=0
-            )
-            market_open = market_open.tz_localize(pytz.timezone("Asia/Kolkata"))
-
-            # Store index to timestamp mapping
-            idx_to_ts = {}
-            for i, idx in enumerate(date_candles.index):
-                new_ts = market_open + pd.Timedelta(minutes=i * interval_minutes)
-                # Ensure we don't exceed market hours
-                if new_ts.hour > 15 or (new_ts.hour == 15 and new_ts.minute > 30):
-                    new_ts = market_open.replace(hour=15, minute=30)
-                idx_to_ts[idx] = new_ts
-
-            # Add to our dictionary
-            new_timestamps.update(idx_to_ts)
-
-        # Replace timestamps
-        for idx, ts in new_timestamps.items():
-            df.loc[idx, "timestamp"] = ts
-
-        # Sort by the new timestamps
-        df = df.sort_values("timestamp").reset_index(drop=True)
-
-        return df
-
     def get_supported_intervals(self) -> list:
-        """Get list of supported intervals"""
+        """Get list of supported intervals (mirrors timeframe_map / the
+        Historical Candles Interval codes in the 5Paisa docs)."""
         return ["1m", "5m", "10m", "15m", "30m", "1h", "D"]

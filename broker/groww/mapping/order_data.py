@@ -111,14 +111,17 @@ def map_order_data(order_data):
                 # Look up in database
                 from broker.groww.database.master_contract_db import SymToken, db_session
 
-                db_record = (
-                    db_session.query(SymToken)
-                    .filter_by(brsymbol=broker_symbol, brexchange=exchange)
-                    .first()
-                )
-                if db_record and db_record.symbol:
-                    openalgo_symbol = db_record.symbol
-                    logger.info(f"Found symbol in database: {broker_symbol} -> {openalgo_symbol}")
+                with db_session() as session:
+                    db_record = (
+                        session.query(SymToken)
+                        .filter_by(brsymbol=broker_symbol, brexchange=exchange)
+                        .first()
+                    )
+                    if db_record and db_record.symbol:
+                        openalgo_symbol = db_record.symbol
+                        logger.info(
+                            f"Found symbol in database: {broker_symbol} -> {openalgo_symbol}"
+                        )
             except Exception as e:
                 logger.error(f"Error looking up symbol in database: {e}")
 
@@ -952,6 +955,21 @@ def calculate_portfolio_statistics(holdings_data):
     logger.info(f"Input holdings data: {holdings_data}")
 
     # Check if holdings_data is empty or None
+    if not holdings_data:
+        return {
+            "totalholdingvalue": 0,
+            "totalinvvalue": 0,
+            "totalpnlpercentage": 0,
+            "totalprofitandloss": 0,
+        }
+
+    # Handle tuple input (holdings list, metadata) -- get_holdings() returns
+    # (holdings, status) for this broker, and holdings_service passes that
+    # through unchanged. transform_holdings_data() already unwraps it; without
+    # the same handling here every statistic silently came back as zero.
+    if isinstance(holdings_data, tuple):
+        holdings_data = holdings_data[0]  # Take the first element (holdings list)
+
     if not holdings_data:
         return {
             "totalholdingvalue": 0,

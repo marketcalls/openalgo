@@ -151,6 +151,12 @@ def react_holdings():
     return serve_react_app()
 
 
+# Scalping Terminal
+@react_bp.route("/scalping", strict_slashes=False)
+def react_scalping():
+    return serve_react_app()
+
+
 # Search pages
 @react_bp.route("/search/token")
 def react_search_token():
@@ -171,6 +177,12 @@ def react_playground():
     return serve_react_app()
 
 
+# Charting terminal (line-based chart trading, powered by openalgo-charts)
+@react_bp.route("/trading", strict_slashes=False)
+def react_trading():
+    return serve_react_app()
+
+
 # ============================================================
 # Phase 4 Routes - Charts, WebSocket & Sandbox
 # ============================================================
@@ -185,6 +197,31 @@ def react_platforms():
 # TradingView webhook configuration
 @react_bp.route("/tradingview")
 def react_tradingview():
+    return serve_react_app()
+
+
+# Portfolio Backtester
+@react_bp.route("/portfolio-backtester")
+def react_portfolio_backtester():
+    return serve_react_app()
+
+
+# SIP Backtester
+@react_bp.route("/sip-backtester")
+def react_sip_backtester():
+    return serve_react_app()
+
+
+# The former path. Kept so an existing bookmark reaches the SPA, which
+# redirects it to the new one rather than showing a not-found.
+@react_bp.route("/portfolio")
+def react_portfolio_legacy():
+    return serve_react_app()
+
+
+# Portfolio Analyzer (live broker holdings)
+@react_bp.route("/portfolio-analyzer")
+def react_portfolio_analyzer():
     return serve_react_app()
 
 
@@ -215,6 +252,13 @@ def react_ivchart():
 # OI Tracker for open interest analysis
 @react_bp.route("/oitracker")
 def react_oitracker():
+    return serve_react_app()
+
+
+# Chart test page (dev/testing only) - 1m history + live forming candle.
+# Intentionally not linked from any menu; reachable only by direct URL.
+@react_bp.route("/chart/test")
+def react_chart_test():
     return serve_react_app()
 
 
@@ -251,6 +295,12 @@ def react_ivsmile():
 # OI Profile - Open Interest Profile with futures candles
 @react_bp.route("/oiprofile")
 def react_oiprofile():
+    return serve_react_app()
+
+
+# Arbitrage - Futures calendar-spread scanner
+@react_bp.route("/arbitrage")
+def react_arbitrage():
     return serve_react_app()
 
 

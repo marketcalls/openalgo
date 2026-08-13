@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { io, type Socket } from 'socket.io-client'
+import { useSocketContext } from '@/components/socket/SocketProvider'
 
 /**
  * Supported Socket.IO event types for order-related updates
@@ -10,6 +11,8 @@ export type OrderEventType =
   | 'close_position_event'
   | 'cancel_order_event'
   | 'modify_order_event'
+  // Pushed by the server-side scalping risk monitor when it trails/clears an SL.
+  | 'scalping_sl_update'
 
 /**
  * Configuration options for useOrderEventRefresh hook
@@ -55,48 +58,46 @@ export function useOrderEventRefresh(
 ): void {
   const { events = ['order_event', 'analyzer_update'], delay = 500, enabled = true } = options
 
-  const socketRef = useRef<Socket | null>(null)
   const refreshFnRef = useRef(refreshFn)
+  const eventsRef = useRef(events)
+  eventsRef.current = events
+
+  // Reuse the ONE app-wide Socket.IO connection (SocketProvider) instead of opening
+  // our own. Each Socket.IO long-poll holds an HTTP connection, and the browser's
+  // ~6-per-host limit is shared across all tabs — so a per-hook connection (×pages
+  // ×tabs) exhausts the pool and the app hangs. Sharing one connection fixes that.
+  const { socket } = useSocketContext()
 
   // Keep refresh function reference up to date
   useEffect(() => {
     refreshFnRef.current = refreshFn
   }, [refreshFn])
 
+  // Key the effect on the event CONTENTS (callers pass inline arrays), and on the
+  // shared socket — re-attach listeners only when the socket or the set changes.
+  const eventsKey = events.join('|')
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: events read via ref; eventsKey tracks content
   useEffect(() => {
-    if (!enabled) return
+    if (!enabled || !socket) return
 
-    // Build Socket.IO URL from current location
-    const protocol = window.location.protocol
-    const host = window.location.hostname
-    const port = window.location.port
-
-    socketRef.current = io(`${protocol}//${host}:${port}`, {
-      transports: ['polling'],
-      upgrade: false,
-    })
-
-    const socket = socketRef.current
-
-    // Create handler for each event type
     const handleEvent = () => {
       // Delay slightly to allow server to process the event
       setTimeout(() => refreshFnRef.current(), delay)
     }
 
-    // Register listeners for all specified events
-    events.forEach((event) => {
+    const subscribed = eventsRef.current
+    subscribed.forEach((event) => {
       socket.on(event, handleEvent)
     })
 
-    // Cleanup on unmount
+    // Only remove OUR listeners — never disconnect the shared connection.
     return () => {
-      events.forEach((event) => {
+      subscribed.forEach((event) => {
         socket.off(event, handleEvent)
       })
-      socket.disconnect()
     }
-  }, [events, delay, enabled])
+  }, [socket, eventsKey, delay, enabled])
 }
 
 /**

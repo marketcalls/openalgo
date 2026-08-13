@@ -48,6 +48,16 @@ export interface PositionTriggerNodeData {
   threshold?: number
 }
 
+/** Order Update Trigger - Start when a live/sandbox order changes status */
+export interface OrderUpdateTriggerNodeData {
+  label?: string
+  orderId?: string
+  symbol?: string
+  exchange?: string
+  status: 'any' | 'open' | 'trigger pending' | 'complete' | 'rejected' | 'cancelled'
+  trigger: 'once' | 'every_time'
+}
+
 // =============================================================================
 // ACTION NODE DATA TYPES
 // =============================================================================
@@ -249,6 +259,17 @@ export interface GreeksConditionNodeData {
   value: number
 }
 
+/** Var Condition - Compare any two interpolated values (a workflow variable,
+ * an indicator output like {{rsi.latest.value}}, a prior-period level, or a
+ * literal). Generic counterpart to Price Condition, which always re-fetches
+ * a live quote field. */
+export interface VarConditionNodeData {
+  label?: string
+  leftValue: string
+  operator: '>' | '<' | '==' | '>=' | '<=' | '!='
+  rightValue: string
+}
+
 /** Price Condition - Check price condition */
 export interface PriceConditionNodeData {
   label?: string
@@ -340,6 +361,74 @@ export interface HistoryNodeData {
   outputVariable?: string
 }
 
+/** Indicator - Run any openalgo.ta indicator over a symbol's history, or
+ * nest on top of another Indicator node's output series. */
+export interface IndicatorNodeData {
+  label?: string
+  symbol: string
+  exchange: string
+  /** Free text, not a fixed enum - any interval the connected broker's
+   * /api/v1/intervals reports (use the Intervals node to discover them),
+   * or a Historify custom interval (2m, 4m, W, M, Q) when source="db". */
+  interval: string
+  source: 'api' | 'db'
+  indicatorName: string
+  /** JSON object literal of extra kwargs, e.g. '{"period": 14}'. */
+  params: string
+  lookbackBars: number
+  /** Length of the returned `series` array (fixed length so
+   * {{ind.series[N]}} can address a specific historical bar - Flow JSON
+   * interpolation only supports positive array indices). */
+  tailBars: number
+  /** Read the value N closed bars back (0 = latest). Exposed as
+   * {{ind.at_offset.value}} / {{ind.at_offset.out0}} - prefer this over
+   * reverse-indexing `series`, whose offsets shift with tailBars. */
+  offsetBars?: number
+  /** Field to pull from each sourceSeries row. Blank = auto (value, then
+   * out0, then close) so a raw History array works directly. */
+  sourceField?: string
+  /** Optional - set to {{otherIndicator.series}} to compute this indicator
+   * over another Indicator node's output instead of fetching fresh
+   * history. Only single-series indicators (SMA, EMA, RSI, WMA, stdev,
+   * highest/lowest, ...) can be nested this way. */
+  sourceSeries?: string
+  outputVariable?: string
+}
+
+/** Strategy P&L - realized / unrealized / total for one strategy, so a
+ * workflow can exit on its own performance instead of the whole account's. */
+export interface StrategyPnlNodeData {
+  label?: string
+  /** Blank = this workflow's own name, which is also the tag its order nodes apply. */
+  strategy?: string
+  outputVariable?: string
+}
+
+/** Prior Period OHLC - last fully-closed hour/day/week/month candle
+ * (e.g. previous day's high/low for a PDH/PDL breakout strategy) without
+ * the workflow author computing a relative date. */
+export interface PriorPeriodOhlcNodeData {
+  label?: string
+  symbol: string
+  exchange: string
+  period: 'previous_hour' | 'previous_day' | 'previous_week' | 'previous_month'
+  source: 'api' | 'db'
+  outputVariable?: string
+}
+
+/** Bar Offset - OHLCV of the Nth closed bar back at any interval
+ * (offsetBars=0 is the last CLOSED bar, 1 is one before that, ...). Covers
+ * "N bars/hours/days back" style lookback without a node per unit. */
+export interface BarOffsetNodeData {
+  label?: string
+  symbol: string
+  exchange: string
+  interval: string
+  source: 'api' | 'db'
+  offsetBars: number
+  outputVariable?: string
+}
+
 /** Get Open Position - Fetch current position for a symbol */
 export interface OpenPositionNodeData {
   label?: string
@@ -428,6 +517,12 @@ export interface HolidaysNodeData {
 }
 
 /** Timings Node - Get market timings */
+export interface CalendarNodeData {
+  label?: string
+  date?: string // Optional: YYYY-MM-DD, defaults to the trading session date
+  outputVariable?: string
+}
+
 export interface TimingsNodeData {
   label?: string
   date?: string // Optional: YYYY-MM-DD format, defaults to today
@@ -511,6 +606,15 @@ export interface TelegramAlertNodeData {
   username?: string
 }
 
+/** WhatsApp Alert - Send a WhatsApp text message via the paired bot device */
+export interface WhatsappAlertNodeData {
+  label?: string
+  /** Phone digits (e.g. "919876543210"); empty sends to the paired device's
+   * own number (self). */
+  to?: string
+  message: string
+}
+
 /** Delay Node - Wait for duration */
 export interface DelayNodeData {
   label?: string
@@ -578,6 +682,7 @@ export type TriggerNodeData =
   | PriceAlertNodeData
   | WebhookNodeData
   | PositionTriggerNodeData
+  | OrderUpdateTriggerNodeData
 
 /** All Action Node Data Types */
 export type ActionNodeData =
@@ -601,6 +706,7 @@ export type ConditionNodeDataTypes =
   | TimeConditionNodeData
   | GreeksConditionNodeData
   | PriceConditionNodeData
+  | VarConditionNodeData
 
 /** All Data Node Data Types */
 export type DataNodeData =
@@ -613,6 +719,10 @@ export type DataNodeData =
   | CalculateGreeksNodeData
   | GetDepthNodeData
   | HistoryNodeData
+  | IndicatorNodeData
+  | PriorPeriodOhlcNodeData
+  | StrategyPnlNodeData
+  | BarOffsetNodeData
   | OpenPositionNodeData
   | ExpiryNodeData
   | IntervalsNodeData
@@ -636,6 +746,7 @@ export type DataNodeData =
 /** All Utility Node Data Types */
 export type UtilityNodeData =
   | TelegramAlertNodeData
+  | WhatsappAlertNodeData
   | DelayNodeData
   | WaitUntilNodeData
   | LogNodeData
