@@ -106,10 +106,14 @@ _OI_CACHE_TTL = 60.0  # seconds
 # removes up to a full chunk (30 days of 1m candles) from the series.
 CHUNK_FETCH_ATTEMPTS = 3
 CHUNK_RETRY_BACKOFF = 0.5  # seconds; grows 0.5, 1.0 between attempts
-# 4xx is normally terminal (expired session, unknown token) but these three are
-# timing, not client error: 408 Request Timeout, 425 Too Early, 429 Too Many
-# Requests. Treating them as terminal drops a whole chunk over a hiccup.
-_TRANSIENT_4XX = {408, 425, 429}
+# 4xx is normally terminal (expired session, unknown token), but 408 Request
+# Timeout and 425 Too Early are timing rather than client error, and this loop is
+# their only handler - rate_limited_request passes both straight through.
+# 429 is deliberately absent: rate_limited_request already owns it with four
+# requests and 1/2/4s backoff that honors Retry-After. Retrying it again here
+# would issue twelve requests against an endpoint asking us to slow down, on a
+# weaker 0.5s backoff than the one that just failed.
+_TRANSIENT_4XX = {408, 425}
 
 # Session open per segment, used as the resampling origin. Definedge serves
 # NSE/BSE/NFO/BFO (09:15) plus CDS/MCX (09:00); commodity and currency segments
