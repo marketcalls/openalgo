@@ -106,6 +106,17 @@ _OI_CACHE_TTL = 60.0  # seconds
 # removes up to a full chunk (30 days of 1m candles) from the series.
 CHUNK_FETCH_ATTEMPTS = 3
 CHUNK_RETRY_BACKOFF = 0.5  # seconds; grows 0.5, 1.0 between attempts
+# 4xx is normally terminal (expired session, unknown token) but these three are
+# timing, not client error: 408 Request Timeout, 425 Too Early, 429 Too Many
+# Requests. Treating them as terminal drops a whole chunk over a hiccup.
+_TRANSIENT_4XX = {408, 425, 429}
+
+# Session open per segment, used as the resampling origin. Definedge serves
+# NSE/BSE/NFO/BFO (09:15) plus CDS/MCX (09:00); commodity and currency segments
+# open on the hour, so resampling them from a 09:15 origin buckets the
+# 09:00-09:14 candles into a bar stamped before the market opened.
+_SESSION_OPEN_MINUTE = {"MCX": 0, "MCX_INDEX": 0, "CDS": 0, "BCD": 0, "NCDEX": 0}
+_DEFAULT_SESSION_OPEN_MINUTE = 15  # NSE/BSE/NFO/BFO open at 09:15
 
 
 def fetch_latest_oi(segment, token, api_session_key):
@@ -752,7 +763,10 @@ class BrokerData:
                             if response.status_code == 200:
                                 break
                             fetch_error = f"HTTP {response.status_code}: {response.text[:200]}"
-                            if 400 <= response.status_code < 500:
+                            if (
+                                400 <= response.status_code < 500
+                                and response.status_code not in _TRANSIENT_4XX
+                            ):
                                 break
                         except Exception as request_error:
                             response = None
@@ -921,16 +935,18 @@ class BrokerData:
                                 if not chunk_df.empty:
                                     chunk_df = chunk_df.set_index("timestamp")
 
-                                    # Create a custom offset to align with market open at 09:15
-                                    # This ensures 30m candles start at 09:15, not 09:00
-                                    offset_minutes = (
-                                        15  # Market opens at 09:15, so offset by 15 minutes
+                                    # Align bins to the segment's own session open, not
+                                    # a hardcoded 09:15. MCX/CDS/BCD open at 09:00, so a
+                                    # 15-minute origin buckets their 09:00-09:14 candles
+                                    # into bars stamped 08:45 (30m) and 08:15 (1h) -
+                                    # before the market opened. 5m and 15m are unaffected
+                                    # either way since 15 divides evenly into both.
+                                    offset_minutes = _SESSION_OPEN_MINUTE.get(
+                                        exchange.upper(), _DEFAULT_SESSION_OPEN_MINUTE
                                     )
 
                                     # Resample with the offset to align with market hours
                                     resample_rule = f"{interval_minutes[interval]}min"
-                                    # Use offset parameter to shift the bins to start at :15 and :45 for 30m
-                                    # For other intervals, the offset ensures proper market alignment
                                     resampled = chunk_df.resample(
                                         resample_rule, offset=f"{offset_minutes}min"
                                     )
