@@ -10,6 +10,7 @@
 import os
 
 from broker.deltaexchange.api.baseurl import BASE_URL, get_auth_headers
+from broker.deltaexchange.api.rate_limiter import PRIVATE, consume
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -49,6 +50,7 @@ def _get_positions_pnl(api_key, api_secret):
             api_key=api_key,
             api_secret=api_secret,
         )
+        consume(path, method="GET", bucket=PRIVATE)
         client = get_httpx_client()
         response = client.get(url, headers=headers, timeout=30.0)
         if response.status_code != 200:
@@ -122,6 +124,7 @@ def get_margin_data(auth_token):
             api_secret=api_secret,
         )
 
+        consume(path, method="GET", bucket=PRIVATE)
         client = get_httpx_client()
         response = client.get(url, headers=headers, timeout=30.0)
 

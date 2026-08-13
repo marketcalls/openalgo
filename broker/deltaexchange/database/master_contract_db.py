@@ -8,6 +8,7 @@ from sqlalchemy import Column, Float, Index, Integer, Sequence, String, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
+from broker.deltaexchange.api.rate_limiter import PUBLIC, consume
 from database.engine_factory import create_db_engine
 from extensions import socketio  # Import SocketIO
 from utils.httpx_client import get_httpx_client
@@ -318,6 +319,9 @@ def fetch_delta_products():
             params["after"] = after_cursor
 
         try:
+            # Weight 3 per page against the public (IP) quota; a full master
+            # contract download is several pages.
+            consume("/v2/products", method="GET", bucket=PUBLIC)
             response = get_httpx_client().get(
                 url,
                 params=params,

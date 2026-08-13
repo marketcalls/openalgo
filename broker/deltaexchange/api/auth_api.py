@@ -1,6 +1,7 @@
 import os
 
 from broker.deltaexchange.api.baseurl import BASE_URL, get_auth_headers, get_url
+from broker.deltaexchange.api.rate_limiter import PRIVATE, consume
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -47,6 +48,7 @@ def authenticate_broker(code):
         client = get_httpx_client()
 
         logger.info("Verifying Delta Exchange credentials via GET /v2/profile")
+        consume(path, method="GET", bucket=PRIVATE)
         response = client.get(url, headers=headers)
 
         logger.debug(f"Profile response status: {response.status_code}")

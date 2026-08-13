@@ -5,6 +5,7 @@
 import os
 
 from broker.deltaexchange.api.baseurl import BASE_URL, get_auth_headers
+from broker.deltaexchange.api.rate_limiter import PRIVATE, consume
 from broker.deltaexchange.mapping.margin_data import parse_margin_response, transform_margin_positions
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -43,6 +44,7 @@ def get_margin_mode(auth: str) -> str:
             api_key=api_key,
             api_secret=api_secret,
         )
+        consume(path, method="GET", bucket=PRIVATE)
         client = get_httpx_client()
         resp = client.get(BASE_URL + path, headers=headers, timeout=15.0)
         data = resp.json()
@@ -139,6 +141,7 @@ def calculate_margin_api(positions, auth):
                 api_secret=api_secret,
             )
 
+            consume(path, method="GET", bucket=PRIVATE)
             response = client.get(url, headers=headers, timeout=30.0)
             response_data = response.json()
 
