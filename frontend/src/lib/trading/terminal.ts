@@ -16,7 +16,9 @@ import {
   type Bar,
   BuySellButtons,
   CandleBuilder,
+  compactVolume,
   createChart,
+  type IPrimitive,
   LogoWatermark,
   type LtpEvent,
   type MarketDepth,
@@ -54,7 +56,7 @@ export interface DrawStats {
 }
 
 import type { AppMode, ThemeMode } from '@/stores/themeStore'
-import { buildChartTheme, isLightTheme, volumeColor } from './chartTheme'
+import { buildChartTheme, isLightTheme, resolveCssColor, volumeColor } from './chartTheme'
 import { CHART_TYPES } from './chartTypes'
 import { fmtPrice, money, priceDp, snapTick, tickSize } from './format'
 import {
@@ -65,6 +67,16 @@ import {
   lookbackDays,
   pickInterval,
 } from './intervals'
+import {
+  buildChartLegend,
+  DN,
+  type LegendRun,
+  LTP_NEUTRAL,
+  legendHtml,
+  legendToneStyle,
+  lotInfoText,
+  UP,
+} from './legend'
 
 export type OrderSide = 'BUY' | 'SELL'
 export type OrderType = 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
@@ -234,18 +246,47 @@ export function usesLots(exchange: string): boolean {
 const QUOTE_ONLY = new Set(['NSE_INDEX', 'BSE_INDEX', 'MCX_INDEX', 'GLOBAL_INDEX'])
 const STRATEGY = 'chart-trading'
 const VISIBLE_BARS = 120
-/** Candle direction colours, shared by the OHLC legend and the last-price line. */
-const UP = '#26a69a'
-const DN = '#ef5350'
-/** Last-price line before any bar exists to take a direction from. */
-const LTP_NEUTRAL = '#e0b020'
+
+/**
+ * Where the exported PNG paints the OHLC readout, in CSS px. These mirror the
+ * DOM overlay's own placement in `ChartPane` (`left-3 top-1.5`, a 12px line and
+ * a 10px line under it), so the saved image puts the text where the screen
+ * does rather than inventing a second layout.
+ */
+const LEGEND_X = 12
+const LEGEND_Y = 8
+const LEGEND_SUB_Y = 25
+/** Space between two legend runs, in CSS px (the DOM renderer joins with ' '). */
+const LEGEND_GAP = 6
 
 const nowSec = () => Math.floor(Date.now() / 1000)
-const esc = (s: unknown) =>
-  String(s).replace(
-    /[&<>"]/g,
-    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string
-  )
+
+/**
+ * Resolve once the chart has repainted.
+ *
+ * The chart schedules its repaint on `requestAnimationFrame`, and rAF callbacks
+ * run in registration order, so a frame requested after `removePrimitive()`
+ * runs after the repaint that call triggered. Two frames are waited on because
+ * an invalidation raised during a paint defers to the next one. The timeout is
+ * the escape hatch for a background tab, where rAF may never fire at all.
+ */
+function nextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      resolve()
+    }
+    const timer = setTimeout(finish, 250)
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        clearTimeout(timer)
+        finish()
+      })
+    )
+  })
+}
 
 export class TradingTerminal {
   private readonly apiKey: string
@@ -280,10 +321,29 @@ export class TradingTerminal {
   private gridV = true
   private gridH = true
   private drawShortcuts: Record<string, string> = {}
-  private matchShortcut: ((e: { key: string; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => string | null) | null = null
+  private matchShortcut:
+    | ((e: {
+        key: string
+        altKey?: boolean
+        ctrlKey?: boolean
+        metaKey?: boolean
+        shiftKey?: boolean
+      }) => string | null)
+    | null = null
   private ltpLine: PriceLine | null = null
   private posLine: PriceLine | null = null
   private tradeBtns: BuySellButtonsInstance | null = null
+  /** The bar the OHLC readout is currently showing; replayed into the export. */
+  private legendBar: Bar | null = null
+  /**
+   * Canvas primitives that are interaction affordances rather than chart
+   * content. They are detached for the duration of a screenshot and re-attached
+   * straight after, so a saved image carries nothing that invites a click.
+   *
+   * Registering here is how an overlay opts out: the capture path matches on
+   * nothing, so a future overlay only has to add itself to be left out too.
+   */
+  private readonly screenshotExcluded: { primitive: IPrimitive; paneIndex: number }[] = []
 
   private ws: InstanceType<typeof OpenAlgoWsFeed> | null = null
   private rest: InstanceType<typeof OpenAlgoDataFeed> | null = null
@@ -460,29 +520,36 @@ export class TradingTerminal {
 
   /* ── legend (imperative; high-frequency, kept off React state) ────────── */
   private setLegend(bar: Bar | null) {
+    this.legendBar = bar
     if (!this.sym) {
       this.legendEl.innerHTML = ''
       return
     }
-    const lots = this.sym.lots ? ` · lot ${this.sym.lotsize}` : ''
-    const up = UP
-    const dn = DN
-    const col = bar && bar.close >= bar.open ? up : dn
-    const chg =
-      this.lastLtp != null && this.prevClose
-        ? ((this.lastLtp - this.prevClose) / this.prevClose) * 100
-        : null
-    this.legendEl.innerHTML =
-      `<b>${esc(this.sym.symbol)}</b> <span style="opacity:.55">· ${esc(this.interval)} · ${esc(this.sym.exchange)}${lots}</span>` +
-      (bar
-        ? ` <span style="color:${col}">O ${this.fmt(bar.open)} H ${this.fmt(bar.high)} L ${this.fmt(bar.low)} C ${this.fmt(bar.close)}</span>`
-        : '') +
-      (this.lastLtp != null
-        ? ` <span style="color:#e0b020">LTP ${this.fmt(this.lastLtp)}</span>`
-        : '') +
-      (chg != null
-        ? ` <span style="color:${chg >= 0 ? up : dn}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>`
-        : '')
+    this.legendEl.innerHTML = legendHtml(this.legendModel(bar))
+  }
+
+  /**
+   * The readout's content, independent of how it is drawn. The DOM overlay and
+   * the PNG export both render this, which is what stops the saved image from
+   * quoting different numbers than the screen it was taken from.
+   */
+  private legendModel(bar: Bar | null): LegendRun[] {
+    const sym = this.sym
+    if (!sym) return []
+    return buildChartLegend({
+      symbol: sym.symbol,
+      interval: this.interval,
+      exchange: sym.exchange,
+      lotsize: sym.lots ? sym.lotsize : null,
+      bar,
+      ltp: this.lastLtp,
+      changePct:
+        this.lastLtp != null && this.prevClose
+          ? ((this.lastLtp - this.prevClose) / this.prevClose) * 100
+          : null,
+      fmt: (n) => this.fmt(n),
+      fmtVolume: compactVolume,
+    })
   }
 
   /* ── order lines / position marker ────────────────────────────────────── */
@@ -680,11 +747,31 @@ export class TradingTerminal {
     // Snapshot drawings before the chart they live on goes away.
     this.detachDrawing()
     if (this.chart) this.chart.destroy()
+    // The primitives registered here belonged to the chart just destroyed.
+    this.screenshotExcluded.length = 0
     this.container.innerHTML = ''
     const { mode, appMode } = this.getTheme()
     this.chart = createChart(this.container, {
       priceAxisWidth: 78,
       theme: buildChartTheme(mode, appMode),
+      // The library's built-in screenshot command calls its own
+      // `downloadScreenshot()`, which knows nothing about this terminal's DOM
+      // OHLC readout or its trade panel. Unbind it and claim the same chord for
+      // `screenshot()` below, so the keyboard and the toolbar button produce the
+      // same image instead of two different ones.
+      shortcuts: {
+        disabledCommands: ['screenshot'],
+        customShortcuts: [
+          {
+            command: 'app:screenshot',
+            label: 'Screenshot (PNG)',
+            combos: 'Alt+Shift+KeyS',
+            onTrigger: () => {
+              void this.screenshot()
+            },
+          },
+        ],
+      },
       // The pane's top-left already holds this terminal's own OHLC readout (and
       // the lot line under it). Start the canvas indicator legends below both,
       // or they land underneath and their settings / close buttons cannot be
@@ -748,23 +835,23 @@ export class TradingTerminal {
     // there rather than a pane of its own — pane 1 only exists once an
     // indicator asks for one, so anchoring to it would have been conditional.
     const watermark = new LogoWatermark({
-        // The symbol on its own, not the app icon: that asset is a full-bleed
-        // plate with the mark filling under half of it and the wordmark
-        // beneath, so scaling it up scaled the padding too. This one's square
-        // viewBox is tight to the symbol, so height alone gives 32x32, and
-        // 3 of plate padding puts it in a 38x38 square.
-        src: '/images/openalgo-glyph.svg',
-        position: 'bottom-left',
-        height: 32,
-        padding: 3,
-        margin: 10,
-        opacity: 0.85,
-        // Mark alone at rest; the wording unrolls to its right on hover, so it
-        // names itself when looked at without occupying the corner always. The
-        // mark and text share one colour, so this sets both.
-        label: 'OpenAlgo Charts',
-        labelColor: light ? '#3c4354' : '#e4e8f4',
-        href: 'https://openalgo.in',
+      // The symbol on its own, not the app icon: that asset is a full-bleed
+      // plate with the mark filling under half of it and the wordmark
+      // beneath, so scaling it up scaled the padding too. This one's square
+      // viewBox is tight to the symbol, so height alone gives 32x32, and
+      // 3 of plate padding puts it in a 38x38 square.
+      src: '/images/openalgo-glyph.svg',
+      position: 'bottom-left',
+      height: 32,
+      padding: 3,
+      margin: 10,
+      opacity: 0.85,
+      // Mark alone at rest; the wording unrolls to its right on hover, so it
+      // names itself when looked at without occupying the corner always. The
+      // mark and text share one colour, so this sets both.
+      label: 'OpenAlgo Charts',
+      labelColor: light ? '#3c4354' : '#e4e8f4',
+      href: 'https://openalgo.in',
     })
     this.chart.addPrimitive(watermark, 0)
 
@@ -778,7 +865,9 @@ export class TradingTerminal {
         scale: 0.72,
       })
       if (lp != null) this.tradeBtns.setMark(lp)
-      this.chart.addPrimitive(this.tradeBtns, 0)
+      // Order entry is an affordance, not chart content: it is left out of a
+      // saved image (see `screenshotExcluded`).
+      this.addExcludedPrimitive(this.tradeBtns, 0)
     } else this.tradeBtns = null
 
     this.chart.subscribeCrosshairMove((e) =>
@@ -980,7 +1069,9 @@ export class TradingTerminal {
    */
   private async attachDrawing(): Promise<void> {
     if (this.draw || !this.chart) return
-    const { DrawingController, drawingShortcuts, matchDrawingShortcut } = await import('openalgo-charts/draw')
+    const { DrawingController, drawingShortcuts, matchDrawingShortcut } = await import(
+      'openalgo-charts/draw'
+    )
     // The await is a real suspension point: the pane can be destroyed, or the
     // chart rebuilt again, while the tier is in flight.
     if (this.destroyed || !this.chart || this.draw) return
@@ -1095,7 +1186,7 @@ export class TradingTerminal {
       // the dark and light themes.
       backgroundColor: (st.backgroundColor as string) ?? '#434651',
       border: st.border === true,
-      borderColor: (st.borderColor as string) ?? ((st.color as string) ?? '#e4e8f4'),
+      borderColor: (st.borderColor as string) ?? (st.color as string) ?? '#e4e8f4',
       wrap: st.wrap === true,
     }
   }
@@ -1168,7 +1259,13 @@ export class TradingTerminal {
    * caller can swallow the key. The tier owns the chord table, so this is a
    * no-op until drawing has been attached.
    */
-  armByShortcut(e: { key: string; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }): boolean {
+  armByShortcut(e: {
+    key: string
+    altKey?: boolean
+    ctrlKey?: boolean
+    metaKey?: boolean
+    shiftKey?: boolean
+  }): boolean {
     const id = this.matchShortcut?.(e) ?? null
     if (id === null) return false
     void this.setDrawTool(id)
@@ -1682,10 +1779,121 @@ export class TradingTerminal {
     this.chart?.resetScale()
   }
 
-  screenshot() {
-    if (!this.chart || !this.sym) return
+  /* ── PNG export ───────────────────────────────────────────────────────── */
+
+  /**
+   * Attach a primitive that must never appear in an exported image.
+   *
+   * Anything an image cannot be used for — a button, a drag handle — belongs
+   * here rather than on `addPrimitive` directly. See `screenshotExcluded`.
+   */
+  private addExcludedPrimitive(primitive: IPrimitive, paneIndex = 0) {
+    this.chart?.addPrimitive(primitive, paneIndex)
+    this.screenshotExcluded.push({ primitive, paneIndex })
+  }
+
+  /**
+   * Save the chart as a PNG.
+   *
+   * openalgo-charts' own `downloadScreenshot()` is deliberately not used. It
+   * composites the pane canvases and nothing else, which gets both halves of
+   * this wrong: the OHLC readout is a DOM overlay this terminal owns, so it is
+   * invisible to a canvas composite and vanished from the saved image, while
+   * the SELL/qty/BUY panel *is* a canvas primitive, so it was baked in — a
+   * static image with order buttons on it. So the export is driven from here:
+   * detach the interaction-only overlays, take the composite, paint the readout
+   * onto it, restore. Filename convention and canvas theme are unchanged.
+   */
+  async screenshot(): Promise<void> {
+    const chart = this.chart
+    if (!chart || !this.sym) return
     const stamp = new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-')
-    this.chart.downloadScreenshot(`${this.sym.symbol}-${this.interval}-${stamp}.png`)
+    const filename = `${this.sym.symbol}-${this.interval}-${stamp}.png`
+    try {
+      const canvas = await this.captureCanvas(chart)
+      if (!canvas) return
+      const a = document.createElement('a')
+      a.href = canvas.toDataURL('image/png')
+      a.download = filename
+      a.click()
+    } catch (e) {
+      this.toast(this.cleanError(e), 'err')
+    }
+  }
+
+  /**
+   * Composite the chart into an offscreen canvas with the export excluded
+   * overlays taken down, then paint the OHLC readout into the corner the DOM
+   * overlay occupies on screen.
+   *
+   * The detach/re-attach is why this is async: `removePrimitive` only marks the
+   * pane dirty, so the buttons are still in the canvas bitmap until the chart
+   * repaints on the next frame.
+   */
+  private async captureCanvas(chart: ChartInstance): Promise<HTMLCanvasElement | null> {
+    const hidden = [...this.screenshotExcluded]
+    for (const o of hidden) chart.removePrimitive(o.primitive)
+    // Selection handles are grab targets; the drawing itself stays.
+    const selected = this.draw?.selected() ?? null
+    if (selected) this.draw?.select(null)
+    try {
+      await nextPaint()
+      // A theme toggle or an interval change during that frame rebuilds the
+      // chart, and the one captured here would no longer be on screen.
+      if (this.destroyed || this.chart !== chart) return null
+      const shot = chart.takeScreenshot()
+      this.paintLegend(shot)
+      return shot
+    } finally {
+      if (!this.destroyed && this.chart === chart) {
+        for (const o of hidden) chart.addPrimitive(o.primitive, o.paneIndex)
+        if (selected) this.draw?.select(selected)
+      }
+    }
+  }
+
+  /**
+   * Paint the OHLC readout onto a captured canvas, where the DOM overlay sits
+   * on screen and in the colours it is showing.
+   *
+   * The capture is device-pixel sized, and the ratio is derived from the canvas
+   * against the container rather than read from `devicePixelRatio` — that is
+   * the ratio the chart actually rendered at, which is what has to be matched
+   * for the text to land in the right place on a fractional-scaling display.
+   *
+   * The foreground goes through `resolveCssColor` because the app's theme
+   * tokens are oklch, which a canvas is not guaranteed to parse: assigning one
+   * to `fillStyle` is silently ignored and the text would paint in whatever
+   * colour was set last (black, on a dark chart).
+   */
+  private paintLegend(canvas: HTMLCanvasElement) {
+    const ctx = canvas.getContext('2d')
+    if (!ctx || !this.sym) return
+    const cssWidth = this.container.clientWidth || canvas.width
+    const ratio = canvas.width / cssWidth
+    const css = getComputedStyle(this.legendEl)
+    const family = css.fontFamily || 'system-ui, sans-serif'
+    const foreground = css.color ? resolveCssColor(css.color) : '#e4e8f4'
+    ctx.save()
+    ctx.scale(ratio, ratio)
+    ctx.textBaseline = 'top'
+    ctx.font = `500 12px ${family}`
+    let x = LEGEND_X
+    for (const run of this.legendModel(this.legendBar)) {
+      const tone = legendToneStyle(run.tone, foreground)
+      ctx.fillStyle = tone.color
+      ctx.globalAlpha = tone.alpha
+      ctx.fillText(run.text, x, LEGEND_Y)
+      x += ctx.measureText(run.text).width + LEGEND_GAP
+    }
+    const sub = lotInfoText(this.sym, this.qty)
+    if (sub) {
+      ctx.font = `10px ${family}`
+      ctx.fillStyle = foreground
+      ctx.globalAlpha = 0.65
+      ctx.fillText(sub, LEGEND_X, LEGEND_SUB_Y)
+    }
+    ctx.restore()
   }
 
   /* ── right-click order menu ───────────────────────────────────────────── */
@@ -1836,5 +2044,6 @@ export class TradingTerminal {
     }
     this.chart = null
     this.ws = null
+    this.screenshotExcluded.length = 0
   }
 }
