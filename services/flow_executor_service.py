@@ -2246,15 +2246,37 @@ class NodeExecutor:
 
     def execute_price_alert(self, node_data: dict) -> dict:
         """Execute Price Alert trigger node"""
+        from services.flow_price_monitor_service import FlowPriceMonitor
+
         symbol = self.get_str(node_data, "symbol", "")
         exchange = self.get_str(node_data, "exchange", "NSE")
-        condition_type = self.get_str(node_data, "condition", "greater_than")
+        # The editor writes its own vocabulary ("above", "crosses_below") while
+        # this branch chain only ever spoke the monitor's canonical one. An
+        # unmapped name matched nothing, so condition_met stayed False and the
+        # run took the No branch even when the level was clearly met
+        # ("LTP=1304.8 above 1304.0 = False"), silently skipping the order
+        # wired to Yes. Normalize through the monitor's own alias table.
+        condition_type = FlowPriceMonitor.normalize_condition(
+            self.get_str(node_data, "condition", "greater_than")
+        )
         price = self.get_float(node_data, "price", 0)
         price_lower = self.get_float(node_data, "priceLower", 0)
         price_upper = self.get_float(node_data, "priceUpper", 0)
 
         if not symbol:
             return {"status": "error", "condition": False}
+
+        # When the price monitor started this run it has already evaluated the
+        # condition against the tick that fired it. Re-fetching a quote here
+        # races that tick - the price can retreat between the alert and the
+        # graph walk - and a stateless re-check can never confirm a crossing at
+        # all. Trust the trigger and carry its price through.
+        webhook = self.context.get_variable("webhook") or {}
+        if isinstance(webhook, dict) and webhook.get("trigger_type") == "price_alert":
+            ltp = float(webhook.get("trigger_price") or 0)
+            self.log(f"Price alert fired by monitor: {symbol} LTP={ltp} {condition_type} {price}")
+            self.store_output(node_data, {"ltp": ltp, "condition_met": True})
+            return {"status": "success", "condition": True, "ltp": ltp}
 
         result = self.client.get_quotes(symbol=symbol, exchange=exchange)
         if result.get("status") != "success":
@@ -2263,18 +2285,43 @@ class NodeExecutor:
         data = result.get("data", {})
         ltp = float(data.get("ltp", 0) if data else 0)
 
-        condition_met = False
-        if condition_type == "greater_than":
+        if condition_type in ("greater_than", "crossing_up"):
+            # A crossing needs the previous tick, which a single graph walk does
+            # not have. Fall back to the level test rather than to False, which
+            # would be indistinguishable from "the level was not reached".
             condition_met = ltp > price
-        elif condition_type == "less_than":
+        elif condition_type in ("less_than", "crossing_down"):
             condition_met = ltp < price
         elif condition_type == "crossing":
             tolerance = price * 0.001
             condition_met = abs(ltp - price) <= tolerance
-        elif condition_type in ["entering_channel", "inside_channel"]:
+        elif condition_type in ("entering_channel", "inside_channel"):
             condition_met = price_lower <= ltp <= price_upper
-        elif condition_type in ["exiting_channel", "outside_channel"]:
+        elif condition_type in ("exiting_channel", "outside_channel"):
             condition_met = ltp < price_lower or ltp > price_upper
+        elif condition_type in (
+            "moving_up",
+            "moving_down",
+            "moving_up_percent",
+            "moving_down_percent",
+        ):
+            # These compare against the previous tick, which only the monitor
+            # keeps. Outside a monitor-fired run there is nothing to compare to.
+            self.log(
+                f"Price alert condition {condition_type!r} needs the previous tick and can "
+                "only be evaluated by the price monitor; wire this node as the trigger.",
+                "error",
+            )
+            return {"status": "error", "condition": False, "ltp": ltp}
+        else:
+            # Never silently false: an unknown condition can never be true,
+            # which reads exactly like an unmet level. Error takes no branch.
+            self.log(
+                f"Price alert has an unrecognized condition "
+                f"{node_data.get('condition')!r}; it can never be true.",
+                "error",
+            )
+            return {"status": "error", "condition": False, "ltp": ltp}
 
         self.log(f"Price alert: {symbol} LTP={ltp} {condition_type} {price} = {condition_met}")
         self.store_output(node_data, {"ltp": ltp, "condition_met": condition_met})
