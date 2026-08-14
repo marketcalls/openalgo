@@ -7,3 +7,15 @@ scrape_configs:
     static_configs:
       - targets:
           - 127.0.0.1:9108
+  - job_name: lean_spx_0dte_orderflow_profile
+    static_configs:
+      - targets:
+          - 127.0.0.1:9109
+  - job_name: lean_spy_options_strategy_test
+    static_configs:
+      - targets:
+          - 127.0.0.1:9110
+  - job_name: lean_openalgo_order_placement_test
+    static_configs:
+      - targets:
+          - 127.0.0.1:9111

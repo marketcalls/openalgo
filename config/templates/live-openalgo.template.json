@@ -1,0 +1,37 @@
+{
+  "environment": "live-openalgo",
+  "live-mode": true,
+  "messaging-handler": "QuantConnect.Messaging.Messaging",
+  "job-user-id": "0",
+  "api-access-token": "",
+  "job-organization-id": "",
+  "job-queue-handler": "QuantConnect.Queues.JobQueue",
+  "api-handler": "QuantConnect.Api.Api",
+  "lean-manager-type": "LocalLeanManager",
+  "setup-handler": "QuantConnect.Lean.Engine.Setup.BrokerageSetupHandler",
+  "live-mode-brokerage": "OpenAlgoBrokerage",
+  "result-handler": "QuantConnect.Lean.Engine.Results.LiveTradingResultHandler",
+  "data-feed-handler": "QuantConnect.Lean.Engine.DataFeeds.LiveTradingDataFeed",
+  "data-provider": "QuantConnect.Lean.Engine.DataFeeds.DefaultDataProvider",
+  "data-channel-provider": "DataChannelProvider",
+  "data-queue-handler": [ "OpenAlgoBrokerage" ],
+  "real-time-handler": "QuantConnect.Lean.Engine.RealTime.LiveTradingRealTimeHandler",
+  "transaction-handler": "QuantConnect.Lean.Engine.TransactionHandlers.BrokerageTransactionHandler",
+  "history-provider": [ "BrokerageHistoryProvider", "SubscriptionDataReaderHistoryProvider" ],
+
+  "algorithm-type-name": "__ALGORITHM_TYPE__",
+  "algorithm-language": "Python",
+  "algorithm-location": "__ALGORITHM_LOCATION__",
+  "data-folder": "__DATA_FOLDER__",
+  "python-venv": "__PYTHON_VENV__",
+  "parameters": "{\"openalgo-place-test-orders\":\"__OPENALGO_PLACE_TEST_ORDERS__\",\"openalgo-test-quantity\":\"__OPENALGO_TEST_QUANTITY__\",\"openalgo-hold-minutes\":\"__OPENALGO_HOLD_MINUTES__\",\"openalgo-submit-without-price\":\"__OPENALGO_SUBMIT_WITHOUT_PRICE__\",\"openalgo-sbin-symbol\":\"__OPENALGO_SBIN_SYMBOL__\",\"openalgo-nifty-future-symbol\":\"__OPENALGO_NIFTY_FUTURE_SYMBOL__\",\"openalgo-fo-expiry\":\"__OPENALGO_FO_EXPIRY__\",\"openalgo-nifty-spread-enabled\":\"__OPENALGO_NIFTY_SPREAD_ENABLED__\",\"openalgo-nifty-long-call-strike\":\"__OPENALGO_NIFTY_LONG_CALL_STRIKE__\",\"openalgo-nifty-short-call-strike\":\"__OPENALGO_NIFTY_SHORT_CALL_STRIKE__\",\"openalgo-banknifty-spread-enabled\":\"__OPENALGO_BANKNIFTY_SPREAD_ENABLED__\",\"openalgo-banknifty-long-call-strike\":\"__OPENALGO_BANKNIFTY_LONG_CALL_STRIKE__\",\"openalgo-banknifty-short-call-strike\":\"__OPENALGO_BANKNIFTY_SHORT_CALL_STRIKE__\",\"openalgo-sensex-spread-enabled\":\"__OPENALGO_SENSEX_SPREAD_ENABLED__\",\"openalgo-sensex-long-call-strike\":\"__OPENALGO_SENSEX_LONG_CALL_STRIKE__\",\"openalgo-sensex-short-call-strike\":\"__OPENALGO_SENSEX_SHORT_CALL_STRIKE__\"}",
+
+  "openalgo-api-key": "__OPENALGO_API_KEY__",
+  "openalgo-host": "__OPENALGO_HOST__",
+  "openalgo-ws-url": "__OPENALGO_WS_URL__",
+  "openalgo-strategy-name": "__OPENALGO_STRATEGY_NAME__",
+  "openalgo-product-type": "__OPENALGO_PRODUCT_TYPE__",
+
+  "debugging": false,
+  "debugging-method": "LocalCmdline"
+}

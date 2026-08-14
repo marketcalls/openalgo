@@ -22,6 +22,7 @@
   "algorithm-type-name": "__ALGORITHM_TYPE__",
   "algorithm-language": "Python",
   "algorithm-location": "__ALGORITHM_LOCATION__",
+  "parameters": "{\"mes-contract-expiry\":\"__MES_CONTRACT_EXPIRY__\",\"spy-options-test-strategy\":\"__SPY_OPTIONS_TEST_STRATEGY__\",\"spy-options-place-test-order\":\"__SPY_OPTIONS_PLACE_TEST_ORDER__\",\"spy-options-quantity\":\"__SPY_OPTIONS_QUANTITY__\",\"spy-options-wing-width\":\"__SPY_OPTIONS_WING_WIDTH__\",\"spy-options-hold-minutes\":\"__SPY_OPTIONS_HOLD_MINUTES__\",\"spx-0dte-place-test-order\":\"__SPX_0DTE_PLACE_TEST_ORDER__\"}",
   "data-folder": "__DATA_FOLDER__",
   "python-venv": "__PYTHON_VENV__",
 
@@ -30,6 +31,7 @@
   "ib-password": "__IB_PASSWORD__",
   "ib-host": "__IB_HOST__",
   "ib-port": "__IB_PORT__",
+  "ib-client-id": "__IB_CLIENT_ID__",
   "ib-tws-dir": "__IB_TWS_DIR__",
   "ib-version": "__IB_VERSION__",
   "ib-trading-mode": "__IB_TRADING_MODE__",

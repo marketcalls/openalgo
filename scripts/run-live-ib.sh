@@ -9,6 +9,17 @@ resolve_lean_paths
 configure_python_runtime
 resolve_strategy "${1:-}" "${2:-}"
 
+is_ib_gateway_listening() {
+  local host="${IB_HOST:-127.0.0.1}"
+  local port="${IB_PORT:-4002}"
+
+  if [[ "$host" != "127.0.0.1" && "$host" != "localhost" && "$host" != "::1" ]]; then
+    return 1
+  fi
+
+  lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
+}
+
 if [[ -z "${IB_ACCOUNT:-}" ]]; then
   echo "Error: IB_ACCOUNT is required for live runs. Set it in .env"
   exit 1
@@ -18,6 +29,15 @@ if [[ "$IB_ACCOUNT" == "U1234567" || "$IB_ACCOUNT" == "DU1234567" ]]; then
   echo "Error: IB_ACCOUNT still has a placeholder value: $IB_ACCOUNT"
   echo "Set IB_ACCOUNT to your actual IB account id, usually U... or DU... for paper."
   exit 1
+fi
+
+IB_GATEWAY_ALREADY_RUNNING=false
+if is_ib_gateway_listening; then
+  IB_GATEWAY_ALREADY_RUNNING=true
+  if [[ "${IB_USE_EXISTING_GATEWAY:-true}" == "false" ]]; then
+    echo "Detected IB Gateway/TWS already listening on ${IB_HOST:-127.0.0.1}:${IB_PORT:-4002}; using existing gateway for this run."
+    export IB_USE_EXISTING_GATEWAY=true
+  fi
 fi
 
 if [[ "${IB_USE_EXISTING_GATEWAY:-true}" == "false" ]]; then
@@ -54,7 +74,7 @@ if [[ "${IB_TRADING_MODE:-paper}" == "live" && "${LIVE_CONFIRM_REAL:-}" != "true
 fi
 
 mkdir -p "$REPO_ROOT/.tmp"
-CONFIG_PATH="$REPO_ROOT/.tmp/live-ib.config.json"
+CONFIG_PATH="$REPO_ROOT/.tmp/live-ib-${ALGORITHM_TYPE_NAME}.config.json"
 TEMPLATE_PATH="$REPO_ROOT/config/templates/live-interactive.template.json"
 
 generate_config "$TEMPLATE_PATH" "$CONFIG_PATH"
@@ -64,8 +84,10 @@ echo "  strategy: $STRATEGY_PATH"
 echo "  class:    $ALGORITHM_TYPE_NAME"
 echo "  account:  $IB_ACCOUNT"
 echo "  host:     ${IB_HOST:-127.0.0.1}:${IB_PORT:-4002}"
+echo "  client:   ${IB_CLIENT_ID:-0}"
 echo "  mode:     ${IB_TRADING_MODE:-paper}"
 echo "  automater: $([[ "${IB_USE_EXISTING_GATEWAY:-true}" == "false" ]] && echo enabled || echo disabled)"
+echo "  gateway:  $([[ "$IB_GATEWAY_ALREADY_RUNNING" == "true" ]] && echo existing || echo not-detected)"
 if [[ "${IB_USE_EXISTING_GATEWAY:-true}" == "false" ]]; then
   echo "  ib dir:   ${IB_TWS_DIR:-$HOME/Jts}"
   echo "  version:  ${IB_VERSION:-1034}"
