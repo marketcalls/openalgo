@@ -412,6 +412,35 @@ describe('payoff geometry and structural risk', () => {
     expect(payoff.maxLoss).toBeCloseTo(-2, 10)
   })
 
+  it('reports a flat-zero span as its edges, not a breakeven at every sample', () => {
+    // A calendar whose legs were entered at the same premium is worth exactly
+    // zero far from the strike, because both legs are deep in the money and the
+    // far leg has no time value left. Sampling that tail once per grid point
+    // used to emit hundreds of roots, and since the chart frames the outermost
+    // breakeven it stretched the domain to twice spot.
+    const now = new Date('2026-07-28T10:00:00.000Z')
+    const nearExpiryTs = now.getTime() / 1000 + 7 * 86_400
+    const farExpiryTs = now.getTime() / 1000 + 35 * 86_400
+    const shared = {
+      lotSize: 75,
+      strike: 24_800,
+      price: 40,
+      iv: 12,
+      referenceUnderlying: 24_800,
+      forwardPrice: 24_850,
+    }
+    const legs = [
+      valuationOptionLeg({ ...shared, id: 'near', side: 'SELL', expiryTs: nearExpiryTs }),
+      valuationOptionLeg({ ...shared, id: 'far', side: 'BUY', expiryTs: farExpiryTs }),
+    ]
+
+    const nearest = nearestLegDays(legs, now)
+    const payoff = computePayoff(legs, 24_800, nearest, 0, [22_320, 27_280], 240, 0, 12, now)
+
+    expect(payoff.breakevens.length).toBeLessThanOrEqual(4)
+    expect(payoff.samples.at(-1)?.underlying).toBeLessThan(50_000)
+  })
+
   it('PG-07 emits an exact-grid breakeven once', () => {
     const synthetic = [
       optionLeg('call', 'BUY', 'CE', 100, 5),
