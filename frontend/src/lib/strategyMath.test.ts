@@ -126,10 +126,20 @@ describe('per-leg market valuation', () => {
   })
 
   it('values a selected future from its own market reference', () => {
-    const leg = futureLeg({ marketPrice: 25_120, referenceUnderlying: 25_000 })
+    // Pinned to an explicit expiry instant and clock. The old fixture carried
+    // neither, so it read the real system date against an expiry string of
+    // 14AUG26 and silently changed meaning depending on the day it ran.
+    const expiryTs = NOW.getTime() / 1000 + 30 * 86_400
+    const leg = futureLeg({ marketPrice: 25_120, referenceUnderlying: 25_000, expiryTs })
 
-    expect(legPnlAt(leg, 25_000, 0)).toBe(500)
-    expect(legPnlAt(leg, 25_100, 0)).toBe(3_000)
+    // With a month to run the future holds its 120-point basis over spot.
+    expect(legPnlAt(leg, 25_000, 0, undefined, NOW)).toBeCloseTo(500, 6)
+    expect(legPnlAt(leg, 25_100, 0, undefined, NOW)).toBeCloseTo(3_012, 6)
+
+    // At its own expiry it settles against spot and the basis is gone, so a
+    // long entered at 25,100 is down 100 points a share with spot at 25,000.
+    expect(legPnlAt(leg, 25_100, 30, undefined, NOW)).toBeCloseTo(0, 6)
+    expect(legPnlAt(leg, 25_000, 30, undefined, NOW)).toBeCloseTo(-2_500, 6)
   })
 
   it('uses the server-adjusted authoritative expiry for sub-day valuation', () => {
@@ -392,6 +402,76 @@ describe('multi-expiry structures', () => {
 
     expect(payoff.maxProfit).toBe(Infinity)
     expect(payoff.breakevens).toEqual([...payoff.breakevens].sort((a, b) => a - b))
+  })
+
+  it('settles a covered call against spot on both legs', () => {
+    // The future carries a 100-point basis over spot. Held to infinity it
+    // inflated max profit by exactly that basis times the quantity, and moved
+    // the breakeven 100 points down, because only the option was converging.
+    const carry = Math.log(24_900 / 24_800) / (7 / 365)
+    const future: StrategyLeg = {
+      id: 'fut',
+      segment: 'FUTURE',
+      side: 'BUY',
+      lots: 1,
+      lotSize: 75,
+      expiry: '21AUG26',
+      expiryTs: NEAR_TS,
+      price: 24_900,
+      marketPrice: 24_900,
+      referenceUnderlying: 24_800,
+      iv: 0,
+      active: true,
+      symbol: 'NIFTY21AUG26FUT',
+    }
+    const shortCall: StrategyLeg = {
+      ...leg('short-call', 'SELL', 'CE', 25_000, 120, NEAR_TS),
+      forwardPrice: 24_800 * Math.exp((carry * 7) / 365),
+    }
+
+    const payoff = payoffFor([future, shortCall])
+
+    expect(payoff.breakevens).toEqual([expect.closeTo(24_780, 4)])
+    expect(payoff.maxProfit).toBeCloseTo(16_500, 4)
+    expect(payoff.maxLoss).toBeCloseTo(-1_858_500, 4)
+  })
+
+  it('keeps an iron condor defined-risk when one wing has no forward', () => {
+    // A chain fetched without Greeks reports no forward, and a leg outside the
+    // loaded strike window keeps a stale snapshot. Inferring the carry per leg
+    // then gives siblings on ONE expiry different factors, their slopes stop
+    // cancelling, and a defined-risk position reports an unlimited loss.
+    const condor = [
+      leg('long-put', 'BUY', 'PE', 24_600, 30, NEAR_TS),
+      leg('short-put', 'SELL', 'PE', 24_700, 60, NEAR_TS),
+      leg('short-call', 'SELL', 'CE', 24_900, 60, NEAR_TS),
+      { ...leg('long-call', 'BUY', 'CE', 25_000, 30, NEAR_TS), forwardPrice: undefined },
+    ]
+
+    const payoff = payoffFor(condor)
+
+    expect(Number.isFinite(payoff.maxLoss)).toBe(true)
+    expect(Number.isFinite(payoff.maxProfit)).toBe(true)
+    expect(payoff.maxLoss).toBeCloseTo(-3_000, 4)
+    expect(payoff.maxProfit).toBeCloseTo(4_500, 4)
+  })
+
+  it('reports calendar breakevens of the strategy, not of the analysis window', () => {
+    // Equal premiums leave the far tail flat on exactly zero. The scan used to
+    // report its own outermost grid point as a breakeven, so the number moved
+    // whenever the requested window did.
+    const legs = [
+      leg('near', 'SELL', 'PE', 24_800, 40, NEAR_TS),
+      leg('far', 'BUY', 'PE', 24_800, 40, FAR_TS),
+    ]
+    const nearest = nearestLegDays(legs, AT)
+    const narrow = computePayoff(legs, SPOT, nearest, 0, [22_320, 27_280], 240, 0, 12, AT)
+    const wide = computePayoff(legs, SPOT, nearest, 0, [22_320, 60_000], 240, 0, 12, AT)
+
+    expect(narrow.breakevens.every((value) => value > 0)).toBe(true)
+    expect(wide.breakevens.every((value) => value > 0)).toBe(true)
+    expect(narrow.breakevens.every((value) => value < 40_000)).toBe(true)
+    expect(wide.breakevens.every((value) => value < 40_000)).toBe(true)
   })
 
   it('caps a batman below and leaves its upside loss unbounded', () => {
