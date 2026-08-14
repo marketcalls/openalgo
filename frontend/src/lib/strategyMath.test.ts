@@ -195,30 +195,33 @@ describe('per-leg market valuation', () => {
 
   it('uses forward and futures market bases for a flat-slope nonterminal tail', () => {
     const now = new Date('2026-08-11T04:00:00Z')
-    const nearExpiry = 1_786_507_200
     const farExpiry = 1_817_956_800
-    const neutralNearCall = {
-      ...valuationOptionLeg({
-        id: 'near-call',
-        lotSize: 1,
-        expiry: '12AUG26',
-        expiryTs: nearExpiry,
-        strike: 100,
-        price: 0,
-        iv: 100,
-        referenceUnderlying: 100,
-        forwardPrice: 95,
-      }),
-    }
-    const neutralFarCall = {
-      ...neutralNearCall,
-      id: 'far-call',
-      side: 'SELL' as const,
-      // The display string is deliberately stale. The authoritative far expiry
-      // keeps the calendar nonterminal and its time value negative at 200.
+    // A wide call vertical, both legs on the same expiry so they share one
+    // carry curve. Deep in the money their slopes cancel exactly, which is the
+    // flat right tail this exercises: the analysis has to widen its own window
+    // past the supplied [80, 120] to find the root.
+    //
+    // A calendar cannot stand in here. Two expiries carry to different
+    // forwards, so their deep-in-the-money slopes no longer cancel and the tail
+    // is not flat -- it only looked flat while the basis was held constant at
+    // every horizon, which is the bug this suite now guards against.
+    const longCall = valuationOptionLeg({
+      id: 'long-call',
+      lotSize: 1,
       expiry: '12AUG26',
       expiryTs: farExpiry,
-      forwardPrice: 100,
+      strike: 100,
+      price: 150,
+      iv: 20,
+      referenceUnderlying: 100,
+      forwardPrice: 105,
+    })
+    const shortCall = {
+      ...longCall,
+      id: 'short-call',
+      side: 'SELL' as const,
+      strike: 300,
+      price: 0,
     }
     const longFuture = futureLeg({
       id: 'long-future',
@@ -239,7 +242,7 @@ describe('per-leg market valuation', () => {
     })
 
     const payoff = computePayoff(
-      [neutralNearCall, neutralFarCall, longFuture, shortFuture],
+      [longCall, shortCall, longFuture, shortFuture],
       100,
       0,
       0,
@@ -250,7 +253,11 @@ describe('per-leg market valuation', () => {
       now
     )
 
+    // The two futures contribute their own market bases, a constant +10, and
+    // the vertical is a 150 debit, so the root sits far outside the requested
+    // window and the tail beyond the short strike is flat.
     expect(payoff.breakevens.at(-1)).toBeGreaterThan(200)
+    expect(payoff.maxProfit).toBeLessThan(Infinity)
   })
 
   it('clamps a non-positive scenario forward to the Black-76 boundary', () => {
@@ -295,14 +302,22 @@ describe('per-leg market valuation', () => {
     })
     const now = new Date('2026-08-11T04:00:00Z')
 
-    expect(legPnlAt(leg, 25_100, 0, 15, now)).toBeCloseTo(3905.81, 1)
+    // Hand-checked against an independent Black-76 at the carry rate the
+    // snapshot implies, ln(25120/25000) / (3.25/365) = 0.53778726/yr.
+    //   spot 25100, t = 3.25/365  -> F = 25100 * 1.0048   = 25220.4800
+    //   spot 25000, t = 3.25/365  -> F = 25120 exactly (the snapshot forward)
+    //   spot 25000, t = 2.25/365  -> F = 25000 * 1.003321 = 25083.0157
+    // The third case is the one the old constant-basis model got wrong: a day
+    // of decay pulls the forward toward spot, so the leg loses the carry as
+    // well as the time value.
+    expect(legPnlAt(leg, 25_100, 0, 15, now)).toBeCloseTo(3923.44, 1)
     expect(legPnlAt(leg, 25_000, 0, 20, now)).toBeCloseTo(2735.7, 1)
-    expect(legPnlAt(leg, 25_000, 1, 15, now)).toBeCloseTo(-632.97, 1)
+    expect(legPnlAt(leg, 25_000, 1, 15, now)).toBeCloseTo(-1810.41, 1)
   })
 })
 
 describe('payoff geometry and structural risk', () => {
-  it('finds terminal roots at the option kink expressed in underlying coordinates', () => {
+  it('strikes the terminal payoff against spot, not the carried forward', () => {
     const shiftedForwardCall = valuationOptionLeg({
       lotSize: 1,
       strike: 100,
@@ -314,9 +329,40 @@ describe('payoff geometry and structural risk', () => {
 
     const payoff = computePayoff([shiftedForwardCall], 100, 0, 0, [80, 120], 8, 0, 20, NOW)
 
-    expect(payoff.breakevens).toEqual([95])
+    // A forward 10 points over spot does not survive to expiry: the option
+    // settles against the index, so a long 100 call bought for 5 breaks even at
+    // 105, not at 95.
+    expect(payoff.breakevens).toEqual([105])
     expect(payoff.maxLoss).toBe(-5)
     expect(payoff.maxProfit).toBe(Infinity)
+  })
+
+  it('breaks a long put even at strike minus premium, not below the basis', () => {
+    // The reported case: long 1 lot of NIFTY 24000PE at 34.15, lot 65, on a
+    // chain whose parity forward sat 79.275 over spot. The chart showed a
+    // breakeven of 23,886.58 and a max profit of 15,52,627.38 - both exactly
+    // one basis below the truth, because the terminal payoff was struck against
+    // the carried forward instead of spot.
+    const now = new Date('2026-08-14T05:00:00.000Z')
+    const spot = 24_350
+    const expiryTs = now.getTime() / 1000 + 11 * 86_400
+    const leg = valuationOptionLeg({
+      side: 'BUY',
+      optionType: 'PE',
+      strike: 24_000,
+      price: 34.15,
+      lotSize: 65,
+      iv: 12,
+      expiryTs,
+      referenceUnderlying: spot,
+      forwardPrice: spot + 79.275,
+    })
+
+    const payoff = computePayoff([leg], spot, 11, 0, [22_320, 27_280], 240, 0, 12, now)
+
+    expect(payoff.breakevens).toEqual([expect.closeTo(23_965.85, 6)])
+    expect(payoff.maxProfit).toBeCloseTo(1_557_780.25, 4)
+    expect(payoff.maxLoss).toBeCloseTo(-2_219.75, 6)
   })
 
   it('does not pin the plotted domain to zero for a leg in contango', () => {
@@ -340,12 +386,12 @@ describe('payoff geometry and structural risk', () => {
     // The requested lower bound survives instead of being dragged to zero.
     expect(payoff.samples[0].underlying).toBeCloseTo(22_320, 6)
     expect(payoff.samples.every((sample) => sample.underlying >= 22_320)).toBe(true)
-    // The kink and the root stay inside the framed window.
-    expect(payoff.breakevens).toEqual([expect.closeTo(24_600, 6)])
+    // Struck against spot at expiry: 24800 - 150.
+    expect(payoff.breakevens).toEqual([24_650])
 
-    // The analysis domain is untouched: max loss is still evaluated at S = 0,
-    // where the scenario forward clamps to 50 and the short put is deep ITM.
-    expect(payoff.maxLoss).toBeCloseTo(-1_845_000, 6)
+    // Max loss is still evaluated at S = 0, where the put is worth its full
+    // strike: (24800 - 150) * 75.
+    expect(payoff.maxLoss).toBeCloseTo(-1_848_750, 6)
   })
 
   it('does not invent a breakeven for an empty strategy', () => {
