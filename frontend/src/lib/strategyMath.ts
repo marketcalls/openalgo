@@ -737,10 +737,19 @@ function analyzeNonTerminalPayoff(
     extrema.push(tailLimit)
   }
 
+  // A payoff can sit exactly on zero across a whole span rather than crossing
+  // it at a point - a zero-cost collar between its strikes, or a calendar whose
+  // legs were entered at the same premium, whose far tail is flat at zero. That
+  // is one plateau, not a breakeven at every sampled point: recording each grid
+  // point would return hundreds of "breakevens" and, because the framing takes
+  // the outermost of them, would stretch the chart far past the strategy.
+  const isPlateauEdge = (index: number) =>
+    index === 0 || index === values.length - 1 || values[index - 1] !== 0 || values[index + 1] !== 0
+
   for (let index = 0; index < xs.length - 1; index++) {
     const leftValue = values[index]
     const rightValue = values[index + 1]
-    if (leftValue === 0) roots.push(xs[index])
+    if (leftValue === 0 && isPlateauEdge(index)) roots.push(xs[index])
     if (leftValue * rightValue >= 0) continue
 
     let lo = xs[index]
@@ -758,7 +767,10 @@ function analyzeNonTerminalPayoff(
     }
     roots.push((lo + hi) / 2)
   }
-  if (values.at(-1) === 0) roots.push(xs.at(-1) as number)
+  const lastIndex = values.length - 1
+  if (values[lastIndex] === 0 && isPlateauEdge(lastIndex)) {
+    roots.push(xs[lastIndex])
+  }
 
   for (let index = 1; index < xs.length - 1; index++) {
     const previous = values[index - 1]
