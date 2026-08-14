@@ -446,16 +446,21 @@ function responsiveStrikes(legs: StrategyLeg[]): number[] {
   )
 }
 
-/** Terminal intrinsic kinks expressed in the scenario-underlying coordinate. */
+/**
+ * Terminal intrinsic kinks expressed in the scenario-underlying coordinate.
+ *
+ * A forward-priced leg has two vertices: the underlying at which the scenario
+ * forward crosses zero (Black-76 clamps the forward there, see `legPnlAt`) and
+ * the underlying at which that forward reaches the strike. Both are real kinks
+ * of the terminal curve, so both belong in the analysis and sample sets.
+ *
+ * The forward-zero vertex must NOT frame the visible domain — see
+ * `terminalFramingBreakpoints`.
+ */
 function terminalBreakpoints(legs: StrategyLeg[]): number[] {
   return uniqueSorted(
     legs.flatMap((leg) => {
-      if (
-        !leg.active ||
-        isLegClosed(leg) ||
-        leg.segment !== 'OPTION' ||
-        leg.strike === undefined
-      ) {
+      if (!leg.active || isLegClosed(leg) || leg.segment !== 'OPTION' || leg.strike === undefined) {
         return []
       }
       if (isFiniteNumber(leg.referenceUnderlying) && isFiniteNumber(leg.forwardPrice)) {
@@ -463,6 +468,30 @@ function terminalBreakpoints(legs: StrategyLeg[]): number[] {
           Math.max(0, leg.referenceUnderlying - leg.forwardPrice),
           Math.max(0, leg.strike - leg.forwardPrice + leg.referenceUnderlying),
         ]
+      }
+      return [leg.strike]
+    })
+  )
+}
+
+/**
+ * The subset of terminal kinks that may frame the plotted domain.
+ *
+ * Only the strike-equivalent vertex is kept. The forward-zero vertex sits at
+ * `referenceUnderlying - forwardPrice`, which is negative for any underlying in
+ * contango — the normal case for Indian index options — and clamps to 0. Left
+ * in the framing set it pins the x-axis at zero and squashes every ordinary
+ * strategy against the right edge of the chart, even though the payoff there is
+ * a straight line no trader needs to see.
+ */
+function terminalFramingBreakpoints(legs: StrategyLeg[]): number[] {
+  return uniqueSorted(
+    legs.flatMap((leg) => {
+      if (!leg.active || isLegClosed(leg) || leg.segment !== 'OPTION' || leg.strike === undefined) {
+        return []
+      }
+      if (isFiniteNumber(leg.referenceUnderlying) && isFiniteNumber(leg.forwardPrice)) {
+        return [Math.max(0, leg.strike - leg.forwardPrice + leg.referenceUnderlying)]
       }
       return [leg.strike]
     })
@@ -708,10 +737,19 @@ function analyzeNonTerminalPayoff(
     extrema.push(tailLimit)
   }
 
+  // A payoff can sit exactly on zero across a whole span rather than crossing
+  // it at a point - a zero-cost collar between its strikes, or a calendar whose
+  // legs were entered at the same premium, whose far tail is flat at zero. That
+  // is one plateau, not a breakeven at every sampled point: recording each grid
+  // point would return hundreds of "breakevens" and, because the framing takes
+  // the outermost of them, would stretch the chart far past the strategy.
+  const isPlateauEdge = (index: number) =>
+    index === 0 || index === values.length - 1 || values[index - 1] !== 0 || values[index + 1] !== 0
+
   for (let index = 0; index < xs.length - 1; index++) {
     const leftValue = values[index]
     const rightValue = values[index + 1]
-    if (leftValue === 0) roots.push(xs[index])
+    if (leftValue === 0 && isPlateauEdge(index)) roots.push(xs[index])
     if (leftValue * rightValue >= 0) continue
 
     let lo = xs[index]
@@ -729,7 +767,10 @@ function analyzeNonTerminalPayoff(
     }
     roots.push((lo + hi) / 2)
   }
-  if (values.at(-1) === 0) roots.push(xs.at(-1) as number)
+  const lastIndex = values.length - 1
+  if (values[lastIndex] === 0 && isPlateauEdge(lastIndex)) {
+    roots.push(xs[lastIndex])
+  }
 
   for (let index = 1; index < xs.length - 1; index++) {
     const previous = values[index - 1]
@@ -785,14 +826,24 @@ export function computePayoff(
         currentNow
       )
   const strikes = terminal ? terminalBreakpoints(legs) : responsiveStrikes(legs)
+  // Framing decides what the user sees; `strikes` decides where the curve is
+  // sampled. They differ only in the terminal case, where the forward-zero
+  // vertex is a real kink but a useless viewport bound.
+  const framingStrikes = terminal ? terminalFramingBreakpoints(legs) : responsiveStrikes(legs)
   const initialBreakevens = terminalAnalysis.breakevens
+  // A root at zero is the far-tail artefact of a structure that expires
+  // worthless at S = 0, not a breakeven anyone trades around.
+  const framingBreakevens = initialBreakevens.filter((value) => value > 0)
   const [requestedLo, requestedHi] = priceRange
-  const lo = Math.max(0, Math.min(requestedLo, ...strikes, ...initialBreakevens))
-  const hi = Math.max(requestedHi, ...strikes, ...initialBreakevens)
+  const lo = Math.max(0, Math.min(requestedLo, ...framingStrikes, ...framingBreakevens))
+  const hi = Math.max(requestedHi, ...framingStrikes, ...framingBreakevens)
   const safeSteps = Math.max(1, Math.floor(steps))
   const step = (hi - lo) / safeSteps
   const uniform = Array.from({ length: safeSteps + 1 }, (_, index) => lo + index * step)
-  const sampleXs = uniqueSorted([...uniform, ...strikes, ...initialBreakevens])
+  // Kinks and roots outside the framed window would otherwise re-extend the
+  // plotted series back to the bound the framing just excluded.
+  const inFrame = (value: number) => value >= lo && value <= hi
+  const sampleXs = uniqueSorted([...uniform, ...strikes, ...initialBreakevens]).filter(inFrame)
 
   const makeSample = (underlying: number): PayoffSample => ({
     underlying,
@@ -807,7 +858,7 @@ export function computePayoff(
   const breakevens = terminalAnalysis.breakevens
 
   if (breakevens.length > 0) {
-    samples = uniqueSorted([...sampleXs, ...breakevens]).map(makeSample)
+    samples = uniqueSorted([...sampleXs, ...breakevens.filter(inFrame)]).map(makeSample)
   }
 
   const zeroCrossings = samples.flatMap((sample, index) => (sample.expiry === 0 ? [index] : []))
