@@ -224,6 +224,43 @@ function remainingYears(leg: StrategyLeg, daysElapsed: number, now: ValuationTim
 }
 
 /**
+ * Growth factor from the scenario underlying to this leg's forward, at the
+ * remaining life the scenario is being valued at.
+ *
+ * The chain reports a spot (`referenceUnderlying`) and a parity-implied forward
+ * (`forwardPrice`) that sits above it - roughly 79 points on a two-week NIFTY
+ * chain. That gap is cost of carry, and it is not a constant: a forward pulls
+ * to spot as its life runs out, and an index option settles against spot, so at
+ * expiry the two are the same number.
+ *
+ * The snapshot pins one point on that decay - `forwardPrice / referenceUnderlying`
+ * at the leg's current remaining life - which is enough to recover the implied
+ * carry rate and re-apply it at any other horizon. At the snapshot horizon this
+ * reproduces `forwardPrice` exactly, so the live mark still reconciles to the
+ * traded price; at expiry it returns 1, so the terminal payoff is struck
+ * against spot and a long 24000 put breaks even at 24000 minus its premium
+ * rather than 79 points below it.
+ *
+ * Returns 1 - carry the scenario underlying through unchanged - whenever the
+ * rate cannot be inferred: a non-positive spot or forward, or a leg already at
+ * expiry, where there is no remaining life to spread the basis over.
+ */
+function forwardCarryFactor(
+  leg: StrategyLeg,
+  referenceUnderlying: number,
+  forwardPrice: number,
+  tYears: number,
+  now: ValuationTime
+): number {
+  if (referenceUnderlying <= 0 || forwardPrice <= 0 || tYears <= 0) return 1
+  const snapshotYears = remainingYears(leg, 0, now)
+  if (snapshotYears <= 0) return 1
+  const carry = Math.log(forwardPrice / referenceUnderlying) / snapshotYears
+  const factor = Math.exp(carry * tYears)
+  return Number.isFinite(factor) && factor > 0 ? factor : 1
+}
+
+/**
  * Payoff of a single leg at a given underlying price, advanced `daysElapsed`
  * from `now`.
  *
@@ -266,7 +303,7 @@ export function legPnlAt(
   const forwardPrice = isFiniteNumber(leg.forwardPrice) ? leg.forwardPrice : undefined
   const hasForwardReference = referenceUnderlying !== undefined && forwardPrice !== undefined
   const scenarioForward = hasForwardReference
-    ? forwardPrice + (underlying - referenceUnderlying)
+    ? underlying * forwardCarryFactor(leg, referenceUnderlying, forwardPrice, tLeg, now)
     : underlying
   // Black-76 is defined only for positive forwards. Its F -> 0 limit is the
   // undiscounted intrinsic value, so clamp a crossed scenario to that boundary
@@ -446,58 +483,6 @@ function responsiveStrikes(legs: StrategyLeg[]): number[] {
   )
 }
 
-/**
- * Terminal intrinsic kinks expressed in the scenario-underlying coordinate.
- *
- * A forward-priced leg has two vertices: the underlying at which the scenario
- * forward crosses zero (Black-76 clamps the forward there, see `legPnlAt`) and
- * the underlying at which that forward reaches the strike. Both are real kinks
- * of the terminal curve, so both belong in the analysis and sample sets.
- *
- * The forward-zero vertex must NOT frame the visible domain — see
- * `terminalFramingBreakpoints`.
- */
-function terminalBreakpoints(legs: StrategyLeg[]): number[] {
-  return uniqueSorted(
-    legs.flatMap((leg) => {
-      if (!leg.active || isLegClosed(leg) || leg.segment !== 'OPTION' || leg.strike === undefined) {
-        return []
-      }
-      if (isFiniteNumber(leg.referenceUnderlying) && isFiniteNumber(leg.forwardPrice)) {
-        return [
-          Math.max(0, leg.referenceUnderlying - leg.forwardPrice),
-          Math.max(0, leg.strike - leg.forwardPrice + leg.referenceUnderlying),
-        ]
-      }
-      return [leg.strike]
-    })
-  )
-}
-
-/**
- * The subset of terminal kinks that may frame the plotted domain.
- *
- * Only the strike-equivalent vertex is kept. The forward-zero vertex sits at
- * `referenceUnderlying - forwardPrice`, which is negative for any underlying in
- * contango — the normal case for Indian index options — and clamps to 0. Left
- * in the framing set it pins the x-axis at zero and squashes every ordinary
- * strategy against the right edge of the chart, even though the payoff there is
- * a straight line no trader needs to see.
- */
-function terminalFramingBreakpoints(legs: StrategyLeg[]): number[] {
-  return uniqueSorted(
-    legs.flatMap((leg) => {
-      if (!leg.active || isLegClosed(leg) || leg.segment !== 'OPTION' || leg.strike === undefined) {
-        return []
-      }
-      if (isFiniteNumber(leg.referenceUnderlying) && isFiniteNumber(leg.forwardPrice)) {
-        return [Math.max(0, leg.strike - leg.forwardPrice + leg.referenceUnderlying)]
-      }
-      return [leg.strike]
-    })
-  )
-}
-
 function hasResponsiveExposure(legs: StrategyLeg[]): boolean {
   return legs.some(
     (leg) =>
@@ -589,7 +574,10 @@ function analyzeTerminalPayoff(
   fallbackIv: number,
   now: Date
 ): TerminalAnalysis {
-  const candidates = uniqueSorted([0, ...terminalBreakpoints(legs)])
+  // The terminal horizon prices every option against spot, so its only kinks
+  // are the strikes themselves. Zero is kept because it bounds the left tail,
+  // where a short put reaches its worst case.
+  const candidates = uniqueSorted([0, ...responsiveStrikes(legs)])
   const valueAt = (underlying: number) =>
     normalizePayoff(totalPnlAt(legs, underlying, daysAtExpiry, ivShiftPct, fallbackIv, now))
   if (!hasResponsiveExposure(legs)) {
@@ -825,18 +813,16 @@ export function computePayoff(
         fallbackIv,
         currentNow
       )
-  const strikes = terminal ? terminalBreakpoints(legs) : responsiveStrikes(legs)
-  // Framing decides what the user sees; `strikes` decides where the curve is
-  // sampled. They differ only in the terminal case, where the forward-zero
-  // vertex is a real kink but a useless viewport bound.
-  const framingStrikes = terminal ? terminalFramingBreakpoints(legs) : responsiveStrikes(legs)
+  // Every option kink lands on its strike: the terminal curve prices against
+  // spot, and the pre-expiry curve is smooth between them.
+  const strikes = responsiveStrikes(legs)
   const initialBreakevens = terminalAnalysis.breakevens
   // A root at zero is the far-tail artefact of a structure that expires
   // worthless at S = 0, not a breakeven anyone trades around.
   const framingBreakevens = initialBreakevens.filter((value) => value > 0)
   const [requestedLo, requestedHi] = priceRange
-  const lo = Math.max(0, Math.min(requestedLo, ...framingStrikes, ...framingBreakevens))
-  const hi = Math.max(requestedHi, ...framingStrikes, ...framingBreakevens)
+  const lo = Math.max(0, Math.min(requestedLo, ...strikes, ...framingBreakevens))
+  const hi = Math.max(requestedHi, ...strikes, ...framingBreakevens)
   const safeSteps = Math.max(1, Math.floor(steps))
   const step = (hi - lo) / safeSteps
   const uniform = Array.from({ length: safeSteps + 1 }, (_, index) => lo + index * step)
