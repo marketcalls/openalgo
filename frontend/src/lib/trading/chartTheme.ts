@@ -38,6 +38,13 @@ function rasterize(cssColor: string): string {
 
 const token = (name: string) => rasterize(`var(${name})`)
 
+/**
+ * Any CSS colour as a plain `rgb()` string the canvas is certain to parse —
+ * a token, a computed style read back off an element, anything. Exported for
+ * code that paints app-themed text onto a canvas (the chart's PNG export).
+ */
+export const resolveCssColor = (cssColor: string): string => rasterize(cssColor)
+
 /** True when the app is in live light mode (analyzer is always a dark palette). */
 export function isLightTheme(mode: ThemeMode, appMode: AppMode): boolean {
   return appMode === 'live' && mode === 'light'
