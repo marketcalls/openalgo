@@ -260,6 +260,16 @@ function forwardCarryFactor(
   return Number.isFinite(factor) && factor > 0 ? factor : 1
 }
 
+/** `forwardCarryFactor` for a leg, or 1 when the chain gave it no forward. */
+function legForwardFactor(leg: StrategyLeg, tYears: number, now: ValuationTime): number {
+  const referenceUnderlying = isFiniteNumber(leg.referenceUnderlying)
+    ? leg.referenceUnderlying
+    : undefined
+  const forwardPrice = isFiniteNumber(leg.forwardPrice) ? leg.forwardPrice : undefined
+  if (referenceUnderlying === undefined || forwardPrice === undefined) return 1
+  return forwardCarryFactor(leg, referenceUnderlying, forwardPrice, tYears, now)
+}
+
 /**
  * Payoff of a single leg at a given underlying price, advanced `daysElapsed`
  * from `now`.
@@ -412,24 +422,40 @@ export interface PayoffResult {
  * sample window would otherwise report as capped. Closed / inactive legs
  * contribute 0 (their P&L is locked or excluded).
  *
+ * An option is priced off its own forward, and that forward moves with the
+ * scenario underlying by the leg's carry factor, so a deep in-the-money call is
+ * worth `S x factor - K` and contributes `qty x factor` rather than plain
+ * `qty`. At the terminal horizon every factor is 1 and this reduces to the
+ * familiar per-lot slopes.
+ *
+ * The distinction matters for anything spanning two expiries. A calendar's legs
+ * carry to different forwards, so contributions that would cancel on quantity
+ * alone do not actually cancel, and the tail has a real slope. Reporting it as
+ * flat would cap an unbounded loss at whatever the sampled window happened to
+ * reach.
+ *
  * Slope contributions at S → +∞:
- *   BUY  CE  → +qty    (call goes ITM, gains ₹1 per ₹1 spot rise)
- *   SELL CE  → −qty
- *   BUY  PE  →  0      (put worthless at high spot)
+ *   BUY  CE  → +qty x factor   (call goes ITM, gains with the forward)
+ *   SELL CE  → −qty x factor
+ *   BUY  PE  →  0              (put worthless at high spot)
  *   SELL PE  →  0
- *   BUY  FUT → +qty
+ *   BUY  FUT → +qty            (futures track the underlying one for one)
  *   SELL FUT → −qty
  *
  * Slope contributions at S → 0+ (slope w.r.t. S, so a put gaining value as
  * S drops gives a NEGATIVE slope):
  *   BUY  CE  →  0
  *   SELL CE  →  0
- *   BUY  PE  → −qty
- *   SELL PE  → +qty
+ *   BUY  PE  → −qty x factor
+ *   SELL PE  → +qty x factor
  *   BUY  FUT → +qty
  *   SELL FUT → −qty
  */
-function asymptoticSlopes(legs: StrategyLeg[]): { right: number; left: number } {
+function asymptoticSlopes(
+  legs: StrategyLeg[],
+  daysElapsed: number,
+  now: ValuationTime
+): { right: number; left: number } {
   let right = 0
   let left = 0
   for (const leg of legs) {
@@ -445,10 +471,11 @@ function asymptoticSlopes(legs: StrategyLeg[]): { right: number; left: number } 
     }
 
     if (leg.segment === 'OPTION') {
+      const factor = legForwardFactor(leg, remainingYears(leg, daysElapsed, now), now)
       if (leg.optionType === 'CE') {
-        right += sign * qty
+        right += sign * qty * factor
       } else if (leg.optionType === 'PE') {
-        left -= sign * qty
+        left -= sign * qty * factor
       }
     }
   }
@@ -612,7 +639,7 @@ function analyzeTerminalPayoff(
   const lastValue = candidateValues[lastIndex]
   if (lastValue === 0 && isPlateauEdge(lastIndex)) roots.push(last)
 
-  const slopes = asymptoticSlopes(legs)
+  const slopes = asymptoticSlopes(legs, daysAtExpiry, now)
   if (Math.abs(slopes.right) > PAYOFF_EPSILON) {
     const tailRoot = last - lastValue / slopes.right
     if (tailRoot > last + PAYOFF_EPSILON) roots.push(tailRoot)
@@ -675,11 +702,12 @@ function rightTailValue(legs: StrategyLeg[]): number {
       leg.strike !== undefined &&
       leg.optionType !== undefined
     ) {
-      const forwardBasis =
-        isFiniteNumber(leg.forwardPrice) && isFiniteNumber(leg.referenceUnderlying)
-          ? leg.forwardPrice - leg.referenceUnderlying
-          : 0
-      const terminalValue = leg.optionType === 'CE' ? forwardBasis - leg.strike : 0
+      // Deep in the money a call is worth `S x factor - K`. The `S x factor`
+      // part is what the flat-slope test just established sums to zero, so the
+      // constant this returns is the strike alone. Carrying a basis term here
+      // was the additive model's constant, and is wrong once the forward scales
+      // with the underlying rather than sitting a fixed distance above it.
+      const terminalValue = leg.optionType === 'CE' ? -leg.strike : 0
       value += sign * (terminalValue - leg.price) * qty
     } else if (leg.segment === 'FUTURE') {
       const marketBasis =
@@ -713,7 +741,7 @@ function analyzeNonTerminalPayoff(
   const sigmaMove = spot > 0 && maxIv > 0 ? spot * (maxIv / 100) * Math.sqrt(maxRemainingYears) : 0
   const valueAt = (underlying: number) =>
     normalizePayoff(totalPnlAt(legs, underlying, daysAtExpiry, ivShiftPct, fallbackIv, now))
-  const slopes = asymptoticSlopes(legs)
+  const slopes = asymptoticSlopes(legs, daysAtExpiry, now)
   const tailLimit = rightTailValue(legs)
   let analysisHi = Math.max(priceRange[1], maxStrike * 2, spot + 6 * sigmaMove)
   for (let expansion = 0; expansion < 20; expansion++) {

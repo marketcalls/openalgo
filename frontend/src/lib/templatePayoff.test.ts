@@ -16,8 +16,13 @@ import { STRATEGY_TEMPLATES } from './strategyTemplates'
 import { resolveStrikeOffset } from './templateResolution'
 
 const SPOT = 24_350
-/** Parity forward sits above spot on an Indian index chain. */
-const BASIS = 79.275
+/**
+ * One carry curve for the chain: the parity forward sits above spot on an
+ * Indian index, and a further expiry carries further. Pinning every expiry to
+ * the same forward would imply a near leg carrying several times as fast as a
+ * far one, which is not a shape any book quotes.
+ */
+const CARRY_RATE = 0.06
 const NOW = new Date('2026-08-14T05:00:00.000Z')
 const NEAR_DAYS = 11
 const FAR_DAYS = 39
@@ -110,7 +115,7 @@ function buildLegs(template: (typeof STRATEGY_TEMPLATES)[number]): StrategyLeg[]
       active: true,
       symbol: `${template.id}-${index}`,
       referenceUnderlying: SPOT,
-      forwardPrice: SPOT + BASIS,
+      forwardPrice: SPOT * Math.exp((CARRY_RATE * days) / 365),
     }
   })
 }

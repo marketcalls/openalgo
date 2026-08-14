@@ -316,6 +316,100 @@ describe('per-leg market valuation', () => {
   })
 })
 
+describe('multi-expiry structures', () => {
+  const SPOT = 24_800
+  const AT = new Date('2026-08-14T05:00:00.000Z')
+  const NEAR_TS = AT.getTime() / 1000 + 7 * 86_400
+  const FAR_TS = AT.getTime() / 1000 + 35 * 86_400
+  /** One carry curve for the chain, so the far expiry carries further. */
+  const forwardFor = (expiryTs: number) =>
+    SPOT * Math.exp((0.06 * (expiryTs * 1000 - AT.getTime())) / (365 * 86_400_000))
+
+  function leg(
+    id: string,
+    side: Side,
+    optionType: OptionType,
+    strike: number,
+    price: number,
+    expiryTs: number,
+    lots = 1
+  ): StrategyLeg {
+    return {
+      id,
+      segment: 'OPTION',
+      side,
+      optionType,
+      strike,
+      lots,
+      lotSize: 75,
+      expiry: expiryTs === FAR_TS ? '18SEP26' : '21AUG26',
+      expiryTs,
+      price,
+      iv: 12,
+      active: true,
+      symbol: id,
+      referenceUnderlying: SPOT,
+      forwardPrice: forwardFor(expiryTs),
+    }
+  }
+
+  function payoffFor(legs: StrategyLeg[]) {
+    const nearest = nearestLegDays(legs, AT)
+    const range = payoffPriceRange(SPOT, legs, 12, nearest / 365)
+    return computePayoff(legs, SPOT, nearest, 0, range, 240, 0, 12, AT)
+  }
+
+  // The regression these guard: a tail slope summed on quantity alone cancels
+  // for every one of these structures, so the analysis called the tail flat and
+  // capped the extreme at whatever the sampled window happened to reach. The
+  // legs carry to different forwards, so the slopes do not actually cancel.
+  it('sees unbounded upside on a call calendar whose quantities cancel', () => {
+    const payoff = payoffFor([
+      leg('near', 'SELL', 'CE', 24_800, 150, NEAR_TS),
+      leg('far', 'BUY', 'CE', 24_800, 300, FAR_TS),
+    ])
+
+    expect(payoff.maxProfit).toBe(Infinity)
+    expect(Number.isFinite(payoff.maxLoss)).toBe(true)
+  })
+
+  it('sees unbounded upside on a diagonal', () => {
+    const payoff = payoffFor([
+      leg('near', 'SELL', 'CE', 24_800, 150, NEAR_TS),
+      leg('far', 'BUY', 'CE', 24_900, 260, FAR_TS),
+    ])
+
+    expect(payoff.maxProfit).toBe(Infinity)
+  })
+
+  it('sees unbounded upside on a double diagonal', () => {
+    const payoff = payoffFor([
+      leg('near-call', 'SELL', 'CE', 24_900, 120, NEAR_TS),
+      leg('far-call', 'BUY', 'CE', 25_000, 240, FAR_TS),
+      leg('near-put', 'SELL', 'PE', 24_700, 120, NEAR_TS),
+      leg('far-put', 'BUY', 'PE', 24_600, 240, FAR_TS),
+    ])
+
+    expect(payoff.maxProfit).toBe(Infinity)
+    expect(payoff.breakevens).toEqual([...payoff.breakevens].sort((a, b) => a - b))
+  })
+
+  it('caps a batman below and leaves its upside loss unbounded', () => {
+    // Single expiry: a call ratio spread above and a put ratio spread below.
+    // Short two calls against one long, so the right tail falls away without
+    // limit; the put side is bounded because spot cannot go below zero.
+    const payoff = payoffFor([
+      leg('call-long', 'BUY', 'CE', 25_300, 40, NEAR_TS),
+      leg('call-short', 'SELL', 'CE', 25_550, 20, NEAR_TS, 2),
+      leg('put-long', 'BUY', 'PE', 24_300, 40, NEAR_TS),
+      leg('put-short', 'SELL', 'PE', 24_050, 20, NEAR_TS, 2),
+    ])
+
+    expect(payoff.maxLoss).toBe(-Infinity)
+    expect(Number.isFinite(payoff.maxProfit)).toBe(true)
+  })
+})
+
 describe('payoff geometry and structural risk', () => {
   it('strikes the terminal payoff against spot, not the carried forward', () => {
     const shiftedForwardCall = valuationOptionLeg({
