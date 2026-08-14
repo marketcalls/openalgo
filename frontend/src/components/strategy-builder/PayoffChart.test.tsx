@@ -104,7 +104,7 @@ describe('PayoffChart exact geometry', () => {
     }
   })
 
-  it('PG-06 pins the x-axis to the curve domain containing every sigma marker', () => {
+  it('PG-06 keeps every sigma marker inside the autoranged curve domain', () => {
     const payoff = computePayoff(
       [leg('call', 'BUY', 'CE', 100, 2)],
       100,
@@ -127,7 +127,15 @@ describe('PayoffChart exact geometry', () => {
       />
     )
 
-    expect(plotCapture.props?.layout.xaxis?.range).toEqual([40, 160])
+    // No explicit range: an axis pinned to the sample endpoints would be
+    // re-supplied on every live tick and would discard the user's zoom. The
+    // visible window is the sampled domain because every overlay is clipped
+    // into it and the fill traces are unpadded.
+    expect(plotCapture.props?.layout.xaxis?.autorange).toBe(true)
+    expect(plotCapture.props?.layout.xaxis?.range).toBeUndefined()
+    const curveXs = plotCapture.props?.data?.[0]?.x as number[]
+    expect(curveXs[0]).toBe(40)
+    expect(curveXs.at(-1)).toBe(160)
     const sigmaShapes = plotCapture.props?.layout.shapes?.filter(
       (shape) => shape.xref === 'x' && typeof shape.x0 === 'number'
     )
@@ -238,6 +246,9 @@ describe('PayoffChart exact geometry', () => {
     )
 
     expect(plotCapture.props?.layout.uirevision).toBe('NFO:NIFTY:04AUG26')
+    const initialXaxis = plotCapture.props?.layout.xaxis
+    expect(initialXaxis?.autorange).toBe(true)
+
     view.rerender(
       <PayoffChart
         title="Long Call"
@@ -249,6 +260,13 @@ describe('PayoffChart exact geometry', () => {
       />
     )
     expect(plotCapture.props?.layout.uirevision).toBe('NFO:NIFTY:04AUG26')
+    // A stable uirevision alone does not preserve zoom. Plotly discards the
+    // interaction whenever the supplied axis-range value differs from the one
+    // present when the user zoomed, so the range attribute must not drift with
+    // spot either. This is the assertion the earlier version of this test was
+    // missing, which is why the regression went unnoticed.
+    expect(plotCapture.props?.layout.xaxis?.autorange).toBe(true)
+    expect(plotCapture.props?.layout.xaxis?.range).toBeUndefined()
 
     view.rerender(
       <PayoffChart
