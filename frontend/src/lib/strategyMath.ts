@@ -585,21 +585,32 @@ function analyzeTerminalPayoff(
     return { breakevens: [], maxProfit: constantPayoff, maxLoss: constantPayoff }
   }
   const roots: number[] = []
+  const candidateValues = candidates.map(valueAt)
+  // Same rule as the non-terminal scan: a span sitting flat on zero is one
+  // plateau, not a breakeven at each of its vertices. A costless butterfly is
+  // worth exactly nothing below its lowest strike, and reporting a "breakeven"
+  // at an underlying of 0 there is noise, not information.
+  const isPlateauEdge = (index: number) =>
+    index === 0 ||
+    index === candidateValues.length - 1 ||
+    candidateValues[index - 1] !== 0 ||
+    candidateValues[index + 1] !== 0
 
   for (let i = 0; i < candidates.length - 1; i++) {
     const left = candidates[i]
     const right = candidates[i + 1]
-    const leftValue = valueAt(left)
-    const rightValue = valueAt(right)
-    if (leftValue === 0) roots.push(left)
+    const leftValue = candidateValues[i]
+    const rightValue = candidateValues[i + 1]
+    if (leftValue === 0 && isPlateauEdge(i) && i > 0) roots.push(left)
     if (leftValue * rightValue < 0) {
       roots.push(left + ((0 - leftValue) * (right - left)) / (rightValue - leftValue))
     }
   }
 
   const last = candidates.at(-1) ?? 0
-  const lastValue = valueAt(last)
-  if (lastValue === 0) roots.push(last)
+  const lastIndex = candidateValues.length - 1
+  const lastValue = candidateValues[lastIndex]
+  if (lastValue === 0 && isPlateauEdge(lastIndex)) roots.push(last)
 
   const slopes = asymptoticSlopes(legs)
   if (Math.abs(slopes.right) > PAYOFF_EPSILON) {
@@ -607,7 +618,6 @@ function analyzeTerminalPayoff(
     if (tailRoot > last + PAYOFF_EPSILON) roots.push(tailRoot)
   }
 
-  const candidateValues = candidates.map(valueAt)
   let maxProfit = candidateValues.length > 0 ? Math.max(...candidateValues) : 0
   let maxLoss = candidateValues.length > 0 ? Math.min(...candidateValues) : 0
   if (slopes.right > PAYOFF_EPSILON) maxProfit = Infinity
