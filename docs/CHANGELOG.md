@@ -2,6 +2,70 @@
 
 All notable changes to OpenAlgo will be documented in this file.
 
+Point releases between minor versions are documented in
+[docs/releases](releases/) rather than here.
+
+## [2.0.2.0] - 2026-08-14
+
+### Brokers and Options Release
+
+58 commits since 2.0.1.9. Full notes: [version-2.0.2.0-released.md](releases/version-2.0.2.0-released.md).
+
+---
+
+### Highlights
+
+- **HDFC Securities InvestRight** - new broker plugin covering auth, funds, master contract, orders, quotes, depth, WebSocket streaming and the option tools
+- **AliceBlue rebuild** - order-update feed repaired, market-data reconnect storm ended, session-long socket reuse, documented rate limits enforced, index symbology and daily history boundaries corrected
+- **Option Chain live Greeks** - client-side Black-76 recomputed on every tick, with a Price/Greeks view mode (shortcut G) and `with_greeks` on `POST /api/v1/optionchain`
+- **Strategy Builder repair** - valuation aligned with Black-76, exact listed-contract resolution, live-market freshness, and a run of payoff and forward-curve corrections
+- **MCP hardening** - tool annotations, a single structured error shape, a trust envelope, and toolset/read-only filtering on both transports
+- **Samco Trade API v3.2**, **Tradejini CubePlus v2**, and **Delta Exchange** market data moved to the public WebSocket endpoint
+- **Derivative underlying normalized once** on the shared master-contract path, fixing options orders, expiry lists and the underlying dropdown for every broker
+
+---
+
+### New Features
+
+- HDFC Securities InvestRight broker integration (#1784)
+- Option Chain streams live Greeks with a Price/Greeks column-preset toggle
+- `POST /api/v1/optionchain` accepts `with_greeks` and `interest_rate`, and returns `expiry_ts` and `server_ts`
+- HalfTrend added to the charting terminal as the 20th built-in indicator
+- MCP tool annotations, structured errors, trust envelope, and `OPENALGO_MCP_TOOLSETS` / `OPENALGO_MCP_READ_ONLY` filtering
+- AliceBlue EC error codes expand into readable messages
+- PnL Tracker splits PnL and drawdown into 3:1 panes
+
+### Broker Fixes
+
+- AliceBlue: order-update WebSocket token host, market-data reconnect storm, session-long socket reuse, 1800 req / 15 min rate limit, bounded symbol-lock registry, integer master-contract tokens, BSE historical data, daily history day boundary at midnight IST, index symbology and `::index` history routing
+- Samco: migrated to Trade API v3.2; a stalled streaming worker is now always replaced on reconnect (#1783)
+- Tradejini: realigned to the refreshed CubePlus v2 API docs (#1787)
+- Delta Exchange: market data moved to the public WebSocket endpoint with batched subscriptions; expiry dropdown fixed - requires a master contract re-download (#1790)
+- Definedge: no longer loses a full trading day at each history chunk boundary (#1790)
+- All brokers: the derivative underlying root is normalized once on the shared master-contract path, fixing Fyers and any broker that ships a contract description in `name`
+
+### Platform Fixes
+
+- 23 unregistered React routes were feeding `Error404Tracker` and pushing logged-out users toward an automatic IP ban; Flask rules added
+- Strategy Builder: Black-76 scenario valuation, aggregate horizons, exact listed-contract resolution, stale margin invalidation, WebSocket-bound freshness, closed-leg exclusion, and exact tick rounding (#1786)
+- Strategy Builder payoff charts: one carry curve per strategy, forward converging to spot at expiry, no breakeven at an underlying of zero, x-axis no longer collapsing, and zoom preserved
+- Flow: option lot size resolved without trusting `SymToken.name`; open strategy legs sort ahead of flat ones
+- Greeks: parsed option expiry kept naive
+- Charting terminal: screenshots include the readout and exclude the order buttons
+- Option Chain: a hidden column now hides on both sides in one toggle
+
+### Documentation
+
+- WebSocket client connection limits clarified (#1764, #1788)
+- Option Chain `with_greeks` documented, examples moved to 25AUG26
+
+### Dependencies
+
+- `openalgo-charts`: **1.0.28** to **1.0.29** (HalfTrend indicator, frontend only)
+- No Python dependencies changed
+
+---
+
 ## [2.0.0.0] - 2026-01-22
 
 ### Major Release: Complete Frontend Rewrite & Feature Expansion
