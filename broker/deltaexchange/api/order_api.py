@@ -5,6 +5,14 @@ import threading
 import time
 
 from broker.deltaexchange.api.baseurl import get_auth_headers, get_url
+from broker.deltaexchange.api.rate_limiter import (
+    MAX_RETRIES,
+    PRIVATE,
+    DeltaRateLimitError,
+    consume,
+    note_429,
+    retry_delay_from_headers,
+)
 from broker.deltaexchange.mapping.transform_data import (
     map_exchange_type,
     map_product_type,
@@ -45,15 +53,6 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
 
     body = payload if payload else ""
 
-    headers = get_auth_headers(
-        method=method.upper(),
-        path=endpoint,
-        query_string=query_string,
-        payload=body,
-        api_key=auth,
-        api_secret=api_secret,
-    )
-
     # Build full URL (include query string inline so the signed string matches exactly)
     url = get_url(endpoint)
     full_url = url + query_string if query_string else url
@@ -61,14 +60,34 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
     client = get_httpx_client()
     logger.debug(f"[DeltaExchange] {method.upper()} {full_url}")
 
-    # Retry up to 3 times on HTTP 429 (rate limit) with exponential backoff + jitter.
-    # The Retry-After header is honoured when present.  On each retry the HMAC
-    # signature is rebuilt with a fresh timestamp.
-    _MAX_RETRIES = 3
-    _RETRY_BASE  = 1.0  # seconds; doubles each attempt
+    # Retry up to MAX_RETRIES times on HTTP 429.  Delta reports the wait in
+    # X-RATE-LIMIT-RESET (milliseconds until the 5-minute quota window resets),
+    # not Retry-After, so the delay comes from the shared rate limiter.  On each
+    # retry the HMAC signature is rebuilt with a fresh timestamp.
     response = None
 
-    for _attempt in range(_MAX_RETRIES + 1):
+    for _attempt in range(MAX_RETRIES + 1):
+        # Weighted quota accounting; authenticated calls draw on the per-user
+        # bucket, which public market data cannot exhaust.  This runs BEFORE the
+        # request is signed: consume() can block waiting for the quota window,
+        # and Delta rejects any signature more than 5 seconds old
+        # ("SignatureExpired"), so a signature made first would be dead on
+        # arrival.
+        try:
+            consume(endpoint, method=method, bucket=PRIVATE)
+        except DeltaRateLimitError as exc:
+            logger.error(f"[DeltaExchange] {exc}")
+            return {"success": False, "error": {"code": "rate_limited", "message": str(exc)}}
+
+        headers = get_auth_headers(
+            method=method.upper(),
+            path=endpoint,
+            query_string=query_string,
+            payload=body,
+            api_key=auth,
+            api_secret=api_secret,
+        )
+
         try:
             m = method.upper()
             if m == "GET":
@@ -85,26 +104,17 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
             logger.error(f"[DeltaExchange] Request error: {e}")
             return {"success": False, "error": {"code": "request_error", "message": str(e)}}
 
-        if response.status_code == 429 and _attempt < _MAX_RETRIES:
-            retry_after = response.headers.get("Retry-After")
-            wait = (
-                float(retry_after) if retry_after
-                else (_RETRY_BASE * (2 ** _attempt)) + random.uniform(0.0, 0.5)
-            )
+        if response.status_code == 429:
+            note_429(response.headers, bucket=PRIVATE)
+            if _attempt >= MAX_RETRIES:
+                break
+            wait = retry_delay_from_headers(response.headers, _attempt) + random.uniform(0.0, 0.5)
             logger.warning(
                 f"[DeltaExchange] HTTP 429 rate-limit on {endpoint} "
-                f"(attempt {_attempt + 1}/{_MAX_RETRIES}). Retrying in {wait:.1f}s ..."
+                f"(attempt {_attempt + 1}/{MAX_RETRIES}). Retrying in {wait:.1f}s ..."
             )
             time.sleep(wait)
-            # Re-sign with a fresh timestamp before the next attempt
-            headers = get_auth_headers(
-                method=method.upper(),
-                path=endpoint,
-                query_string=query_string,
-                payload=body,
-                api_key=auth,
-                api_secret=api_secret,
-            )
+            # The next pass re-signs with a fresh timestamp after consume().
             continue
         break  # success, non-429, or retries exhausted
 
