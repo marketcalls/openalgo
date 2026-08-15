@@ -337,7 +337,16 @@ export function PayoffChart({
         tickfont: { color: colors.text, size: 10 },
         gridcolor: colors.grid,
         zeroline: false,
-        range: [xs[0], xs[xs.length - 1]],
+        // Deliberately autoranged rather than pinned to [xs[0], xs.at(-1)].
+        // `uirevision` only preserves a user's zoom while the supplied value of
+        // the attribute is unchanged; an explicit range recomputed from the
+        // samples drifts with every live tick, so Plotly reads it as an
+        // intentional programmatic change and discards the zoom immediately.
+        // A literal `true` cannot drift. Autorange is safe here because every
+        // sigma band, tick and label is already clipped into the sample domain
+        // above, and the fill traces set `padded: false`, so the autoranged
+        // window matches the sampled window.
+        autorange: true,
       },
       yaxis: {
         title: { text: 'Profit / Loss', font: { color: colors.text, size: 12 } },

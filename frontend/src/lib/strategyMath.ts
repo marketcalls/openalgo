@@ -224,6 +224,65 @@ function remainingYears(leg: StrategyLeg, daysElapsed: number, now: ValuationTim
 }
 
 /**
+ * One continuous annual carry rate for the whole strategy.
+ *
+ * Every leg reports a spot and a forward, and dividing that ratio by the leg's
+ * remaining life recovers a rate. Inferring it per leg does not survive real
+ * data. The forward is a put-call-parity synthetic built from two live quotes
+ * and the reference is a separately streamed last price, so the ratio is noisy,
+ * and a short-dated leg divides that noise by a very small number. Worse, legs
+ * disagree: a chain fetched without Greeks reports no forward at all, and a leg
+ * whose contract falls outside the loaded strike window keeps a stale snapshot
+ * while its siblings refresh on every tick.
+ *
+ * Two legs on ONE expiry that disagree about the forward is the damaging case.
+ * Their carry factors no longer cancel, so a defined-risk position acquires a
+ * tail slope it does not have, and an iron condor with one unrefreshed wing
+ * reports an unlimited loss.
+ *
+ * The underlying has a single carry curve, so the strategy takes a single rate.
+ * The median makes one stale or unpriced leg unable to move it.
+ */
+function resolveCarryRate(legs: StrategyLeg[], now: ValuationTime): number | null {
+  const rates: number[] = []
+  for (const leg of legs) {
+    if (!leg.active || isLegClosed(leg)) continue
+    const reference = isFiniteNumber(leg.referenceUnderlying) ? leg.referenceUnderlying : undefined
+    // A future quotes its own basis directly; an option carries a parity forward.
+    const carried =
+      leg.segment === 'FUTURE'
+        ? isFiniteNumber(leg.marketPrice)
+          ? leg.marketPrice
+          : undefined
+        : isFiniteNumber(leg.forwardPrice)
+          ? leg.forwardPrice
+          : undefined
+    if (reference === undefined || carried === undefined || reference <= 0 || carried <= 0) {
+      continue
+    }
+    const snapshotYears = remainingYears(leg, 0, now)
+    if (snapshotYears <= 0) continue
+    const rate = Math.log(carried / reference) / snapshotYears
+    if (Number.isFinite(rate)) rates.push(rate)
+  }
+  if (rates.length === 0) return null
+  rates.sort((left, right) => left - right)
+  const middle = Math.floor(rates.length / 2)
+  return rates.length % 2 === 1 ? rates[middle] : (rates[middle - 1] + rates[middle]) / 2
+}
+
+/**
+ * Growth factor from the scenario underlying to a leg's own carried price at
+ * `tYears` of remaining life. Returns 1 at expiry, where everything settles
+ * against spot, and 1 when no rate could be inferred.
+ */
+function carryFactorAt(carryRate: number | null, tYears: number): number {
+  if (carryRate === null || tYears <= 0) return 1
+  const factor = Math.exp(carryRate * tYears)
+  return Number.isFinite(factor) && factor > 0 ? factor : 1
+}
+
+/**
  * Payoff of a single leg at a given underlying price, advanced `daysElapsed`
  * from `now`.
  *
@@ -237,7 +296,8 @@ export function legPnlAt(
   underlying: number,
   daysElapsed: number,
   ivOverride?: number,
-  now: ValuationTime = new Date()
+  now: ValuationTime = new Date(),
+  carryRate: number | null = resolveCarryRate([leg], now)
 ): number {
   if (!leg.active) return 0
   const sign = leg.side === 'BUY' ? 1 : -1
@@ -251,7 +311,12 @@ export function legPnlAt(
 
   if (leg.segment === 'FUTURE') {
     if (isFiniteNumber(leg.marketPrice) && isFiniteNumber(leg.referenceUnderlying)) {
-      const futureValue = leg.marketPrice + (underlying - leg.referenceUnderlying)
+      // A future converges on its own expiry for the same reason an option
+      // does, so its basis decays rather than being carried to infinity. Held
+      // constant, a covered call reported a max profit inflated by exactly the
+      // basis times the quantity.
+      const futureValue =
+        underlying * carryFactorAt(carryRate, remainingYears(leg, daysElapsed, now))
       return sign * (futureValue - leg.price) * qty
     }
     return sign * (underlying - leg.price) * qty
@@ -265,9 +330,7 @@ export function legPnlAt(
     : undefined
   const forwardPrice = isFiniteNumber(leg.forwardPrice) ? leg.forwardPrice : undefined
   const hasForwardReference = referenceUnderlying !== undefined && forwardPrice !== undefined
-  const scenarioForward = hasForwardReference
-    ? forwardPrice + (underlying - referenceUnderlying)
-    : underlying
+  const scenarioForward = underlying * carryFactorAt(carryRate, tLeg)
   // Black-76 is defined only for positive forwards. Its F -> 0 limit is the
   // undiscounted intrinsic value, so clamp a crossed scenario to that boundary
   // instead of sending a non-positive ratio into log(F / K).
@@ -304,13 +367,14 @@ export function totalPnlAt(
    * curve on first paint. Typically the ATM IV from the option chain.
    */
   fallbackIv: number = 0,
-  now: ValuationTime = new Date()
+  now: ValuationTime = new Date(),
+  carryRate: number | null = resolveCarryRate(legs, now)
 ): number {
   let total = 0
   for (const leg of legs) {
     const baseIv = leg.iv > 0 ? leg.iv : fallbackIv
     const legIv = baseIv * (1 + ivShiftPct / 100)
-    total += legPnlAt(leg, underlying, daysElapsed, legIv, now)
+    total += legPnlAt(leg, underlying, daysElapsed, legIv, now, carryRate)
   }
   return total
 }
@@ -375,24 +439,41 @@ export interface PayoffResult {
  * sample window would otherwise report as capped. Closed / inactive legs
  * contribute 0 (their P&L is locked or excluded).
  *
+ * An option is priced off its own forward, and that forward moves with the
+ * scenario underlying by the leg's carry factor, so a deep in-the-money call is
+ * worth `S x factor - K` and contributes `qty x factor` rather than plain
+ * `qty`. At the terminal horizon every factor is 1 and this reduces to the
+ * familiar per-lot slopes.
+ *
+ * The distinction matters for anything spanning two expiries. A calendar's legs
+ * carry to different forwards, so contributions that would cancel on quantity
+ * alone do not actually cancel, and the tail has a real slope. Reporting it as
+ * flat would cap an unbounded loss at whatever the sampled window happened to
+ * reach.
+ *
  * Slope contributions at S → +∞:
- *   BUY  CE  → +qty    (call goes ITM, gains ₹1 per ₹1 spot rise)
- *   SELL CE  → −qty
- *   BUY  PE  →  0      (put worthless at high spot)
+ *   BUY  CE  → +qty x factor   (call goes ITM, gains with the forward)
+ *   SELL CE  → −qty x factor
+ *   BUY  PE  →  0              (put worthless at high spot)
  *   SELL PE  →  0
- *   BUY  FUT → +qty
+ *   BUY  FUT → +qty            (futures track the underlying one for one)
  *   SELL FUT → −qty
  *
  * Slope contributions at S → 0+ (slope w.r.t. S, so a put gaining value as
  * S drops gives a NEGATIVE slope):
  *   BUY  CE  →  0
  *   SELL CE  →  0
- *   BUY  PE  → −qty
- *   SELL PE  → +qty
+ *   BUY  PE  → −qty x factor
+ *   SELL PE  → +qty x factor
  *   BUY  FUT → +qty
  *   SELL FUT → −qty
  */
-function asymptoticSlopes(legs: StrategyLeg[]): { right: number; left: number } {
+function asymptoticSlopes(
+  legs: StrategyLeg[],
+  daysElapsed: number,
+  now: ValuationTime,
+  carryRate: number | null
+): { right: number; left: number } {
   let right = 0
   let left = 0
   for (const leg of legs) {
@@ -400,18 +481,19 @@ function asymptoticSlopes(legs: StrategyLeg[]): { right: number; left: number } 
     if (isLegClosed(leg)) continue
     const qty = leg.lots * leg.lotSize
     const sign = leg.side === 'BUY' ? 1 : -1
+    const factor = carryFactorAt(carryRate, remainingYears(leg, daysElapsed, now))
 
     if (leg.segment === 'FUTURE') {
-      right += sign * qty
-      left += sign * qty
+      right += sign * qty * factor
+      left += sign * qty * factor
       continue
     }
 
     if (leg.segment === 'OPTION') {
       if (leg.optionType === 'CE') {
-        right += sign * qty
+        right += sign * qty * factor
       } else if (leg.optionType === 'PE') {
-        left -= sign * qty
+        left -= sign * qty * factor
       }
     }
   }
@@ -443,29 +525,6 @@ function responsiveStrikes(legs: StrategyLeg[]): number[] {
         ? [leg.strike]
         : []
     )
-  )
-}
-
-/** Terminal intrinsic kinks expressed in the scenario-underlying coordinate. */
-function terminalBreakpoints(legs: StrategyLeg[]): number[] {
-  return uniqueSorted(
-    legs.flatMap((leg) => {
-      if (
-        !leg.active ||
-        isLegClosed(leg) ||
-        leg.segment !== 'OPTION' ||
-        leg.strike === undefined
-      ) {
-        return []
-      }
-      if (isFiniteNumber(leg.referenceUnderlying) && isFiniteNumber(leg.forwardPrice)) {
-        return [
-          Math.max(0, leg.referenceUnderlying - leg.forwardPrice),
-          Math.max(0, leg.strike - leg.forwardPrice + leg.referenceUnderlying),
-        ]
-      }
-      return [leg.strike]
-    })
   )
 }
 
@@ -558,39 +617,55 @@ function analyzeTerminalPayoff(
   daysAtExpiry: number,
   ivShiftPct: number,
   fallbackIv: number,
-  now: Date
+  now: Date,
+  carryRate: number | null
 ): TerminalAnalysis {
-  const candidates = uniqueSorted([0, ...terminalBreakpoints(legs)])
+  // The terminal horizon prices every option against spot, so its only kinks
+  // are the strikes themselves. Zero is kept because it bounds the left tail,
+  // where a short put reaches its worst case.
+  const candidates = uniqueSorted([0, ...responsiveStrikes(legs)])
   const valueAt = (underlying: number) =>
-    normalizePayoff(totalPnlAt(legs, underlying, daysAtExpiry, ivShiftPct, fallbackIv, now))
+    normalizePayoff(
+      totalPnlAt(legs, underlying, daysAtExpiry, ivShiftPct, fallbackIv, now, carryRate)
+    )
   if (!hasResponsiveExposure(legs)) {
     const constantPayoff = valueAt(0)
     return { breakevens: [], maxProfit: constantPayoff, maxLoss: constantPayoff }
   }
   const roots: number[] = []
+  const candidateValues = candidates.map(valueAt)
+  // Same rule as the non-terminal scan: a span sitting flat on zero is one
+  // plateau, not a breakeven at each of its vertices. A costless butterfly is
+  // worth exactly nothing below its lowest strike, and reporting a "breakeven"
+  // at an underlying of 0 there is noise, not information.
+  const isPlateauEdge = (index: number) =>
+    index === 0 ||
+    index === candidateValues.length - 1 ||
+    candidateValues[index - 1] !== 0 ||
+    candidateValues[index + 1] !== 0
 
   for (let i = 0; i < candidates.length - 1; i++) {
     const left = candidates[i]
     const right = candidates[i + 1]
-    const leftValue = valueAt(left)
-    const rightValue = valueAt(right)
-    if (leftValue === 0) roots.push(left)
+    const leftValue = candidateValues[i]
+    const rightValue = candidateValues[i + 1]
+    if (leftValue === 0 && isPlateauEdge(i) && i > 0) roots.push(left)
     if (leftValue * rightValue < 0) {
       roots.push(left + ((0 - leftValue) * (right - left)) / (rightValue - leftValue))
     }
   }
 
   const last = candidates.at(-1) ?? 0
-  const lastValue = valueAt(last)
-  if (lastValue === 0) roots.push(last)
+  const lastIndex = candidateValues.length - 1
+  const lastValue = candidateValues[lastIndex]
+  if (lastValue === 0 && isPlateauEdge(lastIndex)) roots.push(last)
 
-  const slopes = asymptoticSlopes(legs)
+  const slopes = asymptoticSlopes(legs, daysAtExpiry, now, carryRate)
   if (Math.abs(slopes.right) > PAYOFF_EPSILON) {
     const tailRoot = last - lastValue / slopes.right
     if (tailRoot > last + PAYOFF_EPSILON) roots.push(tailRoot)
   }
 
-  const candidateValues = candidates.map(valueAt)
   let maxProfit = candidateValues.length > 0 ? Math.max(...candidateValues) : 0
   let maxLoss = candidateValues.length > 0 ? Math.min(...candidateValues) : 0
   if (slopes.right > PAYOFF_EPSILON) maxProfit = Infinity
@@ -648,18 +723,17 @@ function rightTailValue(legs: StrategyLeg[]): number {
       leg.strike !== undefined &&
       leg.optionType !== undefined
     ) {
-      const forwardBasis =
-        isFiniteNumber(leg.forwardPrice) && isFiniteNumber(leg.referenceUnderlying)
-          ? leg.forwardPrice - leg.referenceUnderlying
-          : 0
-      const terminalValue = leg.optionType === 'CE' ? forwardBasis - leg.strike : 0
+      // Deep in the money a call is worth `S x factor - K`. The `S x factor`
+      // part is what the flat-slope test just established sums to zero, so the
+      // constant this returns is the strike alone. Carrying a basis term here
+      // was the additive model's constant, and is wrong once the forward scales
+      // with the underlying rather than sitting a fixed distance above it.
+      const terminalValue = leg.optionType === 'CE' ? -leg.strike : 0
       value += sign * (terminalValue - leg.price) * qty
     } else if (leg.segment === 'FUTURE') {
-      const marketBasis =
-        isFiniteNumber(leg.marketPrice) && isFiniteNumber(leg.referenceUnderlying)
-          ? leg.marketPrice - leg.referenceUnderlying
-          : 0
-      value += sign * (marketBasis - leg.price) * qty
+      // A future is worth `S x factor`, so once the flat-slope test has
+      // established the scaled terms cancel, only the entry price is left.
+      value += sign * (0 - leg.price) * qty
     }
   }
   return normalizePayoff(value)
@@ -672,7 +746,8 @@ function analyzeNonTerminalPayoff(
   priceRange: [number, number],
   ivShiftPct: number,
   fallbackIv: number,
-  now: Date
+  now: Date,
+  carryRate: number | null
 ): TerminalAnalysis {
   const strikes = responsiveStrikes(legs)
   const maxStrike = Math.max(spot, ...strikes)
@@ -685,8 +760,10 @@ function analyzeNonTerminalPayoff(
     (1 + ivShiftPct / 100)
   const sigmaMove = spot > 0 && maxIv > 0 ? spot * (maxIv / 100) * Math.sqrt(maxRemainingYears) : 0
   const valueAt = (underlying: number) =>
-    normalizePayoff(totalPnlAt(legs, underlying, daysAtExpiry, ivShiftPct, fallbackIv, now))
-  const slopes = asymptoticSlopes(legs)
+    normalizePayoff(
+      totalPnlAt(legs, underlying, daysAtExpiry, ivShiftPct, fallbackIv, now, carryRate)
+    )
+  const slopes = asymptoticSlopes(legs, daysAtExpiry, now, carryRate)
   const tailLimit = rightTailValue(legs)
   let analysisHi = Math.max(priceRange[1], maxStrike * 2, spot + 6 * sigmaMove)
   for (let expansion = 0; expansion < 20; expansion++) {
@@ -708,10 +785,26 @@ function analyzeNonTerminalPayoff(
     extrema.push(tailLimit)
   }
 
+  // A payoff can sit exactly on zero across a whole span rather than crossing
+  // it at a point - a zero-cost collar between its strikes, or a calendar whose
+  // legs were entered at the same premium, whose far tail is flat at zero. That
+  // is one plateau, not a breakeven at every sampled point: recording each grid
+  // point would return hundreds of "breakevens" and, because the framing takes
+  // the outermost of them, would stretch the chart far past the strategy.
+  // Only the interior counts. Index 0 is an underlying of zero and the last
+  // index is `analysisHi`, a window this function chose for itself; neither is
+  // a price a trader can break even at. Reporting the far end also made the
+  // "breakeven" track the window - widen the request and the number moved with
+  // it - and planted a chart marker on the frame edge.
+  for (let index = 1; index < values.length - 1; index++) {
+    if (values[index] !== 0) continue
+    if (values[index - 1] === 0 && values[index + 1] === 0) continue
+    roots.push(xs[index])
+  }
+
   for (let index = 0; index < xs.length - 1; index++) {
     const leftValue = values[index]
     const rightValue = values[index + 1]
-    if (leftValue === 0) roots.push(xs[index])
     if (leftValue * rightValue >= 0) continue
 
     let lo = xs[index]
@@ -729,7 +822,6 @@ function analyzeNonTerminalPayoff(
     }
     roots.push((lo + hi) / 2)
   }
-  if (values.at(-1) === 0) roots.push(xs.at(-1) as number)
 
   for (let index = 1; index < xs.length - 1; index++) {
     const previous = values[index - 1]
@@ -773,8 +865,9 @@ export function computePayoff(
 ): PayoffResult {
   const currentNow = valuationNow(now)
   const terminal = isTerminalHorizon(legs, daysAtExpiry, currentNow)
+  const carryRate = resolveCarryRate(legs, currentNow)
   const terminalAnalysis = terminal
-    ? analyzeTerminalPayoff(legs, daysAtExpiry, ivShiftPct, fallbackIv, currentNow)
+    ? analyzeTerminalPayoff(legs, daysAtExpiry, ivShiftPct, fallbackIv, currentNow, carryRate)
     : analyzeNonTerminalPayoff(
         legs,
         spot,
@@ -782,32 +875,41 @@ export function computePayoff(
         priceRange,
         ivShiftPct,
         fallbackIv,
-        currentNow
+        currentNow,
+        carryRate
       )
-  const strikes = terminal ? terminalBreakpoints(legs) : responsiveStrikes(legs)
+  // Every option kink lands on its strike: the terminal curve prices against
+  // spot, and the pre-expiry curve is smooth between them.
+  const strikes = responsiveStrikes(legs)
   const initialBreakevens = terminalAnalysis.breakevens
+  // A root at zero is the far-tail artefact of a structure that expires
+  // worthless at S = 0, not a breakeven anyone trades around.
+  const framingBreakevens = initialBreakevens.filter((value) => value > 0)
   const [requestedLo, requestedHi] = priceRange
-  const lo = Math.max(0, Math.min(requestedLo, ...strikes, ...initialBreakevens))
-  const hi = Math.max(requestedHi, ...strikes, ...initialBreakevens)
+  const lo = Math.max(0, Math.min(requestedLo, ...strikes, ...framingBreakevens))
+  const hi = Math.max(requestedHi, ...strikes, ...framingBreakevens)
   const safeSteps = Math.max(1, Math.floor(steps))
   const step = (hi - lo) / safeSteps
   const uniform = Array.from({ length: safeSteps + 1 }, (_, index) => lo + index * step)
-  const sampleXs = uniqueSorted([...uniform, ...strikes, ...initialBreakevens])
+  // Kinks and roots outside the framed window would otherwise re-extend the
+  // plotted series back to the bound the framing just excluded.
+  const inFrame = (value: number) => value >= lo && value <= hi
+  const sampleXs = uniqueSorted([...uniform, ...strikes, ...initialBreakevens]).filter(inFrame)
 
   const makeSample = (underlying: number): PayoffSample => ({
     underlying,
     expiry: normalizePayoff(
-      totalPnlAt(legs, underlying, daysAtExpiry, ivShiftPct, fallbackIv, currentNow)
+      totalPnlAt(legs, underlying, daysAtExpiry, ivShiftPct, fallbackIv, currentNow, carryRate)
     ),
     tplus0: normalizePayoff(
-      totalPnlAt(legs, underlying, daysAtT0, ivShiftPct, fallbackIv, currentNow)
+      totalPnlAt(legs, underlying, daysAtT0, ivShiftPct, fallbackIv, currentNow, carryRate)
     ),
   })
   let samples = sampleXs.map(makeSample)
   const breakevens = terminalAnalysis.breakevens
 
   if (breakevens.length > 0) {
-    samples = uniqueSorted([...sampleXs, ...breakevens]).map(makeSample)
+    samples = uniqueSorted([...sampleXs, ...breakevens.filter(inFrame)]).map(makeSample)
   }
 
   const zeroCrossings = samples.flatMap((sample, index) => (sample.expiry === 0 ? [index] : []))
