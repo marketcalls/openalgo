@@ -1315,7 +1315,7 @@ describe('StrategyBuilder live request orchestration', () => {
     expect(greekCells[0]).toHaveTextContent('12.00')
     for (const cell of greekCells.slice(1)) expect(cell).toHaveTextContent('-')
     expect(editedRow).not.toHaveTextContent('0.4400')
-  })
+  }, SLOW_INTEGRATION_TEST_TIMEOUT)
 })
 
 describe('StrategyBuilder identity orchestration', () => {

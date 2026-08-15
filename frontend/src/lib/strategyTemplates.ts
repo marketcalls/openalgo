@@ -53,50 +53,198 @@ interface TemplateDefinition
 
 const PREVIEW_REFERENCE_SPOT = 100
 const PREVIEW_STRIKE_STEP = 4
-const PREVIEW_MAX_SPOT = PREVIEW_REFERENCE_SPOT * 2
+
+/**
+ * Synthetic ATM time value, expressed in strike steps.
+ *
+ * The preview needs a premium, otherwise a long call, a vertical spread and a
+ * butterfly all sit entirely on one side of the zero line and read as a step
+ * rather than as profit versus loss.
+ */
+const PREVIEW_ATM_TIME_VALUE_STEPS = 1.2
+/**
+ * Decay width of the synthetic time value, in strike steps. Must stay at or
+ * above twice PREVIEW_ATM_TIME_VALUE_STEPS so the modelled premium curve is
+ * convex in the strike — see previewPremium.
+ */
+const PREVIEW_TIME_VALUE_WIDTH_STEPS = 3
+/** Smallest preview window width, in strike steps, so a single-strike payoff still reads. */
+const PREVIEW_MIN_WINDOW_STEPS = 3
+/** Blank margin drawn on each side of the payoff features, as a fraction of the feature span. */
+const PREVIEW_MARGIN_RATIO = 0.22
+/** Vertical half-height of the drawn curve. */
+const PREVIEW_AMPLITUDE = 16
+/** Baseline y of the icon; TemplateGrid draws its dashed zero line here. */
+const PREVIEW_ZERO_Y = 20
+/** Smallest share of the amplitude the weaker side of the payoff may occupy. */
+const PREVIEW_MIN_SIDE_SPAN = 0.35
 
 type PreviewStrategy = Pick<StrategyTemplate, 'legs' | 'referenceSpot' | 'strikeStep'>
 
-/** Terminal intrinsic value of normalized template legs; premiums deliberately cancel vertically. */
+function previewStrike(template: PreviewStrategy, leg: TemplateLeg): number {
+  return template.referenceSpot + leg.strikeOffset * template.strikeStep
+}
+
+/**
+ * Deterministic synthetic premium for one preview leg.
+ *
+ * Time value decays exponentially with distance from the reference spot, and
+ * the exponential kink at the money exactly offsets the intrinsic kink, so the
+ * modelled premium is convex in the strike. Convexity is what makes derived
+ * structures come out with the right sign: butterflies and condors as debits,
+ * strangles and iron condors as credits. A concave model (a Gaussian, say)
+ * prices a long call condor at a credit, which would draw an all-profit icon.
+ */
+function previewPremium(template: PreviewStrategy, leg: TemplateLeg): number {
+  const strike = previewStrike(template, leg)
+  const intrinsic =
+    leg.optionType === 'CE'
+      ? Math.max(0, template.referenceSpot - strike)
+      : Math.max(0, strike - template.referenceSpot)
+  const width = PREVIEW_TIME_VALUE_WIDTH_STEPS * template.strikeStep
+  const decay = Math.exp(-Math.abs(strike - template.referenceSpot) / width)
+  return intrinsic + PREVIEW_ATM_TIME_VALUE_STEPS * template.strikeStep * decay
+}
+
+/** Terminal profit and loss of the normalized template legs, net of the synthetic premium. */
 export function previewValue(template: PreviewStrategy, spot: number): number {
   const physicalSpot = Math.max(0, spot)
   return template.legs.reduce((total, leg) => {
-    const strike = template.referenceSpot + leg.strikeOffset * template.strikeStep
+    const strike = previewStrike(template, leg)
     const intrinsic =
       leg.optionType === 'CE'
         ? Math.max(0, physicalSpot - strike)
         : Math.max(0, strike - physicalSpot)
-    return total + (leg.side === 'BUY' ? 1 : -1) * leg.lots * intrinsic
+    const direction = leg.side === 'BUY' ? 1 : -1
+    return total + direction * leg.lots * (intrinsic - previewPremium(template, leg))
   }, 0)
 }
 
-/** Build an SVG topology from the actual normalized legs and their strike kinks. */
-export function templatePreviewPath(template: PreviewStrategy): string {
-  const spots = Array.from(
-    new Set([
-      0,
-      ...template.legs.map(
-        (leg) => template.referenceSpot + leg.strikeOffset * template.strikeStep
-      ),
-      PREVIEW_MAX_SPOT,
-    ])
+/** Distinct leg strikes of the normalized template, ascending. */
+function previewStrikes(template: PreviewStrategy): number[] {
+  return Array.from(new Set(template.legs.map((leg) => previewStrike(template, leg)))).sort(
+    (left, right) => left - right
   )
-    .filter((spot) => spot >= 0 && spot <= PREVIEW_MAX_SPOT)
-    .sort((left, right) => left - right)
+}
+
+/**
+ * Slope of the payoff outside the outermost strikes.
+ *
+ * Below every strike only puts carry intrinsic, and each unit loses one point
+ * of value per point of spot. Above every strike only calls carry intrinsic.
+ */
+function previewTailSlopes(template: PreviewStrategy): { left: number; right: number } {
+  let left = 0
+  let right = 0
+  for (const leg of template.legs) {
+    const direction = leg.side === 'BUY' ? 1 : -1
+    if (leg.optionType === 'CE') right += direction * leg.lots
+    else left -= direction * leg.lots
+  }
+  return { left, right }
+}
+
+/** Spots at which the payoff crosses zero, including the unbounded outer rays. */
+function previewBreakevens(template: PreviewStrategy, strikes: number[]): number[] {
+  const values = strikes.map((strike) => previewValue(template, strike))
+  const crossings: number[] = []
+  for (let index = 0; index < strikes.length - 1; index++) {
+    const lower = values[index]
+    const upper = values[index + 1]
+    if ((lower < 0 && upper > 0) || (lower > 0 && upper < 0)) {
+      const ratio = lower / (lower - upper)
+      crossings.push(strikes[index] + ratio * (strikes[index + 1] - strikes[index]))
+    }
+  }
+  const slopes = previewTailSlopes(template)
+  const firstStrike = strikes[0]
+  const lastStrike = strikes[strikes.length - 1]
+  if (slopes.left !== 0) {
+    const crossing = firstStrike - values[0] / slopes.left
+    if (crossing >= 0 && crossing < firstStrike) crossings.push(crossing)
+  }
+  if (slopes.right !== 0) {
+    const crossing = lastStrike - values[values.length - 1] / slopes.right
+    if (crossing > lastStrike) crossings.push(crossing)
+  }
+  return crossings
+}
+
+/**
+ * Spot range the icon spans, derived from the template's own strikes.
+ *
+ * A fixed window cannot serve every template: a bullish butterfly sits inside
+ * eight normalized points while the Batman spans a hundred and twenty, so a
+ * shared window collapses one to a spike and leaves the other cramped. The
+ * window therefore starts at the strike range and, only when the payoff never
+ * changes sign across the strikes, widens to take in the nearest breakeven so
+ * the drawn curve still shows both profit and loss.
+ */
+function previewWindow(
+  template: PreviewStrategy,
+  strikes: number[]
+): { low: number; high: number } {
+  const values = strikes.map((strike) => previewValue(template, strike))
+  let low = strikes[0]
+  let high = strikes[strikes.length - 1]
+  const changesSign = values.some((value) => value > 0) && values.some((value) => value < 0)
+  if (!changesSign) {
+    for (const crossing of previewBreakevens(template, strikes)) {
+      low = Math.min(low, crossing)
+      high = Math.max(high, crossing)
+    }
+  }
+  const centre = (low + high) / 2
+  const span = Math.max(high - low, PREVIEW_MIN_WINDOW_STEPS * template.strikeStep)
+  const half = span / 2 + span * PREVIEW_MARGIN_RATIO
+  return { low: Math.max(0, centre - half), high: centre + half }
+}
+
+function clamp(value: number, lower: number, upper: number): number {
+  return Math.min(upper, Math.max(lower, value))
+}
+
+/**
+ * Build an SVG topology from the actual normalized legs and their strike kinks.
+ *
+ * Vertices are the window edges plus every strike, which is exact: the payoff
+ * is piecewise linear and kinks only at strikes. Profit and loss are scaled
+ * independently, but neither side is stretched past the shared scale, so the
+ * weaker side stays visible without a lopsided payoff being drawn as balanced.
+ */
+export function templatePreviewPath(template: PreviewStrategy): string {
+  const strikes = previewStrikes(template)
+  const window = previewWindow(template, strikes)
+  const width = window.high - window.low
+  const spots = Array.from(new Set([window.low, ...strikes, window.high])).sort(
+    (left, right) => left - right
+  )
   const values = spots.map((spot) => previewValue(template, spot))
-  const scale = Math.max(1, ...values.map((value) => Math.abs(value)))
+  const maxProfit = Math.max(0, ...values)
+  const maxLoss = Math.max(0, ...values.map((value) => -value))
+  const scale = Math.max(maxProfit, maxLoss)
+  const profitScale = maxProfit > 0 ? Math.min(scale, maxProfit / PREVIEW_MIN_SIDE_SPAN) : scale
+  const lossScale = maxLoss > 0 ? Math.min(scale, maxLoss / PREVIEW_MIN_SIDE_SPAN) : scale
   const points = spots.map((spot, index) => {
-    const x = (spot / PREVIEW_MAX_SPOT) * 100
-    const y = 20 - (values[index] / scale) * 16
-    return `${index === 0 ? 'M' : 'L'}${Number(x.toFixed(2))},${Number(y.toFixed(2))}`
+    const value = values[index]
+    const x = width > 0 ? ((spot - window.low) / width) * 100 : 50
+    const offset =
+      scale === 0
+        ? 0
+        : value >= 0
+          ? -(value / profitScale) * PREVIEW_AMPLITUDE
+          : (-value / lossScale) * PREVIEW_AMPLITUDE
+    const y = PREVIEW_ZERO_Y + clamp(offset, -PREVIEW_AMPLITUDE, PREVIEW_AMPLITUDE)
+    const command = index === 0 ? 'M' : 'L'
+    return `${command}${Number(clamp(x, 0, 100).toFixed(2))},${Number(y.toFixed(2))}`
   })
   return points.join(' ')
 }
 
 /**
  * Icons are drawn so that:
- *   x = 0 .. 100 represents the underlying range,
- *   y = 0 (top, max profit) .. 40 (bottom, max loss),
+ *   x = 0 .. 100 spans the template's own strike window, not a fixed spot range,
+ *   y = 4 (top, max profit) .. 36 (bottom, max loss),
  *   the zero line sits at y = 20.
  */
 const TEMPLATE_DEFINITIONS: TemplateDefinition[] = [

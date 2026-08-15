@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computePayoff, payoffPriceRange, type StrategyLeg } from './strategyMath'
+import { computePayoff, nearestLegDays, payoffPriceRange, type StrategyLeg } from './strategyMath'
 import { STRATEGY_TEMPLATES } from './strategyTemplates'
 import {
   canReuseChainContract,
@@ -43,31 +43,30 @@ describe('template payoff topology', () => {
     expect(resolveListedContract(chain, 100, 'PE')).toBeNull()
   })
 
-  it.each(STRATEGY_TEMPLATES)(
-    '$id keeps every distinct offset distinct on an irregular chain',
-    (template) => {
-      const strikes = Array.from({ length: 41 }, (_, index) => {
-        const distance = index - 20
-        return 1000 + distance * 10 + Math.sign(distance) * Math.floor(Math.abs(distance) / 4) * 5
-      })
-      const resolved = template.legs.map((leg) => ({
-        ...leg,
-        resolvedStrike: resolveStrikeOffset(strikes, 1000, leg.strikeOffset),
-      }))
+  it.each(
+    STRATEGY_TEMPLATES
+  )('$id keeps every distinct offset distinct on an irregular chain', (template) => {
+    const strikes = Array.from({ length: 41 }, (_, index) => {
+      const distance = index - 20
+      return 1000 + distance * 10 + Math.sign(distance) * Math.floor(Math.abs(distance) / 4) * 5
+    })
+    const resolved = template.legs.map((leg) => ({
+      ...leg,
+      resolvedStrike: resolveStrikeOffset(strikes, 1000, leg.strikeOffset),
+    }))
 
-      expect(resolved.every((leg) => leg.resolvedStrike !== null)).toBe(true)
-      expect(validateTemplateStrikeTopology(resolved)).toEqual([])
+    expect(resolved.every((leg) => leg.resolvedStrike !== null)).toBe(true)
+    expect(validateTemplateStrikeTopology(resolved)).toEqual([])
 
-      const strikeByOffset = new Map<number, number>()
-      for (const leg of resolved) {
-        const strike = leg.resolvedStrike as number
-        const previous = strikeByOffset.get(leg.strikeOffset)
-        if (previous === undefined) strikeByOffset.set(leg.strikeOffset, strike)
-        else expect(strike).toBe(previous)
-      }
-      expect(new Set(strikeByOffset.values()).size).toBe(strikeByOffset.size)
+    const strikeByOffset = new Map<number, number>()
+    for (const leg of resolved) {
+      const strike = leg.resolvedStrike as number
+      const previous = strikeByOffset.get(leg.strikeOffset)
+      if (previous === undefined) strikeByOffset.set(leg.strikeOffset, strike)
+      else expect(strike).toBe(previous)
     }
-  )
+    expect(new Set(strikeByOffset.values()).size).toBe(strikeByOffset.size)
+  })
 
   it.each(STRATEGY_TEMPLATES)('$id produces finite, exact payoff vertices', (template) => {
     const strikes = Array.from({ length: 41 }, (_, index) => 800 + index * 10)
@@ -108,6 +107,77 @@ describe('template payoff topology', () => {
     }
     expect(payoff.samples.every((sample) => Number.isFinite(sample.expiry))).toBe(true)
     expect(payoff.samples.every((sample) => Number.isFinite(sample.tplus0))).toBe(true)
+    expect(Number.isNaN(payoff.maxProfit)).toBe(false)
+    expect(Number.isNaN(payoff.maxLoss)).toBe(false)
+    expect(payoff.maxProfit).toBeGreaterThanOrEqual(payoff.maxLoss)
+    expect(payoff.breakevens).toEqual(
+      Array.from(new Set(payoff.breakevens)).sort((left, right) => left - right)
+    )
+  })
+
+  // The fixture above carries no forward basis, which is precisely why it
+  // stayed green while the plotted domain collapsed to zero in production.
+  // Every live leg gets referenceUnderlying and forwardPrice from the chain,
+  // and Indian index options trade in contango, so that is the case to cover.
+  it.each(STRATEGY_TEMPLATES)('$id frames a contango payoff around spot', (template) => {
+    const spot = 24_800
+    const now = new Date('2026-07-28T10:00:00.000Z')
+    const nearExpiryTs = now.getTime() / 1000 + 7 * 86_400
+    const farExpiryTs = now.getTime() / 1000 + 35 * 86_400
+    const strikes = Array.from({ length: 41 }, (_, index) => spot + (index - 20) * 50)
+    // One carry curve for the whole chain, as a real book quotes it: the far
+    // expiry carries further, so its forward is higher. Giving both expiries
+    // the same forward would imply the near leg carries five times as fast as
+    // the far one, and a calendar built on that inconsistency shows a tail
+    // slope the market does not have.
+    const CARRY_RATE = 0.06
+    const forwardFor = (expiryTs: number) =>
+      spot * Math.exp((CARRY_RATE * (expiryTs * 1000 - now.getTime())) / (365 * 86_400_000))
+
+    const legs: StrategyLeg[] = template.legs.map((leg, index) => {
+      const strike = resolveStrikeOffset(strikes, spot, leg.strikeOffset)
+      if (strike === null) throw new Error(`Fixture cannot resolve ${template.id}`)
+      const isFar = leg.expiryOffset === 1
+      const expiryTs = isFar ? farExpiryTs : nearExpiryTs
+      return {
+        id: `${template.id}-${index}`,
+        segment: 'OPTION',
+        side: leg.side,
+        optionType: leg.optionType,
+        strike,
+        lots: leg.lots,
+        lotSize: 75,
+        expiry: isFar ? '28AUG26' : '04AUG26',
+        expiryTs,
+        // A far-expiry leg carries more time value, so a calendar is a real
+        // net debit rather than a costless pair.
+        price: (40 + Math.abs(strike - spot) * 0.02) * (isFar ? 2.2 : 1),
+        iv: 12,
+        active: true,
+        symbol: `${template.id}-${index}`,
+        referenceUnderlying: spot,
+        forwardPrice: forwardFor(expiryTs),
+      }
+    })
+
+    const nearestDays = nearestLegDays(legs, now)
+    const range = payoffPriceRange(spot, legs, 12, nearestDays / 365)
+    const payoff = computePayoff(legs, spot, nearestDays, 0, range, 240, 0, 12, now)
+    const low = payoff.samples[0].underlying
+    const high = payoff.samples[payoff.samples.length - 1].underlying
+
+    // The regression: the forward-zero vertex clamps to 0 in contango, and
+    // framing the chart with it made every template span 0 to roughly spot.
+    expect(low).toBeGreaterThan(0)
+    expect(high - low).toBeLessThan(spot)
+    // Spot must stay inside the drawn window, or the trader cannot see where
+    // the strategy actually sits.
+    expect(low).toBeLessThanOrEqual(spot)
+    expect(high).toBeGreaterThanOrEqual(spot)
+
+    expect(payoff.samples.every((sample) => Number.isFinite(sample.expiry))).toBe(true)
+    expect(payoff.samples.every((sample) => Number.isFinite(sample.tplus0))).toBe(true)
+    expect(payoff.samples.every((sample) => sample.underlying >= low)).toBe(true)
     expect(Number.isNaN(payoff.maxProfit)).toBe(false)
     expect(Number.isNaN(payoff.maxLoss)).toBe(false)
     expect(payoff.maxProfit).toBeGreaterThanOrEqual(payoff.maxLoss)
