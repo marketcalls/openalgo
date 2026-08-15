@@ -5,6 +5,7 @@ Upstox V3 WebSocket adapter implementation (synchronous).
 Uses sync websocket-client (same as Angel/Dhan) to avoid asyncio event loop
 conflicts with eventlet in gunicorn+eventlet deployments.
 """
+
 import json
 import logging
 import threading
@@ -62,6 +63,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # `marketLevel`. We cache the last LTPC so quote/depth packets can
         # carry forward a non-zero LTP into validation downstream.
         self._last_ltpc: dict[str, dict[str, Any]] = {}
+        self._last_oi: dict[str, int] = {}
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, Any] | None = None
@@ -184,9 +186,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         with self.lock:
             if self.batch_timer is not None:
                 self.batch_timer.cancel()
-            self.batch_timer = threading.Timer(
-                self.batch_delay, self._process_batch_subscriptions
-            )
+            self.batch_timer = threading.Timer(self.batch_delay, self._process_batch_subscriptions)
             self.batch_timer.daemon = True
             self.batch_timer.start()
 
@@ -261,6 +261,13 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if success:
                 with self.lock:
                     self.subscriptions.pop(correlation_id, None)
+                    has_remaining = any(
+                        sub.get("instrument_key") == instrument_key
+                        for sub in self.subscriptions.values()
+                    )
+                    if not has_remaining:
+                        self._last_ltpc.pop(instrument_key, None)
+                        self._last_oi.pop(instrument_key, None)
                 self.logger.info(f"Unsubscribed from {symbol} on {exchange}")
                 return self._create_success_response(f"Unsubscribed from {symbol} on {exchange}")
             else:
@@ -295,6 +302,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.subscriptions.clear()
                 self.subscription_queue.clear()
                 self._last_ltpc.clear()
+                self._last_oi.clear()
 
             self.cleanup_zmq()
             self.logger.info("Disconnected from Upstox WebSocket")
@@ -322,6 +330,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.subscriptions.clear()
                 self.subscription_queue.clear()
                 self._last_ltpc.clear()
+                self._last_oi.clear()
                 if self.batch_timer is not None:
                     self.batch_timer.cancel()
                     self.batch_timer = None
@@ -464,7 +473,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.warning(f"No subscription found for feed key: {feed_key}")
                 return
 
-            for correlation_id, sub_info in matching_subscriptions:
+            for _correlation_id, sub_info in matching_subscriptions:
                 symbol = sub_info["symbol"]
                 exchange = sub_info["exchange"]
                 mode = sub_info["mode"]
@@ -473,7 +482,9 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 market_data = self._extract_market_data(feed_data, sub_info, current_ts)
 
                 if market_data:
-                    self.logger.debug(f"Publishing {symbol}.{exchange} mode={mode} topic={topic} ltp={market_data.get('ltp', 'N/A')}")
+                    self.logger.debug(
+                        f"Publishing {symbol}.{exchange} mode={mode} topic={topic} ltp={market_data.get('ltp', 'N/A')}"
+                    )
                     if mode == 3:  # Depth mode
                         depth_data = market_data.copy()
                         depth_levels = {
@@ -517,6 +528,11 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             with self.lock:
                 self._last_ltpc[instrument_key] = ltpc_in_tick
 
+        oi_in_tick = self._extract_tick_oi(feed_data)
+        if oi_in_tick is not None:
+            with self.lock:
+                self._last_oi[instrument_key] = oi_in_tick
+
         # Per-mode extraction.
         if mode == 1:
             result = self._extract_ltp_data(feed_data, base_data)
@@ -549,6 +565,11 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if cached and cached.get("ltp"):
                 result["ltp"] = float(cached["ltp"])
 
+        if result and not result.get("oi"):
+            cached_oi = self._last_oi.get(instrument_key)
+            if cached_oi is not None:
+                result["oi"] = cached_oi
+
         return result
 
     def _extract_tick_ltpc(self, feed_data: dict[str, Any]) -> dict[str, Any]:
@@ -562,6 +583,17 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         ff = full_feed.get("marketFF") or full_feed.get("indexFF") or {}
         ltpc = ff.get("ltpc") or {}
         return ltpc if isinstance(ltpc, dict) else {}
+
+    def _extract_tick_oi(self, feed_data: dict[str, Any]) -> int | None:
+        """Pull OI from a Feed protobuf-as-dict if present."""
+        full_feed = feed_data.get("fullFeed") or {}
+        market_ff = full_feed.get("marketFF") or {}
+        if "oi" in market_ff and market_ff["oi"] is not None:
+            return int(float(market_ff["oi"]))
+        first_level = feed_data.get("firstLevelWithGreeks") or {}
+        if "oi" in first_level and first_level["oi"] is not None:
+            return int(float(first_level["oi"]))
+        return None
 
     def _extract_ltp_data(
         self, feed_data: dict[str, Any], base_data: dict[str, Any]
@@ -606,6 +638,9 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         total_buy_qty = int(ff.get("tbq", 0))
         total_sell_qty = int(ff.get("tsq", 0))
 
+        raw_oi = ff.get("oi")
+        oi = int(float(raw_oi)) if raw_oi is not None else 0
+
         market_data = base_data.copy()
         market_data.update(
             {
@@ -619,6 +654,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "average_price": float(avg_price),
                 "total_buy_quantity": int(total_buy_qty),
                 "total_sell_quantity": int(total_sell_qty),
+                "oi": oi,
                 "timestamp": int(ohlc.get("ts", current_ts)),
             }
         )
