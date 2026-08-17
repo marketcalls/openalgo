@@ -14,6 +14,8 @@ from collections.abc import Callable
 from queue import Queue
 from typing import Any, Dict, List, Optional
 
+import orjson
+
 import websockets
 from dotenv import load_dotenv
 
@@ -155,7 +157,7 @@ class WebSocketClient:
         fut: asyncio.Future = self.loop.create_future()
         self._pending_acks[request_id] = fut
         try:
-            await self.ws.send(json.dumps(message))
+            await self.ws.send(orjson.dumps(message).decode("utf-8"))
             return await asyncio.wait_for(fut, timeout=timeout)
         finally:
             self._pending_acks.pop(request_id, None)
@@ -315,7 +317,7 @@ class WebSocketClient:
             # Send unsubscription request
             if self.loop and self.ws:
                 future = asyncio.run_coroutine_threadsafe(
-                    self.ws.send(json.dumps(unsubscription_msg)), self.loop
+                    self.ws.send(orjson.dumps(unsubscription_msg).decode("utf-8")), self.loop
                 )
                 future.result(timeout=5)
 
@@ -449,7 +451,7 @@ class WebSocketClient:
         """Send authentication message"""
         auth_msg = {"action": "authenticate", "api_key": self.api_key}
 
-        await self.ws.send(json.dumps(auth_msg))
+        await self.ws.send(orjson.dumps(auth_msg).decode("utf-8"))
         logger.info("Sent authentication request")
 
     async def _disconnect(self):
@@ -460,7 +462,7 @@ class WebSocketClient:
     async def _handle_message(self, message: str):
         """Handle incoming WebSocket messages"""
         try:
-            data = json.loads(message)
+            data = orjson.loads(message)
             msg_type = data.get("type", data.get("status"))
 
             # Handle authentication response
@@ -534,7 +536,7 @@ class WebSocketClient:
                     except Exception as e:
                         logger.exception(f"Error in error callback: {e}")
 
-        except json.JSONDecodeError:
+        except (orjson.JSONDecodeError, json.JSONDecodeError):
             logger.error(f"Invalid JSON message: {message}")
         except Exception as e:
             logger.exception(f"Error handling message: {e}")

@@ -8,6 +8,8 @@ import time
 from collections import defaultdict
 from typing import Any, Dict, Optional, Set, Tuple
 
+import orjson
+
 import websockets
 import zmq
 import zmq.asyncio
@@ -632,7 +634,7 @@ class WebSocketProxy:
             for sub_json in subscriptions:
                 try:
                     # Parse the JSON string to get the subscription info
-                    sub_info = json.loads(sub_json)
+                    sub_info = orjson.loads(sub_json)
                     symbol = sub_info.get("symbol")
                     exchange = sub_info.get("exchange")
                     mode = sub_info.get("mode")
@@ -661,7 +663,7 @@ class WebSocketProxy:
                         logger.debug(
                             f"Last client unsubscribed from {symbol}:{exchange}, unsubscribing from adapter"
                         )
-                except json.JSONDecodeError as e:
+                except (orjson.JSONDecodeError, json.JSONDecodeError) as e:
                     logger.exception(f"Error parsing subscription: {sub_json}, Error: {e}")
                 except Exception as e:
                     logger.exception(f"Error processing subscription: {e}")
@@ -718,7 +720,7 @@ class WebSocketProxy:
             message: The message from the client
         """
         try:
-            data = json.loads(message)
+            data = orjson.loads(message)
             # OPTIMIZATION: Remove debug logging from hot path
             # logger.debug(f"Parsed message from client {client_id}: {data}")
 
@@ -747,7 +749,7 @@ class WebSocketProxy:
             else:
                 logger.warning(f"Client {client_id} requested invalid action: {action}")
                 await self.send_error(client_id, "INVALID_ACTION", f"Invalid action: {action}")
-        except json.JSONDecodeError:
+        except (orjson.JSONDecodeError, json.JSONDecodeError):
             logger.exception(f"Invalid JSON from client {client_id}: {message}")
             await self.send_error(client_id, "INVALID_JSON", "Invalid JSON message")
         except Exception as e:
@@ -1236,9 +1238,9 @@ class WebSocketProxy:
                 }
 
                 if client_id in self.subscriptions:
-                    self.subscriptions[client_id].add(json.dumps(subscription_info))
+                    self.subscriptions[client_id].add(orjson.dumps(subscription_info).decode("utf-8"))
                 else:
-                    self.subscriptions[client_id] = {json.dumps(subscription_info)}
+                    self.subscriptions[client_id] = {orjson.dumps(subscription_info).decode("utf-8")}
 
                 # OPTIMIZATION: Update subscription index for O(1) lookup
                 sub_key = (symbol, exchange, mode)
@@ -1347,9 +1349,9 @@ class WebSocketProxy:
                 all_subscriptions = []
                 for sub_json in self.subscriptions[client_id]:
                     try:
-                        sub_dict = json.loads(sub_json)
+                        sub_dict = orjson.loads(sub_json)
                         all_subscriptions.append(sub_dict)
-                    except json.JSONDecodeError:
+                    except (orjson.JSONDecodeError, json.JSONDecodeError):
                         logger.error(f"Failed to parse subscription: {sub_json}")
 
                 # Unsubscribe from each subscription
@@ -1439,14 +1441,14 @@ class WebSocketProxy:
                     subscriptions_to_remove = []
                     for sub_json in self.subscriptions[client_id]:
                         try:
-                            sub_data = json.loads(sub_json)
+                            sub_data = orjson.loads(sub_json)
                             if (
                                 sub_data.get("symbol") == symbol
                                 and sub_data.get("exchange") == exchange
                                 and sub_data.get("mode") == mode
                             ):
                                 subscriptions_to_remove.append(sub_json)
-                        except json.JSONDecodeError:
+                        except (orjson.JSONDecodeError, json.JSONDecodeError):
                             continue
 
                     for sub_json in subscriptions_to_remove:
@@ -1570,7 +1572,10 @@ class WebSocketProxy:
         if client_id in self.clients:
             websocket = self.clients[client_id]
             try:
-                await websocket.send(json.dumps(message))
+                if isinstance(message, str):
+                    await websocket.send(message)
+                else:
+                    await websocket.send(orjson.dumps(message).decode("utf-8"))
             except websockets.exceptions.ConnectionClosed:
                 logger.info(f"Connection closed while sending message to client {client_id}")
 
@@ -1610,7 +1615,7 @@ class WebSocketProxy:
             )
 
             # Parse the invalidation message
-            message = json.loads(data_str)
+            message = orjson.loads(data_str)
             user_id = message.get("user_id")
             cache_type = message.get("cache_type", "ALL")
 
@@ -1678,7 +1683,7 @@ class WebSocketProxy:
                     f"Error cleaning connection pools for user {user_id}: {pool_error}"
                 )
 
-        except json.JSONDecodeError as e:
+        except (orjson.JSONDecodeError, json.JSONDecodeError) as e:
             logger.error(f"Failed to parse cache invalidation message: {e}")
         except Exception as e:
             logger.exception(f"Error processing cache invalidation: {e}")
@@ -1695,7 +1700,7 @@ class WebSocketProxy:
                 subscribers/wsproxy_subscriber.py::on_order_update, already
                 shaped as the client-facing {"type": "order_update", ...} message.
         """
-        message = json.loads(data_str)
+        message = orjson.loads(data_str)
         user_id = message.get("user_id")
         if not user_id:
             logger.warning("Order update message missing user_id")
@@ -1852,7 +1857,7 @@ class WebSocketProxy:
                     logger.debug(f"Skipping private event topic: {topic_str}")
                     continue
 
-                market_data = json.loads(data_str)
+                market_data = orjson.loads(data_str)
 
                 # Extract topic components from ZMQ topic string.
                 # All adapters publish: EXCHANGE_SYMBOL_MODE

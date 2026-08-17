@@ -5,6 +5,8 @@ import socket
 import threading
 from abc import ABC, abstractmethod
 
+import orjson
+
 import zmq
 
 from utils.logging import get_logger
@@ -398,9 +400,9 @@ class BaseBrokerWebSocketAdapter(ABC):
                 # Use shared publisher (connection pooling mode)
                 self._shared_publisher.publish(topic, data)
             elif self.socket:
-                # Use own socket
+                # Use own socket (orjson.dumps returns bytes directly)
                 self.socket.send_multipart(
-                    [topic.encode("utf-8"), json.dumps(data).encode("utf-8")]
+                    [topic.encode("utf-8"), orjson.dumps(data)]
                 )
             else:
                 self.logger.warning("No ZMQ socket available for publishing")

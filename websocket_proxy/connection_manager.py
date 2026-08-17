@@ -17,6 +17,8 @@ from collections import defaultdict
 from collections.abc import Callable
 from typing import Any, Dict, List, Optional, Tuple
 
+import orjson
+
 import zmq
 
 from utils.logging import get_logger
@@ -164,7 +166,7 @@ class SharedZmqPublisher:
         with self._publish_lock:
             try:
                 self.socket.send_multipart(
-                    [topic.encode("utf-8"), json.dumps(data).encode("utf-8")]
+                    [topic.encode("utf-8"), orjson.dumps(data)]
                 )
             except Exception as e:
                 self.logger.exception(f"Error publishing to ZMQ: {e}")
