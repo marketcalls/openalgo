@@ -56,9 +56,13 @@ The LIVE badge is shown only while the live source is healthy and recent; loadin
 
 ### 4. Valuation model
 
-Options use Black-76 consistently because their IV is solved against a parity/synthetic forward. For scenario spot shift `ΔS`, each leg's forward is shifted from its reference snapshot by the same `ΔS`; its own expiry time and option IV shift are applied. At zero spot/IV/time shift, the model value must reconcile to the leg's current market price within tick/rounding tolerance.
+Options use Black-76 consistently because their IV is solved against a parity/synthetic forward. At zero spot/IV/time shift, the model value must reconcile to the leg's current market price within tick/rounding tolerance.
 
-Futures P&L starts from the exact selected futures contract market reference, not the option expiry's synthetic forward and not raw spot. Scenario futures value moves by the underlying scenario displacement from the stored reference.
+> **Superseded 2026-08-14.** This section originally specified that "each leg's forward is shifted from its reference snapshot by the same `ΔS`", and that futures move by the same displacement from their stored reference. Both held the basis constant at every horizon, including expiry, which is wrong: a forward pulls to spot as its life runs out, and Indian index options settle against the index. A long 24000PE bought at 34.15 reported a breakeven of 23,886.58 against a true 23,965.85 — one basis low — and every expiry-derived figure was off by the same amount.
+>
+> The scenario forward is now `underlying × exp(carry × t)`, where `carry` is one continuous annual rate for the whole strategy and `t` is the leg's own remaining life. At the snapshot horizon this reproduces the reported forward, so the live mark still reconciles; at expiry the factor is 1 and the payoff is struck against spot. Futures converge on the same curve rather than carrying their basis to infinity.
+>
+> The rate is resolved once per strategy, as the median of the rates each leg implies, rather than per leg. A per-leg rate is unstable — the forward is a parity synthetic over two live quotes divided by a small remaining life — and, worse, legs disagree: a chain fetched without Greeks reports no forward, and a leg outside the loaded strike window keeps a stale snapshot. Two legs on one expiry with different carry factors stop cancelling, and a defined-risk iron condor reports an unlimited loss. **Invariant: legs sharing an expiry must share one carry curve.**
 
 Time-to-expiry uses the backend `expiry_ts` and a corrected server clock. Sub-day expiries expose fractional-day/hour progression; the control never displays a selectable value that calculation code immediately clamps away.
 

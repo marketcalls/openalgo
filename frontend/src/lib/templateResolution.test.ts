@@ -121,16 +121,24 @@ describe('template payoff topology', () => {
   // and Indian index options trade in contango, so that is the case to cover.
   it.each(STRATEGY_TEMPLATES)('$id frames a contango payoff around spot', (template) => {
     const spot = 24_800
-    const forward = 24_850
     const now = new Date('2026-07-28T10:00:00.000Z')
     const nearExpiryTs = now.getTime() / 1000 + 7 * 86_400
     const farExpiryTs = now.getTime() / 1000 + 35 * 86_400
     const strikes = Array.from({ length: 41 }, (_, index) => spot + (index - 20) * 50)
+    // One carry curve for the whole chain, as a real book quotes it: the far
+    // expiry carries further, so its forward is higher. Giving both expiries
+    // the same forward would imply the near leg carries five times as fast as
+    // the far one, and a calendar built on that inconsistency shows a tail
+    // slope the market does not have.
+    const CARRY_RATE = 0.06
+    const forwardFor = (expiryTs: number) =>
+      spot * Math.exp((CARRY_RATE * (expiryTs * 1000 - now.getTime())) / (365 * 86_400_000))
 
     const legs: StrategyLeg[] = template.legs.map((leg, index) => {
       const strike = resolveStrikeOffset(strikes, spot, leg.strikeOffset)
       if (strike === null) throw new Error(`Fixture cannot resolve ${template.id}`)
       const isFar = leg.expiryOffset === 1
+      const expiryTs = isFar ? farExpiryTs : nearExpiryTs
       return {
         id: `${template.id}-${index}`,
         segment: 'OPTION',
@@ -140,7 +148,7 @@ describe('template payoff topology', () => {
         lots: leg.lots,
         lotSize: 75,
         expiry: isFar ? '28AUG26' : '04AUG26',
-        expiryTs: isFar ? farExpiryTs : nearExpiryTs,
+        expiryTs,
         // A far-expiry leg carries more time value, so a calendar is a real
         // net debit rather than a costless pair.
         price: (40 + Math.abs(strike - spot) * 0.02) * (isFar ? 2.2 : 1),
@@ -148,7 +156,7 @@ describe('template payoff topology', () => {
         active: true,
         symbol: `${template.id}-${index}`,
         referenceUnderlying: spot,
-        forwardPrice: forward,
+        forwardPrice: forwardFor(expiryTs),
       }
     })
 
