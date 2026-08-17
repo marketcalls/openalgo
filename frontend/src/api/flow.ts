@@ -311,6 +311,17 @@ export async function getIndexSymbolsLotSizes(): Promise<IndexSymbolInfo[]> {
   return response.data.data || []
 }
 
+/**
+ * Lot size for one exact contract, so a derivative quantity can be entered in
+ * lots. Resolves to null - not an error - when the master contract has no
+ * usable lot size for the symbol, letting the caller fall back to units.
+ */
+export async function getSymbolLotSize(symbol: string, exchange: string): Promise<number | null> {
+  const params = new URLSearchParams({ symbol, exchange })
+  const response = await webClient.get(`${FLOW_API_BASE}/symbol-lotsize?${params.toString()}`)
+  return response.data.lotSize ?? null
+}
+
 // =============================================================================
 // React Query Keys
 // =============================================================================
@@ -322,4 +333,6 @@ export const flowQueryKeys = {
   executions: (id: number) => [...flowQueryKeys.workflow(id), 'executions'] as const,
   webhook: (id: number) => [...flowQueryKeys.workflow(id), 'webhook'] as const,
   indexSymbols: () => [...flowQueryKeys.all, 'index-symbols'] as const,
+  symbolLotSize: (symbol: string, exchange: string) =>
+    [...flowQueryKeys.all, 'symbol-lotsize', exchange, symbol] as const,
 }

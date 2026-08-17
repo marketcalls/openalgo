@@ -40,6 +40,7 @@ import { cn } from '@/lib/utils'
 import { useFlowWorkflowStore } from '@/stores/flowWorkflowStore'
 import { showToast } from '@/utils/toast'
 import { IndicatorParamsFields } from './IndicatorParamsFields'
+import { MarginPositionsFields } from './MarginPositionsFields'
 
 // ===== LOCAL CONSTANTS =====
 
@@ -2873,15 +2874,10 @@ export function ConfigPanel() {
 
             {nodeType === 'margin' && (
               <>
-                <div className="space-y-2">
-                  <Label className="text-xs">Positions (JSON)</Label>
-                  <Textarea
-                    className="min-h-[100px] text-xs font-mono"
-                    placeholder={`[{"symbol": "NIFTY25DEC25FUT", "exchange": "NFO", "action": "BUY", "quantity": 75}]`}
-                    value={(nodeData.positionsJson as string) || ''}
-                    onChange={(e) => handleDataChange('positionsJson', e.target.value)}
-                  />
-                </div>
+                <MarginPositionsFields
+                  value={(nodeData.positionsJson as string) || ''}
+                  onChange={(raw) => handleDataChange('positionsJson', raw)}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Output Variable</Label>
                   <Input

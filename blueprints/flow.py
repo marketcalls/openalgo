@@ -1079,3 +1079,44 @@ def get_index_symbols_lot_sizes():
     except Exception as e:
         logger.exception(f"Error fetching index symbols lot sizes: {e}")
         return jsonify({"error": "Failed to fetch lot sizes"}), 500
+
+
+@flow_bp.route("/api/symbol-lotsize", methods=["GET"])
+@check_session_validity
+def get_symbol_lot_size():
+    """Lot size for one exact OpenAlgo symbol on one exchange.
+
+    The index-symbols endpoint above only covers index underlyings, and
+    /search/api/search matches by prefix - asking it for a lot size while the
+    user is still typing a symbol can scan thousands of contracts. This is a
+    single indexed lookup on the exact symbol, so the Margin Calculator's
+    per-leg quantity can be entered in lots the way the options tools do.
+
+    Returns lotSize: null (not an error) when the symbol is unknown or the
+    master contract carries no usable lot size, so the caller can fall back to
+    entering plain units rather than blocking on a lookup that may never
+    resolve.
+    """
+    from database.symbol import SymToken, db_session
+
+    symbol = (request.args.get("symbol") or "").strip().upper()
+    exchange = (request.args.get("exchange") or "").strip().upper()
+    if not symbol or not exchange:
+        return jsonify({"status": "error", "message": "symbol and exchange are required"}), 400
+
+    try:
+        record = (
+            db_session.query(SymToken.lotsize)
+            .filter(
+                SymToken.symbol == symbol,
+                SymToken.exchange == exchange,
+                SymToken.lotsize.isnot(None),
+                SymToken.lotsize > 0,
+            )
+            .first()
+        )
+        lot_size = int(record[0]) if record and record[0] else None
+        return jsonify({"status": "success", "lotSize": lot_size})
+    except Exception as e:
+        logger.exception(f"Error fetching lot size for {symbol} ({exchange}): {e}")
+        return jsonify({"error": "Failed to fetch lot size"}), 500
