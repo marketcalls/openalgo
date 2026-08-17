@@ -148,13 +148,14 @@ class BrokerSymbolCache:
         self.cache_loaded: bool = False
 
         # Primary storage - all symbols in memory
-        self.symbols: dict[str, SymbolData] = {}
+        self.symbols: dict[tuple[str, str], SymbolData] = {}
+        self._last_load_row_count: int = 0
+        self._last_load_cache_count: int = 0
 
         # Multi-index maps for O(1) lookups
         self.by_symbol_exchange: dict[tuple[str, str], SymbolData] = {}
         self.by_token_exchange: dict[tuple[str, str], SymbolData] = {}
         self.by_brsymbol_exchange: dict[tuple[str, str], SymbolData] = {}
-        self.by_token: dict[str, SymbolData] = {}
 
         # Pre-computed indexes for FNO filter performance (O(1) lookups)
         self.by_exchange: dict[str, list[SymbolData]] = defaultdict(list)
@@ -249,13 +250,12 @@ class BrokerSymbolCache:
                 )
 
                 # Store in primary dict
-                self.symbols[sym.token] = symbol_data
+                self.symbols[(sym.exchange, sym.token)] = symbol_data
 
                 # Build indexes
                 self.by_symbol_exchange[(sym.symbol, sym.exchange)] = symbol_data
                 self.by_token_exchange[(sym.token, sym.exchange)] = symbol_data
                 self.by_brsymbol_exchange[(sym.brsymbol, sym.exchange)] = symbol_data
-                self.by_token[sym.token] = symbol_data
 
                 # Build FNO filter indexes for O(1) lookups
                 self.by_exchange[sym.exchange].append(symbol_data)
@@ -280,6 +280,19 @@ class BrokerSymbolCache:
                         if exp_date and exp_date >= ist_today:
                             self.tradable_underlyings_by_exchange[sym.exchange].add(underlying)
 
+            row_count = len(symbols)
+            cache_count = len(self.symbols)
+            self._last_load_row_count = row_count
+            self._last_load_cache_count = cache_count
+            if cache_count != row_count:
+                logger.error(
+                    "Symbol cache load mismatch for broker=%s: read %d rows "
+                    "from symtoken but primary cache holds %d entries (%d "
+                    "lost). This means duplicate (exchange, token) pairs "
+                    "exist in the master contract for this broker.",
+                    broker, row_count, cache_count, row_count - cache_count,
+                )
+                
             # Update cache metadata
             self.active_broker = broker
             self.cache_loaded = True
@@ -407,17 +420,8 @@ class BrokerSymbolCache:
         self.stats.misses += 1
         return None
 
-    def get_symbol_data(self, token: str) -> SymbolData | None:
-        """Get complete symbol data by token - O(1) lookup"""
-        self.stats.hits += 1
-        if token in self.by_token:
-            return self.by_token[token]
-
-        self.stats.hits -= 1
-        self.stats.misses += 1
-        return None
-
     def get_tokens_bulk(self, symbol_exchange_pairs: list[tuple[str, str]]) -> list[str | None]:
+        
         """
         Bulk retrieve tokens for multiple symbol-exchange pairs
         Optimized for performance with single pass
@@ -698,7 +702,6 @@ class BrokerSymbolCache:
         self.by_symbol_exchange.clear()
         self.by_token_exchange.clear()
         self.by_brsymbol_exchange.clear()
-        self.by_token.clear()
         # Clear FNO filter indexes
         self.by_exchange.clear()
         self.expiries_by_exchange.clear()
@@ -713,6 +716,9 @@ class BrokerSymbolCache:
         """Get cache information for monitoring"""
         return {
             "active_broker": self.active_broker,
+            "load_row_count": self._last_load_row_count,
+            "load_cache_count": self._last_load_cache_count,
+            "load_mismatch": self._last_load_row_count != self._last_load_cache_count,
             "cache_loaded": self.cache_loaded,
             "total_symbols": self.stats.total_symbols,
             "cache_valid": self.is_cache_valid(),
