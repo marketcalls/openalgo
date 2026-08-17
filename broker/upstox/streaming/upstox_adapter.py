@@ -58,12 +58,17 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.batch_timer: threading.Timer | None = None
         self.batch_delay = 0.5  # seconds — long enough to absorb the WS handshake
 
-        # Per-instrument LTPC cache. Upstox V3 sends incremental ticks where
-        # `fullFeed.marketFF.ltpc` may be absent on packets that only update
-        # `marketLevel`. We cache the last LTPC so quote/depth packets can
-        # carry forward a non-zero LTP into validation downstream.
+        # Per-instrument caches for incremental updates.
+        # Upstox V3 sends incremental ticks where LTPC, OI, Volume, OHLC,
+        # trade stats (ATP, TBQ, TSQ) or marketLevel may arrive separately.
+        # We cache the last values so quote/depth packets always carry forward
+        # valid non-zero values into validation and downstream clients.
         self._last_ltpc: dict[str, dict[str, Any]] = {}
         self._last_oi: dict[str, int] = {}
+        self._last_volume: dict[str, int] = {}
+        self._last_ohlc: dict[str, dict[str, Any]] = {}
+        self._last_stats: dict[str, dict[str, Any]] = {}
+        self._last_depth: dict[str, dict[str, Any]] = {}
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, Any] | None = None
@@ -268,6 +273,10 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     if not has_remaining:
                         self._last_ltpc.pop(instrument_key, None)
                         self._last_oi.pop(instrument_key, None)
+                        self._last_volume.pop(instrument_key, None)
+                        self._last_ohlc.pop(instrument_key, None)
+                        self._last_stats.pop(instrument_key, None)
+                        self._last_depth.pop(instrument_key, None)
                 self.logger.info(f"Unsubscribed from {symbol} on {exchange}")
                 return self._create_success_response(f"Unsubscribed from {symbol} on {exchange}")
             else:
@@ -303,6 +312,10 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.subscription_queue.clear()
                 self._last_ltpc.clear()
                 self._last_oi.clear()
+                self._last_volume.clear()
+                self._last_ohlc.clear()
+                self._last_stats.clear()
+                self._last_depth.clear()
 
             self.cleanup_zmq()
             self.logger.info("Disconnected from Upstox WebSocket")
@@ -331,6 +344,10 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.subscription_queue.clear()
                 self._last_ltpc.clear()
                 self._last_oi.clear()
+                self._last_volume.clear()
+                self._last_ohlc.clear()
+                self._last_stats.clear()
+                self._last_depth.clear()
                 if self.batch_timer is not None:
                     self.batch_timer.cancel()
                     self.batch_timer = None
@@ -505,14 +522,10 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
     ) -> dict[str, Any]:
         """Extract market data based on subscription mode.
 
-        Wraps the per-mode extractors with a per-instrument LTPC cache: if
-        the current tick is incremental and didn't include `ltpc`, we
-        backfill from the last-seen value so `ltp` is always present
-        downstream. Bug observed in production: mode-3 (depth) packets that
-        only update `marketLevel` were producing `Missing LTP value`
-        validation failures because ltpc.get("ltp", 0) was emitting 0
-        (and in some paths returning an empty dict that dropped the key
-        entirely).
+        Wraps the per-mode extractors with per-instrument caches: if the
+        current tick is incremental and didn't include `ltpc`, `oi`, `vtt`,
+        `ohlc`, or `stats`, we backfill from last-seen values so all fields
+        remain populated downstream.
         """
         mode = sub_info["mode"]
         symbol = sub_info["symbol"]
@@ -522,7 +535,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         base_data = {"symbol": symbol, "exchange": exchange, "token": token}
 
-        # Cache any LTPC that arrived on this tick, regardless of mode.
+        # Cache any fields that arrived on this tick, regardless of mode.
         ltpc_in_tick = self._extract_tick_ltpc(feed_data)
         if ltpc_in_tick:
             with self.lock:
@@ -533,20 +546,39 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             with self.lock:
                 self._last_oi[instrument_key] = oi_in_tick
 
+        vol_in_tick = self._extract_tick_volume(feed_data)
+        if vol_in_tick is not None:
+            with self.lock:
+                self._last_volume[instrument_key] = vol_in_tick
+
+        ohlc_in_tick = self._extract_tick_ohlc(feed_data)
+        if ohlc_in_tick:
+            with self.lock:
+                self._last_ohlc[instrument_key] = ohlc_in_tick
+
+        stats_in_tick = self._extract_tick_stats(feed_data)
+        if stats_in_tick:
+            with self.lock:
+                self._last_stats[instrument_key] = stats_in_tick
+
+        depth_in_tick = self._extract_tick_depth(feed_data)
+        if depth_in_tick:
+            with self.lock:
+                self._last_depth[instrument_key] = depth_in_tick
+
         # Per-mode extraction.
         if mode == 1:
             result = self._extract_ltp_data(feed_data, base_data)
         elif mode == 2:
-            result = self._extract_quote_data(feed_data, base_data, current_ts)
+            result = self._extract_quote_data(feed_data, base_data, current_ts, instrument_key)
         elif mode == 3:
-            depth_data = self._extract_depth_data(feed_data, current_ts)
+            depth_data = self._extract_depth_data(feed_data, current_ts, instrument_key)
             depth_data.update(base_data)
             result = depth_data
         else:
             return {}
 
-        # Carry-forward: if the extractor produced an empty dict (no fullFeed
-        # wrapper) or its `ltp` is 0/missing, splice in the cached LTPC.
+        # Carry-forward for LTP:
         if not result:
             cached = self._last_ltpc.get(instrument_key)
             if cached:
@@ -565,24 +597,34 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if cached and cached.get("ltp"):
                 result["ltp"] = float(cached["ltp"])
 
-        if result and not result.get("oi"):
-            cached_oi = self._last_oi.get(instrument_key)
-            if cached_oi is not None:
-                result["oi"] = cached_oi
+        if result:
+            if not result.get("oi"):
+                cached_oi = self._last_oi.get(instrument_key)
+                if cached_oi is not None:
+                    result["oi"] = cached_oi
+            if not result.get("volume"):
+                cached_vol = self._last_volume.get(instrument_key)
+                if cached_vol is not None:
+                    result["volume"] = cached_vol
 
         return result
 
     def _extract_tick_ltpc(self, feed_data: dict[str, Any]) -> dict[str, Any]:
         """Pull LTPC from a Feed protobuf-as-dict regardless of which oneof
-        branch it was sent under (`Feed.ltpc` for mode=ltpc, or
-        `Feed.fullFeed.{marketFF|indexFF}.ltpc` for mode=full).
+        branch it was sent under (`Feed.ltpc` for mode=ltpc,
+        `Feed.fullFeed.{marketFF|indexFF}.ltpc` for mode=full, or
+        `Feed.firstLevelWithGreeks.ltpc`).
         """
         if "ltpc" in feed_data and isinstance(feed_data["ltpc"], dict):
             return feed_data["ltpc"]
         full_feed = feed_data.get("fullFeed") or {}
         ff = full_feed.get("marketFF") or full_feed.get("indexFF") or {}
         ltpc = ff.get("ltpc") or {}
-        return ltpc if isinstance(ltpc, dict) else {}
+        if ltpc and isinstance(ltpc, dict):
+            return ltpc
+        first_level = feed_data.get("firstLevelWithGreeks") or {}
+        fl_ltpc = first_level.get("ltpc") or {}
+        return fl_ltpc if isinstance(fl_ltpc, dict) else {}
 
     def _extract_tick_oi(self, feed_data: dict[str, Any]) -> int | None:
         """Pull OI from a Feed protobuf-as-dict if present."""
@@ -593,6 +635,118 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         first_level = feed_data.get("firstLevelWithGreeks") or {}
         if "oi" in first_level and first_level["oi"] is not None:
             return int(float(first_level["oi"]))
+        return None
+
+    def _extract_tick_volume(self, feed_data: dict[str, Any]) -> int | None:
+        """Pull volume from a Feed protobuf-as-dict if present.
+
+        Prioritizes `vtt` ("volume traded today") from marketFF or
+        firstLevelWithGreeks, falling back to 1d/first interval vol in marketOHLC.
+        """
+        full_feed = feed_data.get("fullFeed") or {}
+        market_ff = full_feed.get("marketFF") or {}
+        if "vtt" in market_ff and market_ff["vtt"] is not None:
+            return int(float(market_ff["vtt"]))
+
+        first_level = feed_data.get("firstLevelWithGreeks") or {}
+        if "vtt" in first_level and first_level["vtt"] is not None:
+            return int(float(first_level["vtt"]))
+
+        ff = market_ff or full_feed.get("indexFF") or {}
+        ohlc_list = ff.get("marketOHLC", {}).get("ohlc", [])
+        if ohlc_list:
+            ohlc = next((o for o in ohlc_list if o.get("interval") == "1d"), ohlc_list[0])
+            if "vol" in ohlc and ohlc["vol"] is not None:
+                return int(float(ohlc["vol"]))
+
+        return None
+
+    def _extract_tick_ohlc(self, feed_data: dict[str, Any]) -> dict[str, Any]:
+        """Pull OHLC dict from marketOHLC if present."""
+        full_feed = feed_data.get("fullFeed") or {}
+        ff = full_feed.get("marketFF") or full_feed.get("indexFF") or {}
+        ohlc_list = ff.get("marketOHLC", {}).get("ohlc", [])
+        if ohlc_list:
+            ohlc = next((o for o in ohlc_list if o.get("interval") == "1d"), ohlc_list[0])
+            return {
+                "open": float(ohlc.get("open", 0)),
+                "high": float(ohlc.get("high", 0)),
+                "low": float(ohlc.get("low", 0)),
+                "close": float(ohlc.get("close", 0)),
+                "ts": int(ohlc.get("ts", 0)),
+            }
+        return {}
+
+    def _extract_tick_stats(self, feed_data: dict[str, Any]) -> dict[str, Any]:
+        """Pull ATP, TBQ, TSQ stats from marketFF if present."""
+        full_feed = feed_data.get("fullFeed") or {}
+        market_ff = full_feed.get("marketFF") or {}
+        stats = {}
+        if "atp" in market_ff and market_ff["atp"] is not None:
+            stats["average_price"] = float(market_ff["atp"])
+        if "tbq" in market_ff and market_ff["tbq"] is not None:
+            stats["total_buy_quantity"] = int(float(market_ff["tbq"]))
+        if "tsq" in market_ff and market_ff["tsq"] is not None:
+            stats["total_sell_quantity"] = int(float(market_ff["tsq"]))
+        return stats
+
+    def _extract_tick_depth(
+        self, feed_data: dict[str, Any]
+    ) -> dict[str, list[dict[str, Any]]] | None:
+        """Pull 5-level market depth from marketFF.marketLevel or firstLevelWithGreeks."""
+        full_feed = feed_data.get("fullFeed") or {}
+        market_ff = full_feed.get("marketFF") or {}
+        market_level = market_ff.get("marketLevel", {})
+        bid_ask = market_level.get("bidAskQuote", [])
+
+        if bid_ask:
+            buy_levels = []
+            sell_levels = []
+            for level in bid_ask:
+                bid_price = float(level.get("bidP", 0))
+                bid_qty = int(float(level.get("bidQ", 0)))
+                if bid_price > 0:
+                    buy_levels.append({"price": bid_price, "quantity": bid_qty, "orders": 0})
+
+                ask_price = float(level.get("askP", 0))
+                ask_qty = int(float(level.get("askQ", 0)))
+                if ask_price > 0:
+                    sell_levels.append({"price": ask_price, "quantity": ask_qty, "orders": 0})
+
+            buy_levels = sorted(buy_levels, key=lambda x: x["price"], reverse=True)
+            sell_levels = sorted(sell_levels, key=lambda x: x["price"])
+
+            buy_levels.extend(
+                [{"price": 0.0, "quantity": 0, "orders": 0}] * (5 - len(buy_levels))
+            )
+            sell_levels.extend(
+                [{"price": 0.0, "quantity": 0, "orders": 0}] * (5 - len(sell_levels))
+            )
+
+            return {"buy": buy_levels[:5], "sell": sell_levels[:5]}
+
+        first_level = feed_data.get("firstLevelWithGreeks", {})
+        first_depth = first_level.get("firstDepth", {})
+        if first_depth:
+            buy_levels = []
+            sell_levels = []
+            bid_price = float(first_depth.get("bidP", 0))
+            bid_qty = int(float(first_depth.get("bidQ", 0)))
+            if bid_price > 0:
+                buy_levels.append({"price": bid_price, "quantity": bid_qty, "orders": 0})
+            ask_price = float(first_depth.get("askP", 0))
+            ask_qty = int(float(first_depth.get("askQ", 0)))
+            if ask_price > 0:
+                sell_levels.append({"price": ask_price, "quantity": ask_qty, "orders": 0})
+
+            buy_levels.extend(
+                [{"price": 0.0, "quantity": 0, "orders": 0}] * (5 - len(buy_levels))
+            )
+            sell_levels.extend(
+                [{"price": 0.0, "quantity": 0, "orders": 0}] * (5 - len(sell_levels))
+            )
+            return {"buy": buy_levels[:5], "sell": sell_levels[:5]}
+
         return None
 
     def _extract_ltp_data(
@@ -615,31 +769,49 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         return market_data
 
     def _extract_quote_data(
-        self, feed_data: dict[str, Any], base_data: dict[str, Any], current_ts: int
+        self,
+        feed_data: dict[str, Any],
+        base_data: dict[str, Any],
+        current_ts: int,
+        instrument_key: str | None = None,
     ) -> dict[str, Any]:
-        """Extract QUOTE data from feed."""
-        if "fullFeed" not in feed_data:
-            return {}
+        """Extract QUOTE data from feed, falling back to cached state for missing fields."""
+        ltpc = self._extract_tick_ltpc(feed_data)
+        if not ltpc and instrument_key:
+            ltpc = self._last_ltpc.get(instrument_key, {})
 
-        full_feed = feed_data["fullFeed"]
-        ff = full_feed.get("marketFF") or full_feed.get("indexFF", {})
+        ltp = float(ltpc.get("ltp", 0)) if ltpc else 0.0
+        ltq = int(ltpc.get("ltq", 0)) if ltpc else 0
 
-        ltpc = ff.get("ltpc", {})
-        ltp = ltpc.get("ltp", 0)
-        ltq = ltpc.get("ltq", 0)
+        # OHLC
+        ohlc = self._extract_tick_ohlc(feed_data)
+        if not ohlc and instrument_key:
+            ohlc = self._last_ohlc.get(instrument_key, {})
 
-        ohlc_list = ff.get("marketOHLC", {}).get("ohlc", [])
-        ohlc = next(
-            (o for o in ohlc_list if o.get("interval") == "1d"), ohlc_list[0] if ohlc_list else {}
-        )
+        # Volume
+        volume = self._extract_tick_volume(feed_data)
+        if volume is None and instrument_key:
+            volume = self._last_volume.get(instrument_key, 0)
+        if volume is None:
+            volume = 0
 
-        volume = ohlc.get("vol", 0) if ohlc else 0
-        avg_price = float(ff.get("atp", 0))
-        total_buy_qty = int(ff.get("tbq", 0))
-        total_sell_qty = int(ff.get("tsq", 0))
+        # Stats (ATP, TBQ, TSQ)
+        stats = self._extract_tick_stats(feed_data)
+        if not stats and instrument_key:
+            stats = self._last_stats.get(instrument_key, {})
 
-        raw_oi = ff.get("oi")
-        oi = int(float(raw_oi)) if raw_oi is not None else 0
+        avg_price = stats.get("average_price", 0.0)
+        total_buy_qty = stats.get("total_buy_quantity", 0)
+        total_sell_qty = stats.get("total_sell_quantity", 0)
+
+        # OI
+        oi = self._extract_tick_oi(feed_data)
+        if oi is None and instrument_key:
+            oi = self._last_oi.get(instrument_key, 0)
+        if oi is None:
+            oi = 0
+
+        ts = ohlc.get("ts") or current_ts
 
         market_data = base_data.copy()
         market_data.update(
@@ -655,48 +827,82 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "total_buy_quantity": int(total_buy_qty),
                 "total_sell_quantity": int(total_sell_qty),
                 "oi": oi,
-                "timestamp": int(ohlc.get("ts", current_ts)),
+                "timestamp": int(ts),
             }
         )
 
         return market_data
 
-    def _extract_depth_data(self, feed_data: dict[str, Any], current_ts: int) -> dict[str, Any]:
-        """Extract depth data from feed."""
-        if "fullFeed" not in feed_data:
-            return {"buy": [], "sell": [], "timestamp": current_ts, "ltp": 0}
+    def _extract_depth_data(
+        self,
+        feed_data: dict[str, Any],
+        current_ts: int,
+        instrument_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Extract depth data from feed including full quote fields."""
+        ltpc = self._extract_tick_ltpc(feed_data)
+        if not ltpc and instrument_key:
+            ltpc = self._last_ltpc.get(instrument_key, {})
 
-        full_feed = feed_data["fullFeed"]
-        market_ff = full_feed.get("marketFF") or full_feed.get("indexFF", {})
-        market_level = market_ff.get("marketLevel", {})
-        bid_ask = market_level.get("bidAskQuote", [])
+        ltp = float(ltpc.get("ltp", 0)) if ltpc else 0.0
+        ltq = int(ltpc.get("ltq", 0)) if ltpc else 0
 
-        ltpc = market_ff.get("ltpc", {})
-        ltp = float(ltpc.get("ltp", 0))
+        # Depth levels
+        depth = self._extract_tick_depth(feed_data)
+        if not depth and instrument_key:
+            depth = self._last_depth.get(instrument_key, {})
 
-        buy_levels = []
-        sell_levels = []
+        buy_levels = depth.get("buy", []) if depth else []
+        sell_levels = depth.get("sell", []) if depth else []
 
-        for level in bid_ask:
-            bid_price = float(level.get("bidP", 0))
-            bid_qty = int(float(level.get("bidQ", 0)))
-            if bid_price > 0:
-                buy_levels.append({"price": bid_price, "quantity": bid_qty, "orders": 0})
+        if not buy_levels:
+            buy_levels = [{"price": 0.0, "quantity": 0, "orders": 0}] * 5
+        if not sell_levels:
+            sell_levels = [{"price": 0.0, "quantity": 0, "orders": 0}] * 5
 
-            ask_price = float(level.get("askP", 0))
-            ask_qty = int(float(level.get("askQ", 0)))
-            if ask_price > 0:
-                sell_levels.append({"price": ask_price, "quantity": ask_qty, "orders": 0})
+        # OHLC
+        ohlc = self._extract_tick_ohlc(feed_data)
+        if not ohlc and instrument_key:
+            ohlc = self._last_ohlc.get(instrument_key, {})
 
-        buy_levels = sorted(buy_levels, key=lambda x: x["price"], reverse=True)
-        sell_levels = sorted(sell_levels, key=lambda x: x["price"])
+        # Volume
+        volume = self._extract_tick_volume(feed_data)
+        if volume is None and instrument_key:
+            volume = self._last_volume.get(instrument_key, 0)
+        if volume is None:
+            volume = 0
 
-        buy_levels.extend([{"price": 0.0, "quantity": 0, "orders": 0}] * (5 - len(buy_levels)))
-        sell_levels.extend([{"price": 0.0, "quantity": 0, "orders": 0}] * (5 - len(sell_levels)))
+        # Stats (ATP, TBQ, TSQ)
+        stats = self._extract_tick_stats(feed_data)
+        if not stats and instrument_key:
+            stats = self._last_stats.get(instrument_key, {})
+
+        avg_price = stats.get("average_price", 0.0)
+        total_buy_qty = stats.get("total_buy_quantity", 0)
+        total_sell_qty = stats.get("total_sell_quantity", 0)
+
+        # OI
+        oi = self._extract_tick_oi(feed_data)
+        if oi is None and instrument_key:
+            oi = self._last_oi.get(instrument_key, 0)
+        if oi is None:
+            oi = 0
+
+        ts = ohlc.get("ts") or current_ts
 
         return {
+            "open": float(ohlc.get("open", 0)),
+            "high": float(ohlc.get("high", 0)),
+            "low": float(ohlc.get("low", 0)),
+            "close": float(ohlc.get("close", 0)),
+            "ltp": float(ltp),
+            "last_trade_quantity": int(ltq),
+            "volume": int(volume),
+            "average_price": float(avg_price),
+            "total_buy_quantity": int(total_buy_qty),
+            "total_sell_quantity": int(total_sell_qty),
+            "oi": oi,
             "buy": buy_levels[:5],
             "sell": sell_levels[:5],
-            "timestamp": current_ts,
-            "ltp": ltp,
+            "timestamp": int(ts),
         }
