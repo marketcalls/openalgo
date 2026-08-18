@@ -244,7 +244,6 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         channels = DeltaModeMapper.get_channels(mode)
         corr_id  = f"{symbol}_{exchange}_{mode}"
 
-        should_disconnect = False
         stale_channels: list[str] = []
         with self._lock:
             # Read the stored br_symbol that was resolved at subscribe() time
@@ -278,9 +277,6 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             ):
                 self.last_values.pop(cache_key, None)
 
-            if not remaining:
-                should_disconnect = True
-
         if self.public_ws and stale_channels:
             try:
                 with self._lock:
@@ -291,9 +287,17 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error("unsubscribe error %s.%s: %s", symbol, exchange, exc)
                 return self._create_error_response("UNSUBSCRIPTION_ERROR", str(exc))
 
-        if should_disconnect:
-            self.logger.info("No subscriptions remaining — disconnecting.")
-            self.disconnect()
+        # Deliberately NOT disconnecting when the last subscription goes away.
+        # The connection pool (websocket_proxy/connection_manager.py) owns this
+        # adapter's lifecycle and keeps reusing the same instance: dropping to
+        # zero symbols is routine (an option chain switching expiry/strikes
+        # unsubscribes every symbol before subscribing the new set).  Tearing
+        # the sockets down here left the pool holding a dead adapter — the WS
+        # retry loop exits on _stop_flag and the ZMQ publisher is closed, so
+        # every later subscribe was accepted, queued, and silently buffered
+        # with no socket to carry it and no path back to connected.  An idle
+        # connection with no subscriptions costs nothing; explicit teardown
+        # still happens through disconnect().
 
         return self._create_success_response(
             f"Unsubscribed from {symbol}.{exchange}", symbol=symbol, exchange=exchange, mode=mode
