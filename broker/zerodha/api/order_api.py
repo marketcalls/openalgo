@@ -5,6 +5,7 @@ import threading
 import time
 import urllib.parse
 
+from broker.zerodha.api.rate_limiter import request as paced_request
 from broker.zerodha.mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
@@ -43,24 +44,30 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
     url = f"{base_url}{endpoint}"
 
     try:
-        # Handle different HTTP methods
+        # Paced and retried by the shared limiter so order, position and
+        # holdings traffic queues against its own 10/sec budget rather than
+        # competing with quote polling.
         if method.upper() == "GET":
-            response = client.get(url, headers=headers)
+            response, response_data = paced_request(client, "GET", url, headers=headers)
         elif method.upper() == "POST":
             if isinstance(payload, str):
                 # For form-urlencoded data
                 headers["Content-Type"] = "application/x-www-form-urlencoded"
-                response = client.post(url, headers=headers, content=payload)
+                response, response_data = paced_request(
+                    client, "POST", url, headers=headers, content=payload
+                )
             else:
                 # For JSON data
                 headers["Content-Type"] = "application/json"
-                response = client.post(url, headers=headers, json=payload)
+                response, response_data = paced_request(
+                    client, "POST", url, headers=headers, json=payload
+                )
         else:
             raise ValueError(f"Unsupported HTTP method: {method}")
 
         # Parse and return JSON response
         response.raise_for_status()
-        return response.json()
+        return response_data if response_data is not None else response.json()
 
     except Exception as e:
         error_msg = str(e)
@@ -199,15 +206,20 @@ def place_order_api(data, auth):
     }
 
     # Make the request using the shared client
-    response = client.post(
-        "https://api.kite.trade/orders/regular", headers=headers, content=payload_encoded
+    response, response_data = paced_request(
+        client,
+        "POST",
+        "https://api.kite.trade/orders/regular",
+        headers=headers,
+        content=payload_encoded,
     )
 
     # Log raw response
     logger.debug(f"Zerodha raw response: status={response.status_code}, body={response.text}")
 
     # Parse the response
-    response_data = response.json()
+    if response_data is None:
+        response_data = response.json()
     logger.debug(f"Response from place_order_api: {response_data}")
 
     # Handle the response

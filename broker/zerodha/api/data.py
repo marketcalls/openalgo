@@ -1,11 +1,11 @@
 import json
 import os
-import time
 import urllib.parse
 from datetime import datetime, timedelta
 
 import pandas as pd
 
+from broker.zerodha.api.rate_limiter import request as paced_request
 from broker.zerodha.database.master_contract_db import SymToken, db_session
 from database.token_db import get_br_symbol, get_oa_symbol
 from utils.httpx_client import get_httpx_client
@@ -84,20 +84,19 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
     url = f"{base_url}{endpoint}"
 
     try:
-        # Log the complete request details for debugging
-        # logger.info("=== API Request Details ===")
-        # logger.info(f"URL: {url}")
-        # logger.info(f"Method: {method}")
-        # logger.info(f"Headers: {json.dumps(headers, indent=2)}")
         if payload:
             logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
 
-        # Make the request using the shared client
+        # Paced against the documented per-endpoint cap, and retried if the
+        # gateway still says no. Quote is 1/sec, which several pages polling at
+        # once will exceed without this.
         if method.upper() == "GET":
-            response = client.get(url, headers=headers)
+            response, response_data = paced_request(client, "GET", url, headers=headers)
         elif method.upper() == "POST":
             headers["Content-Type"] = "application/json"
-            response = client.post(url, headers=headers, json=payload)
+            response, response_data = paced_request(
+                client, "POST", url, headers=headers, json=payload
+            )
         else:
             raise ZerodhaAPIError(f"Unsupported HTTP method: {method}")
 
@@ -107,8 +106,8 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
         logger.debug(f"Response Headers: {dict(response.headers)}")
         logger.debug(f"Response Body: {response.text}")
 
-        # Parse JSON response
-        response_data = response.json()
+        if response_data is None:
+            response_data = response.json()
 
         # Check for permission errors
         if response_data.get("status") == "error":
@@ -252,36 +251,24 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            BATCH_SIZE = 500  # Zerodha API limit per request
-            RATE_LIMIT_DELAY = 1.0  # 1 request per second = 500 symbols/second
+            # /quote accepts 500 instruments per call and each call, whatever its
+            # size, costs one unit against the 1/sec quote budget. So batching is
+            # purely about staying under the per-call cap; the spacing between
+            # calls is owned by apply_rate_limit() in get_api_response, which is
+            # module-level and therefore also paces concurrent requests. The old
+            # sleep here only ran above 500 symbols and only within one call, so
+            # two callers in the same second both fired immediately.
+            BATCH_SIZE = 500
 
-            # If symbols exceed batch size, process in batches
-            if len(symbols) > BATCH_SIZE:
-                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
-                all_results = []
+            batch_count = (len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE
+            if batch_count > 1:
+                logger.info(f"Processing {len(symbols)} symbols in {batch_count} batches")
 
-                # Split symbols into batches
-                for i in range(0, len(symbols), BATCH_SIZE):
-                    batch = symbols[i : i + BATCH_SIZE]
-                    logger.debug(
-                        f"Processing batch {i // BATCH_SIZE + 1}: symbols {i + 1} to {min(i + BATCH_SIZE, len(symbols))}"
-                    )
+            all_results = []
+            for i in range(0, len(symbols), BATCH_SIZE):
+                all_results.extend(self._process_quotes_batch(symbols[i : i + BATCH_SIZE]))
 
-                    # Process this batch
-                    batch_results = self._process_quotes_batch(batch)
-                    all_results.extend(batch_results)
-
-                    # Rate limit delay between batches
-                    if i + BATCH_SIZE < len(symbols):
-                        time.sleep(RATE_LIMIT_DELAY)
-
-                logger.info(
-                    f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches"
-                )
-                return all_results
-            else:
-                # Single batch processing
-                return self._process_quotes_batch(symbols)
+            return all_results
 
         except ZerodhaPermissionError as e:
             logger.debug(f"Permission error fetching multiquotes: {e}")

@@ -4,6 +4,7 @@
 import json
 import urllib.parse
 
+from broker.zerodha.api.rate_limiter import request as paced_request
 from broker.zerodha.mapping.gtt_data import (
     map_gtt_book,
     transform_modify_gtt,
@@ -150,10 +151,13 @@ def place_gtt_order(data, auth):
     logger.info(f"Zerodha place_gtt payload: type={transformed['type']}, body={body}")
 
     client = get_httpx_client()
-    response = client.post(f"{_BASE}/gtt/triggers", headers=_headers(auth, form=True), content=body)
+    response, response_data = paced_request(
+        client, "POST", f"{_BASE}/gtt/triggers", headers=_headers(auth, form=True), content=body
+    )
     logger.info(f"Zerodha place_gtt raw: status={response.status_code}, body={response.text}")
 
-    response_data = response.json()
+    if response_data is None:
+        response_data = response.json()
     response.status = response.status_code  # parity with other order APIs
 
     trigger_id = None
@@ -239,11 +243,12 @@ def get_gtt_book(auth):
     OpenAlgo-normalised GTT objects (see ``map_gtt_book``).
     """
     client = get_httpx_client()
-    response = client.get(f"{_BASE}/gtt/triggers", headers=_headers(auth))
+    response, raw = paced_request(client, "GET", f"{_BASE}/gtt/triggers", headers=_headers(auth))
     logger.info(f"Zerodha gtt_book raw: status={response.status_code}")
 
     try:
-        raw = response.json()
+        if raw is None:
+            raw = response.json()
     except Exception:
         return {"status": "error", "message": response.text or "Invalid response"}, response.status_code
 

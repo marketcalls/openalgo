@@ -1,5 +1,6 @@
 import json
 
+from broker.zerodha.api.rate_limiter import request as paced_request
 from broker.zerodha.mapping.margin_data import parse_margin_response, transform_margin_positions
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -74,14 +75,14 @@ def calculate_margin_api(positions, auth):
 
     try:
         # Make the request using the shared client
-        response = client.post(endpoint, headers=headers, json=payload)
+        response, parsed = paced_request(client, "POST", endpoint, headers=headers, json=payload)
 
         # Add status attribute for compatibility with the existing codebase
         response.status = response.status_code
 
         # Parse the JSON response
         try:
-            response_data = response.json()
+            response_data = parsed if parsed is not None else response.json()
         except json.JSONDecodeError:
             logger.error(f"Failed to parse JSON response from Zerodha: {response.text}")
             error_response = {"status": "error", "message": "Invalid response from broker API"}
