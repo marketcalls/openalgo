@@ -1081,42 +1081,88 @@ def get_index_symbols_lot_sizes():
         return jsonify({"error": "Failed to fetch lot sizes"}), 500
 
 
-@flow_bp.route("/api/symbol-lotsize", methods=["GET"])
+# A margin basket is capped at 50 positions by margin_service, so a lookup can
+# never legitimately need more pairs than that. Bounding it keeps a crafted or
+# buggy caller from turning one request into an unbounded IN clause.
+MAX_LOT_SIZE_LOOKUP = 50
+
+
+@flow_bp.route("/api/symbol-lotsizes", methods=["POST"])
 @check_session_validity
-def get_symbol_lot_size():
-    """Lot size for one exact OpenAlgo symbol on one exchange.
+def get_symbol_lot_sizes():
+    """Lot sizes for a bounded set of exact (symbol, exchange) pairs.
 
     The index-symbols endpoint above only covers index underlyings, and
     /search/api/search matches by prefix - asking it for a lot size while the
-    user is still typing a symbol can scan thousands of contracts. This is a
-    single indexed lookup on the exact symbol, so the Margin Calculator's
-    per-leg quantity can be entered in lots the way the options tools do.
+    user is still typing can scan thousands of contracts. This resolves exact
+    symbols only, so the Margin Calculator's per-leg quantity can be entered in
+    lots the way the options tools do.
 
-    Returns lotSize: null (not an error) when the symbol is unknown or the
+    Batched deliberately: a 50-leg basket opened in the editor would otherwise
+    issue 50 requests. One grouped query answers the whole basket.
+
+    A pair resolves to null - not an error - when the symbol is unknown or the
     master contract carries no usable lot size, so the caller can fall back to
-    entering plain units rather than blocking on a lookup that may never
-    resolve.
+    plain units instead of blocking on a lookup that will never succeed. That
+    is a different condition from the request failing, and the caller is
+    expected to present them differently.
     """
+    from sqlalchemy import tuple_
+
     from database.symbol import SymToken, db_session
 
-    symbol = (request.args.get("symbol") or "").strip().upper()
-    exchange = (request.args.get("exchange") or "").strip().upper()
-    if not symbol or not exchange:
-        return jsonify({"status": "error", "message": "symbol and exchange are required"}), 400
+    payload = request.get_json(silent=True) or {}
+    raw_pairs = payload.get("symbols")
+    if not isinstance(raw_pairs, list) or not raw_pairs:
+        return jsonify({"status": "error", "message": "symbols must be a non-empty array"}), 400
+    if len(raw_pairs) > MAX_LOT_SIZE_LOOKUP:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": f"at most {MAX_LOT_SIZE_LOOKUP} symbols per request",
+                }
+            ),
+            400,
+        )
+
+    pairs = []
+    for entry in raw_pairs:
+        if not isinstance(entry, dict):
+            return jsonify({"status": "error", "message": "each symbol must be an object"}), 400
+        symbol = str(entry.get("symbol") or "").strip().upper()
+        exchange = str(entry.get("exchange") or "").strip().upper()
+        if not symbol or not exchange:
+            return (
+                jsonify({"status": "error", "message": "symbol and exchange are required"}),
+                400,
+            )
+        pairs.append((symbol, exchange))
 
     try:
-        record = (
-            db_session.query(SymToken.lotsize)
+        rows = (
+            db_session.query(SymToken.symbol, SymToken.exchange, SymToken.lotsize)
             .filter(
-                SymToken.symbol == symbol,
-                SymToken.exchange == exchange,
+                tuple_(SymToken.symbol, SymToken.exchange).in_(set(pairs)),
                 SymToken.lotsize.isnot(None),
                 SymToken.lotsize > 0,
             )
-            .first()
+            .all()
         )
-        lot_size = int(record[0]) if record and record[0] else None
-        return jsonify({"status": "success", "lotSize": lot_size})
+        # lotsize is a float column and some segments carry fractional sizes
+        # (Delta Exchange crypto contracts store 0.0001). int() would truncate
+        # those to 0, and a caller that trusted it would divide a quantity by
+        # zero. A fraction of a unit is not a lot, so it resolves to null like
+        # any other contract with no usable lot size.
+        found = {}
+        for symbol, exchange, lotsize in rows:
+            size = int(lotsize)
+            if size >= 1 and size == lotsize:
+                found[f"{exchange}:{symbol}"] = size
+        # Echo every requested pair, so a caller can tell "looked up, not found"
+        # from "not looked up" without diffing its own request.
+        lot_sizes = {f"{exchange}:{symbol}": found.get(f"{exchange}:{symbol}") for symbol, exchange in pairs}
+        return jsonify({"status": "success", "lotSizes": lot_sizes})
     except Exception as e:
-        logger.exception(f"Error fetching lot size for {symbol} ({exchange}): {e}")
-        return jsonify({"error": "Failed to fetch lot size"}), 500
+        logger.exception(f"Error fetching lot sizes for {len(pairs)} pair(s): {e}")
+        return jsonify({"status": "error", "message": "Failed to fetch lot sizes"}), 500

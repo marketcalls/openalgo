@@ -1635,17 +1635,30 @@ class NodeExecutor:
             return None
         if isinstance(raw, str):
             raw = self.context.interpolate(raw).strip()
+            # A basket was configured, so an empty result means interpolation
+            # dropped it - an unset {{variable}}, not a request to price the
+            # single position instead.
             if not raw:
-                return None
+                raise ValueError(
+                    "Margin positions is empty after variable interpolation; "
+                    "check the {{variable}} references in the basket."
+                )
             try:
                 raw = json.loads(raw)
-            except (TypeError, ValueError):
-                self.log("Margin positions JSON is not valid JSON; using the single position", "warning")
-                return None
+            except (TypeError, ValueError) as exc:
+                # Falling back to the single position here priced a *different*
+                # estimate - and the panel never exposes those fields, so it
+                # was an empty symbol - while only logging a warning.
+                raise ValueError(
+                    f"Margin positions is not valid JSON after variable "
+                    f"interpolation: {exc}"
+                ) from exc
         if isinstance(raw, dict):
             raw = [raw]
-        if not isinstance(raw, list) or not raw:
-            return None
+        if not isinstance(raw, list):
+            raise ValueError("Margin positions must be a JSON array of position objects.")
+        if not raw:
+            raise ValueError("Margin positions is an empty basket; add at least one position.")
         if any(not isinstance(entry, dict) for entry in raw):
             # Dropping the bad entries would quietly price part of the basket
             # and report it as the whole estimate.
@@ -1675,6 +1688,13 @@ class NodeExecutor:
         price_type = self.get_str(node_data, "priceType", "MARKET")
         if positions:
             self.log(f"Calculating margin for a basket of {len(positions)} position(s)")
+        elif not symbol:
+            # No basket and no single position. Calling the broker with an empty
+            # symbol returns a confusing broker-side error instead of naming the
+            # thing the node is actually missing.
+            message = "Margin node has no positions and no symbol to price."
+            self.log(f"Margin failed: {message}", "error")
+            return {"status": "error", "message": message}
         else:
             self.log(f"Calculating margin for: {symbol} ({exchange})")
         result = self.client.margin(

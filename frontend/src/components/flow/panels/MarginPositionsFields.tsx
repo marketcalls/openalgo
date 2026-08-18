@@ -4,19 +4,15 @@
 // The node stores the basket as a JSON string because the backend interpolates
 // and parses it before handing the array to services/margin_service
 // (flow_executor_service._parse_margin_positions). That storage format is
-// unchanged here - only the editing surface is.
-//
-// Hand-writing the JSON was easy to get wrong in a way nothing caught until the
-// run: margin_service.validate_position requires exchange, symbol, action,
-// quantity, product AND pricetype on every leg, and restx_api's
-// MarginPositionSchema additionally requires quantity/price to be strings. The
-// panel's own placeholder satisfied neither, so copying it produced
-// "Position 1: Missing mandatory field(s): product, pricetype".
+// unchanged here - only the editing surface is. Parsing, validation,
+// serialization and lot arithmetic live in @/lib/flow/marginPositions so they
+// can be tested without mounting React; this file owns network state and
+// rendering only.
 
 import { useQuery } from '@tanstack/react-query'
 import { Plus, Trash2 } from 'lucide-react'
-import { useEffect, useState } from 'react'
-import { flowQueryKeys, getSymbolLotSize } from '@/api/flow'
+import { useEffect, useMemo, useState } from 'react'
+import { flowQueryKeys, getSymbolLotSizes, type LotSizeMap, type SymbolRef } from '@/api/flow'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -29,6 +25,23 @@ import {
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { EXCHANGES, ORDER_ACTIONS, PRICE_TYPES, PRODUCT_TYPES } from '@/lib/flow/constants'
+import {
+  EMPTY_LEG,
+  hasVariableReference,
+  type LegProblems,
+  LOT_TRADED_EXCHANGES,
+  lotKey,
+  MAX_LEGS,
+  type MarginLeg,
+  NEEDS_PRICE,
+  NEEDS_TRIGGER,
+  parseLegs,
+  roundUpToLot,
+  serializeLegs,
+  unitsToLots,
+  validateBasket,
+  validateLeg,
+} from '@/lib/flow/marginPositions'
 import { cn } from '@/lib/utils'
 
 interface MarginPositionsFieldsProps {
@@ -37,301 +50,106 @@ interface MarginPositionsFieldsProps {
   onChange: (raw: string) => void
 }
 
-interface Leg {
-  symbol: string
-  exchange: string
-  action: string
-  quantity: string
-  product: string
-  pricetype: string
-  price: string
-  trigger_price: string
-}
+/** How long the symbol must stay unchanged before a lookup is issued. Long
+ * enough that ordinary typing produces one request, short enough not to feel
+ * laggy once the user stops. */
+const LOOKUP_DEBOUNCE_MS = 350
 
-const EMPTY_LEG: Leg = {
-  symbol: '',
-  exchange: 'NSE',
-  action: 'BUY',
-  quantity: '1',
-  product: 'MIS',
-  pricetype: 'MARKET',
-  price: '0',
-  trigger_price: '0',
-}
-
-/** Price types whose leg needs a limit price / a stop trigger. */
-const NEEDS_PRICE = new Set(['LIMIT', 'SL'])
-const NEEDS_TRIGGER = new Set(['SL', 'SL-M'])
-
-/** Exchanges whose quantity is entered in lots, matching the options tools. */
-const LOT_TRADED_EXCHANGES = new Set(['NFO', 'BFO'])
-
-function toLeg(entry: Record<string, unknown>): Leg {
-  const str = (key: string, fallback: string) => {
-    const raw = entry[key]
-    return raw === undefined || raw === null || raw === '' ? fallback : String(raw)
-  }
-  return {
-    symbol: str('symbol', ''),
-    exchange: str('exchange', 'NSE'),
-    action: str('action', 'BUY').toUpperCase(),
-    quantity: str('quantity', '1'),
-    product: str('product', 'MIS'),
-    pricetype: str('pricetype', 'MARKET'),
-    price: str('price', '0'),
-    trigger_price: str('trigger_price', '0'),
-  }
-}
-
-function parseLegs(raw: string): { legs: Leg[]; error: string | null } {
-  const text = (raw || '').trim()
-  if (!text) return { legs: [], error: null }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text)
-  } catch (e) {
-    return { legs: [], error: e instanceof Error ? e.message : 'Invalid JSON' }
-  }
-  // The executor accepts a lone object as a one-leg basket, so the editor does
-  // too rather than pushing the user into JSON mode over it.
-  const list = Array.isArray(parsed) ? parsed : [parsed]
-  if (list.some((e) => e === null || typeof e !== 'object' || Array.isArray(e))) {
-    return { legs: [], error: 'Positions must be a JSON array of objects' }
-  }
-  return { legs: list.map((e) => toLeg(e as Record<string, unknown>)), error: null }
-}
-
-/** Serialize to the exact shape both validators accept.
- *
- * quantity/price go out as strings: margin_service coerces either, but
- * MarginPositionSchema declares them fields.Str and rejects a number outright,
- * so the string form is the one that works on every path. trigger_price is
- * only emitted for the price types that use it. */
-function serialize(legs: Leg[]): string {
-  if (!legs.length) return ''
-  return JSON.stringify(
-    legs.map((leg) => ({
-      symbol: leg.symbol,
-      exchange: leg.exchange,
-      action: leg.action,
-      quantity: String(leg.quantity || '0'),
-      product: leg.product,
-      pricetype: leg.pricetype,
-      price: String(NEEDS_PRICE.has(leg.pricetype) ? leg.price || '0' : '0'),
-      ...(NEEDS_TRIGGER.has(leg.pricetype)
-        ? { trigger_price: String(leg.trigger_price || '0') }
-        : {}),
-    }))
-  )
-}
-
-interface LegRowProps {
-  leg: Leg
-  index: number
-  onUpdate: (patch: Partial<Leg>) => void
-  onRemove: () => void
-}
-
-function LegRow({ leg, index, onUpdate, onRemove }: LegRowProps) {
-  const symbol = leg.symbol.trim()
-  // NFO/BFO contracts trade in lots, and the options tools (Option Chain,
-  // Option Greeks) take the quantity that way, so this does too. The API still
-  // wants units, so the lot count is multiplied out on the way into the JSON
-  // and divided back out for display.
-  const isLotTraded = LOT_TRADED_EXCHANGES.has(leg.exchange)
-  const lotSizeQuery = useQuery({
-    queryKey: flowQueryKeys.symbolLotSize(symbol, leg.exchange),
-    queryFn: () => getSymbolLotSize(symbol, leg.exchange),
-    enabled: isLotTraded && symbol.length > 0,
-    // Lot sizes change only on a contract revision, not within a session.
-    staleTime: 1000 * 60 * 60,
-  })
-  const lotSize = isLotTraded ? (lotSizeQuery.data ?? null) : null
-
-  const units = Number.parseInt(leg.quantity, 10) || 0
-  // Until the lookup resolves - or when the master contract has no lot size for
-  // this symbol - stay in units. Guessing a lot count against an unknown lot
-  // size would silently multiply the basket by the wrong factor.
-  const inLots = lotSize !== null && lotSize > 0
-  const lots = inLots ? Math.max(1, Math.round(units / lotSize)) : 0
-
-  // Snap the stored units onto a whole number of lots once the lot size is
-  // known. A leg added as NSE and then switched to NFO still carries its
-  // 1-unit default, and showing "1 lot x 75 = 75 units" over a stored 1 would
-  // price the basket at a quantity the panel never displayed. Converges in one
-  // pass and stays quiet for a leg that is already a clean multiple, so a saved
-  // workflow is not marked dirty just by opening it.
+function useDebounced<T>(value: T, delayMs: number): T {
+  const [settled, setSettled] = useState(value)
   useEffect(() => {
-    if (!inLots) return
-    const normalized = lots * lotSize
-    if (normalized !== units) onUpdate({ quantity: String(normalized) })
-  }, [inLots, lots, lotSize, units, onUpdate])
-
-  return (
-    <div className="space-y-2 rounded-lg border border-border p-2">
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] font-medium text-muted-foreground">Leg {index + 1}</span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6 text-destructive hover:text-destructive"
-          onClick={onRemove}
-          aria-label={`Remove leg ${index + 1}`}
-        >
-          <Trash2 className="h-3 w-3" />
-        </Button>
-      </div>
-
-      <Input
-        className="h-8"
-        placeholder="NIFTY25DEC25FUT"
-        value={leg.symbol}
-        onChange={(e) => onUpdate({ symbol: e.target.value.toUpperCase() })}
-      />
-
-      <div className="grid grid-cols-2 gap-2">
-        <Select value={leg.exchange} onValueChange={(v) => onUpdate({ exchange: v })}>
-          <SelectTrigger className="h-8">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {EXCHANGES.map((e) => (
-              <SelectItem key={e.value} value={e.value}>
-                {e.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Input
-          type="number"
-          min={1}
-          className="h-8"
-          placeholder={inLots ? 'Lots' : 'Qty'}
-          value={inLots ? lots : leg.quantity}
-          onChange={(e) => {
-            const entered = Number.parseInt(e.target.value, 10)
-            if (!inLots) {
-              onUpdate({ quantity: e.target.value })
-              return
-            }
-            onUpdate({ quantity: String(Math.max(1, entered || 1) * lotSize) })
-          }}
-        />
-      </div>
-      {inLots ? (
-        <p className="text-[10px] text-muted-foreground">
-          {lots} lot{lots === 1 ? '' : 's'} x {lotSize} ={' '}
-          <span className="font-medium text-foreground">{lots * lotSize} units</span>
-        </p>
-      ) : isLotTraded && symbol && lotSizeQuery.isFetching ? (
-        <p className="text-[10px] text-muted-foreground">Looking up lot size...</p>
-      ) : isLotTraded && symbol ? (
-        <p className="text-[10px] text-muted-foreground">
-          No lot size in the master contract for this symbol - quantity is in units.
-        </p>
-      ) : null}
-
-      <div className="grid grid-cols-2 gap-2">
-        {ORDER_ACTIONS.map((a) => (
-          <button
-            key={a.value}
-            type="button"
-            onClick={() => onUpdate({ action: a.value })}
-            className={cn(
-              'rounded-lg border py-1.5 text-xs font-semibold',
-              leg.action === a.value
-                ? a.value === 'BUY'
-                  ? 'border-green-500 bg-green-500/20 text-green-600'
-                  : 'border-red-500 bg-red-500/20 text-red-600'
-                : 'border-border bg-muted'
-            )}
-          >
-            {a.label}
-          </button>
-        ))}
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        <Select value={leg.product} onValueChange={(v) => onUpdate({ product: v })}>
-          <SelectTrigger className="h-8">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {PRODUCT_TYPES.map((t) => (
-              <SelectItem key={t.value} value={t.value}>
-                {t.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={leg.pricetype} onValueChange={(v) => onUpdate({ pricetype: v })}>
-          <SelectTrigger className="h-8">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {PRICE_TYPES.map((t) => (
-              <SelectItem key={t.value} value={t.value}>
-                {t.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      {NEEDS_PRICE.has(leg.pricetype) && (
-        <div className="space-y-1">
-          <Label className="text-[10px] text-muted-foreground">Price</Label>
-          <Input
-            type="number"
-            min={0}
-            step="any"
-            className="h-8"
-            value={leg.price}
-            onChange={(e) => onUpdate({ price: e.target.value })}
-          />
-        </div>
-      )}
-      {NEEDS_TRIGGER.has(leg.pricetype) && (
-        <div className="space-y-1">
-          <Label className="text-[10px] text-muted-foreground">Trigger Price</Label>
-          <Input
-            type="number"
-            min={0}
-            step="any"
-            className="h-8"
-            value={leg.trigger_price}
-            onChange={(e) => onUpdate({ trigger_price: e.target.value })}
-          />
-        </div>
-      )}
-    </div>
-  )
+    const id = setTimeout(() => setSettled(value), delayMs)
+    return () => clearTimeout(id)
+  }, [value, delayMs])
+  return settled
 }
+
+/** State of one leg's lot-size lookup. `failed` is deliberately distinct from
+ * `resolved` with a null size - one is retryable, the other is a fact about the
+ * master contract. */
+type LotState =
+  | { kind: 'not-applicable' }
+  | { kind: 'loading' }
+  | { kind: 'failed' }
+  | { kind: 'resolved'; lotSize: number | null }
 
 export function MarginPositionsFields({ value, onChange }: MarginPositionsFieldsProps) {
   const { legs, error } = parseLegs(value)
   const [jsonMode, setJsonMode] = useState(false)
 
   // Malformed JSON, or a {{variable}} basket, has no field representation -
-  // switching to fields would silently discard whatever is in there.
-  const showJson = jsonMode || error !== null
+  // switching to fields would silently discard whatever is in there. A template
+  // can still be well-formed JSON, so the variable check is separate from the
+  // parse error rather than folded into it.
+  const templated = hasVariableReference(value)
+  const showJson = jsonMode || error !== null || templated
 
-  const update = (index: number, patch: Partial<Leg>) => {
-    onChange(serialize(legs.map((leg, i) => (i === index ? { ...leg, ...patch } : leg))))
+  // One lookup for the whole basket. Per-leg queries turned a 50-leg import
+  // into 50 requests on open.
+  const refs = useMemo<SymbolRef[]>(() => {
+    const seen = new Set<string>()
+    const out: SymbolRef[] = []
+    for (const leg of legs) {
+      const symbol = leg.symbol.trim().toUpperCase()
+      if (!symbol || !LOT_TRADED_EXCHANGES.has(leg.exchange)) continue
+      const key = lotKey(symbol, leg.exchange)
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({ symbol, exchange: leg.exchange })
+    }
+    return out.slice(0, MAX_LEGS)
+  }, [legs])
+
+  const debouncedRefs = useDebounced(refs, LOOKUP_DEBOUNCE_MS)
+  const refKeys = debouncedRefs.map((r) => lotKey(r.symbol, r.exchange)).sort()
+
+  const lotQuery = useQuery({
+    queryKey: flowQueryKeys.symbolLotSizes(refKeys),
+    queryFn: () => getSymbolLotSizes(debouncedRefs),
+    enabled: debouncedRefs.length > 0,
+    // Lot sizes change only on a contract revision, not within a session.
+    staleTime: 1000 * 60 * 60,
+  })
+
+  const lotState = (leg: MarginLeg): LotState => {
+    const symbol = leg.symbol.trim().toUpperCase()
+    if (!symbol || !LOT_TRADED_EXCHANGES.has(leg.exchange)) return { kind: 'not-applicable' }
+    if (lotQuery.isError) return { kind: 'failed' }
+    const map: LotSizeMap = lotQuery.data ?? {}
+    const key = lotKey(symbol, leg.exchange)
+    if (!(key in map)) return { kind: 'loading' }
+    return { kind: 'resolved', lotSize: map[key] }
   }
-  const addLeg = () => onChange(serialize([...legs, { ...EMPTY_LEG }]))
-  const removeLeg = (index: number) => onChange(serialize(legs.filter((_, i) => i !== index)))
+
+  const update = (index: number, patch: Partial<MarginLeg>) => {
+    onChange(serializeLegs(legs.map((leg, i) => (i === index ? { ...leg, ...patch } : leg))))
+  }
+  const addLeg = () => onChange(serializeLegs([...legs, { ...EMPTY_LEG, extra: {} }]))
+  const removeLeg = (index: number) => onChange(serializeLegs(legs.filter((_, i) => i !== index)))
+
+  const basketProblems = showJson ? [] : validateBasket(legs)
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <Label className="text-xs">Positions</Label>
+        <Label className="text-xs" id="margin-positions-label">
+          Positions
+        </Label>
         <Button
           type="button"
           variant="ghost"
           size="sm"
           className="h-6 px-2 text-[10px]"
+          // Field mode cannot represent either case, so offering the switch
+          // would promise an edit that silently discards the basket.
+          disabled={templated || error !== null}
+          title={
+            templated
+              ? 'A basket using {{variable}} references can only be edited as JSON'
+              : error !== null
+                ? 'Fix the JSON before switching to fields'
+                : undefined
+          }
           onClick={() => setJsonMode((m) => !m)}
         >
           {showJson ? 'Use fields' : 'Edit as JSON'}
@@ -341,6 +159,9 @@ export function MarginPositionsFields({ value, onChange }: MarginPositionsFields
       {showJson ? (
         <div className="space-y-2">
           <Textarea
+            aria-label="Positions JSON"
+            aria-invalid={error !== null}
+            aria-describedby="margin-json-help"
             className="min-h-[100px] font-mono text-xs"
             placeholder={
               '[{"symbol": "NIFTY25DEC25FUT", "exchange": "NFO", "action": "BUY", "quantity": "75", "product": "NRML", "pricetype": "MARKET", "price": "0"}]'
@@ -349,9 +170,16 @@ export function MarginPositionsFields({ value, onChange }: MarginPositionsFields
             onChange={(e) => onChange(e.target.value)}
           />
           {error ? (
-            <p className="text-[10px] text-destructive">{error}</p>
+            <p id="margin-json-help" className="text-[10px] text-destructive">
+              {error}
+            </p>
+          ) : templated ? (
+            <p id="margin-json-help" className="text-[10px] text-muted-foreground">
+              This basket uses {'{{variable}}'} references, which are interpolated before the JSON
+              is parsed at run time. Field editing is unavailable so the references are not lost.
+            </p>
           ) : (
-            <p className="text-[10px] text-muted-foreground">
+            <p id="margin-json-help" className="text-[10px] text-muted-foreground">
               Every leg needs symbol, exchange, action, quantity, product and pricetype. Use this
               view for {'{{variable}}'} references, which are interpolated before the JSON is
               parsed.
@@ -372,6 +200,8 @@ export function MarginPositionsFields({ value, onChange }: MarginPositionsFields
                 key={index}
                 leg={leg}
                 index={index}
+                lot={lotState(leg)}
+                onRetryLookup={() => lotQuery.refetch()}
                 onUpdate={(patch) => update(index, patch)}
                 onRemove={() => removeLeg(index)}
               />
@@ -383,17 +213,340 @@ export function MarginPositionsFields({ value, onChange }: MarginPositionsFields
             variant="outline"
             size="sm"
             className="h-8 w-full text-xs"
+            disabled={legs.length >= MAX_LEGS}
             onClick={addLeg}
           >
             <Plus className="mr-1 h-3 w-3" />
             Add Position
           </Button>
+          {basketProblems.length > 0 && (
+            <ul className="space-y-0.5">
+              {basketProblems.map((problem) => (
+                <li key={problem} className="text-[10px] text-destructive">
+                  {problem}
+                </li>
+              ))}
+            </ul>
+          )}
           <p className="text-[10px] text-muted-foreground">
-            Up to 50 legs. Margin is estimated for the basket as a whole, so offsetting legs get the
-            hedged requirement.
+            Up to {MAX_LEGS} legs. Margin is estimated for the basket as a whole, so offsetting legs
+            get the hedged requirement.
           </p>
         </>
       )}
+    </div>
+  )
+}
+
+interface LegRowProps {
+  leg: MarginLeg
+  index: number
+  lot: LotState
+  onRetryLookup: () => void
+  onUpdate: (patch: Partial<MarginLeg>) => void
+  onRemove: () => void
+}
+
+function LegRow({ leg, index, lot, onRetryLookup, onUpdate, onRemove }: LegRowProps) {
+  const problems: LegProblems = validateLeg(leg)
+  const units = Number.parseInt(leg.quantity, 10) || 0
+  const lotSize = lot.kind === 'resolved' ? lot.lotSize : null
+  // Lots only when the stored units are a clean multiple. An irregular
+  // quantity is shown as-is with an explicit round action rather than being
+  // rewritten, so opening a saved workflow can never change what it will
+  // execute.
+  const lots = lotSize ? unitsToLots(units, lotSize) : null
+  const inLots = lots !== null
+
+  // In-progress text for the quantity box. The displayed value is derived from
+  // the stored units, so without a draft an intermediate empty string during
+  // retyping would immediately re-derive as one lot and fight the user's
+  // keystrokes. Tagged with the mode it was typed in so a lookup resolving
+  // mid-edit cannot reinterpret lots as units.
+  const [draft, setDraft] = useState<{ inLots: boolean; text: string } | null>(null)
+  const quantityText =
+    draft && draft.inLots === inLots ? draft.text : String(inLots ? lots : leg.quantity)
+
+  const id = (field: string) => `margin-leg-${index}-${field}`
+  const describedBy = (field: keyof MarginLeg) =>
+    problems[field] ? `${id(String(field))}-error` : undefined
+
+  return (
+    <div className="space-y-2 rounded-lg border border-border p-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-medium text-muted-foreground">Leg {index + 1}</span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 text-destructive hover:text-destructive"
+          onClick={onRemove}
+          aria-label={`Remove leg ${index + 1}`}
+        >
+          <Trash2 className="h-3 w-3" />
+        </Button>
+      </div>
+
+      <div className="space-y-1">
+        <Label htmlFor={id('symbol')} className="text-[10px] text-muted-foreground">
+          Symbol
+        </Label>
+        <Input
+          id={id('symbol')}
+          className="h-8"
+          placeholder="NIFTY25DEC25FUT"
+          value={leg.symbol}
+          aria-invalid={Boolean(problems.symbol)}
+          aria-describedby={describedBy('symbol')}
+          onChange={(e) => onUpdate({ symbol: e.target.value.toUpperCase() })}
+        />
+        {problems.symbol && (
+          <p id={`${id('symbol')}-error`} className="text-[10px] text-destructive">
+            {problems.symbol}
+          </p>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1">
+          <Label htmlFor={id('exchange')} className="text-[10px] text-muted-foreground">
+            Exchange
+          </Label>
+          <Select value={leg.exchange} onValueChange={(v) => onUpdate({ exchange: v })}>
+            <SelectTrigger id={id('exchange')} className="h-8" aria-label="Exchange">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {EXCHANGES.map((e) => (
+                <SelectItem key={e.value} value={e.value}>
+                  {e.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={id('quantity')} className="text-[10px] text-muted-foreground">
+            {inLots ? 'Quantity (Lots)' : 'Quantity'}
+          </Label>
+          <Input
+            id={id('quantity')}
+            type="number"
+            min={1}
+            className="h-8"
+            value={quantityText}
+            aria-invalid={Boolean(problems.quantity)}
+            aria-describedby={describedBy('quantity')}
+            onChange={(e) => {
+              const text = e.target.value
+              setDraft({ inLots, text })
+              if (!inLots) {
+                onUpdate({ quantity: text })
+                return
+              }
+              const entered = Number.parseInt(text, 10)
+              // A blank or partial entry keeps the draft but commits nothing,
+              // so the stored basket never passes through a bogus quantity.
+              if (Number.isFinite(entered) && entered > 0) {
+                onUpdate({ quantity: String(entered * (lotSize as number)) })
+              }
+            }}
+            onBlur={() => setDraft(null)}
+          />
+        </div>
+      </div>
+      {problems.quantity && (
+        <p id={`${id('quantity')}-error`} className="text-[10px] text-destructive">
+          {problems.quantity}
+        </p>
+      )}
+      <LotHint
+        lot={lot}
+        units={units}
+        lots={lots}
+        onRetryLookup={onRetryLookup}
+        onRound={(rounded) => onUpdate({ quantity: String(rounded) })}
+      />
+
+      <fieldset className="grid grid-cols-2 gap-2">
+        <legend className="sr-only">Action for leg {index + 1}</legend>
+        {ORDER_ACTIONS.map((a) => (
+          <button
+            key={a.value}
+            type="button"
+            aria-pressed={leg.action === a.value}
+            onClick={() => onUpdate({ action: a.value })}
+            className={cn(
+              'rounded-lg border py-1.5 text-xs font-semibold',
+              leg.action === a.value
+                ? a.value === 'BUY'
+                  ? 'border-green-500 bg-green-500/20 text-green-600'
+                  : 'border-red-500 bg-red-500/20 text-red-600'
+                : 'border-border bg-muted'
+            )}
+          >
+            {a.label}
+          </button>
+        ))}
+      </fieldset>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1">
+          <Label htmlFor={id('product')} className="text-[10px] text-muted-foreground">
+            Product
+          </Label>
+          <Select value={leg.product} onValueChange={(v) => onUpdate({ product: v })}>
+            <SelectTrigger id={id('product')} className="h-8" aria-label="Product">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PRODUCT_TYPES.map((t) => (
+                <SelectItem key={t.value} value={t.value}>
+                  {t.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor={id('pricetype')} className="text-[10px] text-muted-foreground">
+            Price Type
+          </Label>
+          <Select value={leg.pricetype} onValueChange={(v) => onUpdate({ pricetype: v })}>
+            <SelectTrigger id={id('pricetype')} className="h-8" aria-label="Price type">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PRICE_TYPES.map((t) => (
+                <SelectItem key={t.value} value={t.value}>
+                  {t.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {NEEDS_PRICE.has(leg.pricetype) && (
+        <div className="space-y-1">
+          <Label htmlFor={id('price')} className="text-[10px] text-muted-foreground">
+            Price
+          </Label>
+          <Input
+            id={id('price')}
+            type="number"
+            min={0}
+            step="any"
+            className="h-8"
+            value={leg.price}
+            aria-invalid={Boolean(problems.price)}
+            aria-describedby={describedBy('price')}
+            onChange={(e) => onUpdate({ price: e.target.value })}
+          />
+          {problems.price && (
+            <p id={`${id('price')}-error`} className="text-[10px] text-destructive">
+              {problems.price}
+            </p>
+          )}
+        </div>
+      )}
+      {NEEDS_TRIGGER.has(leg.pricetype) && (
+        <div className="space-y-1">
+          <Label htmlFor={id('trigger_price')} className="text-[10px] text-muted-foreground">
+            Trigger Price
+          </Label>
+          <Input
+            id={id('trigger_price')}
+            type="number"
+            min={0}
+            step="any"
+            className="h-8"
+            value={leg.trigger_price}
+            aria-invalid={Boolean(problems.trigger_price)}
+            aria-describedby={describedBy('trigger_price')}
+            onChange={(e) => onUpdate({ trigger_price: e.target.value })}
+          />
+          {problems.trigger_price && (
+            <p id={`${id('trigger_price')}-error`} className="text-[10px] text-destructive">
+              {problems.trigger_price}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+interface LotHintProps {
+  lot: LotState
+  units: number
+  lots: number | null
+  onRetryLookup: () => void
+  onRound: (units: number) => void
+}
+
+/** The four lookup outcomes, kept visibly distinct: a failed request is
+ * retryable, while a contract with no lot size is simply priced in units. */
+function LotHint({ lot, units, lots, onRetryLookup, onRound }: LotHintProps) {
+  if (lot.kind === 'not-applicable') return null
+
+  if (lot.kind === 'loading') {
+    return <p className="text-[10px] text-muted-foreground">Looking up lot size...</p>
+  }
+
+  if (lot.kind === 'failed') {
+    return (
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10px] text-destructive">
+          Lot-size lookup failed. Quantity is in units.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-6 shrink-0 px-2 text-[10px]"
+          onClick={onRetryLookup}
+        >
+          Retry
+        </Button>
+      </div>
+    )
+  }
+
+  if (lot.lotSize === null) {
+    return (
+      <p className="text-[10px] text-muted-foreground">
+        No lot size is available for this contract; quantity is in units.
+      </p>
+    )
+  }
+
+  if (lots !== null) {
+    return (
+      <p className="text-[10px] text-muted-foreground">
+        {lots} lot{lots === 1 ? '' : 's'} x {lot.lotSize} ={' '}
+        <span className="font-medium text-foreground">{lots * lot.lotSize} units</span>
+      </p>
+    )
+  }
+
+  // Stored quantity is not a whole number of lots. Offer the correction rather
+  // than applying it - rewriting on mount would change a saved workflow.
+  const rounded = roundUpToLot(units, lot.lotSize)
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <p className="text-[10px] text-destructive">
+        {units} units is not a multiple of the {lot.lotSize}-unit lot.
+      </p>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="h-6 shrink-0 px-2 text-[10px]"
+        onClick={() => onRound(rounded)}
+      >
+        Round to {rounded / lot.lotSize} lot{rounded / lot.lotSize === 1 ? '' : 's'}
+      </Button>
     </div>
   )
 }
