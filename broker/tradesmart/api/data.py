@@ -8,6 +8,7 @@ import pandas as pd
 from broker.tradesmart.api.baseurl import post, resolve_uid
 from broker.tradesmart.api.rate_limiter import (
     MAX_RETRIES,
+    TRADESMART_MAX_PER_SECOND,
     apply_rate_limit,
     is_rate_limit_error,
     retry_delay,
@@ -16,6 +17,7 @@ from database.token_db import get_br_symbol, get_token
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
 
 def _normalize_data_exchange(exchange):
     """Map OpenAlgo index pseudo-exchanges to their parent cash exchange for data."""
@@ -29,9 +31,8 @@ def _normalize_data_exchange(exchange):
 def _get_api_response(endpoint, auth, payload, retry_count=0):
     """Rate-limited POST returning parsed JSON (dict or list).
 
-    Paced per endpoint class (see broker.tradesmart.api.rate_limiter): quotes
-    bill against a per-second budget, everything else against the older
-    per-minute one.
+    Paced by the shared per-user gate (see broker.tradesmart.api.rate_limiter):
+    every endpoint bills against the same 10/sec + 120/min budget.
 
     Retries with exponential backoff when TradeSmart reports a rate-limit hit,
     so a burst of quote requests (e.g. a 90+ symbol option chain or the OI
@@ -136,7 +137,7 @@ class BrokerData:
         if not prepared:
             return results
 
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=TRADESMART_MAX_PER_SECOND) as executor:
             future_map = {
                 executor.submit(self._fetch_single_quote, item): item for item in prepared
             }
