@@ -362,7 +362,9 @@ export const flowQueryKeys = {
   executions: (id: number) => [...flowQueryKeys.workflow(id), 'executions'] as const,
   webhook: (id: number) => [...flowQueryKeys.workflow(id), 'webhook'] as const,
   indexSymbols: () => [...flowQueryKeys.all, 'index-symbols'] as const,
-  // Keyed on the sorted pair list so an unchanged basket reuses its cache
-  // entry and adding one leg does not refetch the rest from scratch.
+  // Keyed on the sorted pair list, so reopening an unchanged basket reuses its
+  // entry. This key cannot give incremental reuse on its own - any change to
+  // the set is a different key, and would re-request the whole basket - so the
+  // caller keeps its own per-contract map and asks only for what is missing.
   symbolLotSizes: (keys: string[]) => [...flowQueryKeys.all, 'symbol-lotsizes', keys] as const,
 }

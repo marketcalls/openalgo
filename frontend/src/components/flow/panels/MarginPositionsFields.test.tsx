@@ -12,7 +12,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { ReactElement } from 'react'
+import { type ReactElement, useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LotSizeMap } from '@/api/flow'
 
@@ -24,19 +24,53 @@ vi.mock('@/api/flow', async (importOriginal) => {
   return { ...actual, getSymbolLotSizes: (...args: never[]) => getSymbolLotSizes(...args) }
 })
 
+/**
+ * `hasVariableReference` is called once per render and is otherwise pure, which
+ * makes it an honest render counter without touching the component.
+ */
+let renders = 0
+vi.mock('@/lib/flow/marginPositions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/flow/marginPositions')>()
+  return {
+    ...actual,
+    hasVariableReference: (raw: string) => {
+      renders += 1
+      return actual.hasVariableReference(raw)
+    },
+  }
+})
+
 const { MarginPositionsFields } = await import('./MarginPositionsFields')
 
+function newClient() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+}
+
 function renderEditor(value: string, onChange = vi.fn()) {
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  })
   const ui: ReactElement = (
-    <QueryClientProvider client={client}>
+    <QueryClientProvider client={newClient()}>
       <MarginPositionsFields value={value} onChange={onChange} />
     </QueryClientProvider>
   )
   return { onChange, ...render(ui) }
 }
+
+/** Feeds onChange back into value, the way ConfigPanel does, so an edit
+ * actually re-renders the editor with its new basket. */
+function Controlled({ initial }: { initial: string }) {
+  const [value, setValue] = useState(initial)
+  return <MarginPositionsFields value={value} onChange={setValue} />
+}
+
+function renderControlled(initial: string) {
+  return render(
+    <QueryClientProvider client={newClient()}>
+      <Controlled initial={initial} />
+    </QueryClientProvider>
+  )
+}
+
+const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** One complete NFO leg of 100 units - deliberately not a multiple of 65. */
 const IRREGULAR_NFO_LEG = JSON.stringify([
@@ -67,8 +101,57 @@ const NSE_LEG = JSON.stringify([
 ])
 
 beforeEach(() => {
+  renders = 0
   getSymbolLotSizes.mockReset()
   getSymbolLotSizes.mockResolvedValue({ 'NFO:NIFTY25AUG26FUT': 65 })
+})
+
+describe('lookup cost', () => {
+  it('stops rendering once the basket has settled', async () => {
+    // The regression: parsing inline produced a new legs array every render,
+    // so the debounce rescheduled itself and the panel re-rendered on a 350 ms
+    // heartbeat for as long as it stayed open.
+    renderEditor(CLEAN_NFO_LEG)
+    await screen.findByText(/130 units/)
+
+    const settled = renders
+    await settle(1200)
+
+    expect(renders).toBe(settled)
+  })
+
+  it('does not re-issue a lookup when a non-symbol field is edited', async () => {
+    renderControlled(CLEAN_NFO_LEG)
+    const quantity = await screen.findByLabelText('Quantity (Lots)')
+    await waitFor(() => expect(getSymbolLotSizes).toHaveBeenCalledTimes(1))
+
+    await userEvent.clear(quantity)
+    await userEvent.type(quantity, '3')
+    await settle(600)
+
+    // The contract set never changed, so nothing needed re-resolving.
+    expect(getSymbolLotSizes).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks only for the contract it has not resolved before', async () => {
+    getSymbolLotSizes.mockImplementation(async (refs) =>
+      Object.fromEntries(refs.map((r) => [`${r.exchange}:${r.symbol}`, 65]))
+    )
+    const first = JSON.parse(CLEAN_NFO_LEG)[0]
+    renderControlled(JSON.stringify([first, { ...first, symbol: '' }]))
+
+    await waitFor(() => expect(getSymbolLotSizes).toHaveBeenCalledTimes(1))
+    expect(getSymbolLotSizes.mock.calls[0][0]).toHaveLength(1)
+
+    await userEvent.type(screen.getAllByLabelText('Symbol')[1], 'BANKNIFTY25AUG26FUT')
+    await waitFor(() => expect(getSymbolLotSizes).toHaveBeenCalledTimes(2))
+
+    // The first leg was already cached, so only the new contract goes over the
+    // wire. Before per-contract caching this refetched the whole basket.
+    const second = getSymbolLotSizes.mock.calls[1][0]
+    expect(second).toHaveLength(1)
+    expect(second[0].symbol).toBe('BANKNIFTY25AUG26FUT')
+  })
 })
 
 describe('basket editing', () => {

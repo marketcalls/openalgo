@@ -11,7 +11,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { Plus, Trash2 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { flowQueryKeys, getSymbolLotSizes, type LotSizeMap, type SymbolRef } from '@/api/flow'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -74,7 +74,10 @@ type LotState =
   | { kind: 'resolved'; lotSize: number | null }
 
 export function MarginPositionsFields({ value, onChange }: MarginPositionsFieldsProps) {
-  const { legs, error } = parseLegs(value)
+  // Memoized on the raw string, not called inline: an unmemoized parse returns
+  // a fresh array every render, which made every downstream useMemo recompute
+  // and left the debounce below rescheduling itself forever.
+  const { legs, error } = useMemo(() => parseLegs(value), [value])
   const [jsonMode, setJsonMode] = useState(false)
 
   // Malformed JSON, or a {{variable}} basket, has no field representation -
@@ -100,13 +103,54 @@ export function MarginPositionsFields({ value, onChange }: MarginPositionsFields
     return out.slice(0, MAX_LEGS)
   }, [legs])
 
-  const debouncedRefs = useDebounced(refs, LOOKUP_DEBOUNCE_MS)
-  const refKeys = debouncedRefs.map((r) => lotKey(r.symbol, r.exchange)).sort()
+  // Debounce a primitive rather than the array. An array restarts the timer on
+  // every render because its identity changes; a string only changes when the
+  // set of contracts does, so editing a quantity or a price never reschedules
+  // a lookup.
+  const refKey = refs
+    .map((r) => lotKey(r.symbol, r.exchange))
+    .sort()
+    .join('|')
+  const settledKey = useDebounced(refKey, LOOKUP_DEBOUNCE_MS)
+  const settledRefs = useMemo<SymbolRef[]>(() => {
+    if (!settledKey) return []
+    return settledKey.split('|').map((key) => {
+      const split = key.indexOf(':')
+      return { exchange: key.slice(0, split), symbol: key.slice(split + 1) }
+    })
+  }, [settledKey])
+
+  // Lot sizes already resolved while this panel has been open. A lot size is a
+  // property of the contract, not of the basket that asked for it, so this is
+  // keyed per contract rather than per basket. Held in a ref rather than as
+  // individual query entries because those have no observer and are evicted on
+  // the cache's own schedule - the reuse would then depend on GC timing.
+  const resolved = useRef(new Map<string, number | null>())
 
   const lotQuery = useQuery({
-    queryKey: flowQueryKeys.symbolLotSizes(refKeys),
-    queryFn: () => getSymbolLotSizes(debouncedRefs),
-    enabled: debouncedRefs.length > 0,
+    queryKey: flowQueryKeys.symbolLotSizes(settledKey ? settledKey.split('|') : []),
+    queryFn: async () => {
+      // Ask only for contracts never resolved before. Adding one leg to a
+      // 50-leg basket changes this query's key, so without this the whole
+      // basket would go back over the wire to learn a single lot size.
+      const missing = settledRefs.filter((r) => !resolved.current.has(lotKey(r.symbol, r.exchange)))
+      if (missing.length) {
+        const fetched = await getSymbolLotSizes(missing)
+        for (const r of missing) {
+          const key = lotKey(r.symbol, r.exchange)
+          // Absent from the response means the endpoint did not echo the pair,
+          // which is the same answer as a contract with no lot size.
+          resolved.current.set(key, key in fetched ? fetched[key] : null)
+        }
+      }
+      const merged: LotSizeMap = {}
+      for (const r of settledRefs) {
+        const key = lotKey(r.symbol, r.exchange)
+        merged[key] = resolved.current.get(key) ?? null
+      }
+      return merged
+    },
+    enabled: settledRefs.length > 0,
     // Lot sizes change only on a contract revision, not within a session.
     staleTime: 1000 * 60 * 60,
   })
