@@ -130,6 +130,9 @@ class DeltaWebSocket:
         self._lock   = threading.Lock()
         self._connected = False
         self._stop_flag = False
+        # Set by _ws_on_open; the retry loop reads it to tell "this connection
+        # was healthy and later dropped" apart from "we never got through".
+        self._connect_succeeded = False
         # Persistent subscription registry, tracked per symbol rather than per
         # sent frame.  Serves two purposes:
         #   1. Pre-connect buffer: symbols accumulate here and are subscribed in
@@ -332,6 +335,15 @@ class DeltaWebSocket:
                 # run_forever returns when connection closes
                 if self._stop_flag:
                     break
+                # A connection that came up healthy and only later dropped
+                # restores the full retry budget.  Without this the counter is
+                # cumulative over the process lifetime, so a long-lived feed
+                # that reconnects once a day silently exhausts the budget after
+                # max_retry_attempt drops and never comes back.
+                if self._connect_succeeded:
+                    self._connect_succeeded = False
+                    retry_attempts = 0
+                    delay = self.retry_delay
                 retry_attempts += 1
                 logger.warning("DeltaWS[%s] disconnected; retry in %ss", self.name, delay)
                 time.sleep(delay)
@@ -378,6 +390,7 @@ class DeltaWebSocket:
         # ticker book goes back up in one frame however it was subscribed.
         with self._lock:
             self._connected = True
+            self._connect_succeeded = True
             to_replay = list(self._active_private.values())
             for channel, symbols in self._active_symbols.items():
                 if symbols:
