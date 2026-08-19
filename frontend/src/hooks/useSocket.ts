@@ -34,6 +34,8 @@ interface ClosePositionEventData {
 
 interface MasterContractData {
   message: string
+  status?: string
+  progress?: number
 }
 
 interface AnalyzerUpdateData {
@@ -183,8 +185,16 @@ export function useSocket() {
 
     // Master contract download notification
     socket.on('master_contract_download', (data: MasterContractData) => {
-      playAlertSound('system')
-      showCategoryToast('info', `Master Contract: ${data.message}`, 'system')
+      // Only show notifications for start, success, or error
+      // Ignore intermediate progress updates as they are shown via progress bars
+      const isStart = !data.status || data.status === 'started' || (data.progress === 0 && data.status === 'downloading');
+      const isEnd = data.status === 'success' || data.status === 'error';
+      
+      if (isStart || isEnd) {
+        playAlertSound('system')
+        const toastType = data.status === 'error' ? 'error' : (data.status === 'success' ? 'success' : 'info');
+        showCategoryToast(toastType, `Master Contract: ${data.message}`, 'system')
+      }
     })
 
     // Cancel order notification - only play sound, UI handles toast
