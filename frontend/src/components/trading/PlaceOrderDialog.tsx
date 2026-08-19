@@ -122,6 +122,37 @@ export function PlaceOrderDialog({
   const exchange_ = formExchange || exchange
   const isEquityExchange = exchange_ === 'NSE' || exchange_ === 'BSE'
 
+  // Which cash exchanges actually list THIS scrip. Not every equity is on both:
+  // SME and other exchange-exclusive listings trade on one side only, and
+  // offering the other produces a (symbol, exchange) pair with no token, dead
+  // quotes, and an order the broker rejects. Always includes the originating
+  // exchange so a failed or empty lookup degrades to today's fixed behaviour.
+  const [cashListings, setCashListings] = useState<string[]>([])
+
+  useEffect(() => {
+    if (!open || !symbol || (exchange !== 'NSE' && exchange !== 'BSE')) {
+      setCashListings([])
+      return
+    }
+    let cancelled = false
+    const params = new URLSearchParams({ q: symbol, exchange: 'NSE,BSE' })
+    fetch(`/search/api/search?${params.toString()}`, { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((data: { results?: Array<{ symbol?: string; exchange?: string }> }) => {
+        if (cancelled) return
+        const listed = (data.results || [])
+          .filter((r) => r.symbol === symbol && r.exchange)
+          .map((r) => r.exchange as string)
+        setCashListings([...new Set<string>([exchange, ...listed])])
+      })
+      .catch(() => {
+        if (!cancelled) setCashListings([exchange])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, symbol, exchange])
+
   // Get available product types based on exchange
   const productTypes = isFnOExchange(exchange_) ? FNO_PRODUCT_TYPES : EQUITY_PRODUCT_TYPES
 
@@ -409,10 +440,12 @@ export function PlaceOrderDialog({
             )}
           </div>
 
-          {/* Exchange, for cash equity only. The same scrip is listed on both
-              NSE and BSE, so the user picks where to route. Derivatives are
-              contract-specific and stay on the exchange they came from. */}
-          {isEquityExchange && (
+          {/* Exchange, for cash equity listed on more than one cash exchange.
+              Most scrips are on both NSE and BSE, so the user picks where to
+              route; exchange-exclusive listings keep the exchange they came
+              from and the selector is hidden. Derivatives are contract-specific
+              and never reach here. */}
+          {isEquityExchange && cashListings.length > 1 && (
             <div className="space-y-2">
               <Label className="text-xs">Exchange</Label>
               <Select value={exchange_} onValueChange={setFormExchange}>
@@ -420,8 +453,11 @@ export function PlaceOrderDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="NSE">NSE</SelectItem>
-                  <SelectItem value="BSE">BSE</SelectItem>
+                  {cashListings.map((ex) => (
+                    <SelectItem key={ex} value={ex}>
+                      {ex}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
