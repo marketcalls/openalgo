@@ -1,7 +1,9 @@
 import {
   ArrowRight,
+  Blocks,
   BookOpen,
   Bot,
+  CandlestickChart,
   ClipboardList,
   Download,
   GraduationCap,
@@ -10,9 +12,13 @@ import {
   Menu,
   MessageCircle,
   Moon,
+  Server,
+  ShieldCheck,
+  Sigma,
   Sparkles,
   Sun,
   Wand2,
+  Zap,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
@@ -27,6 +33,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet'
+import { tools } from '@/lib/tools'
 import { useThemeStore } from '@/stores/themeStore'
 
 const integrations = [
@@ -48,81 +55,43 @@ const integrations = [
   'Telegram',
 ]
 
-// Open Varsity beginner track (openalgo.in/learn). Chapter counts mirror the
-// CHAPTERS arrays in the webpage repo's lib/*Curriculum.js.
+// Open Varsity (openalgo.in/learn) course count, shown in the hero pill.
 const VARSITY_COURSES = 13
-const VARSITY_CHAPTERS = 407
 
-const beginnerCourses = [
+// The surfaces that share one broker session and feed inside a single
+// self-hosted instance. Counts come from the code: tools.length is the /tools
+// registry, nodeTypes in components/flow/nodes is the Flow palette, and the
+// indicator count is what openalgo-charts ships.
+const platformDesks = [
   {
-    href: 'https://www.openalgo.in/stocks',
-    title: 'Stock Market Basics',
-    chapters: 18,
-    blurb:
-      'Brand new to the market? Shares, IPOs, indices, what actually moves prices and how to spot a scam, in plain English with real Indian examples.',
+    icon: Server,
+    title: 'Self-hosted algo trading',
+    desc: 'A unified broker API and execution engine on your own server, driven from TradingView, Amibroker, ChartInk, Excel, Python or MCP.',
   },
   {
-    href: 'https://www.openalgo.in/technicals',
-    title: 'Technical Analysis',
-    chapters: 28,
-    blurb:
-      'Read a chart from the very first candle: trends, support and resistance, patterns, RSI, MACD and moving averages, all on real NSE charts.',
+    icon: CandlestickChart,
+    title: 'Charting platform',
+    desc: 'Chart-based trading in the built-in terminal: fire and manage orders from the chart itself, with 91 indicators on real market data.',
   },
   {
-    href: 'https://www.openalgo.in/futures',
-    title: 'Futures Trading',
-    chapters: 27,
-    blurb:
-      'Your first derivative. Contracts, margin and leverage, mark to market, rollover, settlement and position sizing, honest about the leverage that cuts both ways.',
+    icon: Blocks,
+    title: 'No-code strategy builder',
+    desc: 'Flow is a drag-and-drop canvas: wire 61 node types from triggers to indicators, conditions and orders, then activate it to run on its own.',
   },
   {
-    href: 'https://www.openalgo.in/options-basics',
-    title: 'Options Basics',
-    chapters: 26,
-    blurb:
-      'Calls and puts from zero. Premium, strike and expiry, moneyness, the option chain, the four single-leg payoffs, the Greeks and implied volatility.',
+    icon: Sigma,
+    title: 'Options trading platform',
+    desc: `${tools.length} built-in tools: option chain, Greeks, OI tracker, max pain, vol surface, GEX, IV smile, straddles and arbitrage, plus portfolio and SIP backtesters.`,
   },
   {
-    href: 'https://www.openalgo.in/fundamentals',
-    title: 'Python for Traders',
-    chapters: 40,
-    blurb:
-      'Never written a line of code? Start at absolute zero: variables, NumPy, pandas and charts, one small step at a time on real market data.',
+    icon: Zap,
+    title: 'Scalping platform',
+    desc: 'A keyboard-driven scalping terminal: arrow keys fire CE and PE orders, F6 flattens every position and F7 cancels every pending order.',
   },
   {
-    href: 'https://www.openalgo.in/risk-management',
-    title: 'Risk Management',
-    chapters: 33,
-    blurb:
-      'The one skill that keeps you in the game: position sizing, stop losses, leverage and execution risk, with clear checklists you can use today.',
-  },
-]
-
-const learningPath = [
-  {
-    text: 'New to markets? Start with',
-    course: 'Stock Market Basics',
-    href: 'https://www.openalgo.in/stocks',
-  },
-  {
-    text: 'To read price charts, take',
-    course: 'Technical Analysis',
-    href: 'https://www.openalgo.in/technicals',
-  },
-  {
-    text: 'Ready to code but new to Python? Start with',
-    course: 'Python for Traders',
-    href: 'https://www.openalgo.in/fundamentals',
-  },
-  {
-    text: 'Once data feels easy, build and automate with',
-    course: 'Algo Trading with Python',
-    href: 'https://www.openalgo.in/python',
-  },
-  {
-    text: 'Prefer charts to Python? Take the parallel track,',
-    course: 'AmiBroker AFL',
-    href: 'https://www.openalgo.in/amibroker',
+    icon: ShieldCheck,
+    title: 'Sandbox testing',
+    desc: 'Analyzer mode runs any strategy against real market data with 1 crore of sandbox capital and exchange-aligned auto square-off.',
   },
 ]
 
@@ -345,91 +314,35 @@ export default function Home() {
           </div>
         </section>
 
-        {/* Start Here - Open Varsity */}
+        {/* One platform, many desks */}
         <section className="container mx-auto px-4 py-16 sm:py-20">
           <div className="text-center max-w-3xl mx-auto mb-12">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-500 mb-6">
-              <GraduationCap className="h-3.5 w-3.5" />
-              Start Here
+              <Server className="h-3.5 w-3.5" />
+              One platform, many desks
             </span>
             <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight mb-4">
-              New to Trading? Learn It Free
+              Not just an algo trading platform.
+              <span className="block text-muted-foreground">A complete trading desk.</span>
             </h2>
             <p className="text-base sm:text-lg text-muted-foreground">
-              Open Varsity is OpenAlgo's free learning academy - {VARSITY_COURSES} courses and{' '}
-              {VARSITY_CHAPTERS} chapters in plain English, on real Indian market data. No ads, no
-              gatekeeping, no hype. Learn the market first, then automate it.
+              Execution is only the starting point. Charting, no-code strategy building, options
+              analytics, scalping and sandbox testing all run inside the same self-hosted stack.
             </p>
           </div>
 
           <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 max-w-6xl mx-auto">
-            {beginnerCourses.map((course) => (
-              <a
-                key={course.href}
-                href={course.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="group"
-              >
-                <Card className="h-full transition-colors hover:border-amber-400/40">
-                  <CardContent className="space-y-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <h3 className="font-bold text-base flex items-center gap-2">
-                        {course.title}
-                        <ArrowRight className="h-4 w-4 shrink-0 transition-transform group-hover:translate-x-0.5" />
-                      </h3>
-                      <span className="shrink-0 rounded-md bg-muted px-2 py-0.5 text-xs text-neutral-600 dark:text-neutral-400">
-                        {course.chapters} chapters
-                      </span>
-                    </div>
-                    <p className="text-sm text-muted-foreground leading-relaxed">{course.blurb}</p>
-                  </CardContent>
-                </Card>
-              </a>
+            {platformDesks.map((desk) => (
+              <Card key={desk.title} className="h-full transition-colors hover:border-amber-400/40">
+                <CardContent className="space-y-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-500">
+                    <desk.icon className="h-5 w-5" />
+                  </div>
+                  <h3 className="font-bold text-base">{desk.title}</h3>
+                  <p className="text-sm text-muted-foreground leading-relaxed">{desk.desc}</p>
+                </CardContent>
+              </Card>
             ))}
-          </div>
-
-          {/* Not sure where to begin */}
-          <div className="max-w-3xl mx-auto mt-10">
-            <Card>
-              <CardContent className="space-y-4">
-                <h3 className="font-bold text-lg flex items-center gap-2">
-                  <ClipboardList className="h-5 w-5 text-amber-700 dark:text-amber-500" />
-                  Not Sure Where to Begin?
-                </h3>
-                <ul className="space-y-2.5">
-                  {learningPath.map((step) => (
-                    <li key={step.href} className="text-sm text-muted-foreground leading-relaxed">
-                      <span className="mr-2 text-amber-700 dark:text-amber-500">-</span>
-                      {step.text}{' '}
-                      <a
-                        href={step.href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-semibold text-foreground underline underline-offset-4 hover:text-primary"
-                      >
-                        {step.course}
-                      </a>
-                      .
-                    </li>
-                  ))}
-                </ul>
-                <p className="text-xs text-muted-foreground border-t pt-4">
-                  Every course is free and self-paced, with examples you can run yourself. For
-                  education only, not investment advice. Practise your strategies in analyzer mode
-                  before going live.
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-
-          <div className="text-center mt-8">
-            <Button size="lg" variant="outline" asChild>
-              <a href="https://www.openalgo.in/learn" target="_blank" rel="noopener noreferrer">
-                <GraduationCap className="mr-2 h-5 w-5" />
-                Browse All {VARSITY_COURSES} Courses
-              </a>
-            </Button>
           </div>
         </section>
 
