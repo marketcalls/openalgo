@@ -2148,38 +2148,33 @@ class NodeExecutor:
         docs/prompt/flow-import-format.md 8.5 ("wait for a varCondition
         node").
         """
-        left_raw = self.get_str(node_data, "leftValue", "0")
-        right_raw = self.get_str(node_data, "rightValue", "0")
-        operator = self.get_str(node_data, "operator", ">")
+        # Never route a branch on a value the author did not configure. An
+        # unresolvable operand was already refused, but an *empty* one slipped
+        # through: `get_str` substitutes its default for a falsy field, so a
+        # blank Left Value became "0" and compared as `0 > 30 = False` with a
+        # success status - taking the else-path on nothing at all. The editor's
+        # validator rejects empty operands before a run starts, but that guard
+        # lives outside the node and does not cover every path in (imported
+        # JSON, a hand-edited flow), so the node now defends itself.
+        left, error = self._operand(node_data, "leftValue")
+        if error:
+            return error
+        right, error = self._operand(node_data, "rightValue")
+        if error:
+            return error
 
-        # Never coerce an unresolvable operand to 0.0. A misspelled variable
-        # or an indicator that returned no value would otherwise compare as
-        # "0" and route a real trading branch on a value the user never
-        # configured. Fail the condition loudly instead.
-        try:
-            left = float(left_raw)
-        except (TypeError, ValueError):
-            self.log(
-                f"Var check aborted: left operand did not resolve to a number: {left_raw!r}",
-                "error",
+        operator = self.get_str(node_data, "operator", ">")
+        # An operator `_compare` does not recognise used to fall through to
+        # False, which is indistinguishable from a condition that genuinely did
+        # not hold: the flow would quietly take the else-path forever. The
+        # dropdown cannot produce one, an imported workflow can.
+        if operator not in self.COMPARISON_OPERATORS:
+            message = (
+                f"operator {operator!r} is not one of "
+                f"{', '.join(sorted(self.COMPARISON_OPERATORS))}"
             )
-            return {
-                "status": "error",
-                "condition": False,
-                "message": f"leftValue did not resolve to a number: {left_raw!r}",
-            }
-        try:
-            right = float(right_raw)
-        except (TypeError, ValueError):
-            self.log(
-                f"Var check aborted: right operand did not resolve to a number: {right_raw!r}",
-                "error",
-            )
-            return {
-                "status": "error",
-                "condition": False,
-                "message": f"rightValue did not resolve to a number: {right_raw!r}",
-            }
+            self.log(f"Var check aborted: {message}", "error")
+            return {"status": "error", "condition": False, "message": message}
 
         condition_met = self._compare(left, operator, right)
         self.log(f"Var check: {left} {operator} {right} = {condition_met}")
@@ -2190,6 +2185,38 @@ class NodeExecutor:
             "operator": operator,
             "right": right,
         }
+
+    def _operand(self, node_data: dict, key: str) -> tuple[float | None, dict | None]:
+        """Resolve one varCondition operand to a float.
+
+        Returns `(value, None)` on success and `(None, error_result)` when the
+        operand is empty, unresolved (`{{typo}}` survives interpolation as
+        literal text) or otherwise not a number - the error result is the node
+        result to return, so the condition takes NEITHER branch.
+        """
+        raw = node_data.get(key, "")
+        # A literal 0 is falsy, so it cannot go through `get_str`'s default
+        # substitution or it would be indistinguishable from an empty field.
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            return float(raw), None
+
+        text = self.context.interpolate(str(raw if raw is not None else "")).strip()
+        if not text:
+            message = f"{key} is empty"
+        else:
+            try:
+                return float(text), None
+            except (TypeError, ValueError):
+                message = f"{key} did not resolve to a number: {text!r}"
+
+        self.log(f"Var check aborted: {message}", "error")
+        return None, {"status": "error", "condition": False, "message": message}
+
+    # Operator vocabularies `_compare` understands: the symbols the editor
+    # writes, plus the word forms some legacy node configs still carry.
+    COMPARISON_OPERATORS = frozenset(
+        {">", "gt", "<", "lt", "==", "eq", "!=", "neq", ">=", "gte", "<=", "lte"}
+    )
 
     @staticmethod
     def _compare(left: float, operator: str, right: float) -> bool:
