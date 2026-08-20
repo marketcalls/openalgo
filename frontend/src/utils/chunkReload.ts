@@ -23,6 +23,13 @@ const CHUNK_ERROR_PATTERNS = [
 
 const RELOAD_FLAG = 'openalgo:chunk-reload-attempted'
 
+// How long a reload attempt suppresses the next one. A genuine stale-bundle
+// reload fixes itself on the first try, so a second failure inside this window
+// means reloading is not going to help - show the error instead of looping.
+// Past the window the auto-recovery arms again, so a later deploy in the same
+// tab session still self-heals.
+const RELOAD_COOLDOWN_MS = 30_000
+
 /** True iff the error message looks like a stale-chunk import failure. */
 export function isChunkLoadError(message: string | undefined | null): boolean {
   if (!message) return false
@@ -30,47 +37,40 @@ export function isChunkLoadError(message: string | undefined | null): boolean {
 }
 
 /**
- * If the error looks like a stale-chunk failure, force-reload the page
- * once per browser tab session to pick up the fresh index.html. Returns
- * true if a reload was triggered (caller should suppress further error
- * UI rendering, since the page is about to navigate).
+ * If the error looks like a stale-chunk failure, reload the page to pick up
+ * the fresh index.html. Returns true if a reload was triggered (caller should
+ * suppress further error UI, since the page is about to navigate).
  *
- * The session-storage flag prevents an infinite reload loop in the rare
- * case where the new index.html *also* fails to import a chunk (server
- * misconfiguration, partial deploy) — after one attempt, fall through
- * to the normal error UI so the user can see what's wrong.
+ * The stored timestamp bounds the retry: a second chunk failure within
+ * RELOAD_COOLDOWN_MS does not reload again, so the user sees the real error
+ * rather than a page that flashes "Loading new version…" forever.
+ *
+ * The timestamp is deliberately never cleared on mount. It used to be, from
+ * main.tsx — but that ran on *every* page load, including the one the reload
+ * itself produced, so the guard was wiped before it could ever apply. The app
+ * shell always mounts fine; only the lazy route chunk fails, so the sequence
+ * was reload -> mount -> clear -> route fails -> reload, without end. Letting
+ * the timestamp age out instead keeps the guard honest while still re-arming
+ * for a later deploy in the same tab.
  */
 export function tryAutoReloadOnChunkError(message: string | undefined | null): boolean {
   if (!isChunkLoadError(message)) return false
 
   try {
-    if (sessionStorage.getItem(RELOAD_FLAG)) {
-      // Already tried once this session — surface the real error instead
-      // of looping. User clicks the manual Reload button if they want
-      // to retry.
+    const previous = Number(sessionStorage.getItem(RELOAD_FLAG)) || 0
+    if (previous && Date.now() - previous < RELOAD_COOLDOWN_MS) {
+      // Reloading already failed to fix this. Fall through to the error UI;
+      // the user can retry with the manual Reload button.
       return false
     }
     sessionStorage.setItem(RELOAD_FLAG, String(Date.now()))
   } catch {
-    // sessionStorage unavailable (private browsing edge cases).
-    // Reload anyway; worst case is one extra reload if the chunks are
-    // still missing — error UI will then surface as expected.
+    // sessionStorage unavailable (private browsing edge cases). Reload anyway;
+    // worst case is one extra reload if the chunks are still missing, and the
+    // error UI surfaces on the attempt after that.
   }
 
   // Hard reload — bypasses any in-memory bfcache state.
   window.location.reload()
   return true
-}
-
-/**
- * Clear the reload-attempted flag. Called once on successful app mount —
- * if we got here, the new bundle loaded fine, so future stale-chunk
- * errors in this tab can retry the auto-reload trick.
- */
-export function clearChunkReloadFlag(): void {
-  try {
-    sessionStorage.removeItem(RELOAD_FLAG)
-  } catch {
-    // ignore
-  }
 }
