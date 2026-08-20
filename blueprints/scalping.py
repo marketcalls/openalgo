@@ -25,6 +25,7 @@ from database.settings_db import get_analyze_mode
 from services.expiry_service import get_expiry_dates
 from services.history_service import get_history
 from services.option_chain_service import get_option_chain
+from utils.latency_monitor import track_latency
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -628,6 +629,7 @@ def _validate_quantity(symbol: str, exchange: str, quantity: int) -> str | None:
 
 @scalping_bp.route("/scalping/api/order", methods=["POST"])
 @check_session_validity
+@track_latency("PLACE")
 def order():
     """Place a single MARKET order for a scalping leg (BUY/SELL CE/PE)."""
     data = request.get_json(silent=True) or {}
@@ -796,6 +798,7 @@ def _reducing_exit(symbol, exchange, product, action, quantity, auth_token, brok
 
 @scalping_bp.route("/scalping/api/close_leg", methods=["POST"])
 @check_session_validity
+@track_latency("CLOSE")
 def close_leg():
     """Risk-reducing single-leg exit (used by the trailing-SL engine + per-row Close)."""
     data = request.get_json(silent=True) or {}
@@ -834,6 +837,7 @@ def close_leg():
 
 @scalping_bp.route("/scalping/api/close_all", methods=["POST"])
 @check_session_validity
+@track_latency("CLOSE")
 def close_all():
     """Close only the SCALPING strategy's open positions (F6), each freeze-safe.
 
@@ -897,6 +901,7 @@ def close_all():
 
 @scalping_bp.route("/scalping/api/cancel_all", methods=["POST"])
 @check_session_validity
+@track_latency("CANCEL_ALL")
 def cancel_all():
     """Cancel all open orders (F7)."""
     auth_token, broker, api_key, err, code = _resolve_session_auth()

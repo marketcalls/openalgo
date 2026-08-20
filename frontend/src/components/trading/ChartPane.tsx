@@ -178,6 +178,7 @@ export function ChartPane({
   // drawing + indicator controls (additive; the trading controls are unchanged)
   const [indicators, setIndicators] = useState<{ id: string; name: string }[]>([])
   const [catalog, setCatalog] = useState<{ id: string; name: string; category: string }[]>([])
+  const [indicatorQuery, setIndicatorQuery] = useState('')
   const [grid, setGrid] = useState({ vertical: true, horizontal: true })
   const [fullscreen, setFullscreen] = useState(false)
   const [gridSub, setGridSub] = useState(false)
@@ -376,12 +377,21 @@ export function ChartPane({
   /** Portal target for menus: the pane itself in fullscreen, body otherwise. */
   const menuHost = fullscreen ? paneRef.current : null
 
-  const catalogGroups = catalog.reduce<Record<string, typeof catalog>>((acc, d) => {
-    const list = acc[d.category] ?? []
-    list.push(d)
-    acc[d.category] = list
-    return acc
-  }, {})
+  const indicatorFilter = indicatorQuery.trim().toLowerCase()
+  const catalogGroups = catalog
+    .filter(
+      (d) =>
+        indicatorFilter === '' ||
+        d.name.toLowerCase().includes(indicatorFilter) ||
+        d.id.includes(indicatorFilter),
+    )
+    .reduce<Record<string, typeof catalog>>((acc, d) => {
+      const list = acc[d.category] ?? []
+      list.push(d)
+      acc[d.category] = list
+      return acc
+    }, {})
+  const catalogMatches = Object.values(catalogGroups).reduce((n, l) => n + l.length, 0)
 
   // The product the toggle switches to; with two options that is "the other".
   const nextProduct = sym
@@ -533,7 +543,20 @@ export function ChartPane({
             container={menuHost}
             align="start"
             className="max-h-80 w-64 overflow-y-auto"
+            onCloseAutoFocus={() => setIndicatorQuery('')}
           >
+            <div className="sticky top-0 z-10 bg-popover px-2 pb-1 pt-1">
+              <input
+                type="text"
+                value={indicatorQuery}
+                onChange={(e) => setIndicatorQuery(e.target.value)}
+                // Radix moves focus to the first item on any printable key, which
+                // would otherwise steal every keystroke out of this box.
+                onKeyDown={(e) => e.stopPropagation()}
+                placeholder={`Search ${catalog.length} indicators`}
+                className="h-7 w-full rounded border bg-background px-2 text-xs outline-none focus:border-primary"
+              />
+            </div>
             {indicators.length > 0 && (
               <>
                 <div className="px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -566,6 +589,11 @@ export function ChartPane({
                 ))}
                 <DropdownMenuSeparator />
               </>
+            )}
+            {catalogMatches === 0 && (
+              <div className="px-2 py-3 text-center text-xs text-muted-foreground">
+                No indicator matches that
+              </div>
             )}
             {Object.entries(catalogGroups).map(([cat, list]) => (
               <div key={cat}>
