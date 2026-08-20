@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 MAX_NODE_DEPTH = 100
 MAX_NODE_VISITS = 500
 
+# Logic gates combine the boolean results of their inputs. Wires into these
+# nodes are data edges, not control edges — see the edge filter below.
+GATE_NODE_TYPES = ("andGate", "orGate", "notGate")
+
 
 def symbol_prefix_filter(column, prefix: str):
     """Index-friendly "this column starts with `prefix`" predicate.
@@ -2238,6 +2242,11 @@ class NodeExecutor:
         """Execute Time Condition node"""
         target_time_str = node_data.get("targetTime", "09:30")
         operator = node_data.get("operator", ">=")
+        # The editor writes conditionType (entry/exit/custom) as a role tag on
+        # the node. It never changes the comparison, but echoing it into the log
+        # line and the result payload is what makes a graph with several time
+        # gates readable in the execution log — "which 15:15 check was that?".
+        condition_type = node_data.get("conditionType", "entry")
 
         now = datetime.now().time()
         target_hour, target_minute, _ = parse_time_string(target_time_str, 9, 30)
@@ -2260,9 +2269,17 @@ class NodeExecutor:
             condition_met = False
 
         self.log(
-            f"Time condition: {now.strftime('%H:%M')} {operator} {target_time_str} = {condition_met}"
+            f"Time condition ({condition_type}): {now.strftime('%H:%M')} "
+            f"{operator} {target_time_str} = {condition_met}"
         )
-        return {"status": "success", "condition": condition_met}
+        return {
+            "status": "success",
+            "condition": condition_met,
+            "condition_type": condition_type,
+            "current_time": now.strftime("%H:%M:%S"),
+            "target_time": target_time_str,
+            "operator": operator,
+        }
 
     def execute_price_alert(self, node_data: dict) -> dict:
         """Execute Price Alert trigger node"""
@@ -3053,7 +3070,7 @@ def execute_node_chain(
         result = executor.execute_subscribe_depth(node_data)
     elif node_type == "unsubscribe":
         result = executor.execute_unsubscribe(node_data)
-    elif node_type in ("andGate", "orGate", "notGate"):
+    elif node_type in GATE_NODE_TYPES:
         # Gates must wait until every wired input has actually been evaluated.
         # The graph walk is depth-first, so the first input to finish would
         # otherwise reach the gate while the others are still unevaluated:
@@ -3109,13 +3126,33 @@ def execute_node_chain(
         # graph a typo'd variable would silently fire the SELL. Pass-through
         # edges (logging/alerting) still run so the failure is visible.
         errored = result.get("status") == "error"
+        # A wire into a logic gate carries the source condition's VALUE, not
+        # control flow: the gate reads each input's stored boolean and ignores
+        # the handle the wire left from. Branch-filtering these edges meant a
+        # False input never travelled to the gate, so the gate stayed parked on
+        # "waiting for N more input(s)" and never fired at all — an OR with one
+        # True and one False produced nothing (OR behaved like AND), no gate
+        # could ever drive its False branch, and which input happened to be
+        # evaluated last decided the outcome. The gate's own once-per-run guard
+        # is what prevents double firing, so always delivering these edges does
+        # not reintroduce the duplicate orders the wait was added to stop.
+        gate_ids = {
+            n.get("id")
+            for n in nodes
+            if isinstance(n, dict) and n.get("type") in GATE_NODE_TYPES
+        }
         filtered_edges = []
         for edge in edges_to_follow:
             source_handle = edge.get("sourceHandle", "") or ""
             is_branch_handle = source_handle in TRUE_HANDLES or source_handle in FALSE_HANDLES
             if errored:
+                # An errored condition has no trustworthy boolean, so it must
+                # not feed a gate either; the gate stays pending and nothing
+                # downstream of it fires.
                 if not is_branch_handle:
                     filtered_edges.append(edge)
+            elif edge.get("target") in gate_ids:
+                filtered_edges.append(edge)
             elif condition_met and source_handle in TRUE_HANDLES:
                 filtered_edges.append(edge)
             elif not condition_met and source_handle in FALSE_HANDLES:
