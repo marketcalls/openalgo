@@ -8,7 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { CRYPTO_EXCHANGE_VALUE, SCHEDULE_DAYS, STRATEGY_EXCHANGES } from '@/types/python-strategy'
+import { useStrategyExchanges } from '@/hooks/useStrategyExchanges'
+import { CRYPTO_EXCHANGE_VALUE, SCHEDULE_DAYS } from '@/types/python-strategy'
 import { showToast } from '@/utils/toast'
 
 const EXAMPLE_STRATEGY = `"""
@@ -66,27 +67,25 @@ export default function NewPythonStrategy() {
   const [stopTime, setStopTime] = useState('16:00')
   const [selectedDays, setSelectedDays] = useState<string[]>(['mon', 'tue', 'wed', 'thu', 'fri'])
 
+  const { exchanges, getWindow } = useStrategyExchanges()
   const isCrypto = exchange === CRYPTO_EXCHANGE_VALUE
 
-  // When exchange changes, apply sensible defaults (idempotent for explicit edits)
+  // When exchange changes, prefill the schedule with that exchange's session
+  // window from the market calendar DB. Never hardcode a window here: a stale
+  // constant would silently cut a strategy short (an NFO script stopped at
+  // 15:30 misses the last ten minutes of the F&O session, which runs to 15:40).
   const handleExchangeChange = (value: string) => {
     setExchange(value)
-    if (value === CRYPTO_EXCHANGE_VALUE) {
-      // CRYPTO: 24/7, all days
-      setStartTime('00:00')
-      setStopTime('23:59')
-      setSelectedDays(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'])
-    } else if (value === 'MCX') {
-      // MCX: full session including evening
-      setStartTime('09:00')
-      setStopTime('23:55')
-      setSelectedDays(['mon', 'tue', 'wed', 'thu', 'fri'])
-    } else {
-      // NSE/BSE/NFO/BFO equity defaults
-      setStartTime('09:15')
-      setStopTime('15:30')
-      setSelectedDays(['mon', 'tue', 'wed', 'thu', 'fri'])
+    const session = getWindow(value)
+    if (session) {
+      setStartTime(session.start)
+      setStopTime(session.stop)
     }
+    setSelectedDays(
+      value === CRYPTO_EXCHANGE_VALUE
+        ? ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+        : ['mon', 'tue', 'wed', 'thu', 'fri']
+    )
   }
 
   const handleDayToggle = (day: string) => {
@@ -281,7 +280,7 @@ export default function NewPythonStrategy() {
                 onChange={(e) => handleExchangeChange(e.target.value)}
                 className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
               >
-                {STRATEGY_EXCHANGES.map((opt) => (
+                {exchanges.map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label}
                   </option>
