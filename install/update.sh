@@ -520,6 +520,56 @@ if [ "$SERVER_MODE" = true ]; then
     sudo systemctl start "$SERVICE_NAME"
     check_status "Failed to start $SERVICE_NAME"
 
+    # --------------------------------------------------------------
+    # Warn about the forced WebSocket upgrade header on the main proxy
+    # block. Configs written by earlier installers set
+    #     proxy_set_header Upgrade $http_upgrade;
+    #     proxy_set_header Connection "upgrade";
+    # inside `location / {`, which carries ordinary HTTP, not WebSockets
+    # (/ws, /ws/ and /socket.io/ have their own blocks). Every normal
+    # request then reaches gunicorn claiming an upgrade with an empty
+    # Upgrade:, which breaks HTTP/1.1 keep-alive and shows up as
+    # intermittent truncated asset responses and 5xx (issue #1807).
+    #
+    # This only reports; it does not edit nginx configs. A wrong automated
+    # rewrite of a live reverse proxy takes the whole instance offline, and
+    # admins routinely hand-customise these files, so the edit is left to a
+    # human who can run `nginx -t` and watch the reload.
+    # --------------------------------------------------------------
+    check_nginx_upgrade_header() {
+        local conf found=""
+        for conf in /etc/nginx/sites-available/* /etc/nginx/conf.d/*.conf; do
+            [ -f "$conf" ] || continue
+            grep -q 'unix:.*\.sock\|openalgo\|gunicorn' "$conf" 2>/dev/null || continue
+            # Report only when `location / {` still forces the header.
+            if awk '
+                /location \/ \{/           { inroot = 1 }
+                inroot && /^[[:space:]]*\}/ { inroot = 0 }
+                inroot && /proxy_set_header[[:space:]]+Connection[[:space:]]+"upgrade";/ { hit = 1 }
+                END { exit !hit }
+            ' "$conf" 2>/dev/null; then
+                found="$found $conf"
+            fi
+        done
+
+        [ -n "$found" ] || return 0
+
+        log_message "
+Nginx: the main proxy block forces a WebSocket upgrade header" "$YELLOW"
+        log_message "Affected config(s):$found" "$YELLOW"
+        log_message "Inside the 'location / {' block only, replace these two lines:" "$YELLOW"
+        log_message "    proxy_set_header Upgrade \$http_upgrade;" "$YELLOW"
+        log_message "    proxy_set_header Connection \"upgrade\";" "$YELLOW"
+        log_message "with this single line:" "$YELLOW"
+        log_message "    proxy_set_header Connection \"\";" "$YELLOW"
+        log_message "Leave the /ws, /ws/ and /socket.io/ blocks unchanged, then run:" "$YELLOW"
+        log_message "    sudo nginx -t && sudo systemctl reload nginx" "$YELLOW"
+        log_message "Background: https://github.com/marketcalls/openalgo/issues/1807
+" "$YELLOW"
+    }
+
+    check_nginx_upgrade_header
+
     # Reload Nginx
     sudo systemctl reload nginx
     check_status "Failed to reload Nginx"
