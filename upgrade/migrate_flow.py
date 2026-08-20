@@ -23,7 +23,10 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Add parent directory to path for imports
 sys.path.insert(0, PROJECT_ROOT)
-
+# Register the app's SQLite pragmas on this process's engines, so a migration
+# waits the same 15s for a write lock the running app does instead of the
+# sqlite3 default of 5s (GitHub issue #1726).
+import _pragmas  # noqa: F401,E402
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.pool import NullPool
 
