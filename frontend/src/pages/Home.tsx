@@ -27,7 +27,6 @@ import {
   SheetTitle,
   SheetTrigger,
 } from '@/components/ui/sheet'
-import { tools } from '@/lib/tools'
 import { useThemeStore } from '@/stores/themeStore'
 
 const integrations = [
@@ -47,6 +46,84 @@ const integrations = [
   'Google Sheets',
   'OpenClaw',
   'Telegram',
+]
+
+// Open Varsity beginner track (openalgo.in/learn). Chapter counts mirror the
+// CHAPTERS arrays in the webpage repo's lib/*Curriculum.js.
+const VARSITY_COURSES = 13
+const VARSITY_CHAPTERS = 407
+
+const beginnerCourses = [
+  {
+    href: 'https://www.openalgo.in/stocks',
+    title: 'Stock Market Basics',
+    chapters: 18,
+    blurb:
+      'Brand new to the market? Shares, IPOs, indices, what actually moves prices and how to spot a scam, in plain English with real Indian examples.',
+  },
+  {
+    href: 'https://www.openalgo.in/technicals',
+    title: 'Technical Analysis',
+    chapters: 28,
+    blurb:
+      'Read a chart from the very first candle: trends, support and resistance, patterns, RSI, MACD and moving averages, all on real NSE charts.',
+  },
+  {
+    href: 'https://www.openalgo.in/futures',
+    title: 'Futures Trading',
+    chapters: 27,
+    blurb:
+      'Your first derivative. Contracts, margin and leverage, mark to market, rollover, settlement and position sizing, honest about the leverage that cuts both ways.',
+  },
+  {
+    href: 'https://www.openalgo.in/options-basics',
+    title: 'Options Basics',
+    chapters: 26,
+    blurb:
+      'Calls and puts from zero. Premium, strike and expiry, moneyness, the option chain, the four single-leg payoffs, the Greeks and implied volatility.',
+  },
+  {
+    href: 'https://www.openalgo.in/fundamentals',
+    title: 'Python for Traders',
+    chapters: 40,
+    blurb:
+      'Never written a line of code? Start at absolute zero: variables, NumPy, pandas and charts, one small step at a time on real market data.',
+  },
+  {
+    href: 'https://www.openalgo.in/risk-management',
+    title: 'Risk Management',
+    chapters: 33,
+    blurb:
+      'The one skill that keeps you in the game: position sizing, stop losses, leverage and execution risk, with clear checklists you can use today.',
+  },
+]
+
+const learningPath = [
+  {
+    text: 'New to markets? Start with',
+    course: 'Stock Market Basics',
+    href: 'https://www.openalgo.in/stocks',
+  },
+  {
+    text: 'To read price charts, take',
+    course: 'Technical Analysis',
+    href: 'https://www.openalgo.in/technicals',
+  },
+  {
+    text: 'Ready to code but new to Python? Start with',
+    course: 'Python for Traders',
+    href: 'https://www.openalgo.in/fundamentals',
+  },
+  {
+    text: 'Once data feels easy, build and automate with',
+    course: 'Algo Trading with Python',
+    href: 'https://www.openalgo.in/python',
+  },
+  {
+    text: 'Prefer charts to Python? Take the parallel track,',
+    course: 'AmiBroker AFL',
+    href: 'https://www.openalgo.in/amibroker',
+  },
 ]
 
 export default function Home() {
@@ -209,17 +286,19 @@ export default function Home() {
         {/* Hero Section */}
         <section className="container mx-auto px-4 pt-20 pb-16 sm:pt-28 sm:pb-20">
           <div className="text-center max-w-4xl mx-auto">
-            <Link
-              to="/tools"
+            <a
+              href="https://www.openalgo.in/learn"
+              target="_blank"
+              rel="noopener noreferrer"
               className="inline-flex items-center gap-2 rounded-full border border-border bg-card/60 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] mb-8 shadow-sm transition-colors hover:border-emerald-500/40 hover:bg-card"
             >
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px] shadow-emerald-400/60" />
-              <span className="text-amber-700 dark:text-amber-500">New in V2</span>
+              <span className="text-amber-700 dark:text-amber-500">New Here</span>
               <span className="text-muted-foreground">
-                - {tools.length} Tool Options &amp; Portfolio Analytics Suite
+                - Learn Free on Open Varsity, {VARSITY_COURSES} Courses
               </span>
               <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
-            </Link>
+            </a>
             <h1 className="text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight mb-6">
               <span className="block text-foreground">Your Personal</span>
               <span className="block text-primary">Algo Trading Platform</span>
@@ -263,6 +342,94 @@ export default function Home() {
                 {name}
               </span>
             ))}
+          </div>
+        </section>
+
+        {/* Start Here - Open Varsity */}
+        <section className="container mx-auto px-4 py-16 sm:py-20">
+          <div className="text-center max-w-3xl mx-auto mb-12">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-500 mb-6">
+              <GraduationCap className="h-3.5 w-3.5" />
+              Start Here
+            </span>
+            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight mb-4">
+              New to Trading? Learn It Free
+            </h2>
+            <p className="text-base sm:text-lg text-muted-foreground">
+              Open Varsity is OpenAlgo's free learning academy - {VARSITY_COURSES} courses and{' '}
+              {VARSITY_CHAPTERS} chapters in plain English, on real Indian market data. No ads, no
+              gatekeeping, no hype. Learn the market first, then automate it.
+            </p>
+          </div>
+
+          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 max-w-6xl mx-auto">
+            {beginnerCourses.map((course) => (
+              <a
+                key={course.href}
+                href={course.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="group"
+              >
+                <Card className="h-full transition-colors hover:border-amber-400/40">
+                  <CardContent className="space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <h3 className="font-bold text-base flex items-center gap-2">
+                        {course.title}
+                        <ArrowRight className="h-4 w-4 shrink-0 transition-transform group-hover:translate-x-0.5" />
+                      </h3>
+                      <span className="shrink-0 rounded-md bg-muted px-2 py-0.5 text-xs text-neutral-600 dark:text-neutral-400">
+                        {course.chapters} chapters
+                      </span>
+                    </div>
+                    <p className="text-sm text-muted-foreground leading-relaxed">{course.blurb}</p>
+                  </CardContent>
+                </Card>
+              </a>
+            ))}
+          </div>
+
+          {/* Not sure where to begin */}
+          <div className="max-w-3xl mx-auto mt-10">
+            <Card>
+              <CardContent className="space-y-4">
+                <h3 className="font-bold text-lg flex items-center gap-2">
+                  <ClipboardList className="h-5 w-5 text-amber-700 dark:text-amber-500" />
+                  Not Sure Where to Begin?
+                </h3>
+                <ul className="space-y-2.5">
+                  {learningPath.map((step) => (
+                    <li key={step.href} className="text-sm text-muted-foreground leading-relaxed">
+                      <span className="mr-2 text-amber-700 dark:text-amber-500">-</span>
+                      {step.text}{' '}
+                      <a
+                        href={step.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-semibold text-foreground underline underline-offset-4 hover:text-primary"
+                      >
+                        {step.course}
+                      </a>
+                      .
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-xs text-muted-foreground border-t pt-4">
+                  Every course is free and self-paced, with examples you can run yourself. For
+                  education only, not investment advice. Practise your strategies in analyzer mode
+                  before going live.
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="text-center mt-8">
+            <Button size="lg" variant="outline" asChild>
+              <a href="https://www.openalgo.in/learn" target="_blank" rel="noopener noreferrer">
+                <GraduationCap className="mr-2 h-5 w-5" />
+                Browse All {VARSITY_COURSES} Courses
+              </a>
+            </Button>
           </div>
         </section>
 
