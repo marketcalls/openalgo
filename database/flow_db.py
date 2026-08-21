@@ -148,9 +148,17 @@ def _migrate_add_api_key_column():
                 conn.execute(text("ALTER TABLE flow_workflows ADD COLUMN api_key VARCHAR(255)"))
                 conn.commit()
                 logger.info("Migration: Added 'api_key' column to flow_workflows table")
-    except Exception as e:
-        # Log but don't fail - column might already exist or other DB issue
-        logger.debug(f"Migration check for api_key column: {e}")
+    except Exception:
+        # Do not fail startup, but do not hide it either. Without api_key every
+        # workflow activation fails to persist, and at debug level that was
+        # invisible while `migrate_flow.py --status` reported all changes
+        # applied. The registered migration adds the column properly; this hook
+        # only covers an installation that has not run it yet.
+        logger.exception(
+            "Could not add the flow_workflows.api_key column. Run "
+            "'cd upgrade && uv run migrate_all.py' -- until then, activating a "
+            "workflow will not persist its API key."
+        )
 
 
 # --- Workflow CRUD Operations ---

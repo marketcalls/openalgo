@@ -93,6 +93,7 @@ def create_flow_workflows_table(engine):
             webhook_secret VARCHAR(64),
             webhook_enabled BOOLEAN DEFAULT 0,
             webhook_auth_type VARCHAR(20) DEFAULT 'payload',
+            api_key VARCHAR(255),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -112,6 +113,7 @@ def create_flow_workflows_table(engine):
             webhook_secret VARCHAR(64),
             webhook_enabled BOOLEAN DEFAULT FALSE,
             webhook_auth_type VARCHAR(20) DEFAULT 'payload',
+            api_key VARCHAR(255),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         )
@@ -122,6 +124,40 @@ def create_flow_workflows_table(engine):
         conn.commit()
 
     print("  [OK] flow_workflows table created")
+    return True
+
+
+def column_exists(engine, table_name, column_name):
+    """Whether a column is present on an existing table."""
+    if not table_exists(engine, table_name):
+        return False
+    return column_name in {col["name"] for col in inspect(engine).get_columns(table_name)}
+
+
+def add_api_key_column(engine):
+    """Add flow_workflows.api_key to an installation that predates it.
+
+    create_flow_workflows_table() returns early when the table exists, so an
+    installation created before this column shipped could never gain it here.
+    The only thing adding it was a startup ALTER in database/flow_db.py whose
+    failures were swallowed at debug level -- so on a deployment where that
+    ALTER could not run, --status still reported "All changes applied" against a
+    schema with no api_key, and every workflow activation then failed silently.
+
+    Idempotent: safe to re-run, and it never touches existing rows.
+    """
+    if not table_exists(engine, "flow_workflows"):
+        return True
+    if column_exists(engine, "flow_workflows", "api_key"):
+        print("  [SKIP] flow_workflows.api_key already present")
+        return True
+
+    print("  [ALTER] Adding flow_workflows.api_key...")
+    with engine.connect() as conn:
+        conn.execute(text("ALTER TABLE flow_workflows ADD COLUMN api_key VARCHAR(255)"))
+        conn.commit()
+
+    print("  [OK] flow_workflows.api_key added")
     return True
 
 
@@ -267,6 +303,11 @@ def status(engine):
         print(f"  {table:<26} {'present' if present else 'MISSING'}")
         applied = applied and present
 
+    if table_exists(engine, "flow_workflows"):
+        present = column_exists(engine, "flow_workflows", "api_key")
+        print(f"  {'flow_workflows.api_key':<26} {'present' if present else 'MISSING'}")
+        applied = applied and present
+
     if table_exists(engine, FLOW_JOBSTORE_TABLE):
         index_name = f"ix_{FLOW_JOBSTORE_TABLE}_next_run_time"
         names = {idx["name"] for idx in inspect(engine).get_indexes(FLOW_JOBSTORE_TABLE)}
@@ -309,6 +350,7 @@ def main():
         print()
         print("Creating tables...")
         create_flow_workflows_table(engine)
+        add_api_key_column(engine)
         create_flow_workflow_executions_table(engine)
         create_apscheduler_jobstore_table(engine, FLOW_JOBSTORE_TABLE)
 

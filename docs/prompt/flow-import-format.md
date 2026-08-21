@@ -259,6 +259,16 @@ For "has a new period started", use the `calendar` node rather than comparing
 these - see 7.4.
 ### Output variables
 
+Data nodes ship with a default `outputVariable` (`orders`, `trades`,
+`positions`, `holdings`, `funds`, `quotes`, `holidays`, `timings`,
+`marginResult`, `response`, `ind`, ...), and the editor persists it. Set your
+own when two nodes of the same type would otherwise collide.
+
+An unresolved `{{name.path}}` interpolates to its own literal text rather than
+raising, so a misspelled variable reaches a numeric field as a string and falls
+back to that field's default. Name your variables deliberately and check the
+execution log for un-substituted `{{...}}` when a run behaves oddly.
+
 Most data and action nodes accept an `outputVariable` field in their `data`
 object. When set, the result of that node is stored in the workflow context
 under that name and can be read by every downstream node.
@@ -700,11 +710,21 @@ Splits a large order into chunks.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `orderId` | string | — | Usually `{{prevOrder.orderid}}`. |
-| `symbol`, `exchange`, `action`, `priceType`, `product` | as `placeOrder` | | Required if the broker expects them on modify. |
+| `orderId` | string | — | Required. Usually `{{prevOrder.orderid}}`. |
 | `newQuantity` | int | — | Empty = keep existing. |
 | `newPrice` | number | — | Empty = keep existing. |
 | `newTriggerPrice` | number | — | Empty = keep existing. |
+| `symbol`, `exchange`, `action`, `priceType`, `product` | as `placeOrder` | from the live order | Optional override. Omit them. |
+
+The executor reads the order back from the order book and changes only the
+fields you supply, so "empty = keep existing" is literal — an omitted quantity
+keeps the order's quantity, not `1`.
+
+Do not set `action` or `product` unless you mean to change them. Several brokers
+carry these on a modify: an `action` of `BUY` on a live SELL order converts the
+order, and a `product` of `MIS` on an NRML position makes it intraday and
+subject to auto square-off. If the order cannot be read, the node fails rather
+than sending a guessed value.
 
 ```json
 {
@@ -713,11 +733,7 @@ Splits a large order into chunks.
   "position": { "x": 100, "y": 300 },
   "data": {
     "orderId": "{{buyOrder.orderid}}",
-    "symbol": "RELIANCE",
-    "exchange": "NSE",
-    "action": "BUY",
     "newPrice": 1455,
-    "priceType": "LIMIT",
     "product": "CNC"
   }
 }
@@ -741,12 +757,31 @@ Cancels every open order. No fields.
 { "id": "node_3", "type": "cancelAllOrders", "position": { "x": 100, "y": 300 }, "data": {} }
 ```
 
-#### closePositions — Close All Positions
+#### closePositions — Close Positions
 
-Squares off every open position. No fields.
+With no `symbol`, squares off every open position across all exchanges and
+products. With a `symbol`, closes only that position.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `symbol` | string | `""` | Blank closes everything. Set it to scope the close. |
+| `exchange` | string | `NSE` | Only meaningful alongside `symbol`. |
+| `product` | string | `MIS` | Only meaningful alongside `symbol`. |
+
+`exchange` and `product` do not filter on their own — without a `symbol` this is
+an unconditional square-off however they are set.
 
 ```json
 { "id": "node_3", "type": "closePositions", "position": { "x": 100, "y": 300 }, "data": {} }
+```
+
+```json
+{
+  "id": "node_4",
+  "type": "closePositions",
+  "position": { "x": 100, "y": 300 },
+  "data": { "symbol": "RELIANCE", "exchange": "NSE", "product": "MIS" }
+}
 ```
 
 ---
@@ -760,13 +795,17 @@ via `sourceHandle` — see [§5](#5-condition-source-handles).
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `symbol` | string | — | |
-| `exchange` | string | `"NSE"` | |
+| `symbol` | string | required | |
+| `exchange` | string | required | |
 | `product` | `"MIS"` \| `"CNC"` \| `"NRML"` | `"MIS"` | |
-| `condition` | `"exists"` \| `"not_exists"` \| `"quantity_above"` \| `"quantity_below"` \| `"pnl_above"` \| `"pnl_below"` | `"exists"` | |
+| `condition` | `"exists"` \| `"not_exists"` \| `"quantity_above"` \| `"quantity_below"` \| `"pnl_above"` \| `"pnl_below"` | required | |
 | `threshold` | number | `0` | Only used by the `quantity_*` and `pnl_*` modes. |
 
 Result: `condition=True` if the rule matches the live position.
+
+`symbol` is required and validated at import and activation. A blank symbol
+reads back a zero-quantity position, which makes `not_exists` unconditionally
+true, so the node fails instead of opening the gate it is supposed to guard.
 
 ```json
 {
@@ -786,7 +825,11 @@ Result: `condition=True` if the rule matches the live position.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `minAvailable` | number | `0` | Triggers True when `availablecash >= minAvailable`. |
+| `minAvailable` | number | required | Triggers True when `availablecash >= minAvailable`. |
+
+Required, and validated at import and activation. A node without it cannot guard
+anything — the comparison would be `availablecash >= 0`, true on any balance —
+so the node fails instead of letting the order behind it through.
 
 ```json
 { "id": "node_2", "type": "fundCheck", "position": { "x": 100, "y": 100 }, "data": { "minAvailable": 10000 } }
@@ -1396,10 +1439,18 @@ For richer arithmetic, use `mathExpression`:
 |---|---|---|---|
 | `method` | `"GET"` \| `"POST"` \| `"PUT"` \| `"DELETE"` \| `"PATCH"` | `"GET"` | |
 | `url` | string | — | Supports `{{vars}}`. |
-| `headers` | object \| JSON-string | `{}` | e.g. `{"Authorization": "Bearer {{token}}"}`. |
+| `headers` | JSON-string | `""` | e.g. `"{\"Authorization\": \"Bearer {{token}}\"}"`. A JSON object is also accepted. |
 | `body` | string | — | JSON string, only used for POST/PUT/PATCH. Supports `{{vars}}`. |
-| `timeout` | int | `30` | Seconds. |
-| `outputVariable` | string | — | `{{apiResponse.data}}`, `{{apiResponse.status}}`. |
+| `timeout` | int | `30000` | Milliseconds, capped at 60000. |
+| `outputVariable` | string | `"response"` | `{{response.data}}`, `{{response.statusCode}}`. |
+
+Only `http` and `https` are allowed, and the destination must resolve to a
+public address. Loopback, private, link-local and reserved ranges are rejected,
+so a workflow cannot be pointed at this server, at a host on the LAN, or at
+cloud metadata on `169.254.169.254`. This matters because `url` interpolates
+from workflow variables, and a webhook trigger puts its caller's JSON body into
+that context. Redirects are not followed. Logged URLs have their query string
+redacted, so a token in a query parameter is not written to the execution log.
 
 ```json
 {
@@ -1411,7 +1462,7 @@ For richer arithmetic, use `mathExpression`:
     "url": "https://hooks.example.com/notify",
     "headers": "{\"Authorization\": \"Bearer {{secret}}\"}",
     "body": "{\"symbol\": \"{{webhook.symbol}}\", \"action\": \"{{webhook.action}}\"}",
-    "timeout": 30,
+    "timeout": 30000,
     "outputVariable": "notifyResp"
   }
 }
@@ -1423,6 +1474,10 @@ For richer arithmetic, use `mathExpression`:
 |---|---|---|---|
 | `delayValue` | int | `1` | |
 | `delayUnit` | `"seconds"` \| `"minutes"` \| `"hours"` | `"seconds"` | |
+
+Capped at 300 seconds. The delay blocks the workflow's lock and, for a webhook
+trigger, the request that fired it, so longer waits belong in a schedule or a
+`waitUntil` node. A longer value waits the maximum and logs a warning.
 
 ```json
 { "id": "node_3", "type": "delay", "position": { "x": 100, "y": 300 }, "data": { "delayValue": 30, "delayUnit": "seconds" } }
@@ -2238,6 +2293,21 @@ positionBook (outputVariable=positions)
 - **Unresolved operands in `varCondition` take neither branch.** Unlike other
   interpolation (which passes `{{...}}` through as literal text), this node
   refuses to evaluate so a typo cannot route a trade.
+- **A failed node stops its branch and fails the run.** When a node returns
+  an error - a broker rejection, an unreachable URL, a guard that cannot be
+  evaluated - nothing downstream of it executes, the run is recorded as
+  `failed`, and the trigger response carries the error. Do not rely on a later
+  node running "anyway"; put independent work on its own branch from the
+  trigger.
+- **One-shot triggers deactivate the workflow when they fire.** A `priceAlert`
+  or `orderUpdateTrigger` with `trigger: "once"` clears `is_active` after its
+  run, so it is not re-armed by a later restart. Use `trigger: "every_time"`
+  for a standing watch.
+- **Editing a trigger on an active workflow does not re-register it.** The
+  scheduler and monitors snapshot the trigger node at activation. Saving a new
+  schedule time or alert symbol returns `needs_reactivate: true`; deactivate
+  and reactivate for it to take effect. Node bodies outside the trigger do
+  apply immediately, because the graph is re-read on every run.
 - **Lot size handling differs per node.** `optionsOrder` and
   `optionsMultiOrder` accept `quantity` **in lots** (multiplied by lot size
   internally). `placeOrder` / `smartOrder` / `splitOrder` / `basketOrder`
@@ -2256,5 +2326,14 @@ positionBook (outputVariable=positions)
 - UI ↔ field mapping: `frontend/src/components/flow/panels/ConfigPanel.tsx`.
 - Edge filtering: `services/flow_executor_service.py:execute_node_chain`
   → the `if result and "condition" in result:` block.
+- Required fields, checked at import, save and activation:
+  `services/flow_workflow_validator.py` (`REQUIRED_NODE_FIELDS`,
+  `CONDITIONAL_REQUIRED_FIELDS`, `EITHER_REQUIRED_FIELDS`).
+- Trigger registration and its lifecycle: `blueprints/flow.py` (activate,
+  deactivate), `services/flow_scheduler_service.py`,
+  `services/flow_price_monitor_service.py`,
+  `services/flow_order_update_monitor_service.py`.
+- HTTP destination rules: `NodeExecutor._check_http_destination` in
+  `services/flow_executor_service.py`.
 
 If this doc and the code disagree, the code wins. Open a PR.
