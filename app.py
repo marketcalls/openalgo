@@ -280,6 +280,11 @@ def create_app():
 
     # Exempt API endpoints from CSRF protection (they use API key authentication)
     csrf.exempt(api_v1_bp)
+    # Stream B1 (2026-08-08): the analytics blueprints now accept an
+    # apikey in the request body (apikey_or_session decorator) exactly like
+    # the /api/v1 restx surface — bearer-token requests are not CSRF-
+    # vulnerable, so exempt them from CSRF the same way. Session-authed
+    # calls are still protected by the decorator's session check.
 
     # Initialize security middleware before traffic logging
     init_security_middleware(app)
@@ -332,6 +337,12 @@ def create_app():
     app.register_blueprint(gex_bp)  # Register GEX blueprint
     app.register_blueprint(ivsmile_bp)  # Register IV Smile blueprint
     app.register_blueprint(oiprofile_bp)  # Register OI Profile blueprint
+    # Stream B1 (2026-08-08): analytics endpoints accept an apikey in the
+    # request body (apikey_or_session) like the restx API — bearer-token
+    # requests are not CSRF-vulnerable, so exempt them the same way.
+    for _analytics_bp in (gex_bp, gamma_density_bp, ivchart_bp, ivsmile_bp,
+                          vol_surface_bp, oiprofile_bp, oitracker_bp):
+        csrf.exempt(_analytics_bp)
     app.register_blueprint(arbitrage_bp)  # Register Arbitrage blueprint
     app.register_blueprint(flow_bp)  # Register Flow blueprint
     app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint

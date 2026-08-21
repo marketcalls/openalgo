@@ -12,13 +12,13 @@ Underlyings and expiries are served by the shared search blueprint
 
 import re
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, g, jsonify, request, session
 from flask_cors import cross_origin
 
 from database.auth_db import get_api_key_for_tradingview
 from services.gamma_density_service import calculate_gamma_density
 from utils.logging import get_logger
-from utils.session import check_session_validity
+from utils.session import check_session_validity, apikey_or_session
 
 logger = get_logger(__name__)
 
@@ -27,11 +27,11 @@ gamma_density_bp = Blueprint("gamma_density_bp", __name__, url_prefix="/")
 
 @gamma_density_bp.route("/gammadensity/api/gamma-data", methods=["POST"])
 @cross_origin()
-@check_session_validity
+@apikey_or_session
 def gamma_data():
     """Get gamma density (Γ×OI) and convexity-zone data for all strikes."""
     try:
-        login_username = session.get("user")
+        login_username = getattr(g, "openalgo_user", None) or session.get("user")
         if not login_username:
             return jsonify({"status": "error", "message": "Authentication required"}), 401
 
