@@ -1693,11 +1693,63 @@ export function ConfigPanel() {
               </div>
             )}
             {nodeType === 'closePositions' && (
-              <div className="rounded-lg border bg-muted/30 p-3">
-                <p className="text-xs text-muted-foreground">
-                  Closes all open positions. No configuration needed.
-                </p>
-              </div>
+              <>
+                <div className="rounded-lg border bg-muted/30 p-3">
+                  <p className="text-xs text-muted-foreground">
+                    Leave Symbol blank to square off every open position. Set it to close only that
+                    position; Exchange and Product narrow it further.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Symbol</Label>
+                  <Input
+                    className="h-8"
+                    placeholder="Blank = close all positions"
+                    value={(nodeData.symbol as string) || ''}
+                    onChange={(e) => handleDataChange('symbol', e.target.value)}
+                  />
+                </div>
+                {Boolean(nodeData.symbol) && (
+                  <>
+                    <div className="space-y-2">
+                      <Label className="text-xs">Exchange</Label>
+                      <Select
+                        value={(nodeData.exchange as string) || 'NSE'}
+                        onValueChange={(v) => handleDataChange('exchange', v)}
+                      >
+                        <SelectTrigger className="h-8">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {EXCHANGES.map((ex) => (
+                            <SelectItem key={ex.value} value={ex.value}>
+                              {ex.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs">Product</Label>
+                      <Select
+                        value={(nodeData.product as string) || 'MIS'}
+                        onValueChange={(v) => handleDataChange('product', v)}
+                      >
+                        <SelectTrigger className="h-8">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {PRODUCT_TYPES.map((pt) => (
+                            <SelectItem key={pt.value} value={pt.value}>
+                              {pt.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </>
+                )}
+              </>
             )}
 
             {/* ===== MODIFY ORDER ===== */}
@@ -1712,6 +1764,12 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('orderId', e.target.value)}
                   />
                 </div>
+                <div className="rounded-lg border bg-muted/30 p-3">
+                  <p className="text-xs text-muted-foreground">
+                    Symbol, exchange, side and product are read from the live order, so anything
+                    left blank here stays as it is.
+                  </p>
+                </div>
                 <div className="space-y-2">
                   <Label className="text-xs">New Price</Label>
                   <Input
@@ -1719,8 +1777,8 @@ export function ConfigPanel() {
                     step="0.05"
                     className="h-8"
                     placeholder="Leave empty to keep"
-                    value={(nodeData.newPrice as number) || ''}
-                    onChange={(e) => handleDataChange('newPrice', parseFloat(e.target.value) || 0)}
+                    value={(nodeData.newPrice as number) ?? ''}
+                    onChange={(e) => handleDataChange('newPrice', e.target.value)}
                   />
                 </div>
                 <div className="space-y-2">
@@ -1730,10 +1788,8 @@ export function ConfigPanel() {
                     min={1}
                     className="h-8"
                     placeholder="Leave empty to keep"
-                    value={(nodeData.newQuantity as number) || ''}
-                    onChange={(e) =>
-                      handleDataChange('newQuantity', parseInt(e.target.value, 10) || 0)
-                    }
+                    value={(nodeData.newQuantity as number) ?? ''}
+                    onChange={(e) => handleDataChange('newQuantity', e.target.value)}
                   />
                 </div>
               </>

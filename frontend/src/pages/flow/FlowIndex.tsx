@@ -4,6 +4,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   Clock,
   Copy,
@@ -546,7 +547,13 @@ export default function FlowIndex() {
   const [importJson, setImportJson] = useState('')
   const [importError, setImportError] = useState<string | null>(null)
 
-  const { data: workflows, isLoading } = useQuery({
+  const {
+    data: workflows,
+    isLoading,
+    isError,
+    error: listError,
+    refetch,
+  } = useQuery({
     queryKey: flowQueryKeys.workflows(),
     queryFn: listWorkflows,
   })
@@ -642,7 +649,24 @@ export default function FlowIndex() {
         </div>
       </div>
 
-      {workflows && workflows.length > 0 ? (
+      {isError ? (
+        // Without this branch a failed fetch left workflows undefined and
+        // isLoading false, so an expired session or a 500 rendered the cheerful
+        // "No workflows yet" empty state - telling the user their workflows were
+        // gone. Retries are capped at 1, so this is two requests away.
+        <Card className="flex flex-col items-center justify-center py-16">
+          <div className="mb-4 rounded-full bg-destructive/10 p-4">
+            <AlertTriangle className="h-8 w-8 text-destructive" />
+          </div>
+          <h3 className="mb-2 text-lg font-medium">Could not load workflows</h3>
+          <p className="mb-6 max-w-md text-center text-sm text-muted-foreground">
+            {listError instanceof Error
+              ? listError.message
+              : 'Something went wrong while loading your workflows.'}
+          </p>
+          <Button onClick={() => refetch()}>Retry</Button>
+        </Card>
+      ) : workflows && workflows.length > 0 ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {workflows.map((workflow) => (
             <WorkflowCard key={workflow.id} workflow={workflow} />

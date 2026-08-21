@@ -1312,7 +1312,10 @@ export const DEFAULT_NODE_DATA = {
     offsetBars: 0,
     sourceSeries: '',
     sourceField: '',
-    outputVariable: '',
+    // The panel only shows this as a grey placeholder, so a node saved
+    // without typing here stored nothing and {{ind.latest.value}} never
+    // resolved -- the run failed with no indication which field was blank.
+    outputVariable: 'ind',
   },
   strategyPnl: {
     strategy: '',
@@ -1339,20 +1342,40 @@ export const DEFAULT_NODE_DATA = {
     product: 'MIS' as const,
     outputVariable: '',
   },
+  // The config panel renders this name as its input's fallback value, so the
+  // box looks filled while the saved node keeps an empty string and
+  // store_output writes nothing. Every downstream {{...}} reference then
+  // resolves to its own literal text. Persist what the user is shown.
   orderBook: {
-    outputVariable: '',
+    outputVariable: 'orders',
   },
+  // The config panel renders this name as its input's fallback value, so the
+  // box looks filled while the saved node keeps an empty string and
+  // store_output writes nothing. Every downstream {{...}} reference then
+  // resolves to its own literal text. Persist what the user is shown.
   tradeBook: {
-    outputVariable: '',
+    outputVariable: 'trades',
   },
+  // The config panel renders this name as its input's fallback value, so the
+  // box looks filled while the saved node keeps an empty string and
+  // store_output writes nothing. Every downstream {{...}} reference then
+  // resolves to its own literal text. Persist what the user is shown.
   positionBook: {
-    outputVariable: '',
+    outputVariable: 'positions',
   },
+  // The config panel renders this name as its input's fallback value, so the
+  // box looks filled while the saved node keeps an empty string and
+  // store_output writes nothing. Every downstream {{...}} reference then
+  // resolves to its own literal text. Persist what the user is shown.
   holdings: {
-    outputVariable: '',
+    outputVariable: 'holdings',
   },
+  // The config panel renders this name as its input's fallback value, so the
+  // box looks filled while the saved node keeps an empty string and
+  // store_output writes nothing. Every downstream {{...}} reference then
+  // resolves to its own literal text. Persist what the user is shown.
   funds: {
-    outputVariable: '',
+    outputVariable: 'funds',
   },
   telegramAlert: {
     message: 'Workflow executed successfully',
@@ -1380,10 +1403,13 @@ export const DEFAULT_NODE_DATA = {
   httpRequest: {
     method: 'GET' as const,
     url: '',
-    headers: {},
+    // A JSON string, matching the panel's textarea and the executor's
+    // parser. The `{}` default rendered as the literal [object Object].
+    headers: '',
     body: '',
-    timeout: 30,
-    outputVariable: '',
+    // Milliseconds, as the panel's own label and bounds already said.
+    timeout: 30000,
+    outputVariable: 'response',
   },
   symbol: {
     symbol: '',
@@ -1411,7 +1437,9 @@ export const DEFAULT_NODE_DATA = {
   multiQuotes: {
     symbols: '',
     exchange: 'NSE',
-    outputVariable: '',
+    // See the note on orderBook: a displayed fallback that is not persisted
+    // leaves the variable undefined at run time.
+    outputVariable: 'quotes',
   },
   optionChain: {
     underlying: 'NIFTY',
@@ -1429,12 +1457,12 @@ export const DEFAULT_NODE_DATA = {
   holidays: {
     // The calendar service takes a year, not an exchange. Blank = current year.
     year: undefined as number | undefined,
-    outputVariable: '',
+    outputVariable: 'holidays',
   },
   timings: {
     // The calendar service takes a date (YYYY-MM-DD). Blank = today.
     date: '',
-    outputVariable: '',
+    outputVariable: 'timings',
   },
   calendar: {
     // Blank = the current trading session date.
@@ -1453,7 +1481,7 @@ export const DEFAULT_NODE_DATA = {
     product: 'MIS' as const,
     action: 'BUY' as const,
     priceType: 'MARKET' as const,
-    outputVariable: '',
+    outputVariable: 'marginResult',
   },
   group: {},
 } as const

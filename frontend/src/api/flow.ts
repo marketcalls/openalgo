@@ -115,7 +115,11 @@ export async function updateWorkflow(
     nodes?: Node[]
     edges?: Edge[]
   }
-): Promise<Workflow> {
+): Promise<Workflow & { needs_reactivate?: boolean }> {
+  // needs_reactivate is set when the saved graph changed the trigger config of a
+  // workflow that is currently active: the scheduler and monitors registered the
+  // old configuration at activation time and will keep using it until the
+  // workflow is deactivated and reactivated.
   const response = await webClient.put(`${FLOW_API_BASE}/workflows/${id}`, data)
   return response.data
 }
