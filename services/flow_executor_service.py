@@ -11,7 +11,7 @@ import threading
 import time as time_module
 import weakref
 from datetime import datetime, time, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from sqlalchemy import and_
 
@@ -29,6 +29,61 @@ logger = logging.getLogger(__name__)
 # Execution limits
 MAX_NODE_DEPTH = 100
 MAX_NODE_VISITS = 500
+
+# Logic gates combine the boolean results of their inputs. Wires into these
+# nodes are data edges, not control edges — see the edge filter below.
+GATE_NODE_TYPES = ("andGate", "orGate", "notGate")
+
+# Nodes that place, change or cancel something at the broker. An unresolved
+# {{variable}} in one of their order-defining fields is treated as a failure
+# rather than being allowed to fall back to a default -- see
+# NodeExecutor.unresolved_order_fields.
+ORDER_NODE_TYPES = frozenset(
+    {
+        "placeOrder",
+        "smartOrder",
+        "optionsOrder",
+        "optionsMultiOrder",
+        "basketOrder",
+        "splitOrder",
+        "modifyOrder",
+        "cancelOrder",
+        "closePositions",
+    }
+)
+
+# Fields on those nodes that decide what actually reaches the broker. Label-ish
+# fields (strategy, strategyTag, outputVariable) are deliberately absent: an
+# unresolved reference there is untidy, not dangerous.
+ORDER_CRITICAL_FIELDS = frozenset(
+    {
+        "symbol",
+        "exchange",
+        "action",
+        "quantity",
+        "product",
+        "priceType",
+        "pricetype",
+        "price",
+        "triggerPrice",
+        "splitSize",
+        "positionSize",
+        "underlying",
+        "strike",
+        "optionType",
+        "expiryDate",
+        "orderId",
+        "newQuantity",
+        "newPrice",
+        "newTriggerPrice",
+        "orders",
+        "legs",
+    }
+)
+
+# What an unresolved reference looks like after interpolation: WorkflowContext
+# returns the original {{...}} text when a path does not resolve.
+_UNRESOLVED_PATTERN = re.compile(r"\{\{[^}]*\}\}")
 
 
 def symbol_prefix_filter(column, prefix: str):
@@ -266,6 +321,11 @@ class NodeExecutor:
         # carries this field). Defaults to the workflow's own name; a node may
         # override it with `strategyTag`.
         self.default_strategy = default_strategy or "flow_workflow"
+        # Nodes that reported failure during this run. A non-empty list makes
+        # the run `failed`; previously every run was recorded as `completed`
+        # unless a handler raised, so a broker rejection returned HTTP 200
+        # "Workflow executed successfully".
+        self.errors: list[dict] = []
 
     def strategy_tag(self, node_data: dict) -> str:
         """Strategy label for an order node.
@@ -289,6 +349,41 @@ class NodeExecutor:
         if output_var and output_var.strip():
             self.context.set_variable(output_var.strip(), result)
             self.log(f"Stored result in variable: {output_var}")
+
+    def unresolved_order_fields(self, node_data: dict) -> list[tuple[str, str]]:
+        """Order-defining fields still holding an unresolved {{reference}}.
+
+        Interpolation is deliberately forgiving: an unknown path passes the
+        literal `{{name}}` text through rather than raising. For most fields
+        that is the right call, but on an order node it was silently dangerous
+        -- `get_int` cannot parse `{{webhook.qty}}`, so it returned its default
+        of 1, and `get_str` handed the literal text to the broker mapper, which
+        fell back to MARKET. A webhook that simply omitted a key therefore
+        produced a successful order for the wrong size at the wrong price type,
+        with nothing in the run to say so.
+
+        Checked before dispatch so the node fails instead of the broker call
+        being made with substituted values.
+        """
+        found: list[tuple[str, str]] = []
+        for key in ORDER_CRITICAL_FIELDS:
+            raw = node_data.get(key)
+            if not isinstance(raw, str) or "{{" not in raw:
+                continue
+            text = self.context.interpolate(raw)
+            if _UNRESOLVED_PATTERN.search(text):
+                found.append((key, text))
+        return sorted(found)
+
+    def unresolved_error(self, node_type: str, fields: list[tuple[str, str]]) -> dict:
+        """The failure result for a node blocked by unresolved references."""
+        detail = ", ".join(f"{key}={text!r}" for key, text in fields)
+        message = (
+            f"{node_type} has unresolved variable(s) in {detail}. "
+            "Refusing to send it with substituted values."
+        )
+        self.log(message, "error")
+        return {"status": "error", "message": message, "unresolved": [f for f, _ in fields]}
 
     def get_str(self, node_data: dict, key: str, default: str = "") -> str:
         """Get interpolated string value from node data"""
@@ -878,27 +973,105 @@ class NodeExecutor:
             return ""
         return expiry_str.replace("-", "").upper()
 
+    def _supplied(self, node_data: dict, *keys: str) -> str | None:
+        """First key the author actually filled in, interpolated. None if none."""
+        for key in keys:
+            if key not in node_data:
+                continue
+            text = self.context.interpolate(str(node_data.get(key) or "")).strip()
+            if text:
+                return text
+        return None
+
     def execute_modify_order(self, node_data: dict) -> dict:
-        """Execute Modify Order node"""
+        """Execute Modify Order node.
+
+        Every attribute except the ones being changed is read back from the live
+        order. The editor only collects order id, new price and new quantity, so
+        the rest used to come from hardcoded defaults -- action "BUY", product
+        "MIS", price type "LIMIT", quantity 1 -- and those are sent to the broker
+        verbatim. Brokers that carry them on a modify (Kotak, MStock, Pocketful,
+        Tradejini, Definedge send action; Angel and Compositedge send product)
+        would flip a live SELL to BUY or an NRML position to MIS, and a 500-lot
+        order silently became 1 lot on brokers that accept the field without
+        validating it. Resolving from the order book means an unspecified field
+        keeps its current value, which is what "modify" means.
+        """
         order_id = self.get_str(node_data, "orderId", "")
-        symbol = self.get_str(node_data, "symbol", "")
-        exchange = self.get_str(node_data, "exchange", "NSE")
-        action = self.get_str(node_data, "action", "BUY")
-        # Support both newQuantity (frontend) and quantity (legacy) field names
-        quantity = self.get_int(node_data, "newQuantity", 0) or self.get_int(
-            node_data, "quantity", 1
-        )
-        price_type = self.get_str(node_data, "priceType", "LIMIT")
-        product = self.get_str(node_data, "product", "MIS")
-        # Support both newPrice (frontend) and price (legacy) field names
-        price = self.get_float(node_data, "newPrice", 0) or self.get_float(node_data, "price", 0)
-        # Support both newTriggerPrice (frontend) and triggerPrice (legacy) field names
-        trigger_price = self.get_float(node_data, "newTriggerPrice", 0) or self.get_float(
-            node_data, "triggerPrice", 0
-        )
+        if not order_id:
+            message = "orderId is required to modify an order"
+            self.log(f"Modify order aborted: {message}", "error")
+            return {"status": "error", "message": message}
+
+        existing = self.client.get_order_status(order_id)
+        if existing.get("status") != "success" or not existing.get("data"):
+            message = (
+                f"Could not read order {order_id} to modify it: "
+                f"{existing.get('message', 'order not found')}"
+            )
+            self.log(f"Modify order aborted: {message}", "error")
+            return {"status": "error", "message": message}
+
+        live = existing["data"]
+
+        # Identity of the order: never guessed. An explicit node value still
+        # wins, so an imported workflow that set these on purpose keeps working.
+        symbol = self._supplied(node_data, "symbol") or str(live.get("symbol", ""))
+        exchange = self._supplied(node_data, "exchange") or str(live.get("exchange", ""))
+        action = (self._supplied(node_data, "action") or str(live.get("action", ""))).upper()
+        product = self._supplied(node_data, "product") or str(live.get("product", ""))
+        price_type = (
+            self._supplied(node_data, "priceType", "pricetype") or str(live.get("pricetype", ""))
+        ).upper()
+
+        missing = [
+            name
+            for name, value in (
+                ("symbol", symbol),
+                ("exchange", exchange),
+                ("action", action),
+                ("product", product),
+                ("priceType", price_type),
+            )
+            if not value
+        ]
+        if missing:
+            message = (
+                f"Order {order_id} did not report {', '.join(missing)}; "
+                "refusing to modify it with a guessed value"
+            )
+            self.log(f"Modify order aborted: {message}", "error")
+            return {"status": "error", "message": message}
+
+        # The three fields the node exists to change. Unspecified means unchanged,
+        # so each falls back to the live order rather than to a literal default.
+        quantity_text = self._supplied(node_data, "newQuantity", "quantity")
+        price_text = self._supplied(node_data, "newPrice", "price")
+        trigger_text = self._supplied(node_data, "newTriggerPrice", "triggerPrice")
+
+        try:
+            quantity = (
+                int(float(quantity_text))
+                if quantity_text
+                else int(float(live.get("quantity", 0) or 0))
+            )
+            price = float(price_text) if price_text else float(live.get("price", 0) or 0)
+            trigger_price = (
+                float(trigger_text) if trigger_text else float(live.get("trigger_price", 0) or 0)
+            )
+        except (TypeError, ValueError) as e:
+            message = f"Modify order got a non-numeric price or quantity: {e}"
+            self.log(f"Modify order aborted: {message}", "error")
+            return {"status": "error", "message": message}
+
+        if quantity <= 0:
+            message = f"Modify order needs a positive quantity, got {quantity}"
+            self.log(f"Modify order aborted: {message}", "error")
+            return {"status": "error", "message": message}
 
         self.log(
-            f"Modifying order: {order_id} - {symbol} {action} qty={quantity} price={price} trigger={trigger_price}"
+            f"Modifying order: {order_id} - {symbol} {action} qty={quantity} "
+            f"price={price} trigger={trigger_price}"
         )
         result = self.client.modify_order(
             order_id=order_id,
@@ -935,16 +1108,48 @@ class NodeExecutor:
         self.log(
             f"Cancel all result: {result}", "info" if result.get("status") == "success" else "error"
         )
+        # Every other action node stores its result. Without this an
+        # outputVariable set on this node stayed undefined, and the downstream
+        # {{...}} that read it resolved to its own literal text.
+        self.store_output(node_data, result)
         return result
 
     def execute_close_positions(self, node_data: dict) -> dict:
-        """Execute Close All Positions node - squares off all open positions"""
-        self.log("Closing all positions")
-        result = self.client.close_all_positions()
+        """Execute Close Positions node - squares off positions.
+
+        Honours the symbol/exchange/product filter the node advertises. The
+        filter fields were read by nothing: whatever the user set, the executor
+        called the unconditional square-off service. Because the node ships with
+        exchange NSE and product MIS pre-filled, its canvas badge always claimed
+        a scoped close, so a node that looked like "square off NSE intraday"
+        liquidated MCX and NFO positions and overnight NRML/CNC holdings too.
+        With no symbol set the behaviour is unchanged: close everything.
+        """
+        symbol = self._supplied(node_data, "symbol")
+        if not symbol:
+            self.log("Closing all positions")
+            result = self.client.close_all_positions()
+            self.log(
+                f"Close all positions result: {result}",
+                "info" if result.get("status") == "success" else "error",
+            )
+            self.store_output(node_data, result)
+            return result
+
+        exchange = self._supplied(node_data, "exchange") or "NSE"
+        product = self._supplied(node_data, "product") or "MIS"
+        self.log(f"Closing position: {symbol}@{exchange} ({product})")
+        result = self.client.close_position(
+            symbol=symbol,
+            exchange=exchange,
+            product_type=product,
+            strategy=self.strategy_tag(node_data),
+        )
         self.log(
-            f"Close all positions result: {result}",
+            f"Close position result: {result}",
             "info" if result.get("status") == "success" else "error",
         )
+        self.store_output(node_data, result)
         return result
 
     def execute_basket_order(self, node_data: dict) -> dict:
@@ -1049,7 +1254,7 @@ class NodeExecutor:
         exchange = self.get_str(node_data, "exchange", "NSE")
         self.log(f"Getting depth for: {symbol}")
         result = self.client.get_depth(symbol=symbol, exchange=exchange)
-        self.log(f"Depth result received")
+        self.log("Depth result received")
         self.store_output(node_data, result)
         return result
 
@@ -1307,11 +1512,30 @@ class NodeExecutor:
         tail_bars = self.get_int(node_data, "tailBars", 5)
         offset_bars = self.get_int(node_data, "offsetBars", 0)
         source_field = self.get_str(node_data, "sourceField", "")
-        params_raw = self.get_str(node_data, "params", "{}")
-        try:
-            params = json.loads(params_raw) if params_raw.strip() else {}
-        except (ValueError, TypeError):
-            return {"status": "error", "message": f"Invalid params JSON: {params_raw}"}
+        # The contract is a JSON string, and the validator now refuses anything
+        # else. A workflow saved before that check exists may still carry the
+        # object form, which used to reach json.loads as "{'period': 14}" and
+        # fail the run outright -- so an already-stored graph is normalised
+        # rather than broken.
+        params_value = node_data.get("params")
+        if isinstance(params_value, dict):
+            self.log(
+                "Indicator params were stored as an object; normalising to the "
+                "JSON string form. Re-save the node to store it correctly.",
+                "warning",
+            )
+            params = params_value
+        else:
+            params_raw = self.get_str(node_data, "params", "{}")
+            try:
+                params = json.loads(params_raw) if params_raw.strip() else {}
+            except (ValueError, TypeError):
+                return {"status": "error", "message": f"Invalid params JSON: {params_raw}"}
+        if not isinstance(params, dict):
+            return {
+                "status": "error",
+                "message": f"params must resolve to a JSON object, got {type(params).__name__}",
+            }
 
         source_series_raw = node_data.get("sourceSeries")
         if source_series_raw not in (None, ""):
@@ -1433,7 +1657,7 @@ class NodeExecutor:
         """Execute OrderBook node"""
         self.log("Fetching order book")
         result = self.client.orderbook()
-        self.log(f"Order book received")
+        self.log("Order book received")
         self.store_output(node_data, result)
         return result
 
@@ -1441,7 +1665,7 @@ class NodeExecutor:
         """Execute TradeBook node"""
         self.log("Fetching trade book")
         result = self.client.tradebook()
-        self.log(f"Trade book received")
+        self.log("Trade book received")
         self.store_output(node_data, result)
         return result
 
@@ -1449,7 +1673,7 @@ class NodeExecutor:
         """Execute PositionBook node"""
         self.log("Fetching position book")
         result = self.client.positionbook()
-        self.log(f"Position book received")
+        self.log("Position book received")
         self.store_output(node_data, result)
         return result
 
@@ -1457,7 +1681,7 @@ class NodeExecutor:
         """Execute Holdings node"""
         self.log("Fetching holdings")
         result = self.client.holdings()
-        self.log(f"Holdings received")
+        self.log("Holdings received")
         self.store_output(node_data, result)
         return result
 
@@ -1465,7 +1689,7 @@ class NodeExecutor:
         """Execute Funds node"""
         self.log("Fetching funds")
         result = self.client.funds()
-        self.log(f"Funds received")
+        self.log("Funds received")
         self.store_output(node_data, result)
         return result
 
@@ -1552,7 +1776,7 @@ class NodeExecutor:
             expiry_date=expiry_date,
             strike_count=strike_count,
         )
-        self.log(f"Option chain result received")
+        self.log("Option chain result received")
         self.store_output(node_data, result)
         return result
 
@@ -1635,17 +1859,30 @@ class NodeExecutor:
             return None
         if isinstance(raw, str):
             raw = self.context.interpolate(raw).strip()
+            # A basket was configured, so an empty result means interpolation
+            # dropped it - an unset {{variable}}, not a request to price the
+            # single position instead.
             if not raw:
-                return None
+                raise ValueError(
+                    "Margin positions is empty after variable interpolation; "
+                    "check the {{variable}} references in the basket."
+                )
             try:
                 raw = json.loads(raw)
-            except (TypeError, ValueError):
-                self.log("Margin positions JSON is not valid JSON; using the single position", "warning")
-                return None
+            except (TypeError, ValueError) as exc:
+                # Falling back to the single position here priced a *different*
+                # estimate - and the panel never exposes those fields, so it
+                # was an empty symbol - while only logging a warning.
+                raise ValueError(
+                    f"Margin positions is not valid JSON after variable "
+                    f"interpolation: {exc}"
+                ) from exc
         if isinstance(raw, dict):
             raw = [raw]
-        if not isinstance(raw, list) or not raw:
-            return None
+        if not isinstance(raw, list):
+            raise ValueError("Margin positions must be a JSON array of position objects.")
+        if not raw:
+            raise ValueError("Margin positions is an empty basket; add at least one position.")
         if any(not isinstance(entry, dict) for entry in raw):
             # Dropping the bad entries would quietly price part of the basket
             # and report it as the whole estimate.
@@ -1675,6 +1912,13 @@ class NodeExecutor:
         price_type = self.get_str(node_data, "priceType", "MARKET")
         if positions:
             self.log(f"Calculating margin for a basket of {len(positions)} position(s)")
+        elif not symbol:
+            # No basket and no single position. Calling the broker with an empty
+            # symbol returns a confusing broker-side error instead of naming the
+            # thing the node is actually missing.
+            message = "Margin node has no positions and no symbol to price."
+            self.log(f"Margin failed: {message}", "error")
+            return {"status": "error", "message": message}
         else:
             self.log(f"Calculating margin for: {symbol} ({exchange})")
         result = self.client.margin(
@@ -1790,9 +2034,12 @@ class NodeExecutor:
             tree = ast.parse(cleaned, mode="eval")
             return float(_eval(tree))
         except SyntaxError as e:
-            raise ValueError(f"Invalid expression syntax: {e}")
+            raise ValueError(f"Invalid expression syntax: {e}") from e
 
     # === Utility Nodes ===
+
+    # Longest a delay node may block. Anything longer belongs in a schedule.
+    DELAY_MAX_SECONDS = 300
 
     def execute_delay(self, node_data: dict) -> dict:
         """Execute Delay node"""
@@ -1810,6 +2057,18 @@ class NodeExecutor:
         else:
             delay_ms = int(node_data.get("delayMs", 1000))
             delay_seconds = delay_ms / 1000
+
+        # Bounded. This sleeps inside the per-workflow lock and, for a webhook
+        # trigger, inside the request that fired it -- so an unbounded "2 hours"
+        # pinned a Flask worker and made every later trigger return
+        # already_running for the duration.
+        if delay_seconds > self.DELAY_MAX_SECONDS:
+            self.log(
+                f"Delay of {delay_seconds}s exceeds the {self.DELAY_MAX_SECONDS}s "
+                "maximum; waiting the maximum instead.",
+                "warning",
+            )
+            delay_seconds = self.DELAY_MAX_SECONDS
 
         self.log(f"Waiting for {delay_seconds} seconds")
         time_module.sleep(delay_seconds)
@@ -1898,69 +2157,166 @@ class NodeExecutor:
         )
         return result
 
+    # The editor's timeout box is labelled "Timeout (ms)" and its own fallback is
+    # 30000, while the executor passed the number straight to httpx as seconds --
+    # so the UI minimum of 1000 meant a 1000-second timeout. Values are read as
+    # milliseconds and capped, because this call blocks the workflow lock and a
+    # Flask worker for its whole duration.
+    HTTP_TIMEOUT_MAX_MS = 60_000
+    HTTP_TIMEOUT_DEFAULT_MS = 30_000
+
+    @staticmethod
+    def _redact_url(url: str) -> str:
+        """URL without credentials or query string, for logs.
+
+        The full interpolated URL was written to the execution log, which is
+        persisted verbatim and rendered in the UI -- so any API key or token in
+        a query string was stored in the clear.
+        """
+        from urllib.parse import urlsplit, urlunsplit
+
+        try:
+            parts = urlsplit(url)
+        except ValueError:
+            return "<unparseable url>"
+        host = parts.hostname or ""
+        if parts.port:
+            host = f"{host}:{parts.port}"
+        redacted = urlunsplit((parts.scheme, host, parts.path, "", ""))
+        return f"{redacted}?<redacted>" if parts.query else redacted
+
+    @classmethod
+    def _check_http_destination(cls, url: str) -> str | None:
+        """Reject destinations a workflow must not reach. None when allowed.
+
+        The URL is interpolated from workflow variables, and a webhook trigger
+        puts its caller's JSON body into that context -- so whoever can fire the
+        webhook can steer this request. Without a check it reaches the loopback
+        interface (this very Flask app, with its session cookies), private LAN
+        hosts, and cloud metadata at 169.254.169.254, and the response body is
+        stored in an output variable, so the read is not blind.
+        """
+        import socket
+        from ipaddress import ip_address
+        from urllib.parse import urlsplit
+
+        try:
+            parts = urlsplit(url)
+        except ValueError:
+            return "URL could not be parsed"
+
+        if parts.scheme not in ("http", "https"):
+            return f"scheme {parts.scheme or 'none'!r} is not allowed; use http or https"
+
+        host = parts.hostname
+        if not host:
+            return "URL has no host"
+
+        try:
+            infos = socket.getaddrinfo(host, parts.port or None, proto=socket.IPPROTO_TCP)
+        except socket.gaierror as e:
+            return f"host {host!r} could not be resolved ({e})"
+
+        for info in infos:
+            address = ip_address(info[4][0])
+            if (
+                address.is_private
+                or address.is_loopback
+                or address.is_link_local
+                or address.is_reserved
+                or address.is_multicast
+                or address.is_unspecified
+            ):
+                return f"host {host!r} resolves to {address}, which is not a public address"
+        return None
+
     def execute_http_request(self, node_data: dict) -> dict:
         """Execute HTTP Request node"""
         import httpx
-
-        from utils.httpx_client import get_httpx_client
 
         method = self.get_str(node_data, "method", "GET").upper()
         url = self.get_str(node_data, "url", "")
         headers_raw = node_data.get("headers", {})
         body = node_data.get("body", "")
-        timeout = self.get_int(node_data, "timeout", 30)
+
+        timeout_ms = self.get_int(node_data, "timeout", self.HTTP_TIMEOUT_DEFAULT_MS)
+        if timeout_ms <= 0:
+            timeout_ms = self.HTTP_TIMEOUT_DEFAULT_MS
+        timeout = min(timeout_ms, self.HTTP_TIMEOUT_MAX_MS) / 1000
 
         if not url:
             return {"status": "error", "message": "No URL specified"}
 
+        # The editor writes this field as a JSON string; only a dict was ever
+        # read, so every header a user typed was silently dropped and requests
+        # meant to be authenticated went out bare.
         headers = {}
+        if isinstance(headers_raw, str):
+            text = self.context.interpolate(headers_raw).strip()
+            if text:
+                try:
+                    headers_raw = json.loads(text)
+                except json.JSONDecodeError as e:
+                    message = f"headers is not valid JSON: {e}"
+                    self.log(f"HTTP request aborted: {message}", "error")
+                    return {"status": "error", "message": message}
+            else:
+                headers_raw = {}
         if isinstance(headers_raw, dict):
             for key, value in headers_raw.items():
-                headers[key] = self.context.interpolate(str(value))
+                headers[str(key)] = self.context.interpolate(str(value))
+        else:
+            message = f"headers must be a JSON object, got {type(headers_raw).__name__}"
+            self.log(f"HTTP request aborted: {message}", "error")
+            return {"status": "error", "message": message}
 
         url = self.context.interpolate(url)
         if isinstance(body, str) and body:
             body = self.context.interpolate(body)
 
-        self.log(f"HTTP {method} {url}")
+        rejection = self._check_http_destination(url)
+        if rejection:
+            message = f"refusing to send this request: {rejection}"
+            self.log(f"HTTP request aborted: {message}", "error")
+            return {"status": "error", "message": message}
 
-        client = get_httpx_client()
+        self.log(f"HTTP {method} {self._redact_url(url)}")
 
-        try:
-            if method == "GET":
-                response = client.get(url, headers=headers, timeout=timeout)
-            elif method == "POST":
-                try:
-                    body_json = json.loads(body) if body else {}
-                    response = client.post(url, json=body_json, headers=headers, timeout=timeout)
-                except json.JSONDecodeError:
-                    response = client.post(url, content=body, headers=headers, timeout=timeout)
-            elif method == "PUT":
-                try:
-                    body_json = json.loads(body) if body else {}
-                    response = client.put(url, json=body_json, headers=headers, timeout=timeout)
-                except json.JSONDecodeError:
-                    response = client.put(url, content=body, headers=headers, timeout=timeout)
-            elif method == "DELETE":
-                response = client.delete(url, headers=headers, timeout=timeout)
-            else:
-                return {"status": "error", "message": f"Unsupported method: {method}"}
-
+        # Its own client, not the shared broker pool: a slow or hostile endpoint
+        # here must not consume a connection that order placement needs.
+        # follow_redirects stays off so a redirect cannot escape the destination
+        # check above.
+        with httpx.Client(timeout=timeout, follow_redirects=False) as client:
             try:
-                response_data = response.json()
-            except Exception:
-                response_data = response.text
+                if method == "GET":
+                    response = client.get(url, headers=headers)
+                elif method in ("POST", "PUT", "PATCH"):
+                    send = getattr(client, method.lower())
+                    try:
+                        body_json = json.loads(body) if body else {}
+                        response = send(url, json=body_json, headers=headers)
+                    except json.JSONDecodeError:
+                        response = send(url, content=body, headers=headers)
+                elif method == "DELETE":
+                    response = client.delete(url, headers=headers)
+                else:
+                    return {"status": "error", "message": f"Unsupported method: {method}"}
 
-            result = {
-                "status": "success" if response.is_success else "error",
-                "statusCode": response.status_code,
-                "data": response_data,
-            }
-            self.store_output(node_data, result)
-            return result
+                try:
+                    response_data = response.json()
+                except Exception:
+                    response_data = response.text
 
-        except httpx.HTTPError as e:
-            return {"status": "error", "message": str(e)}
+                result = {
+                    "status": "success" if response.is_success else "error",
+                    "statusCode": response.status_code,
+                    "data": response_data,
+                }
+                self.store_output(node_data, result)
+                return result
+
+            except httpx.HTTPError as e:
+                return {"status": "error", "message": str(e)}
 
     # === Condition Nodes ===
 
@@ -1990,6 +2346,15 @@ class NodeExecutor:
         condition = self.get_str(node_data, "condition", "exists")
         threshold = self.get_float(node_data, "threshold", 0.0)
 
+        if not symbol:
+            # Fail closed. An empty symbol reads back a zero-quantity position,
+            # which makes `not_exists` true and `exists` false -- so an
+            # unconfigured node silently answered whatever its condition needed
+            # to let the downstream order fire.
+            message = "Position Check has no symbol set, so it cannot guard anything."
+            self.log(message, "error")
+            return {"status": "error", "condition": False, "message": message}
+
         self.log(f"Checking position for: {symbol}")
         result = self.client.get_open_position(
             symbol=symbol, exchange=exchange, product_type=product
@@ -2016,8 +2381,13 @@ class NodeExecutor:
             condition_met = pnl < threshold
             log_msg = f"Position check: pnl={pnl} < {threshold} = {condition_met}"
         else:
-            condition_met = False
-            log_msg = f"Position check: unknown condition '{condition}' — returning False"
+            message = (
+                f"condition {condition!r} is not one this node can evaluate "
+                "(exists, not_exists, quantity_above, quantity_below, "
+                "pnl_above, pnl_below)"
+            )
+            self.log(f"Position check aborted: {message}", "error")
+            return {"status": "error", "condition": False, "message": message}
 
         self.log(log_msg)
         return {
@@ -2061,7 +2431,15 @@ class NodeExecutor:
                 "warning",
             )
         else:
-            min_available = 0.0
+            # Fail closed. Defaulting to zero turned this into `available >= 0`,
+            # which is true on any balance including a negative one, so the guard
+            # silently let every downstream order through.
+            message = (
+                "Fund Check has no Minimum Available set, so it cannot guard "
+                "anything. Open the node and set a minimum."
+            )
+            self.log(message, "error")
+            return {"status": "error", "condition": False, "message": message}
 
         self.log("Checking funds")
         result = self.client.funds()
@@ -2085,12 +2463,36 @@ class NodeExecutor:
         exchange = self.get_str(node_data, "exchange", "NSE")
         field = self.get_str(node_data, "field", "ltp")
         operator = self.get_str(node_data, "operator", ">")
+        if field not in self.PRICE_CONDITION_FIELDS:
+            message = (
+                f"field {field!r} is not one of "
+                f"{', '.join(sorted(self.PRICE_CONDITION_FIELDS))}"
+            )
+            self.log(f"Price check aborted: {message}", "error")
+            return {"status": "error", "condition": False, "message": message}
+
+        # Same rule as varCondition: an operator the comparison cannot honour
+        # used to fall through to a silent False, which does not mean "the
+        # condition did not hold" -- it means the check never ran, and the graph
+        # then took the false branch as though it had.
+        if operator not in self.COMPARISON_OPERATORS:
+            message = (
+                f"operator {operator!r} is not one of "
+                f"{', '.join(sorted(self.COMPARISON_OPERATORS))}"
+            )
+            self.log(f"Price check aborted: {message}", "error")
+            return {"status": "error", "condition": False, "message": message}
+
         # Accept both `value` (current UI) and `threshold` (legacy) for back-compat.
         value = node_data.get("value", node_data.get("threshold", 0))
         try:
-            threshold = float(value) if value not in (None, "") else 0.0
+            threshold = float(
+                self.context.interpolate(str(value)) if value not in (None, "") else 0.0
+            )
         except (TypeError, ValueError):
-            threshold = 0.0
+            message = f"value did not resolve to a number: {value!r}"
+            self.log(f"Price check aborted: {message}", "error")
+            return {"status": "error", "condition": False, "message": message}
 
         self.log(f"Checking price for: {symbol}")
         result = self.client.get_quotes(symbol=symbol, exchange=exchange)
@@ -2124,38 +2526,33 @@ class NodeExecutor:
         docs/prompt/flow-import-format.md 8.5 ("wait for a varCondition
         node").
         """
-        left_raw = self.get_str(node_data, "leftValue", "0")
-        right_raw = self.get_str(node_data, "rightValue", "0")
-        operator = self.get_str(node_data, "operator", ">")
+        # Never route a branch on a value the author did not configure. An
+        # unresolvable operand was already refused, but an *empty* one slipped
+        # through: `get_str` substitutes its default for a falsy field, so a
+        # blank Left Value became "0" and compared as `0 > 30 = False` with a
+        # success status - taking the else-path on nothing at all. The editor's
+        # validator rejects empty operands before a run starts, but that guard
+        # lives outside the node and does not cover every path in (imported
+        # JSON, a hand-edited flow), so the node now defends itself.
+        left, error = self._operand(node_data, "leftValue")
+        if error:
+            return error
+        right, error = self._operand(node_data, "rightValue")
+        if error:
+            return error
 
-        # Never coerce an unresolvable operand to 0.0. A misspelled variable
-        # or an indicator that returned no value would otherwise compare as
-        # "0" and route a real trading branch on a value the user never
-        # configured. Fail the condition loudly instead.
-        try:
-            left = float(left_raw)
-        except (TypeError, ValueError):
-            self.log(
-                f"Var check aborted: left operand did not resolve to a number: {left_raw!r}",
-                "error",
+        operator = self.get_str(node_data, "operator", ">")
+        # An operator `_compare` does not recognise used to fall through to
+        # False, which is indistinguishable from a condition that genuinely did
+        # not hold: the flow would quietly take the else-path forever. The
+        # dropdown cannot produce one, an imported workflow can.
+        if operator not in self.COMPARISON_OPERATORS:
+            message = (
+                f"operator {operator!r} is not one of "
+                f"{', '.join(sorted(self.COMPARISON_OPERATORS))}"
             )
-            return {
-                "status": "error",
-                "condition": False,
-                "message": f"leftValue did not resolve to a number: {left_raw!r}",
-            }
-        try:
-            right = float(right_raw)
-        except (TypeError, ValueError):
-            self.log(
-                f"Var check aborted: right operand did not resolve to a number: {right_raw!r}",
-                "error",
-            )
-            return {
-                "status": "error",
-                "condition": False,
-                "message": f"rightValue did not resolve to a number: {right_raw!r}",
-            }
+            self.log(f"Var check aborted: {message}", "error")
+            return {"status": "error", "condition": False, "message": message}
 
         condition_met = self._compare(left, operator, right)
         self.log(f"Var check: {left} {operator} {right} = {condition_met}")
@@ -2166,6 +2563,45 @@ class NodeExecutor:
             "operator": operator,
             "right": right,
         }
+
+    def _operand(self, node_data: dict, key: str) -> tuple[float | None, dict | None]:
+        """Resolve one varCondition operand to a float.
+
+        Returns `(value, None)` on success and `(None, error_result)` when the
+        operand is empty, unresolved (`{{typo}}` survives interpolation as
+        literal text) or otherwise not a number - the error result is the node
+        result to return, so the condition takes NEITHER branch.
+        """
+        raw = node_data.get(key, "")
+        # A literal 0 is falsy, so it cannot go through `get_str`'s default
+        # substitution or it would be indistinguishable from an empty field.
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            return float(raw), None
+
+        text = self.context.interpolate(str(raw if raw is not None else "")).strip()
+        if not text:
+            message = f"{key} is empty"
+        else:
+            try:
+                return float(text), None
+            except (TypeError, ValueError):
+                message = f"{key} did not resolve to a number: {text!r}"
+
+        self.log(f"Var check aborted: {message}", "error")
+        return None, {"status": "error", "condition": False, "message": message}
+
+    # Quote fields priceCondition can read, matching the editor's dropdown and
+    # the import reference. Anything else used to read 0.0 out of the quote dict
+    # and compare that, so a typo produced a confident, wrong answer.
+    PRICE_CONDITION_FIELDS = frozenset(
+        {"ltp", "open", "high", "low", "prev_close", "change_percent"}
+    )
+
+    # Operator vocabularies `_compare` understands: the symbols the editor
+    # writes, plus the word forms some legacy node configs still carry.
+    COMPARISON_OPERATORS = frozenset(
+        {">", "gt", "<", "lt", "==", "eq", "!=", "neq", ">=", "gte", "<=", "lte"}
+    )
 
     @staticmethod
     def _compare(left: float, operator: str, right: float) -> bool:
@@ -2218,10 +2654,18 @@ class NodeExecutor:
         """Execute Time Condition node"""
         target_time_str = node_data.get("targetTime", "09:30")
         operator = node_data.get("operator", ">=")
+        # The editor writes conditionType (entry/exit/custom) as a role tag on
+        # the node. It never changes the comparison, but echoing it into the log
+        # line and the result payload is what makes a graph with several time
+        # gates readable in the execution log — "which 15:15 check was that?".
+        condition_type = node_data.get("conditionType", "entry")
 
         now = datetime.now().time()
-        target_hour, target_minute, _ = parse_time_string(target_time_str, 9, 30)
-        target_time = time(target_hour, target_minute)
+        # Seconds are kept. Dropping them made "after 15:29:59" behave as
+        # "after 15:29:00", a minute early, while waitUntil parsing the very
+        # same string honoured them -- so two nodes given one time disagreed.
+        target_hour, target_minute, target_second = parse_time_string(target_time_str, 9, 30)
+        target_time = time(target_hour, target_minute, target_second)
 
         now_seconds = now.hour * 3600 + now.minute * 60 + now.second
         target_seconds = target_time.hour * 3600 + target_time.minute * 60 + target_time.second
@@ -2235,26 +2679,61 @@ class NodeExecutor:
         elif operator == "<":
             condition_met = now_seconds < target_seconds
         elif operator == "==":
+            # Deliberately minute-precision: a second-exact equality would only
+            # hold if a poll landed on that exact second, so it would almost
+            # never fire.
             condition_met = now.hour == target_time.hour and now.minute == target_time.minute
         else:
-            condition_met = False
+            message = f"operator {operator!r} is not one of >=, <=, >, <, =="
+            self.log(f"Time condition aborted: {message}", "error")
+            return {"status": "error", "condition": False, "message": message}
 
         self.log(
-            f"Time condition: {now.strftime('%H:%M')} {operator} {target_time_str} = {condition_met}"
+            f"Time condition ({condition_type}): {now.strftime('%H:%M')} "
+            f"{operator} {target_time_str} = {condition_met}"
         )
-        return {"status": "success", "condition": condition_met}
+        return {
+            "status": "success",
+            "condition": condition_met,
+            "condition_type": condition_type,
+            "current_time": now.strftime("%H:%M:%S"),
+            "target_time": target_time_str,
+            "operator": operator,
+        }
 
     def execute_price_alert(self, node_data: dict) -> dict:
         """Execute Price Alert trigger node"""
+        from services.flow_price_monitor_service import FlowPriceMonitor
+
         symbol = self.get_str(node_data, "symbol", "")
         exchange = self.get_str(node_data, "exchange", "NSE")
-        condition_type = self.get_str(node_data, "condition", "greater_than")
+        # The editor writes its own vocabulary ("above", "crosses_below") while
+        # this branch chain only ever spoke the monitor's canonical one. An
+        # unmapped name matched nothing, so condition_met stayed False and the
+        # run took the No branch even when the level was clearly met
+        # ("LTP=1304.8 above 1304.0 = False"), silently skipping the order
+        # wired to Yes. Normalize through the monitor's own alias table.
+        condition_type = FlowPriceMonitor.normalize_condition(
+            self.get_str(node_data, "condition", "greater_than")
+        )
         price = self.get_float(node_data, "price", 0)
         price_lower = self.get_float(node_data, "priceLower", 0)
         price_upper = self.get_float(node_data, "priceUpper", 0)
 
         if not symbol:
             return {"status": "error", "condition": False}
+
+        # When the price monitor started this run it has already evaluated the
+        # condition against the tick that fired it. Re-fetching a quote here
+        # races that tick - the price can retreat between the alert and the
+        # graph walk - and a stateless re-check can never confirm a crossing at
+        # all. Trust the trigger and carry its price through.
+        webhook = self.context.get_variable("webhook") or {}
+        if isinstance(webhook, dict) and webhook.get("trigger_type") == "price_alert":
+            ltp = float(webhook.get("trigger_price") or 0)
+            self.log(f"Price alert fired by monitor: {symbol} LTP={ltp} {condition_type} {price}")
+            self.store_output(node_data, {"ltp": ltp, "condition_met": True})
+            return {"status": "success", "condition": True, "ltp": ltp}
 
         result = self.client.get_quotes(symbol=symbol, exchange=exchange)
         if result.get("status") != "success":
@@ -2263,18 +2742,43 @@ class NodeExecutor:
         data = result.get("data", {})
         ltp = float(data.get("ltp", 0) if data else 0)
 
-        condition_met = False
-        if condition_type == "greater_than":
+        if condition_type in ("greater_than", "crossing_up"):
+            # A crossing needs the previous tick, which a single graph walk does
+            # not have. Fall back to the level test rather than to False, which
+            # would be indistinguishable from "the level was not reached".
             condition_met = ltp > price
-        elif condition_type == "less_than":
+        elif condition_type in ("less_than", "crossing_down"):
             condition_met = ltp < price
         elif condition_type == "crossing":
             tolerance = price * 0.001
             condition_met = abs(ltp - price) <= tolerance
-        elif condition_type in ["entering_channel", "inside_channel"]:
+        elif condition_type in ("entering_channel", "inside_channel"):
             condition_met = price_lower <= ltp <= price_upper
-        elif condition_type in ["exiting_channel", "outside_channel"]:
+        elif condition_type in ("exiting_channel", "outside_channel"):
             condition_met = ltp < price_lower or ltp > price_upper
+        elif condition_type in (
+            "moving_up",
+            "moving_down",
+            "moving_up_percent",
+            "moving_down_percent",
+        ):
+            # These compare against the previous tick, which only the monitor
+            # keeps. Outside a monitor-fired run there is nothing to compare to.
+            self.log(
+                f"Price alert condition {condition_type!r} needs the previous tick and can "
+                "only be evaluated by the price monitor; wire this node as the trigger.",
+                "error",
+            )
+            return {"status": "error", "condition": False, "ltp": ltp}
+        else:
+            # Never silently false: an unknown condition can never be true,
+            # which reads exactly like an unmet level. Error takes no branch.
+            self.log(
+                f"Price alert has an unrecognized condition "
+                f"{node_data.get('condition')!r}; it can never be true.",
+                "error",
+            )
+            return {"status": "error", "condition": False, "ltp": ltp}
 
         self.log(f"Price alert: {symbol} LTP={ltp} {condition_type} {price} = {condition_met}")
         self.store_output(node_data, {"ltp": ltp, "condition_met": condition_met})
@@ -2867,8 +3371,16 @@ def execute_node_chain(
     node_data = node.get("data", {})
     result = None
 
+    # An order node whose order-defining fields still contain {{...}} must not
+    # reach the broker with those references replaced by field defaults.
+    blocked_fields = (
+        executor.unresolved_order_fields(node_data) if node_type in ORDER_NODE_TYPES else []
+    )
+
     # Execute node based on type
-    if node_type == "start":
+    if blocked_fields:
+        result = executor.unresolved_error(node_type, blocked_fields)
+    elif node_type == "start":
         executor.log("Workflow started")
     elif node_type == "placeOrder":
         result = executor.execute_place_order(node_data)
@@ -2986,7 +3498,7 @@ def execute_node_chain(
         result = executor.execute_subscribe_depth(node_data)
     elif node_type == "unsubscribe":
         result = executor.execute_unsubscribe(node_data)
-    elif node_type in ("andGate", "orGate", "notGate"):
+    elif node_type in GATE_NODE_TYPES:
         # Gates must wait until every wired input has actually been evaluated.
         # The graph walk is depth-first, so the first input to finish would
         # otherwise reach the gate while the others are still unevaluated:
@@ -3023,6 +3535,24 @@ def execute_node_chain(
     else:
         executor.log(f"Unknown node type: {node_type}", "warning")
 
+    # A node that reported failure must not silently feed its children. Without
+    # this, a rejected entry order still let the hedge leg place and the "trade
+    # placed" alert fire, leaving a naked position and a run marked completed.
+    if isinstance(result, dict) and result.get("status") == "error":
+        message = result.get("message", "node failed")
+        executor.errors.append({"node": node_id, "type": node_type, "message": message})
+        if "condition" in result:
+            # A condition that could not be evaluated takes neither branch, so
+            # the `errored` handling below already stops the descent. It must
+            # still be recorded: exempting it from executor.errors meant a
+            # workflow whose only fault was an unevaluatable gate finished as
+            # `completed` and answered HTTP 200 success, which is exactly the
+            # dishonesty this list exists to prevent.
+            executor.log(f"{node_type} could not be evaluated ({message})", "error")
+        else:
+            executor.log(f"Stopping this branch: {node_type} node failed ({message})", "error")
+            return
+
     # Determine which edges to follow
     edges_to_follow = edge_map.get(node_id, [])
 
@@ -3042,13 +3572,33 @@ def execute_node_chain(
         # graph a typo'd variable would silently fire the SELL. Pass-through
         # edges (logging/alerting) still run so the failure is visible.
         errored = result.get("status") == "error"
+        # A wire into a logic gate carries the source condition's VALUE, not
+        # control flow: the gate reads each input's stored boolean and ignores
+        # the handle the wire left from. Branch-filtering these edges meant a
+        # False input never travelled to the gate, so the gate stayed parked on
+        # "waiting for N more input(s)" and never fired at all — an OR with one
+        # True and one False produced nothing (OR behaved like AND), no gate
+        # could ever drive its False branch, and which input happened to be
+        # evaluated last decided the outcome. The gate's own once-per-run guard
+        # is what prevents double firing, so always delivering these edges does
+        # not reintroduce the duplicate orders the wait was added to stop.
+        gate_ids = {
+            n.get("id")
+            for n in nodes
+            if isinstance(n, dict) and n.get("type") in GATE_NODE_TYPES
+        }
         filtered_edges = []
         for edge in edges_to_follow:
             source_handle = edge.get("sourceHandle", "") or ""
             is_branch_handle = source_handle in TRUE_HANDLES or source_handle in FALSE_HANDLES
             if errored:
+                # An errored condition has no trustworthy boolean, so it must
+                # not feed a gate either; the gate stays pending and nothing
+                # downstream of it fires.
                 if not is_branch_handle:
                     filtered_edges.append(edge)
+            elif edge.get("target") in gate_ids:
+                filtered_edges.append(edge)
             elif condition_met and source_handle in TRUE_HANDLES:
                 filtered_edges.append(edge)
             elif not condition_met and source_handle in FALSE_HANDLES:
@@ -3081,7 +3631,11 @@ def execute_workflow(
     """Execute a workflow synchronously"""
     lock = get_workflow_lock(workflow_id)
 
-    if lock.locked():
+    # Try-acquire, not locked()-then-acquire. The two-step form let both callers
+    # observe an unlocked lock; the loser then blocked on the acquire and ran the
+    # whole workflow again the moment the winner finished, duplicating every
+    # order instead of returning already_running.
+    if not lock.acquire(blocking=False):
         logger.warning(f"Workflow {workflow_id} is already running")
         return {
             "status": "error",
@@ -3089,7 +3643,7 @@ def execute_workflow(
             "already_running": True,
         }
 
-    with lock:
+    try:
         workflow = get_workflow(workflow_id)
         if not workflow:
             return {"status": "error", "message": "Workflow not found"}
@@ -3176,6 +3730,19 @@ def execute_workflow(
                 depth=0,
             )
 
+            if executor.errors:
+                summary = "; ".join(f"{e['type']}: {e['message']}" for e in executor.errors)
+                update_execution_status(execution.id, "failed", error=summary, logs=logs)
+                return {
+                    "status": "error",
+                    "message": (
+                        f"{len(executor.errors)} node(s) failed: {summary}"
+                    ),
+                    "execution_id": execution.id,
+                    "errors": executor.errors,
+                    "logs": logs,
+                }
+
             update_execution_status(execution.id, "completed", logs=logs)
             return {
                 "status": "success",
@@ -3200,3 +3767,6 @@ def execute_workflow(
                 "execution_id": execution.id,
                 "logs": logs,
             }
+
+    finally:
+        lock.release()

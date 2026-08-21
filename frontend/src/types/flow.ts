@@ -1,4 +1,5 @@
 import type { Edge as ReactFlowEdge, Node as ReactFlowNode } from '@xyflow/react'
+import type { nodeTypes } from '@/components/flow/nodes'
 
 // =============================================================================
 // TRIGGER NODE DATA TYPES
@@ -26,26 +27,6 @@ export interface PriceAlertNodeData {
   price: number
   ltp?: number // Live LTP from quotes API
   enabled?: boolean
-}
-
-/** Webhook Trigger - Start from external webhook */
-export interface WebhookNodeData {
-  label?: string
-  symbol?: string
-  exchange?: string
-  webhookId?: string
-  webhookUrl?: string
-  webhookUrlWithSymbol?: string
-}
-
-/** Position Trigger - Start when position changes */
-export interface PositionTriggerNodeData {
-  label?: string
-  symbol: string
-  exchange: string
-  product: string
-  condition: 'opened' | 'closed' | 'quantity_changed' | 'pnl_above' | 'pnl_below'
-  threshold?: number
 }
 
 /** Order Update Trigger - Start when a live/sandbox order changes status */
@@ -136,16 +117,17 @@ export interface OptionsMultiOrderNodeData {
 /** Basket Order - Multiple orders at once */
 export interface BasketOrderNodeData {
   label?: string
-  strategy?: string
-  orders: Array<{
-    symbol: string
-    exchange: string
-    action: 'BUY' | 'SELL'
-    quantity: number
-    priceType: 'MARKET' | 'LIMIT'
-    product: 'MIS' | 'CNC' | 'NRML'
-    price?: number
-  }>
+  /** Basket label. The node used to render `strategy`, which nothing writes. */
+  basketName?: string
+  /**
+   * Newline-delimited `SYMBOL,EXCHANGE,ACTION,QTY` rows, as the config panel
+   * textarea and the executor's parser both treat it. This was declared as an
+   * array of objects, which is why the canvas badge counting `orders.length`
+   * silently read 0 for every basket without the compiler objecting.
+   */
+  orders: string
+  product?: 'MIS' | 'CNC' | 'NRML'
+  priceType?: 'MARKET' | 'LIMIT'
 }
 
 /** Split Order - Large order splitting */
@@ -191,24 +173,20 @@ export interface CancelAllOrdersNodeData {
 /** Close Positions - Square off positions */
 export interface ClosePositionsNodeData {
   label?: string
-  exchange?: string // Optional filter
-  product?: string // Optional filter
+  /**
+   * Set a symbol to close just that position; leave it blank to square off
+   * everything. exchange and product only narrow a symbol-scoped close - on
+   * their own they filter nothing, which is what the old "Optional filter"
+   * comments implied and the executor never honoured.
+   */
+  symbol?: string
+  exchange?: string
+  product?: string
 }
 
 // =============================================================================
 // CONDITION NODE DATA TYPES
 // =============================================================================
-
-/** Condition Node - If/Else branching */
-export interface ConditionNodeData {
-  label?: string
-  conditions: Array<{
-    variable: string // e.g., 'ltp', 'position', 'pnl', 'time'
-    operator: '>' | '<' | '==' | '>=' | '<=' | '!='
-    value: string | number
-  }>
-  logic: 'AND' | 'OR'
-}
 
 /** Position Check - Check position before action */
 export interface PositionCheckNodeData {
@@ -249,16 +227,6 @@ export interface TimeConditionNodeData {
   operator: '==' | '>=' | '<=' | '>' | '<'
 }
 
-/** Greeks Condition - Check option greeks */
-export interface GreeksConditionNodeData {
-  label?: string
-  symbol: string
-  exchange: string
-  greek: 'delta' | 'gamma' | 'theta' | 'vega' | 'iv'
-  operator: '>' | '<' | '==' | '>=' | '<=' | '!='
-  value: number
-}
-
 /** Var Condition - Compare any two interpolated values (a workflow variable,
  * an indicator output like {{rsi.latest.value}}, a prior-period level, or a
  * literal). Generic counterpart to Price Condition, which always re-fetches
@@ -292,54 +260,11 @@ export interface GetQuoteNodeData {
   outputVariable?: string
 }
 
-/** Get Multi-Quotes - Fetch multiple quotes */
-export interface GetMultiQuotesNodeData {
-  label?: string
-  symbols: Array<{
-    symbol: string
-    exchange: string
-  }>
-  outputVariable?: string
-}
-
-/** Get Option Chain - Fetch option chain */
-export interface GetOptionChainNodeData {
-  label?: string
-  underlying: string
-  exchange: 'NSE_INDEX' | 'BSE_INDEX'
-  expiryDate: string
-  strikeCount?: number
-  outputVariable?: string
-}
-
-/** Get Positions - Fetch current positions */
-export interface GetPositionsNodeData {
-  label?: string
-  outputVariable?: string
-}
-
-/** Get Holdings - Fetch holdings */
-export interface GetHoldingsNodeData {
-  label?: string
-  outputVariable?: string
-}
-
 /** Get Order Status - Check order status */
 export interface GetOrderStatusNodeData {
   label?: string
   orderId: string
   waitForCompletion?: boolean
-  outputVariable?: string
-}
-
-/** Calculate Greeks - Calculate option greeks */
-export interface CalculateGreeksNodeData {
-  label?: string
-  symbol: string
-  exchange: string
-  underlyingSymbol: string
-  underlyingExchange: string
-  interestRate?: number
   outputVariable?: string
 }
 
@@ -665,11 +590,43 @@ export interface MathExpressionNodeData {
   outputVariable: string // Variable to store result
 }
 
-/** Loop Node - Iterate over items */
-export interface LoopNodeData {
+/** Webhook Trigger - Start workflow from an inbound HTTP POST */
+export interface WebhookTriggerNodeData {
   label?: string
-  items: string[] | number
-  itemVariable: string
+  symbol?: string
+  exchange?: string
+}
+
+/** Multi Quotes - Quotes for several symbols at once */
+export interface MultiQuotesNodeData {
+  label?: string
+  /** Comma-separated symbols. */
+  symbols: string
+  exchange?: string
+  outputVariable?: string
+}
+
+/** HTTP Request - Call an external endpoint */
+export interface HttpRequestNodeData {
+  label?: string
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+  url: string
+  /** JSON string, e.g. '{"Authorization": "Bearer {{token}}"}'. */
+  headers?: string
+  body?: string
+  /** Milliseconds, capped at 60000 by the executor. */
+  timeout?: number
+  outputVariable?: string
+}
+
+/** Logic gates - combine the boolean results of their inputs. No fields. */
+export interface GateNodeData {
+  label?: string
+}
+
+/** Group - visual container. No fields. */
+export interface GroupNodeData {
+  label?: string
 }
 
 // =============================================================================
@@ -680,8 +637,7 @@ export interface LoopNodeData {
 export type TriggerNodeData =
   | StartNodeData
   | PriceAlertNodeData
-  | WebhookNodeData
-  | PositionTriggerNodeData
+  | WebhookTriggerNodeData
   | OrderUpdateTriggerNodeData
 
 /** All Action Node Data Types */
@@ -699,24 +655,22 @@ export type ActionNodeData =
 
 /** All Condition Node Data Types */
 export type ConditionNodeDataTypes =
-  | ConditionNodeData
   | PositionCheckNodeData
   | FundCheckNodeData
   | TimeWindowNodeData
   | TimeConditionNodeData
-  | GreeksConditionNodeData
   | PriceConditionNodeData
   | VarConditionNodeData
+  | GateNodeData
 
 /** All Data Node Data Types */
 export type DataNodeData =
   | GetQuoteNodeData
-  | GetMultiQuotesNodeData
-  | GetOptionChainNodeData
-  | GetPositionsNodeData
-  | GetHoldingsNodeData
+  | MultiQuotesNodeData
+  | OptionChainNodeData
+  | PositionBookNodeData
+  | HoldingsNodeData
   | GetOrderStatusNodeData
-  | CalculateGreeksNodeData
   | GetDepthNodeData
   | HistoryNodeData
   | IndicatorNodeData
@@ -752,7 +706,8 @@ export type UtilityNodeData =
   | LogNodeData
   | VariableNodeData
   | MathExpressionNodeData
-  | LoopNodeData
+  | HttpRequestNodeData
+  | GroupNodeData
 
 /** Union of all node data types */
 export type NodeData =
@@ -778,72 +733,16 @@ export type CustomEdge = ReactFlowEdge
 // NODE TYPE CONSTANTS
 // =============================================================================
 
-export const NODE_TYPES = {
-  // Triggers
-  START: 'start',
-  PRICE_ALERT: 'priceAlert',
-  WEBHOOK: 'webhook',
-  POSITION_TRIGGER: 'positionTrigger',
-  // Actions
-  PLACE_ORDER: 'placeOrder',
-  SMART_ORDER: 'smartOrder',
-  OPTIONS_ORDER: 'optionsOrder',
-  OPTIONS_MULTI_ORDER: 'optionsMultiOrder',
-  BASKET_ORDER: 'basketOrder',
-  SPLIT_ORDER: 'splitOrder',
-  MODIFY_ORDER: 'modifyOrder',
-  CANCEL_ORDER: 'cancelOrder',
-  CANCEL_ALL_ORDERS: 'cancelAllOrders',
-  CLOSE_POSITIONS: 'closePositions',
-  // Conditions
-  CONDITION: 'condition',
-  POSITION_CHECK: 'positionCheck',
-  FUND_CHECK: 'fundCheck',
-  TIME_WINDOW: 'timeWindow',
-  TIME_CONDITION: 'timeCondition',
-  GREEKS_CONDITION: 'greeksCondition',
-  PRICE_CONDITION: 'priceCondition',
-  // Data
-  GET_QUOTE: 'getQuote',
-  GET_MULTI_QUOTES: 'getMultiQuotes',
-  GET_OPTION_CHAIN: 'getOptionChain',
-  GET_POSITIONS: 'getPositions',
-  GET_HOLDINGS: 'getHoldings',
-  GET_ORDER_STATUS: 'getOrderStatus',
-  CALCULATE_GREEKS: 'calculateGreeks',
-  GET_DEPTH: 'getDepth',
-  HISTORY: 'history',
-  OPEN_POSITION: 'openPosition',
-  EXPIRY: 'expiry',
-  INTERVALS: 'intervals',
-  SYMBOL: 'symbol',
-  OPTION_SYMBOL: 'optionSymbol',
-  ORDER_BOOK: 'orderBook',
-  TRADE_BOOK: 'tradeBook',
-  POSITION_BOOK: 'positionBook',
-  SYNTHETIC_FUTURE: 'syntheticFuture',
-  OPTION_CHAIN: 'optionChain',
-  HOLIDAYS: 'holidays',
-  TIMINGS: 'timings',
-  // WebSocket (Real-time)
-  SUBSCRIBE_LTP: 'subscribeLtp',
-  SUBSCRIBE_QUOTE: 'subscribeQuote',
-  SUBSCRIBE_DEPTH: 'subscribeDepth',
-  UNSUBSCRIBE: 'unsubscribe',
-  // Risk Management
-  HOLDINGS: 'holdings',
-  FUNDS: 'funds',
-  MARGIN: 'margin',
-  // Utilities
-  TELEGRAM_ALERT: 'telegramAlert',
-  DELAY: 'delay',
-  WAIT_UNTIL: 'waitUntil',
-  LOG: 'log',
-  VARIABLE: 'variable',
-  LOOP: 'loop',
-} as const
-
-export type NodeType = (typeof NODE_TYPES)[keyof typeof NODE_TYPES]
+/**
+ * Every node type the editor can render, derived from the ReactFlow registry.
+ *
+ * This was a hand-maintained NODE_TYPES object, and it had drifted badly: 16 of
+ * the 61 live types were missing (andGate, httpRequest, indicator, varCondition,
+ * webhookTrigger and others) while 10 entries named components that no longer
+ * exist (condition, loop, getOptionChain, webhook, ...). Deriving it from the
+ * registry means the two cannot disagree again.
+ */
+export type NodeType = keyof typeof nodeTypes
 
 // =============================================================================
 // STORE STATE TYPES
