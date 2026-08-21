@@ -1,7 +1,9 @@
 import {
   ArrowRight,
+  Blocks,
   BookOpen,
   Bot,
+  CandlestickChart,
   ClipboardList,
   Download,
   GraduationCap,
@@ -10,9 +12,13 @@ import {
   Menu,
   MessageCircle,
   Moon,
+  Server,
+  ShieldCheck,
+  Sigma,
   Sparkles,
   Sun,
   Wand2,
+  Zap,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
@@ -47,6 +53,46 @@ const integrations = [
   'Google Sheets',
   'OpenClaw',
   'Telegram',
+]
+
+// Open Varsity (openalgo.in/learn) course count, shown in the hero pill.
+const VARSITY_COURSES = 13
+
+// The surfaces that share one broker session and feed inside a single
+// self-hosted instance. Counts come from the code: tools.length is the /tools
+// registry, nodeTypes in components/flow/nodes is the Flow palette, and the
+// indicator count is what openalgo-charts ships.
+const platformDesks = [
+  {
+    icon: Server,
+    title: 'Self-hosted algo trading',
+    desc: 'A unified broker API and execution engine on your own server, driven from TradingView, Amibroker, ChartInk, Excel, Python or MCP.',
+  },
+  {
+    icon: CandlestickChart,
+    title: 'Charting platform',
+    desc: 'Chart-based trading in the built-in terminal: fire and manage orders from the chart itself, with 91 indicators on real market data.',
+  },
+  {
+    icon: Blocks,
+    title: 'No-code strategy builder',
+    desc: 'Flow is a drag-and-drop canvas: wire 61 node types from triggers to indicators, conditions and orders, then activate it to run on its own.',
+  },
+  {
+    icon: Sigma,
+    title: 'Options trading platform',
+    desc: `${tools.length} built-in tools: option chain, Greeks, OI tracker, max pain, vol surface, GEX, IV smile, straddles and arbitrage, plus portfolio and SIP backtesters.`,
+  },
+  {
+    icon: Zap,
+    title: 'Scalping platform',
+    desc: 'A keyboard-driven scalping terminal: arrow keys fire CE and PE orders, F6 flattens every position and F7 cancels every pending order.',
+  },
+  {
+    icon: ShieldCheck,
+    title: 'Sandbox testing',
+    desc: 'Analyzer mode runs any strategy against real market data with 1 crore of sandbox capital and exchange-aligned auto square-off.',
+  },
 ]
 
 export default function Home() {
@@ -209,17 +255,19 @@ export default function Home() {
         {/* Hero Section */}
         <section className="container mx-auto px-4 pt-20 pb-16 sm:pt-28 sm:pb-20">
           <div className="text-center max-w-4xl mx-auto">
-            <Link
-              to="/tools"
+            <a
+              href="https://www.openalgo.in/learn"
+              target="_blank"
+              rel="noopener noreferrer"
               className="inline-flex items-center gap-2 rounded-full border border-border bg-card/60 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] mb-8 shadow-sm transition-colors hover:border-emerald-500/40 hover:bg-card"
             >
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px] shadow-emerald-400/60" />
-              <span className="text-amber-700 dark:text-amber-500">New in V2</span>
+              <span className="text-amber-700 dark:text-amber-500">New Here</span>
               <span className="text-muted-foreground">
-                - {tools.length} Tool Options &amp; Portfolio Analytics Suite
+                - Learn Free on Open Varsity, {VARSITY_COURSES} Courses
               </span>
               <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
-            </Link>
+            </a>
             <h1 className="text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight mb-6">
               <span className="block text-foreground">Your Personal</span>
               <span className="block text-primary">Algo Trading Platform</span>
@@ -262,6 +310,38 @@ export default function Home() {
               >
                 {name}
               </span>
+            ))}
+          </div>
+        </section>
+
+        {/* One platform, many desks */}
+        <section className="container mx-auto px-4 py-16 sm:py-20">
+          <div className="text-center max-w-3xl mx-auto mb-12">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-500 mb-6">
+              <Server className="h-3.5 w-3.5" />
+              One platform, many desks
+            </span>
+            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight mb-4">
+              Not just an algo trading platform.
+              <span className="block text-muted-foreground">A complete trading desk.</span>
+            </h2>
+            <p className="text-base sm:text-lg text-muted-foreground">
+              Execution is only the starting point. Charting, no-code strategy building, options
+              analytics, scalping and sandbox testing all run inside the same self-hosted stack.
+            </p>
+          </div>
+
+          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 max-w-6xl mx-auto">
+            {platformDesks.map((desk) => (
+              <Card key={desk.title} className="h-full transition-colors hover:border-amber-400/40">
+                <CardContent className="space-y-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-500">
+                    <desk.icon className="h-5 w-5" />
+                  </div>
+                  <h3 className="font-bold text-base">{desk.title}</h3>
+                  <p className="text-sm text-muted-foreground leading-relaxed">{desk.desc}</p>
+                </CardContent>
+              </Card>
             ))}
           </div>
         </section>
