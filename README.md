@@ -20,6 +20,41 @@ If your layout is different, set LEAN_REPO or LEAN_LAUNCHER_DIR in environment.
 Python runtime is auto-detected from /Users/arifkhan/github/Lean/.conda/lean-py311.
 If your environment is different, set PYTHON_VENV and PYTHONNET_PYDLL in .env.
 
+## Python strategy state
+
+New Python strategies must persist recoverable state through
+`strategies.python.common.StrategyStateStore`. The helper writes a versioned
+Object Store envelope with a strategy ID, runtime scope, update timestamp, and
+a strategy-owned payload. It does not define a universal trade schema.
+
+```python
+from strategies.python.common.strategy_state import StrategyStateStore
+
+self.state_store = StrategyStateStore(
+   self.object_store,
+   "my-strategy",
+   "paper",
+   1,
+   lambda: {"trades": {}},
+)
+result = self.state_store.load()
+if result.is_valid:
+   self.state = result.payload
+elif result.status in {"corrupt", "incompatible"}:
+   # Block new entries until strategy-specific reconciliation completes.
+   self.state_reconciliation_required = True
+else:
+   self.state = result.payload
+```
+
+Use a stable strategy ID and a separate scope for paper/live deployments. Save
+after every durable lifecycle change, reconcile restored state against Lean
+portfolio and order data before allowing a new entry, and write migrations in
+the owning strategy when its payload schema changes. Corrupt or incompatible
+records must fail closed: retain them and block new entries until reconciliation
+resolves the situation. Never store brokerage credentials, tokens, or account
+secrets in strategy state.
+
 ## Run a backtest
 
 scripts/run-backtest.sh strategies/python/HelloLeanStrategy.py HelloLeanStrategy
