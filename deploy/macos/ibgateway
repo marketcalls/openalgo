@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Compatibility entry point for QuantConnect.IBAutomater on macOS.
+# IBAutomater expects an executable named "ibgateway" in its install
+# directory; macOS installs Gateway as an application bundle instead.
+
+IB_GATEWAY_APP="${IB_GATEWAY_APP:-$HOME/Applications/IB Gateway 10.46/IB Gateway 10.46.app/Contents/MacOS/JavaApplicationStub}"
+
+if [[ ! -x "$IB_GATEWAY_APP" ]]; then
+  echo "Native IB Gateway executable not found: $IB_GATEWAY_APP" >&2
+  exit 127
+fi
+
+exec "$IB_GATEWAY_APP" "$@"

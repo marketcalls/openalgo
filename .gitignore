@@ -9,6 +9,7 @@ config/generated/
 # Logs and runtime artifacts
 logs/
 *.log
+strategies/**/results/
 
 # Python
 __pycache__/

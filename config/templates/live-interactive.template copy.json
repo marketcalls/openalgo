@@ -1,0 +1,28 @@
+{
+  "environment": "live-interactive",
+  "live-mode": true,
+  "messaging-handler": "QuantConnect.Messaging.Messaging",
+  "live-mode-brokerage": "InteractiveBrokersBrokerage",
+  "result-handler": "QuantConnect.Lean.Engine.Results.LiveTradingResultHandler",
+  "data-queue-handler": [ "InteractiveBrokersBrokerage" ],
+  "real-time-handler": "QuantConnect.Lean.Engine.RealTime.LiveTradingRealTimeHandler",
+  "transaction-handler": "QuantConnect.Lean.Engine.TransactionHandlers.BrokerageTransactionHandler",
+  "history-provider": [ "BrokerageHistoryProvider", "SubscriptionDataReaderHistoryProvider" ],
+
+  "algorithm-type-name": "__ALGORITHM_TYPE__",
+  "algorithm-language": "Python",
+  "algorithm-location": "__ALGORITHM_LOCATION__",
+  "data-folder": "__DATA_FOLDER__",
+  "python-venv": "__PYTHON_VENV__",
+
+  "ib-account": "__IB_ACCOUNT__",
+  "ib-user-name": "__IB_USER_NAME__",
+  "ib-password": "__IB_PASSWORD__",
+  "ib-host": "__IB_HOST__",
+  "ib-port": "__IB_PORT__",
+  "ib-trading-mode": "__IB_TRADING_MODE__",
+  "ib-enable-delayed-streaming-data": false,
+
+  "debugging": false,
+  "debugging-method": "LocalCmdline"
+}

@@ -1,0 +1,26 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "id": null,
+  "liveNow": true,
+  "panels": [
+    {"id": 1, "title": "Strategy Status", "type": "stat", "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "lean_algorithm_running{algorithm=\"MesEma9MinuteStrategy\"}", "refId": "A"}]},
+    {"id": 2, "title": "MES Market Value", "type": "stat", "gridPos": {"h": 4, "w": 5, "x": 4, "y": 0}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "lean_strategy_holdings_value{algorithm=\"MesEma9MinuteStrategy\"}", "refId": "A"}]},
+    {"id": 3, "title": "MES Unrealized P/L", "type": "stat", "gridPos": {"h": 4, "w": 5, "x": 9, "y": 0}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "lean_strategy_unrealized_profit{algorithm=\"MesEma9MinuteStrategy\"}", "refId": "A"}]},
+    {"id": 4, "title": "Active MES Position", "type": "stat", "gridPos": {"h": 4, "w": 5, "x": 14, "y": 0}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "sum(lean_holding_quantity{algorithm=\"MesEma9MinuteStrategy\",symbol=~\"MES.*\"})", "refId": "A"}]},
+    {"id": 5, "title": "Trades Entered", "type": "stat", "gridPos": {"h": 4, "w": 5, "x": 19, "y": 0}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "lean_strategy_entries_total{algorithm=\"MesEma9MinuteStrategy\"}", "refId": "A"}]},
+    {"id": 6, "title": "Trades Exited", "type": "stat", "gridPos": {"h": 4, "w": 5, "x": 0, "y": 4}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "lean_strategy_exits_total{algorithm=\"MesEma9MinuteStrategy\"}", "refId": "A"}]},
+    {"id": 7, "title": "MES Value / P&L", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "lean_strategy_holdings_value{algorithm=\"MesEma9MinuteStrategy\"}", "legendFormat": "MES value", "refId": "A"}, {"expr": "lean_strategy_unrealized_profit{algorithm=\"MesEma9MinuteStrategy\"}", "legendFormat": "MES unrealized", "refId": "B"}]},
+    {"id": 8, "title": "MES Position", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "lean_holding_quantity{algorithm=\"MesEma9MinuteStrategy\",symbol=~\"MES.*\"}", "legendFormat": "{{symbol}} quantity", "refId": "A"}, {"expr": "lean_holding_unrealized_profit{algorithm=\"MesEma9MinuteStrategy\",symbol=~\"MES.*\"}", "legendFormat": "{{symbol}} unrealized", "refId": "B"}]},
+    {"id": 9, "title": "Recent Trade Logs", "type": "table", "gridPos": {"h": 10, "w": 24, "x": 0, "y": 16}, "datasource": {"type": "prometheus", "uid": "prometheus"}, "targets": [{"expr": "lean_trade_log_line{algorithm=\"MesEma9MinuteStrategy\"}", "refId": "A", "format": "table", "instant": true}]}
+  ],
+  "schemaVersion": 39,
+  "tags": ["lean", "mes", "ema9", "paper"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MES EMA9 Minute",
+  "uid": "mes-ema9-minute",
+  "version": 4
+}

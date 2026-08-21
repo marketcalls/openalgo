@@ -1,5 +1,145 @@
 [
   {
+    "runId": "20260510T125642Z-PrevNCloseLessThanPrevNOpenStrategy",
+    "algorithmType": "PrevNCloseLessThanPrevNOpenStrategy",
+    "timestamp": "2026-05-10T12:56:42.954755+00:00",
+    "status": "Completed",
+    "dateRange": {
+      "start": "2021-04-01T00:00:00Z",
+      "end": "2021-12-31T23:59:59Z"
+    },
+    "metrics": {
+      "netProfitPct": 0.0,
+      "drawdownPct": 0.0,
+      "sharpeRatio": 0.0,
+      "totalOrders": 0
+    },
+    "paths": {
+      "normalized": "runs/20260510T125642Z-PrevNCloseLessThanPrevNOpenStrategy/normalized.json",
+      "runDir": "runs/20260510T125642Z-PrevNCloseLessThanPrevNOpenStrategy"
+    }
+  },
+  {
+    "runId": "20260510T124902Z-PrevNCloseLessThanPrevNOpenStrategy",
+    "algorithmType": "PrevNCloseLessThanPrevNOpenStrategy",
+    "timestamp": "2026-05-10T12:49:02.433219+00:00",
+    "status": "Completed",
+    "dateRange": {
+      "start": "2018-01-10",
+      "end": "2021-02-09"
+    },
+    "metrics": {
+      "netProfitPct": -40.014,
+      "drawdownPct": 49.8,
+      "sharpeRatio": -0.679,
+      "totalOrders": 93
+    },
+    "paths": {
+      "normalized": "runs/20260510T124902Z-PrevNCloseLessThanPrevNOpenStrategy/normalized.json",
+      "runDir": "runs/20260510T124902Z-PrevNCloseLessThanPrevNOpenStrategy"
+    }
+  },
+  {
+    "runId": "20260510T124813Z-PrevNCloseLessThanPrevNOpenStrategy",
+    "algorithmType": "PrevNCloseLessThanPrevNOpenStrategy",
+    "timestamp": "2026-05-10T12:48:13.639304+00:00",
+    "status": "Completed",
+    "dateRange": {
+      "start": "2018-01-10",
+      "end": "2021-03-15"
+    },
+    "metrics": {
+      "netProfitPct": -50.588,
+      "drawdownPct": 56.9,
+      "sharpeRatio": -0.533,
+      "totalOrders": 5
+    },
+    "paths": {
+      "normalized": "runs/20260510T124813Z-PrevNCloseLessThanPrevNOpenStrategy/normalized.json",
+      "runDir": "runs/20260510T124813Z-PrevNCloseLessThanPrevNOpenStrategy"
+    }
+  },
+  {
+    "runId": "20260510T124740Z-PrevNCloseLessThanPrevNOpenStrategy",
+    "algorithmType": "PrevNCloseLessThanPrevNOpenStrategy",
+    "timestamp": "2026-05-10T12:47:40.246312+00:00",
+    "status": "Completed",
+    "dateRange": {
+      "start": "2018-01-10",
+      "end": "2021-03-15"
+    },
+    "metrics": {
+      "netProfitPct": -50.588,
+      "drawdownPct": 56.9,
+      "sharpeRatio": -0.533,
+      "totalOrders": 5
+    },
+    "paths": {
+      "normalized": "runs/20260510T124740Z-PrevNCloseLessThanPrevNOpenStrategy/normalized.json",
+      "runDir": "runs/20260510T124740Z-PrevNCloseLessThanPrevNOpenStrategy"
+    }
+  },
+  {
+    "runId": "20260510T124603Z-PrevNCloseLessThanPrevNOpenStrategy",
+    "algorithmType": "PrevNCloseLessThanPrevNOpenStrategy",
+    "timestamp": "2026-05-10T12:46:03.928035+00:00",
+    "status": "Completed",
+    "dateRange": {
+      "start": "2018-01-10",
+      "end": "2021-02-09"
+    },
+    "metrics": {
+      "netProfitPct": -46.436,
+      "drawdownPct": 48.7,
+      "sharpeRatio": -0.73,
+      "totalOrders": 85
+    },
+    "paths": {
+      "normalized": "runs/20260510T124603Z-PrevNCloseLessThanPrevNOpenStrategy/normalized.json",
+      "runDir": "runs/20260510T124603Z-PrevNCloseLessThanPrevNOpenStrategy"
+    }
+  },
+  {
+    "runId": "20260510T124223Z-PrevNCloseLessThanPrevNOpenStrategy",
+    "algorithmType": "PrevNCloseLessThanPrevNOpenStrategy",
+    "timestamp": "2026-05-10T12:42:23.733489+00:00",
+    "status": "Completed",
+    "dateRange": {
+      "start": "2013-10-07T00:00:00Z",
+      "end": "2013-10-11T23:59:59Z"
+    },
+    "metrics": {
+      "netProfitPct": -2.424,
+      "drawdownPct": 3.2,
+      "sharpeRatio": -4.34,
+      "totalOrders": 1
+    },
+    "paths": {
+      "normalized": "runs/20260510T124223Z-PrevNCloseLessThanPrevNOpenStrategy/normalized.json",
+      "runDir": "runs/20260510T124223Z-PrevNCloseLessThanPrevNOpenStrategy"
+    }
+  },
+  {
+    "runId": "20260510T095027Z-CoveredCallStrategy",
+    "algorithmType": "CoveredCallStrategy",
+    "timestamp": "2026-05-10T09:50:27.427154+00:00",
+    "status": "Completed",
+    "dateRange": {
+      "start": "2023-08-03T00:00:00Z",
+      "end": "2023-08-03T23:59:59Z"
+    },
+    "metrics": {
+      "netProfitPct": 0.0,
+      "drawdownPct": 0.0,
+      "sharpeRatio": 0.0,
+      "totalOrders": 2
+    },
+    "paths": {
+      "normalized": "runs/20260510T095027Z-CoveredCallStrategy/normalized.json",
+      "runDir": "runs/20260510T095027Z-CoveredCallStrategy"
+    }
+  },
+  {
     "runId": "20260509T135550Z-SpyQqqMomentumAtrStrategy",
     "algorithmType": "SpyQqqMomentumAtrStrategy",
     "timestamp": "2026-05-09T13:55:50.945704+00:00",

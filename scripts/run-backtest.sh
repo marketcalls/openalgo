@@ -24,13 +24,19 @@ echo "  config:   $CONFIG_PATH"
 
 cd "$LEAN_LAUNCHER_DIR"
 set +e
-dotnet "$LEAN_LAUNCHER_DLL" --config "$CONFIG_PATH"
+printf '\n' | dotnet "$LEAN_LAUNCHER_DLL" --config "$CONFIG_PATH"
 BACKTEST_EXIT=$?
 set -e
 
 if [[ $BACKTEST_EXIT -ne 0 ]]; then
-	echo "Backtest failed with exit code: $BACKTEST_EXIT"
-	exit "$BACKTEST_EXIT"
+	SUMMARY_JSON="$LEAN_LAUNCHER_DIR/${ALGORITHM_TYPE_NAME}-summary.json"
+	DETAIL_JSON="$LEAN_LAUNCHER_DIR/${ALGORITHM_TYPE_NAME}.json"
+	if [[ -f "$SUMMARY_JSON" && -f "$DETAIL_JSON" ]]; then
+		echo "Backtest process exited with code $BACKTEST_EXIT, but result artifacts were generated. Continuing."
+	else
+		echo "Backtest failed with exit code: $BACKTEST_EXIT"
+		exit "$BACKTEST_EXIT"
+	fi
 fi
 
 VISUALIZER_PORT="${VISUALIZER_PORT:-3000}"
