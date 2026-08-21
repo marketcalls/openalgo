@@ -175,12 +175,26 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
 
   return (
     <>
+      {/* The click target was a bare div: no role, no tab stop, no key handler.
+          The actions menu offered a keyboard route to the same page, so this was
+          a redundant-affordance gap rather than a dead end - but the card is the
+          primary affordance and should carry it. */}
       <Card
+        role="link"
+        tabIndex={0}
+        aria-label={`Open workflow ${workflow.name}`}
         className={cn(
           'group cursor-pointer transition-all duration-200 hover:border-primary/50',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
           workflow.is_active && 'border-green-500/30'
         )}
         onClick={() => navigate(`/flow/editor/${workflow.id}`)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            navigate(`/flow/editor/${workflow.id}`)
+          }
+        }}
       >
         <CardHeader className="pb-3">
           <div className="flex items-start justify-between">

@@ -29,26 +29,6 @@ export interface PriceAlertNodeData {
   enabled?: boolean
 }
 
-/** Webhook Trigger - Start from external webhook */
-export interface WebhookNodeData {
-  label?: string
-  symbol?: string
-  exchange?: string
-  webhookId?: string
-  webhookUrl?: string
-  webhookUrlWithSymbol?: string
-}
-
-/** Position Trigger - Start when position changes */
-export interface PositionTriggerNodeData {
-  label?: string
-  symbol: string
-  exchange: string
-  product: string
-  condition: 'opened' | 'closed' | 'quantity_changed' | 'pnl_above' | 'pnl_below'
-  threshold?: number
-}
-
 /** Order Update Trigger - Start when a live/sandbox order changes status */
 export interface OrderUpdateTriggerNodeData {
   label?: string
@@ -208,17 +188,6 @@ export interface ClosePositionsNodeData {
 // CONDITION NODE DATA TYPES
 // =============================================================================
 
-/** Condition Node - If/Else branching */
-export interface ConditionNodeData {
-  label?: string
-  conditions: Array<{
-    variable: string // e.g., 'ltp', 'position', 'pnl', 'time'
-    operator: '>' | '<' | '==' | '>=' | '<=' | '!='
-    value: string | number
-  }>
-  logic: 'AND' | 'OR'
-}
-
 /** Position Check - Check position before action */
 export interface PositionCheckNodeData {
   label?: string
@@ -258,16 +227,6 @@ export interface TimeConditionNodeData {
   operator: '==' | '>=' | '<=' | '>' | '<'
 }
 
-/** Greeks Condition - Check option greeks */
-export interface GreeksConditionNodeData {
-  label?: string
-  symbol: string
-  exchange: string
-  greek: 'delta' | 'gamma' | 'theta' | 'vega' | 'iv'
-  operator: '>' | '<' | '==' | '>=' | '<=' | '!='
-  value: number
-}
-
 /** Var Condition - Compare any two interpolated values (a workflow variable,
  * an indicator output like {{rsi.latest.value}}, a prior-period level, or a
  * literal). Generic counterpart to Price Condition, which always re-fetches
@@ -301,54 +260,11 @@ export interface GetQuoteNodeData {
   outputVariable?: string
 }
 
-/** Get Multi-Quotes - Fetch multiple quotes */
-export interface GetMultiQuotesNodeData {
-  label?: string
-  symbols: Array<{
-    symbol: string
-    exchange: string
-  }>
-  outputVariable?: string
-}
-
-/** Get Option Chain - Fetch option chain */
-export interface GetOptionChainNodeData {
-  label?: string
-  underlying: string
-  exchange: 'NSE_INDEX' | 'BSE_INDEX'
-  expiryDate: string
-  strikeCount?: number
-  outputVariable?: string
-}
-
-/** Get Positions - Fetch current positions */
-export interface GetPositionsNodeData {
-  label?: string
-  outputVariable?: string
-}
-
-/** Get Holdings - Fetch holdings */
-export interface GetHoldingsNodeData {
-  label?: string
-  outputVariable?: string
-}
-
 /** Get Order Status - Check order status */
 export interface GetOrderStatusNodeData {
   label?: string
   orderId: string
   waitForCompletion?: boolean
-  outputVariable?: string
-}
-
-/** Calculate Greeks - Calculate option greeks */
-export interface CalculateGreeksNodeData {
-  label?: string
-  symbol: string
-  exchange: string
-  underlyingSymbol: string
-  underlyingExchange: string
-  interestRate?: number
   outputVariable?: string
 }
 
@@ -674,11 +590,43 @@ export interface MathExpressionNodeData {
   outputVariable: string // Variable to store result
 }
 
-/** Loop Node - Iterate over items */
-export interface LoopNodeData {
+/** Webhook Trigger - Start workflow from an inbound HTTP POST */
+export interface WebhookTriggerNodeData {
   label?: string
-  items: string[] | number
-  itemVariable: string
+  symbol?: string
+  exchange?: string
+}
+
+/** Multi Quotes - Quotes for several symbols at once */
+export interface MultiQuotesNodeData {
+  label?: string
+  /** Comma-separated symbols. */
+  symbols: string
+  exchange?: string
+  outputVariable?: string
+}
+
+/** HTTP Request - Call an external endpoint */
+export interface HttpRequestNodeData {
+  label?: string
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+  url: string
+  /** JSON string, e.g. '{"Authorization": "Bearer {{token}}"}'. */
+  headers?: string
+  body?: string
+  /** Milliseconds, capped at 60000 by the executor. */
+  timeout?: number
+  outputVariable?: string
+}
+
+/** Logic gates - combine the boolean results of their inputs. No fields. */
+export interface GateNodeData {
+  label?: string
+}
+
+/** Group - visual container. No fields. */
+export interface GroupNodeData {
+  label?: string
 }
 
 // =============================================================================
@@ -689,8 +637,7 @@ export interface LoopNodeData {
 export type TriggerNodeData =
   | StartNodeData
   | PriceAlertNodeData
-  | WebhookNodeData
-  | PositionTriggerNodeData
+  | WebhookTriggerNodeData
   | OrderUpdateTriggerNodeData
 
 /** All Action Node Data Types */
@@ -708,24 +655,22 @@ export type ActionNodeData =
 
 /** All Condition Node Data Types */
 export type ConditionNodeDataTypes =
-  | ConditionNodeData
   | PositionCheckNodeData
   | FundCheckNodeData
   | TimeWindowNodeData
   | TimeConditionNodeData
-  | GreeksConditionNodeData
   | PriceConditionNodeData
   | VarConditionNodeData
+  | GateNodeData
 
 /** All Data Node Data Types */
 export type DataNodeData =
   | GetQuoteNodeData
-  | GetMultiQuotesNodeData
-  | GetOptionChainNodeData
-  | GetPositionsNodeData
-  | GetHoldingsNodeData
+  | MultiQuotesNodeData
+  | OptionChainNodeData
+  | PositionBookNodeData
+  | HoldingsNodeData
   | GetOrderStatusNodeData
-  | CalculateGreeksNodeData
   | GetDepthNodeData
   | HistoryNodeData
   | IndicatorNodeData
@@ -761,7 +706,8 @@ export type UtilityNodeData =
   | LogNodeData
   | VariableNodeData
   | MathExpressionNodeData
-  | LoopNodeData
+  | HttpRequestNodeData
+  | GroupNodeData
 
 /** Union of all node data types */
 export type NodeData =
