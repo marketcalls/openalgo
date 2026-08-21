@@ -31,7 +31,12 @@ interface WorkflowState {
   setName: (name: string) => void
   setDescription: (description: string) => void
   resetWorkflow: () => void
-  markSaved: () => void
+  /**
+   * A cheap identity for the current graph, captured when a save is issued and
+   * handed back to markSaved when it resolves.
+   */
+  revision: () => string
+  markSaved: (revision?: string) => void
 
   // Actions - Nodes
   setNodes: (nodes: Node[]) => void
@@ -101,7 +106,23 @@ export const useFlowWorkflowStore = create<WorkflowState>((set, get) => ({
 
   resetWorkflow: () => set(initialState),
 
-  markSaved: () => set({ isModified: false }),
+  revision: () => {
+    const { name, nodes, edges } = get()
+    return JSON.stringify([name, nodes, edges])
+  },
+
+  markSaved: (revision) => {
+    // Only clear the dirty flag when the graph still matches what was actually
+    // sent. The save PUTs the graph as it stood when it was issued; edits made
+    // while that request is in flight are not in it, and clearing the flag
+    // unconditionally left the canvas showing B, the server holding A, and the
+    // editor insisting there was nothing unsaved -- so Run Now and Activate
+    // then ran A.
+    if (revision !== undefined && revision !== get().revision()) {
+      return
+    }
+    set({ isModified: false })
+  },
 
   // =============================================================================
   // Node Actions

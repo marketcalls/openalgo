@@ -826,6 +826,13 @@ def setup_environment(app):
                 logger.exception("Failed to restore Flow price alerts")
 
             try:
+                from services.flow_scheduler_service import reconcile_scheduler_jobs
+
+                reconcile_scheduler_jobs()
+            except Exception:
+                logger.exception("Failed to reconcile Flow scheduler jobs")
+
+            try:
                 from services.historify_scheduler_service import init_historify_scheduler
 
                 init_historify_scheduler(socketio=socketio)

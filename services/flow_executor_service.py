@@ -1512,11 +1512,30 @@ class NodeExecutor:
         tail_bars = self.get_int(node_data, "tailBars", 5)
         offset_bars = self.get_int(node_data, "offsetBars", 0)
         source_field = self.get_str(node_data, "sourceField", "")
-        params_raw = self.get_str(node_data, "params", "{}")
-        try:
-            params = json.loads(params_raw) if params_raw.strip() else {}
-        except (ValueError, TypeError):
-            return {"status": "error", "message": f"Invalid params JSON: {params_raw}"}
+        # The contract is a JSON string, and the validator now refuses anything
+        # else. A workflow saved before that check exists may still carry the
+        # object form, which used to reach json.loads as "{'period': 14}" and
+        # fail the run outright -- so an already-stored graph is normalised
+        # rather than broken.
+        params_value = node_data.get("params")
+        if isinstance(params_value, dict):
+            self.log(
+                "Indicator params were stored as an object; normalising to the "
+                "JSON string form. Re-save the node to store it correctly.",
+                "warning",
+            )
+            params = params_value
+        else:
+            params_raw = self.get_str(node_data, "params", "{}")
+            try:
+                params = json.loads(params_raw) if params_raw.strip() else {}
+            except (ValueError, TypeError):
+                return {"status": "error", "message": f"Invalid params JSON: {params_raw}"}
+        if not isinstance(params, dict):
+            return {
+                "status": "error",
+                "message": f"params must resolve to a JSON object, got {type(params).__name__}",
+            }
 
         source_series_raw = node_data.get("sourceSeries")
         if source_series_raw not in (None, ""):

@@ -321,7 +321,22 @@ def _enum_and_range_errors(base: str, node_type: str, data: dict) -> list:
         if field not in data:
             continue
         value = data.get(field)
-        if not isinstance(value, str) or "{{" in value or not value.strip():
+        if isinstance(value, str) and ("{{" in value or not value.strip()):
+            continue
+        if not isinstance(value, str):
+            # A number or boolean here is not merely unknown, it is the wrong
+            # type: skipping non-strings let `"exchange": 123` reach the broker
+            # mapper, which stringifies it and looks up nothing.
+            found.append(
+                _err(
+                    f"{base}/data/{field}",
+                    "invalid_constant",
+                    f"{field} must be one of the {field} constants written as a "
+                    f"string; {value!r} is a {type(value).__name__}.",
+                    sorted(allowed),
+                    value,
+                )
+            )
             continue
         if value.strip().upper() not in allowed:
             found.append(
@@ -354,8 +369,63 @@ def _enum_and_range_errors(base: str, node_type: str, data: dict) -> list:
                 )
             )
 
-    # httpRequest: the two fields whose shape only failed at run time before.
+    # A priced order needs a price. MARKET ignores it, so only the priced types
+    # are checked -- a LIMIT at 0 is not "unset", it is an order the broker will
+    # reject or, worse, fill at a price nobody chose.
+    price_type = data.get("priceType", data.get("pricetype"))
+    if isinstance(price_type, str) and "{{" not in price_type:
+        canonical = price_type.strip().upper()
+        for field, applies_to in (("price", {"LIMIT", "SL"}), ("triggerPrice", {"SL", "SL-M"})):
+            if canonical not in applies_to or field not in data:
+                continue
+            value = data.get(field)
+            if isinstance(value, str) and ("{{" in value or not value.strip()):
+                continue
+            if _positive_number(value) is None:
+                found.append(
+                    _err(
+                        f"{base}/data/{field}",
+                        "invalid_price",
+                        f"a {canonical} order needs a positive {field}; "
+                        f"{value!r} cannot be priced.",
+                        "a positive number",
+                        value,
+                    )
+                )
+
+    # An indicator's params must be the JSON string the executor parses. The
+    # object form imports cleanly and then fails at run time on json.loads, so
+    # the workflow looks valid right up until it runs.
+    if node_type == "indicator" and "params" in data:
+        params = data.get("params")
+        if params is not None and not isinstance(params, str):
+            found.append(
+                _err(
+                    f"{base}/data/params",
+                    "invalid_params",
+                    "params must be a JSON object written as a string, for "
+                    'example "{\"period\": 14}". An object here is accepted by '
+                    "import and then fails when the node runs.",
+                    "a JSON object string",
+                    params,
+                )
+            )
+
+    # httpRequest: the fields whose shape only failed at run time before.
     if node_type == "httpRequest":
+        method = data.get("method")
+        if isinstance(method, str) and method.strip() and "{{" not in method:
+            if method.strip().upper() not in HTTP_METHODS:
+                found.append(
+                    _err(
+                        f"{base}/data/method",
+                        "invalid_method",
+                        f"'{method}' is not a method this node can send. Only "
+                        f"{', '.join(sorted(HTTP_METHODS))} are implemented.",
+                        sorted(HTTP_METHODS),
+                        method,
+                    )
+                )
         headers = data.get("headers")
         if isinstance(headers, str) and headers.strip() and "{{" not in headers:
             import json as _json
@@ -383,15 +453,22 @@ def _enum_and_range_errors(base: str, node_type: str, data: dict) -> list:
                 milliseconds = float(timeout)
             except (TypeError, ValueError):
                 milliseconds = None
-            if milliseconds is None or milliseconds <= 0 or milliseconds > HTTP_TIMEOUT_MAX_MS:
+            if (
+                milliseconds is None
+                or milliseconds < HTTP_TIMEOUT_MIN_MS
+                or milliseconds > HTTP_TIMEOUT_MAX_MS
+            ):
+                # The lower bound matters as much as the upper one: a 1 ms
+                # timeout is not a fast request, it is a request that can only
+                # ever fail, and it reads as a deliberate setting.
                 found.append(
                     _err(
                         f"{base}/data/timeout",
                         "invalid_timeout",
-                        f"timeout is in milliseconds and must be between 1 and "
-                        f"{HTTP_TIMEOUT_MAX_MS}. The request blocks the workflow "
-                        "for its whole duration.",
-                        f"1..{HTTP_TIMEOUT_MAX_MS}",
+                        f"timeout is in milliseconds and must be between "
+                        f"{HTTP_TIMEOUT_MIN_MS} and {HTTP_TIMEOUT_MAX_MS}. The "
+                        "request blocks the workflow for its whole duration.",
+                        f"{HTTP_TIMEOUT_MIN_MS}..{HTTP_TIMEOUT_MAX_MS}",
                         timeout,
                     )
                 )
@@ -401,6 +478,12 @@ def _enum_and_range_errors(base: str, node_type: str, data: dict) -> list:
 # Mirrors NodeExecutor.HTTP_TIMEOUT_MAX_MS; the executor clamps, the validator
 # refuses, so an import cannot quietly ship a value the runtime will override.
 HTTP_TIMEOUT_MAX_MS = 60_000
+# A second is the shortest timeout that can describe a real remote call.
+HTTP_TIMEOUT_MIN_MS = 1_000
+
+# The methods execute_http_request actually implements. Anything else reached
+# the node and returned "Unsupported method" at run time.
+HTTP_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 
 
 class WorkflowValidationError(Exception):
@@ -550,6 +633,16 @@ def validate_workflow(
             triggers.append(str(node_id))
 
         data = node.get("data")
+
+        # Value-level checks run at every level, not just `strict`. A field that
+        # is absent may simply not be wired yet, but a field holding an invalid
+        # constant, a negative quantity or a malformed header is wrong however
+        # incomplete the graph is -- and the editor saves through the non-strict
+        # path, so gating these on `strict` let a save store exactly the node
+        # the importer would have refused.
+        if isinstance(data, dict) and isinstance(node_type, str):
+            errors.extend(_enum_and_range_errors(base, node_type, data))
+
         if strict and isinstance(data, dict) and isinstance(node_type, str):
             required = list(REQUIRED_NODE_FIELDS.get(node_type, ()))
             for selector, options in CONDITIONAL_REQUIRED_FIELDS.get(node_type, {}).items():
@@ -569,8 +662,6 @@ def validate_workflow(
                     )
                 required.extend(options.get(chosen, ()))
                 errors.extend(_alert_threshold_errors(base, data, chosen, options.get(chosen, ())))
-            errors.extend(_enum_and_range_errors(base, node_type, data))
-
             for group in EITHER_REQUIRED_FIELDS.get(node_type, ()):
                 if not any(
                     data.get(f) is not None

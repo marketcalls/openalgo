@@ -240,14 +240,19 @@ function FlowEditorContent() {
   }, [resetWorkflow])
 
   const saveMutation = useMutation({
-    mutationFn: () =>
-      updateWorkflow(Number(id), {
-        name,
-        nodes,
-        edges,
-      }),
+    mutationFn: () => {
+      // Captured with the payload, so onSuccess can tell whether the canvas
+      // moved on while the request was in flight.
+      const revision = useFlowWorkflowStore.getState().revision()
+      const state = useFlowWorkflowStore.getState()
+      return updateWorkflow(Number(id), {
+        name: state.name,
+        nodes: state.nodes,
+        edges: state.edges,
+      }).then((saved) => ({ ...saved, revision }))
+    },
     onSuccess: (saved) => {
-      markSaved()
+      markSaved(saved.revision)
       queryClient.invalidateQueries({ queryKey: flowQueryKeys.workflows() })
       // The server re-arms a changed trigger during the save. It only reports
       // needs_reactivate when that failed, in which case it has stood the
@@ -273,8 +278,21 @@ function FlowEditorContent() {
   // runs the graph on screen; awaiting it also closes the race where a pending
   // Ctrl+S PUT and the execute POST were in flight together.
   const saveIfDirty = useCallback(async () => {
-    if (useFlowWorkflowStore.getState().isModified) {
+    // Loops because an edit made during the PUT leaves the workflow dirty: the
+    // save that just finished does not contain it, so executing now would run
+    // the previous revision. Bounded, because a canvas being edited continuously
+    // would otherwise never converge -- and failing loudly is far better than
+    // silently trading a graph the user is no longer looking at.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (!useFlowWorkflowStore.getState().isModified) {
+        return
+      }
       await saveMutation.mutateAsync()
+    }
+    if (useFlowWorkflowStore.getState().isModified) {
+      throw new Error(
+        'The canvas kept changing while it was being saved. Stop editing, save, then try again.'
+      )
     }
   }, [saveMutation])
 

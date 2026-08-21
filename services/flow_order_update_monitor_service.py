@@ -328,6 +328,31 @@ class FlowOrderUpdateMonitor:
                 f"Could not queue the order-update run for workflow {watch.workflow_id}; "
                 "the watch stays armed."
             )
+            # Unlike a price alert, this event is not re-derivable: the bus
+            # delivers a fill once and never replays it, so re-arming alone
+            # would leave the workflow silently skipping that order. Run it
+            # inline instead -- the caller is the bus dispatch thread, which is
+            # the same thread that would otherwise have queued it.
+            self._run_undeliverable(run_workflow, watch)
+
+    def _run_undeliverable(self, run_workflow, watch: OrderUpdateWatch) -> None:
+        """Last resort for an event the pool refused: run it on this thread.
+
+        Blocks the bus dispatch for the length of one workflow, which is worse
+        than queueing it -- but only ever happens when the pool is saturated or
+        shut down, and a delayed fill is recoverable where a dropped one is not.
+        A failure here is logged with the event so the run can be reconstructed
+        by hand.
+        """
+        try:
+            run_workflow()
+        except Exception:
+            logger.exception(
+                f"Order-update event for workflow {watch.workflow_id} could be "
+                f"neither queued nor run inline (order {watch.order_id or 'any'}, "
+                f"symbol {watch.symbol or 'any'}). The trigger did not fire for "
+                "this event."
+            )
 
     def _retire_one_shot(self, watch: OrderUpdateWatch) -> None:
         """Consume a one-shot watch: drop it and clear the workflow's active flag.

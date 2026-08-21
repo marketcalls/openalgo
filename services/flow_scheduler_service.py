@@ -381,6 +381,92 @@ def is_within_market_hours(
     return start_minutes <= minutes <= end_minutes
 
 
+def reconcile_scheduler_jobs() -> dict:
+    """Bring the persistent jobstore and the database back into agreement.
+
+    Activation writes two things -- a row flag and a scheduler job -- and a
+    crash, a failed write or a hand-edited database can leave those disagreeing.
+    The jobstore is persistent, so a stale job is restored at every boot and
+    keeps trading a workflow the user believes is off, while a missing job
+    leaves a workflow that reports Active and never fires. Neither state can
+    correct itself: deactivate short-circuits on `already_inactive`, and
+    activate refuses an `already_active` workflow.
+
+    Run once at startup, after the Flow database and the scheduler are up.
+
+    Returns counts of what it changed.
+    """
+    from database.flow_db import get_active_workflows, get_workflow, set_schedule_job_id
+
+    scheduler = get_flow_scheduler()
+    removed = 0
+    restored = 0
+
+    # Orphans: a job whose workflow is gone or no longer active.
+    for job in scheduler.get_all_jobs():
+        job_id = str(getattr(job, "id", ""))
+        if not job_id.startswith("flow_workflow_"):
+            continue
+        try:
+            workflow_id = int(job_id.rsplit("_", 1)[1])
+        except (IndexError, ValueError):
+            continue
+
+        workflow = get_workflow(workflow_id)
+        if workflow is None or not workflow.is_active:
+            reason = "no longer exists" if workflow is None else "is not active"
+            logger.warning(
+                f"Removing orphaned scheduler job {job_id}: the workflow {reason}."
+            )
+            if scheduler.remove_job(job_id):
+                removed += 1
+
+    # The mirror case: active, scheduled, but nothing registered to fire it.
+    for workflow in get_active_workflows():
+        trigger = next(
+            (n for n in (workflow.nodes or []) if n.get("type") == "start"), None
+        )
+        if not trigger:
+            continue
+        data = trigger.get("data", {}) or {}
+        schedule_type = data.get("scheduleType")
+        if not schedule_type or schedule_type == "manual":
+            continue
+        if scheduler.get_workflow_job(workflow.id) is not None:
+            continue
+
+        try:
+            job_id = scheduler.add_workflow_job(
+                workflow_id=workflow.id,
+                schedule_type=schedule_type,
+                time_str=data.get("time", "09:15"),
+                days=data.get("days"),
+                execute_at=data.get("executeAt"),
+                interval_value=data.get("intervalValue"),
+                interval_unit=data.get("intervalUnit"),
+                market_hours_only=bool(data.get("marketHoursOnly", False)),
+            )
+            set_schedule_job_id(workflow.id, job_id)
+            restored += 1
+            logger.warning(
+                f"Restored missing scheduler job for active workflow {workflow.id}."
+            )
+        except Exception:
+            # A one-shot schedule whose time has passed cannot be rebuilt, and
+            # that is not a failure worth blocking startup for.
+            logger.exception(
+                f"Could not restore the scheduler job for active workflow "
+                f"{workflow.id}; it will not fire until it is reactivated"
+            )
+
+    if removed or restored:
+        logger.info(
+            f"Scheduler reconciliation: removed {removed} orphaned job(s), "
+            f"restored {restored} missing job(s)"
+        )
+    return {"removed": removed, "restored": restored}
+
+
 def get_market_hours_config(workflow) -> dict:
     """Market-hours settings from a workflow's trigger node.
 

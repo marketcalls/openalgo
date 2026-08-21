@@ -1214,3 +1214,239 @@ def test_no_scheduler_path_persists_the_api_key():
     source = inspect.getsource(FlowScheduler.add_workflow_job)
 
     assert "self._api_key" not in source.split("args=(")[1].split("),")[0]
+
+
+# ---------------------------------------------------------------------------
+# FLOW-016 / FLOW-013 / FLOW-015: value rules the audit found still open
+# ---------------------------------------------------------------------------
+
+
+def _validate_lenient(node_type, data):
+    """The path an ordinary editor save takes."""
+    from services.flow_workflow_validator import validate_workflow
+
+    position = {"x": 0, "y": 0}
+    workflow = {
+        "name": "t",
+        "nodes": [
+            {"id": "n1", "type": "start", "position": position, "data": {}},
+            {"id": "n2", "type": node_type, "position": position, "data": data},
+        ],
+        "edges": [{"id": "e1", "source": "n1", "target": "n2"}],
+    }
+    return [e["code"] for e in validate_workflow(workflow, require_name=False, strict=False)]
+
+
+def test_an_ordinary_save_rejects_an_invalid_constant():
+    """Value checks were gated on `strict`, and the editor saves non-strict.
+
+    A save therefore stored exactly the node the importer would have refused.
+    """
+    assert "invalid_constant" in _validate_lenient(
+        "placeOrder", {**_VALID_ORDER, "exchange": "NSEE"}
+    )
+
+
+def test_an_ordinary_save_still_accepts_a_half_built_node():
+    """Presence checks must stay strict-only, or the editor cannot save at all."""
+    assert _validate_lenient("placeOrder", {}) == []
+
+
+@pytest.mark.parametrize("value", [123, True, 4.5])
+def test_a_non_string_constant_is_the_wrong_type(value):
+    """The check skipped non-strings, so `"exchange": 123` reached the mapper."""
+    assert "invalid_constant" in _validate("placeOrder", {**_VALID_ORDER, "exchange": value})
+
+
+@pytest.mark.parametrize(
+    "price_type,field,value",
+    [
+        ("LIMIT", "price", 0),
+        ("LIMIT", "price", -10),
+        ("SL", "price", 0),
+        ("SL-M", "triggerPrice", 0),
+    ],
+)
+def test_a_priced_order_needs_a_price(price_type, field, value):
+    """A LIMIT at 0 is not "unset" -- it is an order nobody priced."""
+    data = {**_VALID_ORDER, "priceType": price_type, field: value}
+    assert "invalid_price" in _validate("placeOrder", data)
+
+
+def test_a_market_order_may_leave_price_at_zero():
+    assert _validate("placeOrder", {**_VALID_ORDER, "priceType": "MARKET", "price": 0}) == []
+
+
+def test_a_priced_order_with_a_variable_is_left_to_the_executor():
+    data = {**_VALID_ORDER, "priceType": "LIMIT", "price": "{{webhook.px}}"}
+    assert _validate("placeOrder", data) == []
+
+
+@pytest.mark.parametrize("method", ["TRACE", "CONNECT", "OPTIONS"])
+def test_unimplemented_http_methods_are_refused(method):
+    """These reached the node and returned "Unsupported method" at run time."""
+    assert "invalid_method" in _validate("httpRequest", {"url": "https://x.com", "method": method})
+
+
+def test_implemented_http_methods_are_accepted():
+    for method in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+        assert _validate("httpRequest", {"url": "https://x.com", "method": method}) == []
+
+
+@pytest.mark.parametrize("timeout", [1, 10, 999])
+def test_an_unusably_short_timeout_is_refused(timeout):
+    """1 ms is not a fast request, it is a request that can only ever fail."""
+    assert "invalid_timeout" in _validate(
+        "httpRequest", {"url": "https://x.com", "timeout": timeout}
+    )
+
+
+_INDICATOR = {"symbol": "SBIN", "exchange": "NSE", "indicatorName": "rsi"}
+
+
+def test_object_form_indicator_params_are_refused_at_import():
+    """The object form imported cleanly and then failed the run on json.loads."""
+    assert "invalid_params" in _validate("indicator", {**_INDICATOR, "params": {"period": 14}})
+
+
+def test_string_form_indicator_params_are_accepted():
+    assert _validate("indicator", {**_INDICATOR, "params": '{"period": 14}'}) == []
+
+
+def test_the_executor_normalises_legacy_object_params():
+    """Already-stored graphs must keep working; the validator stops new ones.
+
+    Asserted against the source rather than by running the node: importing the
+    indicator service pulls in `openalgo.ta`, and under pytest the repository
+    directory shadows that package.
+    """
+    import inspect
+
+    source = inspect.getsource(fes.NodeExecutor.execute_indicator)
+
+    assert "isinstance(params_value, dict)" in source
+    normalise_at = source.index("isinstance(params_value, dict)")
+    parse_at = source.index("json.loads(params_raw)")
+    assert normalise_at < parse_at, "a dict must be handled before it reaches json.loads"
+
+
+# ---------------------------------------------------------------------------
+# FLOW-003: the jobstore and the database are reconciled at startup
+# ---------------------------------------------------------------------------
+
+
+class _FakeJob:
+    def __init__(self, job_id):
+        self.id = job_id
+
+
+class _FakeScheduler:
+    def __init__(self, jobs, existing=()):
+        self._jobs = [_FakeJob(j) for j in jobs]
+        self._existing = set(existing)
+        self.removed = []
+        self.added = []
+
+    def get_all_jobs(self):
+        return list(self._jobs)
+
+    def remove_job(self, job_id, strict=False):
+        self.removed.append(job_id)
+        return True
+
+    def get_workflow_job(self, workflow_id):
+        return _FakeJob(f"flow_workflow_{workflow_id}") if workflow_id in self._existing else None
+
+    def add_workflow_job(self, workflow_id, **kwargs):
+        self.added.append(workflow_id)
+        return f"flow_workflow_{workflow_id}"
+
+
+def _schedule_workflow(workflow_id, is_active=True, schedule_type="daily"):
+    return types.SimpleNamespace(
+        id=workflow_id,
+        is_active=is_active,
+        nodes=[{"type": "start", "data": {"scheduleType": schedule_type, "time": "09:15"}}],
+    )
+
+
+def _reconcile(monkeypatch, scheduler, workflows):
+    import database.flow_db as flow_db
+    import services.flow_scheduler_service as sched
+
+    by_id = {w.id: w for w in workflows}
+    monkeypatch.setattr(sched, "get_flow_scheduler", lambda: scheduler)
+    monkeypatch.setattr(flow_db, "get_workflow", lambda wid: by_id.get(wid))
+    monkeypatch.setattr(
+        flow_db, "get_active_workflows", lambda: [w for w in workflows if w.is_active]
+    )
+    monkeypatch.setattr(flow_db, "set_schedule_job_id", lambda wid, job_id: True)
+    return sched.reconcile_scheduler_jobs()
+
+
+def test_reconciliation_removes_a_job_whose_workflow_is_inactive(monkeypatch):
+    """The jobstore is persistent, so a stale job is restored at every boot and
+    keeps trading a workflow the user believes is switched off."""
+    scheduler = _FakeScheduler(["flow_workflow_7"])
+
+    result = _reconcile(monkeypatch, scheduler, [_schedule_workflow(7, is_active=False)])
+
+    assert scheduler.removed == ["flow_workflow_7"]
+    assert result["removed"] == 1
+
+
+def test_reconciliation_removes_a_job_whose_workflow_is_gone(monkeypatch):
+    scheduler = _FakeScheduler(["flow_workflow_9"])
+
+    result = _reconcile(monkeypatch, scheduler, [])
+
+    assert scheduler.removed == ["flow_workflow_9"]
+    assert result["removed"] == 1
+
+
+def test_reconciliation_restores_a_missing_job_for_an_active_workflow(monkeypatch):
+    """Active with nothing registered reports Active and never fires, and
+    activate refuses it as already_active."""
+    scheduler = _FakeScheduler([])
+
+    result = _reconcile(monkeypatch, scheduler, [_schedule_workflow(3)])
+
+    assert scheduler.added == [3]
+    assert result["restored"] == 1
+
+
+def test_reconciliation_leaves_a_consistent_pair_alone(monkeypatch):
+    scheduler = _FakeScheduler(["flow_workflow_5"], existing={5})
+
+    result = _reconcile(monkeypatch, scheduler, [_schedule_workflow(5)])
+
+    assert scheduler.removed == []
+    assert scheduler.added == []
+    assert result == {"removed": 0, "restored": 0}
+
+
+def test_reconciliation_ignores_manual_workflows(monkeypatch):
+    """A manual workflow has no schedule, so it is not a missing job."""
+    scheduler = _FakeScheduler([])
+
+    result = _reconcile(monkeypatch, scheduler, [_schedule_workflow(4, schedule_type="manual")])
+
+    assert scheduler.added == []
+    assert result["restored"] == 0
+
+
+def test_reconciliation_ignores_jobs_it_does_not_own(monkeypatch):
+    """The jobstore is shared; only flow_workflow_* ids belong to Flow."""
+    scheduler = _FakeScheduler(["squareoff_12", "flow_workflow_notanint"])
+
+    result = _reconcile(monkeypatch, scheduler, [])
+
+    assert scheduler.removed == []
+    assert result["removed"] == 0
+
+
+def test_startup_runs_the_reconciliation():
+    """Wired next to the other Flow restorations, or it never runs."""
+    source = open("app.py", encoding="utf-8").read()
+
+    assert "reconcile_scheduler_jobs" in source
