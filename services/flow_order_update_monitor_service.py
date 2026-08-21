@@ -13,6 +13,7 @@ see docs/prompt/websockets-format.md "Order Updates") instead of running its
 own polling thread.
 """
 
+import atexit
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -350,17 +351,38 @@ class FlowOrderUpdateMonitor:
             return False
 
     def shutdown(self):
+        """Unsubscribe from the bus and release the worker pool.
+
+        Registered with atexit below; it had no caller before, so the
+        subscription and the pool's threads survived until the process was
+        killed.
+
+        Idempotent, and it clears `_initialized` so a later
+        get_flow_order_update_monitor() re-runs __init__ and re-subscribes.
+        Without that the singleton was unrecoverable: __init__ returns early on
+        the flag, so nothing could ever re-attach to the bus.
+        """
+        if getattr(self, "_shutdown_done", False):
+            return
+        self._shutdown_done = True
+
         bus.unsubscribe("order.update", self._on_order_update)
         with self._watches_lock:
             self._watches.clear()
         # Let in-flight workflows finish; the pool's threads are released with
         # it rather than left running past shutdown.
         _WORKFLOW_POOL.shutdown(wait=False)
+        self._initialized = False
         logger.info("FlowOrderUpdateMonitor shutdown")
 
 
 # Singleton instance
 flow_order_update_monitor = FlowOrderUpdateMonitor()
+
+
+# Unsubscribe from the bus and release the pool on the way out. Without this the
+# subscription and the pool's threads were held until the process was killed.
+atexit.register(flow_order_update_monitor.shutdown)
 
 
 def get_flow_order_update_monitor() -> FlowOrderUpdateMonitor:

@@ -1108,6 +1108,10 @@ class NodeExecutor:
         self.log(
             f"Cancel all result: {result}", "info" if result.get("status") == "success" else "error"
         )
+        # Every other action node stores its result. Without this an
+        # outputVariable set on this node stayed undefined, and the downstream
+        # {{...}} that read it resolved to its own literal text.
+        self.store_output(node_data, result)
         return result
 
     def execute_close_positions(self, node_data: dict) -> dict:
@@ -2358,8 +2362,13 @@ class NodeExecutor:
             condition_met = pnl < threshold
             log_msg = f"Position check: pnl={pnl} < {threshold} = {condition_met}"
         else:
-            condition_met = False
-            log_msg = f"Position check: unknown condition '{condition}' — returning False"
+            message = (
+                f"condition {condition!r} is not one this node can evaluate "
+                "(exists, not_exists, quantity_above, quantity_below, "
+                "pnl_above, pnl_below)"
+            )
+            self.log(f"Position check aborted: {message}", "error")
+            return {"status": "error", "condition": False, "message": message}
 
         self.log(log_msg)
         return {
@@ -2435,12 +2444,36 @@ class NodeExecutor:
         exchange = self.get_str(node_data, "exchange", "NSE")
         field = self.get_str(node_data, "field", "ltp")
         operator = self.get_str(node_data, "operator", ">")
+        if field not in self.PRICE_CONDITION_FIELDS:
+            message = (
+                f"field {field!r} is not one of "
+                f"{', '.join(sorted(self.PRICE_CONDITION_FIELDS))}"
+            )
+            self.log(f"Price check aborted: {message}", "error")
+            return {"status": "error", "condition": False, "message": message}
+
+        # Same rule as varCondition: an operator the comparison cannot honour
+        # used to fall through to a silent False, which does not mean "the
+        # condition did not hold" -- it means the check never ran, and the graph
+        # then took the false branch as though it had.
+        if operator not in self.COMPARISON_OPERATORS:
+            message = (
+                f"operator {operator!r} is not one of "
+                f"{', '.join(sorted(self.COMPARISON_OPERATORS))}"
+            )
+            self.log(f"Price check aborted: {message}", "error")
+            return {"status": "error", "condition": False, "message": message}
+
         # Accept both `value` (current UI) and `threshold` (legacy) for back-compat.
         value = node_data.get("value", node_data.get("threshold", 0))
         try:
-            threshold = float(value) if value not in (None, "") else 0.0
+            threshold = float(
+                self.context.interpolate(str(value)) if value not in (None, "") else 0.0
+            )
         except (TypeError, ValueError):
-            threshold = 0.0
+            message = f"value did not resolve to a number: {value!r}"
+            self.log(f"Price check aborted: {message}", "error")
+            return {"status": "error", "condition": False, "message": message}
 
         self.log(f"Checking price for: {symbol}")
         result = self.client.get_quotes(symbol=symbol, exchange=exchange)
@@ -2538,6 +2571,13 @@ class NodeExecutor:
         self.log(f"Var check aborted: {message}", "error")
         return None, {"status": "error", "condition": False, "message": message}
 
+    # Quote fields priceCondition can read, matching the editor's dropdown and
+    # the import reference. Anything else used to read 0.0 out of the quote dict
+    # and compare that, so a typo produced a confident, wrong answer.
+    PRICE_CONDITION_FIELDS = frozenset(
+        {"ltp", "open", "high", "low", "prev_close", "change_percent"}
+    )
+
     # Operator vocabularies `_compare` understands: the symbols the editor
     # writes, plus the word forms some legacy node configs still carry.
     COMPARISON_OPERATORS = frozenset(
@@ -2602,8 +2642,11 @@ class NodeExecutor:
         condition_type = node_data.get("conditionType", "entry")
 
         now = datetime.now().time()
-        target_hour, target_minute, _ = parse_time_string(target_time_str, 9, 30)
-        target_time = time(target_hour, target_minute)
+        # Seconds are kept. Dropping them made "after 15:29:59" behave as
+        # "after 15:29:00", a minute early, while waitUntil parsing the very
+        # same string honoured them -- so two nodes given one time disagreed.
+        target_hour, target_minute, target_second = parse_time_string(target_time_str, 9, 30)
+        target_time = time(target_hour, target_minute, target_second)
 
         now_seconds = now.hour * 3600 + now.minute * 60 + now.second
         target_seconds = target_time.hour * 3600 + target_time.minute * 60 + target_time.second
@@ -2617,9 +2660,14 @@ class NodeExecutor:
         elif operator == "<":
             condition_met = now_seconds < target_seconds
         elif operator == "==":
+            # Deliberately minute-precision: a second-exact equality would only
+            # hold if a poll landed on that exact second, so it would almost
+            # never fire.
             condition_met = now.hour == target_time.hour and now.minute == target_time.minute
         else:
-            condition_met = False
+            message = f"operator {operator!r} is not one of >=, <=, >, <, =="
+            self.log(f"Time condition aborted: {message}", "error")
+            return {"status": "error", "condition": False, "message": message}
 
         self.log(
             f"Time condition ({condition_type}): {now.strftime('%H:%M')} "

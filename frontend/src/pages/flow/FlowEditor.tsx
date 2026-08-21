@@ -237,12 +237,12 @@ function FlowEditorContent() {
     onSuccess: (saved) => {
       markSaved()
       queryClient.invalidateQueries({ queryKey: flowQueryKeys.workflows() })
-      // Trigger registrations are built at activation time, so editing an active
-      // workflow's schedule time or alert symbol saves cleanly while the
-      // scheduler keeps running the old configuration. The server now says so.
+      // The server re-arms a changed trigger during the save. It only reports
+      // needs_reactivate when that failed, in which case it has stood the
+      // workflow down rather than leave it running a stale registration.
       if (saved?.needs_reactivate) {
         showToast.warning(
-          'Saved. Deactivate and reactivate for the new trigger settings to take effect.',
+          'Saved, but the new trigger could not be registered, so the workflow was deactivated. Activate it again once the trigger is valid.',
           'flow'
         )
       } else {

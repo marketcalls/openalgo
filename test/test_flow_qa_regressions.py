@@ -746,3 +746,168 @@ def test_retention_can_be_switched_off(flow_database):
 
     assert deleted == 0
     assert len(flow_database.get_workflow_executions(workflow.id, limit=200)) == 6
+
+
+# ---------------------------------------------------------------------------
+# Condition nodes must not answer confidently when they cannot evaluate
+# ---------------------------------------------------------------------------
+
+
+class _QuoteClient:
+    def __init__(self, **fields):
+        self.fields = fields
+        self.cancelled = False
+
+    def get_quotes(self, symbol, exchange):
+        return {"status": "success", "data": self.fields}
+
+    def get_open_position(self, **kwargs):
+        return {"quantity": 5, "pnl": 100}
+
+    def cancel_all_orders(self):
+        self.cancelled = True
+        return {"status": "success", "cancelled": 3}
+
+
+def _node(client=None):
+    return fes.NodeExecutor(client or _QuoteClient(ltp=100.0), fes.WorkflowContext(), [])
+
+
+@pytest.mark.parametrize(
+    "node_data,reason",
+    [
+        ({"symbol": "S", "field": "close", "operator": ">", "value": 50}, "unknown field"),
+        ({"symbol": "S", "field": "ltp", "operator": "~=", "value": 50}, "unknown operator"),
+        ({"symbol": "S", "field": "ltp", "operator": ">", "value": "abc"}, "unparseable value"),
+    ],
+)
+def test_price_condition_fails_rather_than_guessing(node_data, reason):
+    """Each of these used to produce a confident answer from a substituted value.
+
+    An unknown field read 0.0 out of the quote dict; an unknown operator fell
+    through the comparison to a silent False, which the graph then treated as
+    "the condition did not hold" rather than "the check never ran"; and a
+    non-numeric threshold became 0.0.
+    """
+    result = _node().execute_price_condition(node_data)
+
+    assert result["status"] == "error", reason
+    assert result["condition"] is False
+
+
+@pytest.mark.parametrize(
+    "operator,value,expected",
+    [(">", 50, True), ("<", 50, False), (">=", 100, True), ("!=", 100, False)],
+)
+def test_price_condition_still_evaluates_valid_configuration(operator, value, expected):
+    result = _node().execute_price_condition(
+        {"symbol": "S", "field": "ltp", "operator": operator, "value": value}
+    )
+
+    assert result["condition"] is expected
+
+
+def test_price_condition_change_percent_is_computed():
+    result = _node(_QuoteClient(ltp=110.0, prev_close=100.0)).execute_price_condition(
+        {"symbol": "S", "field": "change_percent", "operator": ">", "value": 5}
+    )
+
+    assert result["condition"] is True
+
+
+def test_position_check_rejects_an_unknown_condition():
+    """It used to log "returning False", which is indistinguishable downstream."""
+    result = _node().execute_position_check(
+        {"symbol": "S", "exchange": "NSE", "condition": "qty_gt"}
+    )
+
+    assert result["status"] == "error"
+    assert result["condition"] is False
+
+
+def test_position_check_still_evaluates_a_known_condition():
+    result = _node().execute_position_check(
+        {"symbol": "S", "exchange": "NSE", "condition": "exists"}
+    )
+
+    assert result["status"] == "success"
+    assert result["condition"] is True
+
+
+def test_time_condition_honours_seconds():
+    """Truncating seconds fired "after 15:29:59" a minute early.
+
+    Both target times below sit inside the same minute as now, so the two
+    assertions can only disagree if the seconds survive parsing. waitUntil
+    already honoured them, so the two nodes disagreed on one string.
+    """
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    passed = (now - timedelta(seconds=20)).strftime("%H:%M:%S")
+    upcoming = (now + timedelta(seconds=20)).strftime("%H:%M:%S")
+
+    assert _node().execute_time_condition({"targetTime": passed, "operator": ">="})["condition"]
+    assert not _node().execute_time_condition({"targetTime": upcoming, "operator": ">="})[
+        "condition"
+    ]
+
+
+def test_time_condition_rejects_an_unknown_operator():
+    result = _node().execute_time_condition({"targetTime": "09:30:00", "operator": "after"})
+
+    assert result["status"] == "error"
+    assert result["condition"] is False
+
+
+def test_cancel_all_orders_stores_its_result():
+    """Every other action node does; without it the variable stayed undefined."""
+    client = _QuoteClient()
+    executor = _node(client)
+
+    executor.execute_cancel_all_orders({"outputVariable": "cancelled"})
+
+    assert client.cancelled is True
+    assert executor.context.interpolate("{{cancelled.cancelled}}") == "3"
+
+
+# ---------------------------------------------------------------------------
+# Monitor shutdown is reachable, idempotent and recoverable
+# ---------------------------------------------------------------------------
+
+
+def test_price_monitor_shutdown_is_idempotent():
+    """atexit may fire after an explicit call; neither should raise."""
+    monitor = fpm.FlowPriceMonitor()
+    monitor.shutdown()
+    monitor.shutdown()
+
+    assert monitor.is_running() is False
+
+
+def test_order_monitor_shutdown_allows_resubscription():
+    """__init__ returns early on _initialized, so shutdown must clear it.
+
+    Without that the singleton was unrecoverable: nothing could ever re-attach
+    to the order-update bus for the rest of the process.
+    """
+    import services.flow_order_update_monitor_service as oum
+
+    monitor = oum.get_flow_order_update_monitor()
+    monitor.shutdown()
+
+    assert monitor._initialized is False
+
+
+def test_both_monitors_release_their_pool_at_exit():
+    """Neither shutdown had a caller, so the pools outlived every process.
+
+    Checked at the source level: CPython's atexit is C-implemented and exposes
+    no way to enumerate what is registered.
+    """
+    import inspect
+
+    import services.flow_order_update_monitor_service as oum
+
+    assert "atexit.register(flow_price_monitor.shutdown)" in inspect.getsource(fpm)
+    assert "atexit.register(flow_order_update_monitor.shutdown)" in inspect.getsource(oum)

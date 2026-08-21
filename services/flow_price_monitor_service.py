@@ -5,6 +5,7 @@ Real-time price monitoring for Price Alert triggers (Flask/sync version)
 Uses polling instead of WebSocket for simplicity in Flask context
 """
 
+import atexit
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -552,9 +553,26 @@ class FlowPriceMonitor:
         }
 
     def shutdown(self):
-        """Shutdown the price monitor"""
+        """Stop polling and release the worker pool.
+
+        Registered with atexit below, mirroring the scalping risk monitor. It
+        previously had no caller anywhere, so the poll thread and the executor
+        pool were simply abandoned at process exit -- and unlike the sibling
+        order-update monitor it never released the pool at all, leaving its
+        threads and their file descriptors held.
+
+        Idempotent: atexit may fire after an explicit call.
+        """
+        if getattr(self, "_shutdown_done", False):
+            return
+        self._shutdown_done = True
+
         self._stop_monitoring()
-        self._alerts.clear()
+        with self._alerts_lock:
+            self._alerts.clear()
+        # Let an in-flight workflow finish rather than killing it mid-order; the
+        # pool's threads are released with it instead of outliving the process.
+        _WORKFLOW_POOL.shutdown(wait=False)
         logger.info("FlowPriceMonitor shutdown")
 
 
@@ -621,6 +639,10 @@ def restore_price_alerts() -> int:
 
 # Singleton instance
 flow_price_monitor = FlowPriceMonitor()
+
+# Release the poll thread and the worker pool on the way out. Without this the
+# monitor's file descriptors were held until the process was killed.
+atexit.register(flow_price_monitor.shutdown)
 
 
 def get_flow_price_monitor() -> FlowPriceMonitor:

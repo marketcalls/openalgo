@@ -281,12 +281,28 @@ def update_workflow(workflow_id):
     if not workflow:
         return jsonify({"error": "Workflow not found"}), 404
 
-    needs_reactivate = was_active and trigger_config(workflow.nodes or []) != trigger_before
-    if needs_reactivate:
+    trigger_changed = was_active and trigger_config(workflow.nodes or []) != trigger_before
+    needs_reactivate = False
+    if trigger_changed:
+        # Re-arm in place. The registration is a snapshot taken at activation,
+        # so without this a new schedule time or alert symbol saved cleanly
+        # while the scheduler and monitors kept running the old one.
         logger.info(
             f"Workflow {workflow_id} trigger configuration changed while active; "
-            "it must be reactivated for the change to take effect"
+            "re-registering it"
         )
+        try:
+            _reregister_trigger(workflow)
+        except Exception:
+            # Fail closed: rather than leave the workflow active with a stale or
+            # absent registration, stand it down and say so. The editor turns
+            # needs_reactivate into a visible warning.
+            logger.exception(
+                f"Could not re-register the trigger for workflow {workflow_id}; "
+                "deactivating it so it cannot run a stale configuration"
+            )
+            _rollback_activation(workflow_id)
+            needs_reactivate = True
 
     return jsonify(
         {
@@ -337,6 +353,123 @@ def delete_workflow(workflow_id):
 
 
 # === Activation/Deactivation Routes ===
+
+
+def _trigger_node(nodes):
+    """The workflow's trigger node, or None."""
+    return next(
+        (
+            n
+            for n in (nodes or [])
+            if n.get("type") in ["start", "webhookTrigger", "priceAlert", "orderUpdateTrigger"]
+        ),
+        None,
+    )
+
+
+def _unregister_trigger(workflow_id):
+    """Remove every in-memory trigger registration for a workflow.
+
+    Deliberately unconditional across all three kinds: the stored
+    schedule_job_id can be missing, and a workflow whose trigger type changed
+    still has the previous kind registered.
+    """
+    from services.flow_order_update_monitor_service import get_flow_order_update_monitor
+    from services.flow_price_monitor_service import get_flow_price_monitor
+    from services.flow_scheduler_service import get_flow_scheduler
+
+    get_flow_scheduler().remove_workflow_job(workflow_id, strict=True)
+    get_flow_price_monitor().remove_alert(workflow_id)
+    get_flow_order_update_monitor().remove_watch(workflow_id)
+
+
+def _register_trigger(workflow_id, trigger_type, trigger_data, api_key):
+    """Arm the scheduler job, price alert or order watch for a trigger node.
+
+    Shared by activation and by a save that changes the trigger of an already
+    active workflow, so the two cannot drift.
+
+    Raises ValueError for a misconfigured node (a client error) and
+    RuntimeError when a registration cannot be recorded. The caller decides how
+    to report it and what to roll back.
+    """
+    from database.flow_db import set_schedule_job_id
+    from services.flow_order_update_monitor_service import get_flow_order_update_monitor
+    from services.flow_price_monitor_service import get_flow_price_monitor
+    from services.flow_scheduler_service import get_flow_scheduler
+
+    if trigger_type == "start":
+        schedule_type = trigger_data.get("scheduleType")
+        if schedule_type and schedule_type != "manual":
+            scheduler = get_flow_scheduler()
+            scheduler.set_api_key(api_key)
+
+            job_id = scheduler.add_workflow_job(
+                workflow_id=workflow_id,
+                schedule_type=schedule_type,
+                time_str=trigger_data.get("time", "09:15"),
+                days=trigger_data.get("days"),
+                execute_at=trigger_data.get("executeAt"),
+                interval_value=trigger_data.get("intervalValue"),
+                interval_unit=trigger_data.get("intervalUnit"),
+                # Offered by the editor and defaulted on, but never read
+                # before, so schedules kept firing overnight and at weekends.
+                market_hours_only=bool(trigger_data.get("marketHoursOnly", False)),
+            )
+            if not set_schedule_job_id(workflow_id, job_id):
+                # Without the stored id, deactivation cannot find the job.
+                # Undo the job rather than leave one nothing can reach.
+                scheduler.remove_workflow_job(workflow_id)
+                raise RuntimeError("Could not record the scheduler job id for this workflow")
+
+    elif trigger_type == "priceAlert":
+        get_flow_price_monitor().add_alert(
+            workflow_id=workflow_id,
+            symbol=trigger_data.get("symbol", ""),
+            exchange=trigger_data.get("exchange", "NSE"),
+            condition=trigger_data.get("condition", "greater_than"),
+            target_price=float(trigger_data.get("price", 0) or 0),
+            price_lower=trigger_data.get("priceLower"),
+            price_upper=trigger_data.get("priceUpper"),
+            percentage=trigger_data.get("percentage"),
+            api_key=api_key,
+            # Previously dropped here, so "Every Time" behaved as one-shot
+            # and the expiry window was never applied.
+            trigger=trigger_data.get("trigger", "once"),
+            expiration=trigger_data.get("expiration", "none"),
+        )
+
+    elif trigger_type == "orderUpdateTrigger":
+        get_flow_order_update_monitor().add_watch(
+            workflow_id=workflow_id,
+            api_key=api_key,
+            order_id=trigger_data.get("orderId") or None,
+            symbol=trigger_data.get("symbol") or None,
+            exchange=trigger_data.get("exchange") or None,
+            status=trigger_data.get("status", "complete"),
+            trigger=trigger_data.get("trigger", "once"),
+        )
+
+
+def _reregister_trigger(workflow):
+    """Swap a live workflow's trigger registration for its current graph.
+
+    Tears the old one down first, unconditionally and across all three kinds,
+    because the trigger type itself may have changed. Raises if the new
+    registration cannot be armed, leaving the caller to fail closed.
+    """
+    trigger_node = _trigger_node(workflow.nodes)
+    if not trigger_node:
+        raise ValueError("Workflow has no trigger node")
+
+    api_key = get_current_api_key()
+    if not api_key:
+        raise RuntimeError("API key not configured")
+
+    _unregister_trigger(workflow.id)
+    _register_trigger(
+        workflow.id, trigger_node.get("type"), trigger_node.get("data", {}) or {}, api_key
+    )
 
 
 def _rollback_activation(workflow_id):
@@ -396,14 +529,7 @@ def activate_workflow(workflow_id):
     nodes = workflow.nodes or []
 
     # Find trigger node to determine activation type
-    trigger_node = next(
-        (
-            n
-            for n in nodes
-            if n.get("type") in ["start", "webhookTrigger", "priceAlert", "orderUpdateTrigger"]
-        ),
-        None,
-    )
+    trigger_node = _trigger_node(nodes)
     if not trigger_node:
         return jsonify({"error": "No trigger node found in workflow"}), 400
 
@@ -423,72 +549,17 @@ def activate_workflow(workflow_id):
         return jsonify({"error": "Could not activate workflow"}), 500
 
     try:
-        if trigger_type == "start":
-            # Check for schedule configuration
-            schedule_type = trigger_data.get("scheduleType")
-            if schedule_type and schedule_type != "manual":
-                scheduler = get_flow_scheduler()
-                scheduler.set_api_key(api_key)
-
-                job_id = scheduler.add_workflow_job(
-                    workflow_id=workflow_id,
-                    schedule_type=schedule_type,
-                    time_str=trigger_data.get("time", "09:15"),
-                    days=trigger_data.get("days"),
-                    execute_at=trigger_data.get("executeAt"),
-                    interval_value=trigger_data.get("intervalValue"),
-                    interval_unit=trigger_data.get("intervalUnit"),
-                    # Offered by the editor and defaulted on, but never read
-                    # before, so schedules kept firing overnight and at weekends.
-                    market_hours_only=bool(trigger_data.get("marketHoursOnly", False)),
-                )
-                if not set_schedule_job_id(workflow_id, job_id):
-                    # Without the stored id, deactivation cannot find the job.
-                    # Undo the job rather than leave one nothing can reach.
-                    scheduler.remove_workflow_job(workflow_id)
-                    raise RuntimeError(
-                        "Could not record the scheduler job id for this workflow"
-                    )
-
-        elif trigger_type == "priceAlert":
-            price_monitor = get_flow_price_monitor()
-            price_monitor.add_alert(
-                workflow_id=workflow_id,
-                symbol=trigger_data.get("symbol", ""),
-                exchange=trigger_data.get("exchange", "NSE"),
-                condition=trigger_data.get("condition", "greater_than"),
-                target_price=float(trigger_data.get("price", 0)),
-                price_lower=trigger_data.get("priceLower"),
-                price_upper=trigger_data.get("priceUpper"),
-                percentage=trigger_data.get("percentage"),
-                api_key=api_key,
-                # Previously dropped here, so "Every Time" behaved as one-shot
-                # and the expiry window was never applied.
-                trigger=trigger_data.get("trigger", "once"),
-                expiration=trigger_data.get("expiration", "none"),
-            )
-
-        elif trigger_type == "orderUpdateTrigger":
-            order_monitor = get_flow_order_update_monitor()
-            try:
-                order_monitor.add_watch(
-                    workflow_id=workflow_id,
-                    api_key=api_key,
-                    order_id=trigger_data.get("orderId") or None,
-                    symbol=trigger_data.get("symbol") or None,
-                    exchange=trigger_data.get("exchange") or None,
-                    status=trigger_data.get("status", "complete"),
-                    trigger=trigger_data.get("trigger", "once"),
-                )
-            except ValueError as e:
-                # Misconfigured node (no Order ID/Symbol, a {{variable}} Order
-                # ID, or an unknown status) is a client error, not a 500.
-                _rollback_activation(workflow_id)
-                return jsonify({"error": str(e)}), 400
+        _register_trigger(workflow_id, trigger_type, trigger_data, api_key)
 
         return jsonify(
             {"status": "success", "message": f"Workflow activated with {trigger_type} trigger"}
         )
+
+    except ValueError as e:
+        # Misconfigured node (no Order ID/Symbol, a {{variable}} Order ID, or an
+        # unknown status) is a client error, not a 500.
+        _rollback_activation(workflow_id)
+        return jsonify({"error": str(e)}), 400
 
     except Exception as e:
         logger.exception(f"Failed to activate workflow {workflow_id}: {e}")
@@ -1106,9 +1177,22 @@ def replace_workflow(workflow_id):
         return jsonify({"error": "Failed to replace workflow"}), 500
 
     # The graph is re-read on every run, so node edits apply immediately. The
-    # trigger's schedule and any price/order watch are registered at activation,
-    # so a trigger change needs the workflow reactivated.
-    needs_reactivate = was_active and trigger_changed
+    # trigger's schedule and any price/order watch are snapshotted at
+    # activation, so a trigger change is re-armed here rather than waiting for
+    # the user to cycle the workflow.
+    needs_reactivate = False
+    if was_active and trigger_changed:
+        try:
+            _reregister_trigger(updated)
+        except Exception:
+            # Fail closed rather than leave it active on a stale registration.
+            logger.exception(
+                f"Could not re-register the trigger for workflow {workflow_id}; "
+                "deactivating it so it cannot run a stale configuration"
+            )
+            _rollback_activation(workflow_id)
+            needs_reactivate = True
+
     logger.info(
         f"Replaced workflow {workflow_id} from JSON "
         f"(nodes={len(fields['nodes'])} edges={len(fields['edges'])} "
@@ -1121,8 +1205,8 @@ def replace_workflow(workflow_id):
             "migrations": migration_notes,
             "needs_reactivate": needs_reactivate,
             "message": (
-                "Trigger configuration changed. Deactivate and reactivate so the "
-                "schedule is re-registered."
+                "Trigger changed and could not be re-registered, so the workflow "
+                "was deactivated. Activate it again when the trigger is valid."
                 if needs_reactivate
                 else "Workflow replaced. Changes apply from the next run."
             ),

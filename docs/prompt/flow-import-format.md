@@ -777,6 +777,9 @@ than sending a guessed value.
 
 #### cancelAllOrders — Cancel All Orders
 
+Accepts `outputVariable` like every other action node; the broker's response is
+stored under it.
+
 Cancels every open order. No fields.
 
 ```json
@@ -816,6 +819,14 @@ an unconditional square-off however they are set.
 
 These nodes set a `condition` boolean that the executor uses to route edges
 via `sourceHandle` — see [§5](#5-condition-source-handles).
+
+**A condition node that cannot evaluate fails the node; it does not answer
+`false`.** An unrecognised `field`, `operator` or `condition`, or a threshold
+that is not a number, returns `status: "error"` and takes *neither* branch.
+This matters because `false` is a real answer that routes the graph down the
+false path — an exit gate reading `false` would not fire. Previously these
+cases silently produced `false`, so a typo looked like a condition that simply
+did not hold.
 
 #### positionCheck — Position Check
 
@@ -867,8 +878,8 @@ so the node fails instead of letting the order behind it through.
 |---|---|---|---|
 | `symbol` | string | — | |
 | `exchange` | string | `"NSE"` | |
-| `field` | `"ltp"` \| `"open"` \| `"high"` \| `"low"` \| `"prev_close"` \| `"change_percent"` | `"ltp"` | `change_percent` is computed from `(ltp - prev_close) / prev_close * 100`. |
-| `operator` | `">"` \| `"<"` \| `"=="` \| `">="` \| `"<="` \| `"!="` | `">"` | |
+| `field` | `"ltp"` \| `"open"` \| `"high"` \| `"low"` \| `"prev_close"` \| `"change_percent"` | `"ltp"` | Validated. `change_percent` is computed from `(ltp - prev_close) / prev_close * 100`. |
+| `operator` | `">"` \| `"<"` \| `"=="` \| `">="` \| `"<="` \| `"!="` | `">"` | Validated. |
 | `value` | number | `0` | The threshold to compare against. |
 
 ```json
@@ -934,7 +945,7 @@ cannot silently route the else-path into a trade.
 |---|---|---|---|
 | `conditionType` | `"entry"` \| `"exit"` \| `"custom"` | — | UI-only categorization. |
 | `operator` | `"=="` \| `">="` \| `"<="` \| `">"` \| `"<"` | `">="` | |
-| `targetTime` | `"HH:MM"` | `"09:30"` | |
+| `targetTime` | `"HH:MM"` or `"HH:MM:SS"` | `"09:30"` | Seconds are honoured when given. |
 | `label` | string | — | Optional. |
 
 ```json
@@ -1513,7 +1524,7 @@ trigger, the request that fired it, so longer waits belong in a schedule or a
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `targetTime` | `"HH:MM"` | `"09:30"` | If already past, the node returns immediately. |
+| `targetTime` | `"HH:MM"` or `"HH:MM:SS"` | `"09:30"` | Seconds are honoured. If already past, the node returns immediately. |
 | `label` | string | — | UI-only. |
 
 ```json
@@ -2335,11 +2346,13 @@ positionBook (outputVariable=positions)
   or `orderUpdateTrigger` with `trigger: "once"` clears `is_active` after its
   run, so it is not re-armed by a later restart. Use `trigger: "every_time"`
   for a standing watch.
-- **Editing a trigger on an active workflow does not re-register it.** The
-  scheduler and monitors snapshot the trigger node at activation. Saving a new
-  schedule time or alert symbol returns `needs_reactivate: true`; deactivate
-  and reactivate for it to take effect. Node bodies outside the trigger do
-  apply immediately, because the graph is re-read on every run.
+- **Editing a trigger on an active workflow re-arms it during the save.** The
+  scheduler and monitors snapshot the trigger node, so a save that changes it
+  tears the old registration down and installs the new one. If that fails the
+  workflow is **deactivated** rather than left running a stale registration,
+  and the response carries `needs_reactivate: true`. Node bodies outside the
+  trigger apply immediately either way, because the graph is re-read on every
+  run.
 - **Lot size handling differs per node.** `optionsOrder` and
   `optionsMultiOrder` accept `quantity` **in lots** (multiplied by lot size
   internally). `placeOrder` / `smartOrder` / `splitOrder` / `basketOrder`
