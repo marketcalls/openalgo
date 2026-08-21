@@ -10,7 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional, Set
+from typing import Any, Optional
 
 from services.flow_openalgo_client import FlowOpenAlgoClient, get_flow_client
 from utils.env_config import env_int
@@ -64,6 +64,12 @@ class FlowPriceMonitor:
     # merely instance attributes.
     _pending: set[int] = set()
     _pending_lock = threading.Lock()
+    # Guards _alerts together with _running/_stop_event/_monitor_thread. The
+    # emptiness check that stops the loop and the registration that starts it
+    # are check-then-act pairs run from both request threads and the monitor
+    # thread itself, so they must not interleave. RLock because _check_alert
+    # re-enters through remove_alert from inside the loop.
+    _alerts_lock = threading.RLock()
 
     def __new__(cls):
         with cls._lock:
@@ -87,6 +93,7 @@ class FlowPriceMonitor:
         # an instance built without __init__.
         self._pending = set()
         self._pending_lock = threading.Lock()
+        self._alerts_lock = threading.RLock()
         logger.info("FlowPriceMonitor initialized")
 
     # The editor and this monitor grew separate vocabularies for the same four
@@ -141,26 +148,29 @@ class FlowPriceMonitor:
             expiration=str(expiration or "none").strip().lower(),
         )
 
-        self._alerts[workflow_id] = alert
-        logger.info(
-            f"Added price alert for workflow {workflow_id}: {symbol}@{exchange} {condition} {target_price}"
-        )
+        with self._alerts_lock:
+            self._alerts[workflow_id] = alert
+            logger.info(
+                f"Added price alert for workflow {workflow_id}: "
+                f"{symbol}@{exchange} {condition} {target_price}"
+            )
 
-        if not self._running:
-            self._start_monitoring()
+            if not self._running:
+                self._start_monitoring()
 
         return True
 
     def remove_alert(self, workflow_id: int) -> bool:
         """Remove a price alert for a workflow"""
-        if workflow_id not in self._alerts:
-            return False
+        with self._alerts_lock:
+            if workflow_id not in self._alerts:
+                return False
 
-        del self._alerts[workflow_id]
-        logger.info(f"Removed price alert for workflow {workflow_id}")
+            del self._alerts[workflow_id]
+            logger.info(f"Removed price alert for workflow {workflow_id}")
 
-        if not self._alerts and self._running:
-            self._stop_monitoring()
+            if not self._alerts and self._running:
+                self._stop_monitoring()
 
         return True
 
@@ -199,13 +209,18 @@ class FlowPriceMonitor:
         self._stop_event.set()
         self._running = False
 
-        if self._monitor_thread:
-            # remove_alert() is called from inside the monitoring loop when a
-            # one-shot alert fires or expires, and joining the current thread
-            # raises RuntimeError. The loop exits on the stop event anyway.
-            if self._monitor_thread is not threading.current_thread():
-                self._monitor_thread.join(timeout=5)
+        # Clear only the generation this call is stopping. A concurrent
+        # _start_monitoring may already have installed a newer thread here, and
+        # nulling that one would leave the live loop unreferenced and unjoinable.
+        thread = self._monitor_thread
+        if thread is not None:
             self._monitor_thread = None
+
+        # remove_alert() is called from inside the monitoring loop when a
+        # one-shot alert expires, and joining the current thread raises
+        # RuntimeError. The loop exits on the stop event anyway.
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=5)
 
         logger.info("Price monitoring stopped")
 
@@ -215,19 +230,29 @@ class FlowPriceMonitor:
         Watches the event it was started with, not whatever the instance
         currently holds, so a restart cannot resurrect it.
         """
+        from utils.db_sessions import remove_all_scoped_sessions
+
         stop_event = stop_event or self._stop_event
         while not stop_event.is_set():
             try:
                 self._check_all_alerts()
             except Exception as e:
                 logger.exception(f"Error in monitoring loop: {e}")
+            finally:
+                # Quote lookups bind scoped sessions to this thread, which has
+                # no Flask app context, so teardown_appcontext never fires. Left
+                # alone they accumulate a connection per generation of this loop.
+                remove_all_scoped_sessions()
 
             # Wait for next poll interval
             stop_event.wait(timeout=self._poll_interval)
 
     def _check_all_alerts(self):
         """Check all active alerts against current prices"""
-        for workflow_id in list(self._alerts.keys()):
+        with self._alerts_lock:
+            workflow_ids = list(self._alerts.keys())
+
+        for workflow_id in workflow_ids:
             alert = self._alerts.get(workflow_id)
             if alert and not alert.triggered:
                 try:
@@ -292,13 +317,17 @@ class FlowPriceMonitor:
                     f"(price: {current_price}, target: {alert.target_price})"
                 )
 
-                self._trigger_workflow(alert.workflow_id, current_price, alert.api_key)
                 if alert.trigger == "every_time":
                     # Keep watching; record the price so an edge-triggered
                     # crossing needs a fresh cross rather than re-firing.
                     alert.last_price = current_price
-                else:
-                    self.remove_alert(alert.workflow_id)
+
+                # De-registration of a one-shot alert belongs to the run it
+                # launched, not to this thread. Removing it here raced the
+                # worker and lost: submit() usually keeps the GIL, so the alert
+                # was gone before the pool thread read it and the run was
+                # dropped as "no longer registered".
+                self._trigger_workflow(alert, current_price)
             else:
                 alert.last_price = current_price
 
@@ -372,14 +401,23 @@ class FlowPriceMonitor:
         )
         return False
 
-    def _trigger_workflow(self, workflow_id: int, trigger_price: float, api_key: str):
-        """Queue one execution for this workflow, at most one at a time.
+    def _trigger_workflow(self, alert: PriceAlert, trigger_price: float):
+        """Queue one execution for this alert, at most one at a time.
 
         Coalesced deliberately. The pool's queue is unbounded, so an every_time
         alert whose workflow runs slower than the poll interval would stack a
         task per tick and execute long after the price that caused it. One
         pending run per workflow keeps the alert responsive without a backlog.
+
+        The whole alert object is passed, not its id, so the worker can prove
+        the registration it is about to consume is still the one that produced
+        it. A deactivate/reactivate cycle installs a new PriceAlert under the
+        same id, and an id-keyed removal would delete that new one.
         """
+        workflow_id = alert.workflow_id
+        api_key = alert.api_key
+        one_shot = alert.trigger != "every_time"
+
         with self._pending_lock:
             if workflow_id in self._pending:
                 logger.debug(
@@ -396,10 +434,10 @@ class FlowPriceMonitor:
                 # expires, or the workflow is deactivated. execute_workflow does
                 # not require the workflow to be active, so without this a stale
                 # price event could still place orders.
-                if workflow_id not in self._alerts:
+                if self._alerts.get(workflow_id) is not alert:
                     logger.info(
                         f"Dropping queued price-alert run for workflow {workflow_id}: "
-                        "the alert is no longer registered."
+                        "the alert was removed or replaced before this run claimed it."
                     )
                     return
                 if not self._workflow_is_active(workflow_id):
@@ -423,6 +461,8 @@ class FlowPriceMonitor:
             except Exception as e:
                 logger.exception(f"Failed to execute workflow {workflow_id}: {e}")
             finally:
+                if one_shot:
+                    self._retire_one_shot(alert)
                 with self._pending_lock:
                     self._pending.discard(workflow_id)
                 # No Flask app context on a pool thread, so teardown_appcontext
@@ -438,6 +478,42 @@ class FlowPriceMonitor:
             with self._pending_lock:
                 self._pending.discard(workflow_id)
             raise
+
+    def _retire_one_shot(self, alert: PriceAlert) -> None:
+        """Consume a one-shot alert: drop the watch and clear the active flag.
+
+        Both halves matter. Dropping only the in-memory watch left the row
+        `is_active`, so the UI kept showing the workflow as armed, the activate
+        endpoint answered `already_active` and refused to re-arm it, and
+        `restore_price_alerts` would re-arm the spent alert on the next restart
+        and fire an order the user believed was one-time.
+
+        Removal is by identity, so a run that finishes after the user has
+        deactivated and reactivated cannot delete the newer registration.
+        """
+        workflow_id = alert.workflow_id
+        with self._alerts_lock:
+            if self._alerts.get(workflow_id) is not alert:
+                logger.debug(
+                    f"One-shot price alert for workflow {workflow_id} was already "
+                    "replaced; leaving the current registration alone."
+                )
+                return
+            self.remove_alert(workflow_id)
+
+        try:
+            from database.flow_db import deactivate_workflow
+
+            deactivate_workflow(workflow_id)
+            logger.info(
+                f"One-shot price alert for workflow {workflow_id} consumed; "
+                "workflow deactivated."
+            )
+        except Exception:
+            logger.exception(
+                f"Could not deactivate workflow {workflow_id} after its one-shot "
+                "price alert fired"
+            )
 
     @staticmethod
     def _workflow_is_active(workflow_id: int) -> bool:
@@ -480,6 +556,67 @@ class FlowPriceMonitor:
         self._stop_monitoring()
         self._alerts.clear()
         logger.info("FlowPriceMonitor shutdown")
+
+
+def restore_price_alerts() -> int:
+    """Re-register alerts for already-active priceAlert workflows.
+
+    Alerts live only in memory, but `is_active` is persisted. Without this, a
+    server restart leaves such workflows marked active while watching nothing,
+    and the activate endpoint rejects them as `already_active` -- so they stay
+    silently dead until manually deactivated and reactivated. This mirrors
+    restore_order_update_watches; call once at startup, after the DB is ready.
+
+    Safe to call repeatedly: add_alert replaces the entry for a workflow id
+    rather than stacking a second one. A one-shot alert that has already fired
+    is not restored, because _retire_one_shot clears is_active when it is
+    consumed -- otherwise every restart would re-arm a spent alert.
+    """
+    from database.flow_db import get_active_workflows, get_workflow_api_key
+
+    monitor = get_flow_price_monitor()
+    restored = 0
+    for workflow in get_active_workflows():
+        trigger_node = next(
+            (n for n in (workflow.nodes or []) if n.get("type") == "priceAlert"), None
+        )
+        if not trigger_node:
+            continue
+        api_key = get_workflow_api_key(workflow)
+        if not api_key:
+            logger.warning(
+                f"Cannot restore price alert for workflow {workflow.id}: no stored API key"
+            )
+            continue
+        data = trigger_node.get("data", {}) or {}
+        symbol = data.get("symbol", "")
+        if not symbol:
+            logger.warning(
+                f"Cannot restore price alert for workflow {workflow.id}: no symbol configured"
+            )
+            continue
+        try:
+            monitor.add_alert(
+                workflow_id=workflow.id,
+                symbol=symbol,
+                exchange=data.get("exchange", "NSE"),
+                condition=data.get("condition", "greater_than"),
+                target_price=float(data.get("price", 0) or 0),
+                price_lower=data.get("priceLower"),
+                price_upper=data.get("priceUpper"),
+                percentage=data.get("percentage"),
+                api_key=api_key,
+                trigger=data.get("trigger", "once"),
+                expiration=data.get("expiration", "none"),
+            )
+            restored += 1
+        except (TypeError, ValueError) as e:
+            logger.warning(f"Skipping invalid price alert for workflow {workflow.id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to restore price alert for workflow {workflow.id}")
+    if restored:
+        logger.info(f"Restored {restored} price alert(s) from active workflows")
+    return restored
 
 
 # Singleton instance

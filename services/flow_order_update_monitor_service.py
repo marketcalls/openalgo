@@ -245,6 +245,26 @@ class FlowOrderUpdateMonitor:
 
         def run_workflow():
             try:
+                # A queued run can sit behind a slow execution while the user
+                # deactivates or deletes the workflow. execute_workflow does not
+                # require the workflow to be active, so without these guards a
+                # stale order event still places live orders. Identity, not id:
+                # a deactivate/reactivate cycle installs a new watch under the
+                # same key, and this run has no claim on that one.
+                if self.get_watch(watch.workflow_id) is not watch:
+                    logger.info(
+                        f"Dropping queued order-update run for workflow "
+                        f"{watch.workflow_id}: the watch was removed or replaced "
+                        "before this run claimed it."
+                    )
+                    return
+                if not self._workflow_is_active(watch.workflow_id):
+                    logger.info(
+                        f"Dropping queued order-update run for workflow "
+                        f"{watch.workflow_id}: the workflow is no longer active."
+                    )
+                    return
+
                 from services.flow_executor_service import execute_workflow
 
                 webhook_data = {
@@ -268,7 +288,7 @@ class FlowOrderUpdateMonitor:
                 logger.exception(f"Failed to execute workflow {watch.workflow_id}")
             finally:
                 if watch.trigger != "every_time":
-                    self.remove_watch(watch.workflow_id)
+                    self._retire_one_shot(watch)
                 else:
                     watch.triggered = False
                 # No app context here, so teardown_appcontext never runs and
@@ -279,6 +299,55 @@ class FlowOrderUpdateMonitor:
                 remove_all_scoped_sessions()
 
         _WORKFLOW_POOL.submit(run_workflow)
+
+    def _retire_one_shot(self, watch: OrderUpdateWatch) -> None:
+        """Consume a one-shot watch: drop it and clear the workflow's active flag.
+
+        Removal is by identity so a run that finishes after the user has
+        deactivated and reactivated cannot delete the newer registration --
+        that left the workflow `is_active` with nothing watching, and the
+        activate endpoint then refused to re-arm it as `already_active`.
+
+        Clearing `is_active` is the other half: without it a spent one-shot
+        watch is restored on every restart by restore_order_update_watches and
+        fires again on the next matching order.
+        """
+        workflow_id = watch.workflow_id
+        with self._watches_lock:
+            if self._watches.get(workflow_id) is not watch:
+                logger.debug(
+                    f"One-shot order-update watch for workflow {workflow_id} was "
+                    "already replaced; leaving the current registration alone."
+                )
+                return
+            del self._watches[workflow_id]
+            logger.info(f"Removed order-update watch for workflow {workflow_id}")
+
+        try:
+            from database.flow_db import deactivate_workflow
+
+            deactivate_workflow(workflow_id)
+            logger.info(
+                f"One-shot order-update watch for workflow {workflow_id} consumed; "
+                "workflow deactivated."
+            )
+        except Exception:
+            logger.exception(
+                f"Could not deactivate workflow {workflow_id} after its one-shot "
+                "order-update watch fired"
+            )
+
+    @staticmethod
+    def _workflow_is_active(workflow_id: int) -> bool:
+        """Whether the workflow is still active. Fails closed on error."""
+        try:
+            from database.flow_db import get_workflow
+
+            workflow = get_workflow(workflow_id)
+            return bool(workflow and workflow.is_active)
+        except Exception:
+            logger.exception(f"Could not confirm workflow {workflow_id} is active")
+            return False
 
     def shutdown(self):
         bus.unsubscribe("order.update", self._on_order_update)

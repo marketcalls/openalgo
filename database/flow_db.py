@@ -186,16 +186,28 @@ def get_workflow(workflow_id):
 
 
 def get_workflow_by_webhook_token(webhook_token):
-    """Get workflow by webhook token (cached for 5 minutes)"""
-    # Check cache first
-    if webhook_token in _workflow_webhook_cache:
-        return _workflow_webhook_cache[webhook_token]
+    """Get workflow by webhook token (token-to-id lookup cached for 5 minutes).
+
+    Only the id is cached, never the ORM instance. Caching the instance handed
+    the same object to every later request: the commit inside a workflow run
+    expired it and the scoped session was removed at teardown, so the next
+    webhook within the TTL raised DetachedInstanceError on the first attribute
+    read -- outside any try -- and dropped every alert for five minutes. A
+    cached id is also immune to a stale attribute snapshot, which is what let a
+    rotated-out webhook secret keep authenticating.
+    """
+    cached_id = _workflow_webhook_cache.get(webhook_token)
+    if cached_id is not None:
+        workflow = get_workflow(cached_id)
+        if workflow is not None and workflow.webhook_token == webhook_token:
+            return workflow
+        # The token moved or the workflow is gone; fall through to a real lookup.
+        _workflow_webhook_cache.pop(webhook_token, None)
 
     try:
         workflow = FlowWorkflow.query.filter_by(webhook_token=webhook_token).first()
-        # Cache the result (including None for not found)
         if workflow:
-            _workflow_webhook_cache[webhook_token] = workflow
+            _workflow_webhook_cache[webhook_token] = workflow.id
         return workflow
     except Exception as e:
         logger.exception(f"Error getting workflow by webhook token: {str(e)}")
@@ -334,6 +346,13 @@ def regenerate_webhook_secret(workflow_id):
         workflow.webhook_secret = generate_webhook_secret()
         db_session.commit()
 
+        # Rotation must revoke the old secret immediately. Every other mutator
+        # evicts this cache; this one did not, so for the whole 5-minute TTL the
+        # leaked secret kept authenticating and the new one was rejected 401 --
+        # the revocation did nothing at exactly the moment it mattered.
+        _workflow_cache.clear()
+        _workflow_webhook_cache.pop(workflow.webhook_token, None)
+
         logger.info(f"Regenerated webhook secret for workflow {workflow_id}")
         return workflow.webhook_secret
     except Exception as e:
@@ -433,8 +452,17 @@ def get_execution(execution_id):
         return None
 
 
+# Defence in depth for the route's own clamp: a negative limit reaches SQLite as
+# "no limit", which would load every execution row and its log blob into memory.
+EXECUTIONS_QUERY_MAX = 200
+
+
 def get_workflow_executions(workflow_id, limit=50):
     """Get executions for a workflow"""
+    try:
+        limit = min(max(int(limit or 50), 1), EXECUTIONS_QUERY_MAX)
+    except (TypeError, ValueError):
+        limit = 50
     try:
         return (
             FlowWorkflowExecution.query.filter_by(workflow_id=workflow_id)

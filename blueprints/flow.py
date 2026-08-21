@@ -173,6 +173,35 @@ def get_workflow(workflow_id):
     )
 
 
+# Execution-history page size. The maximum bounds one response; a workflow on a
+# one-minute schedule writes hundreds of rows a day, each with a full log blob.
+EXECUTIONS_DEFAULT_LIMIT = 20
+EXECUTIONS_MAX_LIMIT = 200
+
+
+def _execution_status_code(result: dict) -> int:
+    """HTTP status for an executor result.
+
+    Every outcome used to return 200, including a run that placed no orders
+    because another was already in flight and a run whose broker calls were all
+    rejected. A client checking response.ok saw success for both.
+    """
+    if not isinstance(result, dict):
+        return 200
+    if result.get("already_running"):
+        return 409
+    if result.get("status") == "error":
+        return 502 if result.get("errors") else 500
+    return 200
+
+
+def _existing_for_trigger_check(workflow_id):
+    """The stored workflow, for comparing trigger config across an update."""
+    from database.flow_db import get_workflow as _get
+
+    return _get(workflow_id)
+
+
 @flow_bp.route("/api/workflows/<int:workflow_id>", methods=["PUT"])
 @check_session_validity
 def update_workflow(workflow_id):
@@ -194,6 +223,22 @@ def update_workflow(workflow_id):
                 "errors": _validate(data),
             }
         ), 400
+
+    # Only what the editor may change. The database allowlist also accepts
+    # is_active, schedule_job_id, webhook_enabled and api_key, so a PUT could
+    # flip lifecycle state without the registration that has to go with it --
+    # marking a workflow active with no scheduler job (shows Active, never
+    # fires), marking it inactive while its job keeps trading, or enabling the
+    # webhook without ensure_webhook_credentials, which leaves webhook_secret
+    # NULL and _execute_webhook then skips authentication entirely. Those
+    # transitions belong to the activate/deactivate/webhook routes.
+    editable = {"name", "description", "nodes", "edges"}
+    rejected = sorted(set(data) - editable)
+    data = {key: value for key, value in data.items() if key in editable}
+    if rejected:
+        logger.warning(
+            f"Ignoring non-editable field(s) {rejected} in PUT for workflow {workflow_id}"
+        )
 
     # Partial updates (rename, toggle) carry no graph, and the API also accepts
     # nodes without edges or vice versa. Validate the merged graph so a partial
@@ -220,12 +265,32 @@ def update_workflow(workflow_id):
                 }
             ), 400
 
+    # Trigger registrations are built at activation time from a snapshot of the
+    # trigger node, and nothing here re-reads them -- so editing the schedule
+    # time, the alert symbol or the watched order on an active workflow saved
+    # cleanly while the scheduler and monitors kept running the old
+    # configuration. The /replace route already reports this; the plain PUT did
+    # not, so the editor had no way to know.
+    from services.flow_workflow_validator import trigger_config
+
+    existing = _existing_for_trigger_check(workflow_id)
+    trigger_before = trigger_config(existing.nodes or []) if existing else {}
+    was_active = bool(existing.is_active) if existing else False
+
     workflow = update_workflow(workflow_id, **data)
     if not workflow:
         return jsonify({"error": "Workflow not found"}), 404
 
+    needs_reactivate = was_active and trigger_config(workflow.nodes or []) != trigger_before
+    if needs_reactivate:
+        logger.info(
+            f"Workflow {workflow_id} trigger configuration changed while active; "
+            "it must be reactivated for the change to take effect"
+        )
+
     return jsonify(
         {
+            "needs_reactivate": needs_reactivate,
             "id": workflow.id,
             "name": workflow.name,
             "description": workflow.description,
@@ -274,6 +339,35 @@ def delete_workflow(workflow_id):
 # === Activation/Deactivation Routes ===
 
 
+def _rollback_activation(workflow_id):
+    """Undo a partial activation so nothing is left armed.
+
+    Activation persists `is_active` before registering the trigger, so a
+    registration failure must clear the flag again -- otherwise the workflow
+    reports Active with nothing watching, and the activate endpoint refuses to
+    retry it as `already_active`. Every registration is torn down too, because
+    a multi-step activation can fail after one of them succeeded.
+    """
+    from database.flow_db import deactivate_workflow as db_deactivate
+    from services.flow_order_update_monitor_service import get_flow_order_update_monitor
+    from services.flow_price_monitor_service import get_flow_price_monitor
+    from services.flow_scheduler_service import get_flow_scheduler
+
+    for undo, what in (
+        (lambda: get_flow_scheduler().remove_workflow_job(workflow_id), "scheduler job"),
+        (lambda: get_flow_price_monitor().remove_alert(workflow_id), "price alert"),
+        (lambda: get_flow_order_update_monitor().remove_watch(workflow_id), "order-update watch"),
+        (lambda: db_deactivate(workflow_id), "active flag"),
+    ):
+        try:
+            undo()
+        except Exception:
+            logger.exception(
+                f"Could not roll back the {what} for workflow {workflow_id} after a "
+                "failed activation; it may need to be deactivated manually"
+            )
+
+
 @flow_bp.route("/api/workflows/<int:workflow_id>/activate", methods=["POST"])
 @check_session_validity
 def activate_workflow(workflow_id):
@@ -316,6 +410,18 @@ def activate_workflow(workflow_id):
     trigger_type = trigger_node.get("type")
     trigger_data = trigger_node.get("data", {})
 
+    # Persist the active state before registering anything. The old order
+    # registered the trigger first and ignored what the database said, so a
+    # failed write returned HTTP 200 "success" while leaving a live scheduler
+    # job against a row marked inactive -- a workflow that traded on schedule
+    # and could not be stopped, because deactivate short-circuits on
+    # already_inactive and delete only removes the job when the row is active.
+    # Persisting first fails closed: nothing is registered yet, so a failure
+    # here leaves nothing running.
+    if not db_activate(workflow_id, api_key=api_key):
+        logger.error(f"Failed to persist active state for workflow {workflow_id}")
+        return jsonify({"error": "Could not activate workflow"}), 500
+
     try:
         if trigger_type == "start":
             # Check for schedule configuration
@@ -336,7 +442,13 @@ def activate_workflow(workflow_id):
                     # before, so schedules kept firing overnight and at weekends.
                     market_hours_only=bool(trigger_data.get("marketHoursOnly", False)),
                 )
-                set_schedule_job_id(workflow_id, job_id)
+                if not set_schedule_job_id(workflow_id, job_id):
+                    # Without the stored id, deactivation cannot find the job.
+                    # Undo the job rather than leave one nothing can reach.
+                    scheduler.remove_workflow_job(workflow_id)
+                    raise RuntimeError(
+                        "Could not record the scheduler job id for this workflow"
+                    )
 
         elif trigger_type == "priceAlert":
             price_monitor = get_flow_price_monitor()
@@ -371,10 +483,8 @@ def activate_workflow(workflow_id):
             except ValueError as e:
                 # Misconfigured node (no Order ID/Symbol, a {{variable}} Order
                 # ID, or an unknown status) is a client error, not a 500.
+                _rollback_activation(workflow_id)
                 return jsonify({"error": str(e)}), 400
-
-        # Update workflow as active and store API key for webhook execution
-        db_activate(workflow_id, api_key=api_key)
 
         return jsonify(
             {"status": "success", "message": f"Workflow activated with {trigger_type} trigger"}
@@ -382,6 +492,7 @@ def activate_workflow(workflow_id):
 
     except Exception as e:
         logger.exception(f"Failed to activate workflow {workflow_id}: {e}")
+        _rollback_activation(workflow_id)
         return jsonify({"error": str(e)}), 500
 
 
@@ -403,12 +514,16 @@ def deactivate_workflow(workflow_id):
         return jsonify({"status": "already_inactive", "message": "Workflow is already inactive"})
 
     try:
-        # Remove scheduler job if any
+        # Removed by workflow id, not by the stored schedule_job_id. The id is
+        # derived deterministically, so this still finds the job when the stored
+        # pointer was never written or was cleared -- the case that used to skip
+        # removal entirely and strand a live job. strict=True turns a jobstore
+        # failure into an exception instead of a silent False, so the workflow
+        # is never marked inactive while its job is still armed. An already-gone
+        # job returns False and is fine: that is the desired end state.
+        scheduler = get_flow_scheduler()
+        scheduler.remove_workflow_job(workflow_id, strict=True)
         if workflow.schedule_job_id:
-            scheduler = get_flow_scheduler()
-            # An already-gone job is expected after a restart or a double click;
-            # remove_job treats that as a no-op.
-            scheduler.remove_job(workflow.schedule_job_id)
             set_schedule_job_id(workflow_id, None)
 
         # Remove price alert if any
@@ -420,7 +535,9 @@ def deactivate_workflow(workflow_id):
         order_monitor.remove_watch(workflow_id)
 
         # Update workflow as inactive
-        db_deactivate(workflow_id)
+        if not db_deactivate(workflow_id):
+            logger.error(f"Failed to persist inactive state for workflow {workflow_id}")
+            return jsonify({"error": "Could not deactivate workflow"}), 500
 
         return jsonify({"status": "success", "message": "Workflow deactivated"})
 
@@ -482,7 +599,7 @@ def execute_workflow_now(workflow_id):
 
     try:
         result = execute_workflow(workflow_id, api_key=api_key)
-        return jsonify(result)
+        return jsonify(result), _execution_status_code(result)
     except Exception as e:
         logger.exception(f"Failed to execute workflow {workflow_id}: {e}")
         return jsonify({"error": str(e)}), 500
@@ -494,7 +611,12 @@ def get_workflow_executions(workflow_id):
     """Get execution history for a workflow"""
     from database.flow_db import get_workflow_executions
 
-    limit = request.args.get("limit", 20, type=int)
+    # Clamped. The raw value went straight into SQL LIMIT, where SQLite reads a
+    # negative as "no limit" -- so ?limit=-1 serialised every execution row, each
+    # carrying a full log blob, into one response. `type=int` also yields None on
+    # a non-numeric value, which reaches LIMIT as unlimited too.
+    requested = request.args.get("limit", EXECUTIONS_DEFAULT_LIMIT, type=int)
+    limit = min(max(requested or EXECUTIONS_DEFAULT_LIMIT, 1), EXECUTIONS_MAX_LIMIT)
     executions = get_workflow_executions(workflow_id, limit=limit)
 
     return jsonify(
@@ -617,10 +739,14 @@ def regenerate_webhook(workflow_id):
     from database.flow_db import get_workflow, regenerate_webhook_secret, regenerate_webhook_token
 
     new_token = regenerate_webhook_token(workflow_id)
-    new_secret = regenerate_webhook_secret(workflow_id)
-
     if not new_token:
         return jsonify({"error": "Failed to regenerate token"}), 500
+
+    # Checked, not just called. The secret's return value was discarded, so a
+    # failed rotation still reported success and the caller kept using a secret
+    # they believed had been replaced.
+    if not regenerate_webhook_secret(workflow_id):
+        return jsonify({"error": "Failed to regenerate secret"}), 500
 
     # Get updated workflow and return full webhook info
     workflow = get_workflow(workflow_id)
@@ -757,14 +883,22 @@ def _execute_webhook(token, webhook_data=None, url_secret=None):
     try:
         logger.info(f"Webhook triggered for workflow {workflow.id}: {workflow.name}")
         result = execute_workflow(workflow.id, webhook_data=data, api_key=api_key)
+        status = result.get("status", "success")
+        # On failure, report the run's own message. Overwriting it left a caller
+        # such as TradingView with HTTP 200 and the text "Workflow 'X' triggered"
+        # whether the orders were placed or the broker rejected them, so nothing
+        # could alert or retry.
+        triggered = f"Workflow '{workflow.name}' triggered"
+        message = triggered if status == "success" else (result.get("message") or triggered)
         return jsonify(
             {
-                "status": result.get("status", "success"),
-                "message": f"Workflow '{workflow.name}' triggered",
+                "status": status,
+                "message": message,
+                "errors": result.get("errors"),
                 "execution_id": result.get("execution_id"),
                 "workflow_id": workflow.id,
             }
-        )
+        ), _execution_status_code(result)
     except Exception as e:
         logger.exception(f"Webhook execution failed for workflow {workflow.id}: {e}")
         return jsonify({"error": str(e)}), 500

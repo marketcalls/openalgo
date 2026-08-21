@@ -233,6 +233,10 @@ REQUIRED_NODE_FIELDS: dict[str, tuple[str, ...]] = {
     "mathExpression": ("expression",),
     "varCondition": ("leftValue", "operator"),
     "priceCondition": ("symbol", "exchange", "operator"),
+    # Condition gates that fail OPEN when unconfigured, so an empty one lets the
+    # order behind it through unconditionally: positionCheck with no symbol reads
+    # a zero-quantity position, which makes `not_exists` always true.
+    "positionCheck": ("symbol", "exchange", "condition"),
     # Broker-mutating nodes. An empty one reaches the broker as a malformed
     # order rather than failing at import.
     "splitOrder": ("symbol", "exchange", "action", "quantity", "splitSize"),
@@ -252,6 +256,16 @@ REQUIRED_NODE_FIELDS: dict[str, tuple[str, ...]] = {
     "httpRequest": ("url",),
     "variable": ("variableName",),
     "waitUntil": ("targetTime",),
+}
+
+
+# Nodes that need at least one of a set of interchangeable fields, rather than
+# every field in a list. fundCheck reads `minAvailable`, or a legacy `threshold`
+# from a node saved before that field existed; with neither, its guard compares
+# against zero and passes on any balance at all -- the bypass the field was
+# added to prevent.
+EITHER_REQUIRED_FIELDS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "fundCheck": (("minAvailable", "threshold"),),
 }
 
 
@@ -421,6 +435,24 @@ def validate_workflow(
                     )
                 required.extend(options.get(chosen, ()))
                 errors.extend(_alert_threshold_errors(base, data, chosen, options.get(chosen, ())))
+            for group in EITHER_REQUIRED_FIELDS.get(node_type, ()):
+                if not any(
+                    data.get(f) is not None
+                    and not (isinstance(data.get(f), str) and not data.get(f).strip())
+                    for f in group
+                ):
+                    errors.append(
+                        _err(
+                            f"{base}/data/{group[0]}",
+                            "missing_required_field",
+                            f"A {node_type} node needs {group[0]}. Without it the "
+                            "check passes unconditionally, so whatever it guards "
+                            "runs every time.",
+                            group[0],
+                            None,
+                        )
+                    )
+
             for field in required:
                 value = data.get(field)
                 if value is None or (isinstance(value, str) and not value.strip()):
