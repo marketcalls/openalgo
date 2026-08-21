@@ -93,7 +93,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "lean_algorithm_running",
+          "expr": "lean_algorithm_running{algorithm=\"Spx1_45PmSandwichStrategy\"}",
           "refId": "A"
         }
       ],
@@ -138,7 +138,7 @@
       "pluginVersion": "12.3.0",
       "targets": [
         {
-          "expr": "lean_equity",
+          "expr": "lean_equity{algorithm=\"Spx1_45PmSandwichStrategy\"}",
           "refId": "A"
         }
       ],
@@ -183,7 +183,7 @@
       "pluginVersion": "12.3.0",
       "targets": [
         {
-          "expr": "lean_net_profit",
+          "expr": "lean_net_profit{algorithm=\"Spx1_45PmSandwichStrategy\"}",
           "refId": "A"
         }
       ],
@@ -228,7 +228,7 @@
       "pluginVersion": "12.3.0",
       "targets": [
         {
-          "expr": "lean_unrealized_profit",
+          "expr": "lean_unrealized_profit{algorithm=\"Spx1_45PmSandwichStrategy\"}",
           "refId": "A"
         }
       ],
@@ -273,7 +273,7 @@
       "pluginVersion": "12.3.0",
       "targets": [
         {
-          "expr": "lean_order_count",
+          "expr": "lean_order_count{algorithm=\"Spx1_45PmSandwichStrategy\"}",
           "refId": "A"
         }
       ],
@@ -323,7 +323,7 @@
       },
       "targets": [
         {
-          "expr": "lean_equity",
+          "expr": "lean_equity{algorithm=\"Spx1_45PmSandwichStrategy\"}",
           "legendFormat": "Equity",
           "refId": "A"
         }
@@ -372,17 +372,17 @@
       },
       "targets": [
         {
-          "expr": "lean_net_profit",
+          "expr": "lean_net_profit{algorithm=\"Spx1_45PmSandwichStrategy\"}",
           "legendFormat": "Net Profit",
           "refId": "A"
         },
         {
-          "expr": "lean_unrealized_profit",
+          "expr": "lean_unrealized_profit{algorithm=\"Spx1_45PmSandwichStrategy\"}",
           "legendFormat": "Unrealized",
           "refId": "B"
         },
         {
-          "expr": "lean_fees",
+          "expr": "lean_fees{algorithm=\"Spx1_45PmSandwichStrategy\"}",
           "legendFormat": "Fees",
           "refId": "C"
         }
@@ -430,7 +430,7 @@
       },
       "targets": [
         {
-          "expr": "lean_holding_value",
+          "expr": "lean_holding_value{algorithm=\"Spx1_45PmSandwichStrategy\"}",
           "legendFormat": "{{symbol}}",
           "refId": "A"
         }
@@ -476,21 +476,21 @@
       },
       "targets": [
         {
-          "expr": "lean_holding_quantity",
+          "expr": "lean_holding_quantity{algorithm=\"Spx1_45PmSandwichStrategy\"}",
           "format": "table",
           "instant": true,
           "legendFormat": "{{symbol}}",
           "refId": "A"
         },
         {
-          "expr": "lean_holding_price",
+          "expr": "lean_holding_price{algorithm=\"Spx1_45PmSandwichStrategy\"}",
           "format": "table",
           "instant": true,
           "legendFormat": "{{symbol}}",
           "refId": "B"
         },
         {
-          "expr": "lean_holding_unrealized_profit",
+          "expr": "lean_holding_unrealized_profit{algorithm=\"Spx1_45PmSandwichStrategy\"}",
           "format": "table",
           "instant": true,
           "legendFormat": "{{symbol}}",
@@ -537,7 +537,7 @@
       },
       "targets": [
         {
-          "expr": "lean_status_file_age_seconds",
+          "expr": "lean_status_file_age_seconds{algorithm=\"Spx1_45PmSandwichStrategy\"}",
           "refId": "A"
         }
       ],
@@ -581,7 +581,7 @@
       },
       "targets": [
         {
-          "expr": "lean_order_fees_total",
+          "expr": "lean_order_fees_total{algorithm=\"Spx1_45PmSandwichStrategy\"}",
           "refId": "A"
         }
       ],
@@ -625,12 +625,71 @@
       },
       "targets": [
         {
-          "expr": "lean_order_events_filled_total",
+          "expr": "lean_order_events_filled_total{algorithm=\"Spx1_45PmSandwichStrategy\"}",
           "refId": "A"
         }
       ],
       "title": "Filled Order Events",
       "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "id": 13,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "index"
+          }
+        ]
+      },
+      "pluginVersion": "12.3.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "lean_log_line{algorithm=\"Spx1_45PmSandwichStrategy\"}",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Recent Strategy Logs",
+      "type": "table"
     }
   ],
   "preload": false,

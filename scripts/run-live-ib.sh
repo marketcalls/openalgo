@@ -34,9 +34,13 @@ fi
 IB_GATEWAY_ALREADY_RUNNING=false
 if is_ib_gateway_listening; then
   IB_GATEWAY_ALREADY_RUNNING=true
-  if [[ "${IB_USE_EXISTING_GATEWAY:-true}" == "false" ]]; then
-    echo "Detected IB Gateway/TWS already listening on ${IB_HOST:-127.0.0.1}:${IB_PORT:-4002}; using existing gateway for this run."
-    export IB_USE_EXISTING_GATEWAY=true
+  export IB_USE_EXISTING_GATEWAY=true
+  echo "Detected IB Gateway/TWS already listening on ${IB_HOST:-127.0.0.1}:${IB_PORT:-4002}; using existing gateway for this run."
+else
+  export IB_USE_EXISTING_GATEWAY=false
+  echo "No IB Gateway detected on ${IB_HOST:-127.0.0.1}:${IB_PORT:-4002}; IBAutomater will start it."
+  if [[ "$(uname -s)" == "Darwin" && -x "$REPO_ROOT/scripts/install-macos-ibautomater.sh" ]]; then
+    "$REPO_ROOT/scripts/install-macos-ibautomater.sh"
   fi
 fi
 
@@ -76,6 +80,11 @@ fi
 mkdir -p "$REPO_ROOT/.tmp"
 CONFIG_PATH="$REPO_ROOT/.tmp/live-ib-${ALGORITHM_TYPE_NAME}.config.json"
 TEMPLATE_PATH="$REPO_ROOT/config/templates/live-interactive.template.json"
+
+if pgrep -f -- "$CONFIG_PATH" >/dev/null 2>&1; then
+  echo "Error: $ALGORITHM_TYPE_NAME is already running. Stop the existing LEAN process with Ctrl+C before starting another copy." >&2
+  exit 1
+fi
 
 generate_config "$TEMPLATE_PATH" "$CONFIG_PATH"
 

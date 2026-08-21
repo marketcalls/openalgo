@@ -22,7 +22,7 @@
   "algorithm-type-name": "__ALGORITHM_TYPE__",
   "algorithm-language": "Python",
   "algorithm-location": "__ALGORITHM_LOCATION__",
-  "parameters": "{\"mes-contract-expiry\":\"__MES_CONTRACT_EXPIRY__\",\"spy-options-test-strategy\":\"__SPY_OPTIONS_TEST_STRATEGY__\",\"spy-options-place-test-order\":\"__SPY_OPTIONS_PLACE_TEST_ORDER__\",\"spy-options-quantity\":\"__SPY_OPTIONS_QUANTITY__\",\"spy-options-wing-width\":\"__SPY_OPTIONS_WING_WIDTH__\",\"spy-options-hold-minutes\":\"__SPY_OPTIONS_HOLD_MINUTES__\",\"spx-0dte-place-test-order\":\"__SPX_0DTE_PLACE_TEST_ORDER__\"}",
+  "parameters": "{\"mes-contract-expiry\":\"__MES_CONTRACT_EXPIRY__\",\"spy-options-test-strategy\":\"__SPY_OPTIONS_TEST_STRATEGY__\",\"spy-options-place-test-order\":\"__SPY_OPTIONS_PLACE_TEST_ORDER__\",\"spy-options-quantity\":\"__SPY_OPTIONS_QUANTITY__\",\"spy-options-wing-width\":\"__SPY_OPTIONS_WING_WIDTH__\",\"spy-options-hold-minutes\":\"__SPY_OPTIONS_HOLD_MINUTES__\",\"spx-0dte-place-test-order\":\"__SPX_0DTE_PLACE_TEST_ORDER__\",\"sandwich-place-orders\":\"__SANDWICH_PLACE_ORDERS__\",\"sandwich-force-exit\":\"__SANDWICH_FORCE_EXIT__\",\"sandwich-min-vix\":\"__SANDWICH_MIN_VIX__\",\"sandwich-max-vix\":\"__SANDWICH_MAX_VIX__\",\"sandwich-min-reward-risk\":\"__SANDWICH_MIN_REWARD_RISK__\",\"sandwich-wing-width\":\"__SANDWICH_WING_WIDTH__\",\"sandwich-max-allocation\":\"__SANDWICH_MAX_ALLOCATION__\"}",
   "data-folder": "__DATA_FOLDER__",
   "python-venv": "__PYTHON_VENV__",
 

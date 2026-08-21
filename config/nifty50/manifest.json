@@ -1,0 +1,19 @@
+{
+  "source_file": "nifty_50_weightage_2026-07-31.csv",
+  "source_url": "https://www.smart-investing.in/indices-bse-nse.php?index=NIFTY",
+  "as_of": "2026-07-31",
+  "sha256": "6f449a72aee5ee76f4f31e970739a75450f48bc93abe31cab8ceedd9be5d98c6",
+  "row_count": 49,
+  "raw_weight_sum": 97.97,
+  "missing_weight": 2.03,
+  "concentration": {
+    "top_5": 36.91,
+    "top_10": 52.89,
+    "top_20": 71.40,
+    "top_30": 82.93,
+    "top_40": 91.88
+  },
+  "warn_after_days": 35,
+  "block_after_days": 65,
+  "notes": "49 constituents, not 50. Normalize by eligible-basket sum, not 97.97."
+}

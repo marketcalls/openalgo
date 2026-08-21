@@ -1,0 +1,84 @@
+{
+  "uid": "spx-1-45pm-sandwich",
+  "title": "SPX 1:45 PM Sandwich",
+  "tags": ["lean", "ib", "spx", "0dte"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Algorithm Running",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "expr": "lean_algorithm_running{algorithm=\"Spx1_45PmSandwichStrategy\",job=\"lean_spx_1_45pm_sandwich\"}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "mappings": [{ "type": "value", "options": { "0": { "text": "Stopped" }, "1": { "text": "Running" } } }] }, "overrides": [] }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Equity",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [{ "expr": "lean_equity{algorithm=\"Spx1_45PmSandwichStrategy\",job=\"lean_spx_1_45pm_sandwich\"}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Net Profit",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [{ "expr": "lean_net_profit{algorithm=\"Spx1_45PmSandwichStrategy\",job=\"lean_spx_1_45pm_sandwich\"}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Filled Orders",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [{ "expr": "lean_order_events_filled_total{algorithm=\"Spx1_45PmSandwichStrategy\",job=\"lean_spx_1_45pm_sandwich\"}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Equity and P/L",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        { "expr": "lean_equity{algorithm=\"Spx1_45PmSandwichStrategy\",job=\"lean_spx_1_45pm_sandwich\"}", "legendFormat": "Equity", "refId": "A" },
+        { "expr": "lean_net_profit{algorithm=\"Spx1_45PmSandwichStrategy\",job=\"lean_spx_1_45pm_sandwich\"}", "legendFormat": "Net profit", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Holdings Value",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [{ "expr": "lean_holdings_value{algorithm=\"Spx1_45PmSandwichStrategy\",job=\"lean_spx_1_45pm_sandwich\"}", "legendFormat": "Holdings", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Recent Strategy Logs",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 12 },
+      "targets": [{
+        "expr": "lean_log_line{algorithm=\"Spx1_45PmSandwichStrategy\",job=\"lean_spx_1_45pm_sandwich\"}",
+        "format": "table",
+        "instant": true,
+        "refId": "A"
+      }],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [{ "displayName": "index", "desc": true }]
+      },
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    }
+  ],
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "links": []
+}

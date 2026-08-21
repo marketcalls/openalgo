@@ -105,12 +105,14 @@ generate_config() {
   local output="$2"
   local ib_account ib_user_name ib_password ib_host ib_port ib_client_id ib_tws_dir ib_version ib_trading_mode mes_contract_expiry
   local spy_options_test_strategy spy_options_place_test_order spy_options_quantity spy_options_wing_width spy_options_hold_minutes
+  local sandwich_place_orders sandwich_force_exit sandwich_min_vix sandwich_max_vix sandwich_min_reward_risk sandwich_wing_width sandwich_max_allocation
   local openalgo_api_key openalgo_host openalgo_ws_url openalgo_strategy_name openalgo_product_type
   local openalgo_place_test_orders openalgo_test_quantity openalgo_hold_minutes openalgo_submit_without_price openalgo_sbin_symbol
   local openalgo_nifty_future_symbol openalgo_fo_expiry openalgo_nifty_spread_enabled openalgo_nifty_long_call_strike
   local openalgo_nifty_short_call_strike openalgo_banknifty_spread_enabled openalgo_banknifty_long_call_strike
   local openalgo_banknifty_short_call_strike openalgo_sensex_spread_enabled openalgo_sensex_long_call_strike
   local openalgo_sensex_short_call_strike
+  local nwm_mode nwm_futures_map_path
   local ib_agent_description ib_weekly_restart_utc_time ib_financial_advisors_group_filter ib_use_existing_gateway
 
   ib_account="$(escape_sed_replacement "${IB_ACCOUNT:-}")"
@@ -129,6 +131,13 @@ generate_config() {
   spy_options_wing_width="$(escape_sed_replacement "${SPY_OPTIONS_WING_WIDTH:-}")"
   spy_options_hold_minutes="$(escape_sed_replacement "${SPY_OPTIONS_HOLD_MINUTES:-}")"
   spx_0dte_place_test_order="$(escape_sed_replacement "${SPX_0DTE_PLACE_TEST_ORDER:-false}")"
+  sandwich_place_orders="$(escape_sed_replacement "${SPX_SANDWICH_PLACE_ORDERS:-false}")"
+  sandwich_force_exit="$(escape_sed_replacement "${SPX_SANDWICH_FORCE_EXIT:-false}")"
+  sandwich_min_vix="$(escape_sed_replacement "${SPX_SANDWICH_MIN_VIX:-0}")"
+  sandwich_max_vix="$(escape_sed_replacement "${SPX_SANDWICH_MAX_VIX:-24}")"
+  sandwich_min_reward_risk="$(escape_sed_replacement "${SPX_SANDWICH_MIN_REWARD_RISK:-1.0}")"
+  sandwich_wing_width="$(escape_sed_replacement "${SPX_SANDWICH_WING_WIDTH:-5}")"
+  sandwich_max_allocation="$(escape_sed_replacement "${SPX_SANDWICH_MAX_ALLOCATION:-2500}")"
   openalgo_api_key="$(escape_sed_replacement "${OPENALGO_API_KEY:-}")"
   openalgo_host="$(escape_sed_replacement "${OPENALGO_HOST:-http://127.0.0.1:5000}")"
   openalgo_ws_url="$(escape_sed_replacement "${OPENALGO_WS_URL:-ws://127.0.0.1:8443}")"
@@ -150,6 +159,8 @@ generate_config() {
   openalgo_sensex_spread_enabled="$(escape_sed_replacement "${OPENALGO_SENSEX_SPREAD_ENABLED:-true}")"
   openalgo_sensex_long_call_strike="$(escape_sed_replacement "${OPENALGO_SENSEX_LONG_CALL_STRIKE:-0}")"
   openalgo_sensex_short_call_strike="$(escape_sed_replacement "${OPENALGO_SENSEX_SHORT_CALL_STRIKE:-0}")"
+  nwm_mode="$(escape_sed_replacement "${NWM_MODE:-data-only}")"
+  nwm_futures_map_path="$(escape_sed_replacement "${NWM_FUTURES_MAP_PATH:-}")"
   ib_agent_description="$(escape_sed_replacement "${IB_AGENT_DESCRIPTION:-Individual}")"
   ib_weekly_restart_utc_time="$(escape_sed_replacement "${IB_WEEKLY_RESTART_UTC_TIME:-22:00:00}")"
   ib_financial_advisors_group_filter="$(escape_sed_replacement "${IB_FINANCIAL_ADVISORS_GROUP_FILTER:-}")"
@@ -165,6 +176,13 @@ generate_config() {
     -e "s|__SPY_OPTIONS_WING_WIDTH__|$spy_options_wing_width|g" \
     -e "s|__SPY_OPTIONS_HOLD_MINUTES__|$spy_options_hold_minutes|g" \
     -e "s|__SPX_0DTE_PLACE_TEST_ORDER__|$spx_0dte_place_test_order|g" \
+    -e "s|__SANDWICH_PLACE_ORDERS__|$sandwich_place_orders|g" \
+    -e "s|__SANDWICH_FORCE_EXIT__|$sandwich_force_exit|g" \
+    -e "s|__SANDWICH_MIN_VIX__|$sandwich_min_vix|g" \
+    -e "s|__SANDWICH_MAX_VIX__|$sandwich_max_vix|g" \
+    -e "s|__SANDWICH_MIN_REWARD_RISK__|$sandwich_min_reward_risk|g" \
+    -e "s|__SANDWICH_WING_WIDTH__|$sandwich_wing_width|g" \
+    -e "s|__SANDWICH_MAX_ALLOCATION__|$sandwich_max_allocation|g" \
     -e "s|__OPENALGO_API_KEY__|$openalgo_api_key|g" \
     -e "s|__OPENALGO_HOST__|$openalgo_host|g" \
     -e "s|__OPENALGO_WS_URL__|$openalgo_ws_url|g" \
@@ -186,6 +204,8 @@ generate_config() {
     -e "s|__OPENALGO_SENSEX_SPREAD_ENABLED__|$openalgo_sensex_spread_enabled|g" \
     -e "s|__OPENALGO_SENSEX_LONG_CALL_STRIKE__|$openalgo_sensex_long_call_strike|g" \
     -e "s|__OPENALGO_SENSEX_SHORT_CALL_STRIKE__|$openalgo_sensex_short_call_strike|g" \
+    -e "s|__NWM_MODE__|$nwm_mode|g" \
+    -e "s|__NWM_FUTURES_MAP_PATH__|$nwm_futures_map_path|g" \
     -e "s|__DATA_FOLDER__|$LEAN_DATA_DIR|g" \
     -e "s|__PYTHON_VENV__|${PYTHON_VENV:-}|g" \
     -e "s|__IB_ACCOUNT__|$ib_account|g" \
