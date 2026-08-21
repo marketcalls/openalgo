@@ -159,7 +159,7 @@ class FlowScheduler:
                 logger.info(f"Creating one-time trigger: {execute_datetime}")
             except ValueError as e:
                 logger.error(f"Invalid execute_at datetime: {execute_at} - {e}")
-                raise ValueError(f"Invalid datetime format: {execute_at}")
+                raise ValueError(f"Invalid datetime format: {execute_at}") from e
 
         elif schedule_type == "daily":
             try:
@@ -168,7 +168,7 @@ class FlowScheduler:
                 logger.info(f"Creating daily trigger: {time_str}")
             except ValueError as e:
                 logger.error(f"Invalid time format: {time_str} - {e}")
-                raise ValueError(f"Invalid time format: {time_str}")
+                raise ValueError(f"Invalid time format: {time_str}") from e
 
         elif schedule_type == "weekly" and days:
             try:
@@ -179,7 +179,7 @@ class FlowScheduler:
                 logger.info(f"Creating weekly trigger: {day_of_week} at {time_str}")
             except (ValueError, KeyError) as e:
                 logger.error(f"Invalid weekly schedule config: {e}")
-                raise ValueError("Invalid weekly schedule configuration")
+                raise ValueError("Invalid weekly schedule configuration") from e
 
         else:
             raise ValueError(f"Invalid schedule configuration: type={schedule_type}")
@@ -188,13 +188,24 @@ class FlowScheduler:
             func,
             trigger=trigger,
             id=job_id,
+            # The API key is deliberately NOT stored here. APScheduler pickles
+            # these args into flow_apscheduler_jobs.job_state, which lives in the
+            # same database that encrypts flow_workflows.api_key -- persisting it
+            # here defeated that encryption and froze the key at activation time,
+            # so regenerating it silently broke every scheduled workflow. The
+            # default executor resolves the current key at run time instead.
             # Only the default executor takes the market-hours flag. A custom
-            # callback still receives the documented (workflow_id, api_key)
-            # pair, which passing a third positional argument would break.
+            # callback still receives the documented (workflow_id, api_key) pair,
+            # which passing a third positional argument would break.
+            # No branch stores the key. The custom-callback path used to pass
+            # self._api_key, which lands in the same pickled job_state, so the
+            # leak survived for any caller supplying its own func. A custom
+            # callback receives None and resolves the current key itself, the
+            # same way the default executor does.
             args=(
-                [workflow_id, self._api_key, market_hours_only]
+                [workflow_id, None, market_hours_only]
                 if func is execute_workflow_scheduled
-                else [workflow_id, self._api_key]
+                else [workflow_id, None]
             ),
             replace_existing=True,
             name=f"Workflow {workflow_id}",
@@ -203,7 +214,7 @@ class FlowScheduler:
         logger.info(f"Added job {job_id}")
         return job_id
 
-    def remove_job(self, job_id: str) -> bool:
+    def remove_job(self, job_id: str, strict: bool = False) -> bool:
         """Remove a job from the scheduler. Returns False if there was none.
 
         A job that does not exist is not an error for any caller: activating a
@@ -211,6 +222,13 @@ class FlowScheduler:
         deactivating may find it already gone after a restart. Logging that as
         an ERROR with a traceback made a perfectly normal activation look
         broken. A real jobstore failure is still logged with its traceback.
+
+        `strict` separates those two cases for callers that must not proceed on
+        a failed removal. Deactivation uses it: swallowing a jobstore error let
+        the workflow be marked inactive while its job stayed live and kept
+        trading, with the stored job id already cleared so nothing could find
+        it again. A missing job still returns False rather than raising, because
+        that genuinely is the desired end state.
         """
         from apscheduler.jobstores.base import JobLookupError
 
@@ -223,12 +241,14 @@ class FlowScheduler:
             return False
         except Exception:
             logger.exception(f"Failed to remove job {job_id}")
+            if strict:
+                raise
             return False
 
-    def remove_workflow_job(self, workflow_id: int) -> bool:
+    def remove_workflow_job(self, workflow_id: int, strict: bool = False) -> bool:
         """Remove a workflow job. A job that is already gone is not a failure."""
         job_id = f"flow_workflow_{workflow_id}"
-        return self.remove_job(job_id)
+        return self.remove_job(job_id, strict=strict)
 
     def get_job(self, job_id: str):
         """Get a job by ID"""
@@ -361,6 +381,92 @@ def is_within_market_hours(
     return start_minutes <= minutes <= end_minutes
 
 
+def reconcile_scheduler_jobs() -> dict:
+    """Bring the persistent jobstore and the database back into agreement.
+
+    Activation writes two things -- a row flag and a scheduler job -- and a
+    crash, a failed write or a hand-edited database can leave those disagreeing.
+    The jobstore is persistent, so a stale job is restored at every boot and
+    keeps trading a workflow the user believes is off, while a missing job
+    leaves a workflow that reports Active and never fires. Neither state can
+    correct itself: deactivate short-circuits on `already_inactive`, and
+    activate refuses an `already_active` workflow.
+
+    Run once at startup, after the Flow database and the scheduler are up.
+
+    Returns counts of what it changed.
+    """
+    from database.flow_db import get_active_workflows, get_workflow, set_schedule_job_id
+
+    scheduler = get_flow_scheduler()
+    removed = 0
+    restored = 0
+
+    # Orphans: a job whose workflow is gone or no longer active.
+    for job in scheduler.get_all_jobs():
+        job_id = str(getattr(job, "id", ""))
+        if not job_id.startswith("flow_workflow_"):
+            continue
+        try:
+            workflow_id = int(job_id.rsplit("_", 1)[1])
+        except (IndexError, ValueError):
+            continue
+
+        workflow = get_workflow(workflow_id)
+        if workflow is None or not workflow.is_active:
+            reason = "no longer exists" if workflow is None else "is not active"
+            logger.warning(
+                f"Removing orphaned scheduler job {job_id}: the workflow {reason}."
+            )
+            if scheduler.remove_job(job_id):
+                removed += 1
+
+    # The mirror case: active, scheduled, but nothing registered to fire it.
+    for workflow in get_active_workflows():
+        trigger = next(
+            (n for n in (workflow.nodes or []) if n.get("type") == "start"), None
+        )
+        if not trigger:
+            continue
+        data = trigger.get("data", {}) or {}
+        schedule_type = data.get("scheduleType")
+        if not schedule_type or schedule_type == "manual":
+            continue
+        if scheduler.get_workflow_job(workflow.id) is not None:
+            continue
+
+        try:
+            job_id = scheduler.add_workflow_job(
+                workflow_id=workflow.id,
+                schedule_type=schedule_type,
+                time_str=data.get("time", "09:15"),
+                days=data.get("days"),
+                execute_at=data.get("executeAt"),
+                interval_value=data.get("intervalValue"),
+                interval_unit=data.get("intervalUnit"),
+                market_hours_only=bool(data.get("marketHoursOnly", False)),
+            )
+            set_schedule_job_id(workflow.id, job_id)
+            restored += 1
+            logger.warning(
+                f"Restored missing scheduler job for active workflow {workflow.id}."
+            )
+        except Exception:
+            # A one-shot schedule whose time has passed cannot be rebuilt, and
+            # that is not a failure worth blocking startup for.
+            logger.exception(
+                f"Could not restore the scheduler job for active workflow "
+                f"{workflow.id}; it will not fire until it is reactivated"
+            )
+
+    if removed or restored:
+        logger.info(
+            f"Scheduler reconciliation: removed {removed} orphaned job(s), "
+            f"restored {restored} missing job(s)"
+        )
+    return {"removed": removed, "restored": restored}
+
+
 def get_market_hours_config(workflow) -> dict:
     """Market-hours settings from a workflow's trigger node.
 
@@ -384,37 +490,61 @@ def get_market_hours_config(workflow) -> dict:
 def execute_workflow_scheduled(
     workflow_id: int, api_key: str = None, market_hours_only: bool = False
 ):
-    """Execute a workflow from scheduler (synchronous)"""
+    """Execute a workflow from scheduler (synchronous).
+
+    `api_key` is accepted only so jobs pickled by an older build, which stored
+    the key in the jobstore, still run. New jobs pass None and the current key
+    is decrypted from the workflow row on every run.
+    """
     from services.flow_executor_service import execute_workflow
 
     logger.info(f"Scheduled execution of workflow {workflow_id}")
 
-    if not api_key:
-        logger.error(f"No API key available for workflow {workflow_id}")
-        return
-
     # The window is read from the workflow's trigger node on every run, so
     # changing the times in the flow JSON applies from the next run. The
     # market_hours_only argument is what older jobs stored in the jobstore and
-    # is honoured when the graph does not set the switch itself.
+    # is honoured only when the workflow itself cannot be read.
     config = {"enabled": market_hours_only, "start": None, "end": None, "exchange": None}
     try:
-        from database.flow_db import get_workflow
+        from database.flow_db import get_workflow, get_workflow_api_key
 
         workflow = get_workflow(workflow_id)
-        if workflow is not None:
-            from_graph = get_market_hours_config(workflow)
-            if from_graph["enabled"] or any(
-                from_graph[k] for k in ("start", "end", "exchange")
-            ):
-                config = from_graph
+        if workflow is None:
+            logger.warning(
+                f"Skipping scheduled workflow {workflow_id}: it no longer exists"
+            )
+            return
+
+        # Fail closed. A job can outlive the deactivation that should have
+        # removed it -- a failed jobstore write, a crash between the two steps,
+        # or an orphan restored from the jobstore at boot -- and without this
+        # check it keeps placing live orders against a workflow the user
+        # believes is switched off.
+        if not workflow.is_active:
+            logger.warning(
+                f"Skipping scheduled workflow {workflow_id}: it is not active"
+            )
+            return
+
+        if not api_key:
+            api_key = get_workflow_api_key(workflow)
+
+        # The graph is the source of truth whenever it can be read, including
+        # when the user switches market-hours gating off. Treating a disabled
+        # switch as "nothing to say" made the setting one-way: it could be
+        # turned on from the editor but never off.
+        config = get_market_hours_config(workflow)
     except Exception:
         # A lookup failure must not silently drop the gate and let a workflow
         # trade at 3am, so the stored flag stands.
         logger.exception(
-            f"Could not read market-hours config for workflow {workflow_id}; "
+            f"Could not read scheduling config for workflow {workflow_id}; "
             "using the schedule's stored setting"
         )
+
+    if not api_key:
+        logger.error(f"No API key available for workflow {workflow_id}")
+        return
 
     if config["enabled"] and not is_within_market_hours(
         start=config["start"], end=config["end"], exchange=config["exchange"]

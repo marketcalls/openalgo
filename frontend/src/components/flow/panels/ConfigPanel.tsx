@@ -26,6 +26,7 @@ import {
   EXPIRY_TYPES,
   INDEX_SYMBOLS,
   INDICATOR_CATALOG,
+  INDICATOR_PARAMS,
   NODE_DEFINITIONS,
   OPTION_STRATEGIES,
   OPTION_TYPES,
@@ -38,6 +39,8 @@ import {
 import { cn } from '@/lib/utils'
 import { useFlowWorkflowStore } from '@/stores/flowWorkflowStore'
 import { showToast } from '@/utils/toast'
+import { IndicatorParamsFields } from './IndicatorParamsFields'
+import { MarginPositionsFields } from './MarginPositionsFields'
 
 // ===== LOCAL CONSTANTS =====
 
@@ -166,6 +169,27 @@ const NODE_TITLES: Record<string, string> = {
   subscribeQuote: 'Subscribe Quote',
   subscribeDepth: 'Subscribe Depth',
   unsubscribe: 'Unsubscribe',
+}
+
+/** Drop `params` keys the newly selected indicator does not accept.
+ *
+ * Left alone when the JSON is malformed or holds a {{variable}} reference -
+ * that text is the user's to fix, and rewriting it would discard it. */
+function pruneIndicatorParams(indicatorName: string, raw: string): string {
+  const text = raw.trim()
+  if (!text) return ''
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return raw
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return raw
+  const allowed = new Set((INDICATOR_PARAMS[indicatorName] ?? []).map((p) => p.name))
+  const kept = Object.fromEntries(
+    Object.entries(parsed as Record<string, unknown>).filter(([key]) => allowed.has(key))
+  )
+  return Object.keys(kept).length ? JSON.stringify(kept) : ''
 }
 
 function getNodeInfo(nodeType: string) {
@@ -1669,11 +1693,63 @@ export function ConfigPanel() {
               </div>
             )}
             {nodeType === 'closePositions' && (
-              <div className="rounded-lg border bg-muted/30 p-3">
-                <p className="text-xs text-muted-foreground">
-                  Closes all open positions. No configuration needed.
-                </p>
-              </div>
+              <>
+                <div className="rounded-lg border bg-muted/30 p-3">
+                  <p className="text-xs text-muted-foreground">
+                    Leave Symbol blank to square off every open position. Set it to close only that
+                    position; Exchange and Product narrow it further.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Symbol</Label>
+                  <Input
+                    className="h-8"
+                    placeholder="Blank = close all positions"
+                    value={(nodeData.symbol as string) || ''}
+                    onChange={(e) => handleDataChange('symbol', e.target.value)}
+                  />
+                </div>
+                {Boolean(nodeData.symbol) && (
+                  <>
+                    <div className="space-y-2">
+                      <Label className="text-xs">Exchange</Label>
+                      <Select
+                        value={(nodeData.exchange as string) || 'NSE'}
+                        onValueChange={(v) => handleDataChange('exchange', v)}
+                      >
+                        <SelectTrigger className="h-8">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {EXCHANGES.map((ex) => (
+                            <SelectItem key={ex.value} value={ex.value}>
+                              {ex.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs">Product</Label>
+                      <Select
+                        value={(nodeData.product as string) || 'MIS'}
+                        onValueChange={(v) => handleDataChange('product', v)}
+                      >
+                        <SelectTrigger className="h-8">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {PRODUCT_TYPES.map((pt) => (
+                            <SelectItem key={pt.value} value={pt.value}>
+                              {pt.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </>
+                )}
+              </>
             )}
 
             {/* ===== MODIFY ORDER ===== */}
@@ -1688,6 +1764,12 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('orderId', e.target.value)}
                   />
                 </div>
+                <div className="rounded-lg border bg-muted/30 p-3">
+                  <p className="text-xs text-muted-foreground">
+                    Symbol, exchange, side and product are read from the live order, so anything
+                    left blank here stays as it is.
+                  </p>
+                </div>
                 <div className="space-y-2">
                   <Label className="text-xs">New Price</Label>
                   <Input
@@ -1695,8 +1777,8 @@ export function ConfigPanel() {
                     step="0.05"
                     className="h-8"
                     placeholder="Leave empty to keep"
-                    value={(nodeData.newPrice as number) || ''}
-                    onChange={(e) => handleDataChange('newPrice', parseFloat(e.target.value) || 0)}
+                    value={(nodeData.newPrice as number) ?? ''}
+                    onChange={(e) => handleDataChange('newPrice', e.target.value)}
                   />
                 </div>
                 <div className="space-y-2">
@@ -1706,10 +1788,8 @@ export function ConfigPanel() {
                     min={1}
                     className="h-8"
                     placeholder="Leave empty to keep"
-                    value={(nodeData.newQuantity as number) || ''}
-                    onChange={(e) =>
-                      handleDataChange('newQuantity', parseInt(e.target.value, 10) || 0)
-                    }
+                    value={(nodeData.newQuantity as number) ?? ''}
+                    onChange={(e) => handleDataChange('newQuantity', e.target.value)}
                   />
                 </div>
               </>
@@ -1968,7 +2048,17 @@ export function ConfigPanel() {
                   <Label className="text-xs">Indicator</Label>
                   <Select
                     value={(nodeData.indicatorName as string) || 'rsi'}
-                    onValueChange={(v) => handleDataChange('indicatorName', v)}
+                    onValueChange={(v) => {
+                      handleDataChange('indicatorName', v)
+                      // Params are kwargs for the previously selected function.
+                      // Carrying them over sends the new indicator a keyword it
+                      // does not accept - ta.macd(period=14) is a TypeError -
+                      // so keep only the names the new one actually takes.
+                      handleDataChange(
+                        'params',
+                        pruneIndicatorParams(v, (nodeData.params as string) || '')
+                      )
+                    }}
                   >
                     <SelectTrigger className="h-8">
                       <SelectValue />
@@ -2084,15 +2174,14 @@ export function ConfigPanel() {
                     </div>
                   </>
                 )}
-                <div className="space-y-2">
-                  <Label className="text-xs">Params (JSON)</Label>
-                  <Input
-                    className="h-8"
-                    placeholder='{"period": 14}'
-                    value={(nodeData.params as string) || ''}
-                    onChange={(e) => handleDataChange('params', e.target.value)}
-                  />
-                </div>
+                <IndicatorParamsFields
+                  // Remount on either change so the number fields' in-progress
+                  // text does not leak across nodes or indicators.
+                  key={`${selectedNode.id}-${(nodeData.indicatorName as string) || 'rsi'}`}
+                  indicatorName={(nodeData.indicatorName as string) || 'rsi'}
+                  value={(nodeData.params as string) || ''}
+                  onChange={(raw) => handleDataChange('params', raw)}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Value N Bars Back</Label>
                   <Input
@@ -2841,15 +2930,10 @@ export function ConfigPanel() {
 
             {nodeType === 'margin' && (
               <>
-                <div className="space-y-2">
-                  <Label className="text-xs">Positions (JSON)</Label>
-                  <Textarea
-                    className="min-h-[100px] text-xs font-mono"
-                    placeholder={`[{"symbol": "NIFTY25DEC25FUT", "exchange": "NFO", "action": "BUY", "quantity": 75}]`}
-                    value={(nodeData.positionsJson as string) || ''}
-                    onChange={(e) => handleDataChange('positionsJson', e.target.value)}
-                  />
-                </div>
+                <MarginPositionsFields
+                  value={(nodeData.positionsJson as string) || ''}
+                  onChange={(raw) => handleDataChange('positionsJson', raw)}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Output Variable</Label>
                   <Input

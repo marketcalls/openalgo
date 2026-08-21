@@ -12,7 +12,8 @@ uv run python scripts/generate_indicator_reference.py
 ```
 
 - **Inputs** are the OHLCV columns the node feeds in for you.
-- **Parameters** go in the node's `params` object.
+- **Parameters** go in the node's `params` field, as a JSON **string** -
+  for example `"{\"period\": 14}"`, not a nested object.
 - **Outputs** are the keys under `latest` / `previous` / `at_offset`. A single
   output is always `value`; multiple outputs are `out0`, `out1`, ...
 
@@ -48,7 +49,7 @@ uv run python scripts/generate_indicator_reference.py
 | `dema` | `ta.dema(close, period=14)` | `close` | `period`=14 | `value` | `{"period": 14}` |
 | `dmi` | `ta.dmi(high, low, close, period=14)` | `high`, `low`, `close` | `period`=14 | `out0`, `out1` | `{"period": 14}` |
 | `donchian` | `ta.donchian(high, low, period=20)` | `high`, `low` | `period`=20 | `out0`, `out1`, `out2` | `{"period": 20}` |
-| `dpo` | `ta.dpo(close, period=21, is_centered=False)` | `close` | `period`=21, `is_centered`=False | `value` | `{"period": 21, "is_centered": False}` |
+| `dpo` | `ta.dpo(close, period=21, is_centered=False)` | `close` | `period`=21, `is_centered`=False | `value` | `{"period": 21, "is_centered": false}` |
 | `dx` | `ta.dx(high, low, close, period=14)` | `high`, `low`, `close` | `period`=14 | `value` | `{"period": 14}` |
 | `elderray` | `ta.elderray(high, low, close, period=13)` | `high`, `low`, `close` | `period`=13 | `out0`, `out1` | `{"period": 13}` |
 | `ema` | `ta.ema(close, period=14)` | `close` | `period`=14 | `value` | `{"period": 14}` |
@@ -158,7 +159,7 @@ uv run python scripts/generate_indicator_reference.py
     "exchange": "NSE",
     "interval": "5m",
     "indicatorName": "rsi",
-    "params": { "period": 14 },
+    "params": "{\"period\": 14}",
     "outputVariable": "r"
   }
 }

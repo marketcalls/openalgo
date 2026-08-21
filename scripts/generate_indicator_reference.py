@@ -110,7 +110,8 @@ def main() -> int:
         "```",
         "",
         "- **Inputs** are the OHLCV columns the node feeds in for you.",
-        "- **Parameters** go in the node's `params` object.",
+        "- **Parameters** go in the node's `params` field, as a JSON **string** -",
+        "  for example `\"{\\\"period\\\": 14}\"`, not a nested object.",
         "- **Outputs** are the keys under `latest` / `previous` / `at_offset`. A single",
         "  output is always `value`; multiple outputs are `out0`, `out1`, ...",
         "",
@@ -121,17 +122,16 @@ def main() -> int:
         inputs = ", ".join(f"`{i}`" for i in e["inputs"]) or "-"
         params = ", ".join(f"`{p}`={d!r}" for p, d in e["params"]) or "-"
         outputs = ", ".join(f"`{o}`" for o in e["outputs"]) or "-"
-        if e["params"]:
-            pairs = ", ".join(f'"{p}": {d!r}' for p, d in e["params"][:2])
-            example = "{" + pairs + "}"
-        else:
-            example = "{}"
+        # json.dumps, not repr: repr emits Python's False/True/None, which are
+        # not JSON, so the executor's json.loads rejected the example outright.
+        # The old chr(39)->chr(34) swap below only fixed quoted strings.
+        example = json.dumps(dict(e["params"][:2])) if e["params"] else "{}"
         call_args = ", ".join(e["inputs"]) or "data"
         if e["params"]:
             call_args += ", " + ", ".join(f"{p}={d!r}" for p, d in e["params"][:2])
         lines.append(
             f"| `{e['name']}` | `ta.{e['name']}({call_args})` | {inputs} | {params} | "
-            f"{outputs} | `{example.replace(chr(39), chr(34))}` |"
+            f"{outputs} | `{example}` |"
         )
 
     lines += [
@@ -162,7 +162,9 @@ def main() -> int:
         '    "exchange": "NSE",',
         '    "interval": "5m",',
         '    "indicatorName": "rsi",',
-        '    "params": { "period": 14 },',
+        # A JSON string, which is what the executor parses. An object here
+        # imported cleanly and then failed at run time with "Invalid params JSON".
+        '    "params": "{\\"period\\": 14}",',
         '    "outputVariable": "r"',
         "  }",
         "}",
