@@ -34,6 +34,57 @@ MAX_NODE_VISITS = 500
 # nodes are data edges, not control edges — see the edge filter below.
 GATE_NODE_TYPES = ("andGate", "orGate", "notGate")
 
+# Nodes that place, change or cancel something at the broker. An unresolved
+# {{variable}} in one of their order-defining fields is treated as a failure
+# rather than being allowed to fall back to a default -- see
+# NodeExecutor.unresolved_order_fields.
+ORDER_NODE_TYPES = frozenset(
+    {
+        "placeOrder",
+        "smartOrder",
+        "optionsOrder",
+        "optionsMultiOrder",
+        "basketOrder",
+        "splitOrder",
+        "modifyOrder",
+        "cancelOrder",
+        "closePositions",
+    }
+)
+
+# Fields on those nodes that decide what actually reaches the broker. Label-ish
+# fields (strategy, strategyTag, outputVariable) are deliberately absent: an
+# unresolved reference there is untidy, not dangerous.
+ORDER_CRITICAL_FIELDS = frozenset(
+    {
+        "symbol",
+        "exchange",
+        "action",
+        "quantity",
+        "product",
+        "priceType",
+        "pricetype",
+        "price",
+        "triggerPrice",
+        "splitSize",
+        "positionSize",
+        "underlying",
+        "strike",
+        "optionType",
+        "expiryDate",
+        "orderId",
+        "newQuantity",
+        "newPrice",
+        "newTriggerPrice",
+        "orders",
+        "legs",
+    }
+)
+
+# What an unresolved reference looks like after interpolation: WorkflowContext
+# returns the original {{...}} text when a path does not resolve.
+_UNRESOLVED_PATTERN = re.compile(r"\{\{[^}]*\}\}")
+
 
 def symbol_prefix_filter(column, prefix: str):
     """Index-friendly "this column starts with `prefix`" predicate.
@@ -298,6 +349,41 @@ class NodeExecutor:
         if output_var and output_var.strip():
             self.context.set_variable(output_var.strip(), result)
             self.log(f"Stored result in variable: {output_var}")
+
+    def unresolved_order_fields(self, node_data: dict) -> list[tuple[str, str]]:
+        """Order-defining fields still holding an unresolved {{reference}}.
+
+        Interpolation is deliberately forgiving: an unknown path passes the
+        literal `{{name}}` text through rather than raising. For most fields
+        that is the right call, but on an order node it was silently dangerous
+        -- `get_int` cannot parse `{{webhook.qty}}`, so it returned its default
+        of 1, and `get_str` handed the literal text to the broker mapper, which
+        fell back to MARKET. A webhook that simply omitted a key therefore
+        produced a successful order for the wrong size at the wrong price type,
+        with nothing in the run to say so.
+
+        Checked before dispatch so the node fails instead of the broker call
+        being made with substituted values.
+        """
+        found: list[tuple[str, str]] = []
+        for key in ORDER_CRITICAL_FIELDS:
+            raw = node_data.get(key)
+            if not isinstance(raw, str) or "{{" not in raw:
+                continue
+            text = self.context.interpolate(raw)
+            if _UNRESOLVED_PATTERN.search(text):
+                found.append((key, text))
+        return sorted(found)
+
+    def unresolved_error(self, node_type: str, fields: list[tuple[str, str]]) -> dict:
+        """The failure result for a node blocked by unresolved references."""
+        detail = ", ".join(f"{key}={text!r}" for key, text in fields)
+        message = (
+            f"{node_type} has unresolved variable(s) in {detail}. "
+            "Refusing to send it with substituted values."
+        )
+        self.log(message, "error")
+        return {"status": "error", "message": message, "unresolved": [f for f, _ in fields]}
 
     def get_str(self, node_data: dict, key: str, default: str = "") -> str:
         """Get interpolated string value from node data"""
@@ -3218,8 +3304,16 @@ def execute_node_chain(
     node_data = node.get("data", {})
     result = None
 
+    # An order node whose order-defining fields still contain {{...}} must not
+    # reach the broker with those references replaced by field defaults.
+    blocked_fields = (
+        executor.unresolved_order_fields(node_data) if node_type in ORDER_NODE_TYPES else []
+    )
+
     # Execute node based on type
-    if node_type == "start":
+    if blocked_fields:
+        result = executor.unresolved_error(node_type, blocked_fields)
+    elif node_type == "start":
         executor.log("Workflow started")
     elif node_type == "placeOrder":
         result = executor.execute_place_order(node_data)

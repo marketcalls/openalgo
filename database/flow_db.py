@@ -3,6 +3,7 @@
 import logging
 import os
 import secrets
+from datetime import UTC, datetime, timedelta
 
 from cachetools import TTLCache
 from sqlalchemy import (
@@ -437,13 +438,25 @@ def set_schedule_job_id(workflow_id, job_id):
 
 
 def create_execution(workflow_id, status="pending"):
-    """Create a new workflow execution"""
+    """Create a new workflow execution.
+
+    `started_at` is stamped here. It used to be set only by
+    update_execution_status("running"), and nothing ever passed that status --
+    the executor creates the row already running -- so every execution ever
+    recorded had a NULL start time. The history query ordered on that column,
+    and with every value NULL the sort collapsed to insertion order ascending,
+    so the Executions panel listed the *oldest* runs and the dashboard's "last
+    run" showed the first run the workflow ever had.
+    """
     try:
-        execution = FlowWorkflowExecution(workflow_id=workflow_id, status=status, logs=[])
+        execution = FlowWorkflowExecution(
+            workflow_id=workflow_id, status=status, logs=[], started_at=func.now()
+        )
         db_session.add(execution)
         db_session.commit()
 
         logger.info(f"Created execution for workflow {workflow_id} (id={execution.id})")
+        prune_workflow_executions(workflow_id)
         return execution
     except Exception as e:
         logger.exception(f"Error creating execution for workflow {workflow_id}: {str(e)}")
@@ -464,6 +477,80 @@ def get_execution(execution_id):
 # "no limit", which would load every execution row and its log blob into memory.
 EXECUTIONS_QUERY_MAX = 200
 
+# How much execution history to keep per workflow. Each row carries the full
+# node trace as JSON, and a workflow on a one-minute schedule writes roughly 375
+# rows a day, so without pruning the table grows without bound. Either limit can
+# be disabled by setting it to 0.
+EXECUTION_RETENTION_COUNT = int(os.getenv("FLOW_EXECUTION_RETENTION_COUNT", "500"))
+EXECUTION_RETENTION_DAYS = int(os.getenv("FLOW_EXECUTION_RETENTION_DAYS", "30"))
+
+
+def prune_workflow_executions(workflow_id, max_count=None, max_age_days=None):
+    """Delete execution history for one workflow beyond the retention limits.
+
+    Runs after a new execution is recorded, so the table is trimmed by the same
+    activity that grows it. Both passes are indexed: age uses
+    idx_flow_executions_started_at, count uses the primary key.
+
+    The deletes synchronize the session rather than running detached: SQLite
+    reuses a rowid once the highest one is removed, and a stale instance left in
+    the identity map then collides with the next insert that takes that id.
+
+    Returns the number of rows deleted.
+    """
+    max_count = EXECUTION_RETENTION_COUNT if max_count is None else max_count
+    max_age_days = EXECUTION_RETENTION_DAYS if max_age_days is None else max_age_days
+
+    deleted = 0
+    try:
+        if max_age_days and max_age_days > 0:
+            cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
+            deleted += (
+                FlowWorkflowExecution.query.filter(
+                    FlowWorkflowExecution.workflow_id == workflow_id,
+                    FlowWorkflowExecution.started_at.isnot(None),
+                    FlowWorkflowExecution.started_at < cutoff,
+                ).delete(synchronize_session="fetch")
+                or 0
+            )
+
+        if max_count and max_count > 0:
+            # Keep the newest max_count by id. Ordering by id rather than
+            # started_at matters for rows written before that column was
+            # stamped: their timestamp is null and would sort unpredictably.
+            keep = [
+                row.id
+                for row in FlowWorkflowExecution.query.with_entities(
+                    FlowWorkflowExecution.id
+                )
+                .filter(FlowWorkflowExecution.workflow_id == workflow_id)
+                .order_by(FlowWorkflowExecution.id.desc())
+                .limit(max_count)
+                .all()
+            ]
+            if len(keep) >= max_count:
+                deleted += (
+                    FlowWorkflowExecution.query.filter(
+                        FlowWorkflowExecution.workflow_id == workflow_id,
+                        FlowWorkflowExecution.id < min(keep),
+                    ).delete(synchronize_session="fetch")
+                    or 0
+                )
+
+        if deleted:
+            db_session.commit()
+            logger.info(
+                f"Pruned {deleted} execution(s) for workflow {workflow_id} "
+                f"(keep newest {max_count}, max age {max_age_days}d)"
+            )
+        return deleted
+    except Exception:
+        # Retention is housekeeping: a failure here must not fail the run that
+        # triggered it.
+        logger.exception(f"Could not prune execution history for workflow {workflow_id}")
+        db_session.rollback()
+        return 0
+
 
 def get_workflow_executions(workflow_id, limit=50):
     """Get executions for a workflow"""
@@ -474,7 +561,11 @@ def get_workflow_executions(workflow_id, limit=50):
     try:
         return (
             FlowWorkflowExecution.query.filter_by(workflow_id=workflow_id)
-            .order_by(FlowWorkflowExecution.started_at.desc())
+            # By id, not started_at. The id is monotonic and never null, while
+            # rows written before started_at was stamped have none -- and the
+            # two engines disagree on where nulls sort under DESC, so ordering
+            # on the timestamp would list legacy rows first on one of them.
+            .order_by(FlowWorkflowExecution.id.desc())
             .limit(limit)
             .all()
         )

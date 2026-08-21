@@ -549,3 +549,200 @@ def test_execution_history_limit_is_clamped(requested, monkeypatch):
     flow_db.get_workflow_executions(1, limit=requested)
 
     assert 1 <= captured[0] <= flow_db.EXECUTIONS_QUERY_MAX
+
+
+# ---------------------------------------------------------------------------
+# Unresolved {{variables}} must not become order defaults
+# ---------------------------------------------------------------------------
+
+_ORDER_NODE = {
+    "symbol": "SBIN",
+    "exchange": "NSE",
+    "action": "BUY",
+    "product": "MIS",
+    "priceType": "LIMIT",
+    "price": "{{webhook.px}}",
+    "quantity": "{{webhook.qty}}",
+}
+
+
+class _RecordingClient:
+    def __init__(self):
+        self.orders = []
+
+    def place_order(self, **kwargs):
+        self.orders.append(kwargs)
+        return {"status": "success", "orderid": "X1"}
+
+
+@pytest.fixture
+def order_env(executor_env, monkeypatch):
+    """executor_env, plus a client that records what reached the broker."""
+    client = _RecordingClient()
+    monkeypatch.setattr(fes, "get_flow_client", lambda api_key: client)
+    return types.SimpleNamespace(client=client, statuses=executor_env.statuses)
+
+
+def _graph(node_type, data):
+    return [
+        {"id": "n1", "type": "start", "data": {}},
+        {"id": "n2", "type": node_type, "data": data},
+        {"id": "n3", "type": "log", "data": {"message": "downstream ran"}},
+    ]
+
+
+def _run_graph(monkeypatch, node_type, data, webhook):
+    workflow = types.SimpleNamespace(
+        id=1, name="t", nodes=_graph(node_type, data), edges=_EDGES, is_active=True
+    )
+    monkeypatch.setattr(fes, "get_workflow", lambda wid: workflow)
+    result = fes.execute_workflow(1, webhook_data=webhook, api_key="k")
+    return result, [entry["message"] for entry in result["logs"]]
+
+
+def test_unresolved_order_field_never_reaches_the_broker(order_env, monkeypatch):
+    """A webhook that omits a key used to produce a successful wrong order.
+
+    `get_int` cannot parse `{{webhook.qty}}`, so it returned its default of 1,
+    and the unresolved price type fell through the broker mapper to MARKET. The
+    node now fails before the call is made.
+    """
+    result, messages = _run_graph(monkeypatch, "placeOrder", _ORDER_NODE, {"symbol": "SBIN"})
+
+    assert order_env.client.orders == [], "an order was sent with substituted values"
+    assert result["status"] == "error"
+    assert order_env.statuses[-1][0] == "failed"
+    assert not any("downstream ran" in m for m in messages)
+    assert "quantity" in result["errors"][0]["message"]
+
+
+def test_resolved_order_fields_are_sent_normally(order_env, monkeypatch):
+    """The guard must not disturb the case where the variables do resolve."""
+    result, messages = _run_graph(monkeypatch, "placeOrder", _ORDER_NODE, {"qty": 50, "px": 812.5})
+
+    assert result["status"] == "success"
+    assert order_env.client.orders[0]["quantity"] == 50
+    assert order_env.client.orders[0]["price"] == 812.5
+    assert any("downstream ran" in m for m in messages)
+
+
+def test_label_fields_stay_permissive(order_env, monkeypatch):
+    """strategyTag is a label; an unresolved reference there is untidy, not unsafe."""
+    data = {**_ORDER_NODE, "price": 800, "quantity": 10, "strategyTag": "{{missing.tag}}"}
+
+    result, _ = _run_graph(monkeypatch, "placeOrder", data, {})
+
+    assert result["status"] == "success"
+    assert order_env.client.orders[0]["strategy"] == "{{missing.tag}}"
+
+
+def test_non_order_nodes_keep_passing_variables_through(order_env, monkeypatch):
+    """Interpolation stays forgiving everywhere the value cannot reach a broker."""
+    result, messages = _run_graph(monkeypatch, "log", {"message": "value is {{missing.thing}}"}, {})
+
+    assert result["status"] == "success"
+    assert any("{{missing.thing}}" in m for m in messages)
+
+
+def test_cancel_order_with_an_unresolved_id_fails(order_env, monkeypatch):
+    """Cancelling "{{prev.orderid}}" literally would target nothing, silently."""
+    result, _ = _run_graph(monkeypatch, "cancelOrder", {"orderId": "{{prev.orderid}}"}, {})
+
+    assert result["status"] == "error"
+    assert "orderId" in result["errors"][0]["message"]
+
+
+# ---------------------------------------------------------------------------
+# Execution history: recorded with a start time, and bounded
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def flow_database():
+    """The test database, initialised once, with a workflow per test."""
+    import database.flow_db as flow_db
+
+    flow_db.init_db()
+    return flow_db
+
+
+def test_execution_records_its_start_time(flow_database):
+    """started_at was only set by a status nothing ever passed, so it was NULL.
+
+    The history query ordered on that column; with every value NULL the sort
+    collapsed to insertion order ascending, so the panel listed the oldest runs
+    and the dashboard's "last run" showed the first run the workflow ever had.
+    """
+    workflow = flow_database.create_workflow("started_at test", nodes=[], edges=[])
+
+    execution = flow_database.create_execution(workflow.id, status="running")
+
+    assert execution is not None
+    assert execution.started_at is not None
+
+
+def test_execution_history_is_newest_first(flow_database):
+    workflow = flow_database.create_workflow("ordering test", nodes=[], edges=[])
+    for _ in range(5):
+        flow_database.create_execution(workflow.id, status="running")
+
+    rows = flow_database.get_workflow_executions(workflow.id, limit=5)
+    ids = [row.id for row in rows]
+
+    assert ids == sorted(ids, reverse=True), "history is not newest-first"
+
+
+def test_retention_keeps_only_the_newest_runs(flow_database):
+    """Each row carries the full node trace, so history has to be bounded."""
+    workflow = flow_database.create_workflow("retention test", nodes=[], edges=[])
+    for _ in range(30):
+        flow_database.create_execution(workflow.id, status="running")
+        flow_database.prune_workflow_executions(workflow.id, max_count=10, max_age_days=0)
+
+    rows = flow_database.get_workflow_executions(workflow.id, limit=200)
+
+    assert len(rows) == 10
+    assert [r.id for r in rows] == sorted((r.id for r in rows), reverse=True)
+
+
+def test_retention_removes_rows_past_the_age_limit(flow_database):
+    from datetime import UTC, datetime, timedelta
+
+    workflow = flow_database.create_workflow("age test", nodes=[], edges=[])
+    keep = flow_database.create_execution(workflow.id, status="running")
+    stale = flow_database.create_execution(workflow.id, status="running")
+    stale.started_at = datetime.now(UTC) - timedelta(days=99)
+    flow_database.db_session.commit()
+    # Read the ids before pruning: the delete synchronizes the session, so the
+    # removed instance is detached afterwards and cannot be queried for its id.
+    keep_id, stale_id = keep.id, stale.id
+
+    flow_database.prune_workflow_executions(workflow.id, max_count=0, max_age_days=30)
+
+    remaining = {row.id for row in flow_database.get_workflow_executions(workflow.id, limit=200)}
+    assert keep_id in remaining
+    assert stale_id not in remaining
+
+
+def test_retention_leaves_other_workflows_alone(flow_database):
+    mine = flow_database.create_workflow("mine", nodes=[], edges=[])
+    theirs = flow_database.create_workflow("theirs", nodes=[], edges=[])
+    for _ in range(4):
+        flow_database.create_execution(theirs.id, status="running")
+    for _ in range(20):
+        flow_database.create_execution(mine.id, status="running")
+
+    flow_database.prune_workflow_executions(mine.id, max_count=2, max_age_days=0)
+
+    assert len(flow_database.get_workflow_executions(theirs.id, limit=200)) == 4
+
+
+def test_retention_can_be_switched_off(flow_database):
+    workflow = flow_database.create_workflow("no retention", nodes=[], edges=[])
+    for _ in range(6):
+        flow_database.create_execution(workflow.id, status="running")
+
+    deleted = flow_database.prune_workflow_executions(workflow.id, max_count=0, max_age_days=0)
+
+    assert deleted == 0
+    assert len(flow_database.get_workflow_executions(workflow.id, limit=200)) == 6

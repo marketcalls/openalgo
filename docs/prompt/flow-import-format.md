@@ -220,6 +220,33 @@ Inside any string field of any node's `data`, you can reference variables that
 upstream nodes have produced or that the executor exposes as built-ins. The
 syntax is `{{path}}`.
 
+### Unresolved references on order nodes
+
+Order-defining fields are checked before the node runs, and a `{{reference}}`
+that does not resolve fails the node instead of falling back to a default.
+
+This applies to `placeOrder`, `smartOrder`, `optionsOrder`, `optionsMultiOrder`,
+`basketOrder`, `splitOrder`, `modifyOrder`, `cancelOrder` and `closePositions`,
+on these fields:
+
+`symbol` `exchange` `action` `quantity` `product` `priceType` `price`
+`triggerPrice` `splitSize` `positionSize` `underlying` `strike` `optionType`
+`expiryDate` `orderId` `newQuantity` `newPrice` `newTriggerPrice` `orders`
+`legs`, plus the legacy lowercase spelling `pricetype`.
+
+Why it matters: a numeric field cannot parse `{{webhook.qty}}`, so it used to
+take the field default of `1`, and an unresolved `priceType` fell through the
+broker mapping to `MARKET`. A webhook that simply omitted a key therefore placed
+a **successful order for the wrong size at the wrong price type**, with nothing
+in the run to say so. Now the node fails, the run is marked `failed`, and
+nothing downstream of it executes.
+
+Label fields are deliberately exempt -- `strategy`, `strategyTag` and
+`outputVariable` still pass an unresolved reference through as text.
+
+When a webhook may legitimately omit a value, give the node a literal instead of
+a variable, or branch on a condition node first.
+
 ### Path grammar
 
 - **Dotted keys** for dict access: `{{order.data.orderid}}`
@@ -265,9 +292,8 @@ Data nodes ship with a default `outputVariable` (`orders`, `trades`,
 own when two nodes of the same type would otherwise collide.
 
 An unresolved `{{name.path}}` interpolates to its own literal text rather than
-raising, so a misspelled variable reaches a numeric field as a string and falls
-back to that field's default. Name your variables deliberately and check the
-execution log for un-substituted `{{...}}` when a run behaves oddly.
+raising. On most fields that is harmless -- an alert message simply contains the
+literal `{{...}}`. On an **order node it is a failure**: see below.
 
 Most data and action nodes accept an `outputVariable` field in their `data`
 object. When set, the result of that node is stored in the workflow context
@@ -2292,7 +2318,13 @@ positionBook (outputVariable=positions)
   from Historify regardless of broker capability.
 - **Unresolved operands in `varCondition` take neither branch.** Unlike other
   interpolation (which passes `{{...}}` through as literal text), this node
-  refuses to evaluate so a typo cannot route a trade.
+  refuses to evaluate so a typo cannot route a trade. Order nodes refuse for the
+  same reason -- see [Unresolved references on order nodes](#unresolved-references-on-order-nodes).
+- **Execution history is pruned.** Each run stores its full node trace, so the
+  newest `FLOW_EXECUTION_RETENTION_COUNT` runs per workflow (default 500) and
+  anything newer than `FLOW_EXECUTION_RETENTION_DAYS` (default 30) are kept;
+  older rows are deleted as new ones are written. Set either to `0` to disable
+  that limit. Export anything you need to keep.
 - **A failed node stops its branch and fails the run.** When a node returns
   an error - a broker rejection, an unreachable URL, a guard that cannot be
   evaluated - nothing downstream of it executes, the run is recorded as
@@ -2335,5 +2367,10 @@ positionBook (outputVariable=positions)
   `services/flow_order_update_monitor_service.py`.
 - HTTP destination rules: `NodeExecutor._check_http_destination` in
   `services/flow_executor_service.py`.
+- Unresolved-reference checks on order nodes: `ORDER_NODE_TYPES`,
+  `ORDER_CRITICAL_FIELDS` and `NodeExecutor.unresolved_order_fields` in
+  `services/flow_executor_service.py`.
+- Execution-history retention: `prune_workflow_executions` in
+  `database/flow_db.py`.
 
 If this doc and the code disagree, the code wins. Open a PR.

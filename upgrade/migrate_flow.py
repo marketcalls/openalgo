@@ -161,6 +161,50 @@ def add_api_key_column(engine):
     return True
 
 
+def backfill_execution_started_at(engine):
+    """Give historical executions a start time.
+
+    create_execution never stamped started_at -- only
+    update_execution_status("running") did, and nothing passed that status --
+    so every row written before that fix has NULL. The history query ordered on
+    that column, and an all-NULL sort collapsed to insertion order ascending,
+    which listed the oldest runs first and made the dashboard's "last run" show
+    the workflow's first ever run.
+
+    completed_at is the best evidence available for when a finished run
+    happened. A row with neither timestamp is left alone; ordering is by id now,
+    so a null start time no longer misplaces it.
+
+    Idempotent: only rows that are still NULL are touched.
+    """
+    if not table_exists(engine, "flow_workflow_executions"):
+        return True
+
+    with engine.connect() as conn:
+        pending = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM flow_workflow_executions "
+                "WHERE started_at IS NULL AND completed_at IS NOT NULL"
+            )
+        ).scalar()
+
+        if not pending:
+            print("  [SKIP] execution start times already populated")
+            return True
+
+        print(f"  [BACKFILL] Setting started_at on {pending} execution(s)...")
+        conn.execute(
+            text(
+                "UPDATE flow_workflow_executions SET started_at = completed_at "
+                "WHERE started_at IS NULL AND completed_at IS NOT NULL"
+            )
+        )
+        conn.commit()
+
+    print("  [OK] execution start times backfilled")
+    return True
+
+
 def create_flow_workflow_executions_table(engine):
     """Create flow_workflow_executions table"""
     if table_exists(engine, "flow_workflow_executions"):
@@ -308,6 +352,18 @@ def status(engine):
         print(f"  {'flow_workflows.api_key':<26} {'present' if present else 'MISSING'}")
         applied = applied and present
 
+    if table_exists(engine, "flow_workflow_executions"):
+        with engine.connect() as conn:
+            pending = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM flow_workflow_executions "
+                    "WHERE started_at IS NULL AND completed_at IS NOT NULL"
+                )
+            ).scalar()
+        label = "execution started_at"
+        print(f"  {label:<26} {'present' if not pending else f'{pending} MISSING'}")
+        applied = applied and not pending
+
     if table_exists(engine, FLOW_JOBSTORE_TABLE):
         index_name = f"ix_{FLOW_JOBSTORE_TABLE}_next_run_time"
         names = {idx["name"] for idx in inspect(engine).get_indexes(FLOW_JOBSTORE_TABLE)}
@@ -352,6 +408,7 @@ def main():
         create_flow_workflows_table(engine)
         add_api_key_column(engine)
         create_flow_workflow_executions_table(engine)
+        backfill_execution_started_at(engine)
         create_apscheduler_jobstore_table(engine, FLOW_JOBSTORE_TABLE)
 
         print()
