@@ -269,6 +269,140 @@ EITHER_REQUIRED_FIELDS: dict[str, tuple[tuple[str, ...], ...]] = {
 }
 
 
+# Order constants, from docs/prompt/order-constants.md. Presence checks alone
+# let an invalid value through to the broker, where it becomes a rejection at
+# best and a silently different order at worst -- several broker mappers fall
+# back to a default for an unrecognised price type rather than refusing it, so
+# a typo'd "LIMT" becomes a MARKET order.
+VALID_EXCHANGES = frozenset(
+    {
+        "NSE",
+        "NFO",
+        "CDS",
+        "BSE",
+        "BFO",
+        "BCD",
+        "MCX",
+        "NCDEX",
+        "NCO",
+        "NSE_INDEX",
+        "BSE_INDEX",
+        "MCX_INDEX",
+        "CRYPTO",
+        "GLOBAL_INDEX",
+    }
+)
+VALID_PRODUCTS = frozenset({"CNC", "NRML", "MIS"})
+VALID_PRICE_TYPES = frozenset({"MARKET", "LIMIT", "SL", "SL-M"})
+VALID_ACTIONS = frozenset({"BUY", "SELL"})
+
+# Which of those vocabularies each field is drawn from.
+ENUM_FIELDS: dict[str, frozenset[str]] = {
+    "exchange": VALID_EXCHANGES,
+    "action": VALID_ACTIONS,
+    "product": VALID_PRODUCTS,
+    "priceType": VALID_PRICE_TYPES,
+    "pricetype": VALID_PRICE_TYPES,
+}
+
+# Fields that must be a positive number wherever they appear. A zero or
+# negative quantity reaches the broker as a malformed order.
+POSITIVE_NUMBER_FIELDS = frozenset({"quantity", "splitSize", "lots"})
+
+
+def _enum_and_range_errors(base: str, node_type: str, data: dict) -> list:
+    """Value-level checks for order fields: known constants, sane numbers.
+
+    Skipped for any value carrying a {{variable}}, which is only resolvable at
+    run time -- the executor checks those separately before it calls the broker.
+    """
+    found = []
+    for field, allowed in ENUM_FIELDS.items():
+        if field not in data:
+            continue
+        value = data.get(field)
+        if not isinstance(value, str) or "{{" in value or not value.strip():
+            continue
+        if value.strip().upper() not in allowed:
+            found.append(
+                _err(
+                    f"{base}/data/{field}",
+                    "invalid_constant",
+                    f"'{value}' is not a valid {field}. Brokers may silently "
+                    "substitute a default for an unrecognised value rather than "
+                    "reject the order.",
+                    sorted(allowed),
+                    value,
+                )
+            )
+
+    for field in POSITIVE_NUMBER_FIELDS:
+        if field not in data:
+            continue
+        value = data.get(field)
+        if isinstance(value, str) and ("{{" in value or not value.strip()):
+            continue
+        if _positive_number(value) is None:
+            found.append(
+                _err(
+                    f"{base}/data/{field}",
+                    "invalid_quantity",
+                    f"{field} must be a positive number; {value!r} reaches the "
+                    "broker as a malformed order.",
+                    "a positive number",
+                    value,
+                )
+            )
+
+    # httpRequest: the two fields whose shape only failed at run time before.
+    if node_type == "httpRequest":
+        headers = data.get("headers")
+        if isinstance(headers, str) and headers.strip() and "{{" not in headers:
+            import json as _json
+
+            try:
+                parsed = _json.loads(headers)
+            except ValueError:
+                parsed = None
+            if not isinstance(parsed, dict):
+                found.append(
+                    _err(
+                        f"{base}/data/headers",
+                        "invalid_headers",
+                        "headers must be a JSON object written as a string, for "
+                        'example "{\"Authorization\": \"Bearer x\"}". An '
+                        "unparseable value is dropped and the request goes out "
+                        "unauthenticated.",
+                        "a JSON object string",
+                        headers,
+                    )
+                )
+        timeout = data.get("timeout")
+        if timeout is not None and not (isinstance(timeout, str) and "{{" in timeout):
+            try:
+                milliseconds = float(timeout)
+            except (TypeError, ValueError):
+                milliseconds = None
+            if milliseconds is None or milliseconds <= 0 or milliseconds > HTTP_TIMEOUT_MAX_MS:
+                found.append(
+                    _err(
+                        f"{base}/data/timeout",
+                        "invalid_timeout",
+                        f"timeout is in milliseconds and must be between 1 and "
+                        f"{HTTP_TIMEOUT_MAX_MS}. The request blocks the workflow "
+                        "for its whole duration.",
+                        f"1..{HTTP_TIMEOUT_MAX_MS}",
+                        timeout,
+                    )
+                )
+    return found
+
+
+# Mirrors NodeExecutor.HTTP_TIMEOUT_MAX_MS; the executor clamps, the validator
+# refuses, so an import cannot quietly ship a value the runtime will override.
+HTTP_TIMEOUT_MAX_MS = 60_000
+
+
 class WorkflowValidationError(Exception):
     """One or more structural problems, each with a path and a reason."""
 
@@ -435,6 +569,8 @@ def validate_workflow(
                     )
                 required.extend(options.get(chosen, ()))
                 errors.extend(_alert_threshold_errors(base, data, chosen, options.get(chosen, ())))
+            errors.extend(_enum_and_range_errors(base, node_type, data))
+
             for group in EITHER_REQUIRED_FIELDS.get(node_type, ()):
                 if not any(
                     data.get(f) is not None

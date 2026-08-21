@@ -197,10 +197,15 @@ class FlowScheduler:
             # Only the default executor takes the market-hours flag. A custom
             # callback still receives the documented (workflow_id, api_key) pair,
             # which passing a third positional argument would break.
+            # No branch stores the key. The custom-callback path used to pass
+            # self._api_key, which lands in the same pickled job_state, so the
+            # leak survived for any caller supplying its own func. A custom
+            # callback receives None and resolves the current key itself, the
+            # same way the default executor does.
             args=(
                 [workflow_id, None, market_hours_only]
                 if func is execute_workflow_scheduled
-                else [workflow_id, self._api_key]
+                else [workflow_id, None]
             ),
             replace_existing=True,
             name=f"Workflow {workflow_id}",

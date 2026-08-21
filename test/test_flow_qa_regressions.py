@@ -5,6 +5,7 @@ run without a broker, market data, or a live scheduler: the collaborators are
 stubbed at the seams the executor already imports through.
 """
 
+import io
 import threading
 import time
 import types
@@ -876,27 +877,44 @@ def test_cancel_all_orders_stores_its_result():
 # ---------------------------------------------------------------------------
 
 
-def test_price_monitor_shutdown_is_idempotent():
-    """atexit may fire after an explicit call; neither should raise."""
+def test_price_monitor_shutdown_is_idempotent(monkeypatch):
+    """atexit may fire after an explicit call; neither should raise.
+
+    The pool is swapped for a throwaway one: shutdown releases the module-level
+    executor, and killing the shared instance would break every later test that
+    queues a run.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setattr(fpm, "_WORKFLOW_POOL", ThreadPoolExecutor(max_workers=1))
+
     monitor = fpm.FlowPriceMonitor()
+    monitor._shutdown_done = False
     monitor.shutdown()
     monitor.shutdown()
 
     assert monitor.is_running() is False
+    monitor._shutdown_done = False
 
 
-def test_order_monitor_shutdown_allows_resubscription():
+def test_order_monitor_shutdown_allows_resubscription(monkeypatch):
     """__init__ returns early on _initialized, so shutdown must clear it.
 
     Without that the singleton was unrecoverable: nothing could ever re-attach
     to the order-update bus for the rest of the process.
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     import services.flow_order_update_monitor_service as oum
 
+    monkeypatch.setattr(oum, "_WORKFLOW_POOL", ThreadPoolExecutor(max_workers=1))
+
     monitor = oum.get_flow_order_update_monitor()
+    monitor._shutdown_done = False
     monitor.shutdown()
 
     assert monitor._initialized is False
+    monitor._shutdown_done = False
 
 
 def test_both_monitors_release_their_pool_at_exit():
@@ -909,5 +927,290 @@ def test_both_monitors_release_their_pool_at_exit():
 
     import services.flow_order_update_monitor_service as oum
 
-    assert "atexit.register(flow_price_monitor.shutdown)" in inspect.getsource(fpm)
-    assert "atexit.register(flow_order_update_monitor.shutdown)" in inspect.getsource(oum)
+    assert "atexit.register(_shutdown_at_exit)" in inspect.getsource(fpm)
+    assert "atexit.register(_shutdown_at_exit)" in inspect.getsource(oum)
+    assert "flow_price_monitor.shutdown()" in inspect.getsource(fpm)
+    assert "flow_order_update_monitor.shutdown()" in inspect.getsource(oum)
+
+
+# ---------------------------------------------------------------------------
+# FLOW-031: a trigger is spent only by a run that actually happened
+# ---------------------------------------------------------------------------
+
+
+def test_already_running_does_not_consume_a_one_shot_alert(price_monitor, monkeypatch):
+    """Retirement ran in `finally`, so a collision spent the event.
+
+    A one-shot alert firing while a previous run was still in flight was
+    retired and its workflow deactivated, even though the graph never saw the
+    event. The alert must stay armed so the next tick can deliver it.
+    """
+    import sys
+
+    sys.modules["services.flow_executor_service"].execute_workflow = (
+        lambda wid, webhook_data=None, api_key=None: (
+            price_monitor.fired.append(wid),
+            price_monitor.done.set(),
+            {"status": "error", "already_running": True},
+        )[-1]
+    )
+
+    alert = _arm(price_monitor.monitor, 7001)
+    price_monitor.monitor._check_alert(alert)
+    assert price_monitor.done.wait(5)
+    time.sleep(0.05)
+
+    assert price_monitor.monitor.get_alert(7001) is not None, "the alert was consumed"
+    assert price_monitor.deactivated == [], "the workflow was deactivated without running"
+    assert alert.triggered is False, "the latch was left set, so it can never fire again"
+
+
+def test_submit_failure_leaves_the_alert_armed(price_monitor, monkeypatch):
+    """The latch is set before submitting; a failed submit must clear it.
+
+    Otherwise _check_all_alerts skips the alert for the rest of the process and
+    the trigger is silently dead.
+    """
+
+    def refuse(fn):
+        raise RuntimeError("pool is full")
+
+    monkeypatch.setattr(fpm._WORKFLOW_POOL, "submit", refuse)
+
+    alert = _arm(price_monitor.monitor, 7002)
+    # _check_alert logs and swallows the failure rather than propagating it, so
+    # the observable outcome is the latch, not an exception.
+    price_monitor.monitor._check_alert(alert)
+
+    assert alert.triggered is False
+    assert price_monitor.monitor.get_alert(7002) is not None
+
+
+def test_a_broker_rejection_still_consumes_the_one_shot(price_monitor):
+    """The workflow ran; the broker refusing the order is not a lost event."""
+    import sys
+
+    sys.modules["services.flow_executor_service"].execute_workflow = (
+        lambda wid, webhook_data=None, api_key=None: (
+            price_monitor.fired.append(wid),
+            price_monitor.done.set(),
+            {"status": "error", "message": "insufficient margin"},
+        )[-1]
+    )
+
+    price_monitor.monitor._check_alert(_arm(price_monitor.monitor, 7003))
+    assert price_monitor.done.wait(5)
+    time.sleep(0.05)
+
+    assert price_monitor.monitor.get_alert(7003) is None
+    assert price_monitor.deactivated == [7003]
+
+
+# ---------------------------------------------------------------------------
+# FLOW-032: a condition that cannot be evaluated fails the run
+# ---------------------------------------------------------------------------
+
+
+def _condition_graph(operator):
+    return [
+        {"id": "n1", "type": "start", "data": {}},
+        {
+            "id": "n2",
+            "type": "priceCondition",
+            "data": {
+                "symbol": "SBIN",
+                "exchange": "NSE",
+                "field": "ltp",
+                "operator": operator,
+                "value": 50,
+            },
+        },
+        {"id": "n3", "type": "log", "data": {"message": "true branch"}},
+    ]
+
+
+_COND_EDGES = [
+    {"id": "e1", "source": "n1", "target": "n2"},
+    {"id": "e2", "source": "n2", "sourceHandle": "true", "target": "n3"},
+]
+
+
+def _run_condition(monkeypatch, executor_env, operator, value=50):
+    nodes = _condition_graph(operator)
+    nodes[1]["data"]["value"] = value
+    workflow = types.SimpleNamespace(id=1, name="t", nodes=nodes, edges=_COND_EDGES, is_active=True)
+    monkeypatch.setattr(fes, "get_workflow", lambda wid: workflow)
+    monkeypatch.setattr(fes, "get_flow_client", lambda api_key: _QuoteClient(ltp=100.0))
+    result = fes.execute_workflow(1, api_key="k")
+    return result, [entry["message"] for entry in result["logs"]]
+
+
+def test_unevaluatable_condition_fails_the_run(executor_env, monkeypatch):
+    """Condition errors were exempt from executor.errors, so the run passed.
+
+    The node logged an error and took neither branch, yet execute_workflow
+    returned success and persisted `completed` -- the exact dishonesty the
+    error list exists to prevent.
+    """
+    result, messages = _run_condition(monkeypatch, executor_env, "~=")
+
+    assert result["status"] == "error"
+    assert executor_env.statuses[-1][0] == "failed"
+    assert not any("true branch" in m for m in messages)
+    assert result["errors"][0]["type"] == "priceCondition"
+
+
+def test_a_condition_that_is_merely_false_is_not_an_error(executor_env, monkeypatch):
+    """False is a real answer and must stay distinguishable from "cannot evaluate"."""
+    result, messages = _run_condition(monkeypatch, executor_env, ">", value=500)
+
+    assert result["status"] == "success"
+    assert executor_env.statuses[-1][0] == "completed"
+    assert not any("true branch" in m for m in messages)
+
+
+def test_a_condition_that_holds_still_routes_its_branch(executor_env, monkeypatch):
+    result, messages = _run_condition(monkeypatch, executor_env, ">", value=50)
+
+    assert result["status"] == "success"
+    assert any("true branch" in m for m in messages)
+
+
+# ---------------------------------------------------------------------------
+# FLOW-012: the editor must not ship values that override the live order
+# ---------------------------------------------------------------------------
+
+
+def test_modify_order_defaults_carry_no_order_attributes():
+    """The backend lookup cannot tell a shipped default from an intended value.
+
+    DEFAULT_NODE_DATA.modifyOrder carried exchange 'NSE' and action 'BUY', so
+    every node created in the editor sent them as explicit overrides and a live
+    NFO SELL order was modified into an NSE BUY.
+    """
+    import re
+
+    source = open("frontend/src/lib/flow/constants.ts", encoding="utf-8").read()
+    block = re.search(r"  modifyOrder: \{(.*?)\n  \},", source, re.S).group(1)
+
+    for field in ("symbol", "exchange", "action", "product", "priceType"):
+        assert re.search(rf"^\s+{field}:", block, re.M) is None, f"ships {field}"
+    assert re.search(r"^\s+orderId:", block, re.M) is not None
+
+
+def test_modify_order_from_a_default_node_preserves_the_live_contract():
+    live = {
+        "orderid": "25082800018",
+        "symbol": "NIFTY28MAR2420800CE",
+        "exchange": "NFO",
+        "action": "SELL",
+        "product": "NRML",
+        "pricetype": "LIMIT",
+        "quantity": "150",
+        "price": 42.5,
+        "trigger_price": 0,
+    }
+    client, _ = _modify({"orderId": "25082800018", "newPrice": "44.0"}, order=live)
+
+    assert client.sent["exchange"] == "NFO"
+    assert client.sent["action"] == "SELL"
+    assert client.sent["product_type"] == "NRML"
+    assert client.sent["quantity"] == 150
+
+
+# ---------------------------------------------------------------------------
+# FLOW-016 / FLOW-013: order constants and node shapes checked before run time
+# ---------------------------------------------------------------------------
+
+_VALID_ORDER = {
+    "symbol": "SBIN",
+    "exchange": "NSE",
+    "action": "BUY",
+    "quantity": 10,
+    "product": "MIS",
+    "priceType": "MARKET",
+}
+
+
+def _validate(node_type, data):
+    from services.flow_workflow_validator import validate_workflow
+
+    position = {"x": 0, "y": 0}
+    workflow = {
+        "name": "t",
+        "nodes": [
+            {"id": "n1", "type": "start", "position": position, "data": {}},
+            {"id": "n2", "type": node_type, "position": position, "data": data},
+        ],
+        "edges": [{"id": "e1", "source": "n1", "target": "n2"}],
+    }
+    return [e["code"] for e in validate_workflow(workflow, strict=True)]
+
+
+def test_a_valid_order_node_validates_clean():
+    assert _validate("placeOrder", _VALID_ORDER) == []
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("exchange", "NSEE"),
+        ("action", "BUYY"),
+        ("product", "INTRADAY"),
+        ("priceType", "LIMT"),
+    ],
+)
+def test_invalid_order_constants_are_refused(field, value):
+    """Several broker mappers substitute a default for an unrecognised value
+    rather than rejecting it, so a typo became a different order."""
+    assert "invalid_constant" in _validate("placeOrder", {**_VALID_ORDER, field: value})
+
+
+@pytest.mark.parametrize("quantity", [0, -5, "abc"])
+def test_non_positive_quantities_are_refused(quantity):
+    assert "invalid_quantity" in _validate("placeOrder", {**_VALID_ORDER, "quantity": quantity})
+
+
+@pytest.mark.parametrize("field", ["exchange", "action", "quantity"])
+def test_variables_are_left_for_the_executor_to_resolve(field):
+    """These are only knowable at run time, where the order-node check applies."""
+    assert _validate("placeOrder", {**_VALID_ORDER, field: "{{webhook.value}}"}) == []
+
+
+def test_constants_are_case_insensitive():
+    assert _validate("placeOrder", {**_VALID_ORDER, "exchange": "nse", "action": "buy"}) == []
+
+
+@pytest.mark.parametrize(
+    "data,code",
+    [
+        ({"url": "https://x.com", "headers": "{not json}"}, "invalid_headers"),
+        ({"url": "https://x.com", "headers": '["a"]'}, "invalid_headers"),
+        ({"url": "https://x.com", "timeout": 999999}, "invalid_timeout"),
+        ({"url": "https://x.com", "timeout": 0}, "invalid_timeout"),
+    ],
+)
+def test_http_request_shape_is_checked_before_run_time(data, code):
+    """These previously only failed once the node executed."""
+    assert code in _validate("httpRequest", data)
+
+
+def test_valid_http_request_validates_clean():
+    assert (
+        _validate(
+            "httpRequest",
+            {"url": "https://x.com", "headers": '{"A": "b"}', "timeout": 30000},
+        )
+        == []
+    )
+
+
+def test_no_scheduler_path_persists_the_api_key():
+    """The custom-callback branch still passed self._api_key into job args."""
+    import inspect
+
+    from services.flow_scheduler_service import FlowScheduler
+
+    source = inspect.getsource(FlowScheduler.add_workflow_job)
+
+    assert "self._api_key" not in source.split("args=(")[1].split("),")[0]

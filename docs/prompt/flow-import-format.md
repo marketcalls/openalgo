@@ -148,6 +148,24 @@ below is a *shape diagram*, not import-ready — see §8 for runnable examples):
 | `edges` | **yes** (array, can be empty) | yes | See §3. |
 | `viewport` | no | no | Restores canvas position only. Importers may omit. |
 
+### Value validation
+
+Presence is not the only check. On import, save and activation the validator
+also rejects:
+
+- an `exchange`, `action`, `product` or `priceType` outside
+  [§11 Order constants](#11-order-constants) — case-insensitive. Several broker
+  mappers substitute a default for an unrecognised value rather than refusing
+  it, so `"LIMT"` would have become a MARKET order.
+- a `quantity` or `splitSize` that is not a positive number.
+- `httpRequest` `headers` that are not a JSON object written as a string, and a
+  `timeout` outside 1..60000 milliseconds.
+
+A value containing `{{...}}` is skipped here, because it is only knowable at
+run time — order nodes check those separately, immediately before the broker
+call. See
+[Unresolved references on order nodes](#unresolved-references-on-order-nodes).
+
 ### Importer validation
 
 The importer (`POST /api/workflows/import`, called from the Flow Editor's
@@ -740,7 +758,7 @@ Splits a large order into chunks.
 | `newQuantity` | int | — | Empty = keep existing. |
 | `newPrice` | number | — | Empty = keep existing. |
 | `newTriggerPrice` | number | — | Empty = keep existing. |
-| `symbol`, `exchange`, `action`, `priceType`, `product` | as `placeOrder` | from the live order | Optional override. Omit them. |
+| `symbol`, `exchange`, `action`, `priceType`, `product` | as `placeOrder` | from the live order | **Omit these.** Any value present is treated as a deliberate override. |
 
 The executor reads the order back from the order book and changes only the
 fields you supply, so "empty = keep existing" is literal — an omitted quantity
@@ -751,6 +769,10 @@ carry these on a modify: an `action` of `BUY` on a live SELL order converts the
 order, and a `product` of `MIS` on an NRML position makes it intraday and
 subject to auto square-off. If the order cannot be read, the node fails rather
 than sending a guessed value.
+
+The executor cannot distinguish a value you meant from one a generator filled
+in, so a `modifyOrder` node should carry **only** `orderId` plus whichever of
+`newPrice` / `newQuantity` / `newTriggerPrice` you are changing.
 
 ```json
 {
@@ -827,6 +849,10 @@ This matters because `false` is a real answer that routes the graph down the
 false path — an exit gate reading `false` would not fire. Previously these
 cases silently produced `false`, so a typo looked like a condition that simply
 did not hold.
+
+Such a run is recorded as `failed` and the trigger response carries the error,
+the same as any other failing node. A condition that evaluates cleanly to
+`false` is **not** an error and the run still completes.
 
 #### positionCheck — Position Check
 
@@ -2221,8 +2247,17 @@ Valid `exchange` values across all nodes:
 | `BCD` | BSE Currency |
 | `MCX` | Commodity |
 | `NCDEX` | Commodity |
+| `NCO` | NSE Commodities, futures and options (Zerodha only) |
 | `NSE_INDEX` | NSE Indices (for `optionsOrder`/`optionChain`/`optionSymbol`/`syntheticFuture`) |
 | `BSE_INDEX` | BSE Indices (same usage as above) |
+| `MCX_INDEX` | MCX sectoral indices such as MCXBULLDEX (quote only) |
+| `GLOBAL_INDEX` | Global indices - US30, JAPAN225, HANGSENG, GIFTNIFTY (quote only, Zerodha) |
+| `CRYPTO` | Crypto derivatives (Delta Exchange only) |
+
+The index and crypto codes are quote-only or broker-specific; an order node
+using one is accepted by the validator but will be refused by a broker that
+does not serve that segment. See `docs/prompt/order-constants.md`, which is the
+source this list is checked against.
 
 ---
 
@@ -2345,7 +2380,10 @@ positionBook (outputVariable=positions)
 - **One-shot triggers deactivate the workflow when they fire.** A `priceAlert`
   or `orderUpdateTrigger` with `trigger: "once"` clears `is_active` after its
   run, so it is not re-armed by a later restart. Use `trigger: "every_time"`
-  for a standing watch.
+  for a standing watch. The trigger is spent only by a run that actually
+  reached the graph: if the workflow was already running, or the run could not
+  be queued, the trigger stays armed for the next event rather than being
+  silently consumed. A run the broker rejected still counts as spent — it ran.
 - **Editing a trigger on an active workflow re-arms it during the save.** The
   scheduler and monitors snapshot the trigger node, so a save that changes it
   tears the old registration down and installs the new one. If that fails the

@@ -14,6 +14,7 @@ own polling thread.
 """
 
 import atexit
+import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -244,7 +245,12 @@ class FlowOrderUpdateMonitor:
             f"orderid={event.orderid} status={event.order_status}"
         )
 
+        # Whether the workflow actually ran. A one-shot watch is only spent by
+        # a run that reached the graph.
+        executed = False
+
         def run_workflow():
+            nonlocal executed
             try:
                 # A queued run can sit behind a slow execution while the user
                 # deactivates or deletes the workflow. execute_workflow does not
@@ -285,11 +291,24 @@ class FlowOrderUpdateMonitor:
                 logger.info(
                     f"Workflow {watch.workflow_id} execution result: {result.get('status')}"
                 )
+                # `already_running` means this event never reached the graph.
+                executed = not result.get("already_running")
             except Exception:
                 logger.exception(f"Failed to execute workflow {watch.workflow_id}")
             finally:
                 if watch.trigger != "every_time":
-                    self._retire_one_shot(watch)
+                    if executed:
+                        self._retire_one_shot(watch)
+                    else:
+                        # Nothing ran, so the watch must not be consumed. It was
+                        # retired unconditionally, so an order event colliding
+                        # with an in-flight run spent the trigger and
+                        # deactivated its workflow without executing anything.
+                        watch.triggered = False
+                        logger.info(
+                            f"Re-arming one-shot order-update watch for workflow "
+                            f"{watch.workflow_id}: the run did not execute."
+                        )
                 else:
                     watch.triggered = False
                 # No app context here, so teardown_appcontext never runs and
@@ -299,7 +318,16 @@ class FlowOrderUpdateMonitor:
 
                 remove_all_scoped_sessions()
 
-        _WORKFLOW_POOL.submit(run_workflow)
+        try:
+            _WORKFLOW_POOL.submit(run_workflow)
+        except Exception:
+            # The claim is made under the lock before submitting; if the submit
+            # fails it has to come back off or the watch never fires again.
+            watch.triggered = False
+            logger.exception(
+                f"Could not queue the order-update run for workflow {watch.workflow_id}; "
+                "the watch stays armed."
+            )
 
     def _retire_one_shot(self, watch: OrderUpdateWatch) -> None:
         """Consume a one-shot watch: drop it and clear the workflow's active flag.
@@ -382,7 +410,23 @@ flow_order_update_monitor = FlowOrderUpdateMonitor()
 
 # Unsubscribe from the bus and release the pool on the way out. Without this the
 # subscription and the pool's threads were held until the process was killed.
-atexit.register(flow_order_update_monitor.shutdown)
+def _shutdown_at_exit() -> None:
+    """atexit entry point.
+
+    Logging handlers are often already closed by the time interpreter shutdown
+    reaches us -- pytest closes its capture streams first -- and logging into a
+    closed stream prints a "Logging error" traceback that looks like a fault
+    but is only ordering. Nothing after this point needs a log line, so quiet
+    the loggers before releasing the pool.
+    """
+    logging.disable(logging.CRITICAL)
+    try:
+        flow_order_update_monitor.shutdown()
+    except Exception:
+        pass
+
+
+atexit.register(_shutdown_at_exit)
 
 
 def get_flow_order_update_monitor() -> FlowOrderUpdateMonitor:

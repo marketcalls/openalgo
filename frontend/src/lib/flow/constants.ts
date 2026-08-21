@@ -1224,10 +1224,13 @@ export const DEFAULT_NODE_DATA = {
     product: 'MIS' as const,
   },
   modifyOrder: {
+    // Only the order id. symbol/exchange/action/product/priceType are read back
+    // from the live order by the executor, and anything present here is treated
+    // as a deliberate override -- so shipping exchange 'NSE' and action 'BUY' as
+    // defaults sent them to the broker on every modify, converting a live NFO
+    // SELL order into an NSE BUY. The backend lookup alone could not prevent
+    // this, because it cannot tell a default apart from an intended value.
     orderId: '',
-    symbol: '',
-    exchange: 'NSE',
-    action: 'BUY' as const,
   },
   basketOrder: {
     orders: '',

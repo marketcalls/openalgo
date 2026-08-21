@@ -3519,13 +3519,20 @@ def execute_node_chain(
     # A node that reported failure must not silently feed its children. Without
     # this, a rejected entry order still let the hedge leg place and the "trade
     # placed" alert fire, leaving a naked position and a run marked completed.
-    # Condition nodes are exempt: they carry their own `errored` handling below,
-    # which routes around the branch rather than ending the run.
-    if isinstance(result, dict) and result.get("status") == "error" and "condition" not in result:
+    if isinstance(result, dict) and result.get("status") == "error":
         message = result.get("message", "node failed")
         executor.errors.append({"node": node_id, "type": node_type, "message": message})
-        executor.log(f"Stopping this branch: {node_type} node failed ({message})", "error")
-        return
+        if "condition" in result:
+            # A condition that could not be evaluated takes neither branch, so
+            # the `errored` handling below already stops the descent. It must
+            # still be recorded: exempting it from executor.errors meant a
+            # workflow whose only fault was an unevaluatable gate finished as
+            # `completed` and answered HTTP 200 success, which is exactly the
+            # dishonesty this list exists to prevent.
+            executor.log(f"{node_type} could not be evaluated ({message})", "error")
+        else:
+            executor.log(f"Stopping this branch: {node_type} node failed ({message})", "error")
+            return
 
     # Determine which edges to follow
     edges_to_follow = edge_map.get(node_id, [])

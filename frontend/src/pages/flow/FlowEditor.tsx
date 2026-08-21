@@ -95,8 +95,9 @@ let nodeId = 0
  * nodes now carry the name in DEFAULT_NODE_DATA; this repairs the ones already
  * saved, so what the panel shows is what the next save will persist.
  */
-function withDefaultOutputVariables(nodes: Node[]): Node[] {
-  return nodes.map((node) => {
+function withDefaultOutputVariables(nodes: Node[]): { nodes: Node[]; repaired: boolean } {
+  let repaired = false
+  const next = nodes.map((node) => {
     const defaults = DEFAULT_NODE_DATA[node.type as keyof typeof DEFAULT_NODE_DATA] as
       | { outputVariable?: string }
       | undefined
@@ -105,8 +106,10 @@ function withDefaultOutputVariables(nodes: Node[]): Node[] {
     if (!fallback || (typeof current === 'string' && current.trim())) {
       return node
     }
+    repaired = true
     return { ...node, data: { ...node.data, outputVariable: fallback } }
   })
+  return { nodes: next, repaired }
 }
 const getNodeId = () => `node_${nodeId++}`
 
@@ -202,13 +205,22 @@ function FlowEditorContent() {
         type: 'insertable',
         animated: true,
       }))
+      const { nodes: hydratedNodes, repaired } = withDefaultOutputVariables(workflowNodes as Node[])
       setWorkflow({
         id: workflow.id,
         name: workflow.name,
         description: workflow.description || '',
-        nodes: withDefaultOutputVariables(workflowNodes as Node[]),
+        nodes: hydratedNodes,
         edges: convertedEdges,
       })
+      if (repaired) {
+        // setWorkflow marks the canvas clean, so a repair made here would live
+        // only in memory: Run Now saves nothing, the backend executes the
+        // stored graph with the blank names, and the run fails on a variable
+        // the panel shows as filled. Flagging it dirty is also honest -- the
+        // canvas really does differ from what is stored.
+        useFlowWorkflowStore.setState({ isModified: true })
+      }
       // Set node ID counter
       const maxId = Math.max(
         0,

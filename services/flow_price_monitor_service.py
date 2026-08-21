@@ -6,6 +6,7 @@ Uses polling instead of WebSocket for simplicity in Flask context
 """
 
 import atexit
+import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -428,7 +429,12 @@ class FlowPriceMonitor:
                 return
             self._pending.add(workflow_id)
 
+        # Whether the workflow actually ran. A one-shot alert is only spent by
+        # a run that reached the graph.
+        executed = False
+
         def run_workflow():
+            nonlocal executed
             try:
                 # Re-checked here, not only at submit time: a queued run can sit
                 # behind a slow execution while the alert is removed, the watch
@@ -458,12 +464,27 @@ class FlowPriceMonitor:
 
                 result = execute_workflow(workflow_id, webhook_data=webhook_data, api_key=api_key)
                 logger.info(f"Workflow {workflow_id} execution result: {result.get('status')}")
+                # `already_running` means this event never reached the graph.
+                # Anything else did run, whatever the broker made of it.
+                executed = not result.get("already_running")
 
             except Exception as e:
                 logger.exception(f"Failed to execute workflow {workflow_id}: {e}")
             finally:
                 if one_shot:
-                    self._retire_one_shot(alert)
+                    if executed:
+                        self._retire_one_shot(alert)
+                    else:
+                        # Nothing ran, so the alert must not be consumed. It was
+                        # retired unconditionally here, which meant a one-shot
+                        # colliding with an in-flight run -- or dropped by a
+                        # guard above -- was silently spent and its workflow
+                        # deactivated, with the event lost for good.
+                        alert.triggered = False
+                        logger.info(
+                            f"Re-arming one-shot price alert for workflow {workflow_id}: "
+                            "the run did not execute."
+                        )
                 with self._pending_lock:
                     self._pending.discard(workflow_id)
                 # No Flask app context on a pool thread, so teardown_appcontext
@@ -478,6 +499,16 @@ class FlowPriceMonitor:
         except Exception:
             with self._pending_lock:
                 self._pending.discard(workflow_id)
+            # The one-shot latch is set before submitting, so that a second tick
+            # cannot queue the same alert twice. If the submit itself fails the
+            # latch has to come back off, or _check_all_alerts skips this alert
+            # for the rest of the process and the trigger is dead.
+            if one_shot:
+                alert.triggered = False
+                logger.error(
+                    f"Could not queue the price-alert run for workflow {workflow_id}; "
+                    "the alert stays armed."
+                )
             raise
 
     def _retire_one_shot(self, alert: PriceAlert) -> None:
@@ -642,7 +673,23 @@ flow_price_monitor = FlowPriceMonitor()
 
 # Release the poll thread and the worker pool on the way out. Without this the
 # monitor's file descriptors were held until the process was killed.
-atexit.register(flow_price_monitor.shutdown)
+def _shutdown_at_exit() -> None:
+    """atexit entry point.
+
+    Logging handlers are often already closed by the time interpreter shutdown
+    reaches us -- pytest closes its capture streams first -- and logging into a
+    closed stream prints a "Logging error" traceback that looks like a fault
+    but is only ordering. Nothing after this point needs a log line, so quiet
+    the loggers before releasing the pool.
+    """
+    logging.disable(logging.CRITICAL)
+    try:
+        flow_price_monitor.shutdown()
+    except Exception:
+        pass
+
+
+atexit.register(_shutdown_at_exit)
 
 
 def get_flow_price_monitor() -> FlowPriceMonitor:
