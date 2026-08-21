@@ -1484,12 +1484,16 @@ def _check_db_read():
 def _check_loopback_http():
     """HEAD the local Flask app — measures internal request latency.
 
-    Two candidate targets, because the listening topology differs by install:
+    Candidate targets, because the listening topology differs by install, in
+    the same resolution order as blueprints/mcp_http.py:
+      - MCP_LOOPBACK_URL: explicit override for unusual topologies. Tried
+        first, since an operator who had to set it did so precisely because
+        neither default answers (GitHub issue #1441).
       - Docker / dev server: gunicorn (or Flask) listens on TCP
         127.0.0.1:{FLASK_PORT|PORT}.
       - Ubuntu install.sh: gunicorn binds to a UNIX SOCKET behind nginx — no
         TCP port answers locally, so HOST_SERVER via nginx is the only
-        loopback that works (same resolution as blueprints/mcp_http.py).
+        loopback that works.
     Trying only the TCP port made this check a guaranteed false alarm on
     every native Ubuntu install (GitHub issue #1483).
     """
@@ -1499,19 +1503,23 @@ def _check_loopback_http():
     # FLASK_PORT is the canonical OpenAlgo var; PORT is the Docker/Railway
     # convention (gunicorn binds to ${PORT:-5000} in start.sh).
     port = os.getenv("FLASK_PORT") or os.getenv("PORT") or "5000"
-    targets = [f"http://127.0.0.1:{port}/"]
+
+    targets = []
+    override = (os.getenv("MCP_LOOPBACK_URL") or "").strip().rstrip("/")
+    if override:
+        targets.append((f"{override}/", "MCP_LOOPBACK_URL"))
+    targets.append((f"http://127.0.0.1:{port}/", "direct"))
     host_server = (os.getenv("HOST_SERVER") or "").strip().rstrip("/")
     if host_server and "127.0.0.1" not in host_server and "localhost" not in host_server:
-        targets.append(f"{host_server}/")
+        targets.append((f"{host_server}/", "via nginx (unix-socket bind)"))
 
     last_error = "no target answered"
-    for target in targets:
+    for target, label in targets:
         started = time.perf_counter()
         try:
             req = urllib.request.Request(target, method="HEAD")
             with urllib.request.urlopen(req, timeout=3.0) as resp:
                 elapsed = round((time.perf_counter() - started) * 1000, 1)
-                label = "direct" if "127.0.0.1" in target else "via nginx (unix-socket bind)"
                 return {
                     "name": "Loopback HTTP",
                     "ok": resp.status < 500,
