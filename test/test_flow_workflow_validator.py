@@ -102,6 +102,300 @@ def _permissive_node_errors(node_type, data):
     )
 
 
+PRICED_ORDER_NODES = {
+    "placeOrder": {"symbol": "RELIANCE", "exchange": "NSE", "action": "BUY", "quantity": 1},
+    "smartOrder": {"symbol": "RELIANCE", "exchange": "NSE", "action": "BUY", "quantity": 1},
+    "optionsOrder": {"underlying": "NIFTY", "action": "BUY", "quantity": 1},
+    "optionsMultiOrder": {"strategy": "straddle", "underlying": "NIFTY", "quantity": 1},
+    "basketOrder": {"orders": "RELIANCE,NSE,BUY,1"},
+    "splitOrder": {
+        "symbol": "RELIANCE",
+        "exchange": "NSE",
+        "action": "BUY",
+        "quantity": 1,
+        "splitSize": 1,
+    },
+}
+
+
+@pytest.mark.parametrize("node_type,minimal", PRICED_ORDER_NODES.items())
+@pytest.mark.parametrize(
+    ("price_type", "required_field"),
+    [("LIMIT", "price"), ("SL", "price"), ("SL", "triggerPrice"), ("SL-M", "triggerPrice")],
+)
+def test_priced_order_requires_each_static_price(node_type, minimal, price_type, required_field):
+    """A priced executable order cannot rely on the broker's zero default."""
+    data = {**minimal, "priceType": price_type}
+    errors = _strict_node_errors(node_type, data)
+    assert any(
+        error["code"] == "missing_price" and error["path"].endswith(f"/{required_field}")
+        for error in errors
+    )
+    assert not any(
+        error["path"].endswith(f"/{required_field}")
+        for error in _permissive_node_errors(node_type, data)
+    )
+
+
+@pytest.mark.parametrize("node_type,minimal", PRICED_ORDER_NODES.items())
+@pytest.mark.parametrize(
+    ("price_type", "required_field"),
+    [("LIMIT", "price"), ("SL", "price"), ("SL", "triggerPrice"), ("SL-M", "triggerPrice")],
+)
+@pytest.mark.parametrize(
+    ("value", "strict_code", "permissive_code"),
+    [
+        ("", "missing_price", None),
+        (0, "invalid_price", "invalid_price"),
+        (-1, "invalid_price", "invalid_price"),
+        (1, None, None),
+        ("{{webhook.price}}", None, None),
+    ],
+)
+def test_priced_order_price_values_follow_draft_and_runtime_contract(
+    node_type, minimal, price_type, required_field, value, strict_code, permissive_code
+):
+    """Blank values are incomplete drafts; supplied malformed prices are always invalid."""
+    data = {**minimal, "priceType": price_type, required_field: value}
+    strict_errors = _strict_node_errors(node_type, data)
+    permissive_errors = _permissive_node_errors(node_type, data)
+    assert any(
+        error["code"] == strict_code and error["path"].endswith(f"/{required_field}")
+        for error in strict_errors
+    ) is (strict_code is not None)
+    assert any(
+        error["code"] == permissive_code and error["path"].endswith(f"/{required_field}")
+        for error in permissive_errors
+    ) is (permissive_code is not None)
+
+
+MARGIN_LEG = {
+    "symbol": "RELIANCE",
+    "exchange": "NSE",
+    "action": "BUY",
+    "quantity": "1",
+    "product": "MIS",
+    "pricetype": "MARKET",
+    "price": "0",
+}
+
+
+@pytest.mark.parametrize(
+    ("data", "strict_code", "permissive_code", "path"),
+    [
+        ({}, "missing_alternative", None, "positionsJson"),
+        ({"positionsJson": ""}, "missing_alternative", None, "positionsJson"),
+        ({"positionsJson": "not json"}, "invalid_positions", "invalid_positions", "positionsJson"),
+        ({"positionsJson": "[]"}, "invalid_positions", "invalid_positions", "positionsJson"),
+        ({"positionsJson": "{}"}, "invalid_positions", "invalid_positions", "positionsJson"),
+        ({"positionsJson": '["not a leg"]'}, "invalid_positions", "invalid_positions", "positionsJson/0"),
+        (
+            {"positionsJson": '[{"symbol": "RELIANCE"}]'},
+            "missing_required_field",
+            None,
+            "positionsJson/0/exchange",
+        ),
+        (
+            {"positionsJson": '[{"symbol": "RELIANCE", "exchange": "NOPE", "action": "BUY", "quantity": "1", "product": "MIS", "pricetype": "MARKET", "price": "0"}]'},
+            "invalid_constant",
+            "invalid_constant",
+            "positionsJson/0/exchange",
+        ),
+        (
+            {"positionsJson": '[{"symbol": "RELIANCE", "exchange": "NSE", "action": "BUY", "quantity": "1", "product": "MIS", "pricetype": "LIMIT", "price": "0"}]'},
+            "invalid_price",
+            "invalid_price",
+            "positionsJson/0/price",
+        ),
+        ({"positionsJson": "{{webhook.positions}}"}, None, None, "positionsJson"),
+        (
+            {"positionsJson": '[{"symbol": "{{symbol}}", "exchange": "NSE", "action": "BUY", "quantity": "{{quantity}}", "product": "MIS", "pricetype": "LIMIT", "price": "{{price}}"}]'},
+            None,
+            None,
+            "positionsJson",
+        ),
+        ({"positionsJson": '[{"symbol": "RELIANCE", "exchange": "NSE", "action": "BUY", "quantity": "1", "product": "MIS", "pricetype": "MARKET", "price": "0"}]'}, None, None, "positionsJson"),
+        ({"positions": [MARGIN_LEG]}, None, None, "positions"),
+        ({"symbol": "RELIANCE"}, None, None, "symbol"),
+    ],
+)
+def test_margin_contract(data, strict_code, permissive_code, path):
+    """Margin either prices one legacy symbol or a complete, static basket."""
+    strict_errors = _strict_node_errors("margin", data)
+    permissive_errors = _permissive_node_errors("margin", data)
+    assert any(
+        error["code"] == strict_code and error["path"].endswith(f"/{path}")
+        for error in strict_errors
+    ) is (strict_code is not None)
+    assert any(
+        error["code"] == permissive_code and error["path"].endswith(f"/{path}")
+        for error in permissive_errors
+    ) is (permissive_code is not None)
+
+
+OPTIONS_MULTI_BASE = {"underlying": "NIFTY", "quantity": 1}
+CUSTOM_OPTION_LEG = {
+    "offset": "ATM",
+    "optionType": "CE",
+    "action": "BUY",
+    "quantity": 1,
+}
+
+
+@pytest.mark.parametrize(
+    ("data", "strict_code", "permissive_code", "path"),
+    [
+        ({**OPTIONS_MULTI_BASE, "strategy": "custom"}, "missing_required_field", None, "legs"),
+        ({**OPTIONS_MULTI_BASE, "strategy": "custom", "legs": []}, "invalid_legs", "invalid_legs", "legs"),
+        ({**OPTIONS_MULTI_BASE, "strategy": "custom", "legs": {}}, "invalid_legs", "invalid_legs", "legs"),
+        (
+            {**OPTIONS_MULTI_BASE, "strategy": "custom", "legs": [{"offset": "ATM"}]},
+            "missing_required_field",
+            None,
+            "legs/0/optionType",
+        ),
+        (
+            {
+                **OPTIONS_MULTI_BASE,
+                "strategy": "custom",
+                "legs": [{**CUSTOM_OPTION_LEG, "product": "NOPE"}],
+            },
+            "invalid_constant",
+            "invalid_constant",
+            "legs/0/product",
+        ),
+        (
+            {
+                **OPTIONS_MULTI_BASE,
+                "strategy": "custom",
+                "legs": [
+                    {
+                        **CUSTOM_OPTION_LEG,
+                        "priceType": "SL",
+                        "price": 100,
+                        "triggerPrice": 99,
+                        "expiryDate": "27AUG26",
+                    }
+                ],
+            },
+            None,
+            None,
+            "legs",
+        ),
+        (
+            {
+                **OPTIONS_MULTI_BASE,
+                "strategy": "custom",
+                "legs": [
+                    {
+                        "offset": "{{offset}}",
+                        "optionType": "{{optionType}}",
+                        "action": "{{action}}",
+                        "quantity": "{{quantity}}",
+                        "priceType": "{{priceType}}",
+                        "price": "{{price}}",
+                    }
+                ],
+            },
+            None,
+            None,
+            "legs",
+        ),
+        (
+            {**OPTIONS_MULTI_BASE, "strategy": "custom", "legs": "{{webhook.legs}}"},
+            None,
+            None,
+            "legs",
+        ),
+        (
+            {**OPTIONS_MULTI_BASE, "strategy": "straddle", "priceType": "SL", "price": 100},
+            "invalid_constant",
+            "invalid_constant",
+            "priceType",
+        ),
+        ({**OPTIONS_MULTI_BASE, "strategy": "straddle", "priceType": "MARKET"}, None, None, "price"),
+        (
+            {**OPTIONS_MULTI_BASE, "strategy": "straddle", "priceType": "LIMIT", "price": 100},
+            None,
+            None,
+            "price",
+        ),
+    ],
+)
+def test_options_multi_contract(data, strict_code, permissive_code, path):
+    """Custom strategies validate each leg; generated strategies support MARKET and LIMIT only."""
+    strict_errors = _strict_node_errors("optionsMultiOrder", data)
+    permissive_errors = _permissive_node_errors("optionsMultiOrder", data)
+    assert any(
+        error["code"] == strict_code and error["path"].endswith(f"/{path}")
+        for error in strict_errors
+    ) is (strict_code is not None)
+    assert any(
+        error["code"] == permissive_code and error["path"].endswith(f"/{path}")
+        for error in permissive_errors
+    ) is (permissive_code is not None)
+
+
+@pytest.mark.parametrize(
+    ("operation", "extra"),
+    [
+        ("set", {}),
+        ("get", {"sourceVariable": "source"}),
+        ("add", {"value": 1}),
+        ("subtract", {"value": 1}),
+        ("multiply", {"value": 2}),
+        ("divide", {"value": 2}),
+        ("increment", {}),
+        ("decrement", {}),
+        ("parse_json", {"value": '{"key": "value"}'}),
+        ("stringify", {"sourceVariable": "source"}),
+        ("append", {}),
+    ],
+)
+def test_variable_contract_accepts_supported_operations(operation, extra):
+    """Every executor operation has a configuration shape that can activate."""
+    errors = _strict_node_errors("variable", {"variableName": "target", "operation": operation, **extra})
+    assert not any(error["path"].endswith(("/operation", "/sourceVariable", "/value")) for error in errors)
+
+
+def test_variable_contract_rejects_unknown_operations_even_in_drafts():
+    """A saved operation typo cannot silently fall through the executor."""
+    data = {"variableName": "target", "operation": "merge"}
+    for errors in (_strict_node_errors("variable", data), _permissive_node_errors("variable", data)):
+        assert any(error["code"] == "invalid_constant" and error["path"].endswith("/operation") for error in errors)
+
+
+@pytest.mark.parametrize("operation,field", [("get", "sourceVariable"), ("stringify", "sourceVariable")])
+def test_variable_contract_requires_a_source_variable_in_strict_mode(operation, field):
+    """Read-based operations need the source name once the workflow is executable."""
+    data = {"variableName": "target", "operation": operation}
+    assert any(error["code"] == "missing_required_field" and error["path"].endswith(f"/{field}") for error in _strict_node_errors("variable", data))
+    assert not any(error["path"].endswith(f"/{field}") for error in _permissive_node_errors("variable", data))
+
+
+@pytest.mark.parametrize("operation", ["add", "subtract", "multiply", "divide", "parse_json"])
+def test_variable_contract_requires_a_value_in_strict_mode(operation):
+    """Operations that consume an operand cannot use the executor's empty default."""
+    data = {"variableName": "target", "operation": operation}
+    assert any(error["code"] == "missing_required_field" and error["path"].endswith("/value") for error in _strict_node_errors("variable", data))
+    assert not any(error["path"].endswith("/value") for error in _permissive_node_errors("variable", data))
+
+
+@pytest.mark.parametrize(("operation", "field"), [("get", "sourceVariable"), ("add", "value")])
+def test_variable_contract_defers_templated_conditional_values(operation, field):
+    """Template references are supplied values whose resolution belongs to runtime."""
+    errors = _strict_node_errors(
+        "variable", {"variableName": "target", "operation": operation, field: "{{webhook.value}}"}
+    )
+    assert not any(error["path"].endswith(f"/{field}") for error in errors)
+
+
+def test_variable_contract_defaults_a_missing_operation_to_set():
+    """Legacy Variable nodes did not persist their default operation."""
+    errors = _strict_node_errors("variable", {"variableName": "target"})
+    assert not any(error["path"].endswith("/operation") for error in errors)
+
+
 @pytest.mark.parametrize(
     ("data", "missing"),
     [
