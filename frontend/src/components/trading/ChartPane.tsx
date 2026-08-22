@@ -1,4 +1,4 @@
-import { ChevronDown, RefreshCw, Search } from 'lucide-react'
+import { ChevronDown, RefreshCw, Search, Settings } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
@@ -13,6 +13,7 @@ import { CHART_TYPE_GROUPS, CHART_TYPES, chartTypeIcon } from '@/lib/trading/cha
 import type { IntervalGroup } from '@/lib/trading/intervals'
 import { lotInfoText } from '@/lib/trading/legend'
 import {
+  type ChartSettingsRequest,
   type CtxItem,
   type DrawSelection,
   type DrawStats,
@@ -25,6 +26,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
+import { ChartSettingsDialog } from './ChartSettingsDialog'
 import { DrawingStyleBar } from './DrawingStyleBar'
 import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
 import { IndicatorSettingsDialog } from './IndicatorSettingsDialog'
@@ -151,13 +153,12 @@ interface Props {
   onToggleRail?(): void
   railVisible?: boolean
   /**
-   * Page-level controls rendered at the head of this pane's toolbar. The
-   * layout picker used to own a full-width row of its own that carried 134px
-   * of content across 1536px and cost 45px of chart height. It belongs to the
-   * page rather than to a pane, so the page passes it in, and passes it to one
-   * pane only.
+   * The grid layout picker, rendered next to this pane's Indicators button.
+   * It used to own a full-width row of its own that carried 134px of content
+   * across 1536px and cost 45px of chart height. It belongs to the page rather
+   * than to a pane, so the page passes it in, and passes it to one pane only.
    */
-  leading?: React.ReactNode
+  layoutPicker?: React.ReactNode
 }
 
 /**
@@ -176,7 +177,7 @@ export function ChartPane({
   onDrawStats,
   onToggleRail,
   railVisible,
-  leading,
+  layoutPicker,
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null)
   const legendRef = useRef<HTMLDivElement>(null)
@@ -213,6 +214,9 @@ export function ChartPane({
   const [volumeOn, setVolumeOn] = useState(true)
   const [drawSel, setDrawSel] = useState<DrawSelection | null>(null)
   const [indSettings, setIndSettings] = useState<IndicatorSettingsRequest | null>(null)
+  // Read from the chart each time the gear is clicked rather than held: the
+  // schema depends on the live series type, theme and timezone.
+  const [chartSettings, setChartSettings] = useState<ChartSettingsRequest | null>(null)
   const [textReq, setTextReq] = useState<TextRequest | null>(null)
 
   // right-click menu: order entry, then the view actions
@@ -442,7 +446,6 @@ export function ChartPane({
           so the view actions stay beside the instrument controls instead of
           dropping to a second row and eating chart height. */}
       <div className="flex flex-nowrap items-center gap-1.5 no-scrollbar overflow-x-auto border-b bg-background/60 px-2 py-1.5">
-        {leading}
         {/* Symbol pill — opens the search modal for this pane */}
         <Button
           variant="outline"
@@ -650,12 +653,46 @@ export function ChartPane({
           </DropdownMenuContent>
         </DropdownMenu>
 
+        {/* The layout picker sits here, immediately after Indicators, because
+            that is where a chart terminal puts it. It is page-level, so only
+            the first pane is given one. */}
+        {layoutPicker}
+
+        {/* Replay. A toolbar action rather than a context-menu entry: it changes
+            what the whole chart is showing, and the transport bar it opens has
+            to be discoverable without a right-click. */}
+        <Button
+          variant="outline"
+          size="sm"
+          className={cn('h-8 shrink-0 gap-1', replay && 'border-primary text-primary')}
+          onClick={() => terminalRef.current?.startReplay()}
+          disabled={!!replay}
+          title={replay ? 'Replay is running' : 'Replay this session'}
+        >
+          <ReplayIcon className="h-4 w-4" />
+          <span className="hidden sm:inline">Replay</span>
+        </Button>
+
         {/* Right side: connection LED + actions */}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <span
             className={cn('inline-block h-2.5 w-2.5 rounded-full', ledClass(wsState))}
             title={`WebSocket ${wsState}`}
           />
+          {/* Chart settings. The engine ships no DOM, so the whole dialog is
+              generated from the schema it describes -- see ChartSettingsDialog. */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => {
+              void terminalRef.current?.chartSettings().then((s) => s && setChartSettings(s))
+            }}
+            title="Chart settings"
+            aria-label="Chart settings"
+          >
+            <Settings className="h-[17px] w-[17px]" />
+          </Button>
           {/* Full screen chart (additive) */}
           <Button
             variant="ghost"
@@ -694,6 +731,13 @@ export function ChartPane({
           req={textReq}
           onSubmit={(id, value) => terminalRef.current?.applyDrawText(id, value)}
           onClose={() => setTextReq(null)}
+        />
+        <ChartSettingsDialog
+          req={chartSettings}
+          onApply={(patch) => {
+            void terminalRef.current?.applyChartSettings(patch)
+          }}
+          onClose={() => setChartSettings(null)}
         />
         <IndicatorSettingsDialog
           req={indSettings}
@@ -857,14 +901,6 @@ export function ChartPane({
             >
               <VolumeIcon className="h-3.5 w-3.5 opacity-70" />
               {volumeOn ? 'Hide volume' : 'Show volume'}
-            </button>
-            <button
-              type="button"
-              className={ctxRow}
-              onClick={() => run(() => terminalRef.current?.startReplay())}
-            >
-              <ReplayIcon className="h-3.5 w-3.5 opacity-70" />
-              Replay this session
             </button>
             <div className="relative" onMouseLeave={() => setGridSub(false)}>
               <button

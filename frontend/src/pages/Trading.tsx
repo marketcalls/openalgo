@@ -1,4 +1,4 @@
-import { ChevronDown, LayoutGrid } from 'lucide-react'
+import { LayoutGrid } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Navbar } from '@/components/layout/Navbar'
 import { ChartPane } from '@/components/trading/ChartPane'
@@ -185,47 +185,51 @@ export default function Trading() {
   const layout = LAYOUTS.find((l) => l.id === layoutId) ?? LAYOUTS[0]
 
   /**
-   * The layout picker, rendered at the head of the first pane's toolbar.
+   * The layout picker, rendered beside the first pane's Indicators button.
    *
    * It used to sit in a full-width row of its own carrying 134px of content
    * across 1536px, so 91 per cent of that row was empty and it cost 45px of
    * chart height plus a border. It is a page-level control, so only the first
    * pane gets it: repeating it per pane would say the layout is per-pane.
+   *
+   * Icon-only, and with no label naming the current preset. The preset is
+   * already legible from the grid itself, and the panes on screen say it
+   * louder than the word "Single" ever did.
    */
   const layoutPicker = (
-    <>
     <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-8 gap-1.5">
-                    <LayoutGrid className="h-4 w-4" />
-                    <span className="text-xs font-medium">Layout</span>
-                    <ChevronDown className="h-3.5 w-3.5 opacity-60" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-56">
-                  <div className="grid grid-cols-4 gap-1 p-1">
-                    {LAYOUTS.map((l) => (
-                      <DropdownMenuItem
-                        key={l.id}
-                        onSelect={() => setLayoutId(l.id)}
-                        title={l.label}
-                        className={cn(
-                          'flex aspect-square flex-col items-center justify-center gap-1 rounded border',
-                          l.id === layoutId
-                            ? 'border-primary bg-primary/10 text-primary'
-                            : 'text-muted-foreground'
-                        )}
-                      >
-                        <LayoutIcon preset={l} />
-                        <span className="text-[9px] font-medium">{l.cells.length}</span>
-                      </DropdownMenuItem>
-                    ))}
-                  </div>
-                </DropdownMenuContent>
-              </DropdownMenu>
-      <span className="mr-1 shrink-0 text-xs text-muted-foreground">{layout.label}</span>
-      <div className="mr-1 h-5 w-px shrink-0 bg-border" />
-    </>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="outline"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          title={`Layout: ${layout.label}`}
+          aria-label={`Chart layout: ${layout.label}`}
+        >
+          <LayoutGrid className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56">
+        <div className="grid grid-cols-4 gap-1 p-1">
+          {LAYOUTS.map((l) => (
+            <DropdownMenuItem
+              key={l.id}
+              onSelect={() => setLayoutId(l.id)}
+              title={l.label}
+              className={cn(
+                'flex aspect-square flex-col items-center justify-center gap-1 rounded border',
+                l.id === layoutId
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'text-muted-foreground'
+              )}
+            >
+              <LayoutIcon preset={l} />
+              <span className="text-[9px] font-medium">{l.cells.length}</span>
+            </DropdownMenuItem>
+          ))}
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 
   return (
@@ -275,7 +279,7 @@ export default function Trading() {
                   onDrawStats={setStats}
                   onToggleRail={() => setShowRail((v) => !v)}
                   railVisible={showRail}
-                  leading={i === 0 ? layoutPicker : undefined}
+                  layoutPicker={i === 0 ? layoutPicker : undefined}
                 />
               ))}
             </div>
