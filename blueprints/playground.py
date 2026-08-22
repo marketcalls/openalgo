@@ -8,6 +8,7 @@ from flask import Blueprint, current_app, jsonify, redirect, session, url_for
 
 from database.auth_db import get_api_key_for_tradingview
 from utils.logging import get_logger
+from utils.response import make_no_store_response
 from utils.session import check_session_validity
 
 logger = get_logger(__name__)
@@ -305,7 +306,7 @@ def get_api_key():
         return jsonify({"error": "Not authenticated"}), 401
 
     api_key = get_api_key_for_tradingview(login_username)
-    return jsonify({"api_key": api_key or ""})
+    return make_no_store_response(jsonify({"api_key": api_key or ""}))
 
 
 @playground_bp.route("/collections")
