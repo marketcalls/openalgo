@@ -174,9 +174,9 @@ def has_login_this_trading_session(username) -> bool:
     return _has_fresher_session(username)
 
 
-def revoke_user_tokens(revoke_db_tokens=True):
+def revoke_user_tokens(revoke_db_tokens=True, username=None, current_session_id=None):
     """
-    Revoke auth tokens for the current user when session expires.
+    Revoke auth tokens for a user when their session expires.
 
     Also publishes cache invalidation events via ZeroMQ for multi-process deployments.
     This ensures WebSocket proxy and other processes clear their stale cached tokens.
@@ -185,9 +185,18 @@ def revoke_user_tokens(revoke_db_tokens=True):
     Args:
         revoke_db_tokens (bool): If True, revokes the token in the database (Invalidates API Key).
                                  If False, only clears local caches (Preserves API Key).
+        username: The user to revoke. Defaults to the current request's session
+                  user. Pass it explicitly from a caller that has no Flask
+                  session -- the API path authenticates with an API key and must
+                  run the same teardown at the daily rollover (issue #1858).
+        current_session_id: This device's session id, when called from a request.
+                            Excluded from the fresher-session check below.
     """
-    if "user" in session:
+    if username is None and "user" in session:
         username = session.get("user")
+        current_session_id = session.get("session_id")
+
+    if username:
         try:
             from database.auth_db import auth_cache, feed_token_cache, upsert_auth
 
@@ -207,17 +216,16 @@ def revoke_user_tokens(revoke_db_tokens=True):
             # below reaches the proxy and disconnects the adapter), and force-logout
             # every device. Suppress it: drop only THIS device's session row and
             # return, leaving the caller to clear just this cookie.
-            if revoke_db_tokens and _has_fresher_session(username, session.get("session_id")):
+            if revoke_db_tokens and _has_fresher_session(username, current_session_id):
                 logger.info(
                     f"Auto-expiry: a newer session for {username} is active past the "
                     f"daily rollover — logging out only this stale device, preserving "
                     f"the shared broker token and other devices"
                 )
-                current_sid = session.get("session_id")
-                if current_sid:
+                if current_session_id:
                     try:
                         from database.auth_db import remove_session
-                        remove_session(current_sid)
+                        remove_session(current_session_id)
                     except Exception as session_error:
                         logger.warning(f"Error removing stale session row: {session_error}")
                 return

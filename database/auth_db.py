@@ -1001,6 +1001,58 @@ def get_broker_name(provided_api_key):
     return None
 
 
+# Trading-session date of the last stale-credential teardown per user (#1858).
+# The date rather than a flag so the next rollover re-arms it.
+_rollover_teardown_done = TTLCache(maxsize=128, ttl=get_session_based_cache_ttl())
+
+
+def is_broker_session_stale_for_user(user_id):
+    """Return True when the stored broker token predates today's rollover.
+
+    Indian broker tokens are invalidated broker-side at SESSION_EXPIRY_TIME
+    (default 03:00 IST), and only a login after that boundary mints a new one.
+    The auth row carries no issue timestamp, so freshness is inferred from the
+    active_sessions login times - the same rule the order-update boot scan
+    already applies in services/order_update_service.py.
+
+    Args:
+        user_id: The user the API key resolved to.
+
+    Returns:
+        bool: True if no login has happened in the current trading session.
+    """
+    from utils.session import has_login_this_trading_session, is_session_expiry_disabled
+
+    # Crypto brokers trade 24/7 and have no rollover to be stale against.
+    if is_session_expiry_disabled():
+        return False
+
+    return not has_login_this_trading_session(user_id)
+
+
+def is_broker_session_stale(provided_api_key):
+    """Return True when a valid API key maps to an expired broker session.
+
+    get_auth_token_broker() returns None for both a bad API key and a stale
+    broker session; callers use this to tell them apart so they can answer a
+    stale session with BROKER_SESSION_EXPIRED rather than blaming an API key
+    that is perfectly valid.
+
+    Args:
+        provided_api_key: The API key supplied by the caller.
+
+    Returns:
+        bool: True only when the key itself is valid but its broker session
+        belongs to a previous trading session.
+    """
+    user_id = verify_api_key(provided_api_key)
+    if not user_id:
+        return False
+
+    return is_broker_session_stale_for_user(user_id)
+
+
+
 def get_auth_token_broker(provided_api_key, include_feed_token=False):
     """
     Get auth token, feed token (optional) and broker for a valid API key with caching.
@@ -1009,11 +1061,38 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
     - Always checks is_revoked status (even for cached data)
     - Cache cleared on credential changes
     - TTL based on session expiry time
+    - Rejects credentials from a previous trading session (issue #1858)
     """
     import hashlib
 
     # Generate cache key
     cache_key = f"{hashlib.sha256(provided_api_key.encode()).hexdigest()}_{include_feed_token}"
+
+    # Reject a credential the daily rollover already killed, before any broker
+    # adapter is built with it. app.py's expiry hook cannot: it skips /api/ and
+    # reads a Flask cookie an API-key caller does not have (app.py:509).
+    user_id = verify_api_key(provided_api_key)
+    if user_id and is_broker_session_stale_for_user(user_id):
+        from utils.session import get_trading_session_date, revoke_user_tokens
+
+        # Once per trading session: leaving the row non-revoked would let the
+        # next login resume a dead token and skip broker OAuth (#1419), but
+        # repeating it per poll republishes the ZeroMQ invalidation and
+        # disconnects the proxy's adapter every few seconds.
+        trading_day = get_trading_session_date()
+        if _rollover_teardown_done.get(user_id) != trading_day:
+            _rollover_teardown_done[user_id] = trading_day
+            logger.info(
+                f"Broker session rollover: no login for user_id '{user_id}' since "
+                "today's session boundary; revoking the stored broker credential "
+                "and invalidating caches"
+            )
+            revoke_user_tokens(username=user_id)
+
+        # Cached like the revoked branch below, so a poller stops hitting the DB.
+        negative_result = (None, None, None) if include_feed_token else (None, None)
+        auth_cache[cache_key] = negative_result
+        return negative_result
 
     # Check cache first (but still verify revocation status)
     if cache_key in auth_cache:
