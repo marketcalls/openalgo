@@ -50,3 +50,4 @@ git push --force-with-lease
 | --- | --- | --- |
 | Rajandran R | [@marketcalls](https://github.com/marketcalls) | maintainer |
 |Padma Balaji L| [@PadmaBalajiL](https://github.com/PadmaBalajiL)|python|
+|Niranjan | [@cracker314](https://github.com/cracker314)|python|
