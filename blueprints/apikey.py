@@ -23,6 +23,7 @@ from database.auth_db import (
     verify_api_key,
 )
 from utils.logging import get_logger
+from utils.response import make_no_store_response
 from utils.session import check_session_validity
 
 # Path to React frontend
@@ -56,27 +57,31 @@ def manage_api_key():
 
         # Return JSON if Accept header requests it (for React frontend)
         if request.headers.get("Accept") == "application/json":
-            return jsonify(
-                {
-                    "login_username": login_username,
-                    "has_api_key": has_api_key,
-                    "api_key": api_key,
-                    "order_mode": order_mode,
-                }
+            return make_no_store_response(
+                jsonify(
+                    {
+                        "login_username": login_username,
+                        "has_api_key": has_api_key,
+                        "api_key": api_key,
+                        "order_mode": order_mode,
+                    }
+                )
             )
 
         # Serve React app for browser navigation
         index_path = FRONTEND_DIST / "index.html"
         if index_path.exists():
-            return send_file(index_path, mimetype="text/html")
+            return make_no_store_response(send_file(index_path, mimetype="text/html"))
 
         # Fallback to old template if React build not available
-        return render_template(
-            "apikey.html",
-            login_username=login_username,
-            has_api_key=has_api_key,
-            api_key=api_key,
-            order_mode=order_mode,
+        return make_no_store_response(
+            render_template(
+                "apikey.html",
+                login_username=login_username,
+                has_api_key=has_api_key,
+                api_key=api_key,
+                order_mode=order_mode,
+            )
         )
     else:
         user_id = request.json.get("user_id")
@@ -92,8 +97,14 @@ def manage_api_key():
 
         if key_id is not None:
             logger.info(f"API key updated successfully for user: {user_id}")
-            return jsonify(
-                {"message": "API key updated successfully.", "api_key": api_key, "key_id": key_id}
+            return make_no_store_response(
+                jsonify(
+                    {
+                        "message": "API key updated successfully.",
+                        "api_key": api_key,
+                        "key_id": key_id,
+                    }
+                )
             )
         else:
             logger.error(f"Failed to update API key for user: {user_id}")
