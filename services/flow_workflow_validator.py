@@ -429,6 +429,33 @@ def _enum_and_range_errors(base: str, node_type: str, data: dict) -> list:
                 )
             )
 
+    if node_type == "orderUpdateTrigger":
+        for field in ("orderId", "symbol"):
+            value = data.get(field)
+            if value is not None and not isinstance(value, str):
+                found.append(
+                    _err(
+                        f"{base}/data/{field}",
+                        "invalid_type",
+                        f"orderUpdateTrigger {field} must be a string filter; "
+                        f"{type(value).__name__} cannot match an order update.",
+                        "string",
+                        value,
+                    )
+                )
+        status = data.get("status", "complete")
+        if normalize_status(status) not in VALID_STATUSES:
+            found.append(
+                _err(
+                    f"{base}/data/status",
+                    "invalid_status",
+                    f"orderUpdateTrigger status must be one of {sorted(VALID_STATUSES)}, "
+                    f"got {status!r}",
+                    sorted(VALID_STATUSES),
+                    status,
+                )
+            )
+
     # httpRequest: the fields whose shape only failed at run time before.
     if node_type == "httpRequest":
         method = data.get("method")
@@ -687,12 +714,8 @@ def validate_workflow(
             if node_type == "orderUpdateTrigger":
                 order_id = data.get("orderId")
                 symbol = data.get("symbol")
-                has_order_id = order_id is not None and not (
-                    isinstance(order_id, str) and not order_id.strip()
-                )
-                has_symbol = symbol is not None and not (
-                    isinstance(symbol, str) and not symbol.strip()
-                )
+                has_order_id = isinstance(order_id, str) and bool(order_id.strip())
+                has_symbol = isinstance(symbol, str) and bool(symbol.strip())
                 if not has_order_id and not has_symbol:
                     errors.append(
                         _err(
@@ -712,18 +735,6 @@ def validate_workflow(
                             "{{variable}} reference.",
                             "a literal order id",
                             order_id,
-                        )
-                    )
-                status = data.get("status", "complete")
-                if normalize_status(status) not in VALID_STATUSES:
-                    errors.append(
-                        _err(
-                            f"{base}/data/status",
-                            "invalid_status",
-                            f"orderUpdateTrigger status must be one of {sorted(VALID_STATUSES)}, "
-                            f"got {status!r}",
-                            sorted(VALID_STATUSES),
-                            status,
                         )
                     )
             for selector, options in CONDITIONAL_REQUIRED_FIELDS.get(node_type, {}).items():

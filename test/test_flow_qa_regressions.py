@@ -654,6 +654,77 @@ def test_cancel_order_with_an_unresolved_id_fails(order_env, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Deferred option expiry values must be safe after interpolation
+# ---------------------------------------------------------------------------
+
+
+class _OptionExpiryClient:
+    def __init__(self):
+        self.calls: list[tuple[str, dict]] = []
+
+    def optionsymbol(self, **kwargs):
+        self.calls.append(("optionSymbol", kwargs))
+        return {"status": "success"}
+
+    def optionchain(self, **kwargs):
+        self.calls.append(("optionChain", kwargs))
+        return {"status": "success"}
+
+    def syntheticfuture(self, **kwargs):
+        self.calls.append(("syntheticFuture", kwargs))
+        return {"status": "success"}
+
+
+@pytest.fixture
+def option_expiry_env(executor_env, monkeypatch):
+    """A real workflow execution with only the external option client recorded."""
+    client = _OptionExpiryClient()
+    monkeypatch.setattr(fes, "get_flow_client", lambda api_key: client)
+    return types.SimpleNamespace(client=client, statuses=executor_env.statuses)
+
+
+_OPTION_EXPIRY_TEMPLATE = {
+    "underlying": "{{webhook.underlying}}",
+    "expiryDate": "{{webhook.expiry}}",
+}
+
+
+@pytest.mark.parametrize("node_type", ["optionSymbol", "optionChain", "syntheticFuture"])
+@pytest.mark.parametrize(
+    "webhook",
+    [
+        {"underlying": "NIFTY", "expiry": ""},
+        {"underlying": "NIFTY", "expiry": "not-a-date"},
+        {"underlying": "NIFTY"},
+    ],
+)
+def test_option_expiry_templates_fail_before_the_client_when_resolved_invalidly(
+    option_expiry_env, monkeypatch, node_type, webhook
+):
+    """Interpolated expiry values must not degrade into empty or literal client inputs."""
+    result, _ = _run_graph(monkeypatch, node_type, _OPTION_EXPIRY_TEMPLATE, webhook)
+
+    assert result["status"] == "error"
+    assert option_expiry_env.client.calls == []
+
+
+@pytest.mark.parametrize("node_type", ["optionSymbol", "optionChain", "syntheticFuture"])
+def test_option_expiry_templates_call_the_client_after_resolving_validly(
+    option_expiry_env, monkeypatch, node_type
+):
+    """The runtime guard must preserve successful dynamic option requests."""
+    result, _ = _run_graph(
+        monkeypatch,
+        node_type,
+        _OPTION_EXPIRY_TEMPLATE,
+        {"underlying": "NIFTY", "expiry": "27AUG26"},
+    )
+
+    assert result["status"] == "success"
+    assert option_expiry_env.client.calls[0][0] == node_type
+
+
+# ---------------------------------------------------------------------------
 # Execution history: recorded with a start time, and bounded
 # ---------------------------------------------------------------------------
 

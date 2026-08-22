@@ -96,6 +96,12 @@ def _strict_node_errors(node_type, data):
     return validate_workflow(_wf([_node("trigger", node_type, **data)]))
 
 
+def _permissive_node_errors(node_type, data):
+    return validate_workflow(
+        _wf([_node("trigger", node_type, **data)]), require_name=False, strict=False
+    )
+
+
 @pytest.mark.parametrize(
     ("data", "missing"),
     [
@@ -167,6 +173,38 @@ def test_order_update_trigger_rejects_unknown_status():
     )
     assert any(
         error["code"] == "invalid_status" and error["path"].endswith("/status")
+        for error in errors
+    )
+
+
+@pytest.mark.parametrize("status", ["filled", 123])
+def test_order_update_trigger_rejects_invalid_statuses_when_drafts_are_saved(status):
+    """A supplied status typo is malformed data, not an incomplete draft."""
+    errors = _permissive_node_errors(
+        "orderUpdateTrigger", {"orderId": "241001000000001", "status": status}
+    )
+    assert any(
+        error["code"] == "invalid_status" and error["path"].endswith("/status")
+        for error in errors
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "other_filter"),
+    [
+        ("orderId", 123, {"symbol": "RELIANCE"}),
+        ("symbol", ["RELIANCE"], {"orderId": "241001000000001"}),
+    ],
+)
+def test_order_update_trigger_rejects_non_string_filters_when_drafts_are_saved(
+    field, value, other_filter
+):
+    """Monitor matching requires literal string filters, never arbitrary truthy objects."""
+    errors = _permissive_node_errors(
+        "orderUpdateTrigger", {"status": "complete", field: value, **other_filter}
+    )
+    assert any(
+        error["code"] == "invalid_type" and error["path"].endswith(f"/{field}")
         for error in errors
     )
 
