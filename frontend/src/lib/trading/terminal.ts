@@ -199,6 +199,65 @@ export interface IndicatorField {
   step?: number
 }
 
+/**
+ * A bullish/bearish colour pair on one labelled row, with an optional switch in
+ * front of it. The engine adds this one widget on top of the indicator input
+ * vocabulary because a candle's up/down colours are the property a trader
+ * changes most, and expressing them as two stacked `color` rows costs three
+ * times the height.
+ *
+ * `key` names the row, not a value: the values live at `up.key`, `down.key` and
+ * `enabled.key`, each an ordinary flat key, so applying this row is exactly the
+ * same patch operation as applying a plain colour.
+ */
+export interface ChartSettingsPairField {
+  key: string
+  type: 'colorPair'
+  label: string
+  group?: string
+  enabled?: { key: string; default: boolean }
+  up: { key: string; label: string; default: string }
+  down: { key: string; label: string; default: string }
+}
+
+export type ChartSettingsField = IndicatorField | ChartSettingsPairField
+
+export interface ChartSettingsTabView {
+  id: string
+  label: string
+  inputs: ChartSettingsField[]
+}
+
+/** Everything needed to generate the chart settings form. */
+export interface ChartSettingsRequest {
+  tabs: ChartSettingsTabView[]
+  values: Record<string, string | number | boolean>
+}
+
+/**
+ * Normalize one engine input into the flat field shape both settings forms
+ * render. Shared by the indicator dialog and the chart dialog: the engine
+ * deliberately describes chart settings with the same `IndicatorInput`
+ * vocabulary, so a host that can render one renders the other for free.
+ */
+function toField(f: {
+  key: string
+  type: string
+  label?: string
+  group?: string
+}): IndicatorField {
+  return {
+    key: f.key,
+    type: f.type,
+    label: f.label ?? f.key,
+    group: f.group,
+    options: (f as { options?: { label: string; value: unknown }[] }).options,
+    min: (f as { min?: number }).min,
+    max: (f as { max?: number }).max,
+    step: (f as { step?: number }).step,
+  }
+}
+
 /** The selected drawing's editable style. */
 export interface DrawSelection {
   id: string
@@ -366,8 +425,23 @@ export class TradingTerminal {
   private depthActive = false
 
   private rawBars: Bar[] = []
+  /**
+   * What the price series is actually showing: `rawBars`, or the output of the
+   * chart type's transform (Heikin Ashi, Renko, ...). Replay has to walk this
+   * rather than `rawBars`, because on a transformed chart the two differ in
+   * both values and length.
+   */
+  private shownBars: Bar[] = []
+  /**
+   * The persisted chart-settings patch, kept as the flat dotted-key record the
+   * engine reads and writes. Held here as well as in storage so an apply merges
+   * onto what is already saved rather than replacing it.
+   */
+  private chartSettingsSaved: Record<string, string | number | boolean> = {}
   /** Non-null only while the chart is showing a replayed prefix. */
   private replay: ReplayController | null = null
+  /** The price axis's autoscale state before replay forced it on. */
+  private replayAutoScale = true
   /** Held so it can be moved to whichever pane is currently at the bottom. */
   private watermark: LogoWatermark | null = null
   private shownCount = 0
@@ -494,7 +568,7 @@ export class TradingTerminal {
       const t = runTransform(cfg.transform(this.boxOf()), this.rawBars)
       this.price.setData(t)
       this.volume.setData(this.bucketVolume(t))
-      this.shownCount = t.length
+      this.shownBars = t
     } else {
       this.price.setData(this.rawBars)
       this.volume.setData(
@@ -506,8 +580,9 @@ export class TradingTerminal {
           close: b.volume || 0,
         }))
       )
-      this.shownCount = this.rawBars.length
+      this.shownBars = this.rawBars
     }
+    this.shownCount = this.shownBars.length
   }
 
   private bucketVolume(tbars: Bar[]): Bar[] {
@@ -822,6 +897,10 @@ export class TradingTerminal {
     // A rebuild makes a fresh series, so the preference has to be re-applied
     // rather than assumed -- switching chart type or theme would show it again.
     if (!this.volumeOn) this.volume.applyOptions({ visible: false })
+    // Same reasoning for the settings patch: a chart-type or theme switch
+    // rebuilds the chart, and without this the user's colours, timezone and
+    // scale options would silently revert to the engine defaults.
+    void this.restoreChartSettings()
     this.setPriceData()
 
     // Default zoom: a FIXED number of recent bars, so the visible price range
@@ -1000,6 +1079,15 @@ export class TradingTerminal {
     // Absent means shown: only an explicit '0' hides it, so existing panes and
     // a first visit both keep volume.
     this.volumeOn = this.lsGet('vol') !== '0'
+    try {
+      const raw = this.lsGet('chartsettings')
+      const parsed = raw ? (JSON.parse(raw) as Record<string, string | number | boolean>) : null
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        this.chartSettingsSaved = parsed
+      }
+    } catch {
+      /* ignore */
+    }
   }
 
   /**
@@ -1383,21 +1471,6 @@ export class TradingTerminal {
     // Value inputs and generated style inputs stay separate so the form can tab
     // them the way a charting package does; one component covers every
     // indicator without a line of indicator-specific code.
-    const toField = (f: {
-      key: string
-      type: string
-      label?: string
-      group?: string
-    }): IndicatorField => ({
-      key: f.key,
-      type: f.type,
-      label: f.label ?? f.key,
-      group: (f as { group?: string }).group,
-      options: (f as { options?: { label: string; value: unknown }[] }).options,
-      min: (f as { min?: number }).min,
-      max: (f as { max?: number }).max,
-      step: (f as { step?: number }).step,
-    })
     this.cb.onIndicatorSettings({
       instanceId,
       name: inst.name,
@@ -1427,6 +1500,65 @@ export class TradingTerminal {
   /** Open the settings form for an indicator from the host's own UI. */
   openIndicatorSettings(instanceId: string): void {
     void this.emitIndicatorSettings(instanceId)
+  }
+
+  /* ── chart settings ─────────────────────────────────────────────────────
+   * The engine is canvas-only and ships no DOM, so it describes its settings
+   * dialog declaratively and the host renders it — the same contract the
+   * indicator form already uses, which is why `toField` is shared.
+   */
+
+  /**
+   * The settings schema and its current values. Read at open time rather than
+   * cached: the Price tab depends on the live series type, the colour defaults
+   * come from the active theme, and the timezone list has to include whatever
+   * zone the chart is already in.
+   */
+  async chartSettings(): Promise<ChartSettingsRequest | null> {
+    if (!this.chart) return null
+    const { chartSettingsSchema, readChartSettings } = await import('openalgo-charts')
+    const tabs = chartSettingsSchema(this.chart).map((t) => ({
+      id: t.id,
+      label: t.label,
+      inputs: t.inputs.map((i) =>
+        i.type === 'colorPair'
+          ? (i as unknown as ChartSettingsPairField)
+          : toField(i as { key: string; type: string; label?: string; group?: string })
+      ),
+    }))
+    return { tabs, values: { ...readChartSettings(this.chart) } }
+  }
+
+  /**
+   * Apply a patch from the settings dialog and persist it.
+   *
+   * Persistence is a merge, not a replace: the dialog sends only the keys it
+   * changed, and a key the engine no longer knows is ignored on the way back
+   * in, so a layout saved by a newer build still restores into an older one.
+   */
+  async applyChartSettings(patch: Record<string, string | number | boolean>): Promise<void> {
+    if (!this.chart) return
+    const { applyChartSettings } = await import('openalgo-charts')
+    applyChartSettings(this.chart, patch)
+    this.chartSettingsSaved = { ...this.chartSettingsSaved, ...patch }
+    this.lsSet('chartsettings', JSON.stringify(this.chartSettingsSaved))
+  }
+
+  /**
+   * Re-apply the persisted settings once the chart exists. Called from the
+   * chart's own setup rather than `restoreChartTools`, because these write
+   * through the live chart object instead of seeding a field read at build
+   * time. A malformed entry is dropped: a stale setting must never stop the
+   * terminal booting.
+   */
+  private async restoreChartSettings(): Promise<void> {
+    if (!this.chart || !Object.keys(this.chartSettingsSaved).length) return
+    try {
+      const { applyChartSettings } = await import('openalgo-charts')
+      applyChartSettings(this.chart, this.chartSettingsSaved)
+    } catch {
+      /* ignore */
+    }
   }
 
   /**
@@ -1541,14 +1673,35 @@ export class TradingTerminal {
    * shows an empty chart, which reads as broken.
    */
   startReplay(startIndex?: number): void {
-    if (this.replay || !this.chart || !this.price || this.rawBars.length < 2) return
+    if (this.replay || !this.chart || !this.price || this.shownBars.length < 2) return
     const driven = this.volume ? [this.price, this.volume] : [this.price]
+    // Walk what the price series is showing, not the raw feed: on Heikin Ashi
+    // or Renko those are different arrays of different lengths, so replaying
+    // rawBars would repaint the chart as plain candles and put the playhead at
+    // the wrong bar.
+    const bars = this.shownBars
+    const from = startIndex ?? Math.floor(bars.length / 4)
     this.replay = new ReplayController(this.chart, {
       series: driven,
-      bars: this.rawBars,
-      startIndex: startIndex ?? Math.floor(this.rawBars.length / 4),
+      bars,
+      startIndex: from,
       onFrame: (state) => this.cb.onReplayChange?.(state),
     })
+    // Entering replay truncates the series to a prefix, but leaves the viewport
+    // and the price range where the user had them -- which is at the right edge
+    // on the newest bars, hundreds of bars past the end of that prefix and at a
+    // price the prefix never trades at. The result is an apparently empty chart
+    // with the candles clipped off the top. Put the view on the playhead and
+    // re-measure the axis, the same way the initial load does.
+    const to = from + 4
+    this.chart.timeScale.setVisibleLogicalRange(
+      from > VISIBLE_BARS ? { from: to - VISIBLE_BARS, to } : { from: -1, to }
+    )
+    // Remembered so a hand-pinned axis is not silently lost: replay has to
+    // autoscale to stay readable as it walks, but that is replay's state, not
+    // a change to the chart the user set up.
+    this.replayAutoScale = this.chart.panes()[0]?.priceScale.autoScale ?? true
+    this.chart.setAutoScale(true)
     this.cb.onReplayChange?.(this.replay.state())
   }
 
@@ -1557,6 +1710,7 @@ export class TradingTerminal {
     if (!this.replay) return
     this.replay.stop()
     this.replay = null
+    if (!this.replayAutoScale) this.chart?.setAutoScale(false)
     this.cb.onReplayChange?.(null)
   }
 

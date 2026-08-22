@@ -25,7 +25,7 @@ const SOURCES = ['open', 'high', 'low', 'close', 'hl2', 'hlc3', 'ohlc4']
 const LINE_STYLES = ['solid', 'dashed', 'dotted']
 
 /** Shared control chrome — compact, flat, dark-first. */
-const CONTROL =
+export const CONTROL =
   'h-7 rounded border border-border bg-background px-2 text-[13px] text-foreground outline-none transition-colors focus:border-primary'
 
 export function IndicatorSettingsDialog({ req, onApply, onDefaults, onClose }: Props) {
@@ -130,7 +130,7 @@ export function IndicatorSettingsDialog({ req, onApply, onDefaults, onClose }: P
           ) : (
             <div className="grid grid-cols-[minmax(0,1fr)_150px] items-center gap-x-5 gap-y-3">
               {fields.map((f) => (
-                <Field
+                <SettingsField
                   key={f.key}
                   field={f}
                   id={`${req.instanceId}-${f.key}`}
@@ -191,8 +191,14 @@ function groupsOf(fields: IndicatorField[]): [string, IndicatorField[]][] {
   return [...out]
 }
 
-/** One label → control row, rendered by the field's declared type. */
-function Field({
+/**
+ * One label -> control row, rendered by the field's declared type.
+ *
+ * Exported because the chart settings dialog renders the same vocabulary: the
+ * engine describes its own settings with `IndicatorInput`, so both forms share
+ * one control set and a new widget only has to be written once.
+ */
+export function SettingsField({
   field,
   id,
   value,
