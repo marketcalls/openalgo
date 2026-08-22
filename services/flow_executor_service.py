@@ -410,7 +410,8 @@ class NodeExecutor:
         from services.option_symbol_service import parse_underlying_symbol
 
         _, embedded_expiry = parse_underlying_symbol(underlying)
-        needs_expiry = node_type == "syntheticFuture" or embedded_expiry is None
+        has_explicit_expiry = bool(expiry_date)
+        needs_expiry = node_type == "syntheticFuture" or has_explicit_expiry or embedded_expiry is None
         if needs_expiry and not _EXPIRY_DATE_PATTERN.fullmatch(expiry_date.upper()):
             message = f"{node_type} needs a resolved expiryDate in DDMMMYY format before it can run."
             self.log(message, "error")
