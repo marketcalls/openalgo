@@ -51,16 +51,20 @@ def catch_up_mis_squareoff():
     try:
         from database.sandbox_db import SandboxFunds, SandboxPositions, db_session
         from sandbox.fund_manager import FundManager
+        from sandbox.session_boundary import last_session_expiry_utc
 
-        # Get today's date at midnight IST
-        today = datetime.now(IST).date()
-        today_start = datetime.combine(today, datetime.min.time())
-        today_start = IST.localize(today_start)
+        session_expiry_str = os.getenv("SESSION_EXPIRY_TIME", "03:00")
+        last_session_expiry = last_session_expiry_utc(session_expiry_str, datetime.now(IST))
 
-        # Find MIS positions from previous days (created before today)
+        # Square off MIS positions that were not touched since the last session
+        # boundary. Use updated_at (database UTC clock), not created_at: reopened
+        # symbols reuse the same row and keep an old created_at (#1794).
         stale_mis_positions = (
             SandboxPositions.query.filter_by(product="MIS")
-            .filter(SandboxPositions.quantity != 0, SandboxPositions.created_at < today_start)
+            .filter(
+                SandboxPositions.quantity != 0,
+                SandboxPositions.updated_at < last_session_expiry,
+            )
             .all()
         )
 
