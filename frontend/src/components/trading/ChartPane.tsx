@@ -17,6 +17,7 @@ import {
   type DrawSelection,
   type DrawStats,
   type IndicatorSettingsRequest,
+  type ReplayState,
   type SymbolView,
   type TerminalCallbacks,
   TradingTerminal,
@@ -72,6 +73,24 @@ function PencilIcon({ className }: { className?: string }) {
 }
 
 /** Three rising bars — the volume histogram in miniature. */
+function ReplayIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+      <path d="M3 4v4h4" />
+    </svg>
+  )
+}
+
 function VolumeIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -189,6 +208,9 @@ export function ChartPane({
 
   // right-click menu: order entry, then the view actions
   const [ctx, setCtx] = useState<{ x: number; y: number; items: CtxItem[] } | null>(null)
+  // Null whenever the chart is live. The transport bar renders only while
+  // replay owns the data, so there is nothing to hide when it does not.
+  const [replay, setReplay] = useState<ReplayState | null>(null)
 
   /* ── boot this pane's terminal once ───────────────────────────────────── */
   useEffect(() => {
@@ -222,6 +244,7 @@ export function ChartPane({
       onIndicatorsChange: (list) => aliveRef.current && setIndicators(list),
       onIndicatorSettings: (req) => aliveRef.current && setIndSettings(req),
       onDrawSelect: (sel) => aliveRef.current && setDrawSel(sel),
+      onReplayChange: (state) => aliveRef.current && setReplay(state),
       onDrawTextEdit: (r) => {
         if (!aliveRef.current) return
         // The ref, not the local: `terminal` is still unassigned while this
@@ -691,6 +714,81 @@ export function ChartPane({
           </div>
         )}
 
+        {/*
+          Replay transport. The engine's controller is headless by design, so the
+          bar, the clock and the scrub are ours to draw. It renders only while
+          replay owns the chart's data: `replay` is null the moment we are live
+          again, which is also the signal that Exit has done its work.
+        */}
+        {replay && (
+          <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-border bg-popover/95 px-2 py-1.5 shadow-lg backdrop-blur">
+            <button
+              type="button"
+              className="rounded px-2 py-1 text-xs hover:bg-accent"
+              title="Step back one bar"
+              onClick={() => terminalRef.current?.replayStepBack()}
+            >
+              Prev
+            </button>
+            <button
+              type="button"
+              className="rounded bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
+              title={replay.playing ? 'Pause' : 'Play'}
+              onClick={() =>
+                replay.playing
+                  ? terminalRef.current?.replayPause()
+                  : terminalRef.current?.replayPlay()
+              }
+            >
+              {replay.playing ? 'Pause' : 'Play'}
+            </button>
+            <button
+              type="button"
+              className="rounded px-2 py-1 text-xs hover:bg-accent"
+              title="Step forward one bar"
+              onClick={() => terminalRef.current?.replayStep()}
+            >
+              Next
+            </button>
+
+            <input
+              type="range"
+              min={0}
+              max={Math.max(0, replay.total - 1)}
+              value={replay.index}
+              className="mx-1 h-1 w-40 cursor-pointer accent-primary"
+              title="Scrub the session"
+              onChange={(e) => terminalRef.current?.replaySeek(Number(e.target.value))}
+            />
+
+            <span className="tabular-nums text-[11px] text-muted-foreground">
+              {replay.index + 1} / {replay.total}
+            </span>
+
+            <select
+              className="rounded border border-border bg-background px-1 py-0.5 text-[11px]"
+              value={replay.speed}
+              title="Bars per second"
+              onChange={(e) => terminalRef.current?.replayPlay(Number(e.target.value))}
+            >
+              {[0.5, 1, 2, 4, 10].map((x) => (
+                <option key={x} value={x}>
+                  {x}x
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+              title="Leave replay and return to the live chart"
+              onClick={() => terminalRef.current?.stopReplay()}
+            >
+              Exit
+            </button>
+          </div>
+        )}
+
         {ctx && (
           <div
             className="fixed z-50 w-56 rounded-md border bg-popover p-1 shadow-lg"
@@ -749,6 +847,14 @@ export function ChartPane({
             >
               <VolumeIcon className="h-3.5 w-3.5 opacity-70" />
               {volumeOn ? 'Hide volume' : 'Show volume'}
+            </button>
+            <button
+              type="button"
+              className={ctxRow}
+              onClick={() => run(() => terminalRef.current?.startReplay())}
+            >
+              <ReplayIcon className="h-3.5 w-3.5 opacity-70" />
+              Replay this session
             </button>
             <div className="relative" onMouseLeave={() => setGridSub(false)}>
               <button
