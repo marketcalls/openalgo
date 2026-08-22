@@ -31,7 +31,7 @@ def get_margin_data(auth_token):
         # Check if the request was successful
         if response.status_code != 200:
             logger.error(
-                f"Error fetching margin data: HTTP {{response.status_code}} - {response.text}"
+                f"Error fetching margin data: HTTP {response.status_code} - {response.text}"
             )
             return {}
 
