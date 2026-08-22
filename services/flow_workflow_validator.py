@@ -229,7 +229,7 @@ REQUIRED_NODE_FIELDS: dict[str, tuple[str, ...]] = {
     "barOffset": ("symbol", "exchange"),
     "openPosition": ("symbol", "exchange"),
     "telegramAlert": ("message",),
-    "whatsappAlert": ("to", "message"),
+    "whatsappAlert": ("message",),
     "mathExpression": ("expression",),
     "varCondition": ("leftValue", "operator"),
     "priceCondition": ("symbol", "exchange", "operator"),
