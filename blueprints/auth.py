@@ -1006,10 +1006,18 @@ def get_session_status():
 
     # If session claims to be logged in with broker, validate the auth token exists
     if session.get("logged_in") and session.get("broker"):
-        from database.auth_db import get_api_key_for_tradingview, get_auth_token
+        from database.auth_db import (
+            get_api_key_for_tradingview,
+            get_auth_token,
+            is_broker_session_stale_for_user,
+        )
 
         auth_token = get_auth_token(session.get("user"))
-        if auth_token is None:
+        # A stored token is not proof of a live broker session. is_revoked is
+        # only flipped by the auto-expiry sweep, which runs from a
+        # before_request hook, so between the daily rollover and the next
+        # browser request the dead token still reads as connected (issue #1858).
+        if auth_token is None or is_broker_session_stale_for_user(session.get("user")):
             # The BROKER token is gone (daily rollover / revocation) but the
             # APP session is still valid. Do NOT clear or downgrade the
             # session here: `logged_in` doubles as the app-session flag in
