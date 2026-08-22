@@ -15,8 +15,20 @@ interface BasketOrderNodeProps {
 }
 
 export const BasketOrderNode = memo(({ data, selected }: BasketOrderNodeProps) => {
-  // Orders is an array, count items
-  const orderCount = Array.isArray(data.orders) ? data.orders.length : 0
+  // The config panel writes `orders` as newline-delimited CSV text, not an
+  // array, so the array-only count rendered "Orders: 0" for every basket
+  // however many legs it had. The stale array type in types/flow.ts is what
+  // let the drift through the compiler.
+  // Widened before narrowing: `orders` is typed as the string the editor
+  // writes, but a workflow imported from an older export may still carry the
+  // array shape, and that should count rather than render 0.
+  const ordersRaw: unknown = data.orders
+  const orderCount =
+    typeof ordersRaw === 'string'
+      ? ordersRaw.split('\n').filter((line) => line.trim()).length
+      : Array.isArray(ordersRaw)
+        ? ordersRaw.length
+        : 0
 
   return (
     <div className={cn('workflow-node node-action min-w-[120px]', selected && 'selected')}>
@@ -37,7 +49,7 @@ export const BasketOrderNode = memo(({ data, selected }: BasketOrderNodeProps) =
             <span className="mono-data text-[10px] font-medium">{orderCount}</span>
           </div>
           <div className="text-center text-[9px] text-muted-foreground">
-            {data.strategy || 'Batch execution'}
+            {data.basketName || 'Batch execution'}
           </div>
         </div>
       </div>
