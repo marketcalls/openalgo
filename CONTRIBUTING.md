@@ -196,7 +196,7 @@ uv run gunicorn --worker-class eventlet -w 1 app:app
 ### Access Points
 
 - **Main app**: http://127.0.0.1:5000
-- **React frontend**: http://127.0.0.1:5000/react
+- **Dashboard**: http://127.0.0.1:5000/dashboard
 - **REST API documentation**: [docs/api/README.md](docs/api/README.md)
 - **API Analyzer**: http://127.0.0.1:5000/analyzer
 
@@ -388,7 +388,7 @@ npm run e2e
 
 # Manual testing:
 # 1. Web UI: http://127.0.0.1:5000
-# 2. React UI: http://127.0.0.1:5000/react
+# 2. Dashboard: http://127.0.0.1:5000/dashboard
 # 3. REST API documentation: docs/api/README.md
 # 4. API Analyzer: http://127.0.0.1:5000/analyzer
 ```
@@ -607,7 +607,7 @@ describe('MyComponent', () => {
 import { test, expect } from '@playwright/test';
 
 test('feature works end to end', async ({ page }) => {
-  await page.goto('/react');
+  await page.goto('/dashboard');
   await expect(page.getByText('Dashboard')).toBeVisible();
 });
 ```
