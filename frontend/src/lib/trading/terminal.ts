@@ -26,12 +26,19 @@ import {
   OpenAlgoTradeFeed,
   OpenAlgoWsFeed,
   type PriceLine,
+  ReplayController,
+  type ReplayState,
   type SeriesApi,
   type SeriesStyle,
   type SeriesType,
 } from 'openalgo-charts'
 import type { DrawingController } from 'openalgo-charts/draw'
 import { runTransform } from 'openalgo-charts/transform'
+
+// Re-exported so the React layer imports its chart types from this facade
+// rather than reaching into the library directly, as it already does for
+// SymbolView, DrawStats and the rest.
+export type { ReplayState }
 
 type ChartInstance = ReturnType<typeof createChart>
 type BuySellButtonsInstance = InstanceType<typeof BuySellButtons>
@@ -154,6 +161,11 @@ export interface TerminalCallbacks {
   onIndicatorSettings?(req: IndicatorSettingsRequest): void
   /** A drawing was selected (or deselected), for the style popover. */
   onDrawSelect?(sel: DrawSelection | null): void
+  /**
+   * The replay playhead moved, or replay was entered or left. Null means the
+   * chart is live again, which is the transport bar's cue to hide itself.
+   */
+  onReplayChange?(state: ReplayState | null): void
   /**
    * A text-bearing drawing needs its content. The engine renders `style.text`
    * but has no DOM to collect it with, so the host prompts.
@@ -354,6 +366,8 @@ export class TradingTerminal {
   private depthActive = false
 
   private rawBars: Bar[] = []
+  /** Non-null only while the chart is showing a replayed prefix. */
+  private replay: ReplayController | null = null
   private shownCount = 0
   private liveBucket: number | null = null
   private lastLtp: number | null = null
@@ -1478,6 +1492,73 @@ export class TradingTerminal {
     return this.volumeOn
   }
 
+  /* ── market replay ──────────────────────────────────────────────────────
+   * Walk the loaded session forward a bar at a time. The engine's controller
+   * feeds the series a prefix of the bars, which is what makes every indicator
+   * redraw as it stood at that moment rather than needing replay-aware code of
+   * its own.
+   *
+   * Both the price and the volume series are driven: the chart merges every
+   * series onto one time axis, so a volume histogram left at full length would
+   * drag future timestamps back onto the axis and undo the illusion.
+   */
+
+  /** True while the chart is showing a replayed prefix rather than live data. */
+  replayActive(): boolean {
+    return this.replay !== null
+  }
+
+  replayState(): ReplayState | null {
+    return this.replay?.state() ?? null
+  }
+
+  /**
+   * Enter replay. Defaults to a quarter of the way in, so there is history to
+   * read on the left and session left to walk on the right: opening on bar 0
+   * shows an empty chart, which reads as broken.
+   */
+  startReplay(startIndex?: number): void {
+    if (this.replay || !this.chart || !this.price || this.rawBars.length < 2) return
+    const driven = this.volume ? [this.price, this.volume] : [this.price]
+    this.replay = new ReplayController(this.chart, {
+      series: driven,
+      bars: this.rawBars,
+      startIndex: startIndex ?? Math.floor(this.rawBars.length / 4),
+      onFrame: (state) => this.cb.onReplayChange?.(state),
+    })
+    this.cb.onReplayChange?.(this.replay.state())
+  }
+
+  /** Leave replay and put the live chart back exactly where the user left it. */
+  stopReplay(): void {
+    if (!this.replay) return
+    this.replay.stop()
+    this.replay = null
+    this.cb.onReplayChange?.(null)
+  }
+
+  replayPlay(speed?: number): void {
+    this.replay?.play(speed === undefined ? undefined : { speed })
+    this.cb.onReplayChange?.(this.replayState())
+  }
+
+  replayPause(): void {
+    this.replay?.pause()
+    this.cb.onReplayChange?.(this.replayState())
+  }
+
+  replayStep(n = 1): void {
+    this.replay?.step(n)
+  }
+
+  replayStepBack(n = 1): void {
+    this.replay?.stepBack(n)
+  }
+
+  replaySeek(index: number): void {
+    this.replay?.seek(index)
+  }
+
   /* ── WS-down fallback: poll quotes so LTP + the forming candle stay live ─ */
   private startLtpFallback() {
     if (this.ltpPollTimer) return
@@ -1648,6 +1729,10 @@ export class TradingTerminal {
   /* ── symbol selection ─────────────────────────────────────────────────── */
   async loadSymbol(pick: SearchRow, opts: { silent?: boolean } = {}): Promise<boolean> {
     if (!this.rest) return false
+    // Replay holds a snapshot of the bars it was started on, and stop() puts
+    // that snapshot back. Carrying it across a symbol change would restore the
+    // previous instrument's data onto the new one.
+    this.stopReplay()
     // swap the live stream: drop the previous symbol's subscription
     if (
       this.ws &&
@@ -1747,6 +1832,7 @@ export class TradingTerminal {
 
   /* ── toolbar setters (called by the React page) ───────────────────────── */
   setInterval(iv: string) {
+    this.stopReplay() // same reason as loadSymbol: the bars are about to change
     this.interval = iv
     this.lsSet('interval', iv)
     if (this.sym) this.reloadCurrent()
@@ -2036,6 +2122,11 @@ export class TradingTerminal {
       this.ws?.close()
     } catch {
       /* already closed */
+    }
+    try {
+      this.stopReplay() // release the controller before its chart disappears
+    } catch {
+      /* nothing to leave */
     }
     try {
       this.chart?.destroy()
