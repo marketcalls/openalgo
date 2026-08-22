@@ -13,6 +13,7 @@ stay with the executor, which is where their defaults and coercions live.
 """
 
 import json
+import math
 import re
 from typing import Any
 
@@ -126,18 +127,24 @@ CONDITIONAL_REQUIRED_FIELDS: dict[str, dict[str, dict[str, tuple[str, ...]]]] = 
 
 def _positive_number(value: object) -> float | None:
     """The value as a positive number, or None when it is not one."""
+    if isinstance(value, bool):
+        return None
     try:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return number if number > 0 else None
+    return number if math.isfinite(number) and number > 0 else None
 
 
 def _valid_quantity(value: object, *, allow_zero: bool = False) -> bool:
     """Return whether an order quantity is positive, or non-negative when allowed."""
+    if isinstance(value, bool):
+        return False
     try:
         number = float(value)
     except (TypeError, ValueError):
+        return False
+    if not math.isfinite(number):
         return False
     return number >= 0 if allow_zero else number > 0
 
@@ -501,7 +508,7 @@ def _margin_errors(base: str, data: dict, strict: bool) -> list[dict]:
     raw_base = f"{base}/data/{raw_key}"
     if isinstance(raw, str):
         text = raw.strip()
-        if text.startswith("{{") and text.endswith("}}"):
+        if "{{" in text:
             return []
         try:
             positions = json.loads(text)
@@ -645,7 +652,9 @@ def _enum_and_range_errors(base: str, node_type: str, data: dict, strict: bool) 
         if field not in data:
             continue
         value = data.get(field)
-        if isinstance(value, str) and ("{{" in value or not value.strip()):
+        if isinstance(value, str) and "{{" in value:
+            continue
+        if isinstance(value, str) and not value.strip() and field != "operation":
             continue
         if not isinstance(value, str):
             # A number or boolean here is not merely unknown, it is the wrong
@@ -662,7 +671,7 @@ def _enum_and_range_errors(base: str, node_type: str, data: dict, strict: bool) 
                 )
             )
             continue
-        canonical = value.strip().lower() if field == "operation" else value.strip().upper()
+        canonical = value if field == "operation" else value.strip().upper()
         if canonical not in allowed:
             found.append(
                 _err(
@@ -1010,11 +1019,10 @@ def validate_workflow(
             elif node_type == "variable":
                 operation = data.get("operation", "set")
                 if isinstance(operation, str) and "{{" not in operation:
-                    canonical_operation = operation.strip().lower() or "set"
-                    if canonical_operation in VALID_VARIABLE_OPERATIONS:
-                        if canonical_operation in {"get", "stringify"}:
+                    if operation in VALID_VARIABLE_OPERATIONS:
+                        if operation in {"get", "stringify"}:
                             required.append("sourceVariable")
-                        elif canonical_operation in {
+                        elif operation in {
                             "add",
                             "subtract",
                             "multiply",
