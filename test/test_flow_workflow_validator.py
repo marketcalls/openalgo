@@ -354,8 +354,12 @@ def test_options_multi_contract(data, strict_code, permissive_code, path):
 )
 def test_variable_contract_accepts_supported_operations(operation, extra):
     """Every executor operation has a configuration shape that can activate."""
-    errors = _strict_node_errors("variable", {"variableName": "target", "operation": operation, **extra})
-    assert not any(error["path"].endswith(("/operation", "/sourceVariable", "/value")) for error in errors)
+    data = {"variableName": "target", "operation": operation, **extra}
+    for errors in (_strict_node_errors("variable", data), _permissive_node_errors("variable", data)):
+        assert not any(
+            error["path"].endswith(("/operation", "/sourceVariable", "/value"))
+            for error in errors
+        )
 
 
 def test_variable_contract_rejects_unknown_operations_even_in_drafts():
@@ -394,6 +398,69 @@ def test_variable_contract_defaults_a_missing_operation_to_set():
     """Legacy Variable nodes did not persist their default operation."""
     errors = _strict_node_errors("variable", {"variableName": "target"})
     assert not any(error["path"].endswith("/operation") for error in errors)
+
+
+@pytest.mark.parametrize("operation", ["", "SET", " set "])
+def test_variable_contract_rejects_noncanonical_operation_spellings(operation):
+    """Only the executor's exact lowercase operation names are executable."""
+    data = {"variableName": "target", "operation": operation}
+    for errors in (_strict_node_errors("variable", data), _permissive_node_errors("variable", data)):
+        assert any(
+            error["code"] == "invalid_constant" and error["path"].endswith("/operation")
+            for error in errors
+        )
+
+
+@pytest.mark.parametrize("value", [True, float("inf"), float("-inf"), "Infinity", "-Infinity", "NaN"])
+def test_executable_price_rejects_boolean_and_nonfinite_values(value):
+    """Broker prices must be finite numbers, never truthy or infinite floats."""
+    data = {**PRICED_ORDER_NODES["placeOrder"], "priceType": "LIMIT", "price": value}
+    for errors in (_strict_node_errors("placeOrder", data), _permissive_node_errors("placeOrder", data)):
+        assert any(error["code"] == "invalid_price" and error["path"].endswith("/price") for error in errors)
+
+
+@pytest.mark.parametrize("value", [True, float("inf"), float("-inf"), "Infinity", "-Infinity", "NaN"])
+def test_custom_option_leg_quantity_rejects_boolean_and_nonfinite_values(value):
+    """A custom leg quantity uses the same finite-number contract as an order."""
+    data = {
+        **OPTIONS_MULTI_BASE,
+        "strategy": "custom",
+        "legs": [{**CUSTOM_OPTION_LEG, "quantity": value}],
+    }
+    for errors in (
+        _strict_node_errors("optionsMultiOrder", data),
+        _permissive_node_errors("optionsMultiOrder", data),
+    ):
+        assert any(
+            error["code"] == "invalid_quantity" and error["path"].endswith("/legs/0/quantity")
+            for error in errors
+        )
+
+
+@pytest.mark.parametrize("value", [1, "1.25"])
+def test_executable_price_and_custom_leg_quantity_keep_finite_values(value):
+    """Finite numeric values remain valid in both shared numeric helpers."""
+    price_data = {**PRICED_ORDER_NODES["placeOrder"], "priceType": "LIMIT", "price": value}
+    leg_data = {
+        **OPTIONS_MULTI_BASE,
+        "strategy": "custom",
+        "legs": [{**CUSTOM_OPTION_LEG, "quantity": value}],
+    }
+    for errors in (_strict_node_errors("placeOrder", price_data), _permissive_node_errors("placeOrder", price_data)):
+        assert not any(error["path"].endswith("/price") for error in errors)
+    for errors in (
+        _strict_node_errors("optionsMultiOrder", leg_data),
+        _permissive_node_errors("optionsMultiOrder", leg_data),
+    ):
+        assert not any(error["path"].endswith("/legs/0/quantity") for error in errors)
+
+
+@pytest.mark.parametrize("positions_json", ["{{webhook.positions}}", "[{{webhook.positions}}]"])
+def test_margin_contract_defers_any_template_containing_positions_json(positions_json):
+    """A templated Margin basket is resolved at runtime before JSON parsing."""
+    data = {"positionsJson": positions_json}
+    for errors in (_strict_node_errors("margin", data), _permissive_node_errors("margin", data)):
+        assert not any(error["path"].endswith("/positionsJson") for error in errors)
 
 
 @pytest.mark.parametrize(
