@@ -6,6 +6,8 @@ import io
 import json
 import os
 import shutil
+import tempfile
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -695,29 +697,51 @@ def delete_fyers_temp_data(output_path):
                 logger.warning(f"Error deleting file {file_path}: {e}")
 
 
+# Serialize concurrent master-contract downloads. The login flow can trigger this
+# more than once in quick succession, and two runs sharing the temp dir + the
+# symtoken table race destructively: one run wipes the table and deletes the temp
+# CSVs the other is still reading, leaving an EMPTY catalog — after which every
+# symbol/token lookup (quotes, order placement, search) silently fails. A
+# process-wide lock makes runs strictly sequential.
+_master_contract_lock = threading.Lock()
+
+
 def master_contract_download():
+    # Hold the lock for the whole download so two invocations can never interleave.
+    with _master_contract_lock:
+        return _master_contract_download()
+
+
+def _master_contract_download():
     logger.info("Downloading Master Contract")
 
-    output_path = "tmp"
+    # Use a unique temp dir per run so a concurrent or previous run's cleanup can
+    # never delete this run's files (and vice-versa), and so temp files are always
+    # removed afterwards regardless of success or failure.
+    output_path = tempfile.mkdtemp(prefix="fyers_master_")
     try:
-        download_csv_fyers_data(output_path)
-        delete_symtoken_table()
-        token_df = process_fyers_nse_csv(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_fyers_bse_csv(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_fyers_bfo_csv(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_fyers_nfo_csv(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_fyers_cds_json(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_fyers_mcx_json(output_path)
-        copy_from_dataframe(token_df)
-        delete_fyers_temp_data(output_path)
-        # token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
+        # Verify ALL master files downloaded BEFORE touching the table. If the
+        # download was incomplete, keep the existing (possibly stale) contract
+        # rather than wiping it and ending up with zero symbols.
+        success, _downloaded, error_msg = download_csv_fyers_data(output_path)
+        if not success:
+            raise RuntimeError(f"master contract download incomplete: {error_msg}")
 
-        # token_df = token_df.drop_duplicates(subset='symbol', keep='first')
+        # Parse every file into DataFrames BEFORE mutating the table, so a parse
+        # error can't leave the catalog empty. Delete as late as possible.
+        token_frames = [
+            process_fyers_nse_csv(output_path),
+            process_fyers_bse_csv(output_path),
+            process_fyers_bfo_csv(output_path),
+            process_fyers_nfo_csv(output_path),
+            process_fyers_cds_json(output_path),
+            process_fyers_mcx_json(output_path),
+        ]
+
+        # All data is validated in memory — now swap the table contents.
+        delete_symtoken_table()
+        for token_df in token_frames:
+            copy_from_dataframe(token_df)
 
         return socketio.emit(
             "master_contract_download", {"status": "success", "message": "Successfully Downloaded"}
@@ -726,6 +750,9 @@ def master_contract_download():
     except Exception as e:
         logger.exception(f"{e}")
         return socketio.emit("master_contract_download", {"status": "error", "message": f"{e}"})
+    finally:
+        # Always remove this run's isolated temp dir (files + the dir itself).
+        shutil.rmtree(output_path, ignore_errors=True)
 
 
 def search_symbols(symbol, exchange):
