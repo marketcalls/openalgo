@@ -218,7 +218,17 @@ function Field({
           type="checkbox"
           checked={value === true}
           onChange={(e) => onChange(e.target.checked)}
-          className="h-4 w-4 accent-[hsl(var(--primary))]"
+          // accent-color only tints the CHECKED state, so a native checkbox
+          // still renders a white box when unchecked and reads as a hole in a
+          // dark panel. Draw the whole control instead: the tick is a CSS mask
+          // so it inherits the foreground colour and needs no icon font.
+          className={cn(
+            'h-4 w-4 shrink-0 cursor-pointer appearance-none rounded border border-border bg-background',
+            'transition-colors hover:border-muted-foreground',
+            'checked:border-primary checked:bg-primary',
+            "checked:after:block checked:after:h-full checked:after:w-full checked:after:bg-[hsl(var(--primary-foreground))] checked:after:content-['']",
+            'checked:after:[mask:url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Cpath fill=%27none%27 stroke=%27%23000%27 stroke-width=%272.5%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27 d=%27M3.5 8.5l3 3 6-6%27/%3E%3C/svg%3E") center/100% no-repeat]',
+          )}
         />
       </>
     )
@@ -236,8 +246,10 @@ function Field({
             value={v}
             onChange={(e) => onChange(e.target.value)}
             aria-label={field.label}
-            // Native swatch chrome is bulky; clip it to a flat colour chip.
-            className="h-6 w-10 cursor-pointer rounded border border-border bg-transparent p-0 [&::-moz-color-swatch]:rounded-sm [&::-moz-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0.5 [&::-webkit-color-swatch]:rounded-sm [&::-webkit-color-swatch]:border-0"
+            // A colour control is a swatch, not a bar: square and small enough
+            // that a column of them reads as a palette rather than as blocks.
+            // Native swatch chrome is bulky, so it is clipped to a flat chip.
+            className="h-[26px] w-[26px] cursor-pointer rounded-md border border-border bg-transparent p-0 [&::-moz-color-swatch]:rounded [&::-moz-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-[3px] [&::-webkit-color-swatch]:rounded [&::-webkit-color-swatch]:border-0"
           />
         </div>
       </>
