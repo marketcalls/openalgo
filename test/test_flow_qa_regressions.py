@@ -570,10 +570,25 @@ _ORDER_NODE = {
 class _RecordingClient:
     def __init__(self):
         self.orders = []
+        self.smart_orders = []
+        self.split_orders = []
+        self.baskets = []
 
     def place_order(self, **kwargs):
         self.orders.append(kwargs)
         return {"status": "success", "orderid": "X1"}
+
+    def place_smart_order(self, **kwargs):
+        self.smart_orders.append(kwargs)
+        return {"status": "success", "orderid": "S1"}
+
+    def split_order(self, **kwargs):
+        self.split_orders.append(kwargs)
+        return {"status": "success", "orderid": "SP1"}
+
+    def basket_order(self, **kwargs):
+        self.baskets.append(kwargs)
+        return {"status": "success", "orderids": ["B1"]}
 
 
 @pytest.fixture
@@ -651,6 +666,235 @@ def test_cancel_order_with_an_unresolved_id_fails(order_env, monkeypatch):
 
     assert result["status"] == "error"
     assert "orderId" in result["errors"][0]["message"]
+
+
+# ---------------------------------------------------------------------------
+# FLOW-024: order numeric fields must retain explicit zero and broker pricing
+# ---------------------------------------------------------------------------
+
+
+def test_numeric_accessors_preserve_zero():
+    """A numeric zero is supplied data, not a missing value to replace."""
+    executor = fes.NodeExecutor(None, fes.WorkflowContext(), [])
+    executor.context.set_variable("bad_number", "not-a-number")
+
+    assert executor.get_int({"quantity": 0}, "quantity", 1) == 0
+    assert executor.get_float({"price": 0}, "price", 1.0) == 0.0
+    assert executor.get_int({}, "quantity", 1) == 1
+    assert executor.get_float({}, "price", 1.0) == 1.0
+    assert executor.get_int({"quantity": "{{bad_number}}"}, "quantity", 1) == 1
+    assert executor.get_float({"price": "{{bad_number}}"}, "price", 1.0) == 1.0
+
+
+@pytest.mark.parametrize(
+    ("method", "node_data", "expected"),
+    [
+        (
+            "execute_smart_order",
+            {
+                "symbol": "SBIN",
+                "exchange": "NSE",
+                "action": "BUY",
+                "quantity": 0,
+                "positionSize": 5,
+                "product": "MIS",
+                "priceType": "LIMIT",
+                "price": 625,
+                "triggerPrice": 0,
+            },
+            {"price": 625.0, "trigger_price": 0.0},
+        ),
+        (
+            "execute_split_order",
+            {
+                "symbol": "SBIN",
+                "exchange": "NSE",
+                "action": "SELL",
+                "quantity": 4,
+                "splitSize": 2,
+                "product": "MIS",
+                "priceType": "SL",
+                "price": 625,
+                "triggerPrice": 624,
+            },
+            {"price": 625.0, "trigger_price": 624.0},
+        ),
+    ],
+)
+def test_smart_and_split_order_price_reaches_the_broker(method, node_data, expected):
+    """These nodes used to discard price data and place a different order type."""
+    client = _RecordingClient()
+    executor = fes.NodeExecutor(client, fes.WorkflowContext(), [])
+
+    result = getattr(executor, method)(node_data)
+
+    sent = client.smart_orders if method == "execute_smart_order" else client.split_orders
+    assert result["status"] == "success"
+    assert sent[0]["quantity"] == node_data["quantity"]
+    assert sent[0]["price"] == expected["price"]
+    assert sent[0]["trigger_price"] == expected["trigger_price"]
+
+
+@pytest.mark.parametrize(
+    ("method", "node_data"),
+    [
+        (
+            "execute_smart_order",
+            {
+                "symbol": "SBIN",
+                "quantity": 1,
+                "priceType": "LIMIT",
+                "price": "{{runtime.price}}",
+            },
+        ),
+        (
+            "execute_split_order",
+            {
+                "symbol": "SBIN",
+                "quantity": 1,
+                "splitSize": 1,
+                "priceType": "SL",
+                "price": 625,
+                "triggerPrice": "{{runtime.trigger}}",
+            },
+        ),
+    ],
+)
+def test_smart_and_split_order_price_templates_that_resolve_to_zero_fail_closed(method, node_data):
+    """A resolved zero must be rejected before the broker can reinterpret it."""
+    client = _RecordingClient()
+    context = fes.WorkflowContext()
+    context.set_variable("runtime", {"price": 0, "trigger": 0})
+    executor = fes.NodeExecutor(client, context, [])
+
+    result = getattr(executor, method)(node_data)
+
+    assert result["status"] == "error"
+    assert client.smart_orders == []
+    assert client.split_orders == []
+
+
+def test_basket_order_price_applies_common_fields_to_csv_rows():
+    """CSV basket rows inherit the node price fields in the client's payload spelling."""
+    client = _RecordingClient()
+    executor = fes.NodeExecutor(client, fes.WorkflowContext(), [])
+
+    result = executor.execute_basket_order(
+        {
+            "orders": "SBIN,NSE,BUY,2",
+            "product": "MIS",
+            "priceType": "SL",
+            "price": 625,
+            "triggerPrice": 624,
+        }
+    )
+
+    assert result["status"] == "success"
+    sent = client.baskets[0]["orders"]
+    assert sent[0] == {
+        "symbol": "SBIN",
+        "exchange": "NSE",
+        "action": "BUY",
+        "quantity": 2,
+        "product": "MIS",
+        "pricetype": "SL",
+        "price": 625.0,
+        "triggerprice": 624.0,
+    }
+
+
+def test_basket_order_price_preserves_imported_leg_values_and_fills_missing_values():
+    """Imported legs own their explicit fields and the editor's saved list stays untouched."""
+    client = _RecordingClient()
+    context = fes.WorkflowContext()
+    context.set_variable("runtime", {"price": 626, "trigger": 625})
+    executor = fes.NodeExecutor(client, context, [])
+    orders = [
+        {
+            "symbol": "SBIN",
+            "exchange": "NSE",
+            "action": "BUY",
+            "quantity": 2,
+            "product": "CNC",
+            "priceType": "LIMIT",
+            "price": "{{runtime.price}}",
+            "triggerPrice": "{{runtime.trigger}}",
+        },
+        {"symbol": "INFY", "exchange": "NSE", "action": "SELL", "quantity": 1},
+    ]
+    original_orders = [dict(order) for order in orders]
+
+    result = executor.execute_basket_order(
+        {
+            "orders": orders,
+            "product": "MIS",
+            "priceType": "SL",
+            "price": 625,
+            "triggerPrice": 624,
+        }
+    )
+
+    assert result["status"] == "success"
+    assert orders == original_orders
+    assert client.baskets[0]["orders"] == [
+        {
+            "symbol": "SBIN",
+            "exchange": "NSE",
+            "action": "BUY",
+            "quantity": 2,
+            "product": "CNC",
+            "pricetype": "LIMIT",
+            "price": 626.0,
+            "triggerprice": 625.0,
+        },
+        {
+            "symbol": "INFY",
+            "exchange": "NSE",
+            "action": "SELL",
+            "quantity": 1,
+            "product": "MIS",
+            "pricetype": "SL",
+            "price": 625.0,
+            "triggerprice": 624.0,
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "node_data",
+    [
+        {
+            "orders": "SBIN,NSE,BUY,2",
+            "priceType": "LIMIT",
+            "price": "{{runtime.price}}",
+        },
+        {
+            "orders": [
+                {
+                    "symbol": "SBIN",
+                    "exchange": "NSE",
+                    "action": "BUY",
+                    "quantity": 2,
+                    "priceType": "SL",
+                    "price": 625,
+                    "triggerPrice": 0,
+                }
+            ],
+            "priceType": "MARKET",
+        },
+    ],
+)
+def test_basket_order_price_rejects_invalid_common_or_imported_prices(node_data):
+    """One unusable row must stop the whole basket before any broker request."""
+    client = _RecordingClient()
+    context = fes.WorkflowContext()
+    context.set_variable("runtime", {"price": 0})
+    executor = fes.NodeExecutor(client, context, [])
+
+    result = executor.execute_basket_order(node_data)
+
+    assert result["status"] == "error"
+    assert client.baskets == []
 
 
 # ---------------------------------------------------------------------------
