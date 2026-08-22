@@ -368,6 +368,8 @@ export class TradingTerminal {
   private rawBars: Bar[] = []
   /** Non-null only while the chart is showing a replayed prefix. */
   private replay: ReplayController | null = null
+  /** Held so it can be moved to whichever pane is currently at the bottom. */
+  private watermark: LogoWatermark | null = null
   private shownCount = 0
   private liveBucket: number | null = null
   private lastLtp: number | null = null
@@ -867,6 +869,7 @@ export class TradingTerminal {
       labelColor: light ? '#3c4354' : '#e4e8f4',
       href: 'https://openalgo.in',
     })
+    this.watermark = watermark
     this.chart.addPrimitive(watermark, 0)
 
     // inline SELL · qty · BUY panel, docked top-left below the OHLC legend.
@@ -960,6 +963,7 @@ export class TradingTerminal {
     // list still held it — so the next rebuild (timeframe, chart type, theme)
     // brought the deleted indicator back.
     this.chart.on('indicatorRemoved', () => this.syncIndicators())
+    this.chart.on('paneRemoved', () => this.placeWatermark())
     // Scrolling back past the loaded range pages in older bars.
     this.chart.setHistoryLoader(() => void this.loadOlderHistory())
   }
@@ -1432,8 +1436,27 @@ export class TradingTerminal {
    * two SMAs differ only by instance id, so "remove the one with this
    * indicatorId" would drop an arbitrary one of them.
    */
+  /**
+   * Keep the brand mark in the chart's bottom corner rather than pane 0's.
+   *
+   * A primitive belongs to a pane, and an oscillator that asks for its own
+   * pane pushes a new one underneath. "Bottom of pane 0" is then the middle
+   * of the chart, which is where the mark was ending up. The engine emits no
+   * event when a pane is created (only paneRemoved), so this is driven from
+   * the indicator funnel, which is the only thing that creates one here.
+   */
+  private placeWatermark(): void {
+    const mark = this.watermark
+    if (!this.chart || !mark) return
+    const bottom = this.chart.panes().length - 1
+    if (bottom < 0) return
+    this.chart.removePrimitive(mark)
+    this.chart.addPrimitive(mark, bottom)
+  }
+
   private syncIndicators(): void {
     if (!this.chart || this.applyingIndicators) return
+    this.placeWatermark()
     this.activeIndicators = this.chart.indicators().map((i) => ({
       indicatorId: i.indicatorId,
       settings: { ...i.settings() },
