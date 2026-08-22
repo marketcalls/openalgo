@@ -87,6 +87,25 @@ def test_apikey_html_response_prevents_caching_credentials(client, monkeypatch, 
     assert response.headers["Pragma"] == "no-cache"
 
 
+def test_apikey_react_shell_response_is_unchanged(client, monkeypatch, tmp_path):
+    """The static React shell contains no credential and should remain cacheable."""
+    tmp_path.joinpath("index.html").write_text("app shell", encoding="utf-8")
+    monkeypatch.setattr(apikey_blueprint, "FRONTEND_DIST", tmp_path)
+    monkeypatch.setattr(
+        apikey_blueprint,
+        "get_api_key_for_tradingview",
+        lambda username: "test-token-not-real",
+    )
+    monkeypatch.setattr(apikey_blueprint, "get_order_mode", lambda username: "auto")
+
+    response = client.get("/apikey")
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == "app shell"
+    assert "no-store" not in response.headers.get("Cache-Control", "")
+    assert "Pragma" not in response.headers
+
+
 def test_playground_api_key_prevents_caching_credentials(client, monkeypatch):
     """The playground key endpoint must not be cached."""
     monkeypatch.setattr(

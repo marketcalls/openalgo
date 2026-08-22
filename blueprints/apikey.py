@@ -71,7 +71,7 @@ def manage_api_key():
         # Serve React app for browser navigation
         index_path = FRONTEND_DIST / "index.html"
         if index_path.exists():
-            return make_no_store_response(send_file(index_path, mimetype="text/html"))
+            return send_file(index_path, mimetype="text/html")
 
         # Fallback to old template if React build not available
         return make_no_store_response(
