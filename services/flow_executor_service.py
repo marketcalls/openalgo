@@ -425,25 +425,29 @@ class NodeExecutor:
 
     def get_int(self, node_data: dict, key: str, default: int = 0) -> int:
         """Get interpolated integer value from node data"""
-        value = node_data.get(key, default)
+        value = node_data.get(key)
+        if value is None or value == "":
+            return default
         if isinstance(value, str):
             interpolated = self.context.interpolate(value)
             try:
                 return int(float(interpolated))
             except (ValueError, TypeError):
                 return default
-        return int(value) if value else default
+        return int(value)
 
     def get_float(self, node_data: dict, key: str, default: float = 0.0) -> float:
         """Get interpolated float value from node data"""
-        value = node_data.get(key, default)
+        value = node_data.get(key)
+        if value is None or value == "":
+            return default
         if isinstance(value, str):
             interpolated = self.context.interpolate(value)
             try:
                 return float(interpolated)
             except (ValueError, TypeError):
                 return default
-        return float(value) if value else default
+        return float(value)
 
     # === Order Nodes ===
 
@@ -485,6 +489,14 @@ class NodeExecutor:
         position_size = self.get_int(node_data, "positionSize", 0)
         price_type = self.get_str(node_data, "priceType", "MARKET")
         product = self.get_str(node_data, "product", "MIS")
+        price = self.get_float(node_data, "price", 0.0)
+        trigger_price = self.get_float(node_data, "triggerPrice", 0.0)
+
+        invalid = self._invalid_price_reason(price_type, price, trigger_price)
+        if invalid:
+            error_result = {"status": "error", "message": invalid}
+            self.log(f"Smart order failed: {invalid}", "error")
+            return error_result
 
         self.log(f"Placing smart order: {symbol} {action}")
         result = self.client.place_smart_order(
@@ -495,6 +507,8 @@ class NodeExecutor:
             position_size=position_size,
             price_type=price_type,
             product_type=product,
+            price=price,
+            trigger_price=trigger_price,
             strategy=self.strategy_tag(node_data),
         )
         self.log(
@@ -1188,44 +1202,124 @@ class NodeExecutor:
     def execute_basket_order(self, node_data: dict) -> dict:
         """Execute Basket Order node - places multiple orders in batch"""
         orders_raw = node_data.get("orders", "")
-        product = self.get_str(node_data, "product", "MIS")
-        price_type = self.get_str(node_data, "priceType", "MARKET")
         basket_name = self.get_str(node_data, "basketName", "flow_basket")
 
-        orders = []
+        def resolve(value: Any, field: str) -> Any:
+            if isinstance(value, str):
+                value = self.context.interpolate(value)
+            if isinstance(value, str) and _UNRESOLVED_PATTERN.search(value):
+                raise ValueError(f"{field} has unresolved value {value!r}")
+            return value
+
+        def common_value(key: str, default: Any) -> Any:
+            value = node_data.get(key)
+            if value is None or value == "":
+                return default
+            return resolve(value, key)
+
+        def number(value: Any, field: str) -> float:
+            try:
+                return float(value)
+            except (ValueError, TypeError) as exc:
+                raise ValueError(f"{field} must be numeric, got {value!r}") from exc
+
+        def basket_error(index: int, detail: str) -> dict:
+            message = f"Basket order row {index}: {detail}"
+            self.log(f"Basket order failed: {message}", "error")
+            return {"status": "error", "message": message}
+
+        try:
+            common_product = common_value("product", "MIS")
+            common_price_type = common_value("priceType", "MARKET")
+            common_price = number(common_value("price", 0.0), "price")
+            common_trigger_price = number(common_value("triggerPrice", 0.0), "triggerPrice")
+        except ValueError as exc:
+            return basket_error(1, str(exc))
+
+        raw_rows: list[tuple[int, dict, bool]] = []
         if isinstance(orders_raw, str):
             # Parse orders from CSV-like format: SYMBOL,EXCHANGE,ACTION,QTY per line
-            for line in orders_raw.strip().split("\n"):
+            for index, line in enumerate(orders_raw.strip().split("\n"), start=1):
                 line = line.strip()
                 if not line:
                     continue
                 parts = [p.strip() for p in line.split(",")]
-                if len(parts) >= 4:
-                    try:
-                        order = {
-                            "symbol": self.context.interpolate(parts[0]),
-                            "exchange": self.context.interpolate(parts[1]),
-                            "action": self.context.interpolate(parts[2]).upper(),
-                            "quantity": int(self.context.interpolate(parts[3])),
-                            "pricetype": price_type,
-                            "product": product,
-                        }
-                        orders.append(order)
-                    except (ValueError, IndexError) as e:
-                        self.log(f"Skipping invalid order line '{line}': {e}", "warning")
-                else:
-                    self.log(
-                        f"Skipping invalid order line '{line}': expected SYMBOL,EXCHANGE,ACTION,QTY",
-                        "warning",
+                if len(parts) < 4:
+                    return basket_error(index, "expected SYMBOL,EXCHANGE,ACTION,QTY")
+                raw_rows.append(
+                    (
+                        index,
+                        {
+                            "symbol": parts[0],
+                            "exchange": parts[1],
+                            "action": parts[2],
+                            "quantity": parts[3],
+                        },
+                        True,
                     )
+                )
         elif isinstance(orders_raw, list):
-            # Already a list of order dicts
-            orders = orders_raw
+            for index, order in enumerate(orders_raw, start=1):
+                if not isinstance(order, dict):
+                    return basket_error(index, "must be an order object")
+                raw_rows.append((index, order, False))
 
-        if not orders:
+        if not raw_rows:
             error_result = {"status": "error", "message": "No valid orders to place"}
             self.log("Basket order failed: No valid orders", "error")
             return error_result
+
+        orders = []
+        for index, raw_order, csv_row in raw_rows:
+            def row_value(
+                key: str,
+                default: Any,
+                *aliases: str,
+                is_csv_row: bool = csv_row,
+                source_order: dict = raw_order,
+            ) -> Any:
+                if is_csv_row:
+                    return default
+                for candidate in (key, *aliases):
+                    if candidate in source_order:
+                        return resolve(source_order[candidate], candidate)
+                return default
+
+            try:
+                symbol = str(resolve(raw_order.get("symbol"), "symbol")).strip()
+                exchange = str(resolve(raw_order.get("exchange"), "exchange")).strip()
+                action = str(resolve(raw_order.get("action"), "action")).strip().upper()
+                quantity_value = resolve(raw_order.get("quantity"), "quantity")
+                quantity = int(float(quantity_value))
+                if quantity <= 0:
+                    raise ValueError(f"quantity must be positive, got {quantity}")
+                if not symbol or not exchange or not action:
+                    raise ValueError("symbol, exchange, and action are required")
+
+                product = row_value("product", common_product)
+                price_type = row_value("pricetype", common_price_type, "priceType")
+                price = number(row_value("price", common_price), "price")
+                trigger_price = number(
+                    row_value("triggerprice", common_trigger_price, "triggerPrice"), "triggerprice"
+                )
+                invalid = self._invalid_price_reason(str(price_type), price, trigger_price)
+                if invalid:
+                    raise ValueError(invalid)
+            except (ValueError, TypeError) as exc:
+                return basket_error(index, str(exc))
+
+            orders.append(
+                {
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "action": action,
+                    "quantity": quantity,
+                    "product": product,
+                    "pricetype": price_type,
+                    "price": price,
+                    "triggerprice": trigger_price,
+                }
+            )
 
         self.log(f"Placing basket order '{basket_name}' with {len(orders)} orders")
         for i, order in enumerate(orders):
@@ -1250,6 +1344,14 @@ class NodeExecutor:
         split_size = self.get_int(node_data, "splitSize", 10)
         price_type = self.get_str(node_data, "priceType", "MARKET")
         product = self.get_str(node_data, "product", "MIS")
+        price = self.get_float(node_data, "price", 0.0)
+        trigger_price = self.get_float(node_data, "triggerPrice", 0.0)
+
+        invalid = self._invalid_price_reason(price_type, price, trigger_price)
+        if invalid:
+            error_result = {"status": "error", "message": invalid}
+            self.log(f"Split order failed: {invalid}", "error")
+            return error_result
 
         self.log(f"Placing split order: {symbol} qty={quantity} split={split_size}")
         result = self.client.split_order(
@@ -1260,6 +1362,8 @@ class NodeExecutor:
             split_size=split_size,
             price_type=price_type,
             product_type=product,
+            price=price,
+            trigger_price=trigger_price,
             strategy=self.strategy_tag(node_data),
         )
         self.log(
