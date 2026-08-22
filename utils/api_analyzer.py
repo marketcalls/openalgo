@@ -1,4 +1,5 @@
 import json
+import math
 from datetime import datetime, timedelta
 
 import pytz
@@ -31,6 +32,24 @@ logger = get_logger(__name__)
 # Global variable to track order sequence
 _order_sequence = 0
 
+
+
+def _finite_float(value):
+    """Convert ``value`` to float, rejecting NaN and infinity.
+
+    ``float()`` accepts "nan", "inf" and "-inf", and every range check in this
+    module is expressed as a comparison (``<= 0``, ``< 0``, ``== 0``). All of
+    those are False for NaN, so a non-finite value passes validation untouched
+    and reaches the broker. Raise ValueError instead, so the existing handlers
+    report it the same way they report any unparseable number.
+
+    The value itself is never interpolated into the message — analyzer input is
+    logged downstream and must not leak through the error path.
+    """
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("numeric field must be a finite number")
+    return number
 
 def generate_order_id():
     """Generate a sequential order ID in format YYMMDDXXXXXXXX"""
@@ -115,7 +134,7 @@ def analyze_api_request(order_data):
         # Validate quantity
         if "quantity" in order_data:
             try:
-                quantity = float(order_data["quantity"])
+                quantity = _finite_float(order_data["quantity"])
                 if quantity <= 0:
                     issues.append("Quantity must be greater than 0")
             except (ValueError, TypeError):
@@ -143,9 +162,9 @@ def analyze_api_request(order_data):
 
         # Validate price values
         try:
-            price = float(order_data.get("price", DEFAULT_PRICE))
-            trigger_price = float(order_data.get("trigger_price", DEFAULT_TRIGGER_PRICE))
-            disclosed_qty = float(order_data.get("disclosed_quantity", DEFAULT_DISCLOSED_QUANTITY))
+            price = _finite_float(order_data.get("price", DEFAULT_PRICE))
+            trigger_price = _finite_float(order_data.get("trigger_price", DEFAULT_TRIGGER_PRICE))
+            disclosed_qty = _finite_float(order_data.get("disclosed_quantity", DEFAULT_DISCLOSED_QUANTITY))
 
             if price < 0:
                 issues.append("Price cannot be negative")
@@ -211,7 +230,7 @@ def analyze_smart_order_request(order_data):
         # Validate quantity - Allow zero for smart orders since it's used for position checking
         if "quantity" in order_data:
             try:
-                quantity = float(order_data["quantity"])
+                quantity = _finite_float(order_data["quantity"])
                 if quantity < 0:  # Only check for negative values
                     issues.append("Quantity cannot be negative")
             except (ValueError, TypeError):
@@ -220,7 +239,7 @@ def analyze_smart_order_request(order_data):
         # Validate position_size - Allow any number including zero for position management
         if "position_size" in order_data:
             try:
-                float(order_data["position_size"])  # Just validate it's a valid number
+                _finite_float(order_data["position_size"])  # Just validate it's a valid number
             except (ValueError, TypeError):
                 issues.append("Invalid position size value")
 
@@ -246,9 +265,9 @@ def analyze_smart_order_request(order_data):
 
         # Validate price values
         try:
-            price = float(order_data.get("price", DEFAULT_PRICE))
-            trigger_price = float(order_data.get("trigger_price", DEFAULT_TRIGGER_PRICE))
-            disclosed_qty = float(order_data.get("disclosed_quantity", DEFAULT_DISCLOSED_QUANTITY))
+            price = _finite_float(order_data.get("price", DEFAULT_PRICE))
+            trigger_price = _finite_float(order_data.get("trigger_price", DEFAULT_TRIGGER_PRICE))
+            disclosed_qty = _finite_float(order_data.get("disclosed_quantity", DEFAULT_DISCLOSED_QUANTITY))
 
             if price < 0:
                 issues.append("Price cannot be negative")
@@ -459,14 +478,14 @@ def analyze_modify_order_request(order_data):
         try:
             # Validate quantity
             if "quantity" in order_data:
-                quantity = float(order_data["quantity"])
+                quantity = _finite_float(order_data["quantity"])
                 if quantity <= 0:
                     issues.append("Quantity must be greater than 0")
 
             # Validate price values
-            price = float(order_data.get("price", "0"))
-            trigger_price = float(order_data.get("trigger_price", "0"))
-            disclosed_qty = float(order_data.get("disclosed_quantity", "0"))
+            price = _finite_float(order_data.get("price", "0"))
+            trigger_price = _finite_float(order_data.get("trigger_price", "0"))
+            disclosed_qty = _finite_float(order_data.get("disclosed_quantity", "0"))
 
             if price < 0:
                 issues.append("Price cannot be negative")
