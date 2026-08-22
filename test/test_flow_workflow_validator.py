@@ -21,6 +21,7 @@ from services.flow_workflow_validator import (
     migrate_legacy_node_data,
     validate_workflow,
 )
+from services.option_symbol_service import parse_underlying_symbol
 
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend" / "src"
 REGISTRY = FRONTEND / "components" / "flow" / "nodes" / "index.ts"
@@ -82,6 +83,117 @@ def _wf(nodes, edges=None, name="W"):
 
 def _node(node_id, node_type="log", **data):
     return {"id": node_id, "type": node_type, "position": {"x": 0, "y": 0}, "data": data}
+
+
+def _single_action_workflow(node_type, data):
+    return _wf(
+        [_node("start", "start"), _node("action", node_type, **data)],
+        [{"id": "edge", "source": "start", "target": "action"}],
+    )
+
+
+def _strict_node_errors(node_type, data):
+    return validate_workflow(_wf([_node("trigger", node_type, **data)]))
+
+
+@pytest.mark.parametrize(
+    ("data", "missing"),
+    [
+        ({"indicatorName": "RSI", "sourceSeries": "{{bars}}"}, set()),
+        ({"indicatorName": "RSI"}, {"symbol", "exchange"}),
+        ({"sourceSeries": "{{bars}}"}, {"indicatorName"}),
+    ],
+)
+def test_indicator_requirements_follow_its_data_source(data, missing):
+    """History fields must not be required when an upstream series is selected."""
+    errors = validate_workflow(_single_action_workflow("indicator", data))
+    paths = {
+        error["path"].rsplit("/", 1)[-1]
+        for error in errors
+        if error["code"] == "missing_required_field"
+    }
+    assert paths == missing
+
+
+@pytest.mark.parametrize(
+    ("quantity", "invalid"),
+    [(0, False), ("0", False), (-1, True), (1, False)],
+)
+def test_smart_order_quantity_allows_zero_but_rejects_negative_values(quantity, invalid):
+    """Target-position SmartOrders use zero for square-off semantics."""
+    errors = validate_workflow(
+        _single_action_workflow(
+            "smartOrder",
+            {"symbol": "RELIANCE", "exchange": "NSE", "action": "BUY", "quantity": quantity},
+        )
+    )
+    assert any(error["code"] == "invalid_quantity" for error in errors) is invalid
+
+
+def test_place_order_quantity_must_stay_positive():
+    """A regular broker order with zero quantity remains malformed."""
+    errors = validate_workflow(
+        _single_action_workflow(
+            "placeOrder",
+            {"symbol": "RELIANCE", "exchange": "NSE", "action": "BUY", "quantity": 0},
+        )
+    )
+    assert any(error["code"] == "invalid_quantity" for error in errors)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"orderId": "241001000000001", "status": "complete"},
+        {"symbol": "RELIANCE", "status": " TRIGGER_PENDING "},
+    ],
+)
+def test_order_update_trigger_accepts_watchable_filters_and_normalized_status(data):
+    """Activation must accept the same filters and status spellings as the monitor."""
+    errors = _strict_node_errors("orderUpdateTrigger", data)
+    assert not any(error["path"].endswith(("/orderId", "/symbol", "/status")) for error in errors)
+
+
+@pytest.mark.parametrize("data", [{}, {"orderId": "{{previous.orderid}}"}])
+def test_order_update_trigger_rejects_unwatchable_filters(data):
+    """A trigger without a literal order ID or symbol can never match an update."""
+    errors = _strict_node_errors("orderUpdateTrigger", {"status": "complete", **data})
+    assert any(error["code"] in {"missing_alternative", "invalid_trigger_filter"} for error in errors)
+
+
+def test_order_update_trigger_rejects_unknown_status():
+    errors = _strict_node_errors(
+        "orderUpdateTrigger", {"orderId": "241001000000001", "status": "filled"}
+    )
+    assert any(
+        error["code"] == "invalid_status" and error["path"].endswith("/status")
+        for error in errors
+    )
+
+
+@pytest.mark.parametrize(
+    ("node_type", "data", "requires_expiry"),
+    [
+        ("optionSymbol", {"underlying": "NIFTY", "optionType": "CE", "expiryDate": "27AUG26"}, False),
+        ("optionSymbol", {"underlying": "NIFTY27AUG26", "optionType": "CE"}, False),
+        ("optionSymbol", {"underlying": "NIFTY", "optionType": "CE"}, True),
+        ("optionChain", {"underlying": "NIFTY", "expiryDate": "27AUG26"}, False),
+        ("optionChain", {"underlying": "NIFTY27AUG26"}, False),
+        ("optionChain", {"underlying": "NIFTY"}, True),
+        ("syntheticFuture", {"underlying": "NIFTY", "expiryDate": "27AUG26"}, False),
+        ("syntheticFuture", {"underlying": "NIFTY"}, True),
+        ("optionChain", {"underlying": "{{previous.underlying}}"}, False),
+    ],
+)
+def test_expiry_requirement_follows_node_and_underlying(node_type, data, requires_expiry):
+    """Only parsable embedded expiries can replace an explicit expiry field."""
+    assert parse_underlying_symbol("NIFTY27AUG26")[1] == "27AUG26"
+    errors = validate_workflow(_single_action_workflow(node_type, data))
+    has_expiry_error = any(
+        error["code"] == "missing_required_field" and error["path"].endswith("/expiryDate")
+        for error in errors
+    )
+    assert has_expiry_error is requires_expiry
 
 
 def test_valid_workflow_passes():
