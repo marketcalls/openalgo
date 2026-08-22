@@ -13,7 +13,7 @@ Features:
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from datetime import time as dt_time
 from decimal import Decimal
 
@@ -34,6 +34,40 @@ logger = get_logger(__name__)
 
 # Maximum age (seconds) for WebSocket data to be considered fresh
 WEBSOCKET_DATA_MAX_AGE = 5
+
+
+def last_session_expiry_utc(session_expiry_str, now_local):
+    """Resolve the most recent session boundary as a naive UTC datetime.
+
+    ``sandbox_positions.updated_at`` is written by the database clock
+    (``func.now()``), which on the default SQLite database is UTC
+    (``CURRENT_TIMESTAMP``). ``SESSION_EXPIRY_TIME`` is a wall-clock time on
+    the host. Comparing the stored UTC value against a naive *local* boundary
+    mixes clocks: on any host whose timezone is not UTC, positions last
+    updated inside the UTC-offset window (for IST, before 08:30 local —
+    overnight crypto and international-market trades) are dropped from the
+    position book even though they belong to the current session.
+
+    The boundary is therefore converted into the database's clock. On a UTC
+    host the returned value is exactly what the old naive comparison used, so
+    only non-UTC hosts change behavior.
+
+    Args:
+        session_expiry_str: Wall-clock boundary from config (e.g. '03:00').
+        now_local: Timezone-aware current time in the host's timezone.
+
+    Returns:
+        Naive UTC datetime of the most recent session expiry.
+    """
+    expiry_hour, expiry_minute = map(int, session_expiry_str.split(":"))
+    boundary_today = now_local.replace(
+        hour=expiry_hour, minute=expiry_minute, second=0, microsecond=0
+    )
+    if now_local >= boundary_today:
+        boundary = boundary_today
+    else:
+        boundary = boundary_today - timedelta(days=1)
+    return boundary.astimezone(UTC).replace(tzinfo=None)
 
 
 def parse_expiry_from_symbol(symbol, exchange):
@@ -456,30 +490,18 @@ class PositionManager:
         """
         try:
             import os
-            from datetime import datetime, time, timedelta
+            from datetime import datetime
 
             # Get session expiry time from config (e.g., '03:00')
             session_expiry_str = os.getenv("SESSION_EXPIRY_TIME", "03:00")
-            expiry_hour, expiry_minute = map(int, session_expiry_str.split(":"))
 
-            # Get current time
-            now = datetime.now()
-            today = now.date()
-
-            # Calculate if we're in a new session
-            session_expiry_time = time(expiry_hour, expiry_minute)
-
-            # Determine last session expiry
-            if now.time() < session_expiry_time:
-                # We're before today's session expiry (e.g., before 3 AM)
-                # Last session expired yesterday at 3 AM
-                last_session_expiry = datetime.combine(
-                    today - timedelta(days=1), session_expiry_time
-                )
-            else:
-                # We're after today's session expiry (e.g., after 3 AM)
-                # Last session expired today at 3 AM
-                last_session_expiry = datetime.combine(today, session_expiry_time)
+            # updated_at is stored in the database's clock (UTC on SQLite),
+            # so the boundary must be resolved in UTC too — see
+            # last_session_expiry_utc().
+            last_session_expiry = last_session_expiry_utc(
+                session_expiry_str, datetime.now().astimezone()
+            )
+            today = datetime.now(UTC).date()
 
             # Get all positions (including zero quantity ones from current session)
             positions_query = SandboxPositions.query.filter(
