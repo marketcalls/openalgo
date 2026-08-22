@@ -724,6 +724,33 @@ def test_option_expiry_templates_call_the_client_after_resolving_validly(
     assert option_expiry_env.client.calls[0][0] == node_type
 
 
+@pytest.mark.parametrize("node_type", ["optionSymbol", "optionChain"])
+def test_explicit_dynamic_expiry_overrides_an_embedded_expiry_and_must_be_valid(
+    option_expiry_env, monkeypatch, node_type
+):
+    """Option clients prefer expiryDate over an expiry embedded in the underlying."""
+    result, _ = _run_graph(
+        monkeypatch,
+        node_type,
+        {"underlying": "NIFTY27AUG26", "expiryDate": "{{webhook.expiry}}"},
+        {"expiry": "not-a-date"},
+    )
+
+    assert result["status"] == "error"
+    assert option_expiry_env.client.calls == []
+
+
+@pytest.mark.parametrize("node_type", ["optionSymbol", "optionChain"])
+def test_embedded_expiry_is_the_option_node_fallback_when_no_expiry_is_supplied(
+    option_expiry_env, monkeypatch, node_type
+):
+    """An embedded expiry is valid only when an explicit expiryDate is absent."""
+    result, _ = _run_graph(monkeypatch, node_type, {"underlying": "NIFTY27AUG26"}, {})
+
+    assert result["status"] == "success"
+    assert option_expiry_env.client.calls[0][0] == node_type
+
+
 # ---------------------------------------------------------------------------
 # Execution history: recorded with a start time, and bounded
 # ---------------------------------------------------------------------------
