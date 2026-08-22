@@ -13,6 +13,7 @@ Features:
 
 import os
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime
@@ -75,6 +76,14 @@ class ExecutionEngine:
         self.order_rate_limit = int(os.getenv("ORDER_RATE_LIMIT", "10 per second").split()[0])
         self.api_rate_limit = int(os.getenv("API_RATE_LIMIT", "50 per second").split()[0])
         self.batch_delay = 1.0  # 1 second between batches
+
+    # Class-level lock (issue #1808). Each placeorder request constructs a fresh
+    # ExecutionEngine() inside OrderManager.place_order, so an instance-level
+    # lock would give every request its own mutex and the race would remain.
+    # A class attribute is shared across every instance in this process and
+    # therefore serializes the position RMW for them. Multi-process deployments
+    # would still need a DB-level lock.
+    _position_lock = threading.Lock()
 
     def check_and_execute_pending_orders(self):
         """
@@ -667,6 +676,12 @@ class ExecutionEngine:
         or during immediate execution (for MARKET orders). We only need to release margin when
         positions are closed/reduced.
         """
+        # Serialize the position RMW (issue #1808). Without this lock two
+        # concurrent same-symbol fills can both read the same old_quantity,
+        # each compute old + its own delta, and last-write-wins -- silently
+        # losing one increment. The lock is released even when the function
+        # raises or rolls back its transaction.
+        self._position_lock.acquire()
         try:
             fund_manager = FundManager(order.user_id)
 
@@ -966,6 +981,8 @@ class ExecutionEngine:
             db_session.rollback()
             logger.exception(f"Error updating position for order {order.orderid}: {e}")
             raise
+        finally:
+            self._position_lock.release()
 
     def _calculate_realized_pnl(self, old_quantity, avg_price, close_quantity, close_price, contract_value=1.0):
         """Calculate realized P&L for closed positions, multiplied by contract_value (e.g. 0.01 for ETHUSD.P)."""
