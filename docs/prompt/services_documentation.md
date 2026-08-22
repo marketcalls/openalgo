@@ -486,7 +486,7 @@ Data:   get_quotes, get_multi_quotes, get_depth, get_history, get_order_status,
         orderbook, tradebook, positionbook, holdings, funds, get_open_position
 Lookup: symbol, search_symbols, get_expiry, get_intervals, optionchain,
         optionsymbol, syntheticfuture, get_option_greeks
-Other:  holidays, timings, margin, telegram
+Other:  holidays, timings, margin, telegram, whatsapp
 ```
 
 Node execution belongs in `NodeExecutor` and `execute_node_chain(...)`. New Flow
