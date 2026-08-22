@@ -150,6 +150,14 @@ interface Props {
   /** Show/hide the page-level rail — the action lives in each pane's menu. */
   onToggleRail?(): void
   railVisible?: boolean
+  /**
+   * Page-level controls rendered at the head of this pane's toolbar. The
+   * layout picker used to own a full-width row of its own that carried 134px
+   * of content across 1536px and cost 45px of chart height. It belongs to the
+   * page rather than to a pane, so the page passes it in, and passes it to one
+   * pane only.
+   */
+  leading?: React.ReactNode
 }
 
 /**
@@ -168,6 +176,7 @@ export function ChartPane({
   onDrawStats,
   onToggleRail,
   railVisible,
+  leading,
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null)
   const legendRef = useRef<HTMLDivElement>(null)
@@ -433,6 +442,7 @@ export function ChartPane({
           so the view actions stay beside the instrument controls instead of
           dropping to a second row and eating chart height. */}
       <div className="flex flex-nowrap items-center gap-1.5 no-scrollbar overflow-x-auto border-b bg-background/60 px-2 py-1.5">
+        {leading}
         {/* Symbol pill — opens the search modal for this pane */}
         <Button
           variant="outline"
