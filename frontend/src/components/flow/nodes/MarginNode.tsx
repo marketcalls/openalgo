@@ -1,18 +1,15 @@
 import { Handle, Position } from '@xyflow/react'
 import { Calculator } from 'lucide-react'
 import { memo } from 'react'
+import { parseLegs } from '@/lib/flow/marginPositions'
 import { cn } from '@/lib/utils'
 
 interface MarginNodeData {
   label?: string
-  positions?: Array<{
-    symbol: string
-    exchange: string
-    action: 'BUY' | 'SELL'
-    quantity: number
-    product: string
-    priceType: string
-  }>
+  // The editor stores the basket as a raw JSON string under positionsJson; the
+  // `positions` array this used to declare was never written by anything, so
+  // the node badge read "Positions: 0" for every margin node.
+  positionsJson?: string
   outputVariable?: string
 }
 
@@ -22,7 +19,8 @@ interface MarginNodeProps {
 }
 
 export const MarginNode = memo(({ data, selected }: MarginNodeProps) => {
-  const positionCount = data.positions?.length || 0
+  const { legs } = parseLegs(data.positionsJson ?? '')
+  const positionCount = legs.length
 
   return (
     <div className={cn('workflow-node min-w-[120px] border-l-amber-500', selected && 'selected')}>

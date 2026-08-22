@@ -15,7 +15,10 @@ interface ClosePositionsNodeProps {
 }
 
 export const ClosePositionsNode = memo(({ data, selected }: ClosePositionsNodeProps) => {
-  const hasFilter = data.exchange || data.product
+  // Keyed on symbol, because that is what makes the executor scope the close.
+  // exchange and product ship pre-filled (NSE / MIS), so this was always true
+  // and every node advertised a scoped square-off it did not perform.
+  const hasFilter = Boolean(data.symbol)
 
   return (
     <div className={cn('workflow-node node-action min-w-[110px]', selected && 'selected')}>
@@ -26,12 +29,18 @@ export const ClosePositionsNode = memo(({ data, selected }: ClosePositionsNodePr
             <Square className="h-3 w-3" />
           </div>
           <div>
-            <div className="text-xs font-medium leading-tight">Close All</div>
+            <div className="text-xs font-medium leading-tight">
+              {hasFilter ? 'Close' : 'Close All'}
+            </div>
             <div className="text-[9px] text-muted-foreground">Positions</div>
           </div>
         </div>
         {hasFilter ? (
           <div className="space-y-1">
+            <div className="flex items-center justify-between rounded bg-muted/50 px-1.5 py-1">
+              <span className="text-[10px] text-muted-foreground">Symbol</span>
+              <span className="text-[10px] font-medium">{data.symbol}</span>
+            </div>
             {data.exchange && (
               <div className="flex items-center justify-between rounded bg-muted/50 px-1.5 py-1">
                 <span className="text-[10px] text-muted-foreground">Exchange</span>

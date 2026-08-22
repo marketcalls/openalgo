@@ -148,6 +148,24 @@ below is a *shape diagram*, not import-ready — see §8 for runnable examples):
 | `edges` | **yes** (array, can be empty) | yes | See §3. |
 | `viewport` | no | no | Restores canvas position only. Importers may omit. |
 
+### Value validation
+
+Presence is not the only check. On import, save and activation the validator
+also rejects:
+
+- an `exchange`, `action`, `product` or `priceType` outside
+  [§11 Order constants](#11-order-constants) — case-insensitive. Several broker
+  mappers substitute a default for an unrecognised value rather than refusing
+  it, so `"LIMT"` would have become a MARKET order.
+- a `quantity` or `splitSize` that is not a positive number.
+- `httpRequest` `headers` that are not a JSON object written as a string, and a
+  `timeout` outside 1..60000 milliseconds.
+
+A value containing `{{...}}` is skipped here, because it is only knowable at
+run time — order nodes check those separately, immediately before the broker
+call. See
+[Unresolved references on order nodes](#unresolved-references-on-order-nodes).
+
 ### Importer validation
 
 The importer (`POST /api/workflows/import`, called from the Flow Editor's
@@ -220,6 +238,33 @@ Inside any string field of any node's `data`, you can reference variables that
 upstream nodes have produced or that the executor exposes as built-ins. The
 syntax is `{{path}}`.
 
+### Unresolved references on order nodes
+
+Order-defining fields are checked before the node runs, and a `{{reference}}`
+that does not resolve fails the node instead of falling back to a default.
+
+This applies to `placeOrder`, `smartOrder`, `optionsOrder`, `optionsMultiOrder`,
+`basketOrder`, `splitOrder`, `modifyOrder`, `cancelOrder` and `closePositions`,
+on these fields:
+
+`symbol` `exchange` `action` `quantity` `product` `priceType` `price`
+`triggerPrice` `splitSize` `positionSize` `underlying` `strike` `optionType`
+`expiryDate` `orderId` `newQuantity` `newPrice` `newTriggerPrice` `orders`
+`legs`, plus the legacy lowercase spelling `pricetype`.
+
+Why it matters: a numeric field cannot parse `{{webhook.qty}}`, so it used to
+take the field default of `1`, and an unresolved `priceType` fell through the
+broker mapping to `MARKET`. A webhook that simply omitted a key therefore placed
+a **successful order for the wrong size at the wrong price type**, with nothing
+in the run to say so. Now the node fails, the run is marked `failed`, and
+nothing downstream of it executes.
+
+Label fields are deliberately exempt -- `strategy`, `strategyTag` and
+`outputVariable` still pass an unresolved reference through as text.
+
+When a webhook may legitimately omit a value, give the node a literal instead of
+a variable, or branch on a condition node first.
+
 ### Path grammar
 
 - **Dotted keys** for dict access: `{{order.data.orderid}}`
@@ -258,6 +303,15 @@ differs from `{{date}}` between midnight and the 03:00 IST rollover).
 For "has a new period started", use the `calendar` node rather than comparing
 these - see 7.4.
 ### Output variables
+
+Data nodes ship with a default `outputVariable` (`orders`, `trades`,
+`positions`, `holdings`, `funds`, `quotes`, `holidays`, `timings`,
+`marginResult`, `response`, `ind`, ...), and the editor persists it. Set your
+own when two nodes of the same type would otherwise collide.
+
+An unresolved `{{name.path}}` interpolates to its own literal text rather than
+raising. On most fields that is harmless -- an alert message simply contains the
+literal `{{...}}`. On an **order node it is a failure**: see below.
 
 Most data and action nodes accept an `outputVariable` field in their `data`
 object. When set, the result of that node is stored in the workflow context
@@ -700,11 +754,25 @@ Splits a large order into chunks.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `orderId` | string | — | Usually `{{prevOrder.orderid}}`. |
-| `symbol`, `exchange`, `action`, `priceType`, `product` | as `placeOrder` | | Required if the broker expects them on modify. |
+| `orderId` | string | — | Required. Usually `{{prevOrder.orderid}}`. |
 | `newQuantity` | int | — | Empty = keep existing. |
 | `newPrice` | number | — | Empty = keep existing. |
 | `newTriggerPrice` | number | — | Empty = keep existing. |
+| `symbol`, `exchange`, `action`, `priceType`, `product` | as `placeOrder` | from the live order | **Omit these.** Any value present is treated as a deliberate override. |
+
+The executor reads the order back from the order book and changes only the
+fields you supply, so "empty = keep existing" is literal — an omitted quantity
+keeps the order's quantity, not `1`.
+
+Do not set `action` or `product` unless you mean to change them. Several brokers
+carry these on a modify: an `action` of `BUY` on a live SELL order converts the
+order, and a `product` of `MIS` on an NRML position makes it intraday and
+subject to auto square-off. If the order cannot be read, the node fails rather
+than sending a guessed value.
+
+The executor cannot distinguish a value you meant from one a generator filled
+in, so a `modifyOrder` node should carry **only** `orderId` plus whichever of
+`newPrice` / `newQuantity` / `newTriggerPrice` you are changing.
 
 ```json
 {
@@ -713,11 +781,7 @@ Splits a large order into chunks.
   "position": { "x": 100, "y": 300 },
   "data": {
     "orderId": "{{buyOrder.orderid}}",
-    "symbol": "RELIANCE",
-    "exchange": "NSE",
-    "action": "BUY",
     "newPrice": 1455,
-    "priceType": "LIMIT",
     "product": "CNC"
   }
 }
@@ -735,18 +799,40 @@ Splits a large order into chunks.
 
 #### cancelAllOrders — Cancel All Orders
 
+Accepts `outputVariable` like every other action node; the broker's response is
+stored under it.
+
 Cancels every open order. No fields.
 
 ```json
 { "id": "node_3", "type": "cancelAllOrders", "position": { "x": 100, "y": 300 }, "data": {} }
 ```
 
-#### closePositions — Close All Positions
+#### closePositions — Close Positions
 
-Squares off every open position. No fields.
+With no `symbol`, squares off every open position across all exchanges and
+products. With a `symbol`, closes only that position.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `symbol` | string | `""` | Blank closes everything. Set it to scope the close. |
+| `exchange` | string | `NSE` | Only meaningful alongside `symbol`. |
+| `product` | string | `MIS` | Only meaningful alongside `symbol`. |
+
+`exchange` and `product` do not filter on their own — without a `symbol` this is
+an unconditional square-off however they are set.
 
 ```json
 { "id": "node_3", "type": "closePositions", "position": { "x": 100, "y": 300 }, "data": {} }
+```
+
+```json
+{
+  "id": "node_4",
+  "type": "closePositions",
+  "position": { "x": 100, "y": 300 },
+  "data": { "symbol": "RELIANCE", "exchange": "NSE", "product": "MIS" }
+}
 ```
 
 ---
@@ -756,17 +842,33 @@ Squares off every open position. No fields.
 These nodes set a `condition` boolean that the executor uses to route edges
 via `sourceHandle` — see [§5](#5-condition-source-handles).
 
+**A condition node that cannot evaluate fails the node; it does not answer
+`false`.** An unrecognised `field`, `operator` or `condition`, or a threshold
+that is not a number, returns `status: "error"` and takes *neither* branch.
+This matters because `false` is a real answer that routes the graph down the
+false path — an exit gate reading `false` would not fire. Previously these
+cases silently produced `false`, so a typo looked like a condition that simply
+did not hold.
+
+Such a run is recorded as `failed` and the trigger response carries the error,
+the same as any other failing node. A condition that evaluates cleanly to
+`false` is **not** an error and the run still completes.
+
 #### positionCheck — Position Check
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `symbol` | string | — | |
-| `exchange` | string | `"NSE"` | |
+| `symbol` | string | required | |
+| `exchange` | string | required | |
 | `product` | `"MIS"` \| `"CNC"` \| `"NRML"` | `"MIS"` | |
-| `condition` | `"exists"` \| `"not_exists"` \| `"quantity_above"` \| `"quantity_below"` \| `"pnl_above"` \| `"pnl_below"` | `"exists"` | |
+| `condition` | `"exists"` \| `"not_exists"` \| `"quantity_above"` \| `"quantity_below"` \| `"pnl_above"` \| `"pnl_below"` | required | |
 | `threshold` | number | `0` | Only used by the `quantity_*` and `pnl_*` modes. |
 
 Result: `condition=True` if the rule matches the live position.
+
+`symbol` is required and validated at import and activation. A blank symbol
+reads back a zero-quantity position, which makes `not_exists` unconditionally
+true, so the node fails instead of opening the gate it is supposed to guard.
 
 ```json
 {
@@ -786,7 +888,11 @@ Result: `condition=True` if the rule matches the live position.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `minAvailable` | number | `0` | Triggers True when `availablecash >= minAvailable`. |
+| `minAvailable` | number | required | Triggers True when `availablecash >= minAvailable`. |
+
+Required, and validated at import and activation. A node without it cannot guard
+anything — the comparison would be `availablecash >= 0`, true on any balance —
+so the node fails instead of letting the order behind it through.
 
 ```json
 { "id": "node_2", "type": "fundCheck", "position": { "x": 100, "y": 100 }, "data": { "minAvailable": 10000 } }
@@ -798,8 +904,8 @@ Result: `condition=True` if the rule matches the live position.
 |---|---|---|---|
 | `symbol` | string | — | |
 | `exchange` | string | `"NSE"` | |
-| `field` | `"ltp"` \| `"open"` \| `"high"` \| `"low"` \| `"prev_close"` \| `"change_percent"` | `"ltp"` | `change_percent` is computed from `(ltp - prev_close) / prev_close * 100`. |
-| `operator` | `">"` \| `"<"` \| `"=="` \| `">="` \| `"<="` \| `"!="` | `">"` | |
+| `field` | `"ltp"` \| `"open"` \| `"high"` \| `"low"` \| `"prev_close"` \| `"change_percent"` | `"ltp"` | Validated. `change_percent` is computed from `(ltp - prev_close) / prev_close * 100`. |
+| `operator` | `">"` \| `"<"` \| `"=="` \| `">="` \| `"<="` \| `"!="` | `">"` | Validated. |
 | `value` | number | `0` | The threshold to compare against. |
 
 ```json
@@ -865,7 +971,7 @@ cannot silently route the else-path into a trade.
 |---|---|---|---|
 | `conditionType` | `"entry"` \| `"exit"` \| `"custom"` | — | UI-only categorization. |
 | `operator` | `"=="` \| `">="` \| `"<="` \| `">"` \| `"<"` | `">="` | |
-| `targetTime` | `"HH:MM"` | `"09:30"` | |
+| `targetTime` | `"HH:MM"` or `"HH:MM:SS"` | `"09:30"` | Seconds are honoured when given. |
 | `label` | string | — | Optional. |
 
 ```json
@@ -1396,10 +1502,18 @@ For richer arithmetic, use `mathExpression`:
 |---|---|---|---|
 | `method` | `"GET"` \| `"POST"` \| `"PUT"` \| `"DELETE"` \| `"PATCH"` | `"GET"` | |
 | `url` | string | — | Supports `{{vars}}`. |
-| `headers` | object \| JSON-string | `{}` | e.g. `{"Authorization": "Bearer {{token}}"}`. |
+| `headers` | JSON-string | `""` | e.g. `"{\"Authorization\": \"Bearer {{token}}\"}"`. A JSON object is also accepted. |
 | `body` | string | — | JSON string, only used for POST/PUT/PATCH. Supports `{{vars}}`. |
-| `timeout` | int | `30` | Seconds. |
-| `outputVariable` | string | — | `{{apiResponse.data}}`, `{{apiResponse.status}}`. |
+| `timeout` | int | `30000` | Milliseconds, capped at 60000. |
+| `outputVariable` | string | `"response"` | `{{response.data}}`, `{{response.statusCode}}`. |
+
+Only `http` and `https` are allowed, and the destination must resolve to a
+public address. Loopback, private, link-local and reserved ranges are rejected,
+so a workflow cannot be pointed at this server, at a host on the LAN, or at
+cloud metadata on `169.254.169.254`. This matters because `url` interpolates
+from workflow variables, and a webhook trigger puts its caller's JSON body into
+that context. Redirects are not followed. Logged URLs have their query string
+redacted, so a token in a query parameter is not written to the execution log.
 
 ```json
 {
@@ -1411,7 +1525,7 @@ For richer arithmetic, use `mathExpression`:
     "url": "https://hooks.example.com/notify",
     "headers": "{\"Authorization\": \"Bearer {{secret}}\"}",
     "body": "{\"symbol\": \"{{webhook.symbol}}\", \"action\": \"{{webhook.action}}\"}",
-    "timeout": 30,
+    "timeout": 30000,
     "outputVariable": "notifyResp"
   }
 }
@@ -1424,6 +1538,10 @@ For richer arithmetic, use `mathExpression`:
 | `delayValue` | int | `1` | |
 | `delayUnit` | `"seconds"` \| `"minutes"` \| `"hours"` | `"seconds"` | |
 
+Capped at 300 seconds. The delay blocks the workflow's lock and, for a webhook
+trigger, the request that fired it, so longer waits belong in a schedule or a
+`waitUntil` node. A longer value waits the maximum and logs a warning.
+
 ```json
 { "id": "node_3", "type": "delay", "position": { "x": 100, "y": 300 }, "data": { "delayValue": 30, "delayUnit": "seconds" } }
 ```
@@ -1432,7 +1550,7 @@ For richer arithmetic, use `mathExpression`:
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `targetTime` | `"HH:MM"` | `"09:30"` | If already past, the node returns immediately. |
+| `targetTime` | `"HH:MM"` or `"HH:MM:SS"` | `"09:30"` | Seconds are honoured. If already past, the node returns immediately. |
 | `label` | string | — | UI-only. |
 
 ```json
@@ -2129,8 +2247,17 @@ Valid `exchange` values across all nodes:
 | `BCD` | BSE Currency |
 | `MCX` | Commodity |
 | `NCDEX` | Commodity |
+| `NCO` | NSE Commodities, futures and options (Zerodha only) |
 | `NSE_INDEX` | NSE Indices (for `optionsOrder`/`optionChain`/`optionSymbol`/`syntheticFuture`) |
 | `BSE_INDEX` | BSE Indices (same usage as above) |
+| `MCX_INDEX` | MCX sectoral indices such as MCXBULLDEX (quote only) |
+| `GLOBAL_INDEX` | Global indices - US30, JAPAN225, HANGSENG, GIFTNIFTY (quote only, Zerodha) |
+| `CRYPTO` | Crypto derivatives (Delta Exchange only) |
+
+The index and crypto codes are quote-only or broker-specific; an order node
+using one is accepted by the validator but will be refused by a broker that
+does not serve that segment. See `docs/prompt/order-constants.md`, which is the
+source this list is checked against.
 
 ---
 
@@ -2237,7 +2364,33 @@ positionBook (outputVariable=positions)
   from Historify regardless of broker capability.
 - **Unresolved operands in `varCondition` take neither branch.** Unlike other
   interpolation (which passes `{{...}}` through as literal text), this node
-  refuses to evaluate so a typo cannot route a trade.
+  refuses to evaluate so a typo cannot route a trade. Order nodes refuse for the
+  same reason -- see [Unresolved references on order nodes](#unresolved-references-on-order-nodes).
+- **Execution history is pruned.** Each run stores its full node trace, so the
+  newest `FLOW_EXECUTION_RETENTION_COUNT` runs per workflow (default 500) and
+  anything newer than `FLOW_EXECUTION_RETENTION_DAYS` (default 30) are kept;
+  older rows are deleted as new ones are written. Set either to `0` to disable
+  that limit. Export anything you need to keep.
+- **A failed node stops its branch and fails the run.** When a node returns
+  an error - a broker rejection, an unreachable URL, a guard that cannot be
+  evaluated - nothing downstream of it executes, the run is recorded as
+  `failed`, and the trigger response carries the error. Do not rely on a later
+  node running "anyway"; put independent work on its own branch from the
+  trigger.
+- **One-shot triggers deactivate the workflow when they fire.** A `priceAlert`
+  or `orderUpdateTrigger` with `trigger: "once"` clears `is_active` after its
+  run, so it is not re-armed by a later restart. Use `trigger: "every_time"`
+  for a standing watch. The trigger is spent only by a run that actually
+  reached the graph: if the workflow was already running, or the run could not
+  be queued, the trigger stays armed for the next event rather than being
+  silently consumed. A run the broker rejected still counts as spent — it ran.
+- **Editing a trigger on an active workflow re-arms it during the save.** The
+  scheduler and monitors snapshot the trigger node, so a save that changes it
+  tears the old registration down and installs the new one. If that fails the
+  workflow is **deactivated** rather than left running a stale registration,
+  and the response carries `needs_reactivate: true`. Node bodies outside the
+  trigger apply immediately either way, because the graph is re-read on every
+  run.
 - **Lot size handling differs per node.** `optionsOrder` and
   `optionsMultiOrder` accept `quantity` **in lots** (multiplied by lot size
   internally). `placeOrder` / `smartOrder` / `splitOrder` / `basketOrder`
@@ -2256,5 +2409,19 @@ positionBook (outputVariable=positions)
 - UI ↔ field mapping: `frontend/src/components/flow/panels/ConfigPanel.tsx`.
 - Edge filtering: `services/flow_executor_service.py:execute_node_chain`
   → the `if result and "condition" in result:` block.
+- Required fields, checked at import, save and activation:
+  `services/flow_workflow_validator.py` (`REQUIRED_NODE_FIELDS`,
+  `CONDITIONAL_REQUIRED_FIELDS`, `EITHER_REQUIRED_FIELDS`).
+- Trigger registration and its lifecycle: `blueprints/flow.py` (activate,
+  deactivate), `services/flow_scheduler_service.py`,
+  `services/flow_price_monitor_service.py`,
+  `services/flow_order_update_monitor_service.py`.
+- HTTP destination rules: `NodeExecutor._check_http_destination` in
+  `services/flow_executor_service.py`.
+- Unresolved-reference checks on order nodes: `ORDER_NODE_TYPES`,
+  `ORDER_CRITICAL_FIELDS` and `NodeExecutor.unresolved_order_fields` in
+  `services/flow_executor_service.py`.
+- Execution-history retention: `prune_workflow_executions` in
+  `database/flow_db.py`.
 
 If this doc and the code disagree, the code wins. Open a PR.

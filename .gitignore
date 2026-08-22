@@ -42,6 +42,7 @@ tmp/
 checkpoint.txt
 checkpoints.json
 log/ws_proxy_stats.json
+log/test/
 
 
 # Strategy encryption key
