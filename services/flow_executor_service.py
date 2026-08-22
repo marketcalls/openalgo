@@ -52,6 +52,8 @@ ORDER_NODE_TYPES = frozenset(
     }
 )
 
+OPTION_EXPIRY_NODE_TYPES = frozenset({"optionSymbol", "optionChain", "syntheticFuture"})
+
 # Fields on those nodes that decide what actually reaches the broker. Label-ish
 # fields (strategy, strategyTag, outputVariable) are deliberately absent: an
 # unresolved reference there is untidy, not dangerous.
@@ -84,6 +86,7 @@ ORDER_CRITICAL_FIELDS = frozenset(
 # What an unresolved reference looks like after interpolation: WorkflowContext
 # returns the original {{...}} text when a path does not resolve.
 _UNRESOLVED_PATTERN = re.compile(r"\{\{[^}]*\}\}")
+_EXPIRY_DATE_PATTERN = re.compile(r"\d{2}[A-Z]{3}\d{2}")
 
 
 def symbol_prefix_filter(column, prefix: str):
@@ -384,6 +387,35 @@ class NodeExecutor:
         )
         self.log(message, "error")
         return {"status": "error", "message": message, "unresolved": [f for f, _ in fields]}
+
+    def option_expiry_error(self, node_type: str, node_data: dict) -> dict | None:
+        """Reject unresolved or invalid option expiry inputs before a client call."""
+        unresolved = []
+        for field in ("underlying", "expiryDate"):
+            raw = node_data.get(field)
+            if isinstance(raw, str) and "{{" in raw:
+                resolved = self.context.interpolate(raw)
+                if _UNRESOLVED_PATTERN.search(resolved):
+                    unresolved.append((field, resolved))
+        if unresolved:
+            return self.unresolved_error(node_type, unresolved)
+
+        underlying = self.get_str(node_data, "underlying", "").strip()
+        expiry_date = self.get_str(node_data, "expiryDate", "").strip()
+        if not underlying:
+            message = f"{node_type} needs a resolved underlying before it can request option data."
+            self.log(message, "error")
+            return {"status": "error", "message": message}
+
+        from services.option_symbol_service import parse_underlying_symbol
+
+        _, embedded_expiry = parse_underlying_symbol(underlying)
+        needs_expiry = node_type == "syntheticFuture" or embedded_expiry is None
+        if needs_expiry and not _EXPIRY_DATE_PATTERN.fullmatch(expiry_date.upper()):
+            message = f"{node_type} needs a resolved expiryDate in DDMMMYY format before it can run."
+            self.log(message, "error")
+            return {"status": "error", "message": message}
+        return None
 
     def get_str(self, node_data: dict, key: str, default: str = "") -> str:
         """Get interpolated string value from node data"""
@@ -3376,10 +3408,17 @@ def execute_node_chain(
     blocked_fields = (
         executor.unresolved_order_fields(node_data) if node_type in ORDER_NODE_TYPES else []
     )
+    option_expiry_error = (
+        executor.option_expiry_error(node_type, node_data)
+        if node_type in OPTION_EXPIRY_NODE_TYPES
+        else None
+    )
 
     # Execute node based on type
     if blocked_fields:
         result = executor.unresolved_error(node_type, blocked_fields)
+    elif option_expiry_error:
+        result = option_expiry_error
     elif node_type == "start":
         executor.log("Workflow started")
     elif node_type == "placeOrder":
