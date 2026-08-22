@@ -15,6 +15,8 @@ stay with the executor, which is where their defaults and coercions live.
 import re
 from typing import Any
 
+from services.flow_node_contracts import VALID_STATUSES, normalize_status
+from services.option_symbol_service import parse_underlying_symbol
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -130,6 +132,15 @@ def _positive_number(value: object) -> float | None:
     return number if number > 0 else None
 
 
+def _valid_quantity(value: object, *, allow_zero: bool = False) -> bool:
+    """Return whether an order quantity is positive, or non-negative when allowed."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return number >= 0 if allow_zero else number > 0
+
+
 def _alert_threshold_errors(
     base: str, data: dict, condition: str, required: tuple[str, ...]
 ) -> list[dict]:
@@ -224,7 +235,7 @@ REQUIRED_NODE_FIELDS: dict[str, tuple[str, ...]] = {
     "getQuote": ("symbol", "exchange"),
     "getDepth": ("symbol", "exchange"),
     "history": ("symbol", "exchange", "interval"),
-    "indicator": ("symbol", "exchange", "indicatorName"),
+    "indicator": ("indicatorName",),
     "priorPeriodOhlc": ("symbol", "exchange"),
     "barOffset": ("symbol", "exchange"),
     "openPosition": ("symbol", "exchange"),
@@ -305,8 +316,8 @@ ENUM_FIELDS: dict[str, frozenset[str]] = {
     "pricetype": VALID_PRICE_TYPES,
 }
 
-# Fields that must be a positive number wherever they appear. A zero or
-# negative quantity reaches the broker as a malformed order.
+# Fields that must be a positive number wherever they appear. SmartOrder
+# quantity is the exception: zero denotes a valid target-position square-off.
 POSITIVE_NUMBER_FIELDS = frozenset({"quantity", "splitSize", "lots"})
 
 
@@ -357,14 +368,21 @@ def _enum_and_range_errors(base: str, node_type: str, data: dict) -> list:
         value = data.get(field)
         if isinstance(value, str) and ("{{" in value or not value.strip()):
             continue
-        if _positive_number(value) is None:
+        allow_zero = node_type == "smartOrder" and field == "quantity"
+        if not _valid_quantity(value, allow_zero=allow_zero):
+            expectation = "a non-negative number" if allow_zero else "a positive number"
+            message = (
+                f"SmartOrder quantity must be a non-negative number; {value!r} "
+                "cannot describe a target position."
+                if allow_zero
+                else f"{field} must be a positive number; {value!r} reaches the broker as a malformed order."
+            )
             found.append(
                 _err(
                     f"{base}/data/{field}",
                     "invalid_quantity",
-                    f"{field} must be a positive number; {value!r} reaches the "
-                    "broker as a malformed order.",
-                    "a positive number",
+                    message,
+                    expectation,
                     value,
                 )
             )
@@ -645,6 +663,69 @@ def validate_workflow(
 
         if strict and isinstance(data, dict) and isinstance(node_type, str):
             required = list(REQUIRED_NODE_FIELDS.get(node_type, ()))
+            if node_type == "indicator":
+                source_series = data.get("sourceSeries")
+                if source_series is None or (
+                    isinstance(source_series, str) and not source_series.strip()
+                ):
+                    required.extend(("symbol", "exchange"))
+            elif node_type in {"optionSymbol", "optionChain"}:
+                underlying = data.get("underlying")
+                has_embedded_expiry = (
+                    isinstance(underlying, str)
+                    and "{{" not in underlying
+                    and bool(underlying.strip())
+                    and parse_underlying_symbol(underlying)[1] is not None
+                )
+                if not has_embedded_expiry and not (
+                    isinstance(underlying, str) and "{{" in underlying
+                ):
+                    required.append("expiryDate")
+            elif node_type == "syntheticFuture":
+                required.append("expiryDate")
+
+            if node_type == "orderUpdateTrigger":
+                order_id = data.get("orderId")
+                symbol = data.get("symbol")
+                has_order_id = order_id is not None and not (
+                    isinstance(order_id, str) and not order_id.strip()
+                )
+                has_symbol = symbol is not None and not (
+                    isinstance(symbol, str) and not symbol.strip()
+                )
+                if not has_order_id and not has_symbol:
+                    errors.append(
+                        _err(
+                            f"{base}/data/orderId",
+                            "missing_alternative",
+                            "An orderUpdateTrigger needs an Order ID or a Symbol to watch.",
+                            "a non-empty orderId or symbol",
+                            None,
+                        )
+                    )
+                elif isinstance(order_id, str) and "{{" in order_id:
+                    errors.append(
+                        _err(
+                            f"{base}/data/orderId",
+                            "invalid_trigger_filter",
+                            "orderUpdateTrigger Order ID must be a literal order id, not a "
+                            "{{variable}} reference.",
+                            "a literal order id",
+                            order_id,
+                        )
+                    )
+                status = data.get("status", "complete")
+                if normalize_status(status) not in VALID_STATUSES:
+                    errors.append(
+                        _err(
+                            f"{base}/data/status",
+                            "invalid_status",
+                            f"orderUpdateTrigger status must be one of {sorted(VALID_STATUSES)}, "
+                            f"got {status!r}",
+                            sorted(VALID_STATUSES),
+                            status,
+                        )
+                    )
             for selector, options in CONDITIONAL_REQUIRED_FIELDS.get(node_type, {}).items():
                 chosen = _canonical_condition(data.get(selector, ""))
                 if chosen and chosen not in options:
