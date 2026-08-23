@@ -9,6 +9,7 @@ list - was a case of those falling out of step with no test to catch it.
 Run: uv run pytest test/test_flow_workflow_validator.py -v
 """
 
+import json
 import re
 from pathlib import Path
 
@@ -23,7 +24,9 @@ from services.flow_workflow_validator import (
 )
 from services.option_symbol_service import parse_underlying_symbol
 
-FRONTEND = Path(__file__).resolve().parents[1] / "frontend" / "src"
+ROOT = Path(__file__).resolve().parents[1]
+FRONTEND = ROOT / "frontend" / "src"
+FLOW_IMPORT_PROMPT = ROOT / "docs" / "prompt" / "flow-import-format.md"
 REGISTRY = FRONTEND / "components" / "flow" / "nodes" / "index.ts"
 PALETTE = FRONTEND / "components" / "flow" / "panels" / "NodePalette.tsx"
 CONFIG_PANEL = FRONTEND / "components" / "flow" / "panels" / "ConfigPanel.tsx"
@@ -161,6 +164,133 @@ def _wf(nodes, edges=None, name="W"):
 
 def _node(node_id, node_type="log", **data):
     return {"id": node_id, "type": node_type, "position": {"x": 0, "y": 0}, "data": data}
+
+
+JSON_FENCE_RE = re.compile(r"^```json\s*\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
+MULTI_VALUE_JSON_FENCES = {5: 2, 27: 2, 38: 5}
+
+
+def _json_fences(prompt):
+    for index, match in enumerate(JSON_FENCE_RE.finditer(prompt), 1):
+        start_line = prompt.count("\n", 0, match.start()) + 1
+        yield index, start_line, match.group(1)
+
+
+def _decode_json_sequence(raw):
+    decoder = json.JSONDecoder()
+    values = []
+    offset = 0
+    while True:
+        while offset < len(raw) and raw[offset].isspace():
+            offset += 1
+        if offset == len(raw):
+            return values
+        value, offset = decoder.raw_decode(raw, offset)
+        values.append(value)
+
+
+def _as_workflow_example(value):
+    if isinstance(value, dict) and "nodes" in value and "edges" in value:
+        return value
+
+    if isinstance(value, dict):
+        snippets = [value]
+    elif isinstance(value, list):
+        snippets = value
+    else:
+        return None
+
+    if not snippets or not all(
+        isinstance(node, dict)
+        and isinstance(node.get("type"), str)
+        and isinstance(node.get("data"), dict)
+        for node in snippets
+    ):
+        return None
+
+    nodes = []
+    for index, snippet in enumerate(snippets, 1):
+        node = dict(snippet)
+        node.setdefault("id", f"documented_node_{index}")
+        node.setdefault("position", {"x": 100, "y": index * 100})
+        nodes.append(node)
+
+    trigger_ids = [node["id"] for node in nodes if node["type"] in TRIGGER_NODE_TYPES]
+    if not trigger_ids:
+        nodes.insert(0, _node("documented_trigger", "start"))
+        trigger_ids = ["documented_trigger"]
+    if len(nodes) == 1:
+        nodes.append(_node("documented_action", "log", message="Prompt contract example"))
+
+    trigger_id = trigger_ids[0]
+    edges = [
+        {"id": f"documented_edge_{index}", "source": trigger_id, "target": node["id"]}
+        for index, node in enumerate(nodes, 1)
+        if node["id"] != trigger_id
+    ]
+    return _wf(nodes, edges, name="Prompt contract example")
+
+
+def test_every_parseable_prompt_json_example_matches_the_strict_contract():
+    """Malformed or runtime-invalid prompt JSON must identify its source fence."""
+    prompt = FLOW_IMPORT_PROMPT.read_text(encoding="utf-8")
+    failures = []
+    fence_lines = {}
+    seen_multi_value_fences = {}
+
+    for index, line, raw in _json_fences(prompt):
+        fence_lines[index] = line
+        try:
+            values = [json.loads(raw)]
+        except json.JSONDecodeError:
+            try:
+                values = _decode_json_sequence(raw)
+            except json.JSONDecodeError as exc:
+                failures.append((index, line, [{"code": "invalid_json", "message": str(exc)}]))
+                continue
+
+            expected_count = MULTI_VALUE_JSON_FENCES.get(index)
+            if expected_count != len(values):
+                failures.append(
+                    (
+                        index,
+                        line,
+                        [
+                            {
+                                "code": "unexpected_json_sequence",
+                                "message": f"decoded {len(values)} values; expected {expected_count or 1}",
+                            }
+                        ],
+                    )
+                )
+                continue
+            seen_multi_value_fences[index] = len(values)
+
+        for value in values:
+            payload = _as_workflow_example(value)
+            if payload is None:
+                continue
+            errors = validate_workflow(payload, strict=True)
+            if errors:
+                failures.append((index, line, errors))
+
+    for index, expected_count in MULTI_VALUE_JSON_FENCES.items():
+        if index not in seen_multi_value_fences:
+            failures.append(
+                (
+                    index,
+                    fence_lines.get(index),
+                    [
+                        {
+                            "code": "missing_json_sequence",
+                            "message": f"expected the allowlisted sequence of {expected_count} values",
+                        }
+                    ],
+                )
+            )
+
+    assert failures == []
+    assert seen_multi_value_fences == MULTI_VALUE_JSON_FENCES
 
 
 def _single_action_workflow(node_type, data):
