@@ -11,6 +11,23 @@ interface OrderPriceFieldsProps {
   onTriggerPriceChange: (triggerPrice: number) => void
 }
 
+interface OptionsMultiPricingState {
+  strategy: string
+  priceType: PriceType
+}
+
+export function getOptionsMultiStrategyUpdate(
+  current: OptionsMultiPricingState,
+  strategy: string
+): { strategy: string; priceType?: PriceType } {
+  const leavesCustomStrategy = current.strategy === 'custom' && strategy !== 'custom'
+  const hasStopPriceType = current.priceType === 'SL' || current.priceType === 'SL-M'
+
+  return leavesCustomStrategy && hasStopPriceType
+    ? { strategy, priceType: 'MARKET' }
+    : { strategy }
+}
+
 function numericValue(value: string): number {
   const parsed = Number.parseFloat(value)
   return Number.isFinite(parsed) ? parsed : 0
