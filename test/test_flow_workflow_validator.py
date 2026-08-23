@@ -28,6 +28,7 @@ REGISTRY = FRONTEND / "components" / "flow" / "nodes" / "index.ts"
 PALETTE = FRONTEND / "components" / "flow" / "panels" / "NodePalette.tsx"
 CONFIG_PANEL = FRONTEND / "components" / "flow" / "panels" / "ConfigPanel.tsx"
 CONSTANTS = FRONTEND / "lib" / "flow" / "constants.ts"
+FLOW_TYPES = FRONTEND / "types" / "flow.ts"
 
 
 def _registry_types() -> set[str]:
@@ -41,6 +42,16 @@ def _default_node_data_keys() -> set[str]:
     block = src.split("DEFAULT_NODE_DATA")[1]
     block = block[: block.index("\n}")]
     return set(re.findall(r"^\s{2}(\w+):\s*\{", block, re.M))
+
+
+def _default_node_data_block(node_type: str) -> str:
+    src = CONSTANTS.read_text()
+    return src.split(f"  {node_type}: {{", 1)[1].split("\n  },", 1)[0]
+
+
+def _typescript_interface_body(interface_name: str) -> str:
+    src = FLOW_TYPES.read_text()
+    return src.split(f"export interface {interface_name} {{", 1)[1].split("\n}", 1)[0]
 
 
 def _palette_types() -> set[str]:
@@ -64,6 +75,73 @@ def test_validator_matches_reactflow_registry():
 def test_every_registered_node_has_default_data():
     """Without defaults a dragged node starts as {} and its contract is implicit."""
     assert _registry_types() - _default_node_data_keys() == set()
+
+
+@pytest.mark.parametrize("node_type", ["smartOrder", "basketOrder", "splitOrder"])
+@pytest.mark.parametrize("field", ["price", "triggerPrice"])
+def test_frontend_order_defaults_include_numeric_prices(node_type, field):
+    """New order nodes persist the complete price contract from their first save."""
+    block = _default_node_data_block(node_type)
+    assert re.search(rf"^\s+{field}: 0,$", block, re.M)
+
+
+def test_frontend_order_defaults_exclude_legacy_fields():
+    """Frontend contracts do not advertise values ignored by execution."""
+    assert "username" not in _default_node_data_block("telegramAlert")
+    assert "username" not in _typescript_interface_body("TelegramAlertNodeData")
+
+    options_multi = _typescript_interface_body("OptionsMultiOrderNodeData")
+    leg = options_multi.split("legs: Array<{", 1)[1].split("}>", 1)[0]
+    assert "expiryDate" not in leg
+
+
+@pytest.mark.parametrize(
+    ("interface_name", "optional"),
+    [
+        ("OptionsOrderNodeData", False),
+        ("OptionsMultiOrderNodeData", False),
+        ("BasketOrderNodeData", True),
+        ("SplitOrderNodeData", False),
+    ],
+)
+def test_frontend_order_defaults_types_accept_every_backend_price_type(interface_name, optional):
+    """Order interfaces cannot reject a price type accepted by execution."""
+    body = _typescript_interface_body(interface_name)
+    marker = "priceType?:" if optional else "priceType:"
+    assert f"{marker} 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'" in body
+
+
+@pytest.mark.parametrize(
+    "interface_name",
+    [
+        "OptionsOrderNodeData",
+        "OptionsMultiOrderNodeData",
+        "BasketOrderNodeData",
+        "SplitOrderNodeData",
+    ],
+)
+@pytest.mark.parametrize("field", ["price", "triggerPrice"])
+def test_frontend_order_defaults_types_expose_top_level_prices(interface_name, field):
+    """Every priced order exposes both persisted numeric fields at the top level."""
+    body = _typescript_interface_body(interface_name)
+    top_level = body.split("}>", 1)[1] if interface_name == "OptionsMultiOrderNodeData" else body
+    assert f"{field}?: number" in top_level
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "product?: 'MIS' | 'NRML'",
+        "priceType?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'",
+        "price?: number",
+        "triggerPrice?: number",
+    ],
+)
+def test_frontend_order_defaults_custom_legs_carry_price_contract(field):
+    """Imported custom legs retain their own execution fields, but not expiry."""
+    body = _typescript_interface_body("OptionsMultiOrderNodeData")
+    leg = body.split("legs: Array<{", 1)[1].split("}>", 1)[0]
+    assert field in leg
 
 
 @pytest.mark.skipif(not PALETTE.exists(), reason="frontend sources not present")
