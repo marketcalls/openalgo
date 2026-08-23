@@ -1433,7 +1433,6 @@ def test_variable_operation_get_preserves_a_stored_none_value():
         ),
         ("add", {"target": "not numeric"}, {"value": "1"}, "not numeric"),
         ("add", {"target": "sentinel"}, {"value": "not numeric"}, "sentinel"),
-        ("divide", {"target": "sentinel"}, {"value": "0"}, "sentinel"),
         ("parse_json", {"target": "sentinel"}, {"value": "not json"}, "sentinel"),
         ("stringify", {"target": "sentinel", "source": {1, 2}}, {"sourceVariable": "source"}, "sentinel"),
     ],
@@ -1447,6 +1446,20 @@ def test_variable_operation_error_does_not_mutate_target(operation, initial, dat
 
     assert result["status"] == "error"
     assert executor.context.get_variable("target") == original
+
+
+def test_variable_divide_by_zero_reaches_the_zero_guard_without_mutating_target():
+    """A numeric target proves the explicit divisor guard, not an earlier coercion error."""
+    executor = _node()
+    executor.context.set_variable("target", 9)
+
+    result = executor.execute_variable(
+        {"variableName": "target", "operation": "divide", "value": 0}
+    )
+
+    assert result["status"] == "error"
+    assert "divide by zero" in result["message"].lower()
+    assert executor.context.get_variable("target") == 9
 
 
 @pytest.mark.parametrize(

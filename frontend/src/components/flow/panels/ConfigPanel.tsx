@@ -39,6 +39,7 @@ import {
 import type { PriceType } from '@/lib/flow/constants'
 import { cn } from '@/lib/utils'
 import { useFlowWorkflowStore } from '@/stores/flowWorkflowStore'
+import type { BasketOrderItem } from '@/types/flow'
 import { showToast } from '@/utils/toast'
 import { IndicatorParamsFields } from './IndicatorParamsFields'
 import { MarginPositionsFields } from './MarginPositionsFields'
@@ -202,6 +203,17 @@ function getNodeInfo(nodeType: string) {
   return null
 }
 
+function basketOrdersText(orders: string | BasketOrderItem[] | undefined): string {
+  if (Array.isArray(orders)) return JSON.stringify(orders, null, 2)
+  return orders || ''
+}
+
+function basketOrdersToCsv(orders: BasketOrderItem[]): string {
+  return orders
+    .map((order) => [order.symbol, order.exchange, order.action, order.quantity].join(','))
+    .join('\n')
+}
+
 export function ConfigPanel() {
   const { id: workflowId } = useParams<{ id: string }>()
   const { nodes, selectedNodeId, updateNodeData, deleteNode, selectNode } = useFlowWorkflowStore()
@@ -270,6 +282,7 @@ export function ConfigPanel() {
   const nodeData = selectedNode.data as Record<string, unknown>
   const nodeType = selectedNode.type || 'unknown'
   const orderPriceType = (nodeData.priceType as PriceType | undefined) || 'MARKET'
+  const basketOrders = nodeData.orders as string | BasketOrderItem[] | undefined
   const nodeTitle = NODE_TITLES[nodeType] || nodeInfo?.label || nodeType
 
   return (
@@ -1367,6 +1380,13 @@ export function ConfigPanel() {
                   onPriceChange={(value) => handleDataChange('price', value)}
                   onTriggerPriceChange={(value) => handleDataChange('triggerPrice', value)}
                 />
+                {nodeData.strategy === 'custom' && (
+                  <p className="text-[10px] text-muted-foreground">
+                    Custom legs inherit these common product and price fields when omitted. A
+                    leg&apos;s explicit product, price type, price, or trigger price overrides the
+                    common value.
+                  </p>
+                )}
                 {orderPriceType === 'LIMIT' && nodeData.strategy !== 'custom' && (
                   <div>
                     <p className="text-[10px] text-muted-foreground">
@@ -1505,9 +1525,28 @@ export function ConfigPanel() {
                   <Textarea
                     className="min-h-[100px] text-xs font-mono"
                     placeholder="RELIANCE,NSE,BUY,10&#10;INFY,NSE,BUY,5&#10;SBIN,NSE,SELL,20"
-                    value={(nodeData.orders as string) || ''}
+                    value={basketOrdersText(basketOrders)}
+                    readOnly={Array.isArray(basketOrders)}
                     onChange={(e) => handleDataChange('orders', e.target.value)}
                   />
+                  {Array.isArray(basketOrders) && (
+                    <div className="space-y-2 rounded-md border p-2">
+                      <p className="text-[10px] text-muted-foreground">
+                        This imported per-order list is preserved read-only, including product and
+                        price overrides. Converting to CSV keeps only symbol, exchange, action, and
+                        quantity so the rows can be edited here.
+                      </p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => handleDataChange('orders', basketOrdersToCsv(basketOrders))}
+                      >
+                        Convert imported orders to CSV
+                      </Button>
+                    </div>
+                  )}
                   <p className="text-[10px] text-muted-foreground">
                     Supported exchanges: NSE, BSE, NFO, BFO, CDS, BCD, MCX, NCO
                   </p>

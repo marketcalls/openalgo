@@ -18,6 +18,10 @@ import re
 from typing import Any
 
 from services.flow_node_contracts import VALID_STATUSES, normalize_status, parse_underlying_symbol
+from utils.constants import VALID_ACTIONS as SHARED_VALID_ACTIONS
+from utils.constants import VALID_EXCHANGES as SHARED_VALID_EXCHANGES
+from utils.constants import VALID_PRICE_TYPES as SHARED_VALID_PRICE_TYPES
+from utils.constants import VALID_PRODUCT_TYPES as SHARED_VALID_PRODUCT_TYPES
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -292,27 +296,10 @@ EITHER_REQUIRED_FIELDS: dict[str, tuple[tuple[str, ...], ...]] = {
 # best and a silently different order at worst -- several broker mappers fall
 # back to a default for an unrecognised price type rather than refusing it, so
 # a typo'd "LIMT" becomes a MARKET order.
-VALID_EXCHANGES = frozenset(
-    {
-        "NSE",
-        "NFO",
-        "CDS",
-        "BSE",
-        "BFO",
-        "BCD",
-        "MCX",
-        "NCDEX",
-        "NCO",
-        "NSE_INDEX",
-        "BSE_INDEX",
-        "MCX_INDEX",
-        "CRYPTO",
-        "GLOBAL_INDEX",
-    }
-)
-VALID_PRODUCTS = frozenset({"CNC", "NRML", "MIS"})
-VALID_PRICE_TYPES = frozenset({"MARKET", "LIMIT", "SL", "SL-M"})
-VALID_ACTIONS = frozenset({"BUY", "SELL"})
+VALID_EXCHANGES = frozenset(SHARED_VALID_EXCHANGES)
+VALID_PRODUCTS = frozenset(SHARED_VALID_PRODUCT_TYPES)
+VALID_PRICE_TYPES = frozenset(SHARED_VALID_PRICE_TYPES)
+VALID_ACTIONS = frozenset(SHARED_VALID_ACTIONS)
 VALID_OPTION_TYPES = frozenset({"CE", "PE"})
 VALID_VARIABLE_OPERATIONS = frozenset(
     {
@@ -583,8 +570,9 @@ def _options_multi_errors(base: str, data: dict, strict: bool) -> list[dict]:
                 ]
         return []
 
-    legs = data.get("legs")
-    legs_base = f"{base}/data/legs"
+    legs_key = "orderLegs" if "legs" not in data and "orderLegs" in data else "legs"
+    legs = data.get(legs_key)
+    legs_base = f"{base}/data/{legs_key}"
     if legs is None or (isinstance(legs, str) and not legs.strip()):
         return (
             [
@@ -626,11 +614,19 @@ def _options_multi_errors(base: str, data: dict, strict: bool) -> list[dict]:
                 )
             )
             continue
+        effective_leg = dict(leg)
+        if "product" not in effective_leg and "product" in data:
+            effective_leg["product"] = data["product"]
         price_type_key = "priceType" if "priceType" in leg else "pricetype"
+        if price_type_key not in effective_leg and "priceType" in data:
+            effective_leg[price_type_key] = data["priceType"]
+        for field in ("price", "triggerPrice"):
+            if field not in effective_leg and field in data:
+                effective_leg[field] = data[field]
         found.extend(
             _static_order_leg_errors(
                 leg_base,
-                leg,
+                effective_leg,
                 strict,
                 ("offset", "optionType", "action", "quantity"),
                 price_type_key=price_type_key,
