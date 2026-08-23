@@ -29,6 +29,7 @@ import { showToast } from '@/utils/toast'
 import { ChartSettingsDialog } from './ChartSettingsDialog'
 import { DrawingStyleBar } from './DrawingStyleBar'
 import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
+import { IndicatorPickerDialog } from './IndicatorPickerDialog'
 import { IndicatorSettingsDialog } from './IndicatorSettingsDialog'
 import { SymbolSearchDialog } from './SymbolSearchDialog'
 
@@ -242,7 +243,7 @@ export function ChartPane({
   // drawing + indicator controls (additive; the trading controls are unchanged)
   const [indicators, setIndicators] = useState<{ id: string; name: string }[]>([])
   const [catalog, setCatalog] = useState<{ id: string; name: string; category: string }[]>([])
-  const [indicatorQuery, setIndicatorQuery] = useState('')
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [grid, setGrid] = useState({ vertical: true, horizontal: true })
   const [fullscreen, setFullscreen] = useState(false)
   const [gridSub, setGridSub] = useState(false)
@@ -451,21 +452,6 @@ export function ChartPane({
   /** Portal target for menus: the pane itself in fullscreen, body otherwise. */
   const menuHost = fullscreen ? paneRef.current : null
 
-  const indicatorFilter = indicatorQuery.trim().toLowerCase()
-  const catalogGroups = catalog
-    .filter(
-      (d) =>
-        indicatorFilter === '' ||
-        d.name.toLowerCase().includes(indicatorFilter) ||
-        d.id.includes(indicatorFilter),
-    )
-    .reduce<Record<string, typeof catalog>>((acc, d) => {
-      const list = acc[d.category] ?? []
-      list.push(d)
-      acc[d.category] = list
-      return acc
-    }, {})
-  const catalogMatches = Object.values(catalogGroups).reduce((n, l) => n + l.length, 0)
 
   // The product the toggle switches to; with two options that is "the other".
   const nextProduct = sym
@@ -599,97 +585,28 @@ export function ChartPane({
           />
         </div>
 
-        {/* Indicators (additive) */}
-        <DropdownMenu onOpenChange={(o) => o && void openIndicators()}>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-8 shrink-0 gap-1" title="Indicators">
-              <IndicatorIcon className="h-4 w-4" />
-              <span className="hidden sm:inline">Indicators</span>
-              {indicators.length > 0 && (
-                <span className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary">
-                  {indicators.length}
-                </span>
-              )}
-              <ChevronDown className="h-3.5 w-3.5 opacity-60" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            container={menuHost}
-            align="start"
-            className="max-h-80 w-64 overflow-y-auto"
-            onCloseAutoFocus={() => setIndicatorQuery('')}
-          >
-            <div className="sticky top-0 z-10 bg-popover px-2 pb-1 pt-1">
-              <input
-                type="text"
-                value={indicatorQuery}
-                onChange={(e) => setIndicatorQuery(e.target.value)}
-                // Radix moves focus to the first item on any printable key, which
-                // would otherwise steal every keystroke out of this box.
-                onKeyDown={(e) => e.stopPropagation()}
-                placeholder={`Search ${catalog.length} indicators`}
-                className="h-7 w-full rounded border bg-background px-2 text-xs outline-none focus:border-primary"
-              />
-            </div>
-            {indicators.length > 0 && (
-              <>
-                <div className="px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  On this chart
-                </div>
-                {indicators.map((i) => (
-                  <DropdownMenuItem
-                    key={i.id}
-                    onSelect={(e) => {
-                      // Settings and remove on one row; the gear must not fall
-                      // through to the row's remove action.
-                      const target = e.target as HTMLElement
-                      if (target.closest('[data-act="settings"]')) {
-                        e.preventDefault()
-                        terminalRef.current?.openIndicatorSettings(i.id)
-                        return
-                      }
-                      terminalRef.current?.removeIndicatorById(i.id)
-                    }}
-                    className="justify-between gap-2 text-sm"
-                  >
-                    {i.name}
-                    <span className="flex items-center gap-2">
-                      <span data-act="settings" className="text-xs text-primary hover:underline">
-                        settings
-                      </span>
-                      <span className="text-xs text-muted-foreground">remove</span>
-                    </span>
-                  </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-              </>
-            )}
-            {catalogMatches === 0 && (
-              <div className="px-2 py-3 text-center text-xs text-muted-foreground">
-                No indicator matches that
-              </div>
-            )}
-            {Object.entries(catalogGroups).map(([cat, list]) => (
-              <div key={cat}>
-                <div className="px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  {cat}
-                </div>
-                {list.map((d) => (
-                  <DropdownMenuItem
-                    key={d.id}
-                    onSelect={() => void terminalRef.current?.addIndicatorById(d.id)}
-                    className="text-sm"
-                  >
-                    {d.name}
-                  </DropdownMenuItem>
-                ))}
-              </div>
-            ))}
-            {catalog.length === 0 && (
-              <div className="px-2 py-3 text-sm text-muted-foreground">Loading…</div>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {/* Indicators. A dialog rather than a dropdown: 88 built-ins in a
+            264px column was a scroll race, with no way to jump to a category
+            and no memory of what you reach for daily. */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 shrink-0 gap-1"
+          title="Indicators"
+          onClick={() => {
+            setPickerOpen(true)
+            void openIndicators()
+          }}
+        >
+          <IndicatorIcon className="h-4 w-4" />
+          <span className="hidden sm:inline">Indicators</span>
+          {indicators.length > 0 && (
+            <span className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary">
+              {indicators.length}
+            </span>
+          )}
+          <ChevronDown className="h-3.5 w-3.5 opacity-60" />
+        </Button>
 
         {/* The layout picker sits here, immediately after Indicators, because
             that is where a chart terminal puts it. It is page-level, so only
@@ -786,6 +703,15 @@ export function ChartPane({
           req={textReq}
           onSubmit={(id, value) => terminalRef.current?.applyDrawText(id, value)}
           onClose={() => setTextReq(null)}
+        />
+        <IndicatorPickerDialog
+          open={pickerOpen}
+          catalog={catalog}
+          active={indicators}
+          onAdd={(id) => void terminalRef.current?.addIndicatorById(id)}
+          onRemove={(id) => terminalRef.current?.removeIndicatorById(id)}
+          onSettings={(id) => terminalRef.current?.openIndicatorSettings(id)}
+          onClose={() => setPickerOpen(false)}
         />
         <ChartSettingsDialog
           req={chartSettings}
