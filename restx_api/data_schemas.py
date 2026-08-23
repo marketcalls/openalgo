@@ -79,11 +79,13 @@ class HistorySchema(Schema):
                 "15m",
                 "20m",
                 "30m",
+                "60m",
                 # Hours intervals
                 "1h",
                 "2h",
                 "3h",
                 "4h",
+                "6h",
                 # Daily, Weekly, Monthly, Quarterly, Yearly intervals
                 "D",
                 "W",
