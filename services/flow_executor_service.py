@@ -23,6 +23,7 @@ from database.flow_db import (
     update_execution_status,
 )
 from services.flow_openalgo_client import FlowOpenAlgoClient, get_flow_client
+from utils.constants import VALID_ACTIONS, VALID_EXCHANGES, VALID_PRICE_TYPES, VALID_PRODUCT_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -1223,6 +1224,15 @@ class NodeExecutor:
             except (ValueError, TypeError) as exc:
                 raise ValueError(f"{field} must be numeric, got {value!r}") from exc
 
+        def required_text(value: Any, field: str) -> str:
+            value = resolve(value, field)
+            if value is None:
+                raise ValueError(f"{field} is required")
+            text = str(value).strip()
+            if not text:
+                raise ValueError(f"{field} is required")
+            return text
+
         def basket_error(index: int, detail: str) -> dict:
             message = f"Basket order row {index}: {detail}"
             self.log(f"Basket order failed: {message}", "error")
@@ -1286,18 +1296,24 @@ class NodeExecutor:
                 return default
 
             try:
-                symbol = str(resolve(raw_order.get("symbol"), "symbol")).strip()
-                exchange = str(resolve(raw_order.get("exchange"), "exchange")).strip()
-                action = str(resolve(raw_order.get("action"), "action")).strip().upper()
+                symbol = required_text(raw_order.get("symbol"), "symbol")
+                exchange = required_text(raw_order.get("exchange"), "exchange")
+                action = required_text(raw_order.get("action"), "action").upper()
                 quantity_value = resolve(raw_order.get("quantity"), "quantity")
                 quantity = int(float(quantity_value))
                 if quantity <= 0:
                     raise ValueError(f"quantity must be positive, got {quantity}")
-                if not symbol or not exchange or not action:
-                    raise ValueError("symbol, exchange, and action are required")
 
                 product = row_value("product", common_product)
                 price_type = row_value("pricetype", common_price_type, "priceType")
+                if exchange not in VALID_EXCHANGES:
+                    raise ValueError(f"invalid exchange {exchange!r}")
+                if action not in VALID_ACTIONS:
+                    raise ValueError(f"invalid action {action!r}")
+                if product not in VALID_PRODUCT_TYPES:
+                    raise ValueError(f"invalid product {product!r}")
+                if price_type not in VALID_PRICE_TYPES:
+                    raise ValueError(f"invalid pricetype {price_type!r}")
                 price = number(row_value("price", common_price), "price")
                 trigger_price = number(
                     row_value("triggerprice", common_trigger_price, "triggerPrice"), "triggerprice"

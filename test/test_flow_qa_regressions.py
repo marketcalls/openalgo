@@ -897,6 +897,86 @@ def test_basket_order_price_rejects_invalid_common_or_imported_prices(node_data)
     assert client.baskets == []
 
 
+@pytest.mark.parametrize(
+    ("orders", "field"),
+    [
+        ([{"exchange": "NSE", "action": "BUY", "quantity": 1}], "symbol"),
+        ([{"symbol": "SBIN", "exchange": None, "action": "BUY", "quantity": 1}], "exchange"),
+        ([{"symbol": "SBIN", "exchange": "NSE", "action": "", "quantity": 1}], "action"),
+    ],
+)
+def test_basket_order_rejects_missing_required_text_before_the_client(orders, field):
+    """Missing text must not be stringified into a broker-valid-looking value."""
+    client = _RecordingClient()
+    executor = fes.NodeExecutor(client, fes.WorkflowContext(), [])
+
+    result = executor.execute_basket_order({"orders": orders})
+
+    assert result["status"] == "error"
+    assert field in result["message"]
+    assert client.baskets == []
+
+
+@pytest.mark.parametrize(
+    ("node_data", "field"),
+    [
+        ({"orders": "SBIN,BAD,BUY,1"}, "exchange"),
+        (
+            {
+                "orders": [
+                    {"symbol": "SBIN", "exchange": "NSE", "action": "HOLD", "quantity": 1}
+                ]
+            },
+            "action",
+        ),
+        ({"orders": "SBIN,NSE,BUY,1", "product": "BAD"}, "product"),
+        (
+            {
+                "orders": [
+                    {
+                        "symbol": "SBIN",
+                        "exchange": "NSE",
+                        "action": "BUY",
+                        "quantity": 1,
+                        "priceType": "BAD",
+                    }
+                ]
+            },
+            "pricetype",
+        ),
+    ],
+)
+def test_basket_order_rejects_invalid_normalized_values_before_the_client(node_data, field):
+    """Executor validation must reject values the live basket service would skip."""
+    client = _RecordingClient()
+    executor = fes.NodeExecutor(client, fes.WorkflowContext(), [])
+
+    result = executor.execute_basket_order(node_data)
+
+    assert result["status"] == "error"
+    assert field in result["message"]
+    assert client.baskets == []
+
+
+def test_basket_order_rejects_a_later_invalid_row_without_partial_submission():
+    """A valid first leg cannot reach the broker when a later leg is invalid."""
+    client = _RecordingClient()
+    executor = fes.NodeExecutor(client, fes.WorkflowContext(), [])
+
+    result = executor.execute_basket_order(
+        {
+            "orders": [
+                {"symbol": "SBIN", "exchange": "NSE", "action": "BUY", "quantity": 1},
+                {"symbol": "INFY", "exchange": "INVALID", "action": "SELL", "quantity": 1},
+            ]
+        }
+    )
+
+    assert result["status"] == "error"
+    assert "row 2" in result["message"]
+    assert client.baskets == []
+
+
 # ---------------------------------------------------------------------------
 # Deferred option expiry values must be safe after interpolation
 # ---------------------------------------------------------------------------
