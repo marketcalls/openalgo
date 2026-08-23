@@ -13,6 +13,7 @@ import types
 import pytest
 
 import services.flow_executor_service as fes
+import services.flow_openalgo_client as foac
 import services.flow_price_monitor_service as fpm
 
 # ---------------------------------------------------------------------------
@@ -74,6 +75,81 @@ def _arm(monitor, workflow_id, trigger="once"):
         trigger=trigger,
     )
     return monitor.get_alert(workflow_id)
+
+
+# ---------------------------------------------------------------------------
+# Telegram alerts: the workflow API key, never legacy node data, owns delivery
+# ---------------------------------------------------------------------------
+
+
+def test_telegram_alert_ignores_legacy_username_and_delivers_to_api_key_owner(monkeypatch):
+    """A stale imported ``username`` cannot redirect another user's alert."""
+    verified_api_keys = []
+    looked_up_usernames = []
+    deliveries = []
+
+    fake_auth_db = types.ModuleType("database.auth_db")
+
+    def verify_api_key(api_key):
+        verified_api_keys.append(api_key)
+        return "owner_user"
+
+    fake_auth_db.verify_api_key = verify_api_key
+    monkeypatch.setitem(__import__("sys").modules, "database.auth_db", fake_auth_db)
+
+    fake_telegram_db = types.ModuleType("database.telegram_db")
+
+    def get_telegram_user_by_username(username):
+        looked_up_usernames.append(username)
+        return {
+            "telegram_id": {
+                "owner_user": 101,
+                "other_user": 202,
+            }[username],
+            "notifications_enabled": True,
+        }
+
+    fake_telegram_db.get_telegram_user_by_username = get_telegram_user_by_username
+    monkeypatch.setitem(__import__("sys").modules, "database.telegram_db", fake_telegram_db)
+
+    fake_alert_service = types.SimpleNamespace(
+        is_bot_active=lambda: True,
+        send_alert_sync=lambda telegram_id, message: deliveries.append((telegram_id, message)),
+    )
+    fake_executor = types.SimpleNamespace(submit=lambda fn, *args: fn(*args))
+    fake_service_module = types.ModuleType("services.telegram_alert_service")
+    fake_service_module.telegram_alert_service = fake_alert_service
+    fake_service_module.alert_executor = fake_executor
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "services.telegram_alert_service",
+        fake_service_module,
+    )
+
+    client = foac.FlowOpenAlgoClient("owner-api-key")
+    real_telegram = client.telegram
+    client_calls = []
+
+    def record_telegram_call(*args, **kwargs):
+        client_calls.append((args, kwargs))
+        return real_telegram(*args, **kwargs)
+
+    client.telegram = record_telegram_call
+    executor = fes.NodeExecutor(client, fes.WorkflowContext(), [])
+
+    result = executor.execute_telegram_alert(
+        {"message": "Owner-only notice", "username": "other_user"}
+    )
+
+    assert result["status"] == "success"
+    assert client_calls == [((), {"message": "Owner-only notice"})]
+    assert verified_api_keys == ["owner-api-key"]
+    assert looked_up_usernames == ["owner_user"]
+    assert len(deliveries) == 1
+    telegram_id, formatted_message = deliveries[0]
+    assert telegram_id == 101
+    assert "Owner-only notice" in formatted_message
+    assert "other_user" not in formatted_message
 
 
 @pytest.mark.parametrize("attempt", range(5))

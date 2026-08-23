@@ -209,6 +209,183 @@ def _decode_json_sequence(raw):
         values.append(value)
 
 
+def _markdown_section(prompt, heading_prefix):
+    """Return one Markdown section, including subsections but not its next peer."""
+    match = re.search(rf"^{re.escape(heading_prefix)}(?:\s.*)?$", prompt, re.MULTILINE)
+    assert match is not None, f"missing prompt heading: {heading_prefix}"
+    heading_level = len(heading_prefix) - len(heading_prefix.lstrip("#"))
+    rest = prompt[match.end() :]
+    next_heading = re.search(rf"^#{{1,{heading_level}}}\s", rest, re.MULTILINE)
+    return prompt[match.start() : match.end() + (next_heading.start() if next_heading else len(rest))]
+
+
+def _walk_json(value):
+    yield value
+    if isinstance(value, dict):
+        for child in value.values():
+            yield from _walk_json(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk_json(child)
+
+
+def test_prompt_prose_documents_every_repaired_flow_contract():
+    """The human-facing contract must retain every correction behind the examples."""
+    prompt = FLOW_IMPORT_PROMPT.read_text(encoding="utf-8")
+    failures = []
+
+    def require(category, condition, detail):
+        if not condition:
+            failures.append(f"{category}: {detail}")
+
+    trigger = _markdown_section(prompt, "### 7.1 Trigger nodes")
+    require(
+        "second_trigger",
+        "reject a second trigger" in trigger and "permit a second trigger" not in trigger,
+        "strict validation must explicitly reject a second trigger",
+    )
+
+    history = _markdown_section(prompt, "#### history")
+    require(
+        "history_range",
+        all(field in history for field in ("`days`", "`startDate`", "`endDate`"))
+        and "explicit range takes\nprecedence over `days`" in history,
+        "document days plus start/end dates and explicit-range precedence",
+    )
+
+    holidays = _markdown_section(prompt, "#### holidays")
+    require(
+        "holidays_year",
+        "`year`" in holidays and "`exchange`" not in holidays,
+        "holidays must document year, not exchange",
+    )
+    timings = _markdown_section(prompt, "#### timings")
+    require(
+        "timings_date",
+        "`date`" in timings and "`exchange`" not in timings,
+        "timings must document date, not exchange",
+    )
+
+    variable = _markdown_section(prompt, "#### variable")
+    operation_table = variable.split("| Operation | Behaviour |", 1)[-1].split(
+        "| Field | Type | Default | Notes |", 1
+    )[0]
+    documented_operations = set(re.findall(r'^\| `"([^"]+)"` \|', operation_table, re.M))
+    required_operations = {
+        "set",
+        "get",
+        "add",
+        "subtract",
+        "multiply",
+        "divide",
+        "increment",
+        "decrement",
+        "parse_json",
+        "stringify",
+        "append",
+    }
+    require(
+        "variable_operations",
+        documented_operations == required_operations,
+        f"expected exactly eleven operations; found {sorted(documented_operations)}",
+    )
+    require(
+        "variable_conditional_fields",
+        "Required for `add`, `subtract`, `multiply`, and `divide`" in variable
+        and "`parse_json` requires a non-empty value" in variable
+        and "Required for `get` and `stringify`" in variable,
+        "document operation-specific value/sourceVariable requirements",
+    )
+
+    math_expression = _markdown_section(prompt, "#### mathExpression")
+    require(
+        "floor_only",
+        "sole allowed function `floor(expression)`" in math_expression
+        and "Other calls" in math_expression
+        and "rejected" in math_expression,
+        "floor must be the sole function and other calls must be rejected",
+    )
+
+    telegram = _markdown_section(prompt, "#### telegramAlert")
+    require(
+        "telegram_identity",
+        "workflow API key" in telegram
+        and "API-key owner" in telegram
+        and "cannot supply a\nrecipient override" in telegram
+        and "username" not in telegram.lower(),
+        "delivery must belong to the API-key owner with no username field",
+    )
+
+    http_request = _markdown_section(prompt, "#### httpRequest")
+    http_example = _markdown_section(prompt, "### 8.7 Webhook")
+    require(
+        "http_timeout_range",
+        "between 1000 and 60000" in http_request,
+        "document the inclusive millisecond timeout range",
+    )
+    require(
+        "http_timeout_example",
+        '"timeout": 10000' in http_example,
+        "the external HTTP example must use timeout 10000",
+    )
+
+    for node_type in ("smartOrder", "basketOrder", "splitOrder"):
+        order_section = _markdown_section(prompt, f"#### {node_type}")
+        require(
+            f"{node_type}_common_prices",
+            "`price`" in order_section
+            and "`triggerPrice`" in order_section
+            and "positive for `LIMIT`/`SL`" in order_section
+            and "positive for `SL`/`SL-M`" in order_section,
+            "document common price/triggerPrice fields and positive-price rules",
+        )
+
+    options_multi = _markdown_section(prompt, "#### optionsMultiOrder")
+    require(
+        "options_multi_expiry",
+        "One common expiry" in options_multi
+        and "Per-leg expiries are not supported" in options_multi
+        and "calendar" not in options_multi.lower()
+        and "diagonal" not in options_multi.lower(),
+        "document one common expiry and make no calendar/diagonal claim",
+    )
+    require(
+        "options_multi_price_types",
+        '`priceType` | `"MARKET"` \\| `"LIMIT"`' in options_multi
+        and "generated legs do not support `SL`/`SL-M`" in options_multi
+        and "Custom leg `priceType` may be any of `MARKET`/`LIMIT`/`SL`/`SL-M`"
+        in options_multi,
+        "distinguish generated MARKET/LIMIT from custom four-type legs",
+    )
+
+    pnl_example = _markdown_section(prompt, "### 8.5 P&L stop-loss")
+    require(
+        "computed_pnl_condition",
+        '"type": "varCondition"' in pnl_example
+        and '"type": "priceCondition"' not in pnl_example,
+        "computed P&L must be compared with varCondition",
+    )
+
+    prohibited_index_orders = []
+    for fence_index, line, raw in _json_fences(prompt):
+        for value in _decode_json_sequence(raw):
+            for candidate in _walk_json(value):
+                if (
+                    isinstance(candidate, dict)
+                    and candidate.get("type") == "placeOrder"
+                    and candidate.get("data", {}).get("exchange")
+                    in {"NSE_INDEX", "BSE_INDEX"}
+                ):
+                    prohibited_index_orders.append((fence_index, line, candidate.get("id")))
+    require(
+        "place_order_index_exchange",
+        not prohibited_index_orders,
+        f"placeOrder examples use index exchanges: {prohibited_index_orders}",
+    )
+
+    assert not failures, "prompt prose contract failures:\n" + "\n".join(failures)
+
+
 def _as_workflow_example(value):
     if isinstance(value, dict) and "nodes" in value and "edges" in value:
         return value
