@@ -17,8 +17,7 @@ import math
 import re
 from typing import Any
 
-from services.flow_node_contracts import VALID_STATUSES, normalize_status
-from services.option_symbol_service import parse_underlying_symbol
+from services.flow_node_contracts import VALID_STATUSES, normalize_status, parse_underlying_symbol
 from utils.logging import get_logger
 
 logger = get_logger(__name__)

@@ -945,12 +945,13 @@ export function ConfigPanel() {
                   <Label className="text-xs">Quantity</Label>
                   <Input
                     type="number"
-                    min={1}
+                    min={0}
                     className="h-8"
-                    value={(nodeData.quantity as number) || 1}
-                    onChange={(e) =>
-                      handleDataChange('quantity', parseInt(e.target.value, 10) || 1)
-                    }
+                    value={(nodeData.quantity as number | undefined) ?? 1}
+                    onChange={(e) => {
+                      const value = parseInt(e.target.value, 10)
+                      handleDataChange('quantity', Number.isNaN(value) ? 0 : value)
+                    }}
                   />
                 </div>
                 <div className="space-y-2">
