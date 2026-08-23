@@ -18,6 +18,7 @@ import {
   CandleBuilder,
   compactVolume,
   createChart,
+  readChartSettings,
   type IPrimitive,
   LogoWatermark,
   type LtpEvent,
@@ -232,6 +233,14 @@ export interface ChartSettingsTabView {
 export interface ChartSettingsRequest {
   tabs: ChartSettingsTabView[]
   values: Record<string, string | number | boolean>
+  /**
+   * The chart as this terminal builds it, before a single stored preference is
+   * replayed. What "Reset to defaults" restores, and deliberately NOT the
+   * engine's own defaults: this host turns the session clock and the bar
+   * countdown on at construction, so resetting to the engine's answer would
+   * switch off chrome the user never asked to lose.
+   */
+  defaults: Record<string, string | number | boolean>
 }
 
 /**
@@ -240,12 +249,7 @@ export interface ChartSettingsRequest {
  * deliberately describes chart settings with the same `IndicatorInput`
  * vocabulary, so a host that can render one renders the other for free.
  */
-function toField(f: {
-  key: string
-  type: string
-  label?: string
-  group?: string
-}): IndicatorField {
+function toField(f: { key: string; type: string; label?: string; group?: string }): IndicatorField {
   return {
     key: f.key,
     type: f.type,
@@ -438,6 +442,11 @@ export class TradingTerminal {
    * onto what is already saved rather than replacing it.
    */
   private chartSettingsSaved: Record<string, string | number | boolean> = {}
+  /**
+   * The chart as this terminal builds it, captured once per build. See
+   * {@link snapshotChartDefaults}.
+   */
+  private chartDefaults: Record<string, string | number | boolean> = {}
   /** Non-null only while the chart is showing a replayed prefix. */
   private replay: ReplayController | null = null
   /** The price axis's autoscale state before replay forced it on. */
@@ -907,6 +916,13 @@ export class TradingTerminal {
     // Same reasoning for the settings patch: a chart-type or theme switch
     // rebuilds the chart, and without this the user's colours, timezone and
     // scale options would silently revert to the engine defaults.
+    //
+    // The baseline is captured on the line before, and the order is the whole
+    // point: one statement later the chart is carrying restored preferences and
+    // is no longer a picture of anything's defaults. Synchronous for the same
+    // reason -- `restoreChartSettings` and the grid re-apply further down both
+    // write to this chart, and an awaited snapshot would land after them.
+    this.snapshotChartDefaults()
     void this.restoreChartSettings()
     this.setPriceData()
 
@@ -1533,7 +1549,34 @@ export class TradingTerminal {
           : toField(i as { key: string; type: string; label?: string; group?: string })
       ),
     }))
-    return { tabs, values: { ...readChartSettings(this.chart) } }
+    return {
+      tabs,
+      values: { ...readChartSettings(this.chart) },
+      defaults: { ...this.chartDefaults },
+    }
+  }
+
+  /**
+   * Record the chart as this terminal builds it: engine defaults with this
+   * host's construction options already on top, and nothing restored from
+   * storage yet. That combination is what a user means by "default" here.
+   *
+   * The engine's own per-control defaults, which the schema does publish, are
+   * the wrong answer to reset against. This host opts into the corner session
+   * clock and the bar countdown at construction, both off in the engine, so a
+   * reset driven from the schema would quietly switch off chrome the user never
+   * touched. It would also fight the grid, which the context menu owns under a
+   * separate key: the engine's default is on, and a reset would flip the grid
+   * back on for someone who had turned it off from the menu, leaving the two
+   * owners disagreeing about the same two booleans.
+   *
+   * Re-taken on every build, which is also what keeps it honest across a theme
+   * switch: `applyTheme` rebuilds the chart, so the colours here are always the
+   * live theme's rather than whichever palette was on at boot.
+   */
+  private snapshotChartDefaults(): void {
+    if (!this.chart) return
+    this.chartDefaults = { ...readChartSettings(this.chart) }
   }
 
   /**
@@ -1542,13 +1585,54 @@ export class TradingTerminal {
    * Persistence is a merge, not a replace: the dialog sends only the keys it
    * changed, and a key the engine no longer knows is ignored on the way back
    * in, so a layout saved by a newer build still restores into an older one.
+   *
+   * What is stored is then pruned back to the keys that genuinely DIFFER from
+   * the baseline, and that prune is what makes "reset to defaults" survive a
+   * reload. A reset arrives here as an ordinary patch setting each key back to
+   * its baseline value; merging it blindly would store the entire default set,
+   * and `restoreChartSettings` would replay it on the next boot. Since a colour
+   * baseline is the active theme's, that replay would nail the chart to the
+   * palette of whichever theme happened to be on at reset time, and a later
+   * switch to light or dark would leave the candles behind. Storing only real
+   * deviations lets an untouched control keep following the theme, which is
+   * what "default" has to mean for the reset to be worth having.
    */
   async applyChartSettings(patch: Record<string, string | number | boolean>): Promise<void> {
     if (!this.chart) return
     const { applyChartSettings } = await import('openalgo-charts')
     applyChartSettings(this.chart, patch)
-    this.chartSettingsSaved = { ...this.chartSettingsSaved, ...patch }
-    this.lsSet('chartsettings', JSON.stringify(this.chartSettingsSaved))
+    const merged = { ...this.chartSettingsSaved, ...patch }
+    const kept: Record<string, string | number | boolean> = {}
+    for (const [k, v] of Object.entries(merged)) {
+      // A key absent from the baseline is kept: an unrecognised control is not
+      // evidence that its value is the default one.
+      if (!(k in this.chartDefaults) || this.chartDefaults[k] !== v) kept[k] = v
+    }
+    this.chartSettingsSaved = kept
+    this.lsSet('chartsettings', JSON.stringify(kept))
+    this.adoptGridFromPatch(patch)
+  }
+
+  /**
+   * Keep the two owners of grid visibility from disagreeing.
+   *
+   * Grid lines can be changed from two places: the context menu, which writes
+   * `gridV`/`gridH` and its own storage key, and the settings dialog, which
+   * patches `canvas.grid.*` straight through to the engine. Left alone the two
+   * drift apart, and the context menu -- which is re-applied verbatim on every
+   * rebuild -- eventually wins, so a grid switched from the dialog silently
+   * comes back on the next theme or chart-type change. Mirroring the patch here
+   * makes the dialog write through the same field the menu reads, so the menu's
+   * tick matches the chart and a rebuild re-applies what the user last chose,
+   * whichever control they chose it with.
+   */
+  private adoptGridFromPatch(patch: Record<string, string | number | boolean>): void {
+    const v = patch['canvas.grid.vertLines']
+    const h = patch['canvas.grid.horzLines']
+    if (v === undefined && h === undefined) return
+    this.gridV = v === undefined ? this.gridV : v === true
+    this.gridH = h === undefined ? this.gridH : h === true
+    this.lsSet('grid', `${this.gridV ? 1 : 0}${this.gridH ? 1 : 0}`)
   }
 
   /**

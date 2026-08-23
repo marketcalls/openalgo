@@ -1,5 +1,5 @@
 import { ChevronDown, RefreshCw, Search, Settings } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -74,8 +74,26 @@ function PencilIcon({ className }: { className?: string }) {
   )
 }
 
-/** Three rising bars — the volume histogram in miniature. */
+/**
+ * Rewind: two triangles pointing back to a bar.
+ *
+ * It was a circular arrow, which is the universal glyph for "reload" and reads
+ * as though the button refetches the chart. Replay winds the session back and
+ * plays it forward, so a transport control is the honest picture. Filled rather
+ * than stroked, so it stays legible at 16px where two thin outlined triangles
+ * turn to mush.
+ */
 function ReplayIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden="true">
+      <path d="M11.5 6.4v11.2a.7.7 0 0 1-1.1.6l-7.1-5.6a.7.7 0 0 1 0-1.2l7.1-5.6a.7.7 0 0 1 1.1.6Z" />
+      <path d="M20.5 6.4v11.2a.7.7 0 0 1-1.1.6l-7.1-5.6a.7.7 0 0 1 0-1.2l7.1-5.6a.7.7 0 0 1 1.1.6Z" />
+    </svg>
+  )
+}
+
+/** Curved arrow back. Mirrored for redo, so the pair reads as one control. */
+function UndoIcon({ className, flip }: { className?: string; flip?: boolean }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -86,9 +104,10 @@ function ReplayIcon({ className }: { className?: string }) {
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
+      style={flip ? { transform: 'scaleX(-1)' } : undefined}
     >
-      <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
-      <path d="M3 4v4h4" />
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h10a6 6 0 0 1 0 12h-3" />
     </svg>
   )
 }
@@ -200,6 +219,22 @@ export function ChartPane({
   const [sym, setSym] = useState<SymbolView | null>(null)
   const [qty, setQty] = useState(1)
   const [wsState, setWsState] = useState('connecting')
+  /**
+   * Just the two history flags, mirrored locally. The full DrawStats is pushed
+   * to the parent for the drawing rail, but the toolbar's undo/redo sit in THIS
+   * component, and reading a parent's state back down would make the buttons
+   * lag a shape behind. Narrowed to two booleans on purpose: every drawing edit
+   * fires this, and re-rendering the toolbar because a tool was armed or a
+   * shape was selected would be work for nothing.
+   */
+  const [history, setHistory] = useState({ canUndo: false, canRedo: false })
+  const noteHistory = useCallback((s: DrawStats) => {
+    setHistory((prev) =>
+      prev.canUndo === s.canUndo && prev.canRedo === s.canRedo
+        ? prev
+        : { canUndo: s.canUndo, canRedo: s.canRedo }
+    )
+  }, [])
 
   // symbol search modal (per-pane; opened from the toolbar symbol pill)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -253,6 +288,7 @@ export function ChartPane({
       onDrawChange: (s) => {
         if (!aliveRef.current) return
         statsCbRef.current?.(s)
+        noteHistory(s)
       },
       onIndicatorsChange: (list) => aliveRef.current && setIndicators(list),
       onIndicatorSettings: (req) => aliveRef.current && setIndSettings(req),
@@ -282,7 +318,9 @@ export function ChartPane({
       })
       terminalRef.current = terminal
       terminal.init()
-      statsCbRef.current?.(terminal.drawStats())
+      const stats0 = terminal.drawStats()
+      statsCbRef.current?.(stats0)
+      noteHistory(stats0)
       setGrid(terminal.gridState())
       setVolumeOn(terminal.volumeVisible())
     }
@@ -292,7 +330,7 @@ export function ChartPane({
       terminal?.destroy()
       terminalRef.current = null
     }
-  }, [paneId, apiKey, wsUrl])
+  }, [paneId, apiKey, wsUrl, noteHistory])
 
   /* ── follow the page-level drawing rail ───────────────────────────────── */
   useEffect(() => {
@@ -671,6 +709,37 @@ export function ChartPane({
         >
           <ReplayIcon className="h-4 w-4" />
           <span className="hidden sm:inline">Replay</span>
+        </Button>
+
+        {/* Undo / redo for drawings. Also on the drawing rail, and deliberately
+            here as well: the rail can be hidden, and these two are reached far
+            more often than the tool that made the shape. Both stay mounted and
+            go disabled rather than disappearing, so the toolbar does not reflow
+            as you draw. The engine's history is drawing-only, so the labels say
+            so -- a bare "Undo" next to a Replay button would imply it could
+            take back an order. */}
+        <div className="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden="true" />
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          onClick={() => terminalRef.current?.undoDraw()}
+          disabled={!history.canUndo}
+          title="Undo drawing (Ctrl + Z)"
+          aria-label="Undo drawing"
+        >
+          <UndoIcon className="h-[17px] w-[17px]" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          onClick={() => terminalRef.current?.redoDraw()}
+          disabled={!history.canRedo}
+          title="Redo drawing (Ctrl + Shift + Z)"
+          aria-label="Redo drawing"
+        >
+          <UndoIcon className="h-[17px] w-[17px]" flip />
         </Button>
 
         {/* Right side: connection LED + actions */}
