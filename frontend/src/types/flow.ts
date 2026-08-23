@@ -83,10 +83,11 @@ export interface OptionsOrderNodeData {
   optionType: 'CE' | 'PE'
   action: 'BUY' | 'SELL'
   quantity: number
-  priceType: 'MARKET' | 'LIMIT'
+  priceType: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
   product: 'MIS' | 'NRML'
   splitSize?: number
   price?: number
+  triggerPrice?: number
   ltp?: number
 }
 
@@ -108,10 +109,15 @@ export interface OptionsMultiOrderNodeData {
     optionType: 'CE' | 'PE'
     action: 'BUY' | 'SELL'
     quantity: number
-    expiryDate?: string // For calendar spreads
+    product?: 'MIS' | 'NRML'
+    priceType?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
+    price?: number
+    triggerPrice?: number
   }>
-  priceType: 'MARKET' | 'LIMIT'
+  priceType: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
   product: 'MIS' | 'NRML'
+  price?: number
+  triggerPrice?: number
 }
 
 /** Basket Order - Multiple orders at once */
@@ -127,7 +133,9 @@ export interface BasketOrderNodeData {
    */
   orders: string
   product?: 'MIS' | 'CNC' | 'NRML'
-  priceType?: 'MARKET' | 'LIMIT'
+  priceType?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
+  price?: number
+  triggerPrice?: number
 }
 
 /** Split Order - Large order splitting */
@@ -138,9 +146,10 @@ export interface SplitOrderNodeData {
   action: 'BUY' | 'SELL'
   quantity: number
   splitSize: number
-  priceType: 'MARKET' | 'LIMIT'
+  priceType: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
   product: 'MIS' | 'CNC' | 'NRML'
   price?: number
+  triggerPrice?: number
   delayMs?: number
 }
 
@@ -528,7 +537,6 @@ export interface MarginNodeData {
 export interface TelegramAlertNodeData {
   label?: string
   message: string
-  username?: string
 }
 
 /** WhatsApp Alert - Send a WhatsApp text message via the paired bot device */
