@@ -66,7 +66,7 @@ describe('FlowEditor initial viewport', () => {
     })
   })
 
-  it('opens a small workflow centered without zooming above 60 percent', async () => {
+  it('opens a small workflow centered at its natural size', async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     })
@@ -93,6 +93,6 @@ describe('FlowEditor initial viewport', () => {
     )
 
     expect(capturedCanvas.props?.fitView).toBe(true)
-    expect(viewport.zoom).toBe(0.6)
+    expect(viewport.zoom).toBe(1)
   })
 })
