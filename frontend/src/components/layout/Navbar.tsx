@@ -104,9 +104,10 @@ export function Navbar() {
                   Navigation
                 </div>
                 {mobileSheetItems.map((item) => {
+                  const active = isActive(item.href)
                   const cls = cn(
                     'flex items-center gap-3 rounded-lg px-3 py-3 text-sm transition-colors min-h-[44px] touch-manipulation',
-                    isActive(item.href)
+                    active
                       ? 'bg-primary text-primary-foreground'
                       : 'hover:bg-muted active:bg-muted'
                   )
@@ -122,6 +123,7 @@ export function Navbar() {
                       href={item.href}
                       onClick={() => setMobileOpen(false)}
                       className={cls}
+                      aria-current={active ? 'page' : undefined}
                     >
                       {inner}
                     </a>
@@ -131,6 +133,7 @@ export function Navbar() {
                       to={item.href}
                       onClick={() => setMobileOpen(false)}
                       className={cls}
+                      aria-current={active ? 'page' : undefined}
                     >
                       {inner}
                     </Link>
@@ -154,6 +157,7 @@ export function Navbar() {
                         ? 'bg-primary text-primary-foreground'
                         : 'hover:bg-muted active:bg-muted'
                     )}
+                    aria-current={isActive(item.href) ? 'page' : undefined}
                   >
                     <item.icon className="h-4 w-4" />
                     {item.label}
@@ -186,9 +190,10 @@ export function Navbar() {
             the profile menu off-screen; full labels from xl up (issue #1384). */}
         <nav className="hidden md:flex items-center gap-1">
           {navItems.map((item) => {
+            const active = isActive(item.href)
             const className = cn(
               'flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors',
-              isActive(item.href)
+              active
                 ? 'bg-primary text-primary-foreground'
                 : 'text-muted-foreground hover:bg-muted hover:text-foreground'
             )
@@ -201,11 +206,23 @@ export function Navbar() {
             // Flask-served pages (e.g. /trading) need a full page load,
             // not client-side routing.
             return item.external ? (
-              <a key={item.href} href={item.href} title={item.label} className={className}>
+              <a
+                key={item.href}
+                href={item.href}
+                title={item.label}
+                className={className}
+                aria-current={active ? 'page' : undefined}
+              >
                 {content}
               </a>
             ) : (
-              <Link key={item.href} to={item.href} title={item.label} className={className}>
+              <Link
+                key={item.href}
+                to={item.href}
+                title={item.label}
+                className={className}
+                aria-current={active ? 'page' : undefined}
+              >
                 {content}
               </Link>
             )
