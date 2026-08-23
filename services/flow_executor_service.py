@@ -6,6 +6,7 @@ Executes workflow nodes using internal OpenAlgo services (synchronous Flask vers
 
 import json
 import logging
+import math
 import re
 import threading
 import time as time_module
@@ -88,6 +89,8 @@ ORDER_CRITICAL_FIELDS = frozenset(
 # returns the original {{...}} text when a path does not resolve.
 _UNRESOLVED_PATTERN = re.compile(r"\{\{[^}]*\}\}")
 _EXPIRY_DATE_PATTERN = re.compile(r"\d{2}[A-Z]{3}\d{2}")
+_OPTION_OFFSET_PATTERN = re.compile(r"(?:ATM|(?:ITM|OTM)(?:[1-9]|[1-4]\d|50))")
+_MISSING_ORDER_VALUE = object()
 
 
 def symbol_prefix_filter(column, prefix: str):
@@ -307,6 +310,106 @@ class WorkflowContext:
         return re.sub(r"\{\{([^}]+)\}\}", replacer, text)
 
 
+class RuntimeOrderResolver:
+    """Resolve one order payload without turning supplied bad data into defaults.
+
+    Flow's general accessors are deliberately forgiving because display and
+    data nodes often have useful legacy defaults.  That behavior is unsafe at
+    an order boundary: an interpolated typo must not become quantity ``1`` or a
+    broker mapper's MARKET fallback.  This resolver uses a default only when no
+    supported key is present; once a value is supplied, it must resolve and
+    validate on its own merits.
+    """
+
+    def __init__(self, context: WorkflowContext, data: dict, label: str):
+        self.context = context
+        self.data = data
+        self.label = label
+
+    def value(
+        self,
+        key: str,
+        *,
+        default: Any = _MISSING_ORDER_VALUE,
+        aliases: tuple[str, ...] = (),
+    ) -> Any:
+        for candidate in (key, *aliases):
+            if candidate not in self.data:
+                continue
+            raw = self.data[candidate]
+            resolved = self.context.resolve_raw(raw) if isinstance(raw, str) else raw
+            if isinstance(resolved, str) and _UNRESOLVED_PATTERN.search(resolved):
+                raise ValueError(f"{candidate} has unresolved value {resolved!r}")
+            return resolved
+        if default is _MISSING_ORDER_VALUE:
+            raise ValueError(f"{key} is required")
+        return default
+
+    def text(
+        self,
+        key: str,
+        *,
+        default: Any = _MISSING_ORDER_VALUE,
+        aliases: tuple[str, ...] = (),
+    ) -> str:
+        value = self.value(key, default=default, aliases=aliases)
+        if not isinstance(value, str):
+            raise ValueError(f"{key} must resolve to text, got {value!r}")
+        text = value.strip()
+        if not text:
+            raise ValueError(f"{key} must not be blank")
+        return text
+
+    def enum(
+        self,
+        key: str,
+        allowed: list[str] | frozenset[str],
+        *,
+        default: Any = _MISSING_ORDER_VALUE,
+        aliases: tuple[str, ...] = (),
+    ) -> str:
+        canonical = self.text(key, default=default, aliases=aliases).upper()
+        if canonical not in allowed:
+            raise ValueError(
+                f"{key} must be one of {', '.join(sorted(allowed))}, got {canonical!r}"
+            )
+        return canonical
+
+    def number(
+        self,
+        key: str,
+        *,
+        default: Any = _MISSING_ORDER_VALUE,
+        aliases: tuple[str, ...] = (),
+    ) -> float:
+        value = self.value(key, default=default, aliases=aliases)
+        if isinstance(value, bool):
+            raise ValueError(f"{key} must be numeric, got boolean {value!r}")
+        if isinstance(value, str) and not value.strip():
+            raise ValueError(f"{key} must not be blank")
+        try:
+            number = float(value)
+        except (OverflowError, TypeError, ValueError) as exc:
+            raise ValueError(f"{key} must be numeric, got {value!r}") from exc
+        if not math.isfinite(number):
+            raise ValueError(f"{key} must be finite, got {value!r}")
+        return number
+
+    def integer(
+        self,
+        key: str,
+        *,
+        default: Any = _MISSING_ORDER_VALUE,
+        aliases: tuple[str, ...] = (),
+        minimum: int | None = None,
+    ) -> int:
+        number = self.number(key, default=default, aliases=aliases)
+        if minimum is not None and number < minimum:
+            qualifier = "non-negative" if minimum == 0 else f"at least {minimum}"
+            raise ValueError(f"{key} must be {qualifier}, got {number}")
+        return int(number)
+
+
 class NodeExecutor:
     """Executes individual workflow nodes"""
 
@@ -374,9 +477,9 @@ class NodeExecutor:
             raw = node_data.get(key)
             if not isinstance(raw, str) or "{{" not in raw:
                 continue
-            text = self.context.interpolate(raw)
-            if _UNRESOLVED_PATTERN.search(text):
-                found.append((key, text))
+            resolved = self.context.resolve_raw(raw)
+            if isinstance(resolved, str) and _UNRESOLVED_PATTERN.search(resolved):
+                found.append((key, resolved))
         return sorted(found)
 
     def unresolved_error(self, node_type: str, fields: list[tuple[str, str]]) -> dict:
@@ -450,29 +553,60 @@ class NodeExecutor:
                 return default
         return float(value)
 
+    def runtime_order_error(self, label: str, error: ValueError) -> dict:
+        """Return one consistent fail-closed result for an unusable order value."""
+        message = f"{label} has invalid runtime order data: {error}"
+        self.log(message, "error")
+        return {"status": "error", "message": message}
+
+    def resolve_standard_order(
+        self,
+        node_data: dict,
+        label: str,
+        *,
+        allow_zero_quantity: bool = False,
+    ) -> dict[str, Any]:
+        """Resolve the fields shared by regular, smart, and split orders."""
+        values = RuntimeOrderResolver(self.context, node_data, label)
+        quantity_minimum = 0 if allow_zero_quantity else 1
+        resolved = {
+            "symbol": values.text("symbol"),
+            "exchange": values.enum("exchange", VALID_EXCHANGES, default="NSE"),
+            "action": values.enum("action", VALID_ACTIONS, default="BUY"),
+            "quantity": values.integer("quantity", default=1, minimum=quantity_minimum),
+            "price_type": values.enum("priceType", VALID_PRICE_TYPES, default="MARKET"),
+            "product": values.enum("product", VALID_PRODUCT_TYPES, default="MIS"),
+            "price": values.number("price", default=0.0),
+            "trigger_price": values.number("triggerPrice", default=0.0),
+        }
+        invalid = self._invalid_price_reason(
+            resolved["price_type"], resolved["price"], resolved["trigger_price"]
+        )
+        if invalid:
+            raise ValueError(invalid)
+        return resolved
+
     # === Order Nodes ===
 
     def execute_place_order(self, node_data: dict) -> dict:
         """Execute Place Order node"""
-        symbol = self.get_str(node_data, "symbol", "")
-        exchange = self.get_str(node_data, "exchange", "NSE")
-        action = self.get_str(node_data, "action", "BUY")
-        quantity = self.get_int(node_data, "quantity", 1)
-        price_type = self.get_str(node_data, "priceType", "MARKET")
-        product = self.get_str(node_data, "product", "MIS")
-        price = self.get_float(node_data, "price", 0)
-        trigger_price = self.get_float(node_data, "triggerPrice", 0)
+        try:
+            order = self.resolve_standard_order(node_data, "Place order")
+        except ValueError as exc:
+            return self.runtime_order_error("Place order", exc)
 
-        self.log(f"Placing order: {symbol} {action} qty={quantity}")
+        self.log(
+            f"Placing order: {order['symbol']} {order['action']} qty={order['quantity']}"
+        )
         result = self.client.place_order(
-            symbol=symbol,
-            exchange=exchange,
-            action=action,
-            quantity=quantity,
-            price_type=price_type,
-            product_type=product,
-            price=price,
-            trigger_price=trigger_price,
+            symbol=order["symbol"],
+            exchange=order["exchange"],
+            action=order["action"],
+            quantity=order["quantity"],
+            price_type=order["price_type"],
+            product_type=order["product"],
+            price=order["price"],
+            trigger_price=order["trigger_price"],
             strategy=self.strategy_tag(node_data),
         )
         self.log(
@@ -483,33 +617,26 @@ class NodeExecutor:
 
     def execute_smart_order(self, node_data: dict) -> dict:
         """Execute Smart Order node"""
-        symbol = self.get_str(node_data, "symbol", "")
-        exchange = self.get_str(node_data, "exchange", "NSE")
-        action = self.get_str(node_data, "action", "BUY")
-        quantity = self.get_int(node_data, "quantity", 1)
-        position_size = self.get_int(node_data, "positionSize", 0)
-        price_type = self.get_str(node_data, "priceType", "MARKET")
-        product = self.get_str(node_data, "product", "MIS")
-        price = self.get_float(node_data, "price", 0.0)
-        trigger_price = self.get_float(node_data, "triggerPrice", 0.0)
+        try:
+            order = self.resolve_standard_order(
+                node_data, "Smart order", allow_zero_quantity=True
+            )
+            values = RuntimeOrderResolver(self.context, node_data, "Smart order")
+            position_size = values.integer("positionSize", default=0)
+        except ValueError as exc:
+            return self.runtime_order_error("Smart order", exc)
 
-        invalid = self._invalid_price_reason(price_type, price, trigger_price)
-        if invalid:
-            error_result = {"status": "error", "message": invalid}
-            self.log(f"Smart order failed: {invalid}", "error")
-            return error_result
-
-        self.log(f"Placing smart order: {symbol} {action}")
+        self.log(f"Placing smart order: {order['symbol']} {order['action']}")
         result = self.client.place_smart_order(
-            symbol=symbol,
-            exchange=exchange,
-            action=action,
-            quantity=quantity,
+            symbol=order["symbol"],
+            exchange=order["exchange"],
+            action=order["action"],
+            quantity=order["quantity"],
             position_size=position_size,
-            price_type=price_type,
-            product_type=product,
-            price=price,
-            trigger_price=trigger_price,
+            price_type=order["price_type"],
+            product_type=order["product"],
+            price=order["price"],
+            trigger_price=order["trigger_price"],
             strategy=self.strategy_tag(node_data),
         )
         self.log(
@@ -542,6 +669,10 @@ class NodeExecutor:
         unintended level, so it is refused rather than sent with a zero.
         """
         price_type = (price_type or "MARKET").upper()
+        if not math.isfinite(price):
+            return f"{price_type} order needs a finite price, got {price}"
+        if not math.isfinite(trigger_price):
+            return f"{price_type} order needs a finite trigger price, got {trigger_price}"
         if price_type in ("LIMIT", "SL") and price <= 0:
             return f"{price_type} order needs a positive price, got {price}"
         if price_type in ("SL", "SL-M") and trigger_price <= 0:
@@ -644,23 +775,30 @@ class NodeExecutor:
 
     def execute_options_order(self, node_data: dict) -> dict:
         """Execute Options Order node"""
-        underlying = self.get_str(node_data, "underlying", "NIFTY")
-        expiry_type = self.get_str(node_data, "expiryType", "current_week")
-        quantity = self.get_int(node_data, "quantity", 1)
-        offset = self.get_str(node_data, "offset", "ATM")
-        option_type = self.get_str(node_data, "optionType", "CE")
-        action = self.get_str(node_data, "action", "BUY")
-        price_type = self.get_str(node_data, "priceType", "MARKET").upper()
-        product = self.get_str(node_data, "product", "NRML")
-        split_size = self.get_int(node_data, "splitSize", 0)
-        price = self.get_float(node_data, "price", 0.0)
-        trigger_price = self.get_float(node_data, "triggerPrice", 0.0)
-
-        invalid = self._invalid_price_reason(price_type, price, trigger_price)
-        if invalid:
-            error_result = {"status": "error", "message": invalid}
-            self.log(f"Options order failed: {invalid}", "error")
-            return error_result
+        try:
+            values = RuntimeOrderResolver(self.context, node_data, "Options order")
+            underlying = values.text("underlying", default="NIFTY").upper()
+            expiry_type = values.text("expiryType", default="current_week").lower()
+            quantity = values.integer("quantity", default=1, minimum=1)
+            offset = values.text("offset", default="ATM").upper()
+            if not _OPTION_OFFSET_PATTERN.fullmatch(offset):
+                raise ValueError(
+                    f"offset must be ATM, ITM1-ITM50, or OTM1-OTM50, got {offset!r}"
+                )
+            option_type = values.enum("optionType", frozenset({"CE", "PE"}), default="CE")
+            action = values.enum("action", VALID_ACTIONS, default="BUY")
+            price_type = values.enum("priceType", VALID_PRICE_TYPES, default="MARKET")
+            product = values.enum("product", VALID_PRODUCT_TYPES, default="NRML")
+            split_size = values.integer("splitSize", default=0, minimum=0)
+            price = values.number("price", default=0.0)
+            trigger_price = values.number("triggerPrice", default=0.0)
+            if "exchange" in node_data:
+                values.enum("exchange", VALID_EXCHANGES)
+            invalid = self._invalid_price_reason(price_type, price, trigger_price)
+            if invalid:
+                raise ValueError(invalid)
+        except ValueError as exc:
+            return self.runtime_order_error("Options order", exc)
 
         self.log(f"Placing options order: {underlying} {option_type} {offset}")
 
@@ -720,23 +858,109 @@ class NodeExecutor:
         # Debug: log node_data keys to understand structure
         self.log(f"Options multi-order node_data keys: {list(node_data.keys())}")
 
-        underlying = self.get_str(node_data, "underlying", "NIFTY")
-        expiry_type = self.get_str(node_data, "expiryType", "current_week")
-        # Frontend uses "strategy" field, not "strategyType"
-        strategy_type = self.get_str(node_data, "strategy", "") or self.get_str(
-            node_data, "strategyType", "custom"
-        )
-        action = self.get_str(node_data, "action", "SELL")  # BUY or SELL for the strategy direction
-        quantity_lots = self.get_int(node_data, "quantity", 1)  # Number of lots per leg
-        product = self.get_str(node_data, "product", "MIS")
-        strangle_width = self.get_str(node_data, "strangleWidth", "OTM2")  # For strangle strategy
-        # Documented as a top-level field; previously read for custom legs only,
-        # so a predefined strategy silently executed MARKET legs.
-        multi_price_type = self.get_str(node_data, "priceType", "MARKET").upper()
-        multi_price = self.get_float(node_data, "price", 0.0)
+        try:
+            values = RuntimeOrderResolver(self.context, node_data, "Options multi-order")
+            underlying = values.text("underlying", default="NIFTY").upper()
+            expiry_type = values.text("expiryType", default="current_week").lower()
+            # Frontend uses ``strategy``; ``strategyType`` is a legacy alias.
+            strategy_type = values.text(
+                "strategy", default="custom", aliases=("strategyType",)
+            ).lower()
+            action = values.enum("action", VALID_ACTIONS, default="SELL")
+            quantity_lots = values.integer("quantity", default=1, minimum=1)
+            product = values.enum("product", VALID_PRODUCT_TYPES, default="MIS")
+            strangle_width = values.text("strangleWidth", default="OTM2").upper()
+            if not _OPTION_OFFSET_PATTERN.fullmatch(strangle_width):
+                raise ValueError(
+                    "strangleWidth must be ATM, ITM1-ITM50, or OTM1-OTM50, "
+                    f"got {strangle_width!r}"
+                )
+            multi_price_type = values.enum(
+                "priceType", VALID_PRICE_TYPES, default="MARKET"
+            )
+            multi_price = values.number("price", default=0.0)
+            multi_trigger_price = values.number("triggerPrice", default=0.0)
+            if "exchange" in node_data:
+                values.enum("exchange", VALID_EXCHANGES)
+            if strategy_type != "custom":
+                if multi_price_type not in {"MARKET", "LIMIT"}:
+                    raise ValueError(
+                        "generated option strategies support only MARKET and LIMIT price types"
+                    )
+                invalid = self._invalid_price_reason(
+                    multi_price_type, multi_price, multi_trigger_price
+                )
+                if invalid:
+                    raise ValueError(invalid)
+        except ValueError as exc:
+            return self.runtime_order_error("Options multi-order", exc)
 
-        # Check for custom legs data
-        legs_data = node_data.get("legs", []) or node_data.get("orderLegs", [])
+        normalized_custom_legs: list[dict[str, Any]] | None = None
+        if strategy_type == "custom":
+            try:
+                raw_legs = values.value("legs", aliases=("orderLegs",))
+                if not isinstance(raw_legs, list) or not raw_legs:
+                    raise ValueError("legs must resolve to a non-empty list of objects")
+                if any(not isinstance(leg, dict) for leg in raw_legs):
+                    raise ValueError("every resolved leg must be an object")
+
+                normalized_custom_legs = []
+                for index, leg in enumerate(raw_legs, start=1):
+                    leg_values = RuntimeOrderResolver(
+                        self.context, leg, f"Options multi-order leg {index}"
+                    )
+                    try:
+                        offset = leg_values.text("offset").upper()
+                        if not _OPTION_OFFSET_PATTERN.fullmatch(offset):
+                            raise ValueError(
+                                "offset must be ATM, ITM1-ITM50, or "
+                                f"OTM1-OTM50, got {offset!r}"
+                            )
+                        option_type = leg_values.enum(
+                            "optionType", frozenset({"CE", "PE"})
+                        )
+                        leg_action = leg_values.enum("action", VALID_ACTIONS)
+                        leg_quantity = leg_values.integer("quantity", minimum=1)
+                        leg_product = leg_values.enum(
+                            "product", VALID_PRODUCT_TYPES, default=product
+                        )
+                        leg_price_type = leg_values.enum(
+                            "priceType",
+                            VALID_PRICE_TYPES,
+                            default=multi_price_type,
+                            aliases=("pricetype",),
+                        )
+                        leg_price = leg_values.number("price", default=multi_price)
+                        leg_trigger = leg_values.number(
+                            "triggerPrice",
+                            default=multi_trigger_price,
+                            aliases=("trigger_price",),
+                        )
+                        leg_split_size = leg_values.integer(
+                            "splitSize", default=0, aliases=("splitsize",), minimum=0
+                        )
+                        invalid = self._invalid_price_reason(
+                            leg_price_type, leg_price, leg_trigger
+                        )
+                        if invalid:
+                            raise ValueError(invalid)
+                    except ValueError as exc:
+                        raise ValueError(f"leg {index}: {exc}") from exc
+                    normalized_custom_legs.append(
+                        {
+                            "offset": offset,
+                            "option_type": option_type,
+                            "action": leg_action,
+                            "quantity_lots": leg_quantity,
+                            "pricetype": leg_price_type,
+                            "product": leg_product,
+                            "price": leg_price,
+                            "trigger_price": leg_trigger,
+                            "splitsize": leg_split_size,
+                        }
+                    )
+            except ValueError as exc:
+                return self.runtime_order_error("Options multi-order", exc)
 
         self.log(
             f"Strategy: {strategy_type}, Action: {action}, Quantity: {quantity_lots} lots, Product: {product}"
@@ -778,33 +1002,16 @@ class NodeExecutor:
 
         # Generate legs based on strategy type if no custom legs provided
         legs = []
-        if legs_data:
-            # Use custom legs from node data
-            for leg in legs_data:
-                leg_qty = self.get_int(leg, "quantity", 1)
-                leg_price_type = self.get_str(leg, "priceType", multi_price_type).upper()
-                leg_price = self.get_float(leg, "price", multi_price)
-                leg_trigger = self.get_float(leg, "triggerPrice", 0.0)
-                leg_entry = {
-                    "offset": self.get_str(leg, "offset", "ATM"),
-                    "option_type": self.get_str(leg, "optionType", "CE"),
-                    "action": self.get_str(leg, "action", "BUY"),
-                    "quantity": leg_qty * lot_size,
-                    "pricetype": leg_price_type,
-                    "product": self.get_str(leg, "product", product),
-                    "price": leg_price,
-                    "trigger_price": leg_trigger,
-                    "splitsize": self.get_int(leg, "splitSize", 0),
-                }
-                invalid = self._invalid_price_reason(leg_price_type, leg_price, leg_trigger)
-                if invalid:
-                    error_result = {
-                        "status": "error",
-                        "message": f"Leg {len(legs) + 1}: {invalid}",
+        if normalized_custom_legs is not None:
+            for leg in normalized_custom_legs:
+                legs.append(
+                    {
+                        key: value
+                        for key, value in leg.items()
+                        if key != "quantity_lots"
                     }
-                    self.log(f"Options multi-order failed: {error_result['message']}", "error")
-                    return error_result
-                legs.append(leg_entry)
+                    | {"quantity": leg["quantity_lots"] * lot_size}
+                )
         else:
             # Generate legs from predefined strategy type
             # A generated strategy shares one price type across its legs. Its
@@ -1203,26 +1410,35 @@ class NodeExecutor:
     def execute_basket_order(self, node_data: dict) -> dict:
         """Execute Basket Order node - places multiple orders in batch"""
         orders_raw = node_data.get("orders", "")
+        if isinstance(orders_raw, str):
+            orders_raw = self.context.resolve_raw(orders_raw)
         basket_name = self.get_str(node_data, "basketName", "flow_basket")
 
         def resolve(value: Any, field: str) -> Any:
             if isinstance(value, str):
-                value = self.context.interpolate(value)
+                value = self.context.resolve_raw(value)
             if isinstance(value, str) and _UNRESOLVED_PATTERN.search(value):
                 raise ValueError(f"{field} has unresolved value {value!r}")
             return value
 
         def common_value(key: str, default: Any) -> Any:
-            value = node_data.get(key)
-            if value is None or value == "":
+            if key not in node_data:
                 return default
-            return resolve(value, key)
+            return resolve(node_data[key], key)
 
         def number(value: Any, field: str) -> float:
+            value = resolve(value, field)
+            if isinstance(value, bool):
+                raise ValueError(f"{field} must be numeric, got boolean {value!r}")
+            if isinstance(value, str) and not value.strip():
+                raise ValueError(f"{field} must not be blank")
             try:
-                return float(value)
-            except (ValueError, TypeError) as exc:
+                numeric = float(value)
+            except (OverflowError, TypeError, ValueError) as exc:
                 raise ValueError(f"{field} must be numeric, got {value!r}") from exc
+            if not math.isfinite(numeric):
+                raise ValueError(f"{field} must be finite, got {value!r}")
+            return numeric
 
         def required_text(value: Any, field: str) -> str:
             value = resolve(value, field)
@@ -1239,8 +1455,14 @@ class NodeExecutor:
             return {"status": "error", "message": message}
 
         try:
-            common_product = common_value("product", "MIS")
-            common_price_type = common_value("priceType", "MARKET")
+            common_product = required_text(common_value("product", "MIS"), "product").upper()
+            common_price_type = required_text(
+                common_value("priceType", "MARKET"), "priceType"
+            ).upper()
+            if common_product not in VALID_PRODUCT_TYPES:
+                raise ValueError(f"invalid product {common_product!r}")
+            if common_price_type not in VALID_PRICE_TYPES:
+                raise ValueError(f"invalid pricetype {common_price_type!r}")
             common_price = number(common_value("price", 0.0), "price")
             common_trigger_price = number(common_value("triggerPrice", 0.0), "triggerPrice")
         except ValueError as exc:
@@ -1297,15 +1519,19 @@ class NodeExecutor:
 
             try:
                 symbol = required_text(raw_order.get("symbol"), "symbol")
-                exchange = required_text(raw_order.get("exchange"), "exchange")
+                exchange = required_text(raw_order.get("exchange"), "exchange").upper()
                 action = required_text(raw_order.get("action"), "action").upper()
                 quantity_value = resolve(raw_order.get("quantity"), "quantity")
-                quantity = int(float(quantity_value))
+                quantity = int(number(quantity_value, "quantity"))
                 if quantity <= 0:
                     raise ValueError(f"quantity must be positive, got {quantity}")
 
-                product = row_value("product", common_product)
-                price_type = row_value("pricetype", common_price_type, "priceType")
+                product = required_text(
+                    row_value("product", common_product), "product"
+                ).upper()
+                price_type = required_text(
+                    row_value("pricetype", common_price_type, "priceType"), "pricetype"
+                ).upper()
                 if exchange not in VALID_EXCHANGES:
                     raise ValueError(f"invalid exchange {exchange!r}")
                 if action not in VALID_ACTIONS:
@@ -1353,33 +1579,26 @@ class NodeExecutor:
 
     def execute_split_order(self, node_data: dict) -> dict:
         """Execute Split Order node"""
-        symbol = self.get_str(node_data, "symbol", "")
-        exchange = self.get_str(node_data, "exchange", "NSE")
-        action = self.get_str(node_data, "action", "BUY")
-        quantity = self.get_int(node_data, "quantity", 1)
-        split_size = self.get_int(node_data, "splitSize", 10)
-        price_type = self.get_str(node_data, "priceType", "MARKET")
-        product = self.get_str(node_data, "product", "MIS")
-        price = self.get_float(node_data, "price", 0.0)
-        trigger_price = self.get_float(node_data, "triggerPrice", 0.0)
+        try:
+            order = self.resolve_standard_order(node_data, "Split order")
+            values = RuntimeOrderResolver(self.context, node_data, "Split order")
+            split_size = values.integer("splitSize", default=10, minimum=1)
+        except ValueError as exc:
+            return self.runtime_order_error("Split order", exc)
 
-        invalid = self._invalid_price_reason(price_type, price, trigger_price)
-        if invalid:
-            error_result = {"status": "error", "message": invalid}
-            self.log(f"Split order failed: {invalid}", "error")
-            return error_result
-
-        self.log(f"Placing split order: {symbol} qty={quantity} split={split_size}")
+        self.log(
+            f"Placing split order: {order['symbol']} qty={order['quantity']} split={split_size}"
+        )
         result = self.client.split_order(
-            symbol=symbol,
-            exchange=exchange,
-            action=action,
-            quantity=quantity,
+            symbol=order["symbol"],
+            exchange=order["exchange"],
+            action=order["action"],
+            quantity=order["quantity"],
             split_size=split_size,
-            price_type=price_type,
-            product_type=product,
-            price=price,
-            trigger_price=trigger_price,
+            price_type=order["price_type"],
+            product_type=order["product"],
+            price=order["price"],
+            trigger_price=order["trigger_price"],
             strategy=self.strategy_tag(node_data),
         )
         self.log(
@@ -2007,11 +2226,23 @@ class NodeExecutor:
 
     def _parse_margin_positions(self, node_data: dict) -> list[dict] | None:
         """Read the panel's positionsJson basket, if present and usable."""
-        raw = node_data.get("positionsJson") or node_data.get("positions")
-        if not raw:
+        raw_key = next(
+            (
+                key
+                for key in ("positionsJson", "positions")
+                if key in node_data and node_data[key] is not None
+            ),
+            None,
+        )
+        if raw_key is None:
             return None
+        raw = node_data[raw_key]
         if isinstance(raw, str):
-            raw = self.context.interpolate(raw).strip()
+            raw = self.context.resolve_raw(raw)
+        if isinstance(raw, str):
+            if _UNRESOLVED_PATTERN.search(raw):
+                raise ValueError(f"Margin positions has unresolved value {raw!r}.")
+            raw = raw.strip()
             # A basket was configured, so an empty result means interpolation
             # dropped it - an unset {{variable}}, not a request to price the
             # single position instead.
@@ -2043,7 +2274,48 @@ class NodeExecutor:
                 "Margin positions must all be objects; the basket contains a "
                 "non-object entry."
             )
-        return raw or None
+
+        normalized: list[dict[str, Any]] = []
+        for index, position in enumerate(raw, start=1):
+            values = RuntimeOrderResolver(self.context, position, f"Margin position {index}")
+            try:
+                symbol = values.text("symbol")
+                exchange = values.enum("exchange", VALID_EXCHANGES)
+                action = values.enum("action", VALID_ACTIONS)
+                quantity = values.integer("quantity", minimum=1)
+                product = values.enum("product", VALID_PRODUCT_TYPES)
+                price_type = values.enum("pricetype", VALID_PRICE_TYPES)
+                price = values.number("price", default=0.0)
+                trigger_price = values.number(
+                    "trigger_price", default=0.0, aliases=("triggerPrice",)
+                )
+                invalid = self._invalid_price_reason(price_type, price, trigger_price)
+                if invalid:
+                    raise ValueError(invalid)
+            except ValueError as exc:
+                raise ValueError(f"Margin position {index}: {exc}") from exc
+
+            def numeric_text(number: float) -> str:
+                return str(int(number)) if number.is_integer() else str(number)
+
+            resolved_position = dict(position)
+            resolved_position.update(
+                {
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "action": action,
+                    "quantity": str(quantity),
+                    "product": product,
+                    "pricetype": price_type,
+                }
+            )
+            if "price" in position:
+                resolved_position["price"] = numeric_text(price)
+            if "trigger_price" in position or "triggerPrice" in position:
+                resolved_position.pop("triggerPrice", None)
+                resolved_position["trigger_price"] = numeric_text(trigger_price)
+            normalized.append(resolved_position)
+        return normalized
 
     def execute_margin(self, node_data: dict) -> dict:
         """Execute Margin node - calculate margin requirements"""

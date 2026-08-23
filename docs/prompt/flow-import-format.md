@@ -685,10 +685,11 @@ spreads / custom).
 | `expiryType` | (as `optionsOrder`) | `"current_week"` | One common expiry is resolved for every generated or custom leg. |
 | `action` | `"BUY"` \| `"SELL"` | — | Direction for the strategy (BUY=long volatility, SELL=short volatility). |
 | `quantity` | int | `1` | Lots per leg. |
-| `priceType` | `"MARKET"` \| `"LIMIT"` | `"MARKET"` | Common price type for generated strategies; generated legs do not support `SL`/`SL-M`. |
+| `priceType` | `"MARKET"` \| `"LIMIT"` \| `"SL"` \| `"SL-M"` | `"MARKET"` | Common price type; generated legs do not support `SL`/`SL-M`, while custom legs may inherit all four types. |
 | `product` | `"MIS"` \| `"NRML"` | `"NRML"` | |
-| `price` | number | `0` | Common generated-leg price. Must be positive when `priceType="LIMIT"`. |
-| `legs` | `Leg[]` | `[]` | **Required for `strategy="custom"`.** Each leg requires `{ offset, optionType, action, quantity }`; optional `product`, `priceType`, `price`, and `triggerPrice` select per-leg execution. Omitted `product`, `priceType`, and `price` inherit common node values. Custom leg `priceType` may be any of `MARKET`/`LIMIT`/`SL`/`SL-M`; every priced leg must carry its own required positive price fields. |
+| `price` | number | `0` | Common leg price. Must be positive when the effective price type is `LIMIT`/`SL`. |
+| `triggerPrice` | number | `0` | Common custom-leg trigger. Must be positive when the effective price type is `SL`/`SL-M`. |
+| `legs` | `Leg[]` | `[]` | **Required for `strategy="custom"`.** Each leg requires `{ offset, optionType, action, quantity }`; optional `product`, `priceType` (or legacy `pricetype`), `price`, and `triggerPrice` override the common node value. Omitted optional fields inherit the common node values. Custom leg `priceType` may be any of `MARKET`/`LIMIT`/`SL`/`SL-M`; the resulting effective priced leg must have the required positive price fields. |
 | `outputVariable` | string | — | Result includes `{{name.results}}` array per leg. |
 
 Options Multi-Order always resolves the node-level `expiryType` once and sends
@@ -2098,7 +2099,7 @@ Sizes a position based on a fraction of available cash divided by LTP. Shows
 ```
 
 > `floor(expression)` is the only supported function call and returns an
-> integer. Other function names, attributes, keyword arguments, or calls with
+> integer-valued number. Other function names, attributes, keyword arguments, or calls with
 > anything other than one positional expression are rejected.
 
 ### 8.12 Per-day order counter (variable increment)

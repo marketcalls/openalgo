@@ -120,18 +120,30 @@ export interface OptionsMultiOrderNodeData {
   triggerPrice?: number
 }
 
+export interface BasketOrderItem {
+  symbol: string
+  exchange: string
+  action: 'BUY' | 'SELL'
+  quantity: number | string
+  product?: 'MIS' | 'CNC' | 'NRML'
+  pricetype?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
+  priceType?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
+  price?: number | string
+  triggerprice?: number | string
+  triggerPrice?: number | string
+}
+
 /** Basket Order - Multiple orders at once */
 export interface BasketOrderNodeData {
   label?: string
   /** Basket label. The node used to render `strategy`, which nothing writes. */
   basketName?: string
   /**
-   * Newline-delimited `SYMBOL,EXCHANGE,ACTION,QTY` rows, as the config panel
-   * textarea and the executor's parser both treat it. This was declared as an
-   * array of objects, which is why the canvas badge counting `orders.length`
-   * silently read 0 for every basket without the compiler objecting.
+   * Editor-authored baskets use newline-delimited
+   * `SYMBOL,EXCHANGE,ACTION,QTY` rows. Imported workflows may retain a richer
+   * per-order list with product and price overrides.
    */
-  orders: string
+  orders: string | BasketOrderItem[]
   product?: 'MIS' | 'CNC' | 'NRML'
   priceType?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
   price?: number
