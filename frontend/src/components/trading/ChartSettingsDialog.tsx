@@ -82,7 +82,7 @@ export function ChartSettingsDialog({ req, onApply, onClose }: Props) {
     >
       <div className="flex max-h-[92%] w-[380px] flex-col rounded-lg border bg-popover shadow-2xl">
         {/* Title */}
-        <div className="flex items-center justify-between px-4 pb-2 pt-3">
+        <div className="flex shrink-0 items-center justify-between px-4 pb-2 pt-3">
           <h3 className="text-[15px] font-semibold tracking-tight">Chart settings</h3>
           <button
             type="button"
@@ -105,15 +105,33 @@ export function ChartSettingsDialog({ req, onApply, onClose }: Props) {
         </div>
 
         {/* Tabs. Five of them, so the row scrolls rather than wraps: a wrapped
-            tab strip changes the dialog's height as you move between tabs. */}
-        <div className="flex gap-4 overflow-x-auto no-scrollbar border-b px-4">
+            tab strip changes the dialog's height as you move between tabs.
+
+            `shrink-0` is load-bearing, and its absence was a real bug. The
+            fields panel below is `flex-1`, i.e. `flex: 1 1 0%`, and a flex item
+            whose basis is 0 has a *scaled shrink factor of 0*: it absorbs none
+            of the overflow when the dialog hits `max-h`. The browser took the
+            excess out of the only children with a non-zero basis instead, this
+            strip among them, squeezing it from 28px to 16.6px. `overflow-x-auto`
+            also computes `overflow-y` to `auto`, so the squeezed strip clipped
+            rather than spilled, and it clipped exactly the descender band: the
+            `p` in `Appearance` and the `g` in `Trading` lost their tails while
+            `Price`, `Readout` and `Axes` looked untouched. It only reproduced on
+            those two tabs because their panels are the tall ones, so they are
+            the ones that push the dialog into its `max-h` in the first place.
+
+            `leading-5` is belt and braces: `text-[13px]` is an arbitrary size,
+            which sets font-size ONLY and inherits its line-height, unlike
+            `text-sm` which ships a paired one. Pinning it makes the row's height
+            deterministic rather than a function of whatever leading it sits in. */}
+        <div className="flex shrink-0 gap-4 overflow-x-auto no-scrollbar border-b px-4">
           {req.tabs.map((t) => (
             <button
               type="button"
               key={t.id}
               onClick={() => setTabId(t.id)}
               className={cn(
-                '-mb-px shrink-0 border-b-2 pb-2 text-[13px] transition-colors',
+                '-mb-px shrink-0 border-b-2 pb-2 text-[13px] leading-5 transition-colors',
                 t.id === tab.id
                   ? 'border-primary text-foreground'
                   : 'border-transparent text-muted-foreground hover:text-foreground'
@@ -146,7 +164,7 @@ export function ChartSettingsDialog({ req, onApply, onClose }: Props) {
         {/* Footer. No Defaults action: the engine exposes per-control defaults
             in the schema but no "reset the chart" call, and a button that
             silently reset only the visible tab would be a lie. */}
-        <div className="flex items-center justify-end gap-2 border-t px-4 py-2.5">
+        <div className="flex shrink-0 items-center justify-end gap-2 border-t px-4 py-2.5">
           <button
             type="button"
             onClick={onClose}

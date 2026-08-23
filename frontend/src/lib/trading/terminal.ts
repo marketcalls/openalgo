@@ -845,6 +845,13 @@ export class TradingTerminal {
     this.chart = createChart(this.container, {
       priceAxisWidth: 78,
       theme: buildChartTheme(mode, appMode),
+      // Corner clock and bar countdown. Both are off by default in the engine,
+      // deliberately: a countdown repaints every second, and on the historical
+      // range a chart usually opens on it counts against a bar that closed months
+      // ago. A live trading terminal is the case they are for, so this host opts
+      // in. The clock reads the exchange's wall time through the chart's
+      // configured timezone, which is what a trader is actually watching.
+      axisChrome: { sessionClock: { showOffset: true }, barCountdown: true },
       // The library's built-in screenshot command calls its own
       // `downloadScreenshot()`, which knows nothing about this terminal's DOM
       // OHLC readout or its trade panel. Unbind it and claim the same chord for
