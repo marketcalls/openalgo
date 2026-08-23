@@ -1,3 +1,7 @@
+// ChevronDown survives for the context menu's submenu arrow only. The
+// toolbar buttons carry no caret: a chevron on every control is dead
+// weight when the whole row opens menus, and it reads as a dated form
+// control. Reserve the glyph for where it distinguishes something.
 import { ChevronDown, RefreshCw, Search, Settings } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -23,6 +27,7 @@ import {
   type TerminalCallbacks,
   TradingTerminal,
 } from '@/lib/trading/terminal'
+import type { LinkGroup } from 'openalgo-charts'
 import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
@@ -58,10 +63,22 @@ const glyph = {
   strokeLinejoin: 'round' as const,
 }
 
+/**
+ * An oscillator crossing its threshold: a signal line weaving over and under a
+ * dashed level, with the crossing marked.
+ *
+ * The old glyph was a bare zig-zag, which is the generic "chart" mark this
+ * toolbar already uses for the chart-type button and the legend. This one says
+ * what an indicator IS here rather than that a chart exists: a derived series
+ * read against a level. The dashed rule and the dot survive 16px, which a
+ * busier picture of a whole sub-pane would not.
+ */
 function IndicatorIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" {...glyph} className={className} aria-hidden="true">
-      <path d="M3 16.5l4-7 3.5 3.5L14 5l3.5 5.5L21 8" />
+      <path d="M3 12h18" strokeDasharray="2.5 2.6" opacity={0.55} />
+      <path d="M3 17.5c2.2 0 2.4-9 5-9s2.6 8 5 8 2.6-9 5-9 2.6 4.5 3 5" />
+      <circle cx="13" cy="12" r="1.6" fill="currentColor" stroke="none" />
     </svg>
   )
 }
@@ -169,6 +186,8 @@ interface Props {
   onFocusPane?(terminal: TradingTerminal | null): void
   /** Drawing state of this pane, for the shared rail's buttons. */
   onDrawStats?(stats: DrawStats): void
+  /** Workspace link group this pane joins, if the page made one. */
+  linkGroup?: LinkGroup | null
   /** Show/hide the page-level rail — the action lives in each pane's menu. */
   onToggleRail?(): void
   railVisible?: boolean
@@ -195,6 +214,7 @@ export function ChartPane({
   sharedMagnet,
   onFocusPane,
   onDrawStats,
+  linkGroup,
   onToggleRail,
   railVisible,
   layoutPicker,
@@ -319,6 +339,7 @@ export function ChartPane({
       })
       terminalRef.current = terminal
       terminal.init()
+      terminal.setLinkGroup(linkGroup ?? null)
       const stats0 = terminal.drawStats()
       statsCbRef.current?.(stats0)
       noteHistory(stats0)
@@ -331,7 +352,9 @@ export function ChartPane({
       terminal?.destroy()
       terminalRef.current = null
     }
-  }, [paneId, apiKey, wsUrl, noteHistory])
+    // linkGroup is held in a ref by the page and created once, so its identity
+    // is stable and listing it here does not re-run the boot effect.
+  }, [paneId, apiKey, wsUrl, noteHistory, linkGroup])
 
   /* ── follow the page-level drawing rail ───────────────────────────────── */
   useEffect(() => {
@@ -492,7 +515,6 @@ export function ChartPane({
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" className="h-8 min-w-12 shrink-0 gap-1 font-medium">
               {interval || '—'}
-              <ChevronDown className="h-3.5 w-3.5 opacity-60" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent container={menuHost} align="start" className="w-64">
@@ -530,7 +552,6 @@ export function ChartPane({
               title={chartTypeDef.label}
             >
               <span className="h-4 w-4">{chartTypeIcon(chartTypeDef.iconKey)}</span>
-              <ChevronDown className="h-3.5 w-3.5 opacity-60" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent container={menuHost} align="start" className="w-52">
@@ -605,7 +626,6 @@ export function ChartPane({
               {indicators.length}
             </span>
           )}
-          <ChevronDown className="h-3.5 w-3.5 opacity-60" />
         </Button>
 
         {/* The layout picker sits here, immediately after Indicators, because

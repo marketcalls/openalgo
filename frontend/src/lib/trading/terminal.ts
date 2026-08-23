@@ -24,6 +24,8 @@ import {
   type LtpEvent,
   type MarketDepth,
   OpenAlgoDataFeed,
+  tryResolveInterval,
+  withBarCache,
   OpenAlgoTradeFeed,
   OpenAlgoWsFeed,
   type PriceLine,
@@ -33,6 +35,7 @@ import {
   type SeriesStyle,
   type SeriesType,
 } from 'openalgo-charts'
+import type { LinkGroup } from 'openalgo-charts'
 import type { DrawingController } from 'openalgo-charts/draw'
 import { runTransform } from 'openalgo-charts/transform'
 
@@ -422,6 +425,21 @@ export class TradingTerminal {
 
   private ws: InstanceType<typeof OpenAlgoWsFeed> | null = null
   private rest: InstanceType<typeof OpenAlgoDataFeed> | null = null
+  /**
+   * The same feed with warm-load caching in front of it.
+   *
+   * Deliberately a SECOND handle rather than a replacement for `rest`: the
+   * periodic reconcile exists to re-ask the broker about bars it may already
+   * have, so it must keep going to the wire. Everything else -- opening a
+   * symbol, paging in older history -- is immutable closed history and is
+   * exactly what a cache is for.
+   *
+   * The cache never stores a forming bar, so a warm load is short by at most
+   * the bar currently building, which the WebSocket supplies within a tick. A
+   * chart with Buy and Sell buttons on it can be a bar behind for a moment; it
+   * must never be confidently wrong about a price.
+   */
+  private cachedBars: ReturnType<typeof withBarCache> | null = null
   private trade: TradeFeedInstance | null = null
   private builder: CandleBuilder | null = null
   private offLtp: (() => void) | null = null
@@ -447,6 +465,8 @@ export class TradingTerminal {
    * {@link snapshotChartDefaults}.
    */
   private chartDefaults: Record<string, string | number | boolean> = {}
+  /** The workspace link group this pane belongs to, if sync is on. */
+  private link: LinkGroup | null = null
   /** Non-null only while the chart is showing a replayed prefix. */
   private replay: ReplayController | null = null
   /** The price axis's autoscale state before replay forced it on. */
@@ -924,6 +944,10 @@ export class TradingTerminal {
     // write to this chart, and an awaited snapshot would land after them.
     this.snapshotChartDefaults()
     void this.restoreChartSettings()
+    // A theme or chart-type switch throws the old Chart away, so membership has
+    // to be re-established against the new one or the pane silently drops out
+    // of the group it still believes it is in.
+    this.joinLink()
     this.setPriceData()
 
     // Default zoom: a FIXED number of recent bars, so the visible price range
@@ -1709,6 +1733,67 @@ export class TradingTerminal {
     return this.chart ? this.chart.indicators().map((i) => ({ id: i.id, name: i.name })) : []
   }
 
+  /**
+   * Join or leave the workspace link group.
+   *
+   * The engine has no notion of a symbol, so following one is a callback: the
+   * group decides WHEN, this host decides HOW. `loadSymbol` is the same path
+   * the symbol search uses, so a linked change behaves exactly like a typed one
+   * -- same fetch, same cache, same teardown of a running replay.
+   */
+  setLinkGroup(group: LinkGroup | null): void {
+    if (this.link && this.chart && this.link !== group) this.link.remove(this.chart)
+    this.link = group
+    this.joinLink()
+  }
+
+  /**
+   * The group's symbol is `EXCHANGE:SYMBOL`, not a bare ticker.
+   *
+   * The engine treats the value as an opaque string, and a bare symbol is not
+   * an instrument here: the same ticker exists on more than one exchange, so
+   * following one would be a coin toss over which book you ended up charting.
+   */
+  private linkSymbol(): string | undefined {
+    return this.sym ? `${this.sym.exchange}:${this.sym.symbol}` : undefined
+  }
+
+  private joinLink(): void {
+    if (!this.link || !this.chart) return
+    this.link.add(this.chart, {
+      symbol: this.linkSymbol(),
+      onSymbol: (next) => {
+        // Ignore an echo of what this pane already shows: the group puts a
+        // joining member onto the agreed symbol, and reloading a chart onto the
+        // instrument it already displays would throw away its viewport.
+        if (this.linkSymbol() === next) return
+        const cut = next.indexOf(':')
+        if (cut <= 0) return // not ours to interpret
+        void this.loadSymbol({ symbol: next.slice(cut + 1), exchange: next.slice(0, cut) })
+      },
+    })
+  }
+
+  /**
+   * Now, snapped down to the bar grid.
+   *
+   * The cache keys on symbol, exchange and interval and then slices by range,
+   * so the range has to be STABLE between two loads inside the same bar. A raw
+   * `nowSec()` moves every second, which the cache reads as a request for data
+   * it does not hold, and the hit rate is then exactly zero. Snapping makes
+   * every load inside one bar ask the identical question.
+   *
+   * Count-driven and calendar codes have no fixed grid to snap to, so they fall
+   * through unsnapped and simply do not benefit. That is the honest outcome
+   * rather than inventing a grid they do not have.
+   */
+  private gridNow(): number {
+    const found = tryResolveInterval(this.interval)
+    const step = found?.bucketing.mode === 'interval' ? found.bucketing.seconds : 0
+    const now = nowSec()
+    return step > 0 ? Math.floor(now / step) * step : now
+  }
+
   /** Grid visibility, independently per axis. */
   setGrid(vertical: boolean, horizontal: boolean): void {
     this.gridV = vertical
@@ -2057,15 +2142,19 @@ export class TradingTerminal {
     }
     this.qty = 1
     this.lsSet('symbol', JSON.stringify({ symbol: this.sym.symbol, exchange: this.sym.exchange }))
+    // Tell the group before the history fetch below, so a linked grid starts
+    // loading together rather than one pane at a time. The group's own echo
+    // guard stops this coming straight back at us.
+    if (this.link && this.chart) this.link.setSymbol(this.chart, `${exchange}:${this.sym.symbol}`)
 
     // history
-    const to = nowSec()
+    const to = this.gridNow()
     this.lastLtp = null
     this.prevClose = null
     this.liveBucket = null
     this.noMoreHistory = false
     try {
-      this.rawBars = await this.rest.getBars({
+      this.rawBars = await (this.cachedBars ?? this.rest).getBars({
         symbol: this.sym.symbol,
         exchange: this.sym.exchange,
         interval: this.interval,
@@ -2292,6 +2381,7 @@ export class TradingTerminal {
   /* ── bootstrap + teardown ─────────────────────────────────────────────── */
   async init() {
     this.rest = new OpenAlgoDataFeed({ baseUrl: '', apiKey: this.apiKey })
+    this.cachedBars = withBarCache(this.rest, { ttlMs: 10 * 60_000 })
     this.trade = new OpenAlgoTradeFeed({ baseUrl: '', apiKey: this.apiKey, strategy: STRATEGY })
 
     // broker-supported intervals → the timeframe dropdown
