@@ -2139,6 +2139,7 @@ class NodeExecutor:
         Prevents arbitrary code execution.
         """
         import ast
+        import math
         import operator as op
 
         # Supported operators
@@ -2155,9 +2156,18 @@ class NodeExecutor:
 
         def _eval(node):
             if isinstance(node, ast.Constant):
-                if isinstance(node.value, (int, float)):
+                if isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
                     return node.value
                 raise ValueError(f"Unsupported constant: {node.value}")
+            elif isinstance(node, ast.Call):
+                if not (
+                    isinstance(node.func, ast.Name)
+                    and node.func.id == "floor"
+                    and len(node.args) == 1
+                    and not node.keywords
+                ):
+                    raise ValueError("Only floor(expression) is supported")
+                return math.floor(_eval(node.args[0]))
             elif isinstance(node, ast.BinOp):
                 left = _eval(node.left)
                 right = _eval(node.right)
@@ -2253,8 +2263,69 @@ class NodeExecutor:
         self.log(f"[LOG] {message}", log_level)
         return {"status": "success", "message": message}
 
+    @staticmethod
+    def _walk_variable_json_path(value: Any, json_path: str) -> Any:
+        """Traverse dotted dict keys and bracketed list indexes without eval."""
+        if not isinstance(json_path, str):
+            raise ValueError("jsonPath must be a string")
+
+        path = json_path.strip()
+        if not path:
+            return value
+
+        position = 0
+        while position < len(path):
+            if path[position] == "[":
+                closing = path.find("]", position + 1)
+                if closing < 0:
+                    raise ValueError(f"Invalid jsonPath: {json_path}")
+                index_text = path[position + 1 : closing]
+                if not index_text.isdigit():
+                    raise ValueError(f"Invalid jsonPath index: {index_text}")
+                if not isinstance(value, (list, tuple)):
+                    raise TypeError("jsonPath index requires a list or tuple")
+                value = value[int(index_text)]
+                position = closing + 1
+                if position < len(path) and path[position] not in ".[":
+                    raise ValueError(f"Invalid jsonPath: {json_path}")
+                continue
+
+            if position:
+                if path[position] != ".":
+                    raise ValueError(f"Invalid jsonPath: {json_path}")
+                position += 1
+
+            key_start = position
+            while position < len(path) and path[position] not in ".[]":
+                position += 1
+            key = path[key_start:position]
+            if not key:
+                raise ValueError(f"Invalid jsonPath: {json_path}")
+            if not isinstance(value, dict):
+                raise TypeError("jsonPath key requires an object")
+            value = value[key]
+
+            if position < len(path) and path[position] == "]":
+                raise ValueError(f"Invalid jsonPath: {json_path}")
+
+        return value
+
+    def _lookup_variable_source(self, source_variable: Any, json_path: Any = None) -> Any:
+        """Return a raw source variable, distinguishing missing values from None."""
+        if not isinstance(source_variable, str) or not source_variable.strip():
+            raise ValueError("sourceVariable is required")
+
+        source_name = source_variable.strip()
+        if source_name not in self.context.variables:
+            raise KeyError(f"Source variable not found: {source_name}")
+
+        source = self.context.variables[source_name]
+        if json_path is None or json_path == "":
+            return source
+        return self._walk_variable_json_path(source, json_path)
+
     def execute_variable(self, node_data: dict) -> dict:
-        """Execute Variable node"""
+        """Execute Variable node, storing a result only after it fully succeeds."""
         var_name = node_data.get("variableName") or node_data.get("name", "")
         operation = node_data.get("operation", "set")
         var_value = node_data.get("value", "")
@@ -2262,32 +2333,52 @@ class NodeExecutor:
         if isinstance(var_value, str):
             var_value = self.context.interpolate(var_value)
 
-        if operation == "set":
-            if isinstance(var_value, str):
-                if var_value.startswith("{") or var_value.startswith("["):
+        try:
+            if operation == "set":
+                result = var_value
+                if isinstance(result, str) and (result.startswith("{") or result.startswith("[")):
                     try:
-                        var_value = json.loads(var_value)
+                        result = json.loads(result)
                     except json.JSONDecodeError:
                         pass
-            self.context.set_variable(var_name, var_value)
-            self.log(f"Set variable {var_name} = {var_value}")
-        elif operation == "add":
-            current = float(self.context.get_variable(var_name, 0) or 0)
-            result = current + float(var_value or 0)
-            self.context.set_variable(var_name, result)
-            var_value = result
-        elif operation == "increment":
-            current = float(self.context.get_variable(var_name, 0) or 0)
-            result = current + 1
-            self.context.set_variable(var_name, result)
-            var_value = result
-        elif operation == "decrement":
-            current = float(self.context.get_variable(var_name, 0) or 0)
-            result = current - 1
-            self.context.set_variable(var_name, result)
-            var_value = result
+            elif operation == "get":
+                result = self._lookup_variable_source(
+                    node_data.get("sourceVariable"), node_data.get("jsonPath")
+                )
+            elif operation in {"add", "subtract", "multiply", "divide"}:
+                current = float(self.context.get_variable(var_name, 0))
+                value = float(var_value)
+                if operation == "add":
+                    result = current + value
+                elif operation == "subtract":
+                    result = current - value
+                elif operation == "multiply":
+                    result = current * value
+                else:
+                    if value == 0:
+                        raise ValueError("Cannot divide by zero")
+                    result = current / value
+            elif operation == "increment":
+                result = float(self.context.get_variable(var_name, 0)) + 1
+            elif operation == "decrement":
+                result = float(self.context.get_variable(var_name, 0)) - 1
+            elif operation == "parse_json":
+                result = json.loads(var_value)
+            elif operation == "stringify":
+                result = json.dumps(self._lookup_variable_source(node_data.get("sourceVariable")))
+            elif operation == "append":
+                current = self.context.get_variable(var_name, "")
+                result = f"{current}{var_value}" if var_name in self.context.variables else str(var_value)
+            else:
+                raise ValueError(f"Unknown variable operation: {operation}")
+        except (ValueError, TypeError, KeyError, IndexError, json.JSONDecodeError) as exc:
+            message = f"Variable operation {operation!r} failed: {exc}"
+            self.log(message, "error")
+            return {"status": "error", "message": message}
 
-        return {"status": "success", "variable": var_name, "value": var_value}
+        self.context.set_variable(var_name, result)
+        self.log(f"Set variable {var_name} = {result}")
+        return {"status": "success", "variable": var_name, "value": result}
 
     def execute_whatsapp_alert(self, node_data: dict) -> dict:
         """Execute WhatsApp Alert node"""

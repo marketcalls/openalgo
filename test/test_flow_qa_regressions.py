@@ -1295,6 +1295,110 @@ def test_cancel_all_orders_stores_its_result():
 
 
 # ---------------------------------------------------------------------------
+# Variable nodes preserve raw values and report failed operations honestly
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("operation", "initial", "data", "expected"),
+    [
+        ("set", {}, {"value": '{"ok": true}'}, {"ok": True}),
+        (
+            "get",
+            {"portfolio": {"orders": [{"price": 101}, {"price": 102.5}]}},
+            {"sourceVariable": "portfolio", "jsonPath": "orders[1].price"},
+            102.5,
+        ),
+        ("add", {"target": 2}, {"value": "3"}, 5.0),
+        ("subtract", {"target": 9}, {"value": "4"}, 5.0),
+        ("multiply", {"target": 3}, {"value": "2.5"}, 7.5),
+        ("divide", {"target": 9}, {"value": "2"}, 4.5),
+        ("increment", {"target": 3}, {}, 4.0),
+        ("decrement", {"target": 3}, {}, 2.0),
+        ("parse_json", {}, {"value": '{"ok": true}'}, {"ok": True}),
+        ("stringify", {"source": {"ok": True}}, {"sourceVariable": "source"}, '{"ok": true}'),
+        ("append", {}, {"value": "done"}, "done"),
+    ],
+)
+def test_variable_operation_success(operation, initial, data, expected):
+    """Each supported operation stores its specified raw result."""
+    executor = _node()
+    executor.context.variables.update(initial)
+
+    result = executor.execute_variable({"variableName": "target", "operation": operation, **data})
+
+    assert result == {"status": "success", "variable": "target", "value": expected}
+    assert executor.context.get_variable("target") == expected
+
+
+def test_variable_operation_get_preserves_a_stored_none_value():
+    """A stored None is a source value, rather than evidence the source is missing."""
+    executor = _node()
+    executor.context.set_variable("source", None)
+
+    result = executor.execute_variable(
+        {"variableName": "target", "operation": "get", "sourceVariable": "source"}
+    )
+
+    assert result == {"status": "success", "variable": "target", "value": None}
+    assert executor.context.get_variable("target") is None
+
+
+@pytest.mark.parametrize(
+    ("operation", "initial", "data", "original"),
+    [
+        ("unknown", {"target": "sentinel"}, {}, "sentinel"),
+        ("get", {"target": "sentinel"}, {}, "sentinel"),
+        (
+            "get",
+            {"target": "sentinel", "source": {"orders": []}},
+            {"sourceVariable": "source", "jsonPath": "orders[1].price"},
+            "sentinel",
+        ),
+        ("add", {"target": "not numeric"}, {"value": "1"}, "not numeric"),
+        ("add", {"target": "sentinel"}, {"value": "not numeric"}, "sentinel"),
+        ("divide", {"target": "sentinel"}, {"value": "0"}, "sentinel"),
+        ("parse_json", {"target": "sentinel"}, {"value": "not json"}, "sentinel"),
+        ("stringify", {"target": "sentinel", "source": {1, 2}}, {"sourceVariable": "source"}, "sentinel"),
+    ],
+)
+def test_variable_operation_error_does_not_mutate_target(operation, initial, data, original):
+    """Invalid work must preserve the output variable rather than partly succeeding."""
+    executor = _node()
+    executor.context.variables.update(initial)
+
+    result = executor.execute_variable({"variableName": "target", "operation": operation, **data})
+
+    assert result["status"] == "error"
+    assert executor.context.get_variable("target") == original
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [("floor(3.9)", 3.0), ("floor(2 + 2.8)", 4.0)],
+)
+def test_safe_math_floor(expression, expected):
+    assert _node()._safe_eval_math(expression) == expected
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "ceil(1.1)",
+        "math.floor(2.2)",
+        "floor()",
+        "floor(1, 2)",
+        "floor(x=1)",
+        "floor(unknown(1))",
+        "__import__('os').system('echo unsafe')",
+    ],
+)
+def test_safe_math_floor_rejects_every_other_call_shape(expression):
+    with pytest.raises(ValueError):
+        _node()._safe_eval_math(expression)
+
+
+# ---------------------------------------------------------------------------
 # Monitor shutdown is reachable, idempotent and recoverable
 # ---------------------------------------------------------------------------
 
