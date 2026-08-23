@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { OrderPriceFields } from './OrderPriceFields'
+import { getOptionsMultiStrategyUpdate, OrderPriceFields } from './OrderPriceFields'
 
 describe('OrderPriceFields', () => {
   it.each([
@@ -72,5 +72,24 @@ describe('OrderPriceFields', () => {
     fireEvent.change(screen.getByLabelText('Price'), { target: { value: '' } })
 
     expect(onPriceChange).toHaveBeenLastCalledWith(0)
+  })
+})
+
+describe('Options Multi strategy pricing transition', () => {
+  it.each(['SL', 'SL-M'] as const)(
+    'normalizes custom %s pricing when switching to a generated strategy',
+    (priceType) => {
+      const current = { strategy: 'custom', priceType }
+
+      const update = getOptionsMultiStrategyUpdate(current, 'iron_condor')
+
+      expect(update).toEqual({ strategy: 'iron_condor', priceType: 'MARKET' })
+    }
+  )
+
+  it('preserves LIMIT pricing when switching to a generated strategy', () => {
+    const current = { strategy: 'custom', priceType: 'LIMIT' as const }
+
+    expect(getOptionsMultiStrategyUpdate(current, 'straddle')).toEqual({ strategy: 'straddle' })
   })
 })

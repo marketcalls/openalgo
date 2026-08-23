@@ -42,7 +42,7 @@ import { useFlowWorkflowStore } from '@/stores/flowWorkflowStore'
 import { showToast } from '@/utils/toast'
 import { IndicatorParamsFields } from './IndicatorParamsFields'
 import { MarginPositionsFields } from './MarginPositionsFields'
-import { OrderPriceFields } from './OrderPriceFields'
+import { getOptionsMultiStrategyUpdate, OrderPriceFields } from './OrderPriceFields'
 
 // ===== LOCAL CONSTANTS =====
 
@@ -1218,7 +1218,19 @@ export function ConfigPanel() {
                   <Label className="text-xs">Strategy</Label>
                   <Select
                     value={(nodeData.strategy as string) || 'straddle'}
-                    onValueChange={(v) => handleDataChange('strategy', v)}
+                    onValueChange={(strategy) => {
+                      if (!selectedNodeId) return
+                      updateNodeData(
+                        selectedNodeId,
+                        getOptionsMultiStrategyUpdate(
+                          {
+                            strategy: (nodeData.strategy as string) || 'straddle',
+                            priceType: orderPriceType,
+                          },
+                          strategy
+                        )
+                      )
+                    }}
                   >
                     <SelectTrigger className="h-8">
                       <SelectValue />
