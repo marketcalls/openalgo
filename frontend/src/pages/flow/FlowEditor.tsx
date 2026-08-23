@@ -921,6 +921,7 @@ function FlowEditorContent() {
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             fitView
+            fitViewOptions={{ maxZoom: 0.6 }}
             snapToGrid
             snapGrid={[16, 16]}
             deleteKeyCode={null}
