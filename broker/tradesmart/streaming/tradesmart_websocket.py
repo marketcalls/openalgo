@@ -9,12 +9,33 @@ and keep alive with heartbeat (``h``).
 
 import json
 import logging
+import socket
 import threading
 import time
 from collections.abc import Callable
 from typing import Any
 
 import websocket
+from websocket import ABNF
+
+
+def close_frame_status(error: object) -> int | None:
+    """Status code if ``error`` is really a CLOSE frame, else ``None``.
+
+    websocket-client >= 1.9 hands a *received close frame* to ``on_error`` as
+    though it were an exception (``_app.py``: ``if op_code ==
+    ABNF.OPCODE_CLOSE: return closed(frame)``), then tears down without
+    passing the frame to ``on_close`` -- which is why a clean hangup is logged
+    as an error and the close callback then reports ``None - None``. A polite
+    server-side close is not a fault, so callers use this to tell the two
+    apart and recover the code the frame actually carried.
+    """
+    if getattr(error, "opcode", None) != ABNF.OPCODE_CLOSE:
+        return None
+    data = getattr(error, "data", b"") or b""
+    if len(data) < 2:
+        return 0  # close with no payload
+    return int.from_bytes(data[:2], "big")
 
 
 class TradeSmartWebSocket:
@@ -70,6 +91,17 @@ class TradeSmartWebSocket:
         self._heartbeat_thread = None
         self._last_message_time = None
         self._heartbeat_lock = threading.Lock()
+        # Signals every internal wait to return at once on shutdown. A bare
+        # time.sleep(HEARTBEAT_INTERVAL) cannot be interrupted, so stop() used
+        # to block for HEARTBEAT_JOIN_TIMEOUT and then warn -- see
+        # shoonya_websocket.py, which solved this the same way.
+        self._shutdown_event = threading.Event()
+
+        # Set when the broker answers the connect task with anything but OK, so
+        # the adapter can stop reconnecting instead of hammering the broker
+        # with a token that will not come back (shoonya_websocket.py parity).
+        self.auth_failed = False
+        self.auth_failure_reason: str | None = None
 
         self.logger = logging.getLogger("tradesmart_websocket")
 
@@ -88,6 +120,9 @@ class TradeSmartWebSocket:
 
     def _initialize_connection(self) -> None:
         self.running = True
+        self._shutdown_event.clear()
+        self.auth_failed = False
+        self.auth_failure_reason = None
         self.ws = websocket.WebSocketApp(
             self.WS_URL,
             on_open=self._on_open,
@@ -104,7 +139,8 @@ class TradeSmartWebSocket:
             if self.connected:
                 self.logger.info("WebSocket connected successfully")
                 return True
-            time.sleep(0.1)
+            if self._shutdown_event.wait(0.1):
+                break
         self.logger.error("Connection timeout")
         self.stop()
         return False
@@ -124,6 +160,7 @@ class TradeSmartWebSocket:
     def stop(self) -> None:
         """Stop the connection and release resources (never join a daemon hard)."""
         self.logger.info("Stopping WebSocket connection")
+        self._shutdown_event.set()
         self.running = False
         self.connected = False
         self._close_websocket()
@@ -131,13 +168,33 @@ class TradeSmartWebSocket:
         self._stop_heartbeat()
 
     def _close_websocket(self) -> None:
-        if self.ws:
+        ws, self.ws = self.ws, None
+        if ws is None:
+            return
+
+        # Force the reader thread out of recv() before closing politely.
+        #
+        # run_forever() leaves the socket fully blocking: websocket-client sets
+        # ``self.sock.settimeout(getdefaulttimeout())`` (_app.py) and that
+        # default is None unless something installed a global one, so the
+        # thread parks in recv() with no deadline. Closing the socket from
+        # another thread does not reliably wake a pending recv on Windows --
+        # only shutdown() does. Without this, stop() waited out
+        # THREAD_JOIN_TIMEOUT, logged "WebSocket thread did not terminate
+        # within timeout" and walked away, leaving the thread parked in a
+        # worker that never restarts.
+        raw = getattr(getattr(ws, "sock", None), "sock", None)
+        if raw is not None:
             try:
-                self.ws.close()
-            except Exception as e:
-                self.logger.error(f"Error closing WebSocket: {e}")
-            finally:
-                self.ws = None
+                raw.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                # Already shut down, or the handshake never completed.
+                pass
+
+        try:
+            ws.close()
+        except Exception as e:
+            self.logger.error(f"Error closing WebSocket: {e}")
 
     def _wait_for_thread_completion(self) -> None:
         if self.ws_thread and self.ws_thread.is_alive():
@@ -194,11 +251,19 @@ class TradeSmartWebSocket:
         if data.get("s") == self.AUTH_SUCCESS:
             self.logger.info("Authentication successful")
         else:
+            self.auth_failed = True
+            self.auth_failure_reason = str(data)
             self.logger.error(f"Authentication failed: {data}")
         return True
 
     def _on_error(self, ws, error) -> None:
-        self.logger.error(f"WebSocket error: {error}")
+        close_code = close_frame_status(error)
+        if close_code is not None:
+            # Not a fault: the server hung up politely and websocket-client
+            # routed the close frame here. See close_frame_status().
+            self.logger.info(f"WebSocket closed by server (code {close_code})")
+        else:
+            self.logger.error(f"WebSocket error: {error}")
         self._call_external_callback(self.on_error, ws, error)
 
     def _on_close(self, ws, close_status_code, close_msg) -> None:
@@ -225,17 +290,26 @@ class TradeSmartWebSocket:
         self._heartbeat_thread.start()
 
     def _stop_heartbeat(self) -> None:
-        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
-            self._heartbeat_thread.join(timeout=self.HEARTBEAT_JOIN_TIMEOUT)
-            if self._heartbeat_thread.is_alive():
+        with self._heartbeat_lock:
+            thread = self._heartbeat_thread
+        # Never join the heartbeat thread from inside itself, and never null a
+        # thread a concurrent _start_heartbeat has just replaced.
+        if thread and thread.is_alive() and thread is not threading.current_thread():
+            self._shutdown_event.set()
+            thread.join(timeout=self.HEARTBEAT_JOIN_TIMEOUT)
+            if thread.is_alive():
                 self.logger.warning("Heartbeat thread did not terminate within timeout")
-                return
-        self._heartbeat_thread = None
+        with self._heartbeat_lock:
+            if self._heartbeat_thread is thread:
+                self._heartbeat_thread = None
 
     def _heartbeat_worker(self) -> None:
         while self.running and self.connected:
             try:
-                time.sleep(self.HEARTBEAT_INTERVAL)
+                # Interruptible: returns immediately once stop() signals,
+                # instead of sitting out the rest of a 30s sleep.
+                if self._shutdown_event.wait(self.HEARTBEAT_INTERVAL):
+                    break
                 if self.running and self.connected:
                     if not self._send_heartbeat():
                         break
@@ -246,10 +320,13 @@ class TradeSmartWebSocket:
                 break
 
     def _send_heartbeat(self) -> bool:
-        if not self.ws:
+        # Snapshot: _close_websocket() nulls self.ws from another thread, so
+        # checking the attribute and then sending through it is a race.
+        ws = self.ws
+        if not ws:
             return False
         try:
-            self.ws.send(json.dumps({"t": self.MSG_TYPE_HEARTBEAT}))
+            ws.send(json.dumps({"t": self.MSG_TYPE_HEARTBEAT}))
             self.logger.debug("Sent heartbeat")
             return True
         except Exception as e:
@@ -285,7 +362,9 @@ class TradeSmartWebSocket:
             self.MSG_TYPE_DEPTH_UNSUB, scrip_list, "depth unsubscription"
         )
 
-    def _send_subscription_message(self, msg_type: str, scrip_list: str, operation_name: str) -> bool:
+    def _send_subscription_message(
+        self, msg_type: str, scrip_list: str, operation_name: str
+    ) -> bool:
         return self._send_message({"t": msg_type, "k": scrip_list}, operation_name)
 
     def _send_message(self, message_dict: dict[str, Any], operation_name: str) -> bool:

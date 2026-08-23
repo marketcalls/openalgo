@@ -1,4 +1,4 @@
-import { ChevronDown, RefreshCw, Search } from 'lucide-react'
+import { ChevronDown, RefreshCw, Search, Settings } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
@@ -13,10 +13,12 @@ import { CHART_TYPE_GROUPS, CHART_TYPES, chartTypeIcon } from '@/lib/trading/cha
 import type { IntervalGroup } from '@/lib/trading/intervals'
 import { lotInfoText } from '@/lib/trading/legend'
 import {
+  type ChartSettingsRequest,
   type CtxItem,
   type DrawSelection,
   type DrawStats,
   type IndicatorSettingsRequest,
+  type ReplayState,
   type SymbolView,
   type TerminalCallbacks,
   TradingTerminal,
@@ -24,6 +26,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
+import { ChartSettingsDialog } from './ChartSettingsDialog'
 import { DrawingStyleBar } from './DrawingStyleBar'
 import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
 import { IndicatorSettingsDialog } from './IndicatorSettingsDialog'
@@ -72,6 +75,24 @@ function PencilIcon({ className }: { className?: string }) {
 }
 
 /** Three rising bars — the volume histogram in miniature. */
+function ReplayIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+      <path d="M3 4v4h4" />
+    </svg>
+  )
+}
+
 function VolumeIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -131,6 +152,13 @@ interface Props {
   /** Show/hide the page-level rail — the action lives in each pane's menu. */
   onToggleRail?(): void
   railVisible?: boolean
+  /**
+   * The grid layout picker, rendered next to this pane's Indicators button.
+   * It used to own a full-width row of its own that carried 134px of content
+   * across 1536px and cost 45px of chart height. It belongs to the page rather
+   * than to a pane, so the page passes it in, and passes it to one pane only.
+   */
+  layoutPicker?: React.ReactNode
 }
 
 /**
@@ -149,6 +177,7 @@ export function ChartPane({
   onDrawStats,
   onToggleRail,
   railVisible,
+  layoutPicker,
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null)
   const legendRef = useRef<HTMLDivElement>(null)
@@ -178,16 +207,23 @@ export function ChartPane({
   // drawing + indicator controls (additive; the trading controls are unchanged)
   const [indicators, setIndicators] = useState<{ id: string; name: string }[]>([])
   const [catalog, setCatalog] = useState<{ id: string; name: string; category: string }[]>([])
+  const [indicatorQuery, setIndicatorQuery] = useState('')
   const [grid, setGrid] = useState({ vertical: true, horizontal: true })
   const [fullscreen, setFullscreen] = useState(false)
   const [gridSub, setGridSub] = useState(false)
   const [volumeOn, setVolumeOn] = useState(true)
   const [drawSel, setDrawSel] = useState<DrawSelection | null>(null)
   const [indSettings, setIndSettings] = useState<IndicatorSettingsRequest | null>(null)
+  // Read from the chart each time the gear is clicked rather than held: the
+  // schema depends on the live series type, theme and timezone.
+  const [chartSettings, setChartSettings] = useState<ChartSettingsRequest | null>(null)
   const [textReq, setTextReq] = useState<TextRequest | null>(null)
 
   // right-click menu: order entry, then the view actions
   const [ctx, setCtx] = useState<{ x: number; y: number; items: CtxItem[] } | null>(null)
+  // Null whenever the chart is live. The transport bar renders only while
+  // replay owns the data, so there is nothing to hide when it does not.
+  const [replay, setReplay] = useState<ReplayState | null>(null)
 
   /* ── boot this pane's terminal once ───────────────────────────────────── */
   useEffect(() => {
@@ -221,6 +257,7 @@ export function ChartPane({
       onIndicatorsChange: (list) => aliveRef.current && setIndicators(list),
       onIndicatorSettings: (req) => aliveRef.current && setIndSettings(req),
       onDrawSelect: (sel) => aliveRef.current && setDrawSel(sel),
+      onReplayChange: (state) => aliveRef.current && setReplay(state),
       onDrawTextEdit: (r) => {
         if (!aliveRef.current) return
         // The ref, not the local: `terminal` is still unassigned while this
@@ -376,12 +413,21 @@ export function ChartPane({
   /** Portal target for menus: the pane itself in fullscreen, body otherwise. */
   const menuHost = fullscreen ? paneRef.current : null
 
-  const catalogGroups = catalog.reduce<Record<string, typeof catalog>>((acc, d) => {
-    const list = acc[d.category] ?? []
-    list.push(d)
-    acc[d.category] = list
-    return acc
-  }, {})
+  const indicatorFilter = indicatorQuery.trim().toLowerCase()
+  const catalogGroups = catalog
+    .filter(
+      (d) =>
+        indicatorFilter === '' ||
+        d.name.toLowerCase().includes(indicatorFilter) ||
+        d.id.includes(indicatorFilter),
+    )
+    .reduce<Record<string, typeof catalog>>((acc, d) => {
+      const list = acc[d.category] ?? []
+      list.push(d)
+      acc[d.category] = list
+      return acc
+    }, {})
+  const catalogMatches = Object.values(catalogGroups).reduce((n, l) => n + l.length, 0)
 
   // The product the toggle switches to; with two options that is "the other".
   const nextProduct = sym
@@ -533,7 +579,20 @@ export function ChartPane({
             container={menuHost}
             align="start"
             className="max-h-80 w-64 overflow-y-auto"
+            onCloseAutoFocus={() => setIndicatorQuery('')}
           >
+            <div className="sticky top-0 z-10 bg-popover px-2 pb-1 pt-1">
+              <input
+                type="text"
+                value={indicatorQuery}
+                onChange={(e) => setIndicatorQuery(e.target.value)}
+                // Radix moves focus to the first item on any printable key, which
+                // would otherwise steal every keystroke out of this box.
+                onKeyDown={(e) => e.stopPropagation()}
+                placeholder={`Search ${catalog.length} indicators`}
+                className="h-7 w-full rounded border bg-background px-2 text-xs outline-none focus:border-primary"
+              />
+            </div>
             {indicators.length > 0 && (
               <>
                 <div className="px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -567,6 +626,11 @@ export function ChartPane({
                 <DropdownMenuSeparator />
               </>
             )}
+            {catalogMatches === 0 && (
+              <div className="px-2 py-3 text-center text-xs text-muted-foreground">
+                No indicator matches that
+              </div>
+            )}
             {Object.entries(catalogGroups).map(([cat, list]) => (
               <div key={cat}>
                 <div className="px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -589,12 +653,46 @@ export function ChartPane({
           </DropdownMenuContent>
         </DropdownMenu>
 
+        {/* The layout picker sits here, immediately after Indicators, because
+            that is where a chart terminal puts it. It is page-level, so only
+            the first pane is given one. */}
+        {layoutPicker}
+
+        {/* Replay. A toolbar action rather than a context-menu entry: it changes
+            what the whole chart is showing, and the transport bar it opens has
+            to be discoverable without a right-click. */}
+        <Button
+          variant="outline"
+          size="sm"
+          className={cn('h-8 shrink-0 gap-1', replay && 'border-primary text-primary')}
+          onClick={() => terminalRef.current?.startReplay()}
+          disabled={!!replay}
+          title={replay ? 'Replay is running' : 'Replay this session'}
+        >
+          <ReplayIcon className="h-4 w-4" />
+          <span className="hidden sm:inline">Replay</span>
+        </Button>
+
         {/* Right side: connection LED + actions */}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <span
             className={cn('inline-block h-2.5 w-2.5 rounded-full', ledClass(wsState))}
             title={`WebSocket ${wsState}`}
           />
+          {/* Chart settings. The engine ships no DOM, so the whole dialog is
+              generated from the schema it describes -- see ChartSettingsDialog. */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => {
+              void terminalRef.current?.chartSettings().then((s) => s && setChartSettings(s))
+            }}
+            title="Chart settings"
+            aria-label="Chart settings"
+          >
+            <Settings className="h-[17px] w-[17px]" />
+          </Button>
           {/* Full screen chart (additive) */}
           <Button
             variant="ghost"
@@ -634,6 +732,13 @@ export function ChartPane({
           onSubmit={(id, value) => terminalRef.current?.applyDrawText(id, value)}
           onClose={() => setTextReq(null)}
         />
+        <ChartSettingsDialog
+          req={chartSettings}
+          onApply={(patch) => {
+            void terminalRef.current?.applyChartSettings(patch)
+          }}
+          onClose={() => setChartSettings(null)}
+        />
         <IndicatorSettingsDialog
           req={indSettings}
           onApply={(id, patch) => terminalRef.current?.updateIndicatorSettings(id, patch)}
@@ -660,6 +765,81 @@ export function ChartPane({
         {!ready && (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
             Loading…
+          </div>
+        )}
+
+        {/*
+          Replay transport. The engine's controller is headless by design, so the
+          bar, the clock and the scrub are ours to draw. It renders only while
+          replay owns the chart's data: `replay` is null the moment we are live
+          again, which is also the signal that Exit has done its work.
+        */}
+        {replay && (
+          <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-border bg-popover/95 px-2 py-1.5 shadow-lg backdrop-blur">
+            <button
+              type="button"
+              className="rounded px-2 py-1 text-xs hover:bg-accent"
+              title="Step back one bar"
+              onClick={() => terminalRef.current?.replayStepBack()}
+            >
+              Prev
+            </button>
+            <button
+              type="button"
+              className="rounded bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
+              title={replay.playing ? 'Pause' : 'Play'}
+              onClick={() =>
+                replay.playing
+                  ? terminalRef.current?.replayPause()
+                  : terminalRef.current?.replayPlay()
+              }
+            >
+              {replay.playing ? 'Pause' : 'Play'}
+            </button>
+            <button
+              type="button"
+              className="rounded px-2 py-1 text-xs hover:bg-accent"
+              title="Step forward one bar"
+              onClick={() => terminalRef.current?.replayStep()}
+            >
+              Next
+            </button>
+
+            <input
+              type="range"
+              min={0}
+              max={Math.max(0, replay.total - 1)}
+              value={replay.index}
+              className="mx-1 h-1 w-40 cursor-pointer accent-primary"
+              title="Scrub the session"
+              onChange={(e) => terminalRef.current?.replaySeek(Number(e.target.value))}
+            />
+
+            <span className="tabular-nums text-[11px] text-muted-foreground">
+              {replay.index + 1} / {replay.total}
+            </span>
+
+            <select
+              className="rounded border border-border bg-background px-1 py-0.5 text-[11px]"
+              value={replay.speed}
+              title="Bars per second"
+              onChange={(e) => terminalRef.current?.replayPlay(Number(e.target.value))}
+            >
+              {[0.5, 1, 2, 4, 10].map((x) => (
+                <option key={x} value={x}>
+                  {x}x
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+              title="Leave replay and return to the live chart"
+              onClick={() => terminalRef.current?.stopReplay()}
+            >
+              Exit
+            </button>
           </div>
         )}
 

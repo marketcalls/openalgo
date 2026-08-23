@@ -63,7 +63,7 @@ Do not emit nodes for these; restructure the strategy instead.
 | Loops / iteration / "monitor from 09:20 to 12:30" | Use `start` with `scheduleType: "interval"` plus a `timeWindow` condition. One run per tick. |
 | Waiting inside a run for a target or stop | A separate workflow on its own schedule. Entry, exit and square-off are different workflows. |
 | Iterating a list of symbols | One workflow per symbol, or drive it from `webhookTrigger` using `{{webhook.symbol}}`. |
-| Structured trade logs, backtesting, string manipulation, date arithmetic | Not Flow. Order Book / Trade Book / P&L Tracker hold the trade record. |
+| Structured trade logs, backtesting, general date arithmetic | Not Flow. Order Book / Trade Book / P&L Tracker hold the trade record; `variable.append` only provides simple text concatenation. |
 | `crossover` / `crossunder` / `correlation` / `beta` as an `indicator` | Two `indicator` nodes plus an `andGate` — see §8.14. |
 
 ### Worked example of the required shape
@@ -148,6 +148,26 @@ below is a *shape diagram*, not import-ready — see §8 for runnable examples):
 | `edges` | **yes** (array, can be empty) | yes | See §3. |
 | `viewport` | no | no | Restores canvas position only. Importers may omit. |
 
+### Value validation
+
+Presence is not the only check. On import, save and activation the validator
+also rejects:
+
+- an `exchange`, `action`, `product` or `priceType` outside
+  [§11 Order constants](#11-order-constants) — case-insensitive. Several broker
+  mappers substitute a default for an unrecognised value rather than refusing
+  it, so `"LIMT"` would have become a MARKET order.
+- a `quantity` or `splitSize` that is not a positive number, except that
+  `smartOrder.quantity` may be zero when `positionSize` drives the target
+  position or square-off.
+- `httpRequest` `headers` that are not a JSON object written as a string, and a
+  `timeout` outside 1000..60000 milliseconds.
+
+A value containing `{{...}}` is skipped here, because it is only knowable at
+run time — order nodes check those separately, immediately before the broker
+call. See
+[Unresolved references on order nodes](#unresolved-references-on-order-nodes).
+
 ### Importer validation
 
 The importer (`POST /api/workflows/import`, called from the Flow Editor's
@@ -220,6 +240,33 @@ Inside any string field of any node's `data`, you can reference variables that
 upstream nodes have produced or that the executor exposes as built-ins. The
 syntax is `{{path}}`.
 
+### Unresolved references on order nodes
+
+Order-defining fields are checked before the node runs, and a `{{reference}}`
+that does not resolve fails the node instead of falling back to a default.
+
+This applies to `placeOrder`, `smartOrder`, `optionsOrder`, `optionsMultiOrder`,
+`basketOrder`, `splitOrder`, `modifyOrder`, `cancelOrder` and `closePositions`,
+on these fields:
+
+`symbol` `exchange` `action` `quantity` `product` `priceType` `price`
+`triggerPrice` `splitSize` `positionSize` `underlying` `strike` `optionType`
+`expiryDate` `orderId` `newQuantity` `newPrice` `newTriggerPrice` `orders`
+`legs`, plus the legacy lowercase spelling `pricetype`.
+
+Why it matters: a numeric field cannot parse `{{webhook.qty}}`, so it used to
+take the field default of `1`, and an unresolved `priceType` fell through the
+broker mapping to `MARKET`. A webhook that simply omitted a key therefore placed
+a **successful order for the wrong size at the wrong price type**, with nothing
+in the run to say so. Now the node fails, the run is marked `failed`, and
+nothing downstream of it executes.
+
+Label fields are deliberately exempt -- `strategy`, `strategyTag` and
+`outputVariable` still pass an unresolved reference through as text.
+
+When a webhook may legitimately omit a value, give the node a literal instead of
+a variable, or branch on a condition node first.
+
 ### Path grammar
 
 - **Dotted keys** for dict access: `{{order.data.orderid}}`
@@ -258,6 +305,15 @@ differs from `{{date}}` between midnight and the 03:00 IST rollover).
 For "has a new period started", use the `calendar` node rather than comparing
 these - see 7.4.
 ### Output variables
+
+Data nodes ship with a default `outputVariable` (`orders`, `trades`,
+`positions`, `holdings`, `funds`, `quotes`, `holidays`, `timings`,
+`marginResult`, `response`, `ind`, ...), and the editor persists it. Set your
+own when two nodes of the same type would otherwise collide.
+
+An unresolved `{{name.path}}` interpolates to its own literal text rather than
+raising. On most fields that is harmless -- an alert message simply contains the
+literal `{{...}}`. On an **order node it is a failure**: see below.
 
 Most data and action nodes accept an `outputVariable` field in their `data`
 object. When set, the result of that node is stored in the workflow context
@@ -356,12 +412,12 @@ A workflow must contain exactly one trigger node, and that node must be one
 of: `start`, `priceAlert`, `webhookTrigger`, `orderUpdateTrigger`. Every
 other path of execution flows from there.
 
-> **A second trigger is silently ignored.** The executor takes the *first*
-> trigger node it finds and walks the graph from there, so any additional
-> trigger - and every node downstream of it - never runs, with no error. If a
-> strategy needs two schedules (say entries each minute and a square-off at
-> 14:00), either express the second as a `timeWindow`-gated branch on the
-> same trigger, or split it into a second workflow.
+> **Strict import and activation validation reject a second trigger.** A
+> workflow must have exactly one trigger so every node has one unambiguous
+> execution root. If a strategy needs two schedules (say entries each minute
+> and a square-off at 14:00), either express the second as a
+> `timeWindow`-gated branch on the same trigger, or split it into a second
+> workflow.
 >
 > Note that splitting costs broker calls: branches sharing one trigger also
 > share their data nodes, whereas separate workflows each re-fetch. Quotes and
@@ -504,6 +560,13 @@ as `{{webhook.orderid}}`, `{{webhook.symbol}}`, `{{webhook.order_status}}`,
 
 ### 7.2 Action nodes
 
+The six priced order nodes (`placeOrder`, `smartOrder`, `optionsOrder`,
+`optionsMultiOrder`, `basketOrder`, and `splitOrder`) use the same static price
+rules: `LIMIT` and `SL` require a positive `price`; `SL` and `SL-M` require a
+positive `triggerPrice`. A missing, blank, zero, or negative required price is
+rejected. A `{{variable}}` price passes import validation and is checked after
+interpolation before the broker call.
+
 #### placeOrder — Place Order
 
 Single-leg order on any segment.
@@ -546,8 +609,10 @@ and `positionSize` and places the appropriate order to reach it.
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `symbol`, `exchange`, `action`, `priceType`, `product` | (as `placeOrder`) | | |
-| `quantity` | int | `1` | Used only when `positionSize=0`. |
+| `quantity` | int | `1` | Non-negative. Zero is valid when `positionSize` drives target-position reconciliation. |
 | `positionSize` | int | `0` | Target net position. Positive=long, negative=short, 0=use `quantity`. |
+| `price` | number | `0` | Common order price. Must be positive for `LIMIT`/`SL`. |
+| `triggerPrice` | number | `0` | Common trigger price. Must be positive for `SL`/`SL-M`. |
 | `outputVariable` | string | — | |
 
 ```json
@@ -563,6 +628,8 @@ and `positionSize` and places the appropriate order to reach it.
     "positionSize": -5,
     "priceType": "MARKET",
     "product": "MIS",
+    "price": 0,
+    "triggerPrice": 0,
     "outputVariable": "smartResult"
   }
 }
@@ -615,13 +682,18 @@ spreads / custom).
 |---|---|---|---|
 | `strategy` | `"straddle"` \| `"strangle"` \| `"iron_condor"` \| `"bull_call_spread"` \| `"bear_put_spread"` \| `"custom"` | `"straddle"` | |
 | `underlying` | (as `optionsOrder`) | `"NIFTY"` | |
-| `expiryType` | (as `optionsOrder`) | `"current_week"` | |
+| `expiryType` | (as `optionsOrder`) | `"current_week"` | One common expiry is resolved for every generated or custom leg. |
 | `action` | `"BUY"` \| `"SELL"` | — | Direction for the strategy (BUY=long volatility, SELL=short volatility). |
 | `quantity` | int | `1` | Lots per leg. |
-| `priceType` | `"MARKET"` \| `"LIMIT"` | `"MARKET"` | |
+| `priceType` | `"MARKET"` \| `"LIMIT"` \| `"SL"` \| `"SL-M"` | `"MARKET"` | Common price type; generated legs do not support `SL`/`SL-M`, while custom legs may inherit all four types. |
 | `product` | `"MIS"` \| `"NRML"` | `"NRML"` | |
-| `legs` | `Leg[]` | `[]` | **Only for `strategy="custom"`.** Each leg: `{ offset, optionType, action, quantity, expiryDate? }`. |
+| `price` | number | `0` | Common leg price. Must be positive when the effective price type is `LIMIT`/`SL`. |
+| `triggerPrice` | number | `0` | Common custom-leg trigger. Must be positive when the effective price type is `SL`/`SL-M`. |
+| `legs` | `Leg[]` | `[]` | **Required for `strategy="custom"`.** Each leg requires `{ offset, optionType, action, quantity }`; optional `product`, `priceType` (or legacy `pricetype`), `price`, and `triggerPrice` override the common node value. Omitted optional fields inherit the common node values. Custom leg `priceType` may be any of `MARKET`/`LIMIT`/`SL`/`SL-M`; the resulting effective priced leg must have the required positive price fields. |
 | `outputVariable` | string | — | Result includes `{{name.results}}` array per leg. |
+
+Options Multi-Order always resolves the node-level `expiryType` once and sends
+that one expiry for every leg. Per-leg expiries are not supported.
 
 ```json
 {
@@ -647,9 +719,11 @@ Place multiple orders in a single API call.
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `basketName` | string | `"flow_basket"` | |
-| `orders` | string | — | Multi-line, comma-separated `SYMBOL,EXCHANGE,ACTION,QTY` per line. |
+| `orders` | string \| `Order[]` | — | The editor writes multi-line `SYMBOL,EXCHANGE,ACTION,QTY` CSV. Imported arrays may set per-row `product`, `pricetype`, `price`, and `triggerprice`; common node values fill only omitted row fields. |
 | `product` | `"MIS"` \| `"CNC"` \| `"NRML"` | `"MIS"` | |
-| `priceType` | `"MARKET"` \| `"LIMIT"` | `"MARKET"` | |
+| `priceType` | `"MARKET"` \| `"LIMIT"` \| `"SL"` \| `"SL-M"` | `"MARKET"` | Common to every CSV row. |
+| `price` | number | `0` | Common row price. Must be positive for `LIMIT`/`SL`. |
+| `triggerPrice` | number | `0` | Common row trigger price. Must be positive for `SL`/`SL-M`. |
 | `outputVariable` | string | — | `{{name.results}}` is the per-order result array. |
 
 ```json
@@ -662,6 +736,8 @@ Place multiple orders in a single API call.
     "orders": "RELIANCE,NSE,BUY,10\nINFY,NSE,BUY,5\nSBIN,NSE,SELL,20",
     "product": "MIS",
     "priceType": "MARKET",
+    "price": 0,
+    "triggerPrice": 0,
     "outputVariable": "basket"
   }
 }
@@ -676,6 +752,8 @@ Splits a large order into chunks.
 | `symbol`, `exchange`, `action`, `priceType`, `product` | (as `placeOrder`) | | |
 | `quantity` | int | `100` | Total to fill. |
 | `splitSize` | int | `50` | Chunk size. Last chunk may be smaller. |
+| `price` | number | `0` | Common chunk price. Must be positive for `LIMIT`/`SL`. |
+| `triggerPrice` | number | `0` | Common chunk trigger price. Must be positive for `SL`/`SL-M`. |
 | `outputVariable` | string | — | `{{name.results}}` is the per-chunk result. |
 
 ```json
@@ -691,6 +769,8 @@ Splits a large order into chunks.
     "splitSize": 20,
     "priceType": "MARKET",
     "product": "MIS",
+    "price": 0,
+    "triggerPrice": 0,
     "outputVariable": "splitOut"
   }
 }
@@ -700,11 +780,25 @@ Splits a large order into chunks.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `orderId` | string | — | Usually `{{prevOrder.orderid}}`. |
-| `symbol`, `exchange`, `action`, `priceType`, `product` | as `placeOrder` | | Required if the broker expects them on modify. |
+| `orderId` | string | — | Required. Usually `{{prevOrder.orderid}}`. |
 | `newQuantity` | int | — | Empty = keep existing. |
 | `newPrice` | number | — | Empty = keep existing. |
 | `newTriggerPrice` | number | — | Empty = keep existing. |
+| `symbol`, `exchange`, `action`, `priceType`, `product` | as `placeOrder` | from the live order | **Omit these.** Any value present is treated as a deliberate override. |
+
+The executor reads the order back from the order book and changes only the
+fields you supply, so "empty = keep existing" is literal — an omitted quantity
+keeps the order's quantity, not `1`.
+
+Do not set `action` or `product` unless you mean to change them. Several brokers
+carry these on a modify: an `action` of `BUY` on a live SELL order converts the
+order, and a `product` of `MIS` on an NRML position makes it intraday and
+subject to auto square-off. If the order cannot be read, the node fails rather
+than sending a guessed value.
+
+The executor cannot distinguish a value you meant from one a generator filled
+in, so a `modifyOrder` node should carry **only** `orderId` plus whichever of
+`newPrice` / `newQuantity` / `newTriggerPrice` you are changing.
 
 ```json
 {
@@ -713,11 +807,7 @@ Splits a large order into chunks.
   "position": { "x": 100, "y": 300 },
   "data": {
     "orderId": "{{buyOrder.orderid}}",
-    "symbol": "RELIANCE",
-    "exchange": "NSE",
-    "action": "BUY",
     "newPrice": 1455,
-    "priceType": "LIMIT",
     "product": "CNC"
   }
 }
@@ -735,18 +825,40 @@ Splits a large order into chunks.
 
 #### cancelAllOrders — Cancel All Orders
 
+Accepts `outputVariable` like every other action node; the broker's response is
+stored under it.
+
 Cancels every open order. No fields.
 
 ```json
 { "id": "node_3", "type": "cancelAllOrders", "position": { "x": 100, "y": 300 }, "data": {} }
 ```
 
-#### closePositions — Close All Positions
+#### closePositions — Close Positions
 
-Squares off every open position. No fields.
+With no `symbol`, squares off every open position across all exchanges and
+products. With a `symbol`, closes only that position.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `symbol` | string | `""` | Blank closes everything. Set it to scope the close. |
+| `exchange` | string | `NSE` | Only meaningful alongside `symbol`. |
+| `product` | string | `MIS` | Only meaningful alongside `symbol`. |
+
+`exchange` and `product` do not filter on their own — without a `symbol` this is
+an unconditional square-off however they are set.
 
 ```json
 { "id": "node_3", "type": "closePositions", "position": { "x": 100, "y": 300 }, "data": {} }
+```
+
+```json
+{
+  "id": "node_4",
+  "type": "closePositions",
+  "position": { "x": 100, "y": 300 },
+  "data": { "symbol": "RELIANCE", "exchange": "NSE", "product": "MIS" }
+}
 ```
 
 ---
@@ -756,17 +868,33 @@ Squares off every open position. No fields.
 These nodes set a `condition` boolean that the executor uses to route edges
 via `sourceHandle` — see [§5](#5-condition-source-handles).
 
+**A condition node that cannot evaluate fails the node; it does not answer
+`false`.** An unrecognised `field`, `operator` or `condition`, or a threshold
+that is not a number, returns `status: "error"` and takes *neither* branch.
+This matters because `false` is a real answer that routes the graph down the
+false path — an exit gate reading `false` would not fire. Previously these
+cases silently produced `false`, so a typo looked like a condition that simply
+did not hold.
+
+Such a run is recorded as `failed` and the trigger response carries the error,
+the same as any other failing node. A condition that evaluates cleanly to
+`false` is **not** an error and the run still completes.
+
 #### positionCheck — Position Check
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `symbol` | string | — | |
-| `exchange` | string | `"NSE"` | |
+| `symbol` | string | required | |
+| `exchange` | string | required | |
 | `product` | `"MIS"` \| `"CNC"` \| `"NRML"` | `"MIS"` | |
-| `condition` | `"exists"` \| `"not_exists"` \| `"quantity_above"` \| `"quantity_below"` \| `"pnl_above"` \| `"pnl_below"` | `"exists"` | |
+| `condition` | `"exists"` \| `"not_exists"` \| `"quantity_above"` \| `"quantity_below"` \| `"pnl_above"` \| `"pnl_below"` | required | |
 | `threshold` | number | `0` | Only used by the `quantity_*` and `pnl_*` modes. |
 
 Result: `condition=True` if the rule matches the live position.
+
+`symbol` is required and validated at import and activation. A blank symbol
+reads back a zero-quantity position, which makes `not_exists` unconditionally
+true, so the node fails instead of opening the gate it is supposed to guard.
 
 ```json
 {
@@ -786,7 +914,11 @@ Result: `condition=True` if the rule matches the live position.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `minAvailable` | number | `0` | Triggers True when `availablecash >= minAvailable`. |
+| `minAvailable` | number | required | Triggers True when `availablecash >= minAvailable`. |
+
+Required, and validated at import and activation. A node without it cannot guard
+anything — the comparison would be `availablecash >= 0`, true on any balance —
+so the node fails instead of letting the order behind it through.
 
 ```json
 { "id": "node_2", "type": "fundCheck", "position": { "x": 100, "y": 100 }, "data": { "minAvailable": 10000 } }
@@ -798,8 +930,8 @@ Result: `condition=True` if the rule matches the live position.
 |---|---|---|---|
 | `symbol` | string | — | |
 | `exchange` | string | `"NSE"` | |
-| `field` | `"ltp"` \| `"open"` \| `"high"` \| `"low"` \| `"prev_close"` \| `"change_percent"` | `"ltp"` | `change_percent` is computed from `(ltp - prev_close) / prev_close * 100`. |
-| `operator` | `">"` \| `"<"` \| `"=="` \| `">="` \| `"<="` \| `"!="` | `">"` | |
+| `field` | `"ltp"` \| `"open"` \| `"high"` \| `"low"` \| `"prev_close"` \| `"change_percent"` | `"ltp"` | Validated. `change_percent` is computed from `(ltp - prev_close) / prev_close * 100`. |
+| `operator` | `">"` \| `"<"` \| `"=="` \| `">="` \| `"<="` \| `"!="` | `">"` | Validated. |
 | `value` | number | `0` | The threshold to compare against. |
 
 ```json
@@ -865,7 +997,7 @@ cannot silently route the else-path into a trade.
 |---|---|---|---|
 | `conditionType` | `"entry"` \| `"exit"` \| `"custom"` | — | UI-only categorization. |
 | `operator` | `"=="` \| `">="` \| `"<="` \| `">"` \| `"<"` | `">="` | |
-| `targetTime` | `"HH:MM"` | `"09:30"` | |
+| `targetTime` | `"HH:MM"` or `"HH:MM:SS"` | `"09:30"` | Seconds are honoured when given. |
 | `label` | string | — | Optional. |
 
 ```json
@@ -957,9 +1089,13 @@ schemas.
 |---|---|---|---|
 | `symbol`, `exchange` | | | |
 | `interval` | `"1m"` \| `"5m"` \| `"15m"` \| `"1h"` \| `"1d"` (or any interval the broker supports — call `intervals` first) | `"5m"` | |
-| `startDate` | `"YYYY-MM-DD"` | — | **Required.** Note: the Config Panel currently writes a `days` integer instead — the executor does not consume it, so for import JSON write explicit `startDate`/`endDate` strings. |
-| `endDate` | `"YYYY-MM-DD"` | — | **Required.** See note above. |
+| `days` | int | `30` | When positive, derives a range from now back this many calendar days. |
+| `startDate` | `"YYYY-MM-DD"` | — | Optional explicit range start; supply together with `endDate`. |
+| `endDate` | `"YYYY-MM-DD"` | — | Optional explicit range end; supply together with `startDate`. |
 | `outputVariable` | string | — | |
+
+When both `startDate` and `endDate` are non-empty, that explicit range takes
+precedence over `days`. Otherwise a positive `days` value derives both dates.
 
 ```json
 {
@@ -970,6 +1106,7 @@ schemas.
     "symbol": "RELIANCE",
     "exchange": "NSE",
     "interval": "5m",
+    "days": 30,
     "startDate": "2026-04-22",
     "endDate": "2026-04-29",
     "outputVariable": "ohlcv"
@@ -1252,14 +1389,14 @@ Useful interpolations: `{{orders.data.orders[0].orderid}}`,
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `exchange` | string | `"NSE"` | |
+| `year` | int | current year | Optional year whose holiday list is requested. |
 | `outputVariable` | string | — | |
 
 #### timings — Market Timings
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `exchange` | string | `"NSE"` | |
+| `date` | `"YYYY-MM-DD"` | today | Optional date whose market timings are requested. |
 | `outputVariable` | string | — | |
 
 #### margin — Margin Calculator
@@ -1305,11 +1442,12 @@ Useful interpolations: `{{orders.data.orders[0].orderid}}`,
 #### telegramAlert — Telegram Alert
 
 Sends a Telegram message via the per-user Telegram bot configured in OpenAlgo
-settings.
+settings. Delivery is owned by the workflow API key: the message goes to the
+Telegram account paired for that API-key owner. A workflow cannot supply a
+recipient override to target another OpenAlgo user.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `username` | string | — | OpenAlgo login ID linked to a Telegram user. |
 | `message` | string | — | Supports `{{vars}}`. |
 
 ```json
@@ -1318,7 +1456,6 @@ settings.
   "type": "telegramAlert",
   "position": { "x": 100, "y": 300 },
   "data": {
-    "username": "rajandran",
     "message": "Order placed: {{buyOrder.orderid}} for {{buyOrder.symbol}}"
   }
 }
@@ -1345,21 +1482,31 @@ Sends a WhatsApp message via the paired bot device. Requires pairing from the
 
 #### variable — Set / Update Variable
 
-The UI dropdown offers eleven operations but only four are implemented by
-the executor today; pick from those when authoring import JSON:
+All eleven editor operations are implemented. Each successful operation stores
+its result under `variableName`; a missing source, invalid conversion, invalid
+JSON, or division by zero returns an error and leaves the target unchanged.
 
 | Operation | Behaviour |
 |---|---|
 | `"set"` | Stores `value` under `variableName`. JSON-shaped strings (starting with `{` or `[`) are auto-parsed via `json.loads`, so you can carry structured data. |
+| `"get"` | Copies the raw value from `sourceVariable`. Optional `jsonPath` traverses dotted object keys and bracketed list indexes. |
 | `"add"` | `current + value` (numeric coercion). Initialises to 0 if unset. |
+| `"subtract"` | `current - value` (numeric coercion). Initialises to 0 if unset. |
+| `"multiply"` | `current * value` (numeric coercion). Initialises to 0 if unset. |
+| `"divide"` | `current / value` (numeric coercion). Division by zero is an error. |
 | `"increment"` | `current + 1`. Initialises to 0 if unset. |
 | `"decrement"` | `current - 1`. Initialises to 0 if unset. |
+| `"parse_json"` | Parses the interpolated, non-empty `value` as JSON and stores the raw JSON value. Invalid JSON is an error. |
+| `"stringify"` | JSON-serializes the raw `sourceVariable` and stores the resulting string. Missing or non-serializable sources are errors. |
+| `"append"` | Appends `value` to the target as text; an unset target starts as an empty string. |
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `variableName` | string | — | The name to set in workflow context. |
-| `operation` | `"set"` \| `"add"` \| `"increment"` \| `"decrement"` | `"set"` | Other UI options (`subtract`, `multiply`, `divide`, `append`, `parse_json`, `stringify`, `get`) are **no-ops** on the executor side as of this writing — use `mathExpression` for arithmetic and `set` with a JSON-shaped string for structured assignment. |
-| `value` | any | — | Strings accept `{{vars}}`. |
+| `operation` | `"set"` \| `"get"` \| `"add"` \| `"subtract"` \| `"multiply"` \| `"divide"` \| `"increment"` \| `"decrement"` \| `"parse_json"` \| `"stringify"` \| `"append"` | `"set"` | Must be one of these eleven values. |
+| `value` | any | — | Strings accept `{{vars}}`. Required for `add`, `subtract`, `multiply`, and `divide`; `parse_json` requires a non-empty value. Optional for `set` and `append`. |
+| `sourceVariable` | string | — | Required for `get` and `stringify`; names a raw workflow-context variable. |
+| `jsonPath` | string | — | Optional for `get`; dotted keys and bracketed indexes such as `data.items[0].price`. |
 
 ```json
 { "id": "node_3", "type": "variable", "position": { "x": 100, "y": 300 }, "data": { "variableName": "qty", "operation": "set", "value": "10" } }
@@ -1375,7 +1522,7 @@ For richer arithmetic, use `mathExpression`:
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `expression` | string | — | Supports `+`, `-`, `*`, `/`, `%`, `**`, parentheses. Variables via `{{name}}`. |
+| `expression` | string | — | Supports `+`, `-`, `*`, `/`, `%`, `**`, parentheses, and the sole allowed function `floor(expression)`. Variables via `{{name}}`. Other calls, attribute access, keyword arguments, and wrong argument counts are rejected. |
 | `outputVariable` | string | `"result"` | |
 
 ```json
@@ -1396,10 +1543,18 @@ For richer arithmetic, use `mathExpression`:
 |---|---|---|---|
 | `method` | `"GET"` \| `"POST"` \| `"PUT"` \| `"DELETE"` \| `"PATCH"` | `"GET"` | |
 | `url` | string | — | Supports `{{vars}}`. |
-| `headers` | object \| JSON-string | `{}` | e.g. `{"Authorization": "Bearer {{token}}"}`. |
+| `headers` | JSON-string | `""` | e.g. `"{\"Authorization\": \"Bearer {{token}}\"}"`. A JSON object is also accepted. |
 | `body` | string | — | JSON string, only used for POST/PUT/PATCH. Supports `{{vars}}`. |
-| `timeout` | int | `30` | Seconds. |
-| `outputVariable` | string | — | `{{apiResponse.data}}`, `{{apiResponse.status}}`. |
+| `timeout` | int | `30000` | Milliseconds; must be between 1000 and 60000. |
+| `outputVariable` | string | `"response"` | `{{response.data}}`, `{{response.statusCode}}`. |
+
+Only `http` and `https` are allowed, and the destination must resolve to a
+public address. Loopback, private, link-local and reserved ranges are rejected,
+so a workflow cannot be pointed at this server, at a host on the LAN, or at
+cloud metadata on `169.254.169.254`. This matters because `url` interpolates
+from workflow variables, and a webhook trigger puts its caller's JSON body into
+that context. Redirects are not followed. Logged URLs have their query string
+redacted, so a token in a query parameter is not written to the execution log.
 
 ```json
 {
@@ -1411,7 +1566,7 @@ For richer arithmetic, use `mathExpression`:
     "url": "https://hooks.example.com/notify",
     "headers": "{\"Authorization\": \"Bearer {{secret}}\"}",
     "body": "{\"symbol\": \"{{webhook.symbol}}\", \"action\": \"{{webhook.action}}\"}",
-    "timeout": 30,
+    "timeout": 30000,
     "outputVariable": "notifyResp"
   }
 }
@@ -1424,6 +1579,10 @@ For richer arithmetic, use `mathExpression`:
 | `delayValue` | int | `1` | |
 | `delayUnit` | `"seconds"` \| `"minutes"` \| `"hours"` | `"seconds"` | |
 
+Capped at 300 seconds. The delay blocks the workflow's lock and, for a webhook
+trigger, the request that fired it, so longer waits belong in a schedule or a
+`waitUntil` node. A longer value waits the maximum and logs a warning.
+
 ```json
 { "id": "node_3", "type": "delay", "position": { "x": 100, "y": 300 }, "data": { "delayValue": 30, "delayUnit": "seconds" } }
 ```
@@ -1432,7 +1591,7 @@ For richer arithmetic, use `mathExpression`:
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `targetTime` | `"HH:MM"` | `"09:30"` | If already past, the node returns immediately. |
+| `targetTime` | `"HH:MM"` or `"HH:MM:SS"` | `"09:30"` | Seconds are honoured. If already past, the node returns immediately. |
 | `label` | string | — | UI-only. |
 
 ```json
@@ -1664,7 +1823,7 @@ and places a 1-lot BUY.
       "id": "node_4",
       "type": "telegramAlert",
       "position": { "x": 300, "y": 300 },
-      "data": { "username": "rajandran", "message": "Bought ATM CE: {{ceLong.orderid}} (expiry {{expiries.data[0]}})" }
+      "data": { "message": "Bought ATM CE: {{ceLong.orderid}} (expiry {{expiries.data[0]}})" }
     }
   ],
   "edges": [
@@ -1710,7 +1869,7 @@ during market hours. Useful for "watchdog" supervision.
   "nodes": [
     { "id": "node_1", "type": "start",         "position": { "x": 100, "y": 100 }, "data": { "scheduleType": "interval", "intervalValue": 1, "intervalUnit": "minutes", "marketHoursOnly": true } },
     { "id": "node_2", "type": "funds",         "position": { "x": 100, "y": 220 }, "data": { "outputVariable": "funds" } },
-    { "id": "node_3", "type": "telegramAlert", "position": { "x": 100, "y": 340 }, "data": { "username": "rajandran", "message": "Realized: Rs {{funds.data.m2mrealized}} | Unrealized: Rs {{funds.data.m2munrealized}} | Cash: Rs {{funds.data.availablecash}} | At {{time}} IST" } }
+    { "id": "node_3", "type": "telegramAlert", "position": { "x": 100, "y": 340 }, "data": { "message": "Realized: Rs {{funds.data.m2mrealized}} | Unrealized: Rs {{funds.data.m2munrealized}} | Cash: Rs {{funds.data.availablecash}} | At {{time}} IST" } }
   ],
   "edges": [
     { "id": "e1", "source": "node_1", "target": "node_2" },
@@ -1720,8 +1879,9 @@ during market hours. Useful for "watchdog" supervision.
 ```
 
 Note `m2mrealized` and `m2munrealized` are returned as **strings** (e.g.
-`"1234.50"`). They interpolate into the Telegram message correctly; if you
-want to use them in a `priceCondition`, wrap them via `mathExpression` first.
+`"1234.50"`). They interpolate into the Telegram message correctly. To compare
+their computed result, normalize it with `mathExpression` and feed that output
+to a `varCondition`.
 
 ### 8.5 P&L stop-loss circuit breaker
 
@@ -1736,9 +1896,9 @@ Polls the position book every 30 seconds. If aggregate P&L drops below
     { "id": "node_1", "type": "start",          "position": { "x": 100, "y":  60 }, "data": { "scheduleType": "interval", "intervalValue": 30, "intervalUnit": "seconds", "marketHoursOnly": true } },
     { "id": "node_2", "type": "funds",          "position": { "x": 100, "y": 180 }, "data": { "outputVariable": "f" } },
     { "id": "node_3", "type": "mathExpression", "position": { "x": 100, "y": 300 }, "data": { "expression": "{{f.data.m2mrealized}} + {{f.data.m2munrealized}}", "outputVariable": "totalPnL" } },
-    { "id": "node_4", "type": "priceCondition", "position": { "x": 100, "y": 420 }, "data": { "symbol": "RELIANCE", "exchange": "NSE", "field": "ltp", "operator": "<", "value": -2000 } },
+    { "id": "node_4", "type": "varCondition",   "position": { "x": 100, "y": 420 }, "data": { "leftValue": "{{totalPnL}}", "operator": "<", "rightValue": "-2000" } },
     { "id": "node_5", "type": "closePositions","position": { "x":   0, "y": 540 }, "data": {} },
-    { "id": "node_6", "type": "telegramAlert",  "position": { "x": 240, "y": 540 }, "data": { "username": "rajandran", "message": "PnL stop-loss tripped at {{totalPnL}}, all positions squared off" } }
+    { "id": "node_6", "type": "telegramAlert",  "position": { "x": 240, "y": 540 }, "data": { "message": "PnL stop-loss tripped at {{totalPnL}}, all positions squared off" } }
   ],
   "edges": [
     { "id": "e1", "source": "node_1", "target": "node_2" },
@@ -1750,20 +1910,16 @@ Polls the position book every 30 seconds. If aggregate P&L drops below
 }
 ```
 
-> Note: today the `priceCondition` node compares against a quote-fetched
-> field (`ltp`/`open`/etc.). If you want to compare a workflow variable like
-> `{{totalPnL}}` directly, you currently need to write the value into a quote
-> via the broker — or wait for a `varCondition` node. For now the example
-> above is illustrative; in practice, square off via a `priceCondition` on
-> the actual symbol's LTP, or use a `mathExpression` -> negative-result
-> heuristic gate built from `andGate`.
+The `varCondition` compares the computed `{{totalPnL}}` directly; use
+`priceCondition` only when the node itself should fetch and compare an
+instrument quote field such as LTP or open.
 
 ### 8.6 Iron condor with custom legs
 
-`optionsMultiOrder` accepts a `legs` array when `strategy="custom"` —
-useful for any structure the preset enums don't cover (calendars, ratios,
-butterflies). Each leg is `{ offset, optionType, action, quantity }` and
-optionally a leg-specific `expiryDate` for diagonals.
+`optionsMultiOrder` accepts a `legs` array when `strategy="custom"` — useful
+for structures the preset enums do not cover, such as ratios and butterflies.
+Each leg is `{ offset, optionType, action, quantity }` plus optional pricing
+fields. Every leg uses the one expiry resolved from the node's `expiryType`.
 
 ```json
 {
@@ -1818,7 +1974,7 @@ spreadsheet endpoint) for audit.
       "url": "https://audit.example.com/orders",
       "headers": "{\"Content-Type\": \"application/json\"}",
       "body": "{\"symbol\": \"{{webhook.symbol}}\", \"action\": \"{{webhook.action}}\", \"orderid\": \"{{ord.orderid}}\", \"ts\": \"{{iso_timestamp}}\"}",
-      "timeout": 10,
+      "timeout": 10000,
       "outputVariable": "auditResp"
     } }
   ],
@@ -1903,7 +2059,7 @@ positions and log the action. Useful as a tail-end of any intraday flow.
     { "id": "node_2", "type": "waitUntil",      "position": { "x": 100, "y": 180 }, "data": { "targetTime": "15:15", "label": "Square-off window" } },
     { "id": "node_3", "type": "closePositions", "position": { "x": 100, "y": 300 }, "data": {} },
     { "id": "node_4", "type": "log",            "position": { "x": 100, "y": 420 }, "data": { "message": "Daily square-off completed at {{time}} IST", "level": "info" } },
-    { "id": "node_5", "type": "telegramAlert",  "position": { "x": 100, "y": 540 }, "data": { "username": "rajandran", "message": "[OpenAlgo] Daily square-off done at {{time}} IST on {{date}}" } }
+    { "id": "node_5", "type": "telegramAlert",  "position": { "x": 100, "y": 540 }, "data": { "message": "[OpenAlgo] Daily square-off done at {{time}} IST on {{date}}" } }
   ],
   "edges": [
     { "id": "e1", "source": "node_1", "target": "node_2" },
@@ -1928,7 +2084,7 @@ Sizes a position based on a fraction of available cash divided by LTP. Shows
     { "id": "node_1", "type": "start",          "position": { "x": 100, "y":  60 }, "data": { "scheduleType": "daily", "time": "09:30", "days": [0,1,2,3,4], "marketHoursOnly": true } },
     { "id": "node_2", "type": "funds",          "position": { "x": 100, "y": 180 }, "data": { "outputVariable": "f" } },
     { "id": "node_3", "type": "getQuote",       "position": { "x": 100, "y": 300 }, "data": { "symbol": "RELIANCE", "exchange": "NSE", "outputVariable": "q" } },
-    { "id": "node_4", "type": "mathExpression", "position": { "x": 100, "y": 420 }, "data": { "expression": "(0.05 * {{f.data.availablecash}}) / {{q.data.ltp}}", "outputVariable": "sizedQty" } },
+    { "id": "node_4", "type": "mathExpression", "position": { "x": 100, "y": 420 }, "data": { "expression": "floor((0.05 * {{f.data.availablecash}}) / {{q.data.ltp}})", "outputVariable": "sizedQty" } },
     { "id": "node_5", "type": "placeOrder",     "position": { "x": 100, "y": 540 }, "data": { "symbol": "RELIANCE", "exchange": "NSE", "action": "BUY", "quantity": "{{sizedQty}}", "priceType": "MARKET", "product": "CNC", "outputVariable": "ord" } },
     { "id": "node_6", "type": "log",            "position": { "x": 100, "y": 660 }, "data": { "message": "Sized BUY {{sizedQty}} units at LTP {{q.data.ltp}} (cash={{f.data.availablecash}}) -> orderid {{ord.orderid}}", "level": "info" } }
   ],
@@ -1942,10 +2098,9 @@ Sizes a position based on a fraction of available cash divided by LTP. Shows
 }
 ```
 
-> The `mathExpression` result will be a float (e.g. `1.234`). The
-> placeOrder node coerces the `quantity` field via `int(...)` so a float
-> truncates toward zero as in Python. Wrap with `floor()` in your math if
-> you want explicit rounding logic.
+> `floor(expression)` is the only supported function call and returns an
+> integer-valued number. Other function names, attributes, keyword arguments, or calls with
+> anything other than one positional expression are rejected.
 
 ### 8.12 Per-day order counter (variable increment)
 
@@ -2021,7 +2176,7 @@ Note the gate inputs use pass-through wiring (`targetHandle` only, no
     { "id": "c1", "type": "varCondition", "position": {"x":0,"y":300}, "data": { "leftValue": "{{fast.latest.value}}", "operator": ">", "rightValue": "{{slow.latest.value}}" } },
     { "id": "c2", "type": "varCondition", "position": {"x":250,"y":300}, "data": { "leftValue": "{{fast.previous.value}}", "operator": "<=", "rightValue": "{{slow.previous.value}}" } },
     { "id": "and", "type": "andGate", "position": {"x":120,"y":400}, "data": { "inputCount": 2 } },
-    { "id": "buy", "type": "placeOrder", "position": {"x":120,"y":500}, "data": { "symbol": "NIFTY", "exchange": "NSE_INDEX", "action": "BUY", "quantity": 1, "priceType": "MARKET", "product": "MIS", "outputVariable": "ord" } }
+    { "id": "buy", "type": "optionsOrder", "position": {"x":120,"y":500}, "data": { "underlying": "NIFTY", "expiryType": "current_week", "offset": "ATM", "optionType": "CE", "action": "BUY", "quantity": 1, "priceType": "MARKET", "product": "NRML", "outputVariable": "ord" } }
   ],
   "edges": [
     { "id": "e1", "source": "n1", "target": "f" },
@@ -2129,8 +2284,17 @@ Valid `exchange` values across all nodes:
 | `BCD` | BSE Currency |
 | `MCX` | Commodity |
 | `NCDEX` | Commodity |
+| `NCO` | NSE Commodities, futures and options (Zerodha only) |
 | `NSE_INDEX` | NSE Indices (for `optionsOrder`/`optionChain`/`optionSymbol`/`syntheticFuture`) |
 | `BSE_INDEX` | BSE Indices (same usage as above) |
+| `MCX_INDEX` | MCX sectoral indices such as MCXBULLDEX (quote only) |
+| `GLOBAL_INDEX` | Global indices - US30, JAPAN225, HANGSENG, GIFTNIFTY (quote only, Zerodha) |
+| `CRYPTO` | Crypto derivatives (Delta Exchange only) |
+
+The index and crypto codes are quote-only or broker-specific; an order node
+using one is accepted by the validator but will be refused by a broker that
+does not serve that segment. See `docs/prompt/order-constants.md`, which is the
+source this list is checked against.
 
 ---
 
@@ -2184,9 +2348,9 @@ placeOrder (outputVariable=ord)  →  delay (60s)  →  cancelOrder (orderId={{o
 ### Square off everything if MTM crosses a P&L threshold
 
 ```
-positionBook (outputVariable=positions)
-  → mathExpression (expression=sum of {{positions.data[i].pnl}})
-  → priceCondition (operator="<", value=-5000) on the computed MTM
+funds (outputVariable=f)
+  → mathExpression (expression={{f.data.m2mrealized}} + {{f.data.m2munrealized}}, outputVariable=totalPnl)
+  → varCondition (leftValue={{totalPnl}}, operator="<", rightValue=-5000)
       └── true  → closePositions
 ```
 
@@ -2237,7 +2401,33 @@ positionBook (outputVariable=positions)
   from Historify regardless of broker capability.
 - **Unresolved operands in `varCondition` take neither branch.** Unlike other
   interpolation (which passes `{{...}}` through as literal text), this node
-  refuses to evaluate so a typo cannot route a trade.
+  refuses to evaluate so a typo cannot route a trade. Order nodes refuse for the
+  same reason -- see [Unresolved references on order nodes](#unresolved-references-on-order-nodes).
+- **Execution history is pruned.** Each run stores its full node trace, so the
+  newest `FLOW_EXECUTION_RETENTION_COUNT` runs per workflow (default 500) and
+  anything newer than `FLOW_EXECUTION_RETENTION_DAYS` (default 30) are kept;
+  older rows are deleted as new ones are written. Set either to `0` to disable
+  that limit. Export anything you need to keep.
+- **A failed node stops its branch and fails the run.** When a node returns
+  an error - a broker rejection, an unreachable URL, a guard that cannot be
+  evaluated - nothing downstream of it executes, the run is recorded as
+  `failed`, and the trigger response carries the error. Do not rely on a later
+  node running "anyway"; put independent work on its own branch from the
+  trigger.
+- **One-shot triggers deactivate the workflow when they fire.** A `priceAlert`
+  or `orderUpdateTrigger` with `trigger: "once"` clears `is_active` after its
+  run, so it is not re-armed by a later restart. Use `trigger: "every_time"`
+  for a standing watch. The trigger is spent only by a run that actually
+  reached the graph: if the workflow was already running, or the run could not
+  be queued, the trigger stays armed for the next event rather than being
+  silently consumed. A run the broker rejected still counts as spent — it ran.
+- **Editing a trigger on an active workflow re-arms it during the save.** The
+  scheduler and monitors snapshot the trigger node, so a save that changes it
+  tears the old registration down and installs the new one. If that fails the
+  workflow is **deactivated** rather than left running a stale registration,
+  and the response carries `needs_reactivate: true`. Node bodies outside the
+  trigger apply immediately either way, because the graph is re-read on every
+  run.
 - **Lot size handling differs per node.** `optionsOrder` and
   `optionsMultiOrder` accept `quantity` **in lots** (multiplied by lot size
   internally). `placeOrder` / `smartOrder` / `splitOrder` / `basketOrder`
@@ -2256,5 +2446,19 @@ positionBook (outputVariable=positions)
 - UI ↔ field mapping: `frontend/src/components/flow/panels/ConfigPanel.tsx`.
 - Edge filtering: `services/flow_executor_service.py:execute_node_chain`
   → the `if result and "condition" in result:` block.
+- Required fields, checked at import, save and activation:
+  `services/flow_workflow_validator.py` (`REQUIRED_NODE_FIELDS`,
+  `CONDITIONAL_REQUIRED_FIELDS`, `EITHER_REQUIRED_FIELDS`).
+- Trigger registration and its lifecycle: `blueprints/flow.py` (activate,
+  deactivate), `services/flow_scheduler_service.py`,
+  `services/flow_price_monitor_service.py`,
+  `services/flow_order_update_monitor_service.py`.
+- HTTP destination rules: `NodeExecutor._check_http_destination` in
+  `services/flow_executor_service.py`.
+- Unresolved-reference checks on order nodes: `ORDER_NODE_TYPES`,
+  `ORDER_CRITICAL_FIELDS` and `NodeExecutor.unresolved_order_fields` in
+  `services/flow_executor_service.py`.
+- Execution-history retention: `prune_workflow_executions` in
+  `database/flow_db.py`.
 
 If this doc and the code disagree, the code wins. Open a PR.

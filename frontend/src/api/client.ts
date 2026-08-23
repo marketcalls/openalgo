@@ -130,6 +130,21 @@ webClient.interceptors.response.use(
       // Forbidden - user doesn't have permission for this resource
       // Create a more descriptive error for the caller to handle
       error.message = 'You do not have permission to access this resource'
+    } else {
+      // Surface the server's own explanation instead of axios's generic
+      // "Request failed with status code 400". Flask returns the useful text
+      // in the body — `message` carries the specific reason (e.g. which node
+      // field a workflow is missing) while `error` is the generic headline —
+      // and callers only ever read `error.message`, so without this the real
+      // cause reached the server log and nothing else.
+      const data = error.response?.data
+      const serverMessage =
+        typeof data === 'string'
+          ? data
+          : data?.message || data?.error || data?.detail
+      if (serverMessage) {
+        error.message = serverMessage
+      }
     }
     return Promise.reject(error)
   }

@@ -9,11 +9,16 @@ list - was a case of those falling out of step with no test to catch it.
 Run: uv run pytest test/test_flow_workflow_validator.py -v
 """
 
+import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+from services.flow_node_contracts import parse_underlying_symbol
 from services.flow_workflow_validator import (
     BRANCHING_NODE_TYPES,
     TRIGGER_NODE_TYPES,
@@ -22,11 +27,31 @@ from services.flow_workflow_validator import (
     validate_workflow,
 )
 
-FRONTEND = Path(__file__).resolve().parents[1] / "frontend" / "src"
+ROOT = Path(__file__).resolve().parents[1]
+FRONTEND = ROOT / "frontend" / "src"
+FLOW_IMPORT_PROMPT = ROOT / "docs" / "prompt" / "flow-import-format.md"
 REGISTRY = FRONTEND / "components" / "flow" / "nodes" / "index.ts"
 PALETTE = FRONTEND / "components" / "flow" / "panels" / "NodePalette.tsx"
 CONFIG_PANEL = FRONTEND / "components" / "flow" / "panels" / "ConfigPanel.tsx"
 CONSTANTS = FRONTEND / "lib" / "flow" / "constants.ts"
+FLOW_TYPES = FRONTEND / "types" / "flow.ts"
+
+
+def test_validator_import_does_not_require_application_secrets():
+    """Static workflow validation must not initialize database-coupled services."""
+    env = os.environ.copy()
+    env.pop("API_KEY_PEPPER", None)
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import services.flow_workflow_validator"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def _registry_types() -> set[str]:
@@ -40,6 +65,16 @@ def _default_node_data_keys() -> set[str]:
     block = src.split("DEFAULT_NODE_DATA")[1]
     block = block[: block.index("\n}")]
     return set(re.findall(r"^\s{2}(\w+):\s*\{", block, re.M))
+
+
+def _default_node_data_block(node_type: str) -> str:
+    src = CONSTANTS.read_text()
+    return src.split(f"  {node_type}: {{", 1)[1].split("\n  },", 1)[0]
+
+
+def _typescript_interface_body(interface_name: str) -> str:
+    src = FLOW_TYPES.read_text()
+    return src.split(f"export interface {interface_name} {{", 1)[1].split("\n}", 1)[0]
 
 
 def _palette_types() -> set[str]:
@@ -65,6 +100,73 @@ def test_every_registered_node_has_default_data():
     assert _registry_types() - _default_node_data_keys() == set()
 
 
+@pytest.mark.parametrize("node_type", ["smartOrder", "basketOrder", "splitOrder"])
+@pytest.mark.parametrize("field", ["price", "triggerPrice"])
+def test_frontend_order_defaults_include_numeric_prices(node_type, field):
+    """New order nodes persist the complete price contract from their first save."""
+    block = _default_node_data_block(node_type)
+    assert re.search(rf"^\s+{field}: 0,$", block, re.M)
+
+
+def test_frontend_order_defaults_exclude_legacy_fields():
+    """Frontend contracts do not advertise values ignored by execution."""
+    assert "username" not in _default_node_data_block("telegramAlert")
+    assert "username" not in _typescript_interface_body("TelegramAlertNodeData")
+
+    options_multi = _typescript_interface_body("OptionsMultiOrderNodeData")
+    leg = options_multi.split("legs: Array<{", 1)[1].split("}>", 1)[0]
+    assert "expiryDate" not in leg
+
+
+@pytest.mark.parametrize(
+    ("interface_name", "optional"),
+    [
+        ("OptionsOrderNodeData", False),
+        ("OptionsMultiOrderNodeData", False),
+        ("BasketOrderNodeData", True),
+        ("SplitOrderNodeData", False),
+    ],
+)
+def test_frontend_order_defaults_types_accept_every_backend_price_type(interface_name, optional):
+    """Order interfaces cannot reject a price type accepted by execution."""
+    body = _typescript_interface_body(interface_name)
+    marker = "priceType?:" if optional else "priceType:"
+    assert f"{marker} 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'" in body
+
+
+@pytest.mark.parametrize(
+    "interface_name",
+    [
+        "OptionsOrderNodeData",
+        "OptionsMultiOrderNodeData",
+        "BasketOrderNodeData",
+        "SplitOrderNodeData",
+    ],
+)
+@pytest.mark.parametrize("field", ["price", "triggerPrice"])
+def test_frontend_order_defaults_types_expose_top_level_prices(interface_name, field):
+    """Every priced order exposes both persisted numeric fields at the top level."""
+    body = _typescript_interface_body(interface_name)
+    top_level = body.split("}>", 1)[1] if interface_name == "OptionsMultiOrderNodeData" else body
+    assert f"{field}?: number" in top_level
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "product?: 'MIS' | 'NRML'",
+        "priceType?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'",
+        "price?: number",
+        "triggerPrice?: number",
+    ],
+)
+def test_frontend_order_defaults_custom_legs_carry_price_contract(field):
+    """Imported custom legs retain their own execution fields, but not expiry."""
+    body = _typescript_interface_body("OptionsMultiOrderNodeData")
+    leg = body.split("legs: Array<{", 1)[1].split("}>", 1)[0]
+    assert field in leg
+
+
 @pytest.mark.skipif(not PALETTE.exists(), reason="frontend sources not present")
 def test_every_registered_node_is_in_the_palette():
     """A registered node missing from the palette cannot be added by a no-code user."""
@@ -84,12 +186,894 @@ def _node(node_id, node_type="log", **data):
     return {"id": node_id, "type": node_type, "position": {"x": 0, "y": 0}, "data": data}
 
 
+JSON_FENCE_RE = re.compile(r"^```json\s*\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
+MULTI_VALUE_JSON_FENCES = {5: 2, 27: 2, 38: 5}
+
+
+def _json_fences(prompt):
+    for index, match in enumerate(JSON_FENCE_RE.finditer(prompt), 1):
+        start_line = prompt.count("\n", 0, match.start()) + 1
+        yield index, start_line, match.group(1)
+
+
+def _decode_json_sequence(raw):
+    decoder = json.JSONDecoder()
+    values = []
+    offset = 0
+    while True:
+        while offset < len(raw) and raw[offset].isspace():
+            offset += 1
+        if offset == len(raw):
+            return values
+        value, offset = decoder.raw_decode(raw, offset)
+        values.append(value)
+
+
+def _markdown_section(prompt, heading_prefix):
+    """Return one Markdown section, including subsections but not its next peer."""
+    match = re.search(rf"^{re.escape(heading_prefix)}(?:\s.*)?$", prompt, re.MULTILINE)
+    assert match is not None, f"missing prompt heading: {heading_prefix}"
+    heading_level = len(heading_prefix) - len(heading_prefix.lstrip("#"))
+    rest = prompt[match.end() :]
+    next_heading = re.search(rf"^#{{1,{heading_level}}}\s", rest, re.MULTILINE)
+    return prompt[match.start() : match.end() + (next_heading.start() if next_heading else len(rest))]
+
+
+def _walk_json(value):
+    yield value
+    if isinstance(value, dict):
+        for child in value.values():
+            yield from _walk_json(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk_json(child)
+
+
+def _prompt_json_nodes(prompt):
+    """Yield every node embedded in every value from every decoded JSON fence."""
+    for fence_index, start_line, raw in _json_fences(prompt):
+        for value_index, value in enumerate(_decode_json_sequence(raw), 1):
+            for candidate in _walk_json(value):
+                if (
+                    isinstance(candidate, dict)
+                    and isinstance(candidate.get("type"), str)
+                    and isinstance(candidate.get("data"), dict)
+                ):
+                    yield fence_index, start_line, value_index, candidate
+
+
+def test_prompt_prose_documents_every_repaired_flow_contract():
+    """The human-facing contract must retain every correction behind the examples."""
+    prompt = FLOW_IMPORT_PROMPT.read_text(encoding="utf-8")
+    failures = []
+
+    def require(category, condition, detail):
+        if not condition:
+            failures.append(f"{category}: {detail}")
+
+    trigger = _markdown_section(prompt, "### 7.1 Trigger nodes")
+    require(
+        "second_trigger",
+        "reject a second trigger" in trigger and "permit a second trigger" not in trigger,
+        "strict validation must explicitly reject a second trigger",
+    )
+
+    history = _markdown_section(prompt, "#### history")
+    require(
+        "history_range",
+        all(field in history for field in ("`days`", "`startDate`", "`endDate`"))
+        and "explicit range takes\nprecedence over `days`" in history,
+        "document days plus start/end dates and explicit-range precedence",
+    )
+
+    holidays = _markdown_section(prompt, "#### holidays")
+    require(
+        "holidays_year",
+        "`year`" in holidays and "`exchange`" not in holidays,
+        "holidays must document year, not exchange",
+    )
+    timings = _markdown_section(prompt, "#### timings")
+    require(
+        "timings_date",
+        "`date`" in timings and "`exchange`" not in timings,
+        "timings must document date, not exchange",
+    )
+
+    variable = _markdown_section(prompt, "#### variable")
+    operation_table = variable.split("| Operation | Behaviour |", 1)[-1].split(
+        "| Field | Type | Default | Notes |", 1
+    )[0]
+    documented_operations = set(re.findall(r'^\| `"([^"]+)"` \|', operation_table, re.M))
+    required_operations = {
+        "set",
+        "get",
+        "add",
+        "subtract",
+        "multiply",
+        "divide",
+        "increment",
+        "decrement",
+        "parse_json",
+        "stringify",
+        "append",
+    }
+    require(
+        "variable_operations",
+        documented_operations == required_operations,
+        f"expected exactly eleven operations; found {sorted(documented_operations)}",
+    )
+    require(
+        "variable_conditional_fields",
+        "Required for `add`, `subtract`, `multiply`, and `divide`" in variable
+        and "`parse_json` requires a non-empty value" in variable
+        and "Required for `get` and `stringify`" in variable,
+        "document operation-specific value/sourceVariable requirements",
+    )
+
+    math_expression = _markdown_section(prompt, "#### mathExpression")
+    require(
+        "floor_only",
+        "sole allowed function `floor(expression)`" in math_expression
+        and "Other calls" in math_expression
+        and "rejected" in math_expression,
+        "floor must be the sole function and other calls must be rejected",
+    )
+
+    telegram = _markdown_section(prompt, "#### telegramAlert")
+    require(
+        "telegram_identity",
+        "workflow API key" in telegram
+        and "API-key owner" in telegram
+        and "cannot supply a\nrecipient override" in telegram
+        and "username" not in telegram.lower(),
+        "delivery must belong to the API-key owner with no username field",
+    )
+
+    http_request = _markdown_section(prompt, "#### httpRequest")
+    http_example = _markdown_section(prompt, "### 8.7 Webhook")
+    require(
+        "http_timeout_range",
+        "between 1000 and 60000" in http_request,
+        "document the inclusive millisecond timeout range",
+    )
+    require(
+        "http_timeout_example",
+        '"timeout": 10000' in http_example,
+        "the external HTTP example must use timeout 10000",
+    )
+
+    for node_type in ("smartOrder", "basketOrder", "splitOrder"):
+        order_section = _markdown_section(prompt, f"#### {node_type}")
+        require(
+            f"{node_type}_common_prices",
+            "`price`" in order_section
+            and "`triggerPrice`" in order_section
+            and "positive for `LIMIT`/`SL`" in order_section
+            and "positive for `SL`/`SL-M`" in order_section,
+            "document common price/triggerPrice fields and positive-price rules",
+        )
+
+    options_multi = _markdown_section(prompt, "#### optionsMultiOrder")
+    require(
+        "options_multi_expiry",
+        "One common expiry" in options_multi
+        and "Per-leg expiries are not supported" in options_multi
+        and "calendar" not in options_multi.lower()
+        and "diagonal" not in options_multi.lower(),
+        "document one common expiry and make no calendar/diagonal claim",
+    )
+    require(
+        "options_multi_price_types",
+        '`priceType` | `"MARKET"` \\| `"LIMIT"`' in options_multi
+        and "generated legs do not support `SL`/`SL-M`" in options_multi
+        and "Custom leg `priceType` may be any of `MARKET`/`LIMIT`/`SL`/`SL-M`"
+        in options_multi,
+        "distinguish generated MARKET/LIMIT from custom four-type legs",
+    )
+
+    documented_nodes = list(_prompt_json_nodes(prompt))
+    telegram_username_examples = [
+        (fence_index, start_line, value_index, node.get("id"))
+        for fence_index, start_line, value_index, node in documented_nodes
+        if node["type"] == "telegramAlert" and "username" in node["data"]
+    ]
+    require(
+        "telegram_json_username",
+        not telegram_username_examples,
+        "telegramAlert data.username found at "
+        f"(fence, start line, value, node): {telegram_username_examples}",
+    )
+
+    options_leg_expiry_examples = []
+    for fence_index, start_line, value_index, node in documented_nodes:
+        if node["type"] != "optionsMultiOrder":
+            continue
+        for leg_field in ("legs", "orderLegs"):
+            if leg_field not in node["data"]:
+                continue
+            if any(
+                isinstance(candidate, dict) and "expiryDate" in candidate
+                for candidate in _walk_json(node["data"][leg_field])
+            ):
+                options_leg_expiry_examples.append(
+                    (fence_index, start_line, value_index, node.get("id"), leg_field)
+                )
+    require(
+        "options_multi_json_leg_expiry",
+        not options_leg_expiry_examples,
+        "optionsMultiOrder leg expiryDate found at "
+        f"(fence, start line, value, node, field): {options_leg_expiry_examples}",
+    )
+
+    pnl_example = _markdown_section(prompt, "### 8.5 P&L stop-loss")
+    require(
+        "computed_pnl_condition",
+        '"type": "varCondition"' in pnl_example
+        and '"type": "priceCondition"' not in pnl_example,
+        "computed P&L must be compared with varCondition",
+    )
+
+    prohibited_index_orders = [
+        (fence_index, start_line, value_index, node.get("id"))
+        for fence_index, start_line, value_index, node in documented_nodes
+        if node["type"] == "placeOrder"
+        and node["data"].get("exchange") in {"NSE_INDEX", "BSE_INDEX"}
+    ]
+    require(
+        "place_order_index_exchange",
+        not prohibited_index_orders,
+        "placeOrder examples use index exchanges at "
+        f"(fence, start line, value, node): {prohibited_index_orders}",
+    )
+
+    assert not failures, "prompt prose contract failures:\n" + "\n".join(failures)
+
+
+def _as_workflow_example(value):
+    if isinstance(value, dict) and "nodes" in value and "edges" in value:
+        return value
+
+    if isinstance(value, dict):
+        snippets = [value]
+    elif isinstance(value, list):
+        snippets = value
+    else:
+        return None
+
+    if not snippets or not all(
+        isinstance(node, dict)
+        and isinstance(node.get("type"), str)
+        and isinstance(node.get("data"), dict)
+        for node in snippets
+    ):
+        return None
+
+    nodes = []
+    for index, snippet in enumerate(snippets, 1):
+        node = dict(snippet)
+        node.setdefault("id", f"documented_node_{index}")
+        node.setdefault("position", {"x": 100, "y": index * 100})
+        nodes.append(node)
+
+    trigger_ids = [node["id"] for node in nodes if node["type"] in TRIGGER_NODE_TYPES]
+    if not trigger_ids:
+        nodes.insert(0, _node("documented_trigger", "start"))
+        trigger_ids = ["documented_trigger"]
+    if len(nodes) == 1:
+        nodes.append(_node("documented_action", "log", message="Prompt contract example"))
+
+    trigger_id = trigger_ids[0]
+    edges = [
+        {"id": f"documented_edge_{index}", "source": trigger_id, "target": node["id"]}
+        for index, node in enumerate(nodes, 1)
+        if node["id"] != trigger_id
+    ]
+    return _wf(nodes, edges, name="Prompt contract example")
+
+
+def test_every_parseable_prompt_json_example_matches_the_strict_contract():
+    """Malformed or runtime-invalid prompt JSON must identify its source fence."""
+    prompt = FLOW_IMPORT_PROMPT.read_text(encoding="utf-8")
+    failures = []
+    fence_lines = {}
+    seen_multi_value_fences = {}
+
+    for index, line, raw in _json_fences(prompt):
+        fence_lines[index] = line
+        try:
+            values = [json.loads(raw)]
+        except json.JSONDecodeError:
+            try:
+                values = _decode_json_sequence(raw)
+            except json.JSONDecodeError as exc:
+                failures.append((index, line, [{"code": "invalid_json", "message": str(exc)}]))
+                continue
+
+            expected_count = MULTI_VALUE_JSON_FENCES.get(index)
+            if expected_count != len(values):
+                failures.append(
+                    (
+                        index,
+                        line,
+                        [
+                            {
+                                "code": "unexpected_json_sequence",
+                                "message": f"decoded {len(values)} values; expected {expected_count or 1}",
+                            }
+                        ],
+                    )
+                )
+                continue
+            seen_multi_value_fences[index] = len(values)
+
+        for value in values:
+            payload = _as_workflow_example(value)
+            if payload is None:
+                continue
+            errors = validate_workflow(payload, strict=True)
+            if errors:
+                failures.append((index, line, errors))
+
+    for index, expected_count in MULTI_VALUE_JSON_FENCES.items():
+        if index not in seen_multi_value_fences:
+            failures.append(
+                (
+                    index,
+                    fence_lines.get(index),
+                    [
+                        {
+                            "code": "missing_json_sequence",
+                            "message": f"expected the allowlisted sequence of {expected_count} values",
+                        }
+                    ],
+                )
+            )
+
+    assert failures == []
+    assert seen_multi_value_fences == MULTI_VALUE_JSON_FENCES
+
+
+def _single_action_workflow(node_type, data):
+    return _wf(
+        [_node("start", "start"), _node("action", node_type, **data)],
+        [{"id": "edge", "source": "start", "target": "action"}],
+    )
+
+
+def _strict_node_errors(node_type, data):
+    return validate_workflow(_wf([_node("trigger", node_type, **data)]))
+
+
+def _permissive_node_errors(node_type, data):
+    return validate_workflow(
+        _wf([_node("trigger", node_type, **data)]), require_name=False, strict=False
+    )
+
+
+PRICED_ORDER_NODES = {
+    "placeOrder": {"symbol": "RELIANCE", "exchange": "NSE", "action": "BUY", "quantity": 1},
+    "smartOrder": {"symbol": "RELIANCE", "exchange": "NSE", "action": "BUY", "quantity": 1},
+    "optionsOrder": {"underlying": "NIFTY", "action": "BUY", "quantity": 1},
+    "optionsMultiOrder": {"strategy": "straddle", "underlying": "NIFTY", "quantity": 1},
+    "basketOrder": {"orders": "RELIANCE,NSE,BUY,1"},
+    "splitOrder": {
+        "symbol": "RELIANCE",
+        "exchange": "NSE",
+        "action": "BUY",
+        "quantity": 1,
+        "splitSize": 1,
+    },
+}
+
+
+@pytest.mark.parametrize("node_type,minimal", PRICED_ORDER_NODES.items())
+@pytest.mark.parametrize(
+    ("price_type", "required_field"),
+    [("LIMIT", "price"), ("SL", "price"), ("SL", "triggerPrice"), ("SL-M", "triggerPrice")],
+)
+def test_priced_order_requires_each_static_price(node_type, minimal, price_type, required_field):
+    """A priced executable order cannot rely on the broker's zero default."""
+    data = {**minimal, "priceType": price_type}
+    errors = _strict_node_errors(node_type, data)
+    assert any(
+        error["code"] == "missing_price" and error["path"].endswith(f"/{required_field}")
+        for error in errors
+    )
+    assert not any(
+        error["path"].endswith(f"/{required_field}")
+        for error in _permissive_node_errors(node_type, data)
+    )
+
+
+@pytest.mark.parametrize("node_type,minimal", PRICED_ORDER_NODES.items())
+@pytest.mark.parametrize(
+    ("price_type", "required_field"),
+    [("LIMIT", "price"), ("SL", "price"), ("SL", "triggerPrice"), ("SL-M", "triggerPrice")],
+)
+@pytest.mark.parametrize(
+    ("value", "strict_code", "permissive_code"),
+    [
+        ("", "missing_price", None),
+        (0, "invalid_price", "invalid_price"),
+        (-1, "invalid_price", "invalid_price"),
+        (1, None, None),
+        ("{{webhook.price}}", None, None),
+    ],
+)
+def test_priced_order_price_values_follow_draft_and_runtime_contract(
+    node_type, minimal, price_type, required_field, value, strict_code, permissive_code
+):
+    """Blank values are incomplete drafts; supplied malformed prices are always invalid."""
+    data = {**minimal, "priceType": price_type, required_field: value}
+    strict_errors = _strict_node_errors(node_type, data)
+    permissive_errors = _permissive_node_errors(node_type, data)
+    assert any(
+        error["code"] == strict_code and error["path"].endswith(f"/{required_field}")
+        for error in strict_errors
+    ) is (strict_code is not None)
+    assert any(
+        error["code"] == permissive_code and error["path"].endswith(f"/{required_field}")
+        for error in permissive_errors
+    ) is (permissive_code is not None)
+
+
+MARGIN_LEG = {
+    "symbol": "RELIANCE",
+    "exchange": "NSE",
+    "action": "BUY",
+    "quantity": "1",
+    "product": "MIS",
+    "pricetype": "MARKET",
+    "price": "0",
+}
+
+
+@pytest.mark.parametrize(
+    ("data", "strict_code", "permissive_code", "path"),
+    [
+        ({}, "missing_alternative", None, "positionsJson"),
+        ({"positionsJson": ""}, "missing_alternative", None, "positionsJson"),
+        ({"positionsJson": "not json"}, "invalid_positions", "invalid_positions", "positionsJson"),
+        ({"positionsJson": "[]"}, "invalid_positions", "invalid_positions", "positionsJson"),
+        ({"positionsJson": "{}"}, "invalid_positions", "invalid_positions", "positionsJson"),
+        ({"positionsJson": '["not a leg"]'}, "invalid_positions", "invalid_positions", "positionsJson/0"),
+        (
+            {"positionsJson": '[{"symbol": "RELIANCE"}]'},
+            "missing_required_field",
+            None,
+            "positionsJson/0/exchange",
+        ),
+        (
+            {"positionsJson": '[{"symbol": "RELIANCE", "exchange": "NOPE", "action": "BUY", "quantity": "1", "product": "MIS", "pricetype": "MARKET", "price": "0"}]'},
+            "invalid_constant",
+            "invalid_constant",
+            "positionsJson/0/exchange",
+        ),
+        (
+            {"positionsJson": '[{"symbol": "RELIANCE", "exchange": "NSE", "action": "BUY", "quantity": "1", "product": "MIS", "pricetype": "LIMIT", "price": "0"}]'},
+            "invalid_price",
+            "invalid_price",
+            "positionsJson/0/price",
+        ),
+        ({"positionsJson": "{{webhook.positions}}"}, None, None, "positionsJson"),
+        (
+            {"positionsJson": '[{"symbol": "{{symbol}}", "exchange": "NSE", "action": "BUY", "quantity": "{{quantity}}", "product": "MIS", "pricetype": "LIMIT", "price": "{{price}}"}]'},
+            None,
+            None,
+            "positionsJson",
+        ),
+        ({"positionsJson": '[{"symbol": "RELIANCE", "exchange": "NSE", "action": "BUY", "quantity": "1", "product": "MIS", "pricetype": "MARKET", "price": "0"}]'}, None, None, "positionsJson"),
+        ({"positions": [MARGIN_LEG]}, None, None, "positions"),
+        ({"symbol": "RELIANCE"}, None, None, "symbol"),
+    ],
+)
+def test_margin_contract(data, strict_code, permissive_code, path):
+    """Margin either prices one legacy symbol or a complete, static basket."""
+    strict_errors = _strict_node_errors("margin", data)
+    permissive_errors = _permissive_node_errors("margin", data)
+    assert any(
+        error["code"] == strict_code and error["path"].endswith(f"/{path}")
+        for error in strict_errors
+    ) is (strict_code is not None)
+    assert any(
+        error["code"] == permissive_code and error["path"].endswith(f"/{path}")
+        for error in permissive_errors
+    ) is (permissive_code is not None)
+
+
+OPTIONS_MULTI_BASE = {"underlying": "NIFTY", "quantity": 1}
+CUSTOM_OPTION_LEG = {
+    "offset": "ATM",
+    "optionType": "CE",
+    "action": "BUY",
+    "quantity": 1,
+}
+
+
+@pytest.mark.parametrize(
+    ("data", "strict_code", "permissive_code", "path"),
+    [
+        ({**OPTIONS_MULTI_BASE, "strategy": "custom"}, "missing_required_field", None, "legs"),
+        ({**OPTIONS_MULTI_BASE, "strategy": "custom", "legs": []}, "invalid_legs", "invalid_legs", "legs"),
+        ({**OPTIONS_MULTI_BASE, "strategy": "custom", "legs": {}}, "invalid_legs", "invalid_legs", "legs"),
+        (
+            {**OPTIONS_MULTI_BASE, "strategy": "custom", "legs": [{"offset": "ATM"}]},
+            "missing_required_field",
+            None,
+            "legs/0/optionType",
+        ),
+        (
+            {
+                **OPTIONS_MULTI_BASE,
+                "strategy": "custom",
+                "legs": [{**CUSTOM_OPTION_LEG, "product": "NOPE"}],
+            },
+            "invalid_constant",
+            "invalid_constant",
+            "legs/0/product",
+        ),
+        (
+            {
+                **OPTIONS_MULTI_BASE,
+                "strategy": "custom",
+                "legs": [
+                    {
+                        **CUSTOM_OPTION_LEG,
+                        "priceType": "SL",
+                        "price": 100,
+                        "triggerPrice": 99,
+                        "expiryDate": "27AUG26",
+                    }
+                ],
+            },
+            None,
+            None,
+            "legs",
+        ),
+        (
+            {
+                **OPTIONS_MULTI_BASE,
+                "strategy": "custom",
+                "legs": [
+                    {
+                        "offset": "{{offset}}",
+                        "optionType": "{{optionType}}",
+                        "action": "{{action}}",
+                        "quantity": "{{quantity}}",
+                        "priceType": "{{priceType}}",
+                        "price": "{{price}}",
+                    }
+                ],
+            },
+            None,
+            None,
+            "legs",
+        ),
+        (
+            {**OPTIONS_MULTI_BASE, "strategy": "custom", "legs": "{{webhook.legs}}"},
+            None,
+            None,
+            "legs",
+        ),
+        (
+            {**OPTIONS_MULTI_BASE, "strategy": "straddle", "priceType": "SL", "price": 100},
+            "invalid_constant",
+            "invalid_constant",
+            "priceType",
+        ),
+        ({**OPTIONS_MULTI_BASE, "strategy": "straddle", "priceType": "MARKET"}, None, None, "price"),
+        (
+            {**OPTIONS_MULTI_BASE, "strategy": "straddle", "priceType": "LIMIT", "price": 100},
+            None,
+            None,
+            "price",
+        ),
+    ],
+)
+def test_options_multi_contract(data, strict_code, permissive_code, path):
+    """Custom strategies validate each leg; generated strategies support MARKET and LIMIT only."""
+    strict_errors = _strict_node_errors("optionsMultiOrder", data)
+    permissive_errors = _permissive_node_errors("optionsMultiOrder", data)
+    assert any(
+        error["code"] == strict_code and error["path"].endswith(f"/{path}")
+        for error in strict_errors
+    ) is (strict_code is not None)
+    assert any(
+        error["code"] == permissive_code and error["path"].endswith(f"/{path}")
+        for error in permissive_errors
+    ) is (permissive_code is not None)
+
+
+@pytest.mark.parametrize(
+    ("operation", "extra"),
+    [
+        ("set", {}),
+        ("get", {"sourceVariable": "source"}),
+        ("add", {"value": 1}),
+        ("subtract", {"value": 1}),
+        ("multiply", {"value": 2}),
+        ("divide", {"value": 2}),
+        ("increment", {}),
+        ("decrement", {}),
+        ("parse_json", {"value": '{"key": "value"}'}),
+        ("stringify", {"sourceVariable": "source"}),
+        ("append", {}),
+    ],
+)
+def test_variable_contract_accepts_supported_operations(operation, extra):
+    """Every executor operation has a configuration shape that can activate."""
+    data = {"variableName": "target", "operation": operation, **extra}
+    for errors in (_strict_node_errors("variable", data), _permissive_node_errors("variable", data)):
+        assert not any(
+            error["path"].endswith(("/operation", "/sourceVariable", "/value"))
+            for error in errors
+        )
+
+
+def test_variable_contract_rejects_unknown_operations_even_in_drafts():
+    """A saved operation typo cannot silently fall through the executor."""
+    data = {"variableName": "target", "operation": "merge"}
+    for errors in (_strict_node_errors("variable", data), _permissive_node_errors("variable", data)):
+        assert any(error["code"] == "invalid_constant" and error["path"].endswith("/operation") for error in errors)
+
+
+@pytest.mark.parametrize("operation,field", [("get", "sourceVariable"), ("stringify", "sourceVariable")])
+def test_variable_contract_requires_a_source_variable_in_strict_mode(operation, field):
+    """Read-based operations need the source name once the workflow is executable."""
+    data = {"variableName": "target", "operation": operation}
+    assert any(error["code"] == "missing_required_field" and error["path"].endswith(f"/{field}") for error in _strict_node_errors("variable", data))
+    assert not any(error["path"].endswith(f"/{field}") for error in _permissive_node_errors("variable", data))
+
+
+@pytest.mark.parametrize("operation", ["add", "subtract", "multiply", "divide", "parse_json"])
+def test_variable_contract_requires_a_value_in_strict_mode(operation):
+    """Operations that consume an operand cannot use the executor's empty default."""
+    data = {"variableName": "target", "operation": operation}
+    assert any(error["code"] == "missing_required_field" and error["path"].endswith("/value") for error in _strict_node_errors("variable", data))
+    assert not any(error["path"].endswith("/value") for error in _permissive_node_errors("variable", data))
+
+
+@pytest.mark.parametrize(("operation", "field"), [("get", "sourceVariable"), ("add", "value")])
+def test_variable_contract_defers_templated_conditional_values(operation, field):
+    """Template references are supplied values whose resolution belongs to runtime."""
+    errors = _strict_node_errors(
+        "variable", {"variableName": "target", "operation": operation, field: "{{webhook.value}}"}
+    )
+    assert not any(error["path"].endswith(f"/{field}") for error in errors)
+
+
+def test_variable_contract_defaults_a_missing_operation_to_set():
+    """Legacy Variable nodes did not persist their default operation."""
+    errors = _strict_node_errors("variable", {"variableName": "target"})
+    assert not any(error["path"].endswith("/operation") for error in errors)
+
+
+@pytest.mark.parametrize("operation", ["", "SET", " set "])
+def test_variable_contract_rejects_noncanonical_operation_spellings(operation):
+    """Only the executor's exact lowercase operation names are executable."""
+    data = {"variableName": "target", "operation": operation}
+    for errors in (_strict_node_errors("variable", data), _permissive_node_errors("variable", data)):
+        assert any(
+            error["code"] == "invalid_constant" and error["path"].endswith("/operation")
+            for error in errors
+        )
+
+
+@pytest.mark.parametrize("value", [True, float("inf"), float("-inf"), "Infinity", "-Infinity", "NaN"])
+def test_executable_price_rejects_boolean_and_nonfinite_values(value):
+    """Broker prices must be finite numbers, never truthy or infinite floats."""
+    data = {**PRICED_ORDER_NODES["placeOrder"], "priceType": "LIMIT", "price": value}
+    for errors in (_strict_node_errors("placeOrder", data), _permissive_node_errors("placeOrder", data)):
+        assert any(error["code"] == "invalid_price" and error["path"].endswith("/price") for error in errors)
+
+
+@pytest.mark.parametrize("value", [True, float("inf"), float("-inf"), "Infinity", "-Infinity", "NaN"])
+def test_custom_option_leg_quantity_rejects_boolean_and_nonfinite_values(value):
+    """A custom leg quantity uses the same finite-number contract as an order."""
+    data = {
+        **OPTIONS_MULTI_BASE,
+        "strategy": "custom",
+        "legs": [{**CUSTOM_OPTION_LEG, "quantity": value}],
+    }
+    for errors in (
+        _strict_node_errors("optionsMultiOrder", data),
+        _permissive_node_errors("optionsMultiOrder", data),
+    ):
+        assert any(
+            error["code"] == "invalid_quantity" and error["path"].endswith("/legs/0/quantity")
+            for error in errors
+        )
+
+
+@pytest.mark.parametrize("value", [1, "1.25"])
+def test_executable_price_and_custom_leg_quantity_keep_finite_values(value):
+    """Finite numeric values remain valid in both shared numeric helpers."""
+    price_data = {**PRICED_ORDER_NODES["placeOrder"], "priceType": "LIMIT", "price": value}
+    leg_data = {
+        **OPTIONS_MULTI_BASE,
+        "strategy": "custom",
+        "legs": [{**CUSTOM_OPTION_LEG, "quantity": value}],
+    }
+    for errors in (_strict_node_errors("placeOrder", price_data), _permissive_node_errors("placeOrder", price_data)):
+        assert not any(error["path"].endswith("/price") for error in errors)
+    for errors in (
+        _strict_node_errors("optionsMultiOrder", leg_data),
+        _permissive_node_errors("optionsMultiOrder", leg_data),
+    ):
+        assert not any(error["path"].endswith("/legs/0/quantity") for error in errors)
+
+
+@pytest.mark.parametrize("positions_json", ["{{webhook.positions}}", "[{{webhook.positions}}]"])
+def test_margin_contract_defers_any_template_containing_positions_json(positions_json):
+    """A templated Margin basket is resolved at runtime before JSON parsing."""
+    data = {"positionsJson": positions_json}
+    for errors in (_strict_node_errors("margin", data), _permissive_node_errors("margin", data)):
+        assert not any(error["path"].endswith("/positionsJson") for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("data", "missing"),
+    [
+        ({"indicatorName": "RSI", "sourceSeries": "{{bars}}"}, set()),
+        ({"indicatorName": "RSI"}, {"symbol", "exchange"}),
+        ({"sourceSeries": "{{bars}}"}, {"indicatorName"}),
+    ],
+)
+def test_indicator_requirements_follow_its_data_source(data, missing):
+    """History fields must not be required when an upstream series is selected."""
+    errors = validate_workflow(_single_action_workflow("indicator", data))
+    paths = {
+        error["path"].rsplit("/", 1)[-1]
+        for error in errors
+        if error["code"] == "missing_required_field"
+    }
+    assert paths == missing
+
+
+@pytest.mark.parametrize(
+    ("quantity", "invalid"),
+    [(0, False), ("0", False), (-1, True), (1, False)],
+)
+def test_smart_order_quantity_allows_zero_but_rejects_negative_values(quantity, invalid):
+    """Target-position SmartOrders use zero for square-off semantics."""
+    errors = validate_workflow(
+        _single_action_workflow(
+            "smartOrder",
+            {"symbol": "RELIANCE", "exchange": "NSE", "action": "BUY", "quantity": quantity},
+        )
+    )
+    assert any(error["code"] == "invalid_quantity" for error in errors) is invalid
+
+
+def test_place_order_quantity_must_stay_positive():
+    """A regular broker order with zero quantity remains malformed."""
+    errors = validate_workflow(
+        _single_action_workflow(
+            "placeOrder",
+            {"symbol": "RELIANCE", "exchange": "NSE", "action": "BUY", "quantity": 0},
+        )
+    )
+    assert any(error["code"] == "invalid_quantity" for error in errors)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"orderId": "241001000000001", "status": "complete"},
+        {"symbol": "RELIANCE", "status": " TRIGGER_PENDING "},
+    ],
+)
+def test_order_update_trigger_accepts_watchable_filters_and_normalized_status(data):
+    """Activation must accept the same filters and status spellings as the monitor."""
+    errors = _strict_node_errors("orderUpdateTrigger", data)
+    assert not any(error["path"].endswith(("/orderId", "/symbol", "/status")) for error in errors)
+
+
+@pytest.mark.parametrize("data", [{}, {"orderId": "{{previous.orderid}}"}])
+def test_order_update_trigger_rejects_unwatchable_filters(data):
+    """A trigger without a literal order ID or symbol can never match an update."""
+    errors = _strict_node_errors("orderUpdateTrigger", {"status": "complete", **data})
+    assert any(error["code"] in {"missing_alternative", "invalid_trigger_filter"} for error in errors)
+
+
+def test_order_update_trigger_rejects_unknown_status():
+    errors = _strict_node_errors(
+        "orderUpdateTrigger", {"orderId": "241001000000001", "status": "filled"}
+    )
+    assert any(
+        error["code"] == "invalid_status" and error["path"].endswith("/status")
+        for error in errors
+    )
+
+
+@pytest.mark.parametrize("status", ["filled", 123])
+def test_order_update_trigger_rejects_invalid_statuses_when_drafts_are_saved(status):
+    """A supplied status typo is malformed data, not an incomplete draft."""
+    errors = _permissive_node_errors(
+        "orderUpdateTrigger", {"orderId": "241001000000001", "status": status}
+    )
+    assert any(
+        error["code"] == "invalid_status" and error["path"].endswith("/status")
+        for error in errors
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "other_filter"),
+    [
+        ("orderId", 123, {"symbol": "RELIANCE"}),
+        ("symbol", ["RELIANCE"], {"orderId": "241001000000001"}),
+    ],
+)
+def test_order_update_trigger_rejects_non_string_filters_when_drafts_are_saved(
+    field, value, other_filter
+):
+    """Monitor matching requires literal string filters, never arbitrary truthy objects."""
+    errors = _permissive_node_errors(
+        "orderUpdateTrigger", {"status": "complete", field: value, **other_filter}
+    )
+    assert any(
+        error["code"] == "invalid_type" and error["path"].endswith(f"/{field}")
+        for error in errors
+    )
+
+
+@pytest.mark.parametrize(
+    ("node_type", "data", "requires_expiry"),
+    [
+        ("optionSymbol", {"underlying": "NIFTY", "optionType": "CE", "expiryDate": "27AUG26"}, False),
+        ("optionSymbol", {"underlying": "NIFTY27AUG26", "optionType": "CE"}, False),
+        ("optionSymbol", {"underlying": "NIFTY", "optionType": "CE"}, True),
+        ("optionChain", {"underlying": "NIFTY", "expiryDate": "27AUG26"}, False),
+        ("optionChain", {"underlying": "NIFTY27AUG26"}, False),
+        ("optionChain", {"underlying": "NIFTY"}, True),
+        ("syntheticFuture", {"underlying": "NIFTY", "expiryDate": "27AUG26"}, False),
+        ("syntheticFuture", {"underlying": "NIFTY"}, True),
+        ("optionChain", {"underlying": "{{previous.underlying}}"}, False),
+    ],
+)
+def test_expiry_requirement_follows_node_and_underlying(node_type, data, requires_expiry):
+    """Only parsable embedded expiries can replace an explicit expiry field."""
+    assert parse_underlying_symbol("NIFTY27AUG26")[1] == "27AUG26"
+    errors = validate_workflow(_single_action_workflow(node_type, data))
+    has_expiry_error = any(
+        error["code"] == "missing_required_field" and error["path"].endswith("/expiryDate")
+        for error in errors
+    )
+    assert has_expiry_error is requires_expiry
+
+
 def test_valid_workflow_passes():
     wf = _wf(
         [_node("n1", "start"), _node("n2", "log", message="hi")],
         [{"id": "e1", "source": "n1", "target": "n2"}],
     )
     assert validate_workflow(wf) == []
+
+
+@pytest.mark.parametrize("recipient", [None, ""])
+def test_whatsapp_alert_allows_self_send_without_recipient(recipient):
+    alert_data = {"message": "Workflow executed successfully"}
+    if recipient is not None:
+        alert_data["to"] = recipient
+
+    wf = _wf(
+        [_node("t", "start"), _node("wa", "whatsappAlert", **alert_data)],
+        [{"id": "e1", "source": "t", "target": "wa"}],
+    )
+
+    assert validate_workflow(wf) == []
+
+
+def test_whatsapp_alert_still_requires_a_message():
+    wf = _wf(
+        [_node("t", "start"), _node("wa", "whatsappAlert", to="")],
+        [{"id": "e1", "source": "t", "target": "wa"}],
+    )
+
+    errors = validate_workflow(wf)
+
+    assert any(error["path"] == "/nodes/1/data/message" for error in errors)
 
 
 @pytest.mark.parametrize(

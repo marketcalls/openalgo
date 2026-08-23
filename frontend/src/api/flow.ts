@@ -115,7 +115,11 @@ export async function updateWorkflow(
     nodes?: Node[]
     edges?: Edge[]
   }
-): Promise<Workflow> {
+): Promise<Workflow & { needs_reactivate?: boolean }> {
+  // needs_reactivate is set when the saved graph changed the trigger config of a
+  // workflow that is currently active: the scheduler and monitors registered the
+  // old configuration at activation time and will keep using it until the
+  // workflow is deactivated and reactivated.
   const response = await webClient.put(`${FLOW_API_BASE}/workflows/${id}`, data)
   return response.data
 }
@@ -311,6 +315,46 @@ export async function getIndexSymbolsLotSizes(): Promise<IndexSymbolInfo[]> {
   return response.data.data || []
 }
 
+export interface SymbolRef {
+  symbol: string
+  exchange: string
+}
+
+/** Keyed `EXCHANGE:SYMBOL` -> lot size, null where the contract has none. */
+export type LotSizeMap = Record<string, number | null>
+
+interface SymbolLotSizesResponse {
+  status: 'success'
+  lotSizes: LotSizeMap
+}
+
+/**
+ * Lot sizes for a bounded set of exact contracts, so derivative quantities can
+ * be entered in lots. Batched because a margin basket holds up to 50 legs and
+ * one request per leg is pure overhead.
+ *
+ * A pair resolves to null - not a rejection - when the master contract has no
+ * usable lot size, letting the caller fall back to units. A rejected promise
+ * means the lookup itself failed, which is a different state the caller must
+ * not present as "no lot size".
+ */
+export async function getSymbolLotSizes(symbols: SymbolRef[]): Promise<LotSizeMap> {
+  if (!symbols.length) return {}
+  const response = await webClient.post<SymbolLotSizesResponse>(
+    `${FLOW_API_BASE}/symbol-lotsizes`,
+    { symbols }
+  )
+  const raw = response.data?.lotSizes
+  if (!raw || typeof raw !== 'object') return {}
+  // Guard the values rather than trusting the payload: a non-positive or
+  // non-integer lot size would silently multiply a basket by a wrong factor.
+  const clean: LotSizeMap = {}
+  for (const [key, value] of Object.entries(raw)) {
+    clean[key] = Number.isInteger(value) && (value as number) > 0 ? (value as number) : null
+  }
+  return clean
+}
+
 // =============================================================================
 // React Query Keys
 // =============================================================================
@@ -322,4 +366,9 @@ export const flowQueryKeys = {
   executions: (id: number) => [...flowQueryKeys.workflow(id), 'executions'] as const,
   webhook: (id: number) => [...flowQueryKeys.workflow(id), 'webhook'] as const,
   indexSymbols: () => [...flowQueryKeys.all, 'index-symbols'] as const,
+  // Keyed on the sorted pair list, so reopening an unchanged basket reuses its
+  // entry. This key cannot give incremental reuse on its own - any change to
+  // the set is a different key, and would re-request the whole basket - so the
+  // caller keeps its own per-contract map and asks only for what is missing.
+  symbolLotSizes: (keys: string[]) => [...flowQueryKeys.all, 'symbol-lotsizes', keys] as const,
 }

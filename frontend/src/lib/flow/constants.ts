@@ -346,6 +346,369 @@ export const INDICATOR_CATALOG = [
   { value: 'stdev', label: 'STDEV', category: 'Utility' },
 ] as const
 
+// Scalar parameters each indicator accepts, so the Indicator node's config
+// panel can render real fields instead of asking for hand-written JSON. The
+// `name` keys are the exact kwargs services/indicator_service.compute_indicator
+// forwards to openalgo.ta, and the defaults are the ta signatures' own (with
+// indicator_service._REQUIRED_PARAM_DEFAULTS filling the few params that have
+// no signature default). Generated the same way as INDICATOR_CATALOG above -
+// re-derive it from the real signatures if the pinned `openalgo` SDK changes,
+// do not hand-edit.
+export type IndicatorParamType = 'int' | 'float' | 'bool' | 'string'
+
+export interface IndicatorParam {
+  name: string
+  label: string
+  type: IndicatorParamType
+  default: number | string | boolean
+  choices?: readonly string[]
+}
+
+export const INDICATOR_PARAMS: Record<string, readonly IndicatorParam[]> = {
+  accelerator_oscillator: [{ name: 'period', label: 'Period', type: 'int', default: 5 }],
+  adl: [],
+  adx: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  adxr: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  alligator: [
+    { name: 'jaw_period', label: 'Jaw Period', type: 'int', default: 13 },
+    { name: 'jaw_shift', label: 'Jaw Shift', type: 'int', default: 8 },
+    { name: 'teeth_period', label: 'Teeth Period', type: 'int', default: 8 },
+    { name: 'teeth_shift', label: 'Teeth Shift', type: 'int', default: 5 },
+    { name: 'lips_period', label: 'Lips Period', type: 'int', default: 5 },
+    { name: 'lips_shift', label: 'Lips Shift', type: 'int', default: 3 },
+  ],
+  alma: [
+    { name: 'period', label: 'Period', type: 'int', default: 21 },
+    { name: 'offset', label: 'Offset', type: 'float', default: 0.85 },
+    { name: 'sigma', label: 'Sigma', type: 'float', default: 6.0 },
+  ],
+  apo: [
+    { name: 'fast_period', label: 'Fast Period', type: 'int', default: 12 },
+    { name: 'slow_period', label: 'Slow Period', type: 'int', default: 26 },
+    { name: 'ma_type', label: 'MA Type', type: 'string', default: 'SMA', choices: ['SMA', 'EMA'] },
+  ],
+  aroon: [{ name: 'period', label: 'Period', type: 'int', default: 25 }],
+  aroon_oscillator: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  atr: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  avgprice: [],
+  awesome_oscillator: [
+    { name: 'fast_period', label: 'Fast Period', type: 'int', default: 5 },
+    { name: 'slow_period', label: 'Slow Period', type: 'int', default: 34 },
+  ],
+  bbands: [
+    { name: 'period', label: 'Period', type: 'int', default: 20 },
+    { name: 'std_dev', label: 'Std Dev', type: 'float', default: 2.0 },
+  ],
+  bbpercent: [
+    { name: 'period', label: 'Period', type: 'int', default: 20 },
+    { name: 'std_dev', label: 'Std Dev', type: 'float', default: 2.0 },
+  ],
+  bbwidth: [
+    { name: 'period', label: 'Period', type: 'int', default: 20 },
+    { name: 'std_dev', label: 'Std Dev', type: 'float', default: 2.0 },
+  ],
+  bop: [],
+  cci: [{ name: 'period', label: 'Period', type: 'int', default: 20 }],
+  chaikin: [
+    { name: 'ema_period', label: 'EMA Period', type: 'int', default: 10 },
+    { name: 'roc_period', label: 'ROC Period', type: 'int', default: 10 },
+  ],
+  chandelier_exit: [
+    { name: 'period', label: 'Period', type: 'int', default: 22 },
+    { name: 'multiplier', label: 'Multiplier', type: 'float', default: 3.0 },
+  ],
+  change: [{ name: 'length', label: 'Length', type: 'int', default: 1 }],
+  cho: [
+    { name: 'fast_period', label: 'Fast Period', type: 'int', default: 3 },
+    { name: 'slow_period', label: 'Slow Period', type: 'int', default: 10 },
+  ],
+  chop: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  ckstop: [
+    { name: 'p', label: 'ATR Length', type: 'int', default: 10 },
+    { name: 'x', label: 'ATR Coefficient', type: 'float', default: 1.0 },
+    { name: 'q', label: 'Stop Length', type: 'int', default: 9 },
+  ],
+  cmf: [{ name: 'period', label: 'Period', type: 'int', default: 20 }],
+  cmo: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  coppock: [
+    { name: 'wma_length', label: 'WMA Length', type: 'int', default: 10 },
+    { name: 'long_roc_length', label: 'Long ROC Length', type: 'int', default: 14 },
+    { name: 'short_roc_length', label: 'Short ROC Length', type: 'int', default: 11 },
+  ],
+  crsi: [
+    { name: 'lenrsi', label: 'RSI Length', type: 'int', default: 3 },
+    { name: 'lenupdown', label: 'Up/Down Length', type: 'int', default: 2 },
+    { name: 'lenroc', label: 'ROC Length', type: 'int', default: 100 },
+  ],
+  dema: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  dmi: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  donchian: [{ name: 'period', label: 'Period', type: 'int', default: 20 }],
+  dpo: [
+    { name: 'period', label: 'Period', type: 'int', default: 21 },
+    { name: 'is_centered', label: 'Is Centered', type: 'bool', default: false },
+  ],
+  dx: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  elderray: [{ name: 'period', label: 'Period', type: 'int', default: 13 }],
+  ema: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  emv: [
+    { name: 'length', label: 'Length', type: 'int', default: 14 },
+    { name: 'divisor', label: 'Divisor', type: 'int', default: 10000 },
+  ],
+  falling: [{ name: 'length', label: 'Length', type: 'int', default: 1 }],
+  fisher: [{ name: 'length', label: 'Length', type: 'int', default: 9 }],
+  force_index: [{ name: 'length', label: 'Length', type: 'int', default: 13 }],
+  fractals: [{ name: 'periods', label: 'Periods', type: 'int', default: 2 }],
+  frama: [{ name: 'period', label: 'Period', type: 'int', default: 26 }],
+  gator_oscillator: [
+    { name: 'jaw_period', label: 'Jaw Period', type: 'int', default: 13 },
+    { name: 'teeth_period', label: 'Teeth Period', type: 'int', default: 8 },
+    { name: 'lips_period', label: 'Lips Period', type: 'int', default: 5 },
+  ],
+  highest: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  hma: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  hv: [
+    { name: 'length', label: 'Length', type: 'int', default: 10 },
+    { name: 'annual', label: 'Annual Periods', type: 'int', default: 365 },
+    { name: 'per', label: 'Timeframe Periods', type: 'int', default: 1 },
+  ],
+  ichimoku: [
+    { name: 'conversion_periods', label: 'Conversion Periods', type: 'int', default: 9 },
+    { name: 'base_periods', label: 'Base Periods', type: 'int', default: 26 },
+    { name: 'lagging_span2_periods', label: 'Lagging Span B Periods', type: 'int', default: 52 },
+    { name: 'displacement', label: 'Displacement', type: 'int', default: 26 },
+  ],
+  kama: [
+    { name: 'length', label: 'Length', type: 'int', default: 14 },
+    { name: 'fast_length', label: 'Fast Length', type: 'int', default: 2 },
+    { name: 'slow_length', label: 'Slow Length', type: 'int', default: 30 },
+  ],
+  keltner: [
+    { name: 'ema_period', label: 'EMA Period', type: 'int', default: 20 },
+    { name: 'atr_period', label: 'ATR Period', type: 'int', default: 10 },
+    { name: 'multiplier', label: 'Multiplier', type: 'float', default: 2.0 },
+  ],
+  kst: [
+    { name: 'roclen1', label: 'ROC Length 1', type: 'int', default: 10 },
+    { name: 'roclen2', label: 'ROC Length 2', type: 'int', default: 15 },
+    { name: 'roclen3', label: 'ROC Length 3', type: 'int', default: 20 },
+    { name: 'roclen4', label: 'ROC Length 4', type: 'int', default: 30 },
+    { name: 'smalen1', label: 'SMA Length 1', type: 'int', default: 10 },
+    { name: 'smalen2', label: 'SMA Length 2', type: 'int', default: 10 },
+    { name: 'smalen3', label: 'SMA Length 3', type: 'int', default: 10 },
+    { name: 'smalen4', label: 'SMA Length 4', type: 'int', default: 15 },
+    { name: 'siglen', label: 'Signal Length', type: 'int', default: 9 },
+  ],
+  kvo: [
+    { name: 'trig_len', label: 'Trigger Length', type: 'int', default: 13 },
+    { name: 'fast_x', label: 'Fast X', type: 'int', default: 34 },
+    { name: 'slow_x', label: 'Slow X', type: 'int', default: 55 },
+  ],
+  linreg: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  linregangle: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  linregintercept: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  lowest: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  lrslope: [
+    { name: 'period', label: 'Period', type: 'int', default: 100 },
+    { name: 'interval', label: 'Interval', type: 'int', default: 1 },
+  ],
+  ma_envelopes: [
+    { name: 'period', label: 'Period', type: 'int', default: 20 },
+    { name: 'percentage', label: 'Percentage', type: 'float', default: 2.5 },
+    { name: 'ma_type', label: 'MA Type', type: 'string', default: 'SMA', choices: ['SMA', 'EMA'] },
+  ],
+  macd: [
+    { name: 'fast_period', label: 'Fast Period', type: 'int', default: 12 },
+    { name: 'slow_period', label: 'Slow Period', type: 'int', default: 26 },
+    { name: 'signal_period', label: 'Signal Period', type: 'int', default: 9 },
+  ],
+  massindex: [{ name: 'length', label: 'Length', type: 'int', default: 10 }],
+  mcginley: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  median: [{ name: 'period', label: 'Period', type: 'int', default: 3 }],
+  medprice: [],
+  mfi: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  midpoint: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  midprice: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  minus_dm: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  mode: [
+    { name: 'period', label: 'Period', type: 'int', default: 20 },
+    { name: 'bins', label: 'Bins', type: 'int', default: 10 },
+  ],
+  mom: [{ name: 'period', label: 'Period', type: 'int', default: 10 }],
+  natr: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  nvi: [],
+  nvi_with_ema: [{ name: 'ema_length', label: 'EMA Length', type: 'int', default: 255 }],
+  obv: [],
+  obv_smoothed: [
+    {
+      name: 'ma_type',
+      label: 'MA Type',
+      type: 'string',
+      default: 'None',
+      choices: ['None', 'SMA', 'SMA + Bollinger Bands', 'EMA', 'SMMA (RMA)', 'WMA', 'VWMA'],
+    },
+    { name: 'ma_length', label: 'MA Length', type: 'int', default: 20 },
+    { name: 'bb_length', label: 'BB Length', type: 'int', default: 20 },
+    { name: 'bb_mult', label: 'BB Mult', type: 'float', default: 2.0 },
+  ],
+  pivot_points: [],
+  plus_dm: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  po: [
+    { name: 'fast_period', label: 'Fast Period', type: 'int', default: 10 },
+    { name: 'slow_period', label: 'Slow Period', type: 'int', default: 20 },
+    { name: 'ma_type', label: 'MA Type', type: 'string', default: 'SMA', choices: ['SMA', 'EMA'] },
+  ],
+  ppo: [
+    { name: 'fast_period', label: 'Fast Period', type: 'int', default: 12 },
+    { name: 'slow_period', label: 'Slow Period', type: 'int', default: 26 },
+    { name: 'signal_period', label: 'Signal Period', type: 'int', default: 9 },
+  ],
+  psar: [
+    { name: 'acceleration', label: 'Acceleration', type: 'float', default: 0.02 },
+    { name: 'maximum', label: 'Maximum', type: 'float', default: 0.2 },
+  ],
+  pvi: [{ name: 'initial_value', label: 'Initial Value', type: 'float', default: 100.0 }],
+  pvi_with_signal: [
+    { name: 'initial_value', label: 'Initial Value', type: 'float', default: 100.0 },
+    {
+      name: 'signal_type',
+      label: 'Signal Type',
+      type: 'string',
+      default: 'EMA',
+      choices: ['EMA', 'SMA'],
+    },
+    { name: 'signal_length', label: 'Signal Length', type: 'int', default: 255 },
+  ],
+  pvt: [],
+  rising: [{ name: 'length', label: 'Length', type: 'int', default: 1 }],
+  roc: [{ name: 'length', label: 'Length', type: 'int', default: 14 }],
+  rocp: [{ name: 'period', label: 'Period', type: 'int', default: 10 }],
+  rocr: [{ name: 'period', label: 'Period', type: 'int', default: 10 }],
+  rocr100: [{ name: 'period', label: 'Period', type: 'int', default: 10 }],
+  rsi: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  rvi: [{ name: 'period', label: 'Period', type: 'int', default: 10 }],
+  rvol: [{ name: 'period', label: 'Period', type: 'int', default: 20 }],
+  rwi: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  sma: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  starc: [
+    { name: 'ma_period', label: 'MA Period', type: 'int', default: 5 },
+    { name: 'atr_period', label: 'ATR Period', type: 'int', default: 15 },
+    { name: 'multiplier', label: 'Multiplier', type: 'float', default: 1.33 },
+  ],
+  stc: [
+    { name: 'fast_length', label: 'Fast Length', type: 'int', default: 23 },
+    { name: 'slow_length', label: 'Slow Length', type: 'int', default: 50 },
+    { name: 'cycle_length', label: 'Cycle Length', type: 'int', default: 10 },
+    { name: 'd1_length', label: 'D1 Length', type: 'int', default: 3 },
+    { name: 'd2_length', label: 'D2 Length', type: 'int', default: 3 },
+  ],
+  stdev: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  stochastic: [
+    { name: 'k_period', label: 'K Period', type: 'int', default: 14 },
+    { name: 'smooth_k', label: 'Smooth K', type: 'int', default: 3 },
+    { name: 'd_period', label: 'D Period', type: 'int', default: 3 },
+  ],
+  stochf: [
+    { name: 'fastk_period', label: 'Fast K Period', type: 'int', default: 5 },
+    { name: 'fastd_period', label: 'Fast D Period', type: 'int', default: 3 },
+  ],
+  stochrsi: [
+    { name: 'rsi_period', label: 'RSI Period', type: 'int', default: 14 },
+    { name: 'stoch_period', label: 'Stoch Period', type: 'int', default: 14 },
+    { name: 'k_period', label: 'K Period', type: 'int', default: 3 },
+    { name: 'd_period', label: 'D Period', type: 'int', default: 3 },
+  ],
+  supertrend: [
+    { name: 'period', label: 'Period', type: 'int', default: 10 },
+    { name: 'multiplier', label: 'Multiplier', type: 'float', default: 3.0 },
+  ],
+  t3: [
+    { name: 'period', label: 'Period', type: 'int', default: 21 },
+    { name: 'v_factor', label: 'Volume Factor', type: 'float', default: 0.7 },
+  ],
+  tema: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  trima: [{ name: 'period', label: 'Period', type: 'int', default: 20 }],
+  trix: [{ name: 'length', label: 'Length', type: 'int', default: 18 }],
+  true_range: [],
+  tsf: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  tsi: [
+    { name: 'long_period', label: 'Long Period', type: 'int', default: 25 },
+    { name: 'short_period', label: 'Short Period', type: 'int', default: 13 },
+    { name: 'signal_period', label: 'Signal Period', type: 'int', default: 13 },
+  ],
+  typprice: [],
+  ultimate_oscillator: [
+    { name: 'period1', label: 'Period 1', type: 'int', default: 7 },
+    { name: 'period2', label: 'Period 2', type: 'int', default: 14 },
+    { name: 'period3', label: 'Period 3', type: 'int', default: 28 },
+  ],
+  uo_oscillator: [
+    { name: 'period1', label: 'Period 1', type: 'int', default: 7 },
+    { name: 'period2', label: 'Period 2', type: 'int', default: 14 },
+    { name: 'period3', label: 'Period 3', type: 'int', default: 28 },
+  ],
+  variance: [
+    { name: 'lookback', label: 'Lookback', type: 'int', default: 20 },
+    { name: 'mode', label: 'Mode', type: 'string', default: 'PR', choices: ['PR', 'LR'] },
+    { name: 'ema_period', label: 'EMA Period', type: 'int', default: 20 },
+    { name: 'filter_lookback', label: 'Filter Lookback', type: 'int', default: 20 },
+    { name: 'ema_length', label: 'EMA Length', type: 'int', default: 14 },
+    { name: 'return_components', label: 'Return Components', type: 'bool', default: false },
+  ],
+  vidya: [
+    { name: 'period', label: 'Period', type: 'int', default: 14 },
+    { name: 'alpha', label: 'Alpha', type: 'float', default: 0.2 },
+  ],
+  volosc: [
+    { name: 'short_length', label: 'Short Length', type: 'int', default: 5 },
+    { name: 'long_length', label: 'Long Length', type: 'int', default: 10 },
+    { name: 'check_volume_validity', label: 'Check Volume Validity', type: 'bool', default: true },
+  ],
+  vroc: [{ name: 'period', label: 'Period', type: 'int', default: 25 }],
+  vwap: [
+    {
+      name: 'anchor',
+      label: 'Anchor',
+      type: 'string',
+      default: 'Session',
+      choices: [
+        'Session',
+        'Week',
+        'Month',
+        'Quarter',
+        'Year',
+        '12M',
+        '6M',
+        '3M',
+        'D',
+        '4H',
+        '1H',
+        '30m',
+        '15m',
+        '5m',
+        '1m',
+      ],
+    },
+    {
+      name: 'source',
+      label: 'Source',
+      type: 'string',
+      default: 'hlc3',
+      choices: ['hlc3', 'hl2', 'ohlc4', 'close'],
+    },
+    { name: 'stdev_mult_1', label: 'Stdev Mult 1', type: 'float', default: 1.0 },
+    { name: 'stdev_mult_2', label: 'Stdev Mult 2', type: 'float', default: 2.0 },
+    { name: 'stdev_mult_3', label: 'Stdev Mult 3', type: 'float', default: 3.0 },
+    { name: 'percent_mult_1', label: 'Percent Mult 1', type: 'float', default: 0.236 },
+    { name: 'percent_mult_2', label: 'Percent Mult 2', type: 'float', default: 0.382 },
+    { name: 'percent_mult_3', label: 'Percent Mult 3', type: 'float', default: 0.618 },
+  ],
+  vwma: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  wclprice: [],
+  williams_r: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  wma: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+  zlema: [{ name: 'period', label: 'Period', type: 'int', default: 14 }],
+}
+
 // =============================================================================
 // NODE CATEGORIES & DEFINITIONS
 // =============================================================================
@@ -798,6 +1161,8 @@ export const DEFAULT_NODE_DATA = {
     positionSize: 0,
     priceType: 'MARKET' as const,
     product: 'MIS' as const,
+    price: 0,
+    triggerPrice: 0,
   },
   getOrderStatus: {
     orderId: '',
@@ -861,15 +1226,20 @@ export const DEFAULT_NODE_DATA = {
     product: 'MIS' as const,
   },
   modifyOrder: {
+    // Only the order id. symbol/exchange/action/product/priceType are read back
+    // from the live order by the executor, and anything present here is treated
+    // as a deliberate override -- so shipping exchange 'NSE' and action 'BUY' as
+    // defaults sent them to the broker on every modify, converting a live NFO
+    // SELL order into an NSE BUY. The backend lookup alone could not prevent
+    // this, because it cannot tell a default apart from an intended value.
     orderId: '',
-    symbol: '',
-    exchange: 'NSE',
-    action: 'BUY' as const,
   },
   basketOrder: {
     orders: '',
     product: 'MIS' as const,
     priceType: 'MARKET' as const,
+    price: 0,
+    triggerPrice: 0,
   },
   splitOrder: {
     symbol: '',
@@ -879,6 +1249,8 @@ export const DEFAULT_NODE_DATA = {
     splitSize: 50,
     priceType: 'MARKET' as const,
     product: 'MIS' as const,
+    price: 0,
+    triggerPrice: 0,
   },
   positionCheck: {
     symbol: '',
@@ -949,7 +1321,10 @@ export const DEFAULT_NODE_DATA = {
     offsetBars: 0,
     sourceSeries: '',
     sourceField: '',
-    outputVariable: '',
+    // The panel only shows this as a grey placeholder, so a node saved
+    // without typing here stored nothing and {{ind.latest.value}} never
+    // resolved -- the run failed with no indication which field was blank.
+    outputVariable: 'ind',
   },
   strategyPnl: {
     strategy: '',
@@ -976,20 +1351,40 @@ export const DEFAULT_NODE_DATA = {
     product: 'MIS' as const,
     outputVariable: '',
   },
+  // The config panel renders this name as its input's fallback value, so the
+  // box looks filled while the saved node keeps an empty string and
+  // store_output writes nothing. Every downstream {{...}} reference then
+  // resolves to its own literal text. Persist what the user is shown.
   orderBook: {
-    outputVariable: '',
+    outputVariable: 'orders',
   },
+  // The config panel renders this name as its input's fallback value, so the
+  // box looks filled while the saved node keeps an empty string and
+  // store_output writes nothing. Every downstream {{...}} reference then
+  // resolves to its own literal text. Persist what the user is shown.
   tradeBook: {
-    outputVariable: '',
+    outputVariable: 'trades',
   },
+  // The config panel renders this name as its input's fallback value, so the
+  // box looks filled while the saved node keeps an empty string and
+  // store_output writes nothing. Every downstream {{...}} reference then
+  // resolves to its own literal text. Persist what the user is shown.
   positionBook: {
-    outputVariable: '',
+    outputVariable: 'positions',
   },
+  // The config panel renders this name as its input's fallback value, so the
+  // box looks filled while the saved node keeps an empty string and
+  // store_output writes nothing. Every downstream {{...}} reference then
+  // resolves to its own literal text. Persist what the user is shown.
   holdings: {
-    outputVariable: '',
+    outputVariable: 'holdings',
   },
+  // The config panel renders this name as its input's fallback value, so the
+  // box looks filled while the saved node keeps an empty string and
+  // store_output writes nothing. Every downstream {{...}} reference then
+  // resolves to its own literal text. Persist what the user is shown.
   funds: {
-    outputVariable: '',
+    outputVariable: 'funds',
   },
   telegramAlert: {
     message: 'Workflow executed successfully',
@@ -1017,10 +1412,13 @@ export const DEFAULT_NODE_DATA = {
   httpRequest: {
     method: 'GET' as const,
     url: '',
-    headers: {},
+    // A JSON string, matching the panel's textarea and the executor's
+    // parser. The `{}` default rendered as the literal [object Object].
+    headers: '',
     body: '',
-    timeout: 30,
-    outputVariable: '',
+    // Milliseconds, as the panel's own label and bounds already said.
+    timeout: 30000,
+    outputVariable: 'response',
   },
   symbol: {
     symbol: '',
@@ -1048,7 +1446,9 @@ export const DEFAULT_NODE_DATA = {
   multiQuotes: {
     symbols: '',
     exchange: 'NSE',
-    outputVariable: '',
+    // See the note on orderBook: a displayed fallback that is not persisted
+    // leaves the variable undefined at run time.
+    outputVariable: 'quotes',
   },
   optionChain: {
     underlying: 'NIFTY',
@@ -1066,12 +1466,12 @@ export const DEFAULT_NODE_DATA = {
   holidays: {
     // The calendar service takes a year, not an exchange. Blank = current year.
     year: undefined as number | undefined,
-    outputVariable: '',
+    outputVariable: 'holidays',
   },
   timings: {
     // The calendar service takes a date (YYYY-MM-DD). Blank = today.
     date: '',
-    outputVariable: '',
+    outputVariable: 'timings',
   },
   calendar: {
     // Blank = the current trading session date.
@@ -1090,7 +1490,7 @@ export const DEFAULT_NODE_DATA = {
     product: 'MIS' as const,
     action: 'BUY' as const,
     priceType: 'MARKET' as const,
-    outputVariable: '',
+    outputVariable: 'marginResult',
   },
   group: {},
 } as const

@@ -171,6 +171,15 @@ sudo nano /etc/nginx/sites-available/openalgo
 ```
 
 ```nginx
+# Send "Connection: upgrade" upstream only for a real WebSocket handshake.
+# Hardcoding "upgrade" makes every ordinary request reach gunicorn claiming an
+# upgrade with an empty Upgrade:, which breaks HTTP/1.1 keep-alive and causes
+# intermittent truncated responses and 5xx. See GitHub issue #1807.
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
 server {
     listen 80;
     server_name your-domain.com;
@@ -201,9 +210,10 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
 
-        # WebSocket support for Socket.IO
+        # WebSocket support for Socket.IO. Socket.IO also long-polls over plain
+        # HTTP, so this must not force the upgrade header - see the map above.
         proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
+        proxy_set_header Connection $connection_upgrade;
         proxy_read_timeout 86400;
     }
 
@@ -212,7 +222,7 @@ server {
         proxy_pass http://127.0.0.1:8765;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
+        proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host $host;
         proxy_read_timeout 86400;
     }

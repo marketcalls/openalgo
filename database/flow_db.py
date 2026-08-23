@@ -3,6 +3,7 @@
 import logging
 import os
 import secrets
+from datetime import UTC, datetime, timedelta
 
 from cachetools import TTLCache
 from sqlalchemy import (
@@ -148,9 +149,17 @@ def _migrate_add_api_key_column():
                 conn.execute(text("ALTER TABLE flow_workflows ADD COLUMN api_key VARCHAR(255)"))
                 conn.commit()
                 logger.info("Migration: Added 'api_key' column to flow_workflows table")
-    except Exception as e:
-        # Log but don't fail - column might already exist or other DB issue
-        logger.debug(f"Migration check for api_key column: {e}")
+    except Exception:
+        # Do not fail startup, but do not hide it either. Without api_key every
+        # workflow activation fails to persist, and at debug level that was
+        # invisible while `migrate_flow.py --status` reported all changes
+        # applied. The registered migration adds the column properly; this hook
+        # only covers an installation that has not run it yet.
+        logger.exception(
+            "Could not add the flow_workflows.api_key column. Run "
+            "'cd upgrade && uv run migrate_all.py' -- until then, activating a "
+            "workflow will not persist its API key."
+        )
 
 
 # --- Workflow CRUD Operations ---
@@ -186,16 +195,28 @@ def get_workflow(workflow_id):
 
 
 def get_workflow_by_webhook_token(webhook_token):
-    """Get workflow by webhook token (cached for 5 minutes)"""
-    # Check cache first
-    if webhook_token in _workflow_webhook_cache:
-        return _workflow_webhook_cache[webhook_token]
+    """Get workflow by webhook token (token-to-id lookup cached for 5 minutes).
+
+    Only the id is cached, never the ORM instance. Caching the instance handed
+    the same object to every later request: the commit inside a workflow run
+    expired it and the scoped session was removed at teardown, so the next
+    webhook within the TTL raised DetachedInstanceError on the first attribute
+    read -- outside any try -- and dropped every alert for five minutes. A
+    cached id is also immune to a stale attribute snapshot, which is what let a
+    rotated-out webhook secret keep authenticating.
+    """
+    cached_id = _workflow_webhook_cache.get(webhook_token)
+    if cached_id is not None:
+        workflow = get_workflow(cached_id)
+        if workflow is not None and workflow.webhook_token == webhook_token:
+            return workflow
+        # The token moved or the workflow is gone; fall through to a real lookup.
+        _workflow_webhook_cache.pop(webhook_token, None)
 
     try:
         workflow = FlowWorkflow.query.filter_by(webhook_token=webhook_token).first()
-        # Cache the result (including None for not found)
         if workflow:
-            _workflow_webhook_cache[webhook_token] = workflow
+            _workflow_webhook_cache[webhook_token] = workflow.id
         return workflow
     except Exception as e:
         logger.exception(f"Error getting workflow by webhook token: {str(e)}")
@@ -334,6 +355,13 @@ def regenerate_webhook_secret(workflow_id):
         workflow.webhook_secret = generate_webhook_secret()
         db_session.commit()
 
+        # Rotation must revoke the old secret immediately. Every other mutator
+        # evicts this cache; this one did not, so for the whole 5-minute TTL the
+        # leaked secret kept authenticating and the new one was rejected 401 --
+        # the revocation did nothing at exactly the moment it mattered.
+        _workflow_cache.clear()
+        _workflow_webhook_cache.pop(workflow.webhook_token, None)
+
         logger.info(f"Regenerated webhook secret for workflow {workflow_id}")
         return workflow.webhook_secret
     except Exception as e:
@@ -410,13 +438,25 @@ def set_schedule_job_id(workflow_id, job_id):
 
 
 def create_execution(workflow_id, status="pending"):
-    """Create a new workflow execution"""
+    """Create a new workflow execution.
+
+    `started_at` is stamped here. It used to be set only by
+    update_execution_status("running"), and nothing ever passed that status --
+    the executor creates the row already running -- so every execution ever
+    recorded had a NULL start time. The history query ordered on that column,
+    and with every value NULL the sort collapsed to insertion order ascending,
+    so the Executions panel listed the *oldest* runs and the dashboard's "last
+    run" showed the first run the workflow ever had.
+    """
     try:
-        execution = FlowWorkflowExecution(workflow_id=workflow_id, status=status, logs=[])
+        execution = FlowWorkflowExecution(
+            workflow_id=workflow_id, status=status, logs=[], started_at=func.now()
+        )
         db_session.add(execution)
         db_session.commit()
 
         logger.info(f"Created execution for workflow {workflow_id} (id={execution.id})")
+        prune_workflow_executions(workflow_id)
         return execution
     except Exception as e:
         logger.exception(f"Error creating execution for workflow {workflow_id}: {str(e)}")
@@ -433,12 +473,99 @@ def get_execution(execution_id):
         return None
 
 
+# Defence in depth for the route's own clamp: a negative limit reaches SQLite as
+# "no limit", which would load every execution row and its log blob into memory.
+EXECUTIONS_QUERY_MAX = 200
+
+# How much execution history to keep per workflow. Each row carries the full
+# node trace as JSON, and a workflow on a one-minute schedule writes roughly 375
+# rows a day, so without pruning the table grows without bound. Either limit can
+# be disabled by setting it to 0.
+EXECUTION_RETENTION_COUNT = int(os.getenv("FLOW_EXECUTION_RETENTION_COUNT", "500"))
+EXECUTION_RETENTION_DAYS = int(os.getenv("FLOW_EXECUTION_RETENTION_DAYS", "30"))
+
+
+def prune_workflow_executions(workflow_id, max_count=None, max_age_days=None):
+    """Delete execution history for one workflow beyond the retention limits.
+
+    Runs after a new execution is recorded, so the table is trimmed by the same
+    activity that grows it. Both passes are indexed: age uses
+    idx_flow_executions_started_at, count uses the primary key.
+
+    The deletes synchronize the session rather than running detached: SQLite
+    reuses a rowid once the highest one is removed, and a stale instance left in
+    the identity map then collides with the next insert that takes that id.
+
+    Returns the number of rows deleted.
+    """
+    max_count = EXECUTION_RETENTION_COUNT if max_count is None else max_count
+    max_age_days = EXECUTION_RETENTION_DAYS if max_age_days is None else max_age_days
+
+    deleted = 0
+    try:
+        if max_age_days and max_age_days > 0:
+            cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
+            deleted += (
+                FlowWorkflowExecution.query.filter(
+                    FlowWorkflowExecution.workflow_id == workflow_id,
+                    FlowWorkflowExecution.started_at.isnot(None),
+                    FlowWorkflowExecution.started_at < cutoff,
+                ).delete(synchronize_session="fetch")
+                or 0
+            )
+
+        if max_count and max_count > 0:
+            # Keep the newest max_count by id. Ordering by id rather than
+            # started_at matters for rows written before that column was
+            # stamped: their timestamp is null and would sort unpredictably.
+            keep = [
+                row.id
+                for row in FlowWorkflowExecution.query.with_entities(
+                    FlowWorkflowExecution.id
+                )
+                .filter(FlowWorkflowExecution.workflow_id == workflow_id)
+                .order_by(FlowWorkflowExecution.id.desc())
+                .limit(max_count)
+                .all()
+            ]
+            if len(keep) >= max_count:
+                deleted += (
+                    FlowWorkflowExecution.query.filter(
+                        FlowWorkflowExecution.workflow_id == workflow_id,
+                        FlowWorkflowExecution.id < min(keep),
+                    ).delete(synchronize_session="fetch")
+                    or 0
+                )
+
+        if deleted:
+            db_session.commit()
+            logger.info(
+                f"Pruned {deleted} execution(s) for workflow {workflow_id} "
+                f"(keep newest {max_count}, max age {max_age_days}d)"
+            )
+        return deleted
+    except Exception:
+        # Retention is housekeeping: a failure here must not fail the run that
+        # triggered it.
+        logger.exception(f"Could not prune execution history for workflow {workflow_id}")
+        db_session.rollback()
+        return 0
+
+
 def get_workflow_executions(workflow_id, limit=50):
     """Get executions for a workflow"""
     try:
+        limit = min(max(int(limit or 50), 1), EXECUTIONS_QUERY_MAX)
+    except (TypeError, ValueError):
+        limit = 50
+    try:
         return (
             FlowWorkflowExecution.query.filter_by(workflow_id=workflow_id)
-            .order_by(FlowWorkflowExecution.started_at.desc())
+            # By id, not started_at. The id is monotonic and never null, while
+            # rows written before started_at was stamped have none -- and the
+            # two engines disagree on where nulls sort under DESC, so ordering
+            # on the timestamp would list legacy rows first on one of them.
+            .order_by(FlowWorkflowExecution.id.desc())
             .limit(limit)
             .all()
         )
