@@ -1,6 +1,6 @@
 import importlib
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import pandas as pd
 
@@ -250,6 +250,13 @@ def get_history(
         - Response data (dict)
         - HTTP status code (int)
     """
+    if not isinstance(source, str) or source not in {"api", "db"}:
+        return (
+            False,
+            {"status": "error", "message": "Source must be either 'api' or 'db'."},
+            400,
+        )
+
     # Source: 'db' - Fetch from DuckDB/Historify database
     if source == "db":
         return get_history_from_db(
