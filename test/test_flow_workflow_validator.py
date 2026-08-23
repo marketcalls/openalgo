@@ -229,6 +229,19 @@ def _walk_json(value):
             yield from _walk_json(child)
 
 
+def _prompt_json_nodes(prompt):
+    """Yield every node embedded in every value from every decoded JSON fence."""
+    for fence_index, start_line, raw in _json_fences(prompt):
+        for value_index, value in enumerate(_decode_json_sequence(raw), 1):
+            for candidate in _walk_json(value):
+                if (
+                    isinstance(candidate, dict)
+                    and isinstance(candidate.get("type"), str)
+                    and isinstance(candidate.get("data"), dict)
+                ):
+                    yield fence_index, start_line, value_index, candidate
+
+
 def test_prompt_prose_documents_every_repaired_flow_contract():
     """The human-facing contract must retain every correction behind the examples."""
     prompt = FLOW_IMPORT_PROMPT.read_text(encoding="utf-8")
@@ -358,6 +371,40 @@ def test_prompt_prose_documents_every_repaired_flow_contract():
         "distinguish generated MARKET/LIMIT from custom four-type legs",
     )
 
+    documented_nodes = list(_prompt_json_nodes(prompt))
+    telegram_username_examples = [
+        (fence_index, start_line, value_index, node.get("id"))
+        for fence_index, start_line, value_index, node in documented_nodes
+        if node["type"] == "telegramAlert" and "username" in node["data"]
+    ]
+    require(
+        "telegram_json_username",
+        not telegram_username_examples,
+        "telegramAlert data.username found at "
+        f"(fence, start line, value, node): {telegram_username_examples}",
+    )
+
+    options_leg_expiry_examples = []
+    for fence_index, start_line, value_index, node in documented_nodes:
+        if node["type"] != "optionsMultiOrder":
+            continue
+        for leg_field in ("legs", "orderLegs"):
+            if leg_field not in node["data"]:
+                continue
+            if any(
+                isinstance(candidate, dict) and "expiryDate" in candidate
+                for candidate in _walk_json(node["data"][leg_field])
+            ):
+                options_leg_expiry_examples.append(
+                    (fence_index, start_line, value_index, node.get("id"), leg_field)
+                )
+    require(
+        "options_multi_json_leg_expiry",
+        not options_leg_expiry_examples,
+        "optionsMultiOrder leg expiryDate found at "
+        f"(fence, start line, value, node, field): {options_leg_expiry_examples}",
+    )
+
     pnl_example = _markdown_section(prompt, "### 8.5 P&L stop-loss")
     require(
         "computed_pnl_condition",
@@ -366,21 +413,17 @@ def test_prompt_prose_documents_every_repaired_flow_contract():
         "computed P&L must be compared with varCondition",
     )
 
-    prohibited_index_orders = []
-    for fence_index, line, raw in _json_fences(prompt):
-        for value in _decode_json_sequence(raw):
-            for candidate in _walk_json(value):
-                if (
-                    isinstance(candidate, dict)
-                    and candidate.get("type") == "placeOrder"
-                    and candidate.get("data", {}).get("exchange")
-                    in {"NSE_INDEX", "BSE_INDEX"}
-                ):
-                    prohibited_index_orders.append((fence_index, line, candidate.get("id")))
+    prohibited_index_orders = [
+        (fence_index, start_line, value_index, node.get("id"))
+        for fence_index, start_line, value_index, node in documented_nodes
+        if node["type"] == "placeOrder"
+        and node["data"].get("exchange") in {"NSE_INDEX", "BSE_INDEX"}
+    ]
     require(
         "place_order_index_exchange",
         not prohibited_index_orders,
-        f"placeOrder examples use index exchanges: {prohibited_index_orders}",
+        "placeOrder examples use index exchanges at "
+        f"(fence, start line, value, node): {prohibited_index_orders}",
     )
 
     assert not failures, "prompt prose contract failures:\n" + "\n".join(failures)
