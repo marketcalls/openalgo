@@ -92,6 +92,31 @@ def test_valid_workflow_passes():
     assert validate_workflow(wf) == []
 
 
+@pytest.mark.parametrize("recipient", [None, ""])
+def test_whatsapp_alert_allows_self_send_without_recipient(recipient):
+    alert_data = {"message": "Workflow executed successfully"}
+    if recipient is not None:
+        alert_data["to"] = recipient
+
+    wf = _wf(
+        [_node("t", "start"), _node("wa", "whatsappAlert", **alert_data)],
+        [{"id": "e1", "source": "t", "target": "wa"}],
+    )
+
+    assert validate_workflow(wf) == []
+
+
+def test_whatsapp_alert_still_requires_a_message():
+    wf = _wf(
+        [_node("t", "start"), _node("wa", "whatsappAlert", to="")],
+        [{"id": "e1", "source": "t", "target": "wa"}],
+    )
+
+    errors = validate_workflow(wf)
+
+    assert any(error["path"] == "/nodes/1/data/message" for error in errors)
+
+
 @pytest.mark.parametrize(
     "payload,code",
     [
