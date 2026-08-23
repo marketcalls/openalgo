@@ -679,20 +679,6 @@ export function ChartPane({
             className={cn('inline-block h-2.5 w-2.5 rounded-full', ledClass(wsState))}
             title={`WebSocket ${wsState}`}
           />
-          {/* Chart settings. The engine ships no DOM, so the whole dialog is
-              generated from the schema it describes -- see ChartSettingsDialog. */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => {
-              void terminalRef.current?.chartSettings().then((s) => s && setChartSettings(s))
-            }}
-            title="Chart settings"
-            aria-label="Chart settings"
-          >
-            <Settings className="h-[17px] w-[17px]" />
-          </Button>
           {/* Full screen chart (additive) */}
           <Button
             variant="ghost"
@@ -881,6 +867,21 @@ export function ChartPane({
             >
               <RefreshCw className="h-3.5 w-3.5 opacity-70" />
               Reset chart view
+            </button>
+            {/* Settings sits on the chart it configures rather than in the
+                toolbar: right-click is where a terminal user reaches for it, and
+                the toolbar row is already the most contended space on the page. */}
+            <button
+              type="button"
+              className={ctxRow}
+              onClick={() =>
+                run(() => {
+                  void terminalRef.current?.chartSettings().then((cs) => cs && setChartSettings(cs))
+                })
+              }
+            >
+              <Settings className="h-3.5 w-3.5 opacity-70" />
+              Chart settings...
             </button>
             {onToggleRail && (
               <button type="button" className={ctxRow} onClick={() => run(onToggleRail)}>
