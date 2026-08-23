@@ -21,6 +21,7 @@ import type {
 } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
 import { SettingsField } from './IndicatorSettingsDialog'
+import { TickBox } from './TickBox'
 
 type Value = string | number | boolean
 
@@ -53,6 +54,33 @@ export function ChartSettingsDialog({ req, onApply, onClose }: Props) {
   const tab = useMemo(
     () => req?.tabs.find((t) => t.id === tabId) ?? req?.tabs[0] ?? null,
     [req, tabId]
+  )
+
+  /**
+   * What reset restores: this terminal's own baseline, handed over by the host.
+   *
+   * Deliberately NOT assembled from the schema's per-control defaults, even
+   * though every engine input publishes one. Those are the ENGINE's defaults,
+   * and this host does not build a bare engine chart: it turns the corner
+   * session clock and the bar countdown on at construction, and the grid is
+   * owned by the context menu under a separate key. Resetting to the schema
+   * would switch off chrome nobody touched and pick a fight over the grid.
+   * See `snapshotChartDefaults` for where the baseline is taken.
+   *
+   * Colours in it are the chart's ACTIVE THEME's, not a fixed palette, so
+   * resetting in dark mode restores the dark candles rather than the light ones.
+   */
+  const defaults = useMemo(() => req?.defaults ?? {}, [req])
+
+  /**
+   * Whether anything, on any tab, currently deviates. Drives the reset
+   * control's disabled state, which is the honest answer to "is this chart
+   * already at defaults" and cheaper to read than hunting five tabs for a
+   * changed swatch.
+   */
+  const deviates = useMemo(
+    () => Object.entries(defaults).some(([k, v]) => values[k] !== undefined && values[k] !== v),
+    [defaults, values]
   )
 
   if (!req || !tab) return null
@@ -161,24 +189,44 @@ export function ChartSettingsDialog({ req, onApply, onClose }: Props) {
           )}
         </div>
 
-        {/* Footer. No Defaults action: the engine exposes per-control defaults
-            in the schema but no "reset the chart" call, and a button that
-            silently reset only the visible tab would be a lie. */}
-        <div className="flex shrink-0 items-center justify-end gap-2 border-t px-4 py-2.5">
+        {/* Footer: secondary action bottom left, confirming action last.
+
+            Reset covers EVERY tab, not the visible one. The engine has no
+            "reset the chart" call, so this is assembled from the per-control
+            defaults the schema already declares, and a reset that silently
+            stopped at the tab you happened to be looking at would be the kind
+            of half-truth worth not shipping. It is deferred like every other
+            edit here: it fills the form, and Cancel still walks away from it. */}
+        <div className="flex shrink-0 items-center justify-between gap-2 border-t px-4 py-2.5">
           <button
             type="button"
-            onClick={onClose}
-            className="rounded border border-foreground/25 px-3.5 py-1 text-[13px] transition-colors hover:border-foreground/50 hover:bg-accent"
+            disabled={!deviates}
+            onClick={() => setValues((prev) => ({ ...prev, ...defaults }))}
+            title={
+              deviates
+                ? 'Restore every control on every tab to its default'
+                : 'Every control is already at its default'
+            }
+            className="rounded px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
           >
-            Cancel
+            Reset to defaults
           </button>
-          <button
-            type="button"
-            onClick={apply}
-            className="rounded bg-foreground px-5 py-1 text-[13px] font-medium text-background transition-opacity hover:opacity-90"
-          >
-            Ok
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded border border-foreground/25 px-3.5 py-1 text-[13px] transition-colors hover:border-foreground/50 hover:bg-accent"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={apply}
+              className="rounded bg-foreground px-5 py-1 text-[13px] font-medium text-background transition-opacity hover:opacity-90"
+            >
+              Ok
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -258,19 +306,11 @@ function ColorPairRow({
     <>
       <div className="flex items-center gap-2">
         {enabledKey && (
-          <input
+          <TickBox
             id={`chart-${enabledKey}`}
-            type="checkbox"
             checked={on}
-            onChange={(e) => onChange(enabledKey, e.target.checked)}
-            aria-label={field.label}
-            className={cn(
-              'h-4 w-4 shrink-0 cursor-pointer appearance-none rounded border border-border bg-background',
-              'transition-colors hover:border-muted-foreground',
-              'checked:border-primary checked:bg-primary',
-              "checked:after:block checked:after:h-full checked:after:w-full checked:after:bg-[hsl(var(--primary-foreground))] checked:after:content-['']",
-              'checked:after:[mask:url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Cpath fill=%27none%27 stroke=%27%23000%27 stroke-width=%272.5%27 stroke-linecap=%27round%27 stroke-linejoin=%27round%27 d=%27M3.5 8.5l3 3 6-6%27/%3E%3C/svg%3E") center/100% no-repeat]'
-            )}
+            onChange={(next) => onChange(enabledKey, next)}
+            label={field.label}
           />
         )}
         <span className="text-[13px] text-muted-foreground">{field.label}</span>
@@ -280,7 +320,9 @@ function ColorPairRow({
           <input
             key={side.key}
             type="color"
-            value={typeof values[side.key] === 'string' ? (values[side.key] as string) : side.default}
+            value={
+              typeof values[side.key] === 'string' ? (values[side.key] as string) : side.default
+            }
             onChange={(e) => onChange(side.key, e.target.value)}
             aria-label={`${field.label} ${side.label}`}
             title={side.label}
