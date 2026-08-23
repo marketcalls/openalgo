@@ -10,11 +10,15 @@ Run: uv run pytest test/test_flow_workflow_validator.py -v
 """
 
 import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+from services.flow_node_contracts import parse_underlying_symbol
 from services.flow_workflow_validator import (
     BRANCHING_NODE_TYPES,
     TRIGGER_NODE_TYPES,
@@ -22,7 +26,6 @@ from services.flow_workflow_validator import (
     migrate_legacy_node_data,
     validate_workflow,
 )
-from services.option_symbol_service import parse_underlying_symbol
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "frontend" / "src"
@@ -32,6 +35,23 @@ PALETTE = FRONTEND / "components" / "flow" / "panels" / "NodePalette.tsx"
 CONFIG_PANEL = FRONTEND / "components" / "flow" / "panels" / "ConfigPanel.tsx"
 CONSTANTS = FRONTEND / "lib" / "flow" / "constants.ts"
 FLOW_TYPES = FRONTEND / "types" / "flow.ts"
+
+
+def test_validator_import_does_not_require_application_secrets():
+    """Static workflow validation must not initialize database-coupled services."""
+    env = os.environ.copy()
+    env.pop("API_KEY_PEPPER", None)
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import services.flow_workflow_validator"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def _registry_types() -> set[str]:
