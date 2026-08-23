@@ -1,5 +1,6 @@
 from marshmallow import EXCLUDE, Schema, ValidationError, fields, post_load, pre_load, validate
 
+from restx_api.data_schemas import validate_option_offset
 from utils.constants import CRYPTO_EXCHANGES, VALID_EXCHANGES
 
 
@@ -215,7 +216,9 @@ class OptionsOrderSchema(Schema):
     strike_int = fields.Int(
         required=False, validate=validate.Range(min=1), allow_none=True
     )  # OPTIONAL: Strike interval. If not provided, actual strikes from database will be used (RECOMMENDED for accuracy)
-    offset = fields.Str(required=True)  # ATM, ITM1-ITM50, OTM1-OTM50
+    offset = fields.Str(
+        required=True, validate=validate_option_offset
+    )  # ATM, ITM1-ITM50, OTM1-OTM50
     option_type = fields.Str(
         required=True, validate=validate.OneOf(["CE", "PE", "ce", "pe"])
     )  # Call or Put
@@ -250,7 +253,9 @@ class OptionsOrderSchema(Schema):
 class OptionsMultiOrderLegSchema(Schema):
     """Schema for a single leg in options multi-order (no symbol - resolved from offset)"""
 
-    offset = fields.Str(required=True)  # ATM, ITM1-ITM50, OTM1-OTM50
+    offset = fields.Str(
+        required=True, validate=validate_option_offset
+    )  # ATM, ITM1-ITM50, OTM1-OTM50
     option_type = fields.Str(
         required=True, validate=validate.OneOf(["CE", "PE", "ce", "pe"])
     )  # Call or Put
