@@ -367,6 +367,19 @@ def get_multiquotes(
             api_key, include_feed_token=True
         )
         if AUTH_TOKEN is None:
+            if is_broker_session_stale(api_key):
+                # Same condition and same answer as get_quotes above: /quotes and
+                # /multiquotes must not disagree about what a dead broker session
+                # looks like.
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "code": "BROKER_SESSION_EXPIRED",
+                        "message": "Broker session expired - please reconnect your broker",
+                    },
+                    401,
+                )
             return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
         return get_multiquotes_with_auth(AUTH_TOKEN, FEED_TOKEN, broker_name, symbols)
 

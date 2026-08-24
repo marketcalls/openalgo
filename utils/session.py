@@ -126,20 +126,60 @@ def get_trading_session_date():
     return now_ist.date().isoformat()
 
 
-def _has_fresher_session(username, current_session_id=None):
-    """Return True if an active session for ``username`` (other than
-    ``current_session_id``) authenticated at or after today's rollover boundary.
+# Three-valued answer to "does the stored broker token belong to the current
+# trading session?". "unknown" exists because the absence of evidence is not
+# evidence: an empty active_sessions table is also the state left behind by a
+# password change (blueprints/auth.py:811), and get_active_sessions() returns []
+# on a read error too. Callers must treat unknown as "carry on as before".
+SESSION_FRESH = "fresh"
+SESSION_STALE = "stale"
+SESSION_UNKNOWN = "unknown"
 
-    A post-boundary active session means another device has already
-    re-established the single shared broker token after the daily ~3 AM expiry,
-    so a stale cookie crossing the boundary must NOT trigger the global token
-    revoke. See the multi-session audit (finding #1).
+
+def _current_session_boundary(now_ist=None):
+    """Return the start of the trading session ``now_ist`` falls in, as a
+    timezone-aware IST datetime.
+
+    ``_todays_rollover_boundary()`` returns today's clock time unconditionally,
+    which is a *future* instant between midnight and SESSION_EXPIRY_TIME. The
+    session live in that window is the one that opened at the boundary of the
+    previous calendar day, so comparing a login against today's not-yet-reached
+    boundary would call every healthy overnight session stale. This is the same
+    two-sided reasoning is_session_valid() applies with
+    ``now_ist > daily_expiry and login_time < daily_expiry``, and that
+    get_trading_session_date() documents.
+    """
+    if now_ist is None:
+        now_ist = datetime.now(pytz.timezone("UTC")).astimezone(pytz.timezone("Asia/Kolkata"))
+    boundary = _todays_rollover_boundary(now_ist)
+    if now_ist < boundary:
+        boundary -= timedelta(days=1)
+    return boundary
+
+
+def broker_session_freshness(username, current_session_id=None):
+    """Classify ``username``'s stored broker credential against the current
+    trading session, ignoring ``current_session_id`` if given.
+
+    Indian broker tokens are invalidated broker-side at SESSION_EXPIRY_TIME
+    (default 03:00 IST), and only a login after that boundary mints a new one.
+    The auth row carries no issue timestamp, so freshness is inferred from the
+    active_sessions login times.
+
+    Returns:
+        str: SESSION_FRESH when at least one session authenticated at or after
+        the current session boundary; SESSION_STALE only when readable login
+        times exist and every one of them predates it; SESSION_UNKNOWN when
+        there is nothing readable to judge by - no rows, no parseable
+        login_time, or a failed read. A row we cannot parse is not evidence
+        either way, so it does not count towards a stale verdict.
     """
     try:
         from database.auth_db import get_active_sessions
 
-        boundary = _todays_rollover_boundary()
+        boundary = _current_session_boundary()
         ist = pytz.timezone("Asia/Kolkata")
+        usable = 0
         for sess in get_active_sessions(username):
             if current_session_id and sess.get("session_id") == current_session_id:
                 continue
@@ -154,29 +194,53 @@ def _has_fresher_session(username, current_session_id=None):
             # is IST wall-clock, so localize it before comparing.
             if login_dt.tzinfo is None:
                 login_dt = ist.localize(login_dt)
+            usable += 1
             if login_dt >= boundary:
-                return True
+                return SESSION_FRESH
     except Exception as e:
-        logger.warning(f"Error checking for fresher sessions for {username}: {e}")
-    return False
+        logger.warning(f"Error checking session freshness for {username}: {e}")
+        return SESSION_UNKNOWN
+
+    return SESSION_STALE if usable else SESSION_UNKNOWN
+
+
+def _has_fresher_session(username, current_session_id=None):
+    """Return True if an active session for ``username`` (other than
+    ``current_session_id``) authenticated at or after the current session
+    boundary.
+
+    A post-boundary active session means another device has already
+    re-established the single shared broker token after the daily ~3 AM expiry,
+    so a stale cookie crossing the boundary must NOT trigger the global token
+    revoke. See the multi-session audit (finding #1).
+
+    Only SESSION_FRESH is a positive answer: an unknown state must not hold off
+    a revoke that is otherwise due.
+    """
+    return broker_session_freshness(username, current_session_id) == SESSION_FRESH
 
 
 def has_login_this_trading_session(username) -> bool:
     """Return True if ``username`` has an active session that authenticated at
-    or after today's rollover boundary (default 03:00 IST).
+    or after the current session boundary (default 03:00 IST).
 
     Unlike ``is_session_valid()``, this reads only the database and never
     touches the Flask request-scoped ``session``, so background threads can ask
     it. Used at boot to decide whether the stored broker token belongs to the
     current trading session: Indian broker tokens die at the daily rollover, and
     only a login after that boundary re-establishes one.
+
+    This is deliberately the conservative reading - an unknown state answers
+    False - because its caller only declines to start an adapter and self-heals
+    at the next login. Anything with a destructive or user-visible consequence
+    must ask broker_session_freshness() and handle SESSION_UNKNOWN itself.
     """
-    return _has_fresher_session(username)
+    return broker_session_freshness(username) == SESSION_FRESH
 
 
-def revoke_user_tokens(revoke_db_tokens=True, username=None, current_session_id=None):
+def revoke_user_tokens(revoke_db_tokens=True):
     """
-    Revoke auth tokens for a user when their session expires.
+    Revoke auth tokens for the current user when session expires.
 
     Also publishes cache invalidation events via ZeroMQ for multi-process deployments.
     This ensures WebSocket proxy and other processes clear their stale cached tokens.
@@ -185,18 +249,9 @@ def revoke_user_tokens(revoke_db_tokens=True, username=None, current_session_id=
     Args:
         revoke_db_tokens (bool): If True, revokes the token in the database (Invalidates API Key).
                                  If False, only clears local caches (Preserves API Key).
-        username: The user to revoke. Defaults to the current request's session
-                  user. Pass it explicitly from a caller that has no Flask
-                  session -- the API path authenticates with an API key and must
-                  run the same teardown at the daily rollover (issue #1858).
-        current_session_id: This device's session id, when called from a request.
-                            Excluded from the fresher-session check below.
     """
-    if username is None and "user" in session:
+    if "user" in session:
         username = session.get("user")
-        current_session_id = session.get("session_id")
-
-    if username:
         try:
             from database.auth_db import auth_cache, feed_token_cache, upsert_auth
 
@@ -216,16 +271,17 @@ def revoke_user_tokens(revoke_db_tokens=True, username=None, current_session_id=
             # below reaches the proxy and disconnects the adapter), and force-logout
             # every device. Suppress it: drop only THIS device's session row and
             # return, leaving the caller to clear just this cookie.
-            if revoke_db_tokens and _has_fresher_session(username, current_session_id):
+            if revoke_db_tokens and _has_fresher_session(username, session.get("session_id")):
                 logger.info(
                     f"Auto-expiry: a newer session for {username} is active past the "
                     f"daily rollover — logging out only this stale device, preserving "
                     f"the shared broker token and other devices"
                 )
-                if current_session_id:
+                current_sid = session.get("session_id")
+                if current_sid:
                     try:
                         from database.auth_db import remove_session
-                        remove_session(current_session_id)
+                        remove_session(current_sid)
                     except Exception as session_error:
                         logger.warning(f"Error removing stale session row: {session_error}")
                 return

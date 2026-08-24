@@ -568,6 +568,9 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
     auth_cache.clear()
     feed_token_cache.clear()
     broker_cache.clear()  # Also clear broker cache to ensure fresh data
+    # A login just changed what "current trading session" means for this user.
+    _session_freshness_cache.clear()
+    _stale_logged.clear()
     logger.info(f"Cleared all auth caches after token update for user: {name}")
 
     # The two operations below TEAR DOWN the shared broker WebSocket feed (the
@@ -1001,33 +1004,61 @@ def get_broker_name(provided_api_key):
     return None
 
 
-# Trading-session date of the last stale-credential teardown per user (#1858).
-# The date rather than a flag so the next rollover re-arms it.
-_rollover_teardown_done = TTLCache(maxsize=128, ttl=get_session_based_cache_ttl())
+# Freshness verdicts are cached briefly so the guard does not add an
+# active_sessions SELECT to every order (get_auth_token_broker is on the order
+# path via place_order_service.py and ~35 other call sites, and NullPool opens a
+# fresh SQLite connection per read). A short fixed TTL rather than
+# get_session_based_cache_ttl(), whose max(300, ...) clamp can outlive a
+# rollover; upsert_auth clears this alongside auth_cache, so a real login is
+# visible immediately rather than after the TTL.
+_session_freshness_cache = TTLCache(maxsize=128, ttl=30)
+
+# Trading-session date this user was last told about a withheld credential.
+# Without it the rejection logs once per *call*: a strategy polling every 5s
+# after the 03:00 rollover writes ~720 identical lines an hour into log/, and
+# the production worker never restarts to truncate them. This gates only a log
+# line - an early expiry costs a duplicate INFO, never a repeated side effect.
+_stale_logged = TTLCache(maxsize=128, ttl=3600)
 
 
 def is_broker_session_stale_for_user(user_id):
-    """Return True when the stored broker token predates today's rollover.
+    """Return True only when the stored broker token is *confirmed* to predate
+    the current trading session.
 
     Indian broker tokens are invalidated broker-side at SESSION_EXPIRY_TIME
     (default 03:00 IST), and only a login after that boundary mints a new one.
     The auth row carries no issue timestamp, so freshness is inferred from the
-    active_sessions login times - the same rule the order-update boot scan
-    already applies in services/order_update_service.py.
+    active_sessions login times.
+
+    That inference has states it cannot decide: an empty active_sessions table
+    is also what a password change leaves behind (blueprints/auth.py:811) while
+    deliberately keeping the broker token alive, and get_active_sessions()
+    returns [] on a read error too. Those answer SESSION_UNKNOWN and are treated
+    as not-stale, so an undecidable read never withholds a working credential.
 
     Args:
         user_id: The user the API key resolved to.
 
     Returns:
-        bool: True if no login has happened in the current trading session.
+        bool: True only for SESSION_STALE - readable login times exist and every
+        one of them predates a boundary that has actually been crossed.
     """
-    from utils.session import has_login_this_trading_session, is_session_expiry_disabled
+    from utils.session import (
+        SESSION_STALE,
+        broker_session_freshness,
+        is_session_expiry_disabled,
+    )
 
     # Crypto brokers trade 24/7 and have no rollover to be stale against.
     if is_session_expiry_disabled():
         return False
 
-    return not has_login_this_trading_session(user_id)
+    verdict = _session_freshness_cache.get(user_id)
+    if verdict is None:
+        verdict = broker_session_freshness(user_id)
+        _session_freshness_cache[user_id] = verdict
+
+    return verdict == SESSION_STALE
 
 
 def is_broker_session_stale(provided_api_key):
@@ -1052,8 +1083,47 @@ def is_broker_session_stale(provided_api_key):
     return is_broker_session_stale_for_user(user_id)
 
 
-
 def get_auth_token_broker(provided_api_key, include_feed_token=False):
+    """Resolve a credential for a valid API key, refusing one the daily rollover
+    has already killed (issue #1858).
+
+    app.py's expiry sweep cannot cover this path: it runs from a before_request
+    hook that skips /api/ and reads a Flask cookie an API-key caller does not
+    have (app.py:510), so between the rollover and the next *browser* request an
+    API client keeps being handed the previous session's token.
+
+    The credential is withheld, never destroyed. Revoking here would wipe
+    auth_obj.auth and auth_obj.broker (see upsert_auth) on an inference that can
+    be wrong, and #1419 - a later login resuming a dead token - is already
+    handled at the resume site, where _try_resume_broker_session validates the
+    stored token against the live broker before accepting it
+    (blueprints/auth.py:216-238).
+    """
+    result = _lookup_auth_token_broker(provided_api_key, include_feed_token)
+
+    # Nothing resolved (bad key, or already revoked) - no credential to guard,
+    # and no reason to pay for a freshness read.
+    if result[0] is None:
+        return result
+
+    user_id = verify_api_key(provided_api_key)
+    if user_id and is_broker_session_stale_for_user(user_id):
+        from utils.session import get_trading_session_date
+
+        trading_day = get_trading_session_date()
+        if _stale_logged.get(user_id) != trading_day:
+            _stale_logged[user_id] = trading_day
+            logger.info(
+                f"Broker session rollover: no login for user_id '{user_id}' since the "
+                "current session boundary; withholding the stored broker credential "
+                "until the next broker login"
+            )
+        return (None, None, None) if include_feed_token else (None, None)
+
+    return result
+
+
+def _lookup_auth_token_broker(provided_api_key, include_feed_token=False):
     """
     Get auth token, feed token (optional) and broker for a valid API key with caching.
 
@@ -1061,38 +1131,14 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
     - Always checks is_revoked status (even for cached data)
     - Cache cleared on credential changes
     - TTL based on session expiry time
-    - Rejects credentials from a previous trading session (issue #1858)
+
+    Callers want get_auth_token_broker(), which wraps this with the
+    trading-session freshness guard.
     """
     import hashlib
 
     # Generate cache key
     cache_key = f"{hashlib.sha256(provided_api_key.encode()).hexdigest()}_{include_feed_token}"
-
-    # Reject a credential the daily rollover already killed, before any broker
-    # adapter is built with it. app.py's expiry hook cannot: it skips /api/ and
-    # reads a Flask cookie an API-key caller does not have (app.py:509).
-    user_id = verify_api_key(provided_api_key)
-    if user_id and is_broker_session_stale_for_user(user_id):
-        from utils.session import get_trading_session_date, revoke_user_tokens
-
-        # Once per trading session: leaving the row non-revoked would let the
-        # next login resume a dead token and skip broker OAuth (#1419), but
-        # repeating it per poll republishes the ZeroMQ invalidation and
-        # disconnects the proxy's adapter every few seconds.
-        trading_day = get_trading_session_date()
-        if _rollover_teardown_done.get(user_id) != trading_day:
-            _rollover_teardown_done[user_id] = trading_day
-            logger.info(
-                f"Broker session rollover: no login for user_id '{user_id}' since "
-                "today's session boundary; revoking the stored broker credential "
-                "and invalidating caches"
-            )
-            revoke_user_tokens(username=user_id)
-
-        # Cached like the revoked branch below, so a poller stops hitting the DB.
-        negative_result = (None, None, None) if include_feed_token else (None, None)
-        auth_cache[cache_key] = negative_result
-        return negative_result
 
     # Check cache first (but still verify revocation status)
     if cache_key in auth_cache:

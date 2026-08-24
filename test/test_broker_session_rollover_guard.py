@@ -2,19 +2,22 @@
 
 Indian broker tokens die at the daily session boundary (SESSION_EXPIRY_TIME,
 default 03:00 IST). OpenAlgo's expiry sweep runs from a ``before_request`` hook
-that skips ``/api/`` (``app.py:509``) and reads the Flask cookie, so an
+that skips ``/api/`` (``app.py:510``) and reads the Flask cookie, so an
 API-key-authenticated caller -- a strategy, TradingView, a scheduled script --
 never triggers it. Between the rollover and the next *browser* request the
 stored token is dead but still marked ``is_revoked=False``, so every quote and
 history call is sent to the broker with yesterday's credential and comes back
 as an HTTP 500 plus a full traceback.
 
-``services/order_update_service.py:238`` already guards its boot scan with
-``has_login_this_trading_session()`` and documents the gap. These tests pin the
-same rule at the shared credential-resolution boundary
+The guard withholds such a credential at the shared resolution point
 (``database.auth_db.get_auth_token_broker``) so every API caller inherits it.
+It never destroys the credential: the freshness signal is an *inference* from
+``active_sessions`` login times, and the states that inference cannot decide --
+no rows, an unreadable row, a failed read -- must keep working exactly as
+before. These tests pin both halves.
 
-No broker credentials and no network access: the database is in-memory and the
+No broker credentials and no network access: the database is in-memory, every
+side effect of ``upsert_auth`` that opens a socket or a thread is stubbed, and
 session rows are synthesised relative to the real boundary helper.
 """
 
@@ -36,6 +39,36 @@ import utils.session as session_utils  # noqa: E402
 TEST_USER = "test_trader"
 TEST_API_KEY = "test_api_key_for_rollover_guard"
 TEST_BROKER = "zerodha"
+STORED_TOKEN = "broker-token-from-yesterday"
+
+
+@pytest.fixture(autouse=True)
+def no_side_effects(monkeypatch):
+    """Neutralise every socket-, thread- and process-touching side effect of
+    upsert_auth.
+
+    Without this, seeding a token reaches start_order_update_adapter
+    (database/auth_db.py:624) and opens a real WebSocket to the broker -- the
+    suite then depends on the network and prints a live 403 from Zerodha. The
+    ZeroMQ publish and the pool cleanup create sockets and threads per fixture
+    for the same reason. Same pattern as test_auth_upsert_multisession.py.
+    """
+    monkeypatch.setattr(
+        "database.cache_invalidation.publish_all_cache_invalidation",
+        lambda name: True,
+    )
+    monkeypatch.setattr(
+        "websocket_proxy.broker_factory.cleanup_pools_for_user",
+        lambda name, broker_name=None: 0,
+    )
+    monkeypatch.setattr(
+        "services.order_update_service.start_order_update_adapter",
+        lambda name, broker: None,
+    )
+    monkeypatch.setattr(
+        "services.order_update_service.stop_order_update_adapter",
+        lambda name: None,
+    )
 
 
 def _fresh_auth_db():
@@ -58,10 +91,13 @@ def _fresh_auth_db():
     auth_mod.Base.metadata.create_all(engine)
 
     # A caller-visible token cache would mask the guard on the second call, and
-    # the once-per-session teardown marker would carry a previous test's entry
-    # into this one.
+    # a cached freshness verdict would carry a previous test's answer into this
+    # one.
     auth_mod.auth_cache.clear()
-    auth_mod._rollover_teardown_done.clear()
+    auth_mod.verified_api_key_cache.clear()
+    auth_mod.invalid_api_key_cache.clear()
+    auth_mod._session_freshness_cache.clear()
+    auth_mod._stale_logged.clear()
     return auth_mod
 
 
@@ -71,21 +107,28 @@ def _seed_connected_broker(auth_mod):
     This is the state the reporter was in: OpenAlgo believes the broker is
     connected because nothing has flipped is_revoked yet.
     """
-    auth_mod.upsert_auth(TEST_USER, "broker-token-from-yesterday", TEST_BROKER)
+    auth_mod.upsert_auth(TEST_USER, STORED_TOKEN, TEST_BROKER)
     auth_mod.upsert_api_key(TEST_USER, TEST_API_KEY)
 
 
-def _session_rows(offset):
-    """One active_sessions row whose login_time sits ``offset`` from today's
-    boundary.
+def _session_rows(offset, session_id="device-1"):
+    """One active_sessions row whose login_time sits ``offset`` from the current
+    trading session's boundary.
 
-    Deriving from _todays_rollover_boundary() rather than a hardcoded clock is
+    Deriving from _current_session_boundary() rather than a hardcoded clock is
     how the existing rollover tests stay deterministic without freezegun, which
-    this repo does not depend on. SQLite strips tzinfo on storage, so the value
-    is stored naive exactly as the production reader expects it.
+    this repo does not depend on -- and unlike _todays_rollover_boundary() it is
+    also correct when the suite runs between midnight and 03:00 IST. SQLite
+    strips tzinfo on storage, so the value is stored naive exactly as the
+    production reader expects it.
     """
-    login_at = session_utils._todays_rollover_boundary() + offset
-    return [{"session_id": "device-1", "login_time": login_at.replace(tzinfo=None).isoformat()}]
+    login_at = session_utils._current_session_boundary() + offset
+    return [{"session_id": session_id, "login_time": login_at.replace(tzinfo=None).isoformat()}]
+
+
+def _stored_auth_row(auth_mod):
+    """The persisted credential, as the next login's resume path would read it."""
+    return auth_mod.Auth.query.filter_by(name=TEST_USER).first()
 
 
 @pytest.fixture
@@ -97,16 +140,48 @@ def auth_mod(monkeypatch):
     return mod
 
 
+class TestBoundaryMath:
+    """The boundary a login is judged against must be one that has been crossed."""
+
+    def test_pre_boundary_window_is_not_stale(self, auth_mod, monkeypatch):
+        """Between midnight and SESSION_EXPIRY_TIME, last evening's login is live.
+
+        _todays_rollover_boundary() returns today's clock time unconditionally,
+        so in that window it is a *future* instant and every healthy overnight
+        session compares as pre-boundary. MCX runs to 23:30 IST, so this window
+        contains live positions. Simulated by moving the boundary ahead of the
+        clock, which is the same shape as being before it.
+        """
+        now_ist = session_utils.datetime.now(session_utils.pytz.timezone("Asia/Kolkata"))
+        monkeypatch.setenv("SESSION_EXPIRY_TIME", (now_ist + timedelta(hours=2)).strftime("%H:%M"))
+        auth_mod._session_freshness_cache.clear()
+
+        login_an_hour_ago = now_ist - timedelta(hours=1)
+        monkeypatch.setattr(
+            auth_mod,
+            "get_active_sessions",
+            lambda u: [
+                {
+                    "session_id": "device-1",
+                    "login_time": login_an_hour_ago.replace(tzinfo=None).isoformat(),
+                }
+            ],
+        )
+
+        auth_token, broker = auth_mod.get_auth_token_broker(TEST_API_KEY)
+
+        assert (auth_token, broker) == (STORED_TOKEN, TEST_BROKER), (
+            "a login one hour ago cannot predate a boundary two hours in the "
+            "future; today's clock time is not the session boundary before it "
+            "has been crossed"
+        )
+
+
 class TestRolloverGuard:
     """The stale credential must never reach a broker adapter."""
 
     def test_stale_login_is_rejected(self, auth_mod, monkeypatch):
-        """The reported bug: a pre-boundary login still resolves a credential.
-
-        This is the failing test to write first. Today get_auth_token_broker()
-        checks only is_revoked, so it hands back yesterday's token and the
-        caller goes on to build a BrokerData handler with it.
-        """
+        """The reported bug: a pre-boundary login still resolves a credential."""
         monkeypatch.setattr(
             auth_mod, "get_active_sessions", lambda u: _session_rows(-timedelta(hours=5))
         )
@@ -114,8 +189,9 @@ class TestRolloverGuard:
         auth_token, broker = auth_mod.get_auth_token_broker(TEST_API_KEY)
 
         assert auth_token is None, (
-            "a login before today's rollover means the stored broker token is "
-            "dead; resolving it sends the previous session's credential to the broker"
+            "a login before the current session boundary means the stored broker "
+            "token is dead; resolving it sends the previous session's credential "
+            "to the broker"
         )
         assert broker is None
 
@@ -127,30 +203,21 @@ class TestRolloverGuard:
 
         auth_token, broker = auth_mod.get_auth_token_broker(TEST_API_KEY)
 
-        assert auth_token == "broker-token-from-yesterday"
+        assert auth_token == STORED_TOKEN
         assert broker == TEST_BROKER
 
     def test_login_exactly_at_boundary_counts_as_fresh(self, auth_mod, monkeypatch):
         """A login landing on 03:00:00.000 is inside the new session, not outside.
 
-        _has_fresher_session() compares with >=, so the boundary instant belongs
-        to the session it opens. Pinning it stops a later refactor from
-        silently turning that into > and logging out anyone who authenticated
-        on the exact second.
+        The comparison is >=, so the boundary instant belongs to the session it
+        opens. Pinning it stops a later refactor from silently turning that into
+        > and logging out anyone who authenticated on the exact second.
         """
         monkeypatch.setattr(auth_mod, "get_active_sessions", lambda u: _session_rows(timedelta(0)))
 
         auth_token, _ = auth_mod.get_auth_token_broker(TEST_API_KEY)
 
-        assert auth_token == "broker-token-from-yesterday"
-
-    def test_no_sessions_at_all_is_stale(self, auth_mod, monkeypatch):
-        """An empty active_sessions table cannot prove a login happened today."""
-        monkeypatch.setattr(auth_mod, "get_active_sessions", lambda u: [])
-
-        auth_token, _ = auth_mod.get_auth_token_broker(TEST_API_KEY)
-
-        assert auth_token is None
+        assert auth_token == STORED_TOKEN
 
     def test_feed_token_variant_is_guarded_too(self, auth_mod, monkeypatch):
         """include_feed_token=True is the path quotes take; it must not leak past."""
@@ -164,6 +231,137 @@ class TestRolloverGuard:
 
         assert (auth_token, feed_token, broker) == (None, None, None)
 
+    def test_one_fresh_device_keeps_the_shared_token(self, auth_mod, monkeypatch):
+        """The broker token is shared across devices; one fresh login revives it
+        for all of them, so a stale sibling row must not veto."""
+        rows = _session_rows(-timedelta(hours=5), session_id="stale-device") + _session_rows(
+            timedelta(minutes=30), session_id="fresh-device"
+        )
+        monkeypatch.setattr(auth_mod, "get_active_sessions", lambda u: rows)
+
+        auth_token, _ = auth_mod.get_auth_token_broker(TEST_API_KEY)
+
+        assert auth_token == STORED_TOKEN
+
+
+class TestUndecidableStateIsNotStale:
+    """An inference that cannot decide must fall back to today's behaviour."""
+
+    def test_cleared_sessions_keep_a_live_token(self, auth_mod, monkeypatch):
+        """A password change clears active_sessions and *deliberately* keeps the
+        broker token alive (blueprints/auth.py:811) so the user can log back in
+        without redoing broker OAuth. An empty table is therefore not proof of a
+        rollover, and must not cost the user a working credential mid-session.
+        """
+        auth_mod.clear_user_sessions(TEST_USER)
+        auth_mod._session_freshness_cache.clear()
+
+        auth_token, broker = auth_mod.get_auth_token_broker(TEST_API_KEY)
+
+        assert (auth_token, broker) == (STORED_TOKEN, TEST_BROKER), (
+            "no session rows means 'cannot tell', not 'stale'"
+        )
+
+    def test_unreadable_session_store_keeps_a_live_token(self, auth_mod, monkeypatch):
+        """A transient SQLite lock must not read as a rollover.
+
+        get_active_sessions() catches Exception and returns [] (auth_db.py:395),
+        so a failed read is indistinguishable from an empty table; CLAUDE.md
+        notes SQLite locking is stricter on Windows.
+        """
+
+        def locked(_username):
+            raise RuntimeError("database is locked")
+
+        monkeypatch.setattr(auth_mod, "get_active_sessions", locked)
+
+        auth_token, broker = auth_mod.get_auth_token_broker(TEST_API_KEY)
+
+        assert (auth_token, broker) == (STORED_TOKEN, TEST_BROKER)
+
+    def test_unparseable_login_time_is_not_evidence(self, auth_mod, monkeypatch):
+        """A row we cannot read does not count towards 'every login predates it'."""
+        monkeypatch.setattr(
+            auth_mod,
+            "get_active_sessions",
+            lambda u: [{"session_id": "device-1", "login_time": "not-a-timestamp"}],
+        )
+
+        auth_token, _ = auth_mod.get_auth_token_broker(TEST_API_KEY)
+
+        assert auth_token == STORED_TOKEN
+
+
+class TestCredentialSurvives:
+    """Withholding is not revoking."""
+
+    def test_stale_rejection_leaves_the_stored_token_intact(self, auth_mod, monkeypatch):
+        """Revoking here would reach upsert_auth(name, "", "", revoke=True), which
+        overwrites auth_obj.auth and auth_obj.broker. That is irreversible, and
+        blueprints/auth.py:202 then refuses to resume, forcing full broker OAuth.
+        The next login must still find its credential where it left it.
+        """
+        monkeypatch.setattr(
+            auth_mod, "get_active_sessions", lambda u: _session_rows(-timedelta(hours=5))
+        )
+
+        for _ in range(5):
+            assert auth_mod.get_auth_token_broker(TEST_API_KEY) == (None, None)
+
+        row = _stored_auth_row(auth_mod)
+        assert row is not None
+        assert row.is_revoked is False, "the guard must not flip is_revoked"
+        assert row.broker == TEST_BROKER, "the guard must not blank the broker"
+        assert auth_mod.decrypt_token(row.auth) == STORED_TOKEN
+
+    def test_repeated_rejection_publishes_no_teardown(self, auth_mod, monkeypatch):
+        """A polling client must not turn one rollover into a teardown storm.
+
+        The earlier shape of this guard revoked once per trading session, keyed
+        by a TTLCache whose max(300, ...) clamp could expire mid-session and let
+        the whole teardown -- a ZeroMQ CACHE_INVALIDATE_ALL, a pool cleanup, an
+        adapter stop and a force_logout broadcast -- run again. Withholding has
+        no side effects at all, which is the property to keep.
+        """
+        monkeypatch.setattr(
+            auth_mod, "get_active_sessions", lambda u: _session_rows(-timedelta(hours=5))
+        )
+
+        published = []
+        monkeypatch.setattr(
+            "database.cache_invalidation.publish_all_cache_invalidation",
+            lambda name: published.append(name) or True,
+        )
+        cleaned = []
+        monkeypatch.setattr(
+            "websocket_proxy.broker_factory.cleanup_pools_for_user",
+            lambda name, broker_name=None: cleaned.append(name) or 0,
+        )
+
+        for _ in range(20):
+            auth_mod.get_auth_token_broker(TEST_API_KEY)
+
+        assert published == []
+        assert cleaned == []
+
+    def test_rejection_logs_once_per_trading_session(self, auth_mod, monkeypatch, caplog):
+        """The rejection line must not scale with poll rate.
+
+        A strategy polling every 5s after the 03:00 rollover would otherwise
+        write ~720 identical lines an hour into log/, and the production worker
+        is a single Gunicorn process that never restarts to truncate them.
+        """
+        monkeypatch.setattr(
+            auth_mod, "get_active_sessions", lambda u: _session_rows(-timedelta(hours=5))
+        )
+
+        with caplog.at_level("INFO"):
+            for _ in range(50):
+                auth_mod.get_auth_token_broker(TEST_API_KEY)
+
+        emitted = [r for r in caplog.records if "Broker session rollover" in r.getMessage()]
+        assert len(emitted) == 1, f"expected one line for 50 rejections, got {len(emitted)}"
+
 
 class TestCryptoBypass:
     """DISABLE_SESSION_EXPIRY=true brokers trade 24/7 and never roll over."""
@@ -176,35 +374,11 @@ class TestCryptoBypass:
 
         auth_token, broker = mod.get_auth_token_broker(TEST_API_KEY)
 
-        assert auth_token == "broker-token-from-yesterday", (
+        assert auth_token == STORED_TOKEN, (
             "a crypto instance has no 3 AM boundary; guarding it would break "
             "Delta Exchange every night"
         )
         assert broker == TEST_BROKER
-
-
-class TestTeardownIsIdempotent:
-    """A polling client must not turn one rollover into a teardown storm."""
-
-    def test_teardown_runs_once_per_trading_session(self, auth_mod, monkeypatch):
-        """A strategy polling every 5s would otherwise publish 720 ZMQ
-        invalidations an hour, each one disconnecting the WebSocket adapter in
-        the proxy process."""
-        monkeypatch.setattr(
-            auth_mod, "get_active_sessions", lambda u: _session_rows(-timedelta(hours=5))
-        )
-
-        teardowns = []
-        monkeypatch.setattr(
-            session_utils,
-            "revoke_user_tokens",
-            lambda username=None, **kwargs: teardowns.append(username),
-        )
-
-        for _ in range(5):
-            auth_mod.get_auth_token_broker(TEST_API_KEY)
-
-        assert len(teardowns) == 1, f"expected one teardown, got {len(teardowns)}"
 
 
 class TestServiceResponses:
@@ -212,17 +386,32 @@ class TestServiceResponses:
 
     def test_quotes_returns_broker_session_expired(self, monkeypatch):
         """403 'Invalid openalgo apikey' is wrong twice over here: the API key is
-        valid, and the caller needs the reconnect signal Dashboard.tsx:84 reads."""
+        valid, and the caller needs the reconnect signal the dashboard reads."""
         import services.quotes_service as quotes_service
 
         monkeypatch.setattr(
             quotes_service, "get_auth_token_broker", lambda *a, **k: (None, None, None)
         )
-        monkeypatch.setattr(
-            quotes_service, "is_broker_session_stale", lambda api_key: True, raising=False
-        )
+        monkeypatch.setattr(quotes_service, "is_broker_session_stale", lambda api_key: True)
 
         success, response, status = quotes_service.get_quotes("SBIN", "NSE", api_key=TEST_API_KEY)
+
+        assert success is False
+        assert status == 401
+        assert response["code"] == "BROKER_SESSION_EXPIRED"
+
+    def test_multiquotes_agrees_with_quotes(self, monkeypatch):
+        """/quotes and /multiquotes must not disagree about the same condition."""
+        import services.quotes_service as quotes_service
+
+        monkeypatch.setattr(
+            quotes_service, "get_auth_token_broker", lambda *a, **k: (None, None, None)
+        )
+        monkeypatch.setattr(quotes_service, "is_broker_session_stale", lambda api_key: True)
+
+        success, response, status = quotes_service.get_multiquotes(
+            [{"symbol": "SBIN", "exchange": "NSE"}], api_key=TEST_API_KEY
+        )
 
         assert success is False
         assert status == 401
@@ -234,9 +423,7 @@ class TestServiceResponses:
         monkeypatch.setattr(
             history_service, "get_auth_token_broker", lambda *a, **k: (None, None, None)
         )
-        monkeypatch.setattr(
-            history_service, "is_broker_session_stale", lambda api_key: True, raising=False
-        )
+        monkeypatch.setattr(history_service, "is_broker_session_stale", lambda api_key: True)
 
         success, response, status = history_service.get_history(
             "SBIN", "NSE", "1d", "2026-08-01", "2026-08-20", api_key=TEST_API_KEY
@@ -254,9 +441,7 @@ class TestServiceResponses:
         monkeypatch.setattr(
             quotes_service, "get_auth_token_broker", lambda *a, **k: (None, None, None)
         )
-        monkeypatch.setattr(
-            quotes_service, "is_broker_session_stale", lambda api_key: False, raising=False
-        )
+        monkeypatch.setattr(quotes_service, "is_broker_session_stale", lambda api_key: False)
 
         success, response, status = quotes_service.get_quotes(
             "SBIN", "NSE", api_key="not-a-real-key"
@@ -279,6 +464,6 @@ class TestLogHygiene:
             auth_mod.get_auth_token_broker(TEST_API_KEY)
 
         logged = caplog.text
-        assert "broker-token-from-yesterday" not in logged
+        assert STORED_TOKEN not in logged
         assert TEST_API_KEY not in logged
         assert TEST_API_KEY[:8] not in logged, "not even a prefix of the key"
