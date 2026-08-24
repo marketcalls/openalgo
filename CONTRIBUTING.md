@@ -427,6 +427,7 @@ git push origin feature/your-feature-name
 ```
 
 ### 7. Create a Pull Request
+
 1. Go to your fork on GitHub
 2. Click **"Compare & pull request"**
 3. Fill out the PR template:
