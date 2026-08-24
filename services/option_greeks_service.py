@@ -1001,18 +1001,19 @@ def get_multi_option_greeks(
     failed_count = 0
 
     # Step 1: Parse all symbols and group by underlying for spot price fetch
-    parsed_symbols = {}  # symbol -> (base_symbol, expiry, strike, opt_type)
+    parsed_symbols = {}  # (symbol, exchange) -> (base_symbol, expiry, strike, opt_type)
     spot_keys = {}  # (spot_symbol, spot_exchange) -> spot_price
-    symbol_to_spot_key = {}  # symbol -> (spot_symbol, spot_exchange)
-    symbol_forward = {}  # symbol -> Black-76 forward (synthetic future)
+    symbol_to_spot_key = {}  # (symbol, exchange) -> (spot_symbol, spot_exchange)
+    symbol_forward = {}  # (symbol, exchange) -> Black-76 forward (synthetic future)
     synth_cache = {}  # (base, underlying_exchange, expiry_code) -> synthetic future
 
     for sym_req in symbols:
         symbol = sym_req.get("symbol")
         exchange = sym_req.get("exchange")
         try:
+            batch_key = (symbol, exchange)
             base_symbol, expiry, strike, opt_type = parse_option_symbol(symbol, exchange, expiry_time)
-            parsed_symbols[symbol] = (base_symbol, expiry, strike, opt_type)
+            parsed_symbols[batch_key] = (base_symbol, expiry, strike, opt_type)
 
             # Determine spot symbol/exchange for this option (also the fallback
             # if the synthetic future cannot be computed for an index weekly)
@@ -1021,7 +1022,7 @@ def get_multi_option_greeks(
             spot_exchange = sym_req.get("underlying_exchange") or get_underlying_exchange(base_symbol, exchange)
             spot_key = (spot_symbol, spot_exchange)
             spot_keys[spot_key] = None  # will be filled with price
-            symbol_to_spot_key[symbol] = spot_key
+            symbol_to_spot_key[batch_key] = spot_key
 
             # Black-76 forward = per-expiry synthetic future for all F&O; spot
             # fallback. Skipped if the caller passed a custom underlying
@@ -1031,7 +1032,7 @@ def get_multi_option_greeks(
                     base_symbol, exchange, spot_exchange, expiry, api_key, synth_cache
                 )
                 if forward:
-                    symbol_forward[symbol] = forward
+                    symbol_forward[batch_key] = forward
         except Exception as e:
             logger.warning(f"Failed to parse symbol {symbol}: {e}")
             failed_count += 1
@@ -1063,13 +1064,14 @@ def get_multi_option_greeks(
     option_symbols_to_fetch = []
     for sym_req in symbols:
         symbol = sym_req.get("symbol")
-        if symbol in parsed_symbols:  # only if parsing succeeded
+        exchange = sym_req.get("exchange")
+        if (symbol, exchange) in parsed_symbols:  # only if parsing succeeded
             option_symbols_to_fetch.append({
                 "symbol": symbol,
-                "exchange": sym_req.get("exchange"),
+                "exchange": exchange,
             })
 
-    option_prices = {}  # symbol -> ltp
+    option_prices = {}  # (symbol, exchange) -> ltp
     if option_symbols_to_fetch:
         logger.info(f"Batch fetching {len(option_symbols_to_fetch)} option prices via multiquotes")
         try:
@@ -1079,10 +1081,11 @@ def get_multi_option_greeks(
             if mq_success and "results" in mq_response:
                 for result in mq_response["results"]:
                     sym = result.get("symbol")
+                    exch = result.get("exchange")
                     if sym and "data" in result:
                         ltp = result["data"].get("ltp")
                         if ltp:
-                            option_prices[sym] = ltp
+                            option_prices[(sym, exch)] = ltp
         except Exception as e:
             logger.warning(f"Multiquotes fetch failed: {e}")
 
@@ -1090,15 +1093,16 @@ def get_multi_option_greeks(
     for sym_req in symbols:
         symbol = sym_req.get("symbol")
         exchange = sym_req.get("exchange")
+        batch_key = (symbol, exchange)
 
         # Skip if already failed during parsing
-        if symbol not in parsed_symbols:
+        if batch_key not in parsed_symbols:
             continue
 
         # Forward price: synthetic future for index weeklies, else spot.
         # Falls back to spot if the synthetic future could not be computed.
-        spot_key = symbol_to_spot_key.get(symbol)
-        spot_price = symbol_forward.get(symbol) or (spot_keys.get(spot_key) if spot_key else None)
+        spot_key = symbol_to_spot_key.get(batch_key)
+        spot_price = symbol_forward.get(batch_key) or (spot_keys.get(spot_key) if spot_key else None)
         if not spot_price:
             failed_count += 1
             results.append({
@@ -1110,7 +1114,7 @@ def get_multi_option_greeks(
             continue
 
         # Get option price
-        option_price = option_prices.get(symbol)
+        option_price = option_prices.get(batch_key)
         if not option_price:
             failed_count += 1
             results.append({
@@ -1136,7 +1140,7 @@ def get_multi_option_greeks(
                 success_count += 1
             else:
                 if _is_expired_option_response(calc_response):
-                    base_symbol, expiry, strike, opt_type = parsed_symbols[symbol]
+                    base_symbol, expiry, strike, opt_type = parsed_symbols[batch_key]
                     calc_response = _expired_option_greeks_response(
                         option_symbol=symbol,
                         exchange=exchange,
@@ -1165,8 +1169,8 @@ def get_multi_option_greeks(
             })
 
     # Sort results to maintain original order
-    symbol_order = {sym["symbol"]: idx for idx, sym in enumerate(symbols)}
-    results.sort(key=lambda x: symbol_order.get(x.get("symbol"), 999))
+    symbol_order = {(sym["symbol"], sym.get("exchange")): idx for idx, sym in enumerate(symbols)}
+    results.sort(key=lambda x: symbol_order.get((x.get("symbol"), x.get("exchange")), 999))
 
     response = {
         "status": "success" if failed_count == 0 else "partial" if success_count > 0 else "error",

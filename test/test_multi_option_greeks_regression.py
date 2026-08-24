@@ -59,7 +59,8 @@ def test_multi_option_greeks_converts_expired_legs_to_zero_greeks(monkeypatch):
             {
                 "status": "success",
                 "results": [
-                    {"symbol": item["symbol"], "data": {"ltp": 16.4}} for item in symbols
+                    {"symbol": item["symbol"], "exchange": item["exchange"], "data": {"ltp": 16.4}}
+                    for item in symbols
                 ],
             },
             200,
@@ -85,3 +86,83 @@ def test_multi_option_greeks_converts_expired_legs_to_zero_greeks(monkeypatch):
     assert all(item["implied_volatility"] == 0 for item in response["data"])
     assert all(item["greeks"] == {"delta": 0, "gamma": 0, "theta": 0, "vega": 0, "rho": 0} for item in response["data"])
     assert all("expired" in item["note"] for item in response["data"])
+
+
+def test_multi_option_greeks_keeps_per_exchange_state_for_duplicate_symbols(monkeypatch):
+    symbols = [
+        {"symbol": "RELIANCE28MAR243000CE", "exchange": "NFO"},
+        {"symbol": "RELIANCE28MAR243000CE", "exchange": "BFO"},
+    ]
+    spot_by_exchange = {"NSE": 3010.0, "BSE": 3040.0}
+    ltp_by_exchange = {"NFO": 41.5, "BFO": 63.25}
+
+    monkeypatch.setattr(
+        greeks_service,
+        "parse_option_symbol",
+        lambda symbol, exchange, expiry_time=None: (
+            "RELIANCE",
+            datetime(2026, 3, 28, 15, 30),
+            3000.0,
+            "CE",
+        ),
+    )
+    monkeypatch.setattr(
+        greeks_service,
+        "get_underlying_exchange",
+        lambda base_symbol, options_exchange: "NSE" if options_exchange == "NFO" else "BSE",
+    )
+    monkeypatch.setattr(greeks_service, "_resolve_forward_price", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "services.quotes_service.get_quotes",
+        lambda symbol, exchange, api_key=None: (
+            True,
+            {"status": "success", "data": {"ltp": spot_by_exchange[exchange]}},
+            200,
+        ),
+    )
+    monkeypatch.setattr(
+        "services.quotes_service.get_multiquotes",
+        lambda symbols, api_key=None: (
+            True,
+            {
+                "status": "success",
+                "results": [
+                    {
+                        "symbol": item["symbol"],
+                        "exchange": item["exchange"],
+                        "data": {"ltp": ltp_by_exchange[item["exchange"]]},
+                    }
+                    for item in symbols
+                ],
+            },
+            200,
+        ),
+    )
+    monkeypatch.setattr(
+        greeks_service,
+        "calculate_greeks",
+        lambda **kwargs: (
+            True,
+            {
+                "status": "success",
+                "symbol": kwargs["option_symbol"],
+                "exchange": kwargs["exchange"],
+                "spot_price": kwargs["spot_price"],
+                "option_price": kwargs["option_price"],
+            },
+            200,
+        ),
+    )
+
+    success, response, status_code = greeks_service.get_multi_option_greeks(symbols)
+
+    assert success is True
+    assert set(response) == {"status", "data", "summary"}
+    assert response["summary"] == {"total": 2, "success": 2, "failed": 0}
+
+    by_exchange = {item["exchange"]: item for item in response["data"]}
+    assert set(by_exchange) == {"NFO", "BFO"}
+    assert by_exchange["NFO"]["option_price"] == 41.5
+    assert by_exchange["BFO"]["option_price"] == 63.25
+    assert by_exchange["NFO"]["spot_price"] == 3010.0
+    assert by_exchange["BFO"]["spot_price"] == 3040.0
