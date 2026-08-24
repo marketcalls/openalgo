@@ -65,7 +65,11 @@ docker run -d \
 
 ### What Gets Built
 
-The Dockerfile uses **multi-stage builds** for optimization:
+The Dockerfile uses **multi-stage builds** for optimization. Each base image
+below is pinned to an immutable digest in the [`Dockerfile`](../../Dockerfile)
+itself for supply-chain reproducibility. The tag names here are for
+readability. See the [`Dockerfile`](../../Dockerfile) for the exact pinned
+digest currently in use.
 
 1. **Python Builder Stage** (`python:3.12-bullseye`)
    - Installs `uv` package manager
@@ -84,6 +88,10 @@ The Dockerfile uses **multi-stage builds** for optimization:
      - `libopenblas0` - BLAS/LAPACK for linear algebra
      - `libgomp1` - OpenMP for parallel operations
      - `libgfortran5` - Fortran runtime for scipy
+   - **Installs chart export libraries:**
+     - `chromium` and `fonts-liberation` - headless Chromium driven by Kaleido
+       for Plotly static image export, used by the Telegram bot's `/chart`
+       command
    - Copies virtual environment from builder stage
    - Copies built frontend from builder stage
    - **Configures numba/scipy support:**
@@ -103,11 +111,14 @@ None required - all configuration is in `.env` file.
 
 ### Image Size
 
-- **Base image** (`python:3.12-slim-bullseye`): ~145 MB
-- **Python dependencies**: ~650 MB
-- **Runtime libraries**: ~15 MB
-- **Frontend dist**: ~5 MB
-- **Total final image**: ~815 MB
+Measured via `docker history` on a built image (sizes vary by platform):
+
+- **Base image** (`python:3.12-slim-bullseye`): ~115 MB
+- **Python dependencies**: ~795 MB
+- **Runtime libraries** (includes `chromium` for chart export): ~535 MB
+- **Application source**: ~35 MB
+- **Frontend dist**: ~10 MB
+- **Total final image**: ~1.5 GB
 
 ## Configuration Requirements
 
