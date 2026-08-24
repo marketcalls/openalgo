@@ -1220,13 +1220,20 @@ def replace_workflow(workflow_id):
 @flow_bp.route("/api/index-symbols", methods=["GET"])
 @check_session_validity
 def get_index_symbols_lot_sizes():
-    """
-    Get lot sizes for index symbols from master contract database.
-    Returns lot sizes for NSE and BSE index options (NIFTY, BANKNIFTY, etc.)
+    """Lot sizes for every underlying the options nodes offer.
+
+    Named for the index options it originally covered; it now also answers for
+    the MCX commodities, which the Options Order and Multi-Leg nodes list
+    alongside them. The route name is left alone because the frontend caches
+    against it.
+
+    An underlying with no usable lot size is omitted rather than returned with a
+    null, so the dropdown never offers something the executor would then refuse
+    to size.
     """
     from database.symbol import SymToken, db_session
     from database.token_db_enhanced import extract_underlying_from_symbol
-    from services.flow_executor_service import symbol_prefix_filter
+    from services.flow_executor_service import MCX_OPTION_UNDERLYINGS, symbol_prefix_filter
 
     # Define index symbols to look up
     nse_indices = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"]
@@ -1278,9 +1285,13 @@ def get_index_symbols_lot_sizes():
     results = []
 
     try:
-        for index_name, exchange in [(n, "NFO") for n in nse_indices] + [
-            (n, "BFO") for n in bse_indices
-        ]:
+        for index_name, exchange in (
+            [(n, "NFO") for n in nse_indices]
+            + [(n, "BFO") for n in bse_indices]
+            # MCX options trade on MCX itself, so the lot size is read from the
+            # same exchange the option is listed on.
+            + [(n, "MCX") for n in MCX_OPTION_UNDERLYINGS]
+        ):
             lot_size = _lot_size(index_name, exchange)
             if lot_size:
                 results.append(

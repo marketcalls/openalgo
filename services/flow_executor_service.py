@@ -93,6 +93,82 @@ _OPTION_OFFSET_PATTERN = re.compile(r"(?:ATM|(?:ITM|OTM)(?:[1-9]|[1-4]\d|50))")
 _MISSING_ORDER_VALUE = object()
 
 
+#: MCX products that list options in the master contract.
+#:
+#: MCX has no spot instrument, so an option's ATM reference is the near-month
+#: future rather than an index level, and there is no separate derivatives
+#: segment the way NFO is to NSE -- the future, the option and the quote all
+#: live on MCX. option_symbol_service resolves that future itself for every
+#: exchange in its NO_SPOT_EXCHANGES set.
+MCX_OPTION_UNDERLYINGS = (
+    "GOLD",
+    "GOLDM",
+    "SILVER",
+    "SILVERM",
+    "CRUDEOIL",
+    "CRUDEOILM",
+    "NATURALGAS",
+    "NATGASMINI",
+    "COPPER",
+    "ZINC",
+    "MCXBULLDEX",
+)
+
+#: underlying -> (exchange to quote for the ATM reference, exchange the option
+#: trades on). Anything absent is an NSE underlying, which is the overwhelming
+#: majority and keeps this table to the exceptions.
+OPTION_UNDERLYING_EXCHANGES: dict[str, tuple[str, str]] = {
+    "SENSEX": ("BSE_INDEX", "BFO"),
+    "BANKEX": ("BSE_INDEX", "BFO"),
+    "SENSEX50": ("BSE_INDEX", "BFO"),
+    **dict.fromkeys(MCX_OPTION_UNDERLYINGS, ("MCX", "MCX")),
+}
+
+DEFAULT_OPTION_EXCHANGES = ("NSE_INDEX", "NFO")
+
+#: Exchange the author may have declared on the node -> the same pair. Only
+#: consulted for an underlying the table above does not name, so a stored
+#: workflow whose `exchange` still holds the node default cannot reroute a
+#: known index.
+DECLARED_OPTION_EXCHANGES: dict[str, tuple[str, str]] = {
+    "BFO": ("BSE_INDEX", "BFO"),
+    "BSE": ("BSE_INDEX", "BFO"),
+    "BSE_INDEX": ("BSE_INDEX", "BFO"),
+    "NFO": ("NSE_INDEX", "NFO"),
+    "NSE": ("NSE_INDEX", "NFO"),
+    "NSE_INDEX": ("NSE_INDEX", "NFO"),
+    # No-spot exchanges quote and trade on themselves.
+    "MCX": ("MCX", "MCX"),
+    "CDS": ("CDS", "CDS"),
+    "BCD": ("BCD", "BCD"),
+    "NCDEX": ("NCDEX", "NCDEX"),
+    "NCO": ("NCO", "NCO"),
+}
+
+
+def resolve_option_exchanges(underlying: str, declared: str = "") -> tuple[str, str]:
+    """The quote exchange and the option exchange for an options underlying.
+
+    Both options nodes need this pair, and keeping it in one place is what
+    stops them drifting apart -- they already carried two copies of a hardcoded
+    BSE list, and adding MCX to only one of them would have left the multi-leg
+    node placing commodity legs on NFO.
+
+    A named underlying decides on its own. `declared` -- the node's `exchange`
+    field -- is the fallback for anything unnamed, which is how an imported
+    workflow reaches a commodity or a stock option this table does not list.
+    Name first, because the node default ships "NSE_INDEX" and is left untouched
+    unless the author changes the dropdown: trusting it would have sent every
+    imported SENSEX order to NFO.
+    """
+    name = (underlying or "").strip().upper()
+    if name in OPTION_UNDERLYING_EXCHANGES:
+        return OPTION_UNDERLYING_EXCHANGES[name]
+    return DECLARED_OPTION_EXCHANGES.get(
+        (declared or "").strip().upper(), DEFAULT_OPTION_EXCHANGES
+    )
+
+
 def symbol_prefix_filter(column, prefix: str):
     """Index-friendly "this column starts with `prefix`" predicate.
 
@@ -802,13 +878,9 @@ class NodeExecutor:
 
         self.log(f"Placing options order: {underlying} {option_type} {offset}")
 
-        # Get the underlying exchange for index
-        if underlying in ["SENSEX", "BANKEX", "SENSEX50"]:
-            underlying_exchange = "BSE_INDEX"
-            fo_exchange = "BFO"
-        else:
-            underlying_exchange = "NSE_INDEX"
-            fo_exchange = "NFO"
+        underlying_exchange, fo_exchange = resolve_option_exchanges(
+            underlying, self.get_str(node_data, "exchange", "")
+        )
 
         try:
             lot_size = self._resolve_lot_size(underlying, fo_exchange)
@@ -966,13 +1038,9 @@ class NodeExecutor:
             f"Strategy: {strategy_type}, Action: {action}, Quantity: {quantity_lots} lots, Product: {product}"
         )
 
-        # Get the underlying exchange for index
-        if underlying in ["SENSEX", "BANKEX", "SENSEX50"]:
-            underlying_exchange = "BSE_INDEX"
-            fo_exchange = "BFO"
-        else:
-            underlying_exchange = "NSE_INDEX"
-            fo_exchange = "NFO"
+        underlying_exchange, fo_exchange = resolve_option_exchanges(
+            underlying, self.get_str(node_data, "exchange", "")
+        )
 
         # Same master-contract lookup the single-leg options node uses. A second
         # hardcoded table here drifted the same way the first one had: it still

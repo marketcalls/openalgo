@@ -641,8 +641,9 @@ Single-leg options order resolved from underlying + offset + option type.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `underlying` | `"NIFTY"` \| `"BANKNIFTY"` \| `"FINNIFTY"` \| `"MIDCPNIFTY"` \| `"NIFTYNXT50"` \| `"SENSEX"` \| `"BANKEX"` \| `"SENSEX50"` | `"NIFTY"` | |
-| `expiryType` | `"current_week"` \| `"next_week"` \| `"current_month"` \| `"next_month"` | `"current_week"` | The Symbol service resolves to actual date. |
+| `underlying` | NSE: `"NIFTY"` \| `"BANKNIFTY"` \| `"FINNIFTY"` \| `"MIDCPNIFTY"` \| `"NIFTYNXT50"`; BSE: `"SENSEX"` \| `"BANKEX"` \| `"SENSEX50"`; MCX: `"GOLD"` \| `"GOLDM"` \| `"SILVER"` \| `"SILVERM"` \| `"CRUDEOIL"` \| `"CRUDEOILM"` \| `"NATURALGAS"` \| `"NATGASMINI"` \| `"COPPER"` \| `"ZINC"` \| `"MCXBULLDEX"` | `"NIFTY"` | Decides the exchange on its own — see **Underlying and exchange** below. |
+| `exchange` | `"NSE_INDEX"` \| `"NFO"` \| `"BSE_INDEX"` \| `"BFO"` \| `"MCX"` \| `"CDS"` \| `"BCD"` \| `"NCDEX"` \| `"NCO"` | `"NSE_INDEX"` | **Only consulted for an `underlying` not listed above.** |
+| `expiryType` | `"current_week"` \| `"next_week"` \| `"current_month"` \| `"next_month"` | `"current_week"` | The Symbol service resolves to actual date. MCX contracts are monthly, so use `"current_month"`/`"next_month"` there. |
 | `offset` | `"ATM"` \| `"ITM1"`–`"ITM5"` \| `"OTM1"`–`"OTM10"` | `"ATM"` | |
 | `optionType` | `"CE"` \| `"PE"` | `"CE"` | |
 | `action` | `"BUY"` \| `"SELL"` | `"BUY"` | |
@@ -672,6 +673,37 @@ Single-leg options order resolved from underlying + offset + option type.
   }
 }
 ```
+
+**Underlying and exchange.** The two options nodes resolve *two* exchanges: the
+one whose price sets the ATM reference, and the one the option contract trades
+on. Every underlying in the table above decides both by name:
+
+| Underlying | ATM reference quoted from | Option trades on |
+|---|---|---|
+| NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, NIFTYNXT50 | `NSE_INDEX` (the index level) | `NFO` |
+| SENSEX, BANKEX, SENSEX50 | `BSE_INDEX` (the index level) | `BFO` |
+| GOLD, GOLDM, SILVER, SILVERM, CRUDEOIL, CRUDEOILM, NATURALGAS, NATGASMINI, COPPER, ZINC, MCXBULLDEX | `MCX` (the **near-month future**) | `MCX` |
+
+MCX differs from the equity segments in two ways that matter when writing a
+workflow by hand:
+
+- **There is no separate derivatives exchange.** NFO is to NSE what nothing is
+  to MCX — the future, the option and the quote all live on `MCX`.
+- **There is no spot instrument.** `CRUDEOIL` on its own is not a tradable
+  symbol, so the ATM strike is priced off the nearest unexpired future
+  (`CRUDEOIL21SEP26FUT`), resolved automatically. If no unexpired future exists
+  the node fails rather than guessing a reference price.
+
+The `exchange` field is a **fallback, not an override**: it is read only when
+`underlying` is not one of the names above, which is how you reach a stock
+option (`"underlying": "SBIN", "exchange": "NFO"`) or a commodity the editor
+does not list (`"underlying": "MENTHAOIL", "exchange": "MCX"`). A named
+underlying always wins, so a workflow whose `exchange` still holds the node
+default cannot misroute a SENSEX or CRUDEOIL order.
+
+`quantity` is in **lots** for every underlying. The lot size comes from the
+master contract, and most MCX option contracts carry a lot size of 1, so one lot
+is one contract there.
 
 #### optionsMultiOrder — Multi-Leg Options Strategy
 
@@ -2282,12 +2314,12 @@ Valid `exchange` values across all nodes:
 | `BFO` | BSE F&O |
 | `CDS` | NSE Currency |
 | `BCD` | BSE Currency |
-| `MCX` | Commodity |
+| `MCX` | Commodity, futures and options. Also the underlying exchange for a commodity `optionsOrder`/`optionsMultiOrder` - MCX has no separate F&O segment. |
 | `NCDEX` | Commodity |
 | `NCO` | NSE Commodities, futures and options (Zerodha only) |
 | `NSE_INDEX` | NSE Indices (for `optionsOrder`/`optionChain`/`optionSymbol`/`syntheticFuture`) |
 | `BSE_INDEX` | BSE Indices (same usage as above) |
-| `MCX_INDEX` | MCX sectoral indices such as MCXBULLDEX (quote only) |
+| `MCX_INDEX` | MCX sectoral index feeds - MCXBULLDEX, MCXMETLDEX, MCXAGRI (quote only). The tradable MCXBULLDEX futures and options live on `MCX`, not here. |
 | `GLOBAL_INDEX` | Global indices - US30, JAPAN225, HANGSENG, GIFTNIFTY (quote only, Zerodha) |
 | `CRYPTO` | Crypto derivatives (Delta Exchange only) |
 
@@ -2432,7 +2464,9 @@ funds (outputVariable=f)
   `optionsMultiOrder` accept `quantity` **in lots** (multiplied by lot size
   internally). `placeOrder` / `smartOrder` / `splitOrder` / `basketOrder`
   accept `quantity` **in shares**. Check this when generating from a single
-  source.
+  source. The lot size is read from the master contract, never guessed: an
+  underlying with no usable lot size fails the node rather than sizing an order
+  on an assumption. Most MCX option contracts carry a lot size of 1.
 
 ---
 
