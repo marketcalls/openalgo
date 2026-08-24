@@ -108,7 +108,7 @@ from blueprints.tv_json import tv_json_bp
 from blueprints.vol_surface import vol_surface_bp  # Import the vol surface blueprint
 from blueprints.websocket_example import websocket_bp  # Import the websocket example blueprint
 from blueprints.whatsapp import whatsapp_bp  # Import the WhatsApp blueprint
-from cors import cors  # Import the CORS instance
+from cors import init_cors
 from csp import apply_csp_middleware  # Import the CSP middleware
 from database.action_center_db import init_db as ensure_action_center_tables_exists
 from database.analyzer_db import init_db as ensure_analyzer_tables_exists
@@ -179,10 +179,8 @@ def create_app():
     # Initialize Flask-Limiter with the app object
     limiter.init_app(app)
 
-    # Initialize Flask-CORS with the app object using configuration from environment variables
-    from cors import get_cors_config
-
-    cors.init_app(app, **get_cors_config())
+    # Initialize Flask-CORS only when explicitly enabled.
+    init_cors(app)
 
     # Apply Content Security Policy middleware
     apply_csp_middleware(app)
