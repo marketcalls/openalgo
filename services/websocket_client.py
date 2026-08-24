@@ -574,9 +574,9 @@ def get_websocket_client(
 def close_all_clients():
     """Close all WebSocket client connections"""
     with _client_lock:
-        for api_key, client in _client_instances.items():
+        for _api_key, client in _client_instances.items():
             try:
                 client.disconnect()
-            except Exception as e:
-                logger.exception(f"Error closing client for API key {api_key}: {e}")
+            except Exception:
+                logger.exception("Error closing WebSocket client")
         _client_instances.clear()

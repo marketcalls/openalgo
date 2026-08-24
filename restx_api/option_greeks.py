@@ -113,7 +113,7 @@ class OptionGreeks(Resource):
 
             # Verify API key
             if not verify_api_key(api_key):
-                logger.warning(f"Invalid API key used for option greeks: {api_key[:10]}...")
+                logger.warning("Invalid API key used for option greeks")
                 return make_response(
                     jsonify({"status": "error", "message": "Invalid openalgo apikey"}), 401
                 )
