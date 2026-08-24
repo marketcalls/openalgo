@@ -12,9 +12,16 @@ node types, edge endpoints, and the one-trigger rule. Per-node field contracts
 stay with the executor, which is where their defaults and coercions live.
 """
 
+import json
+import math
 import re
 from typing import Any
 
+from services.flow_node_contracts import VALID_STATUSES, normalize_status, parse_underlying_symbol
+from utils.constants import VALID_ACTIONS as SHARED_VALID_ACTIONS
+from utils.constants import VALID_EXCHANGES as SHARED_VALID_EXCHANGES
+from utils.constants import VALID_PRICE_TYPES as SHARED_VALID_PRICE_TYPES
+from utils.constants import VALID_PRODUCT_TYPES as SHARED_VALID_PRODUCT_TYPES
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -123,11 +130,26 @@ CONDITIONAL_REQUIRED_FIELDS: dict[str, dict[str, dict[str, tuple[str, ...]]]] = 
 
 def _positive_number(value: object) -> float | None:
     """The value as a positive number, or None when it is not one."""
+    if isinstance(value, bool):
+        return None
     try:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return number if number > 0 else None
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def _valid_quantity(value: object, *, allow_zero: bool = False) -> bool:
+    """Return whether an order quantity is positive, or non-negative when allowed."""
+    if isinstance(value, bool):
+        return False
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(number):
+        return False
+    return number >= 0 if allow_zero else number > 0
 
 
 def _alert_threshold_errors(
@@ -224,7 +246,7 @@ REQUIRED_NODE_FIELDS: dict[str, tuple[str, ...]] = {
     "getQuote": ("symbol", "exchange"),
     "getDepth": ("symbol", "exchange"),
     "history": ("symbol", "exchange", "interval"),
-    "indicator": ("symbol", "exchange", "indicatorName"),
+    "indicator": ("indicatorName",),
     "priorPeriodOhlc": ("symbol", "exchange"),
     "barOffset": ("symbol", "exchange"),
     "openPosition": ("symbol", "exchange"),
@@ -274,27 +296,29 @@ EITHER_REQUIRED_FIELDS: dict[str, tuple[tuple[str, ...], ...]] = {
 # best and a silently different order at worst -- several broker mappers fall
 # back to a default for an unrecognised price type rather than refusing it, so
 # a typo'd "LIMT" becomes a MARKET order.
-VALID_EXCHANGES = frozenset(
+VALID_EXCHANGES = frozenset(SHARED_VALID_EXCHANGES)
+VALID_PRODUCTS = frozenset(SHARED_VALID_PRODUCT_TYPES)
+VALID_PRICE_TYPES = frozenset(SHARED_VALID_PRICE_TYPES)
+VALID_ACTIONS = frozenset(SHARED_VALID_ACTIONS)
+VALID_OPTION_TYPES = frozenset({"CE", "PE"})
+VALID_VARIABLE_OPERATIONS = frozenset(
     {
-        "NSE",
-        "NFO",
-        "CDS",
-        "BSE",
-        "BFO",
-        "BCD",
-        "MCX",
-        "NCDEX",
-        "NCO",
-        "NSE_INDEX",
-        "BSE_INDEX",
-        "MCX_INDEX",
-        "CRYPTO",
-        "GLOBAL_INDEX",
+        "set",
+        "get",
+        "add",
+        "subtract",
+        "multiply",
+        "divide",
+        "increment",
+        "decrement",
+        "parse_json",
+        "stringify",
+        "append",
     }
 )
-VALID_PRODUCTS = frozenset({"CNC", "NRML", "MIS"})
-VALID_PRICE_TYPES = frozenset({"MARKET", "LIMIT", "SL", "SL-M"})
-VALID_ACTIONS = frozenset({"BUY", "SELL"})
+PRICED_ORDER_NODE_TYPES = frozenset(
+    {"placeOrder", "smartOrder", "optionsOrder", "optionsMultiOrder", "basketOrder", "splitOrder"}
+)
 
 # Which of those vocabularies each field is drawn from.
 ENUM_FIELDS: dict[str, frozenset[str]] = {
@@ -303,14 +327,316 @@ ENUM_FIELDS: dict[str, frozenset[str]] = {
     "product": VALID_PRODUCTS,
     "priceType": VALID_PRICE_TYPES,
     "pricetype": VALID_PRICE_TYPES,
+    "operation": VALID_VARIABLE_OPERATIONS,
 }
 
-# Fields that must be a positive number wherever they appear. A zero or
-# negative quantity reaches the broker as a malformed order.
+# Fields that must be a positive number wherever they appear. SmartOrder
+# quantity is the exception: zero denotes a valid target-position square-off.
 POSITIVE_NUMBER_FIELDS = frozenset({"quantity", "splitSize", "lots"})
 
 
-def _enum_and_range_errors(base: str, node_type: str, data: dict) -> list:
+def _priced_order_errors(
+    base: str,
+    data: dict,
+    strict: bool,
+    price_type_key: str = "priceType",
+    price_key: str = "price",
+    trigger_price_key: str = "triggerPrice",
+) -> list[dict]:
+    """Validate price fields selected by a static price type without touching templates."""
+    price_type = data.get(price_type_key)
+    if not isinstance(price_type, str) or "{{" in price_type:
+        return []
+    canonical = price_type.strip().upper()
+    found: list[dict] = []
+    for field, applies_to in (
+        (price_key, {"LIMIT", "SL"}),
+        (trigger_price_key, {"SL", "SL-M"}),
+    ):
+        if canonical not in applies_to:
+            continue
+        value = data.get(field)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            if strict:
+                found.append(
+                    _err(
+                        f"{base}/{field}",
+                        "missing_price",
+                        f"A {canonical} order needs {field} before it can execute.",
+                        field,
+                        value,
+                    )
+                )
+            continue
+        if isinstance(value, str) and "{{" in value:
+            continue
+        if _positive_number(value) is None:
+            found.append(
+                _err(
+                    f"{base}/{field}",
+                    "invalid_price",
+                    f"A {canonical} order needs a positive {field}; {value!r} cannot be priced.",
+                    "a positive number",
+                    value,
+                )
+            )
+    return found
+
+
+def _static_order_leg_errors(
+    base: str,
+    data: dict,
+    strict: bool,
+    required_fields: tuple[str, ...],
+    *,
+    price_type_key: str,
+    trigger_price_key: str = "triggerPrice",
+    option_leg: bool = False,
+) -> list[dict]:
+    """Validate a parsed Margin or custom-options leg without rewriting it."""
+    found: list[dict] = []
+    for field in required_fields:
+        value = data.get(field)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            if strict:
+                found.append(
+                    _err(
+                        f"{base}/{field}",
+                        "missing_required_field",
+                        f"A position needs {field} before it can execute.",
+                        field,
+                        value,
+                    )
+                )
+
+    enum_fields = {
+        "exchange": VALID_EXCHANGES,
+        "action": VALID_ACTIONS,
+        "product": VALID_PRODUCTS,
+        price_type_key: VALID_PRICE_TYPES,
+    }
+    if option_leg:
+        enum_fields["optionType"] = VALID_OPTION_TYPES
+        if price_type_key == "priceType" and "pricetype" in data:
+            enum_fields["pricetype"] = VALID_PRICE_TYPES
+    for field, allowed in enum_fields.items():
+        if field not in data:
+            continue
+        value = data.get(field)
+        if isinstance(value, str) and ("{{" in value or not value.strip()):
+            continue
+        if not isinstance(value, str) or value.strip().upper() not in allowed:
+            found.append(
+                _err(
+                    f"{base}/{field}",
+                    "invalid_constant",
+                    f"'{value}' is not a valid {field} constant.",
+                    sorted(allowed),
+                    value,
+                )
+            )
+
+    if "quantity" in data:
+        quantity = data.get("quantity")
+        if not (isinstance(quantity, str) and ("{{" in quantity or not quantity.strip())):
+            if not _valid_quantity(quantity):
+                found.append(
+                    _err(
+                        f"{base}/quantity",
+                        "invalid_quantity",
+                        f"quantity must be a positive number; {quantity!r} cannot execute.",
+                        "a positive number",
+                        quantity,
+                    )
+                )
+    found.extend(
+        _priced_order_errors(
+            base,
+            data,
+            strict,
+            price_type_key,
+            trigger_price_key=trigger_price_key,
+        )
+    )
+    return found
+
+
+def _margin_errors(base: str, data: dict, strict: bool) -> list[dict]:
+    """Validate Margin's legacy single position or its raw JSON basket."""
+    raw_key = next(
+        (
+            key
+            for key in ("positionsJson", "positions")
+            if data.get(key) is not None
+            and not (isinstance(data.get(key), str) and not data.get(key).strip())
+        ),
+        None,
+    )
+    if raw_key is None:
+        symbol = data.get("symbol")
+        if symbol is not None and not (isinstance(symbol, str) and not symbol.strip()):
+            return []
+        return (
+            [
+                _err(
+                    f"{base}/data/positionsJson",
+                    "missing_alternative",
+                    "A Margin node needs positionsJson, positions, or a legacy symbol.",
+                    "a non-empty positionsJson, positions, or symbol",
+                    None,
+                )
+            ]
+            if strict
+            else []
+        )
+
+    raw = data[raw_key]
+    raw_base = f"{base}/data/{raw_key}"
+    if isinstance(raw, str):
+        text = raw.strip()
+        if "{{" in text:
+            return []
+        try:
+            positions = json.loads(text)
+        except (TypeError, ValueError):
+            return [
+                _err(
+                    raw_base,
+                    "invalid_positions",
+                    "Margin positions must be a JSON array of position objects.",
+                    "a JSON array of objects",
+                    raw,
+                )
+            ]
+    else:
+        positions = raw
+
+    if not isinstance(positions, list) or not positions:
+        return [
+            _err(
+                raw_base,
+                "invalid_positions",
+                "Margin positions must be a non-empty array of position objects.",
+                "a non-empty array of objects",
+                positions,
+            )
+        ]
+
+    found: list[dict] = []
+    for index, leg in enumerate(positions):
+        leg_base = f"{raw_base}/{index}"
+        if not isinstance(leg, dict):
+            found.append(
+                _err(
+                    leg_base,
+                    "invalid_positions",
+                    "Every Margin position must be an object.",
+                    "object",
+                    leg,
+                )
+            )
+            continue
+        found.extend(
+            _static_order_leg_errors(
+                leg_base,
+                leg,
+                strict,
+                ("symbol", "exchange", "action", "quantity", "product", "pricetype"),
+                price_type_key="pricetype",
+                trigger_price_key="trigger_price",
+            )
+        )
+    return found
+
+
+def _options_multi_errors(base: str, data: dict, strict: bool) -> list[dict]:
+    """Validate the executable shape of generated and custom option strategies."""
+    strategy = data.get("strategy", "straddle")
+    if isinstance(strategy, str) and "{{" in strategy:
+        return []
+    canonical = strategy.strip().lower() if isinstance(strategy, str) else ""
+    if canonical != "custom":
+        price_type = data.get("priceType")
+        if isinstance(price_type, str) and "{{" not in price_type:
+            if price_type.strip().upper() not in {"MARKET", "LIMIT"}:
+                return [
+                    _err(
+                        f"{base}/data/priceType",
+                        "invalid_constant",
+                        "Generated option strategies support only MARKET and LIMIT price types.",
+                        ["LIMIT", "MARKET"],
+                        price_type,
+                    )
+                ]
+        return []
+
+    legs_key = "orderLegs" if "legs" not in data and "orderLegs" in data else "legs"
+    legs = data.get(legs_key)
+    legs_base = f"{base}/data/{legs_key}"
+    if legs is None or (isinstance(legs, str) and not legs.strip()):
+        return (
+            [
+                _err(
+                    legs_base,
+                    "missing_required_field",
+                    "A custom options strategy needs at least one leg.",
+                    "a non-empty legs array",
+                    legs,
+                )
+            ]
+            if strict
+            else []
+        )
+    if isinstance(legs, str) and "{{" in legs:
+        return []
+    if not isinstance(legs, list) or not legs:
+        return [
+            _err(
+                legs_base,
+                "invalid_legs",
+                "Custom options strategy legs must be a non-empty array.",
+                "a non-empty array of objects",
+                legs,
+            )
+        ]
+
+    found: list[dict] = []
+    for index, leg in enumerate(legs):
+        leg_base = f"{legs_base}/{index}"
+        if not isinstance(leg, dict):
+            found.append(
+                _err(
+                    leg_base,
+                    "invalid_legs",
+                    "Every custom options leg must be an object.",
+                    "object",
+                    leg,
+                )
+            )
+            continue
+        effective_leg = dict(leg)
+        if "product" not in effective_leg and "product" in data:
+            effective_leg["product"] = data["product"]
+        price_type_key = "priceType" if "priceType" in leg else "pricetype"
+        if price_type_key not in effective_leg and "priceType" in data:
+            effective_leg[price_type_key] = data["priceType"]
+        for field in ("price", "triggerPrice"):
+            if field not in effective_leg and field in data:
+                effective_leg[field] = data[field]
+        found.extend(
+            _static_order_leg_errors(
+                leg_base,
+                effective_leg,
+                strict,
+                ("offset", "optionType", "action", "quantity"),
+                price_type_key=price_type_key,
+                option_leg=True,
+            )
+        )
+    return found
+
+
+def _enum_and_range_errors(base: str, node_type: str, data: dict, strict: bool) -> list:
     """Value-level checks for order fields: known constants, sane numbers.
 
     Skipped for any value carrying a {{variable}}, which is only resolvable at
@@ -321,7 +647,9 @@ def _enum_and_range_errors(base: str, node_type: str, data: dict) -> list:
         if field not in data:
             continue
         value = data.get(field)
-        if isinstance(value, str) and ("{{" in value or not value.strip()):
+        if isinstance(value, str) and "{{" in value:
+            continue
+        if isinstance(value, str) and not value.strip() and field != "operation":
             continue
         if not isinstance(value, str):
             # A number or boolean here is not merely unknown, it is the wrong
@@ -338,7 +666,8 @@ def _enum_and_range_errors(base: str, node_type: str, data: dict) -> list:
                 )
             )
             continue
-        if value.strip().upper() not in allowed:
+        canonical = value if field == "operation" else value.strip().upper()
+        if canonical not in allowed:
             found.append(
                 _err(
                     f"{base}/data/{field}",
@@ -357,41 +686,27 @@ def _enum_and_range_errors(base: str, node_type: str, data: dict) -> list:
         value = data.get(field)
         if isinstance(value, str) and ("{{" in value or not value.strip()):
             continue
-        if _positive_number(value) is None:
+        allow_zero = node_type == "smartOrder" and field == "quantity"
+        if not _valid_quantity(value, allow_zero=allow_zero):
+            expectation = "a non-negative number" if allow_zero else "a positive number"
+            message = (
+                f"SmartOrder quantity must be a non-negative number; {value!r} "
+                "cannot describe a target position."
+                if allow_zero
+                else f"{field} must be a positive number; {value!r} reaches the broker as a malformed order."
+            )
             found.append(
                 _err(
                     f"{base}/data/{field}",
                     "invalid_quantity",
-                    f"{field} must be a positive number; {value!r} reaches the "
-                    "broker as a malformed order.",
-                    "a positive number",
+                    message,
+                    expectation,
                     value,
                 )
             )
 
-    # A priced order needs a price. MARKET ignores it, so only the priced types
-    # are checked -- a LIMIT at 0 is not "unset", it is an order the broker will
-    # reject or, worse, fill at a price nobody chose.
-    price_type = data.get("priceType", data.get("pricetype"))
-    if isinstance(price_type, str) and "{{" not in price_type:
-        canonical = price_type.strip().upper()
-        for field, applies_to in (("price", {"LIMIT", "SL"}), ("triggerPrice", {"SL", "SL-M"})):
-            if canonical not in applies_to or field not in data:
-                continue
-            value = data.get(field)
-            if isinstance(value, str) and ("{{" in value or not value.strip()):
-                continue
-            if _positive_number(value) is None:
-                found.append(
-                    _err(
-                        f"{base}/data/{field}",
-                        "invalid_price",
-                        f"a {canonical} order needs a positive {field}; "
-                        f"{value!r} cannot be priced.",
-                        "a positive number",
-                        value,
-                    )
-                )
+    if node_type in PRICED_ORDER_NODE_TYPES:
+        found.extend(_priced_order_errors(f"{base}/data", data, strict))
 
     # An indicator's params must be the JSON string the executor parses. The
     # object form imports cleanly and then fails at run time on json.loads, so
@@ -408,6 +723,33 @@ def _enum_and_range_errors(base: str, node_type: str, data: dict) -> list:
                     "import and then fails when the node runs.",
                     "a JSON object string",
                     params,
+                )
+            )
+
+    if node_type == "orderUpdateTrigger":
+        for field in ("orderId", "symbol"):
+            value = data.get(field)
+            if value is not None and not isinstance(value, str):
+                found.append(
+                    _err(
+                        f"{base}/data/{field}",
+                        "invalid_type",
+                        f"orderUpdateTrigger {field} must be a string filter; "
+                        f"{type(value).__name__} cannot match an order update.",
+                        "string",
+                        value,
+                    )
+                )
+        status = data.get("status", "complete")
+        if normalize_status(status) not in VALID_STATUSES:
+            found.append(
+                _err(
+                    f"{base}/data/status",
+                    "invalid_status",
+                    f"orderUpdateTrigger status must be one of {sorted(VALID_STATUSES)}, "
+                    f"got {status!r}",
+                    sorted(VALID_STATUSES),
+                    status,
                 )
             )
 
@@ -641,10 +983,75 @@ def validate_workflow(
         # path, so gating these on `strict` let a save store exactly the node
         # the importer would have refused.
         if isinstance(data, dict) and isinstance(node_type, str):
-            errors.extend(_enum_and_range_errors(base, node_type, data))
+            errors.extend(_enum_and_range_errors(base, node_type, data, strict))
+            if node_type == "margin":
+                errors.extend(_margin_errors(base, data, strict))
+            elif node_type == "optionsMultiOrder":
+                errors.extend(_options_multi_errors(base, data, strict))
 
         if strict and isinstance(data, dict) and isinstance(node_type, str):
             required = list(REQUIRED_NODE_FIELDS.get(node_type, ()))
+            if node_type == "indicator":
+                source_series = data.get("sourceSeries")
+                if source_series is None or (
+                    isinstance(source_series, str) and not source_series.strip()
+                ):
+                    required.extend(("symbol", "exchange"))
+            elif node_type in {"optionSymbol", "optionChain"}:
+                underlying = data.get("underlying")
+                has_embedded_expiry = (
+                    isinstance(underlying, str)
+                    and "{{" not in underlying
+                    and bool(underlying.strip())
+                    and parse_underlying_symbol(underlying)[1] is not None
+                )
+                if not has_embedded_expiry and not (
+                    isinstance(underlying, str) and "{{" in underlying
+                ):
+                    required.append("expiryDate")
+            elif node_type == "syntheticFuture":
+                required.append("expiryDate")
+            elif node_type == "variable":
+                operation = data.get("operation", "set")
+                if isinstance(operation, str) and "{{" not in operation:
+                    if operation in VALID_VARIABLE_OPERATIONS:
+                        if operation in {"get", "stringify"}:
+                            required.append("sourceVariable")
+                        elif operation in {
+                            "add",
+                            "subtract",
+                            "multiply",
+                            "divide",
+                            "parse_json",
+                        }:
+                            required.append("value")
+
+            if node_type == "orderUpdateTrigger":
+                order_id = data.get("orderId")
+                symbol = data.get("symbol")
+                has_order_id = isinstance(order_id, str) and bool(order_id.strip())
+                has_symbol = isinstance(symbol, str) and bool(symbol.strip())
+                if not has_order_id and not has_symbol:
+                    errors.append(
+                        _err(
+                            f"{base}/data/orderId",
+                            "missing_alternative",
+                            "An orderUpdateTrigger needs an Order ID or a Symbol to watch.",
+                            "a non-empty orderId or symbol",
+                            None,
+                        )
+                    )
+                elif isinstance(order_id, str) and "{{" in order_id:
+                    errors.append(
+                        _err(
+                            f"{base}/data/orderId",
+                            "invalid_trigger_filter",
+                            "orderUpdateTrigger Order ID must be a literal order id, not a "
+                            "{{variable}} reference.",
+                            "a literal order id",
+                            order_id,
+                        )
+                    )
             for selector, options in CONDITIONAL_REQUIRED_FIELDS.get(node_type, {}).items():
                 chosen = _canonical_condition(data.get(selector, ""))
                 if chosen and chosen not in options:

@@ -1161,6 +1161,8 @@ export const DEFAULT_NODE_DATA = {
     positionSize: 0,
     priceType: 'MARKET' as const,
     product: 'MIS' as const,
+    price: 0,
+    triggerPrice: 0,
   },
   getOrderStatus: {
     orderId: '',
@@ -1236,6 +1238,8 @@ export const DEFAULT_NODE_DATA = {
     orders: '',
     product: 'MIS' as const,
     priceType: 'MARKET' as const,
+    price: 0,
+    triggerPrice: 0,
   },
   splitOrder: {
     symbol: '',
@@ -1245,6 +1249,8 @@ export const DEFAULT_NODE_DATA = {
     splitSize: 50,
     priceType: 'MARKET' as const,
     product: 'MIS' as const,
+    price: 0,
+    triggerPrice: 0,
   },
   positionCheck: {
     symbol: '',
