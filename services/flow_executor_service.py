@@ -23,6 +23,17 @@ from database.flow_db import (
     get_workflow,
     update_execution_status,
 )
+from services.flow_node_contracts import (
+    EXPIRY_DATE_PATTERN as _EXPIRY_DATE_PATTERN,
+)
+from services.flow_node_contracts import (
+    OPTION_OFFSET_PATTERN as _OPTION_OFFSET_PATTERN,
+)
+from services.flow_node_contracts import (
+    VALID_EXPIRY_TYPES,
+    VALID_LEG_STRIKE_MODES,
+    select_expiry,
+)
 from services.flow_openalgo_client import FlowOpenAlgoClient, get_flow_client
 from utils.constants import VALID_ACTIONS, VALID_EXCHANGES, VALID_PRICE_TYPES, VALID_PRODUCT_TYPES
 
@@ -88,8 +99,6 @@ ORDER_CRITICAL_FIELDS = frozenset(
 # What an unresolved reference looks like after interpolation: WorkflowContext
 # returns the original {{...}} text when a path does not resolve.
 _UNRESOLVED_PATTERN = re.compile(r"\{\{[^}]*\}\}")
-_EXPIRY_DATE_PATTERN = re.compile(r"\d{2}[A-Z]{3}\d{2}")
-_OPTION_OFFSET_PATTERN = re.compile(r"(?:ATM|(?:ITM|OTM)(?:[1-9]|[1-4]\d|50))")
 _MISSING_ORDER_VALUE = object()
 
 
@@ -484,6 +493,21 @@ class RuntimeOrderResolver:
             qualifier = "non-negative" if minimum == 0 else f"at least {minimum}"
             raise ValueError(f"{key} must be {qualifier}, got {number}")
         return int(number)
+
+
+def _optional_leg_text(resolver: RuntimeOrderResolver, key: str) -> str:
+    """Read a leg field that may be absent or blank, but must be text if given.
+
+    ``RuntimeOrderResolver.text`` rejects a blank value, which is right for a
+    required field and wrong for an optional override - an omitted per-leg
+    expiry has to mean "inherit the node's", not "reject the leg".
+    """
+    value = resolver.value(key, default="")
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must resolve to text, got {value!r}")
+    return value.strip()
 
 
 class NodeExecutor:
@@ -982,11 +1006,51 @@ class NodeExecutor:
                         self.context, leg, f"Options multi-order leg {index}"
                     )
                     try:
-                        offset = leg_values.text("offset").upper()
-                        if not _OPTION_OFFSET_PATTERN.fullmatch(offset):
+                        # A leg picks its strike one of two ways. An offset is
+                        # re-resolved against the live underlying on every run,
+                        # which is what a repeating workflow wants. An absolute
+                        # strike names one contract and is used as given, which
+                        # suits a one-shot or manually built spread.
+                        strike_mode = leg_values.enum(
+                            "strikeMode",
+                            VALID_LEG_STRIKE_MODES,
+                            default="OFFSET",
+                        )
+                        offset: str | None = None
+                        strike: float | None = None
+                        if strike_mode == "STRIKE":
+                            strike = leg_values.number("strike")
+                            if strike <= 0:
+                                raise ValueError(
+                                    f"strike must be a positive number, got {strike}"
+                                )
+                        else:
+                            offset = leg_values.text("offset").upper()
+                            if not _OPTION_OFFSET_PATTERN.fullmatch(offset):
+                                raise ValueError(
+                                    "offset must be ATM, ITM1-ITM50, or "
+                                    f"OTM1-OTM50, got {offset!r}"
+                                )
+                        # A leg may override the node expiry, which is what
+                        # makes a calendar or diagonal spread expressible.
+                        # Either an explicit DDMMMYY date or a relative type;
+                        # the date is resolved once the exchange is known.
+                        leg_expiry_date = _optional_leg_text(leg_values, "expiry").upper()
+                        if leg_expiry_date and not _EXPIRY_DATE_PATTERN.fullmatch(
+                            leg_expiry_date
+                        ):
                             raise ValueError(
-                                "offset must be ATM, ITM1-ITM50, or "
-                                f"OTM1-OTM50, got {offset!r}"
+                                "expiry must be in DDMMMYY format such as 28OCT25, "
+                                f"got {leg_expiry_date!r}"
+                            )
+                        leg_expiry_type = _optional_leg_text(
+                            leg_values, "expiryType"
+                        ).lower()
+                        if leg_expiry_type and leg_expiry_type not in VALID_EXPIRY_TYPES:
+                            raise ValueError(
+                                "expiryType must be one of "
+                                f"{', '.join(sorted(VALID_EXPIRY_TYPES))}, "
+                                f"got {leg_expiry_type!r}"
                             )
                         option_type = leg_values.enum(
                             "optionType", frozenset({"CE", "PE"})
@@ -1021,6 +1085,9 @@ class NodeExecutor:
                     normalized_custom_legs.append(
                         {
                             "offset": offset,
+                            "strike": strike,
+                            "expiry_date": leg_expiry_date,
+                            "expiry_type": leg_expiry_type,
                             "option_type": option_type,
                             "action": leg_action,
                             "quantity_lots": leg_quantity,
@@ -1071,15 +1138,45 @@ class NodeExecutor:
         # Generate legs based on strategy type if no custom legs provided
         legs = []
         if normalized_custom_legs is not None:
-            for leg in normalized_custom_legs:
-                legs.append(
-                    {
-                        key: value
-                        for key, value in leg.items()
-                        if key != "quantity_lots"
-                    }
-                    | {"quantity": leg["quantity_lots"] * lot_size}
-                )
+            # A relative per-leg expiry costs a master-contract lookup, so legs
+            # sharing one expiry type resolve it once.
+            leg_expiry_cache: dict[str, str] = {}
+            for index, leg in enumerate(normalized_custom_legs, start=1):
+                leg_expiry = leg["expiry_date"]
+                expiry_type_override = leg["expiry_type"]
+                if not leg_expiry and expiry_type_override:
+                    leg_expiry = leg_expiry_cache.get(expiry_type_override, "")
+                    if not leg_expiry:
+                        resolved = self._resolve_expiry_date(
+                            underlying, fo_exchange, expiry_type_override
+                        )
+                        if not resolved:
+                            message = (
+                                f"leg {index}: could not resolve expiry for "
+                                f"{expiry_type_override}"
+                            )
+                            self.log(f"Options multi-order failed: {message}", "error")
+                            return {"status": "error", "message": message}
+                        leg_expiry_cache[expiry_type_override] = resolved
+                        leg_expiry = resolved
+
+                prepared = {
+                    key: value
+                    for key, value in leg.items()
+                    if key not in ("quantity_lots", "expiry_date", "expiry_type")
+                }
+                prepared["quantity"] = leg["quantity_lots"] * lot_size
+                # Only send an expiry that differs from the node's; the service
+                # falls back to the common expiry when the key is absent.
+                if leg_expiry:
+                    prepared["expiry_date"] = leg_expiry
+                # Send exactly one strike selector so the service's branch is
+                # unambiguous rather than relying on precedence.
+                if prepared.get("strike") is None:
+                    prepared.pop("strike", None)
+                else:
+                    prepared.pop("offset", None)
+                legs.append(prepared)
         else:
             # Generate legs from predefined strategy type
             # A generated strategy shares one price type across its legs. Its
@@ -1121,8 +1218,15 @@ class NodeExecutor:
 
         self.log(f"Placing options multi-order: {underlying} {strategy_type} with {len(legs)} legs")
         for i, leg in enumerate(legs):
+            # A manually built leg carries a strike instead of an offset, and
+            # may carry its own expiry.
+            selector = (
+                f"{leg['strike']:g}" if leg.get("strike") is not None else leg.get("offset")
+            )
+            expiry_note = f" {leg['expiry_date']}" if leg.get("expiry_date") else ""
             self.log(
-                f"  Leg {i + 1}: {leg['offset']} {leg['option_type']} {leg['action']} qty={leg['quantity']}"
+                f"  Leg {i + 1}: {selector}{expiry_note} {leg['option_type']} "
+                f"{leg['action']} qty={leg['quantity']}"
             )
 
         result = self.client.options_multi_order(
@@ -1209,7 +1313,13 @@ class NodeExecutor:
         return legs
 
     def _resolve_expiry_date(self, symbol: str, exchange: str, expiry_type: str) -> str | None:
-        """Resolve expiry type to actual expiry date"""
+        """The date a relative expiry type resolves to, in DDMMMYY.
+
+        The selection rule itself lives in flow_node_contracts.select_expiry so
+        the editor's expiry picker resolves it identically -- the panel shows
+        the author which date a leg will actually use, and a second copy of the
+        rule here would let that promise drift out of date.
+        """
         try:
             response = self.client.get_expiry(
                 symbol=symbol, exchange=exchange, instrumenttype="options"
@@ -1223,69 +1333,14 @@ class NodeExecutor:
                 self.log(f"No expiry dates found for {symbol} on {exchange}", "error")
                 return None
 
-            # Parse and sort expiry dates
-            def parse_expiry(exp_str: str) -> datetime | None:
-                """Parse expiry date string"""
-                if not exp_str or not isinstance(exp_str, str):
-                    return None
-                for fmt in ["%d-%b-%y", "%d%b%y", "%d-%B-%Y", "%d%B%Y"]:
-                    try:
-                        return datetime.strptime(exp_str.upper(), fmt)
-                    except ValueError:
-                        continue
-                return None
-
-            # Filter and sort expiries
-            valid_expiries = []
-            for exp_str in expiry_list:
-                parsed = parse_expiry(exp_str)
-                if parsed is not None:
-                    valid_expiries.append((exp_str, parsed))
-
-            if not valid_expiries:
-                self.log(f"No valid expiry dates found for {symbol}", "error")
-                return None
-
-            # Sort by parsed date
-            valid_expiries.sort(key=lambda x: x[1])
-            sorted_expiries = [exp[0] for exp in valid_expiries]
-            now = datetime.now()
-            current_month = now.month
-            current_year = now.year
-
-            # Calculate next month
-            if current_month == 12:
-                next_month, next_year = 1, current_year + 1
-            else:
-                next_month, next_year = current_month + 1, current_year
-
-            if expiry_type == "current_week":
-                if sorted_expiries:
-                    return self._format_expiry_for_api(sorted_expiries[0])
-                return None
-            elif expiry_type == "next_week":
-                if len(sorted_expiries) > 1:
-                    return self._format_expiry_for_api(sorted_expiries[1])
-                return None
-            elif expiry_type == "current_month":
-                result = None
-                for exp_str, exp_date in valid_expiries:
-                    if exp_date.month == current_month and exp_date.year == current_year:
-                        result = exp_str
-                if result:
-                    return self._format_expiry_for_api(result)
-                return None
-            elif expiry_type == "next_month":
-                result = None
-                for exp_str, exp_date in valid_expiries:
-                    if exp_date.month == next_month and exp_date.year == next_year:
-                        result = exp_str
-                if result:
-                    return self._format_expiry_for_api(result)
-                return None
-
-            self.log(f"Unknown expiry type: {expiry_type}", "error")
-            return None
+            selected = select_expiry(expiry_list, expiry_type)
+            if not selected:
+                self.log(
+                    f"No expiry matches {expiry_type} for {symbol} on {exchange} "
+                    f"among {len(expiry_list)} listed contract(s)",
+                    "error",
+                )
+            return selected
         except Exception as e:
             self.log(f"Error resolving expiry: {e}", "error")
             return None

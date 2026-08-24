@@ -43,6 +43,7 @@ import type { BasketOrderItem } from '@/types/flow'
 import { showToast } from '@/utils/toast'
 import { IndicatorParamsFields } from './IndicatorParamsFields'
 import { MarginPositionsFields } from './MarginPositionsFields'
+import { CustomLegsFields } from './CustomLegsFields'
 import { getOptionsMultiStrategyUpdate, OrderPriceFields } from './OrderPriceFields'
 
 // ===== LOCAL CONSTANTS =====
@@ -1508,10 +1509,23 @@ export function ConfigPanel() {
                       </>
                     )}
                     {nodeData.strategy === 'custom' && (
-                      <p className="text-muted-foreground">Configure custom legs via API</p>
+                      <p className="text-muted-foreground">Built below, leg by leg.</p>
                     )}
                   </div>
                 </div>
+                {nodeData.strategy === 'custom' && (
+                  <CustomLegsFields
+                    value={nodeData.legs}
+                    onChange={(legs) => handleDataChange('legs', legs)}
+                    commonPriceType={orderPriceType}
+                    commonProduct={(nodeData.product as string) || 'MIS'}
+                    commonExpiryType={(nodeData.expiryType as string) || 'current_week'}
+                    commonAction={(nodeData.action as string) || 'SELL'}
+                    commonQuantity={(nodeData.quantity as number) || 1}
+                    strangleWidth={(nodeData.strangleWidth as string) || 'OTM2'}
+                    underlying={(nodeData.underlying as string) || 'NIFTY'}
+                  />
+                )}
                 <div className="space-y-2">
                   <Label className="text-xs">Output Variable</Label>
                   <Input

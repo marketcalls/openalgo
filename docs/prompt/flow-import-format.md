@@ -721,11 +721,102 @@ spreads / custom).
 | `product` | `"MIS"` \| `"NRML"` | `"NRML"` | |
 | `price` | number | `0` | Common leg price. Must be positive when the effective price type is `LIMIT`/`SL`. |
 | `triggerPrice` | number | `0` | Common custom-leg trigger. Must be positive when the effective price type is `SL`/`SL-M`. |
-| `legs` | `Leg[]` | `[]` | **Required for `strategy="custom"`.** Each leg requires `{ offset, optionType, action, quantity }`; optional `product`, `priceType` (or legacy `pricetype`), `price`, and `triggerPrice` override the common node value. Omitted optional fields inherit the common node values. Custom leg `priceType` may be any of `MARKET`/`LIMIT`/`SL`/`SL-M`; the resulting effective priced leg must have the required positive price fields. |
+| `legs` | `Leg[]` | `[]` | **Required for `strategy="custom"`.** See **Custom legs** below. |
 | `outputVariable` | string | — | Result includes `{{name.results}}` array per leg. |
 
-Options Multi-Order always resolves the node-level `expiryType` once and sends
-that one expiry for every leg. Per-leg expiries are not supported.
+**Custom legs.** A readymade strategy positions every leg at an offset from the
+money and gives them all one expiry. `strategy: "custom"` lifts both limits: a
+leg names its own strike, its own expiry and its own side, which is what makes a
+calendar spread, a diagonal, a ratio, or a basket pinned to chosen strikes
+expressible. The editor builds these leg by leg, and can load a readymade
+strategy's legs as a starting point to edit.
+
+In the editor the strike and expiry are chosen from the contracts the exchange
+actually lists - strikes carry their moneyness (`ATM`, `ITM3`, `OTM2`) and the
+symbol they resolve to, and expiry is a plain list of listed dates. A field can
+still be typed instead, which is how a `{{variable}}` strike or expiry is
+entered, and typing is the fallback whenever the contract lookup is unavailable.
+What gets stored is the same either way: a number and a `DDMMMYY` string.
+
+A leg with **no** `expiry` or `expiryType` follows the node's expiry, so a
+scheduled workflow rolls forward to the next contract on its own. Giving a leg
+its own `expiry` pins it to that one contract - correct for a calendar or
+diagonal spread, and a basket that stops working once that date passes for
+anything else. The editor leaves an untouched leg following the node and shows
+the date it currently resolves to; picking a date pins it. `expiryType` is
+accepted on import for a leg that should roll on a different schedule than the
+node, though the editor does not offer it.
+
+| Leg field | Type | Default | Notes |
+|---|---|---|---|
+| `strikeMode` | `"OFFSET"` \| `"STRIKE"` | `"OFFSET"` | Absent is `OFFSET`. A leg carrying `strike` and no mode is read as `STRIKE`. |
+| `offset` | `"ATM"` \| `"ITM1"`–`"ITM50"` \| `"OTM1"`–`"OTM50"` | — | **Required unless `strike` is given.** Re-resolved against the live underlying on every run. |
+| `strike` | number | — | **Required when `strikeMode` is `STRIKE`.** An absolute strike, used exactly as given; must be positive and must be listed for that expiry. |
+| `expiry` | string | — | Overrides the node expiry with an exact date in `DDMMMYY`, e.g. `28OCT25`. |
+| `expiryType` | `"current_week"` \| `"next_week"` \| `"current_month"` \| `"next_month"` | — | Overrides the node expiry with a relative one. Ignored when `expiry` is set. |
+| `optionType` | `"CE"` \| `"PE"` | — | Required. |
+| `action` | `"BUY"` \| `"SELL"` | — | Required. The leg's own side, independent of the node `action`. |
+| `quantity` | int | — | Required. **In lots**, multiplied by the lot size like the node-level quantity. |
+| `product` | `"MIS"` \| `"NRML"` | node `product` | |
+| `priceType` (or `pricetype`) | `"MARKET"` \| `"LIMIT"` \| `"SL"` \| `"SL-M"` | node `priceType` | Unlike a generated strategy, a custom leg may use `SL`/`SL-M`, because it can carry its own trigger. |
+| `price` | number | node `price` | Must be positive when the effective price type is `LIMIT`/`SL`. |
+| `triggerPrice` | number | node `triggerPrice` | Must be positive when the effective price type is `SL`/`SL-M`. |
+| `splitSize` | int | `0` | If >0, splits that leg into chunks. |
+
+An **omitted** optional field is what tells the executor to inherit the node's
+value, so write no key at all rather than an empty string. A leg naming neither
+`offset` nor `strike` cannot execute and is refused.
+
+The editor shows every inherited field as the value it currently resolves to -
+its expiry, product and price type read as `25AUG26`, `MIS`, `MARKET` rather
+than naming the inheritance - and writes nothing until the field is changed. So
+a leg left alone keeps following the node, and adjusting the node still carries
+to it.
+
+Every leg is placed against the node's `underlying`; only the strike, expiry,
+side and pricing vary per leg. A basket is capped at 10 legs in the editor.
+
+Legs are placed in order and **a multi-leg basket fails leg by leg** - if leg
+three is rejected, legs one and two are already filled. That is why a malformed
+strike or expiry is refused at save time rather than at run time.
+
+```json
+{
+  "id": "node_2",
+  "type": "optionsMultiOrder",
+  "position": { "x": 100, "y": 200 },
+  "data": {
+    "strategy": "custom",
+    "underlying": "NIFTY",
+    "expiryType": "current_week",
+    "quantity": 1,
+    "action": "SELL",
+    "priceType": "MARKET",
+    "product": "NRML",
+    "legs": [
+      {
+        "strikeMode": "STRIKE",
+        "strike": 24500,
+        "expiry": "28OCT25",
+        "optionType": "CE",
+        "action": "SELL",
+        "quantity": 1
+      },
+      {
+        "strikeMode": "STRIKE",
+        "strike": 24500,
+        "expiry": "25NOV25",
+        "optionType": "CE",
+        "action": "BUY",
+        "quantity": 1
+      }
+    ],
+    "outputVariable": "calendar"
+  }
+}
+```
+
+That is a calendar spread: one strike, two expiries, opposite sides.
 
 ```json
 {
