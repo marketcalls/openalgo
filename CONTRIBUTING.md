@@ -384,7 +384,7 @@ uv run pytest test/test_log_location.py test/test_navigation_update.py \
   test/sandbox/test_execution_backlog.py test/test_event_bus_bounded.py \
   test/test_telegram_api_contract.py -v --timeout=60
 
-# Full backend suite (slower)
+# Full backend suite (not CI-safe; not green on a clean checkout)
 uv run pytest test/ -v
 
 # Run React tests once (CI/completion check)
@@ -406,7 +406,7 @@ npm run e2e
 - [ ] Application starts without errors (`uv run app.py`)
 - [ ] All existing features still work
 - [ ] New feature works as expected
-- [ ] Python tests pass (`uv run pytest test/ -v`)
+- [ ] CI-safe backend tests pass (the pytest selection above)
 - [ ] Frontend tests pass (`cd frontend && npm run test:run`)
 - [ ] No TypeScript errors (`cd frontend && npm run build`)
 - [ ] No linting errors (Ruff for Python, Biome for frontend)
@@ -427,7 +427,6 @@ git push origin feature/your-feature-name
 ```
 
 ### 7. Create a Pull Request
-
 1. Go to your fork on GitHub
 2. Click **"Compare & pull request"**
 3. Fill out the PR template:
