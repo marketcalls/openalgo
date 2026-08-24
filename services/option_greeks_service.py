@@ -996,22 +996,22 @@ def get_multi_option_greeks(
             200,
         )
 
-    results = []
+    results = [None] * len(symbols)
     success_count = 0
     failed_count = 0
 
     # Step 1: Parse all symbols and group by underlying for spot price fetch
-    parsed_symbols = {}  # (symbol, exchange) -> (base_symbol, expiry, strike, opt_type)
+    parsed_symbols = {}  # leg index -> (base_symbol, expiry, strike, opt_type)
     spot_keys = {}  # (spot_symbol, spot_exchange) -> spot_price
-    symbol_to_spot_key = {}  # (symbol, exchange) -> (spot_symbol, spot_exchange)
-    symbol_forward = {}  # (symbol, exchange) -> Black-76 forward (synthetic future)
+    symbol_to_spot_key = {}  # leg index -> (spot_symbol, spot_exchange)
+    symbol_forward = {}  # leg index -> Black-76 forward (synthetic future)
     synth_cache = {}  # (base, underlying_exchange, expiry_code) -> synthetic future
 
-    for sym_req in symbols:
+    for idx, sym_req in enumerate(symbols):
         symbol = sym_req.get("symbol")
         exchange = sym_req.get("exchange")
         try:
-            batch_key = (symbol, exchange)
+            batch_key = idx
             base_symbol, expiry, strike, opt_type = parse_option_symbol(symbol, exchange, expiry_time)
             parsed_symbols[batch_key] = (base_symbol, expiry, strike, opt_type)
 
@@ -1036,12 +1036,12 @@ def get_multi_option_greeks(
         except Exception as e:
             logger.warning(f"Failed to parse symbol {symbol}: {e}")
             failed_count += 1
-            results.append({
+            results[idx] = {
                 "status": "error",
                 "symbol": symbol,
                 "exchange": exchange,
                 "message": f"Failed to parse option symbol: {str(e)}",
-            })
+            }
 
     # Step 2: Fetch spot prices — one API call per unique underlying
     for spot_key in spot_keys:
@@ -1062,14 +1062,26 @@ def get_multi_option_greeks(
 
     # Step 3: Batch fetch all option prices via get_multiquotes()
     option_symbols_to_fetch = []
-    for sym_req in symbols:
+    seen_quotes = set()
+    for idx, sym_req in enumerate(symbols):
         symbol = sym_req.get("symbol")
         exchange = sym_req.get("exchange")
-        if (symbol, exchange) in parsed_symbols:  # only if parsing succeeded
+        if idx in parsed_symbols and (symbol, exchange) not in seen_quotes:
+            seen_quotes.add((symbol, exchange))
             option_symbols_to_fetch.append({
                 "symbol": symbol,
                 "exchange": exchange,
             })
+
+    # Fallback exchange per requested symbol. Every broker adapter echoes the
+    # requested exchange today, but a result that omitted it would key every
+    # price under (symbol, None) and fail the whole batch rather than one leg.
+    # A symbol requested on two exchanges maps to None: guessing either one
+    # would reintroduce the collision, so only those legs go unpriced.
+    requested_exchange = {}
+    for item in option_symbols_to_fetch:
+        sym_name = item["symbol"]
+        requested_exchange[sym_name] = None if sym_name in requested_exchange else item["exchange"]
 
     option_prices = {}  # (symbol, exchange) -> ltp
     if option_symbols_to_fetch:
@@ -1081,7 +1093,7 @@ def get_multi_option_greeks(
             if mq_success and "results" in mq_response:
                 for result in mq_response["results"]:
                     sym = result.get("symbol")
-                    exch = result.get("exchange")
+                    exch = result.get("exchange") or requested_exchange.get(sym)
                     if sym and "data" in result:
                         ltp = result["data"].get("ltp")
                         if ltp:
@@ -1090,10 +1102,10 @@ def get_multi_option_greeks(
             logger.warning(f"Multiquotes fetch failed: {e}")
 
     # Step 4: Calculate Greeks for each symbol using fetched prices
-    for sym_req in symbols:
+    for idx, sym_req in enumerate(symbols):
         symbol = sym_req.get("symbol")
         exchange = sym_req.get("exchange")
-        batch_key = (symbol, exchange)
+        batch_key = idx
 
         # Skip if already failed during parsing
         if batch_key not in parsed_symbols:
@@ -1102,27 +1114,29 @@ def get_multi_option_greeks(
         # Forward price: synthetic future for index weeklies, else spot.
         # Falls back to spot if the synthetic future could not be computed.
         spot_key = symbol_to_spot_key.get(batch_key)
-        spot_price = symbol_forward.get(batch_key) or (spot_keys.get(spot_key) if spot_key else None)
+        spot_price = symbol_forward.get(batch_key) or (
+            spot_keys.get(spot_key) if spot_key else None
+        )
         if not spot_price:
             failed_count += 1
-            results.append({
+            results[idx] = {
                 "status": "error",
                 "symbol": symbol,
                 "exchange": exchange,
                 "message": f"Failed to fetch underlying price for {spot_key[0] if spot_key else 'unknown'}",
-            })
+            }
             continue
 
         # Get option price
-        option_price = option_prices.get(batch_key)
+        option_price = option_prices.get((symbol, exchange))
         if not option_price:
             failed_count += 1
-            results.append({
+            results[idx] = {
                 "status": "error",
                 "symbol": symbol,
                 "exchange": exchange,
                 "message": "Option LTP not available",
-            })
+            }
             continue
 
         # Calculate Greeks (pure math, no API calls)
@@ -1157,20 +1171,17 @@ def get_multi_option_greeks(
                     failed_count += 1
                     calc_response.setdefault("symbol", symbol)
                     calc_response.setdefault("exchange", exchange)
-            results.append(calc_response)
+            results[idx] = calc_response
         except Exception as e:
             logger.exception(f"Error calculating Greeks for {symbol}: {e}")
             failed_count += 1
-            results.append({
+            results[idx] = {
                 "status": "error",
                 "symbol": symbol,
                 "exchange": exchange,
                 "message": str(e),
-            })
+            }
 
-    # Sort results to maintain original order
-    symbol_order = {(sym["symbol"], sym.get("exchange")): idx for idx, sym in enumerate(symbols)}
-    results.sort(key=lambda x: symbol_order.get((x.get("symbol"), x.get("exchange")), 999))
 
     response = {
         "status": "success" if failed_count == 0 else "partial" if success_count > 0 else "error",
