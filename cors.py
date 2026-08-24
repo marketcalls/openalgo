@@ -4,6 +4,10 @@ import os
 
 from flask_cors import CORS
 
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def is_cors_enabled():
     """Return whether cross-origin access is explicitly enabled."""
@@ -15,12 +19,9 @@ def get_cors_config():
     Get CORS configuration from environment variables.
     Returns a dictionary with CORS configuration options.
     """
-    cors_config = {}
-
-    # Get allowed origins
-    allowed_origins = os.getenv("CORS_ALLOWED_ORIGINS")
-    if allowed_origins:
-        cors_config["origins"] = [origin.strip() for origin in allowed_origins.split(",")]
+    allowed_origins = os.getenv("CORS_ALLOWED_ORIGINS", "")
+    origins = [origin.strip() for origin in allowed_origins.split(",") if origin.strip()]
+    cors_config = {"origins": origins}
 
     # Get allowed methods
     allowed_methods = os.getenv("CORS_ALLOWED_METHODS")
@@ -52,5 +53,16 @@ def get_cors_config():
 
 def init_cors(app):
     """Initialize Flask-CORS when it has been explicitly enabled."""
-    if is_cors_enabled():
-        CORS(app, resources={r"/api/*": get_cors_config()})
+    if not is_cors_enabled():
+        logger.info("CORS is disabled")
+        return
+
+    cors_config = get_cors_config()
+    if cors_config["origins"]:
+        logger.info("CORS enabled for origins: %s", ", ".join(cors_config["origins"]))
+    else:
+        logger.warning(
+            "CORS is enabled but no allowed origins are configured; denying cross-origin requests"
+        )
+
+    CORS(app, resources={r"/api/*": cors_config})
