@@ -385,12 +385,20 @@ git commit -m "refactor: optimize order processing pipeline"
 ### 5. Test Your Changes
 
 ```bash
-# Run Python tests
+# Fast backend check (same maintained selection used by CI)
+uv run pytest test/test_log_location.py test/test_navigation_update.py \
+  test/test_python_editor.py test/test_rate_limits_simple.py \
+  test/test_logout_csrf.py test/test_auth_logout.py \
+  test/test_auth_resume.py test/test_auth_upsert_multisession.py \
+  test/sandbox/test_execution_backlog.py test/test_event_bus_bounded.py \
+  test/test_telegram_api_contract.py -v --timeout=60
+
+# Full backend suite (not CI-safe; not green on a clean checkout)
 uv run pytest test/ -v
 
-# Run React tests
+# Run React tests once (CI/completion check)
 cd frontend
-npm test
+npm run test:run
 
 # Run end-to-end tests
 npm run e2e
@@ -407,8 +415,8 @@ npm run e2e
 - [ ] Application starts without errors (`uv run app.py`)
 - [ ] All existing features still work
 - [ ] New feature works as expected
-- [ ] Python tests pass (`uv run pytest test/ -v`)
-- [ ] Frontend tests pass (`cd frontend && npm test`)
+- [ ] CI-safe backend tests pass (the pytest selection above)
+- [ ] Frontend tests pass (`cd frontend && npm run test:run`)
 - [ ] No TypeScript errors (`cd frontend && npm run build`)
 - [ ] No linting errors (Ruff for Python, Biome for frontend)
 - [ ] API endpoints return correct responses
