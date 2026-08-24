@@ -188,13 +188,13 @@ def catch_up_daily_pnl_reset():
         # Check if there are positions with non-zero today_realized_pnl
         # that were last updated before the session boundary
         positions_needing_reset = SandboxPositions.query.filter(
-            SandboxPositions.today_realized_pnl != None,
+            SandboxPositions.today_realized_pnl.is_not(None),
             SandboxPositions.today_realized_pnl != Decimal("0.00"),
             SandboxPositions.updated_at < last_session_boundary,
         ).count()
 
         funds_needing_reset = SandboxFunds.query.filter(
-            SandboxFunds.today_realized_pnl != None,
+            SandboxFunds.today_realized_pnl.is_not(None),
             SandboxFunds.today_realized_pnl != Decimal("0.00"),
             SandboxFunds.updated_at < last_session_boundary,
         ).count()
