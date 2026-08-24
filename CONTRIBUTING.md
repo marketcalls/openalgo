@@ -391,7 +391,8 @@ uv run pytest test/test_log_location.py test/test_navigation_update.py \
   test/test_logout_csrf.py test/test_auth_logout.py \
   test/test_auth_resume.py test/test_auth_upsert_multisession.py \
   test/sandbox/test_execution_backlog.py test/test_event_bus_bounded.py \
-  test/test_telegram_api_contract.py -v --timeout=60
+  test/test_telegram_api_contract.py test/test_multi_option_greeks_regression.py \
+  test/test_history_format.py -v --timeout=60
 
 # Full backend suite (not CI-safe; not green on a clean checkout)
 uv run pytest test/ -v
