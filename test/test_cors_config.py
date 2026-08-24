@@ -48,7 +48,7 @@ def test_disabled_cors_does_not_add_preflight_headers(monkeypatch):
             "Access-Control-Request-Headers": "X-API-KEY",
         },
     )
-    assert not any(header.lower().startswith("access-control-") for header in response.headers)
+    assert not any(header.lower().startswith("access-control-") for header in response.headers.keys())
 
 
 def test_enabled_cors_without_origins_fails_closed(monkeypatch):
