@@ -1,5 +1,9 @@
+// ChevronDown survives for the context menu's submenu arrow only. The
+// toolbar buttons carry no caret: a chevron on every control is dead
+// weight when the whole row opens menus, and it reads as a dated form
+// control. Reserve the glyph for where it distinguishes something.
 import { ChevronDown, RefreshCw, Search, Settings } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -23,12 +27,14 @@ import {
   type TerminalCallbacks,
   TradingTerminal,
 } from '@/lib/trading/terminal'
+import type { LinkGroup } from 'openalgo-charts'
 import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
 import { ChartSettingsDialog } from './ChartSettingsDialog'
 import { DrawingStyleBar } from './DrawingStyleBar'
 import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
+import { IndicatorPickerDialog } from './IndicatorPickerDialog'
 import { IndicatorSettingsDialog } from './IndicatorSettingsDialog'
 import { SymbolSearchDialog } from './SymbolSearchDialog'
 
@@ -57,10 +63,22 @@ const glyph = {
   strokeLinejoin: 'round' as const,
 }
 
+/**
+ * An oscillator crossing its threshold: a signal line weaving over and under a
+ * dashed level, with the crossing marked.
+ *
+ * The old glyph was a bare zig-zag, which is the generic "chart" mark this
+ * toolbar already uses for the chart-type button and the legend. This one says
+ * what an indicator IS here rather than that a chart exists: a derived series
+ * read against a level. The dashed rule and the dot survive 16px, which a
+ * busier picture of a whole sub-pane would not.
+ */
 function IndicatorIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" {...glyph} className={className} aria-hidden="true">
-      <path d="M3 16.5l4-7 3.5 3.5L14 5l3.5 5.5L21 8" />
+      <path d="M3 12h18" strokeDasharray="2.5 2.6" opacity={0.55} />
+      <path d="M3 17.5c2.2 0 2.4-9 5-9s2.6 8 5 8 2.6-9 5-9 2.6 4.5 3 5" />
+      <circle cx="13" cy="12" r="1.6" fill="currentColor" stroke="none" />
     </svg>
   )
 }
@@ -74,8 +92,26 @@ function PencilIcon({ className }: { className?: string }) {
   )
 }
 
-/** Three rising bars — the volume histogram in miniature. */
+/**
+ * Rewind: two triangles pointing back to a bar.
+ *
+ * It was a circular arrow, which is the universal glyph for "reload" and reads
+ * as though the button refetches the chart. Replay winds the session back and
+ * plays it forward, so a transport control is the honest picture. Filled rather
+ * than stroked, so it stays legible at 16px where two thin outlined triangles
+ * turn to mush.
+ */
 function ReplayIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden="true">
+      <path d="M11.5 6.4v11.2a.7.7 0 0 1-1.1.6l-7.1-5.6a.7.7 0 0 1 0-1.2l7.1-5.6a.7.7 0 0 1 1.1.6Z" />
+      <path d="M20.5 6.4v11.2a.7.7 0 0 1-1.1.6l-7.1-5.6a.7.7 0 0 1 0-1.2l7.1-5.6a.7.7 0 0 1 1.1.6Z" />
+    </svg>
+  )
+}
+
+/** Curved arrow back. Mirrored for redo, so the pair reads as one control. */
+function UndoIcon({ className, flip }: { className?: string; flip?: boolean }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -86,9 +122,10 @@ function ReplayIcon({ className }: { className?: string }) {
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
+      style={flip ? { transform: 'scaleX(-1)' } : undefined}
     >
-      <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
-      <path d="M3 4v4h4" />
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h10a6 6 0 0 1 0 12h-3" />
     </svg>
   )
 }
@@ -149,6 +186,8 @@ interface Props {
   onFocusPane?(terminal: TradingTerminal | null): void
   /** Drawing state of this pane, for the shared rail's buttons. */
   onDrawStats?(stats: DrawStats): void
+  /** Workspace link group this pane joins, if the page made one. */
+  linkGroup?: LinkGroup | null
   /** Show/hide the page-level rail — the action lives in each pane's menu. */
   onToggleRail?(): void
   railVisible?: boolean
@@ -175,6 +214,7 @@ export function ChartPane({
   sharedMagnet,
   onFocusPane,
   onDrawStats,
+  linkGroup,
   onToggleRail,
   railVisible,
   layoutPicker,
@@ -200,6 +240,22 @@ export function ChartPane({
   const [sym, setSym] = useState<SymbolView | null>(null)
   const [qty, setQty] = useState(1)
   const [wsState, setWsState] = useState('connecting')
+  /**
+   * Just the two history flags, mirrored locally. The full DrawStats is pushed
+   * to the parent for the drawing rail, but the toolbar's undo/redo sit in THIS
+   * component, and reading a parent's state back down would make the buttons
+   * lag a shape behind. Narrowed to two booleans on purpose: every drawing edit
+   * fires this, and re-rendering the toolbar because a tool was armed or a
+   * shape was selected would be work for nothing.
+   */
+  const [history, setHistory] = useState({ canUndo: false, canRedo: false })
+  const noteHistory = useCallback((s: DrawStats) => {
+    setHistory((prev) =>
+      prev.canUndo === s.canUndo && prev.canRedo === s.canRedo
+        ? prev
+        : { canUndo: s.canUndo, canRedo: s.canRedo }
+    )
+  }, [])
 
   // symbol search modal (per-pane; opened from the toolbar symbol pill)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -207,7 +263,7 @@ export function ChartPane({
   // drawing + indicator controls (additive; the trading controls are unchanged)
   const [indicators, setIndicators] = useState<{ id: string; name: string }[]>([])
   const [catalog, setCatalog] = useState<{ id: string; name: string; category: string }[]>([])
-  const [indicatorQuery, setIndicatorQuery] = useState('')
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [grid, setGrid] = useState({ vertical: true, horizontal: true })
   const [fullscreen, setFullscreen] = useState(false)
   const [gridSub, setGridSub] = useState(false)
@@ -253,6 +309,7 @@ export function ChartPane({
       onDrawChange: (s) => {
         if (!aliveRef.current) return
         statsCbRef.current?.(s)
+        noteHistory(s)
       },
       onIndicatorsChange: (list) => aliveRef.current && setIndicators(list),
       onIndicatorSettings: (req) => aliveRef.current && setIndSettings(req),
@@ -282,7 +339,10 @@ export function ChartPane({
       })
       terminalRef.current = terminal
       terminal.init()
-      statsCbRef.current?.(terminal.drawStats())
+      terminal.setLinkGroup(linkGroup ?? null)
+      const stats0 = terminal.drawStats()
+      statsCbRef.current?.(stats0)
+      noteHistory(stats0)
       setGrid(terminal.gridState())
       setVolumeOn(terminal.volumeVisible())
     }
@@ -292,7 +352,9 @@ export function ChartPane({
       terminal?.destroy()
       terminalRef.current = null
     }
-  }, [paneId, apiKey, wsUrl])
+    // linkGroup is held in a ref by the page and created once, so its identity
+    // is stable and listing it here does not re-run the boot effect.
+  }, [paneId, apiKey, wsUrl, noteHistory, linkGroup])
 
   /* ── follow the page-level drawing rail ───────────────────────────────── */
   useEffect(() => {
@@ -413,21 +475,6 @@ export function ChartPane({
   /** Portal target for menus: the pane itself in fullscreen, body otherwise. */
   const menuHost = fullscreen ? paneRef.current : null
 
-  const indicatorFilter = indicatorQuery.trim().toLowerCase()
-  const catalogGroups = catalog
-    .filter(
-      (d) =>
-        indicatorFilter === '' ||
-        d.name.toLowerCase().includes(indicatorFilter) ||
-        d.id.includes(indicatorFilter),
-    )
-    .reduce<Record<string, typeof catalog>>((acc, d) => {
-      const list = acc[d.category] ?? []
-      list.push(d)
-      acc[d.category] = list
-      return acc
-    }, {})
-  const catalogMatches = Object.values(catalogGroups).reduce((n, l) => n + l.length, 0)
 
   // The product the toggle switches to; with two options that is "the other".
   const nextProduct = sym
@@ -468,7 +515,6 @@ export function ChartPane({
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" className="h-8 min-w-12 shrink-0 gap-1 font-medium">
               {interval || '—'}
-              <ChevronDown className="h-3.5 w-3.5 opacity-60" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent container={menuHost} align="start" className="w-64">
@@ -506,7 +552,6 @@ export function ChartPane({
               title={chartTypeDef.label}
             >
               <span className="h-4 w-4">{chartTypeIcon(chartTypeDef.iconKey)}</span>
-              <ChevronDown className="h-3.5 w-3.5 opacity-60" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent container={menuHost} align="start" className="w-52">
@@ -561,97 +606,27 @@ export function ChartPane({
           />
         </div>
 
-        {/* Indicators (additive) */}
-        <DropdownMenu onOpenChange={(o) => o && void openIndicators()}>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-8 shrink-0 gap-1" title="Indicators">
-              <IndicatorIcon className="h-4 w-4" />
-              <span className="hidden sm:inline">Indicators</span>
-              {indicators.length > 0 && (
-                <span className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary">
-                  {indicators.length}
-                </span>
-              )}
-              <ChevronDown className="h-3.5 w-3.5 opacity-60" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            container={menuHost}
-            align="start"
-            className="max-h-80 w-64 overflow-y-auto"
-            onCloseAutoFocus={() => setIndicatorQuery('')}
-          >
-            <div className="sticky top-0 z-10 bg-popover px-2 pb-1 pt-1">
-              <input
-                type="text"
-                value={indicatorQuery}
-                onChange={(e) => setIndicatorQuery(e.target.value)}
-                // Radix moves focus to the first item on any printable key, which
-                // would otherwise steal every keystroke out of this box.
-                onKeyDown={(e) => e.stopPropagation()}
-                placeholder={`Search ${catalog.length} indicators`}
-                className="h-7 w-full rounded border bg-background px-2 text-xs outline-none focus:border-primary"
-              />
-            </div>
-            {indicators.length > 0 && (
-              <>
-                <div className="px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  On this chart
-                </div>
-                {indicators.map((i) => (
-                  <DropdownMenuItem
-                    key={i.id}
-                    onSelect={(e) => {
-                      // Settings and remove on one row; the gear must not fall
-                      // through to the row's remove action.
-                      const target = e.target as HTMLElement
-                      if (target.closest('[data-act="settings"]')) {
-                        e.preventDefault()
-                        terminalRef.current?.openIndicatorSettings(i.id)
-                        return
-                      }
-                      terminalRef.current?.removeIndicatorById(i.id)
-                    }}
-                    className="justify-between gap-2 text-sm"
-                  >
-                    {i.name}
-                    <span className="flex items-center gap-2">
-                      <span data-act="settings" className="text-xs text-primary hover:underline">
-                        settings
-                      </span>
-                      <span className="text-xs text-muted-foreground">remove</span>
-                    </span>
-                  </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-              </>
-            )}
-            {catalogMatches === 0 && (
-              <div className="px-2 py-3 text-center text-xs text-muted-foreground">
-                No indicator matches that
-              </div>
-            )}
-            {Object.entries(catalogGroups).map(([cat, list]) => (
-              <div key={cat}>
-                <div className="px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  {cat}
-                </div>
-                {list.map((d) => (
-                  <DropdownMenuItem
-                    key={d.id}
-                    onSelect={() => void terminalRef.current?.addIndicatorById(d.id)}
-                    className="text-sm"
-                  >
-                    {d.name}
-                  </DropdownMenuItem>
-                ))}
-              </div>
-            ))}
-            {catalog.length === 0 && (
-              <div className="px-2 py-3 text-sm text-muted-foreground">Loading…</div>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {/* Indicators. A dialog rather than a dropdown: 88 built-ins in a
+            264px column was a scroll race, with no way to jump to a category
+            and no memory of what you reach for daily. */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 shrink-0 gap-1"
+          title="Indicators"
+          onClick={() => {
+            setPickerOpen(true)
+            void openIndicators()
+          }}
+        >
+          <IndicatorIcon className="h-4 w-4" />
+          <span className="hidden sm:inline">Indicators</span>
+          {indicators.length > 0 && (
+            <span className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary">
+              {indicators.length}
+            </span>
+          )}
+        </Button>
 
         {/* The layout picker sits here, immediately after Indicators, because
             that is where a chart terminal puts it. It is page-level, so only
@@ -673,26 +648,43 @@ export function ChartPane({
           <span className="hidden sm:inline">Replay</span>
         </Button>
 
+        {/* Undo / redo for drawings. Also on the drawing rail, and deliberately
+            here as well: the rail can be hidden, and these two are reached far
+            more often than the tool that made the shape. Both stay mounted and
+            go disabled rather than disappearing, so the toolbar does not reflow
+            as you draw. The engine's history is drawing-only, so the labels say
+            so -- a bare "Undo" next to a Replay button would imply it could
+            take back an order. */}
+        <div className="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden="true" />
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          onClick={() => terminalRef.current?.undoDraw()}
+          disabled={!history.canUndo}
+          title="Undo drawing (Ctrl + Z)"
+          aria-label="Undo drawing"
+        >
+          <UndoIcon className="h-[17px] w-[17px]" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          onClick={() => terminalRef.current?.redoDraw()}
+          disabled={!history.canRedo}
+          title="Redo drawing (Ctrl + Shift + Z)"
+          aria-label="Redo drawing"
+        >
+          <UndoIcon className="h-[17px] w-[17px]" flip />
+        </Button>
+
         {/* Right side: connection LED + actions */}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <span
             className={cn('inline-block h-2.5 w-2.5 rounded-full', ledClass(wsState))}
             title={`WebSocket ${wsState}`}
           />
-          {/* Chart settings. The engine ships no DOM, so the whole dialog is
-              generated from the schema it describes -- see ChartSettingsDialog. */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            onClick={() => {
-              void terminalRef.current?.chartSettings().then((s) => s && setChartSettings(s))
-            }}
-            title="Chart settings"
-            aria-label="Chart settings"
-          >
-            <Settings className="h-[17px] w-[17px]" />
-          </Button>
           {/* Full screen chart (additive) */}
           <Button
             variant="ghost"
@@ -731,6 +723,15 @@ export function ChartPane({
           req={textReq}
           onSubmit={(id, value) => terminalRef.current?.applyDrawText(id, value)}
           onClose={() => setTextReq(null)}
+        />
+        <IndicatorPickerDialog
+          open={pickerOpen}
+          catalog={catalog}
+          active={indicators}
+          onAdd={(id) => void terminalRef.current?.addIndicatorById(id)}
+          onRemove={(id) => terminalRef.current?.removeIndicatorById(id)}
+          onSettings={(id) => terminalRef.current?.openIndicatorSettings(id)}
+          onClose={() => setPickerOpen(false)}
         />
         <ChartSettingsDialog
           req={chartSettings}
@@ -881,6 +882,21 @@ export function ChartPane({
             >
               <RefreshCw className="h-3.5 w-3.5 opacity-70" />
               Reset chart view
+            </button>
+            {/* Settings sits on the chart it configures rather than in the
+                toolbar: right-click is where a terminal user reaches for it, and
+                the toolbar row is already the most contended space on the page. */}
+            <button
+              type="button"
+              className={ctxRow}
+              onClick={() =>
+                run(() => {
+                  void terminalRef.current?.chartSettings().then((cs) => cs && setChartSettings(cs))
+                })
+              }
+            >
+              <Settings className="h-3.5 w-3.5 opacity-70" />
+              Chart settings...
             </button>
             {onToggleRail && (
               <button type="button" className={ctxRow} onClick={() => run(onToggleRail)}>

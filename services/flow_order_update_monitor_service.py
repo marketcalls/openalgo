@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
+from services.flow_node_contracts import VALID_STATUSES, normalize_status
 from utils.env_config import env_int
 from utils.event_bus import bus
 from utils.logging import get_logger
@@ -35,22 +36,6 @@ _WORKFLOW_POOL = ThreadPoolExecutor(
     max_workers=env_int("FLOW_ORDER_UPDATE_WORKERS", 4, minimum=1),
     thread_name_prefix="flow-order-update",
 )
-
-# order_status values a watch can match on; "any" matches every update.
-VALID_STATUSES = {"any", "open", "trigger pending", "complete", "rejected", "cancelled"}
-
-
-def normalize_status(value: str | None) -> str:
-    """Canonicalize an order_status for comparison.
-
-    Broker adapters disagree on the multi-word spelling: Zerodha's order
-    adapter emits "trigger pending" (matching docs/prompt/websockets-format.md
-    and the sandbox engine) while other paths use "trigger_pending". Comparing
-    raw strings makes the Trigger Pending filter silently never match. Fold
-    underscores to spaces and lowercase so both spellings compare equal.
-    """
-    return str(value or "").strip().lower().replace("_", " ")
-
 
 @dataclass
 class OrderUpdateWatch:

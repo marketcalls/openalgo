@@ -42,6 +42,7 @@ const REQ: ChartSettingsRequest = {
           key: 'axes.timezone',
           type: 'select',
           label: 'Timezone',
+          default: 'Asia/Kolkata',
           options: [
             { label: 'Asia/Kolkata', value: 'Asia/Kolkata' },
             { label: 'America/New_York', value: 'America/New_York' },
@@ -58,11 +59,39 @@ const REQ: ChartSettingsRequest = {
     'symbol.borderDownColor': '#ef5350',
     'axes.timezone': 'Asia/Kolkata',
   },
+  /**
+   * The HOST's baseline, which is what reset restores -- not the engine's
+   * per-control defaults. Here it happens to match `values`, i.e. a chart
+   * nobody has touched.
+   */
+  defaults: {
+    'symbol.upColor': '#26a69a',
+    'symbol.downColor': '#ef5350',
+    'symbol.borderVisible': true,
+    'symbol.borderUpColor': '#26a69a',
+    'symbol.borderDownColor': '#ef5350',
+    'axes.timezone': 'Asia/Kolkata',
+  },
 }
 
-function renderDialog(onApply = vi.fn()) {
-  render(<ChartSettingsDialog req={REQ} onApply={onApply} onClose={() => {}} />)
+function renderDialog(onApply = vi.fn(), req: ChartSettingsRequest = REQ) {
+  render(<ChartSettingsDialog req={req} onApply={onApply} onClose={() => {}} />)
   return onApply
+}
+
+/**
+ * The same schema opened on a chart the user has already fiddled with, and
+ * deliberately fiddled with on TWO tabs: a candle colour on Price, the timezone
+ * on Axes. A reset driven from one tab has to reach the other.
+ */
+const REQ_DEVIATED: ChartSettingsRequest = {
+  ...REQ,
+  values: {
+    ...REQ.values,
+    'symbol.upColor': '#ff0000',
+    'symbol.borderVisible': false,
+    'axes.timezone': 'America/New_York',
+  },
 }
 
 describe('ChartSettingsDialog', () => {
@@ -109,6 +138,42 @@ describe('ChartSettingsDialog', () => {
     const user = userEvent.setup()
     const onApply = renderDialog()
     await user.click(screen.getByRole('button', { name: 'Ok' }))
+    expect(onApply).not.toHaveBeenCalled()
+  })
+
+  it('disables reset while every control already sits at its default', () => {
+    renderDialog()
+    // Not hidden: the disabled control IS the answer to "am I at defaults".
+    expect(screen.getByRole('button', { name: 'Reset to defaults' })).toBeDisabled()
+  })
+
+  it('enables reset as soon as a control deviates, without leaving the dialog', async () => {
+    const user = userEvent.setup()
+    renderDialog()
+    expect(screen.getByRole('button', { name: 'Reset to defaults' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Axes' }))
+    await user.selectOptions(screen.getByLabelText('Timezone'), 'America/New_York')
+    expect(screen.getByRole('button', { name: 'Reset to defaults' })).toBeEnabled()
+  })
+
+  it('resets every tab, not the one on screen', async () => {
+    const user = userEvent.setup()
+    const onApply = renderDialog(vi.fn(), REQ_DEVIATED)
+    // Price is the open tab. Axes is never visited.
+    await user.click(screen.getByRole('button', { name: 'Reset to defaults' }))
+    await user.click(screen.getByRole('button', { name: 'Ok' }))
+    expect(onApply).toHaveBeenCalledWith({
+      'symbol.upColor': '#26a69a',
+      'symbol.borderVisible': true,
+      'axes.timezone': 'Asia/Kolkata',
+    })
+  })
+
+  it('leaves a reset uncommitted when the user cancels', async () => {
+    const user = userEvent.setup()
+    const onApply = renderDialog(vi.fn(), REQ_DEVIATED)
+    await user.click(screen.getByRole('button', { name: 'Reset to defaults' }))
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(onApply).not.toHaveBeenCalled()
   })
 })

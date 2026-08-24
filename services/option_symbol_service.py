@@ -36,10 +36,11 @@ Example Usage (OLD METHOD - Legacy):
 import importlib
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from database.auth_db import get_auth_token_broker
 from database.symbol import SymToken, db_session
+from services.flow_node_contracts import parse_underlying_symbol
 from services.quotes_service import get_quotes
 from utils.constants import CRYPTO_EXCHANGES
 from utils.logging import get_logger
@@ -73,35 +74,6 @@ def clear_strikes_cache():
     _STRIKES_CACHE.clear()
     _CACHE_STATS = {"hits": 0, "misses": 0, "total_queries": 0}
     logger.info("Strikes cache cleared")
-
-
-def parse_underlying_symbol(underlying: str) -> tuple[str, str | None]:
-    """
-    Parse underlying symbol to extract base symbol and expiry date if present.
-
-    Args:
-        underlying: Symbol like "NIFTY" or "NIFTY28OCT25FUT" or "RELIANCE31JAN25FUT"
-
-    Returns:
-        Tuple of (base_symbol, expiry_date)
-        e.g., ("NIFTY", "28OCT25") or ("NIFTY", None)
-    """
-    # Pattern to match: SYMBOL + DDMMMYY + optional FUT
-    # Examples: NIFTY28OCT25FUT, BANKNIFTY31JAN25FUT, RELIANCE28MAR24FUT
-    pattern = r"^([A-Z]+)(\d{2}[A-Z]{3}\d{2})(?:FUT)?$"
-
-    match = re.match(pattern, underlying.upper())
-    if match:
-        base_symbol = match.group(1)
-        expiry_date = match.group(2)
-        logger.info(
-            f"Parsed underlying '{underlying}' -> base: '{base_symbol}', expiry: '{expiry_date}'"
-        )
-        return base_symbol, expiry_date
-
-    # If no pattern match, treat the entire string as base symbol
-    logger.info(f"Underlying '{underlying}' has no embedded expiry, using as-is")
-    return underlying.upper(), None
 
 
 #: Exchanges whose options have no tradable spot instrument. The underlying
