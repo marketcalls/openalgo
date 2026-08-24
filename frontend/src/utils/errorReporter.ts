@@ -6,8 +6,8 @@
  * crash the app — every codepath is wrapped, and the reporter refuses to
  * recurse into itself.
  *
- * Privacy: only message + stack + URL + component stack are sent. No DOM,
- * no localStorage, no form values, no breadcrumbs.
+ * Privacy: only message + stack + a query/fragment-free URL + component stack
+ * are sent. No DOM, no localStorage, no form values, no breadcrumbs.
  *
  * Throttling: dedups identical messages within 30s. Caps at 30 reports/min
  * (server enforces too).
@@ -121,6 +121,15 @@ async function send(payload: ClientErrorPayload): Promise<void> {
   }
 }
 
+export function sanitizeErrorReportUrl(value: string): string {
+  try {
+    const url = new URL(value, window.location.origin)
+    return `${url.origin}${url.pathname}`
+  } catch {
+    return value.split(/[?#]/, 1)[0]
+  }
+}
+
 export function reportClientError(payload: ClientErrorPayload): void {
   try {
     const message = (payload.message || '').slice(0, 2000)
@@ -129,7 +138,7 @@ export function reportClientError(payload: ClientErrorPayload): void {
       level: payload.level ?? 'ERROR',
       message,
       stack: payload.stack?.slice(0, 20_000),
-      url: (payload.url || window.location.href).slice(0, 2000),
+      url: sanitizeErrorReportUrl(payload.url || window.location.href).slice(0, 2000),
       component_stack: payload.component_stack?.slice(0, 5000),
       user_agent: navigator.userAgent.slice(0, 500),
     })
