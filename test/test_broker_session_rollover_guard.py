@@ -97,7 +97,7 @@ def _fresh_auth_db():
     auth_mod.verified_api_key_cache.clear()
     auth_mod.invalid_api_key_cache.clear()
     auth_mod._session_freshness_cache.clear()
-    auth_mod._stale_logged.clear()
+    auth_mod._stale_log_throttle.clear()
     return auth_mod
 
 
@@ -143,17 +143,45 @@ def auth_mod(monkeypatch):
 class TestBoundaryMath:
     """The boundary a login is judged against must be one that has been crossed."""
 
+    def test_boundary_belongs_to_the_previous_day_until_it_is_reached(self, monkeypatch):
+        """Walk a full day: before SESSION_EXPIRY_TIME the live session is
+        yesterday's.
+
+        _current_session_boundary() takes its "now" as an argument, so this
+        needs no clock patching and gives the same answer whenever CI runs it.
+        """
+        monkeypatch.setenv("SESSION_EXPIRY_TIME", "03:00")
+        ist = session_utils.pytz.timezone("Asia/Kolkata")
+
+        for hour in range(24):
+            now = ist.localize(session_utils.datetime(2026, 8, 24, hour, 0))
+            boundary = session_utils._current_session_boundary(now)
+            expected_day = 23 if hour < 3 else 24
+            assert boundary.day == expected_day, (
+                f"at {hour:02d}:00 the session boundary should be "
+                f"Aug {expected_day} 03:00, got {boundary}"
+            )
+            assert boundary <= now, "a boundary in the future has not been crossed"
+
     def test_pre_boundary_window_is_not_stale(self, auth_mod, monkeypatch):
         """Between midnight and SESSION_EXPIRY_TIME, last evening's login is live.
 
         _todays_rollover_boundary() returns today's clock time unconditionally,
         so in that window it is a *future* instant and every healthy overnight
         session compares as pre-boundary. MCX runs to 23:30 IST, so this window
-        contains live positions. Simulated by moving the boundary ahead of the
-        clock, which is the same shape as being before it.
+        contains live positions.
+
+        The boundary is monkeypatched rather than derived from SESSION_EXPIRY_TIME
+        so the window under test is chosen, not inherited from the wall clock.
+        Setting the env var to now+2h wraps past midnight when the suite runs
+        after 22:00 IST, and the day-subtraction branch is then never taken -- the
+        assertion would hold with or without the fix, pinning nothing.
         """
         now_ist = session_utils.datetime.now(session_utils.pytz.timezone("Asia/Kolkata"))
-        monkeypatch.setenv("SESSION_EXPIRY_TIME", (now_ist + timedelta(hours=2)).strftime("%H:%M"))
+        boundary_still_ahead = now_ist + timedelta(hours=2)
+        monkeypatch.setattr(
+            session_utils, "_todays_rollover_boundary", lambda now_ist=None: boundary_still_ahead
+        )
         auth_mod._session_freshness_cache.clear()
 
         login_an_hour_ago = now_ist - timedelta(hours=1)
@@ -344,7 +372,7 @@ class TestCredentialSurvives:
         assert published == []
         assert cleaned == []
 
-    def test_rejection_logs_once_per_trading_session(self, auth_mod, monkeypatch, caplog):
+    def test_rejection_log_is_throttled(self, auth_mod, monkeypatch, caplog):
         """The rejection line must not scale with poll rate.
 
         A strategy polling every 5s after the 03:00 rollover would otherwise
@@ -432,6 +460,47 @@ class TestServiceResponses:
         assert success is False
         assert status == 401
         assert response["code"] == "BROKER_SESSION_EXPIRED"
+
+    def test_depth_returns_broker_session_expired(self, monkeypatch):
+        """Depth checked the tuple length, not the token.
+
+        include_feed_token=True always yields a 3-tuple, so len(auth_info) == 3
+        was true even for (None, None, None): broker_name became None,
+        get_depth_with_auth reached import_broker_module(None), and the caller
+        got 404 "Broker-specific module not found". The bug predates the guard
+        but only fired on a bad key until the guard started returning empties
+        every morning.
+        """
+        import services.depth_service as depth_service
+
+        monkeypatch.setattr(
+            depth_service, "get_auth_token_broker", lambda *a, **k: (None, None, None)
+        )
+        monkeypatch.setattr(depth_service, "is_broker_session_stale", lambda api_key: True)
+
+        success, response, status = depth_service.get_depth("SBIN", "NSE", api_key=TEST_API_KEY)
+
+        assert success is False
+        assert status == 401
+        assert response["code"] == "BROKER_SESSION_EXPIRED"
+
+    def test_depth_invalid_api_key_returns_403_not_404(self, monkeypatch):
+        """The length check made the 403 branch unreachable; a bad key answered
+        404 from the broker-module import instead."""
+        import services.depth_service as depth_service
+
+        monkeypatch.setattr(
+            depth_service, "get_auth_token_broker", lambda *a, **k: (None, None, None)
+        )
+        monkeypatch.setattr(depth_service, "is_broker_session_stale", lambda api_key: False)
+
+        success, response, status = depth_service.get_depth(
+            "SBIN", "NSE", api_key="not-a-real-key"
+        )
+
+        assert success is False
+        assert status == 403, "a bad key must not surface as a missing broker module"
+        assert "code" not in response
 
     def test_invalid_api_key_still_returns_403(self, monkeypatch):
         """Only the stale-session case changes; a genuinely bad key keeps its

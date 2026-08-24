@@ -362,7 +362,19 @@ def register_session(username, session_id, device_info=None, ip_address=None, br
         return True
     except Exception as e:
         db_session.rollback()
-        logger.error(f"Error registering session: {e}")
+        # handle_auth_success ignores this return value, so a failure here leaves
+        # the user with a live broker token and a fresh cookie while
+        # active_sessions still holds only the previous session's row. Broker
+        # credential freshness is inferred from those rows
+        # (utils.session.broker_session_freshness), so the divergence reads as a
+        # decidable stale verdict and withholds a working credential for the rest
+        # of the trading session. Name the consequence here: the symptom
+        # otherwise looks like a broker outage.
+        logger.exception(
+            f"Error registering session for {username}: {e}. Until the next "
+            "successful login this user's broker credential may read as stale, "
+            "because session freshness is inferred from active_sessions."
+        )
         return False
 
 
@@ -570,7 +582,7 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
     broker_cache.clear()  # Also clear broker cache to ensure fresh data
     # A login just changed what "current trading session" means for this user.
     _session_freshness_cache.clear()
-    _stale_logged.clear()
+    _stale_log_throttle.clear()
     logger.info(f"Cleared all auth caches after token update for user: {name}")
 
     # The two operations below TEAR DOWN the shared broker WebSocket feed (the
@@ -1013,12 +1025,15 @@ def get_broker_name(provided_api_key):
 # visible immediately rather than after the TTL.
 _session_freshness_cache = TTLCache(maxsize=128, ttl=30)
 
-# Trading-session date this user was last told about a withheld credential.
+# Throttles the withheld-credential log line to at most one per hour per user.
 # Without it the rejection logs once per *call*: a strategy polling every 5s
 # after the 03:00 rollover writes ~720 identical lines an hour into log/, and
-# the production worker never restarts to truncate them. This gates only a log
-# line - an early expiry costs a duplicate INFO, never a repeated side effect.
-_stale_logged = TTLCache(maxsize=128, ttl=3600)
+# the production worker never restarts to truncate them. The entry holds the
+# trading-session date so a rollover always re-announces, but the hour TTL means
+# a long stale stretch reprints rather than staying silent all day. This gates
+# only a log line - a reprint costs a duplicate INFO, never a repeated side
+# effect.
+_stale_log_throttle = TTLCache(maxsize=128, ttl=3600)
 
 
 def is_broker_session_stale_for_user(user_id):
@@ -1111,8 +1126,8 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
         from utils.session import get_trading_session_date
 
         trading_day = get_trading_session_date()
-        if _stale_logged.get(user_id) != trading_day:
-            _stale_logged[user_id] = trading_day
+        if _stale_log_throttle.get(user_id) != trading_day:
+            _stale_log_throttle[user_id] = trading_day
             logger.info(
                 f"Broker session rollover: no login for user_id '{user_id}' since the "
                 "current session boundary; withholding the stored broker credential "
