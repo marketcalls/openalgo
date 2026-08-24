@@ -13,6 +13,7 @@ import types
 import pytest
 
 import services.flow_executor_service as fes
+import services.flow_openalgo_client as foac
 import services.flow_price_monitor_service as fpm
 
 # ---------------------------------------------------------------------------
@@ -74,6 +75,81 @@ def _arm(monitor, workflow_id, trigger="once"):
         trigger=trigger,
     )
     return monitor.get_alert(workflow_id)
+
+
+# ---------------------------------------------------------------------------
+# Telegram alerts: the workflow API key, never legacy node data, owns delivery
+# ---------------------------------------------------------------------------
+
+
+def test_telegram_alert_ignores_legacy_username_and_delivers_to_api_key_owner(monkeypatch):
+    """A stale imported ``username`` cannot redirect another user's alert."""
+    verified_api_keys = []
+    looked_up_usernames = []
+    deliveries = []
+
+    fake_auth_db = types.ModuleType("database.auth_db")
+
+    def verify_api_key(api_key):
+        verified_api_keys.append(api_key)
+        return "owner_user"
+
+    fake_auth_db.verify_api_key = verify_api_key
+    monkeypatch.setitem(__import__("sys").modules, "database.auth_db", fake_auth_db)
+
+    fake_telegram_db = types.ModuleType("database.telegram_db")
+
+    def get_telegram_user_by_username(username):
+        looked_up_usernames.append(username)
+        return {
+            "telegram_id": {
+                "owner_user": 101,
+                "other_user": 202,
+            }[username],
+            "notifications_enabled": True,
+        }
+
+    fake_telegram_db.get_telegram_user_by_username = get_telegram_user_by_username
+    monkeypatch.setitem(__import__("sys").modules, "database.telegram_db", fake_telegram_db)
+
+    fake_alert_service = types.SimpleNamespace(
+        is_bot_active=lambda: True,
+        send_alert_sync=lambda telegram_id, message: deliveries.append((telegram_id, message)),
+    )
+    fake_executor = types.SimpleNamespace(submit=lambda fn, *args: fn(*args))
+    fake_service_module = types.ModuleType("services.telegram_alert_service")
+    fake_service_module.telegram_alert_service = fake_alert_service
+    fake_service_module.alert_executor = fake_executor
+    monkeypatch.setitem(
+        __import__("sys").modules,
+        "services.telegram_alert_service",
+        fake_service_module,
+    )
+
+    client = foac.FlowOpenAlgoClient("owner-api-key")
+    real_telegram = client.telegram
+    client_calls = []
+
+    def record_telegram_call(*args, **kwargs):
+        client_calls.append((args, kwargs))
+        return real_telegram(*args, **kwargs)
+
+    client.telegram = record_telegram_call
+    executor = fes.NodeExecutor(client, fes.WorkflowContext(), [])
+
+    result = executor.execute_telegram_alert(
+        {"message": "Owner-only notice", "username": "other_user"}
+    )
+
+    assert result["status"] == "success"
+    assert client_calls == [((), {"message": "Owner-only notice"})]
+    assert verified_api_keys == ["owner-api-key"]
+    assert looked_up_usernames == ["owner_user"]
+    assert len(deliveries) == 1
+    telegram_id, formatted_message = deliveries[0]
+    assert telegram_id == 101
+    assert "Owner-only notice" in formatted_message
+    assert "other_user" not in formatted_message
 
 
 @pytest.mark.parametrize("attempt", range(5))
@@ -570,10 +646,25 @@ _ORDER_NODE = {
 class _RecordingClient:
     def __init__(self):
         self.orders = []
+        self.smart_orders = []
+        self.split_orders = []
+        self.baskets = []
 
     def place_order(self, **kwargs):
         self.orders.append(kwargs)
         return {"status": "success", "orderid": "X1"}
+
+    def place_smart_order(self, **kwargs):
+        self.smart_orders.append(kwargs)
+        return {"status": "success", "orderid": "S1"}
+
+    def split_order(self, **kwargs):
+        self.split_orders.append(kwargs)
+        return {"status": "success", "orderid": "SP1"}
+
+    def basket_order(self, **kwargs):
+        self.baskets.append(kwargs)
+        return {"status": "success", "orderids": ["B1"]}
 
 
 @pytest.fixture
@@ -651,6 +742,413 @@ def test_cancel_order_with_an_unresolved_id_fails(order_env, monkeypatch):
 
     assert result["status"] == "error"
     assert "orderId" in result["errors"][0]["message"]
+
+
+# ---------------------------------------------------------------------------
+# FLOW-024: order numeric fields must retain explicit zero and broker pricing
+# ---------------------------------------------------------------------------
+
+
+def test_numeric_accessors_preserve_zero():
+    """A numeric zero is supplied data, not a missing value to replace."""
+    executor = fes.NodeExecutor(None, fes.WorkflowContext(), [])
+    executor.context.set_variable("bad_number", "not-a-number")
+
+    assert executor.get_int({"quantity": 0}, "quantity", 1) == 0
+    assert executor.get_float({"price": 0}, "price", 1.0) == 0.0
+    assert executor.get_int({}, "quantity", 1) == 1
+    assert executor.get_float({}, "price", 1.0) == 1.0
+    assert executor.get_int({"quantity": "{{bad_number}}"}, "quantity", 1) == 1
+    assert executor.get_float({"price": "{{bad_number}}"}, "price", 1.0) == 1.0
+
+
+@pytest.mark.parametrize(
+    ("method", "node_data", "expected"),
+    [
+        (
+            "execute_smart_order",
+            {
+                "symbol": "SBIN",
+                "exchange": "NSE",
+                "action": "BUY",
+                "quantity": 0,
+                "positionSize": 5,
+                "product": "MIS",
+                "priceType": "LIMIT",
+                "price": 625,
+                "triggerPrice": 0,
+            },
+            {"price": 625.0, "trigger_price": 0.0},
+        ),
+        (
+            "execute_split_order",
+            {
+                "symbol": "SBIN",
+                "exchange": "NSE",
+                "action": "SELL",
+                "quantity": 4,
+                "splitSize": 2,
+                "product": "MIS",
+                "priceType": "SL",
+                "price": 625,
+                "triggerPrice": 624,
+            },
+            {"price": 625.0, "trigger_price": 624.0},
+        ),
+    ],
+)
+def test_smart_and_split_order_price_reaches_the_broker(method, node_data, expected):
+    """These nodes used to discard price data and place a different order type."""
+    client = _RecordingClient()
+    executor = fes.NodeExecutor(client, fes.WorkflowContext(), [])
+
+    result = getattr(executor, method)(node_data)
+
+    sent = client.smart_orders if method == "execute_smart_order" else client.split_orders
+    assert result["status"] == "success"
+    assert sent[0]["quantity"] == node_data["quantity"]
+    assert sent[0]["price"] == expected["price"]
+    assert sent[0]["trigger_price"] == expected["trigger_price"]
+
+
+@pytest.mark.parametrize(
+    ("method", "node_data"),
+    [
+        (
+            "execute_smart_order",
+            {
+                "symbol": "SBIN",
+                "quantity": 1,
+                "priceType": "LIMIT",
+                "price": "{{runtime.price}}",
+            },
+        ),
+        (
+            "execute_split_order",
+            {
+                "symbol": "SBIN",
+                "quantity": 1,
+                "splitSize": 1,
+                "priceType": "SL",
+                "price": 625,
+                "triggerPrice": "{{runtime.trigger}}",
+            },
+        ),
+    ],
+)
+def test_smart_and_split_order_price_templates_that_resolve_to_zero_fail_closed(method, node_data):
+    """A resolved zero must be rejected before the broker can reinterpret it."""
+    client = _RecordingClient()
+    context = fes.WorkflowContext()
+    context.set_variable("runtime", {"price": 0, "trigger": 0})
+    executor = fes.NodeExecutor(client, context, [])
+
+    result = getattr(executor, method)(node_data)
+
+    assert result["status"] == "error"
+    assert client.smart_orders == []
+    assert client.split_orders == []
+
+
+def test_basket_order_price_applies_common_fields_to_csv_rows():
+    """CSV basket rows inherit the node price fields in the client's payload spelling."""
+    client = _RecordingClient()
+    executor = fes.NodeExecutor(client, fes.WorkflowContext(), [])
+
+    result = executor.execute_basket_order(
+        {
+            "orders": "SBIN,NSE,BUY,2",
+            "product": "MIS",
+            "priceType": "SL",
+            "price": 625,
+            "triggerPrice": 624,
+        }
+    )
+
+    assert result["status"] == "success"
+    sent = client.baskets[0]["orders"]
+    assert sent[0] == {
+        "symbol": "SBIN",
+        "exchange": "NSE",
+        "action": "BUY",
+        "quantity": 2,
+        "product": "MIS",
+        "pricetype": "SL",
+        "price": 625.0,
+        "triggerprice": 624.0,
+    }
+
+
+def test_basket_order_price_preserves_imported_leg_values_and_fills_missing_values():
+    """Imported legs own their explicit fields and the editor's saved list stays untouched."""
+    client = _RecordingClient()
+    context = fes.WorkflowContext()
+    context.set_variable("runtime", {"price": 626, "trigger": 625})
+    executor = fes.NodeExecutor(client, context, [])
+    orders = [
+        {
+            "symbol": "SBIN",
+            "exchange": "NSE",
+            "action": "BUY",
+            "quantity": 2,
+            "product": "CNC",
+            "priceType": "LIMIT",
+            "price": "{{runtime.price}}",
+            "triggerPrice": "{{runtime.trigger}}",
+        },
+        {"symbol": "INFY", "exchange": "NSE", "action": "SELL", "quantity": 1},
+    ]
+    original_orders = [dict(order) for order in orders]
+
+    result = executor.execute_basket_order(
+        {
+            "orders": orders,
+            "product": "MIS",
+            "priceType": "SL",
+            "price": 625,
+            "triggerPrice": 624,
+        }
+    )
+
+    assert result["status"] == "success"
+    assert orders == original_orders
+    assert client.baskets[0]["orders"] == [
+        {
+            "symbol": "SBIN",
+            "exchange": "NSE",
+            "action": "BUY",
+            "quantity": 2,
+            "product": "CNC",
+            "pricetype": "LIMIT",
+            "price": 626.0,
+            "triggerprice": 625.0,
+        },
+        {
+            "symbol": "INFY",
+            "exchange": "NSE",
+            "action": "SELL",
+            "quantity": 1,
+            "product": "MIS",
+            "pricetype": "SL",
+            "price": 625.0,
+            "triggerprice": 624.0,
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "node_data",
+    [
+        {
+            "orders": "SBIN,NSE,BUY,2",
+            "priceType": "LIMIT",
+            "price": "{{runtime.price}}",
+        },
+        {
+            "orders": [
+                {
+                    "symbol": "SBIN",
+                    "exchange": "NSE",
+                    "action": "BUY",
+                    "quantity": 2,
+                    "priceType": "SL",
+                    "price": 625,
+                    "triggerPrice": 0,
+                }
+            ],
+            "priceType": "MARKET",
+        },
+    ],
+)
+def test_basket_order_price_rejects_invalid_common_or_imported_prices(node_data):
+    """One unusable row must stop the whole basket before any broker request."""
+    client = _RecordingClient()
+    context = fes.WorkflowContext()
+    context.set_variable("runtime", {"price": 0})
+    executor = fes.NodeExecutor(client, context, [])
+
+    result = executor.execute_basket_order(node_data)
+
+    assert result["status"] == "error"
+    assert client.baskets == []
+
+
+@pytest.mark.parametrize(
+    ("orders", "field"),
+    [
+        ([{"exchange": "NSE", "action": "BUY", "quantity": 1}], "symbol"),
+        ([{"symbol": "SBIN", "exchange": None, "action": "BUY", "quantity": 1}], "exchange"),
+        ([{"symbol": "SBIN", "exchange": "NSE", "action": "", "quantity": 1}], "action"),
+    ],
+)
+def test_basket_order_rejects_missing_required_text_before_the_client(orders, field):
+    """Missing text must not be stringified into a broker-valid-looking value."""
+    client = _RecordingClient()
+    executor = fes.NodeExecutor(client, fes.WorkflowContext(), [])
+
+    result = executor.execute_basket_order({"orders": orders})
+
+    assert result["status"] == "error"
+    assert field in result["message"]
+    assert client.baskets == []
+
+
+@pytest.mark.parametrize(
+    ("node_data", "field"),
+    [
+        ({"orders": "SBIN,BAD,BUY,1"}, "exchange"),
+        (
+            {
+                "orders": [
+                    {"symbol": "SBIN", "exchange": "NSE", "action": "HOLD", "quantity": 1}
+                ]
+            },
+            "action",
+        ),
+        ({"orders": "SBIN,NSE,BUY,1", "product": "BAD"}, "product"),
+        (
+            {
+                "orders": [
+                    {
+                        "symbol": "SBIN",
+                        "exchange": "NSE",
+                        "action": "BUY",
+                        "quantity": 1,
+                        "priceType": "BAD",
+                    }
+                ]
+            },
+            "pricetype",
+        ),
+    ],
+)
+def test_basket_order_rejects_invalid_normalized_values_before_the_client(node_data, field):
+    """Executor validation must reject values the live basket service would skip."""
+    client = _RecordingClient()
+    executor = fes.NodeExecutor(client, fes.WorkflowContext(), [])
+
+    result = executor.execute_basket_order(node_data)
+
+    assert result["status"] == "error"
+    assert field in result["message"]
+    assert client.baskets == []
+
+
+def test_basket_order_rejects_a_later_invalid_row_without_partial_submission():
+    """A valid first leg cannot reach the broker when a later leg is invalid."""
+    client = _RecordingClient()
+    executor = fes.NodeExecutor(client, fes.WorkflowContext(), [])
+
+    result = executor.execute_basket_order(
+        {
+            "orders": [
+                {"symbol": "SBIN", "exchange": "NSE", "action": "BUY", "quantity": 1},
+                {"symbol": "INFY", "exchange": "INVALID", "action": "SELL", "quantity": 1},
+            ]
+        }
+    )
+
+    assert result["status"] == "error"
+    assert "row 2" in result["message"]
+    assert client.baskets == []
+
+
+# ---------------------------------------------------------------------------
+# Deferred option expiry values must be safe after interpolation
+# ---------------------------------------------------------------------------
+
+
+class _OptionExpiryClient:
+    def __init__(self):
+        self.calls: list[tuple[str, dict]] = []
+
+    def optionsymbol(self, **kwargs):
+        self.calls.append(("optionSymbol", kwargs))
+        return {"status": "success"}
+
+    def optionchain(self, **kwargs):
+        self.calls.append(("optionChain", kwargs))
+        return {"status": "success"}
+
+    def syntheticfuture(self, **kwargs):
+        self.calls.append(("syntheticFuture", kwargs))
+        return {"status": "success"}
+
+
+@pytest.fixture
+def option_expiry_env(executor_env, monkeypatch):
+    """A real workflow execution with only the external option client recorded."""
+    client = _OptionExpiryClient()
+    monkeypatch.setattr(fes, "get_flow_client", lambda api_key: client)
+    return types.SimpleNamespace(client=client, statuses=executor_env.statuses)
+
+
+_OPTION_EXPIRY_TEMPLATE = {
+    "underlying": "{{webhook.underlying}}",
+    "expiryDate": "{{webhook.expiry}}",
+}
+
+
+@pytest.mark.parametrize("node_type", ["optionSymbol", "optionChain", "syntheticFuture"])
+@pytest.mark.parametrize(
+    "webhook",
+    [
+        {"underlying": "NIFTY", "expiry": ""},
+        {"underlying": "NIFTY", "expiry": "not-a-date"},
+        {"underlying": "NIFTY"},
+    ],
+)
+def test_option_expiry_templates_fail_before_the_client_when_resolved_invalidly(
+    option_expiry_env, monkeypatch, node_type, webhook
+):
+    """Interpolated expiry values must not degrade into empty or literal client inputs."""
+    result, _ = _run_graph(monkeypatch, node_type, _OPTION_EXPIRY_TEMPLATE, webhook)
+
+    assert result["status"] == "error"
+    assert option_expiry_env.client.calls == []
+
+
+@pytest.mark.parametrize("node_type", ["optionSymbol", "optionChain", "syntheticFuture"])
+def test_option_expiry_templates_call_the_client_after_resolving_validly(
+    option_expiry_env, monkeypatch, node_type
+):
+    """The runtime guard must preserve successful dynamic option requests."""
+    result, _ = _run_graph(
+        monkeypatch,
+        node_type,
+        _OPTION_EXPIRY_TEMPLATE,
+        {"underlying": "NIFTY", "expiry": "27AUG26"},
+    )
+
+    assert result["status"] == "success"
+    assert option_expiry_env.client.calls[0][0] == node_type
+
+
+@pytest.mark.parametrize("node_type", ["optionSymbol", "optionChain"])
+def test_explicit_dynamic_expiry_overrides_an_embedded_expiry_and_must_be_valid(
+    option_expiry_env, monkeypatch, node_type
+):
+    """Option clients prefer expiryDate over an expiry embedded in the underlying."""
+    result, _ = _run_graph(
+        monkeypatch,
+        node_type,
+        {"underlying": "NIFTY27AUG26", "expiryDate": "{{webhook.expiry}}"},
+        {"expiry": "not-a-date"},
+    )
+
+    assert result["status"] == "error"
+    assert option_expiry_env.client.calls == []
+
+
+@pytest.mark.parametrize("node_type", ["optionSymbol", "optionChain"])
+def test_embedded_expiry_is_the_option_node_fallback_when_no_expiry_is_supplied(
+    option_expiry_env, monkeypatch, node_type
+):
+    """An embedded expiry is valid only when an explicit expiryDate is absent."""
+    result, _ = _run_graph(monkeypatch, node_type, {"underlying": "NIFTY27AUG26"}, {})
+
+    assert result["status"] == "success"
+    assert option_expiry_env.client.calls[0][0] == node_type
 
 
 # ---------------------------------------------------------------------------
@@ -870,6 +1368,123 @@ def test_cancel_all_orders_stores_its_result():
 
     assert client.cancelled is True
     assert executor.context.interpolate("{{cancelled.cancelled}}") == "3"
+
+
+# ---------------------------------------------------------------------------
+# Variable nodes preserve raw values and report failed operations honestly
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("operation", "initial", "data", "expected"),
+    [
+        ("set", {}, {"value": '{"ok": true}'}, {"ok": True}),
+        (
+            "get",
+            {"portfolio": {"orders": [{"price": 101}, {"price": 102.5}]}},
+            {"sourceVariable": "portfolio", "jsonPath": "orders[1].price"},
+            102.5,
+        ),
+        ("add", {"target": 2}, {"value": "3"}, 5.0),
+        ("subtract", {"target": 9}, {"value": "4"}, 5.0),
+        ("multiply", {"target": 3}, {"value": "2.5"}, 7.5),
+        ("divide", {"target": 9}, {"value": "2"}, 4.5),
+        ("increment", {"target": 3}, {}, 4.0),
+        ("decrement", {"target": 3}, {}, 2.0),
+        ("parse_json", {}, {"value": '{"ok": true}'}, {"ok": True}),
+        ("stringify", {"source": {"ok": True}}, {"sourceVariable": "source"}, '{"ok": true}'),
+        ("append", {}, {"value": "done"}, "done"),
+    ],
+)
+def test_variable_operation_success(operation, initial, data, expected):
+    """Each supported operation stores its specified raw result."""
+    executor = _node()
+    executor.context.variables.update(initial)
+
+    result = executor.execute_variable({"variableName": "target", "operation": operation, **data})
+
+    assert result == {"status": "success", "variable": "target", "value": expected}
+    assert executor.context.get_variable("target") == expected
+
+
+def test_variable_operation_get_preserves_a_stored_none_value():
+    """A stored None is a source value, rather than evidence the source is missing."""
+    executor = _node()
+    executor.context.set_variable("source", None)
+
+    result = executor.execute_variable(
+        {"variableName": "target", "operation": "get", "sourceVariable": "source"}
+    )
+
+    assert result == {"status": "success", "variable": "target", "value": None}
+    assert executor.context.get_variable("target") is None
+
+
+@pytest.mark.parametrize(
+    ("operation", "initial", "data", "original"),
+    [
+        ("unknown", {"target": "sentinel"}, {}, "sentinel"),
+        ("get", {"target": "sentinel"}, {}, "sentinel"),
+        (
+            "get",
+            {"target": "sentinel", "source": {"orders": []}},
+            {"sourceVariable": "source", "jsonPath": "orders[1].price"},
+            "sentinel",
+        ),
+        ("add", {"target": "not numeric"}, {"value": "1"}, "not numeric"),
+        ("add", {"target": "sentinel"}, {"value": "not numeric"}, "sentinel"),
+        ("parse_json", {"target": "sentinel"}, {"value": "not json"}, "sentinel"),
+        ("stringify", {"target": "sentinel", "source": {1, 2}}, {"sourceVariable": "source"}, "sentinel"),
+    ],
+)
+def test_variable_operation_error_does_not_mutate_target(operation, initial, data, original):
+    """Invalid work must preserve the output variable rather than partly succeeding."""
+    executor = _node()
+    executor.context.variables.update(initial)
+
+    result = executor.execute_variable({"variableName": "target", "operation": operation, **data})
+
+    assert result["status"] == "error"
+    assert executor.context.get_variable("target") == original
+
+
+def test_variable_divide_by_zero_reaches_the_zero_guard_without_mutating_target():
+    """A numeric target proves the explicit divisor guard, not an earlier coercion error."""
+    executor = _node()
+    executor.context.set_variable("target", 9)
+
+    result = executor.execute_variable(
+        {"variableName": "target", "operation": "divide", "value": 0}
+    )
+
+    assert result["status"] == "error"
+    assert "divide by zero" in result["message"].lower()
+    assert executor.context.get_variable("target") == 9
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [("floor(3.9)", 3.0), ("floor(2 + 2.8)", 4.0)],
+)
+def test_safe_math_floor(expression, expected):
+    assert _node()._safe_eval_math(expression) == expected
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "ceil(1.1)",
+        "math.floor(2.2)",
+        "floor()",
+        "floor(1, 2)",
+        "floor(x=1)",
+        "floor(unknown(1))",
+        "__import__('os').system('echo unsafe')",
+    ],
+)
+def test_safe_math_floor_rejects_every_other_call_shape(expression):
+    with pytest.raises(ValueError):
+        _node()._safe_eval_math(expression)
 
 
 # ---------------------------------------------------------------------------
