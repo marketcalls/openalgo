@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 
 from marshmallow import Schema, ValidationError, fields, validate
 
@@ -35,6 +36,20 @@ def validate_option_offset(data: str) -> bool:
         raise ValidationError("Offset must be ATM, ITM1-ITM50, or OTM1-OTM50")
 
     return True
+
+
+def validate_option_expiry(data: str) -> None:
+    """Validate an option expiry date in the exact DDMMMYY format."""
+    if data == "":
+        return
+
+    if not isinstance(data, str) or not re.fullmatch(r"\d{2}[A-Z]{3}\d{2}", data):
+        raise ValidationError("Expiry date must use the DDMMMYY format (for example, 28AUG26).")
+
+    try:
+        datetime.strptime(data, "%d%b%y")
+    except ValueError as error:
+        raise ValidationError("Expiry date must be a valid calendar date.") from error
 
 
 class QuotesSchema(Schema):
@@ -167,7 +182,7 @@ class OptionSymbolSchema(Schema):
     underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, RELIANCE, NIFTY28OCT25FUT)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, NFO)
     expiry_date = fields.Str(
-        required=False
+        required=False, validate=validate_option_expiry
     )  # Expiry date in DDMMMYY format (e.g., 28OCT25). Optional if underlying includes expiry
     strike_int = fields.Int(
         required=False, validate=validate.Range(min=1), allow_none=True

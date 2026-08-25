@@ -1,5 +1,6 @@
 from marshmallow import EXCLUDE, Schema, ValidationError, fields, post_load, pre_load, validate
 
+from restx_api.data_schemas import validate_option_expiry
 from utils.constants import CRYPTO_EXCHANGES, VALID_EXCHANGES
 
 
@@ -210,7 +211,7 @@ class OptionsOrderSchema(Schema):
     )  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE, or NIFTY28NOV24FUT)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE, NFO, BFO)
     expiry_date = fields.Str(
-        required=False
+        required=False, validate=validate_option_expiry
     )  # Optional if underlying includes expiry (DDMMMYY format)
     strike_int = fields.Int(
         required=False, validate=validate.Range(min=1), allow_none=True
@@ -264,7 +265,7 @@ class OptionsMultiOrderLegSchema(Schema):
         allow_none=True,
     )  # Optional: If > 0, splits leg into multiple orders of this size
     expiry_date = fields.Str(
-        required=False
+        required=False, validate=validate_option_expiry
     )  # Optional per-leg expiry (DDMMMYY format) - for diagonal/calendar spreads
     pricetype = fields.Str(
         missing="MARKET", validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"])
@@ -293,7 +294,7 @@ class OptionsMultiOrderSchema(Schema):
     underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE)
     expiry_date = fields.Str(
-        required=False
+        required=False, validate=validate_option_expiry
     )  # Optional if underlying includes expiry (DDMMMYY format)
     strike_int = fields.Int(
         required=False, validate=validate.Range(min=1), allow_none=True
