@@ -12,6 +12,7 @@ def request_context():
 class RecordingLogger:
     def __init__(self):
         self.messages = []
+        self.error_messages = []
 
     def warning(self, message, *args):
         self.messages.append(message % args if args else message)
@@ -19,7 +20,8 @@ class RecordingLogger:
     def exception(self, message, *args):
         self.messages.append(message % args if args else message)
 
-    error = exception
+    def error(self, message, *args):
+        self.error_messages.append(message % args if args else message)
 
 
 def test_option_greeks_invalid_key_is_not_logged(monkeypatch):
@@ -81,4 +83,5 @@ def test_websocket_close_error_does_not_log_api_key(monkeypatch):
     websocket_client.close_all_clients()
 
     assert logger.messages == ["Error closing WebSocket client"]
+    assert logger.error_messages == []
     assert TEST_KEY not in " ".join(logger.messages)
