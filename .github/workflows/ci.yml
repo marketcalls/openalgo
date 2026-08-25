@@ -57,6 +57,7 @@ jobs:
             test/test_telegram_api_contract.py test/test_cors_config.py \
             test/test_multi_option_greeks_regression.py \
             test/test_history_format.py \
+            test/test_precompress_assets.py \
             -v --timeout=60
 
   # Frontend linting
@@ -192,7 +193,12 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f frontend/dist/
+          # -f is needed because frontend/dist/ is gitignored for contributors,
+          # but the pre-compressed variants stay excluded: gzip/brotli output is
+          # incompressible and undeltifiable, so committing it on every rebuild
+          # grew to two thirds of the repository history and tripled clone
+          # times. utils/precompress_assets.py regenerates them at app startup.
+          git add -f frontend/dist/ ':(exclude)frontend/dist/*.gz' ':(exclude)frontend/dist/*.br'
           git diff --staged --quiet || git commit -m "chore: auto-build frontend dist [skip ci]"
           git push
 
