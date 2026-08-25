@@ -78,6 +78,14 @@ build/
 out/
 
 # Frontend specific
+# Pre-compressed asset variants are NOT committed. Gzip output cannot be
+# deflated or delta-compressed by git, and Vite's content-hashed filenames make
+# every rebuild a brand new blob, so committing these grew to two thirds of the
+# repository history. utils/precompress_assets.py regenerates them at startup.
+frontend/dist/**/*.gz
+frontend/dist/**/*.br
+frontend/dist/**/*.gz.tmp
+
 # frontend/dist/ is built by CI/CD pipeline
 frontend/dist/
 frontend/.cache/

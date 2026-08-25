@@ -671,6 +671,21 @@ def setup_environment(app):
         app.broker_auth_functions = load_broker_auth_functions()
         load_broker_capabilities()  # cache plugin.json data in memory
 
+    # Regenerate the gzip variants of the built frontend assets. These are no
+    # longer committed with frontend/dist/ (they bloated the repository history
+    # badly - see utils/precompress_assets), so they are rebuilt here from the
+    # tracked originals whenever a `git pull` brings a new build.
+    #
+    # Deliberately synchronous, ahead of the background DB thread. Under
+    # eventlet a threading.Thread is a green thread, so running ~3s of gzip
+    # there would stall the entire worker mid-request; run at boot, before the
+    # first request is served, it costs nothing anyone can observe. Subsequent
+    # boots find every variant current and finish in ~30ms.
+    from blueprints.react_app import FRONTEND_DIST
+    from utils.precompress_assets import ensure_precompressed_assets
+
+    ensure_precompressed_assets(FRONTEND_DIST)
+
     # Setup ngrok cleanup handlers (always register, regardless of ngrok being enabled)
     # This ensures proper cleanup on shutdown even if ngrok is enabled/disabled via UI
     # The actual tunnel creation happens in the __main__ block below
