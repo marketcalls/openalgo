@@ -448,6 +448,34 @@ class TestCryptoBypass:
         assert broker == TEST_BROKER
 
 
+class TestCryptoBypassIsSymmetric:
+    """Both sides of the freshness question must exempt 24/7 brokers."""
+
+    def test_boot_scan_helper_exempts_crypto(self, monkeypatch):
+        """has_login_this_trading_session gates whether the order-update adapter
+        starts at boot (services/order_update_service.py). A Delta Exchange
+        instance has no 03:00 rollover, so a login from yesterday is still the
+        current session; without the exemption it gets no adapter at all.
+        """
+        monkeypatch.setenv("DISABLE_SESSION_EXPIRY", "true")
+        monkeypatch.setattr(
+            "database.auth_db.get_active_sessions",
+            lambda u: _session_rows(-timedelta(days=3)),
+        )
+
+        assert session_utils.has_login_this_trading_session(TEST_USER) is True
+
+    def test_boot_scan_helper_still_judges_non_crypto(self, monkeypatch):
+        """The exemption must not leak into a normal instance."""
+        monkeypatch.delenv("DISABLE_SESSION_EXPIRY", raising=False)
+        monkeypatch.setattr(
+            "database.auth_db.get_active_sessions",
+            lambda u: _session_rows(-timedelta(days=3)),
+        )
+
+        assert session_utils.has_login_this_trading_session(TEST_USER) is False
+
+
 class TestServiceResponses:
     """Quote and history must report a reconnect, not a bad API key or a 500."""
 

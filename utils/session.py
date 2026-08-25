@@ -235,6 +235,15 @@ def has_login_this_trading_session(username) -> bool:
     at the next login. Anything with a destructive or user-visible consequence
     must ask broker_session_freshness() and handle SESSION_UNKNOWN itself.
     """
+    # Crypto brokers trade 24/7 and have no rollover, so there is no boundary a
+    # login can predate and the stored token always belongs to the current
+    # session. Without this, a Delta Exchange instance whose last login was
+    # yesterday gets no order-update adapter at boot
+    # (services/order_update_service.py). is_broker_session_stale_for_user()
+    # already short-circuits the same way; this keeps both sides symmetric.
+    if is_session_expiry_disabled():
+        return True
+
     return broker_session_freshness(username) == SESSION_FRESH
 
 
