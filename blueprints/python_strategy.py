@@ -283,9 +283,9 @@ def check_master_contract_ready(skip_on_startup=False):
         if not broker:
             # During startup, we may not have a broker yet, so skip the check
             if skip_on_startup:
-                logger.info("No broker found during startup - skipping master contract check")
+                logger.debug("No broker found during startup - skipping master contract check")
                 return True, "Skipping check during startup"
-            logger.warning("No broker found for master contract check")
+            logger.debug("No broker found for master contract check")
             return False, "No broker session found"
 
         # Import here to avoid circular imports
@@ -2866,7 +2866,7 @@ def restore_strategy_states():
 
     # If we can't determine the broker (no active auth), delay strategy restoration
     if "No broker" in contract_message:
-        logger.info("No active broker found during startup - delaying strategy restoration")
+        logger.debug("No active broker found during startup - delaying strategy restoration")
         if restored_count:
             logger.info(f"Restored {restored_count} live strategies while broker is unavailable")
         return

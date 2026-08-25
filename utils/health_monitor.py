@@ -642,7 +642,7 @@ def start_health_collector(interval=None):
     global _collector_thread, _collector_running, HEALTH_SAMPLE_INTERVAL
 
     if not HEALTH_MONITOR_ENABLED:
-        logger.info("Health monitoring is disabled (HEALTH_MONITOR_ENABLED=false)")
+        logger.debug("Health monitoring is disabled (HEALTH_MONITOR_ENABLED=false)")
         return
 
     if interval:
