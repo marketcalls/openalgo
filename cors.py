@@ -54,12 +54,12 @@ def get_cors_config():
 def init_cors(app):
     """Initialize Flask-CORS when it has been explicitly enabled."""
     if not is_cors_enabled():
-        logger.info("CORS is disabled")
+        logger.debug("CORS is disabled")
         return
 
     cors_config = get_cors_config()
     if cors_config["origins"]:
-        logger.info("CORS enabled for origins: %s", ", ".join(cors_config["origins"]))
+        logger.debug("CORS enabled for origins: %s", ", ".join(cors_config["origins"]))
     else:
         logger.warning(
             "CORS is enabled but no allowed origins are configured; denying cross-origin requests"
