@@ -37,7 +37,12 @@ describe('Navbar', () => {
 
     expect(strategy).toHaveAttribute('aria-current', 'page')
     expect(dashboard).not.toHaveAttribute('aria-current')
-    expect(currentLinks(document.body)).toEqual([strategy])
+    const desktopNav = screen
+      .getAllByRole('navigation')
+      .find((nav) => nav.classList.contains('md:flex'))
+
+    expect(desktopNav).toBeDefined()
+    expect(currentLinks(desktopNav!)).toEqual([strategy])
   })
 
   it('marks only the active sheet navigation link as current', async () => {
