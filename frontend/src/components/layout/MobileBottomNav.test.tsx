@@ -54,6 +54,7 @@ describe('MobileBottomNav', () => {
 
       const dashboardLink = screen.getByRole('link', { name: /dashboard/i })
       expect(dashboardLink).toHaveClass('text-primary')
+      expect(dashboardLink).toHaveAttribute('aria-current', 'page')
     })
 
     it('highlights Positions when on positions route', () => {
