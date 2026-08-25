@@ -12,10 +12,19 @@ from flask import Blueprint, abort, request, send_file, send_from_directory
 react_bp = Blueprint("react", __name__)
 
 # Pre-compressed encodings to negotiate, in preference order (best ratio first).
-# The Vite build (vite-plugin-compression2) emits <asset>.br and <asset>.gz next
-# to each hashed asset; CI commits them with frontend/dist/. Serving these lets
-# no-nginx (laptop) installs ship compressed bytes with zero per-request CPU,
-# and nginx-fronted servers pass the Content-Encoding through untouched.
+# utils/precompress_assets.py writes <asset>.gz next to each hashed asset at
+# startup. They are deliberately NOT committed with frontend/dist/: compressed
+# output can be neither deflated nor delta-compressed by git, so re-committing
+# it on every CI rebuild grew to two thirds of the repository history.
+#
+# Serving these lets installs with no compressing proxy ship compressed bytes
+# at zero per-request CPU, and nginx or Cloudflare in front passes the
+# Content-Encoding through untouched rather than re-compressing.
+#
+# ".br" stays in the list although nothing in the repo produces it now: the
+# lookup is one stat that misses, and it means an operator whose own pipeline
+# emits brotli gets it served without a code change. Missing variants always
+# fall back to the raw asset.
 _PRECOMPRESSED_ENCODINGS = ((".br", "br"), (".gz", "gzip"))
 
 

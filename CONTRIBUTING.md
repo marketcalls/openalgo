@@ -16,18 +16,27 @@ OpenAlgo is built **by traders, for traders**. We believe in democratizing algor
 
 ## Table of Contents
 
-1. [Technology Stack](#technology-stack)
-2. [Development Setup](#development-setup)
-3. [Local Development](#local-development)
-4. [Project Structure](#project-structure)
-5. [Development Workflow](#development-workflow)
-6. [Contributing Guidelines](#contributing-guidelines)
-7. [Testing](#testing)
-8. [Adding a New Broker](#adding-a-new-broker)
-9. [Frontend Development](#frontend-development)
-10. [Documentation](#documentation)
-11. [Best Practices](#best-practices)
-12. [Getting Help](#getting-help)
+1. [Let's democratize algorithmic trading, together!](#lets-democratize-algorithmic-trading-together)
+2. [Our Mission](#our-mission)
+3. [Table of Contents](#table-of-contents)
+4. [Technology Stack](#technology-stack)
+5. [Development Setup](#development-setup)
+6. [Local Development](#local-development)
+7. [Project Structure](#project-structure)
+8. [Development Workflow](#development-workflow)
+9. [Contributing Guidelines](#contributing-guidelines)
+10. [Testing](#testing)
+11. [Adding a New Broker](#adding-a-new-broker)
+12. [Frontend Development](#frontend-development)
+13. [Documentation](#documentation)
+14. [Best Practices](#best-practices)
+15. [Troubleshooting](#troubleshooting)
+16. [Getting Help](#getting-help)
+17. [Code Review Process](#code-review-process)
+18. [Recognition & Community](#recognition--community)
+19. [Quick Reference Links](#quick-reference-links)
+20. [License](#license)
+21. [Thank You!](#thank-you)
 
 ---
 
@@ -196,7 +205,7 @@ uv run gunicorn --worker-class eventlet -w 1 app:app
 ### Access Points
 
 - **Main app**: http://127.0.0.1:5000
-- **React frontend**: http://127.0.0.1:5000/react
+- **Dashboard**: http://127.0.0.1:5000/dashboard
 - **REST API documentation**: [docs/api/README.md](docs/api/README.md)
 - **API Analyzer**: http://127.0.0.1:5000/analyzer
 
@@ -376,19 +385,28 @@ git commit -m "refactor: optimize order processing pipeline"
 ### 5. Test Your Changes
 
 ```bash
-# Run Python tests
+# Fast backend check (same maintained selection used by CI)
+uv run pytest test/test_log_location.py test/test_navigation_update.py \
+  test/test_python_editor.py test/test_rate_limits_simple.py \
+  test/test_logout_csrf.py test/test_auth_logout.py \
+  test/test_auth_resume.py test/test_auth_upsert_multisession.py \
+  test/sandbox/test_execution_backlog.py test/test_event_bus_bounded.py \
+  test/test_telegram_api_contract.py test/test_multi_option_greeks_regression.py \
+  test/test_history_format.py -v --timeout=60
+
+# Full backend suite (not CI-safe; not green on a clean checkout)
 uv run pytest test/ -v
 
-# Run React tests
+# Run React tests once (CI/completion check)
 cd frontend
-npm test
+npm run test:run
 
 # Run end-to-end tests
 npm run e2e
 
 # Manual testing:
 # 1. Web UI: http://127.0.0.1:5000
-# 2. React UI: http://127.0.0.1:5000/react
+# 2. Dashboard: http://127.0.0.1:5000/dashboard
 # 3. REST API documentation: docs/api/README.md
 # 4. API Analyzer: http://127.0.0.1:5000/analyzer
 ```
@@ -398,8 +416,8 @@ npm run e2e
 - [ ] Application starts without errors (`uv run app.py`)
 - [ ] All existing features still work
 - [ ] New feature works as expected
-- [ ] Python tests pass (`uv run pytest test/ -v`)
-- [ ] Frontend tests pass (`cd frontend && npm test`)
+- [ ] CI-safe backend tests pass (the pytest selection above)
+- [ ] Frontend tests pass (`cd frontend && npm run test:run`)
 - [ ] No TypeScript errors (`cd frontend && npm run build`)
 - [ ] No linting errors (Ruff for Python, Biome for frontend)
 - [ ] API endpoints return correct responses
@@ -607,7 +625,7 @@ describe('MyComponent', () => {
 import { test, expect } from '@playwright/test';
 
 test('feature works end to end', async ({ page }) => {
-  await page.goto('/react');
+  await page.goto('/dashboard');
   await expect(page.getByText('Dashboard')).toBeVisible();
 });
 ```
