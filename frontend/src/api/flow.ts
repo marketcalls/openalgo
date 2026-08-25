@@ -355,6 +355,54 @@ export async function getSymbolLotSizes(symbols: SymbolRef[]): Promise<LotSizeMa
   return clean
 }
 
+export interface ListedStrike {
+  strike: number
+  /** The contract this strike resolves to, e.g. GOLDM28AUG26163000CE. */
+  symbol: string | null
+  /** ATM / ITMn / OTMn. Differs per side at the same strike. */
+  label: string | null
+}
+
+export interface OptionStrikesResponse {
+  underlying: string
+  exchange: string
+  /** The expiry the strikes belong to, in DDMMMYY. */
+  expiry: string
+  /** Every listed expiry for this underlying, nearest first. */
+  expiries: string[]
+  /** What each relative expiry type resolves to right now, e.g.
+   * `{ current_week: '28AUG26' }`. Resolved server-side with the selector the
+   * executor uses, so the panel can name the contract a leg will trade. */
+  resolved: Record<string, string | null>
+  optionType: 'CE' | 'PE'
+  strikes: ListedStrike[]
+  /** Nearest listed strike to the underlying LTP, or null when the quote failed. */
+  atm: number | null
+  underlyingLtp: number | null
+  /** What the ATM was priced against - the index, or the near-month future on
+   * an exchange with no spot. */
+  underlyingSymbol: string | null
+}
+
+/**
+ * Listed expiries and strikes for one underlying, for the manual leg builder.
+ *
+ * A leg that names an absolute strike and its own expiry should pick contracts
+ * the exchange actually lists, so the builder offers the master contract's own
+ * list rather than a free number and a typed date. `atm` is a convenience
+ * marker and may be null - a strike list is still usable when the underlying
+ * quote fails.
+ */
+export async function getOptionStrikes(params: {
+  underlying: string
+  expiry?: string
+  expiryType?: string
+  optionType?: 'CE' | 'PE'
+}): Promise<OptionStrikesResponse> {
+  const response = await webClient.get(`${FLOW_API_BASE}/option-strikes`, { params })
+  return response.data.data
+}
+
 // =============================================================================
 // React Query Keys
 // =============================================================================
@@ -366,6 +414,10 @@ export const flowQueryKeys = {
   executions: (id: number) => [...flowQueryKeys.workflow(id), 'executions'] as const,
   webhook: (id: number) => [...flowQueryKeys.workflow(id), 'webhook'] as const,
   indexSymbols: () => [...flowQueryKeys.all, 'index-symbols'] as const,
+  // Keyed on the exact triple the response describes, so switching expiry or
+  // option type refetches instead of showing another expiry's strikes.
+  optionStrikes: (underlying: string, expiry: string, optionType: string) =>
+    [...flowQueryKeys.all, 'option-strikes', underlying, expiry, optionType] as const,
   // Keyed on the sorted pair list, so reopening an unchanged basket reuses its
   // entry. This key cannot give incremental reuse on its own - any change to
   // the set is a different key, and would re-request the whole basket - so the
