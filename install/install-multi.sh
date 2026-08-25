@@ -287,7 +287,15 @@ for ((i=1; i<=INSTANCES; i++)); do
     # Clone or update repository
     if [ ! -d "$INSTANCE_DIR" ]; then
         log_message "Cloning repository to $INSTANCE_DIR" "$BLUE"
-        sudo git clone "$REPO_URL" "$INSTANCE_DIR"
+        # --filter=blob:none makes this a partial clone: the server sends every
+        # commit and tree but no file contents, so it pulls ~20 MB instead of
+        # ~280 MB. Blobs outside the current checkout are fetched on demand, so
+        # the full history stays usable -- all 4,824 commits, 62 tags, every
+        # branch -- which keeps `git reset --hard HEAD~n`, tag checkouts and
+        # branch switching working. Nearly all of that 280 MB is superseded
+        # frontend/dist bundles that a server never reads. A host without filter
+        # support just full-clones, so this is never worse than no flag at all.
+        sudo git clone --filter=blob:none "$REPO_URL" "$INSTANCE_DIR"
         check_status "Failed to clone repository"
     else
         log_message "Directory exists, skipping clone" "$YELLOW"
