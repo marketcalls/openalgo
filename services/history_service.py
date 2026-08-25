@@ -242,13 +242,16 @@ def get_history(
         auth_token: Direct broker authentication token (for internal calls)
         feed_token: Direct broker feed token (for internal calls)
         broker: Direct broker name (for internal calls)
-        source: Data source - 'api' (broker, default) or 'db' (DuckDB/Historify)
+        source: Data source - 'api' (broker, default) or 'db' (DuckDB/Historify).
+            Unsupported values return 400 before a provider is called.
 
     Returns:
         Tuple containing:
         - Success status (bool)
         - Response data (dict)
         - HTTP status code (int)
+
+        Unsupported source values return a 400 error before either provider is called.
     """
     if not isinstance(source, str) or source not in {"api", "db"}:
         return (
