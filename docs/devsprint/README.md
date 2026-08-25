@@ -393,7 +393,7 @@ git push --force-with-lease
 These are not style preferences. They are the things maintainers actually send PRs
 back for.
 
-**One feature or one fix per pull request.** OpenAlgo supports 35 brokers, and
+**One feature or one fix per pull request.** OpenAlgo supports 36 broker plugins, and
 every change has to be validated across that surface. Large combined PRs are not
 reviewable and will be asked to be split. The one exception is a brand new broker
 integration, which is self-contained inside its own `broker/` directory.

@@ -1008,7 +1008,7 @@ A new broker must be registered in **all** of the following locations:
 Add your broker to the "Supported Brokers" section (alphabetical order):
 
 ```markdown
-## Supported Brokers (34 plugins)
+## Supported Brokers (36 plugins)
 
 <details>
 <summary>View All Supported Brokers</summary>
@@ -1455,9 +1455,18 @@ Study these implementations for the pattern closest to your broker:
 
 ---
 
-## Appendix: Complete Plugin Inventory (34)
+## Appendix: Complete Plugin Inventory (36)
 
 This inventory is derived from `broker/*/plugin.json`. Authentication requirements must be read from the adapter and the broker's current developer instructions rather than copied from a static cross-broker table.
+
+> **Maintainer note:** To verify the current broker plugin count and ensure documentation remains consistent across releases, run:
+> ```bash
+> # Count all broker plugin definitions
+> find broker -name "plugin.json" | wc -l
+>
+> # Check for hard-coded counts across documentation
+> rg -n "\b(3[0-9])\s+(plugins?|brokers?)\b" README.md CONTRIBUTING.md docs/INDEX.md docs/broker-integration-guide.md
+> ```
 
 | # | Directory | Type |
 |---:|---|---|
@@ -1475,23 +1484,25 @@ This inventory is derived from `broker/*/plugin.json`. Authentication requiremen
 | 12 | `flattrade` | Securities |
 | 13 | `fyers` | Securities |
 | 14 | `groww` | Securities |
-| 15 | `ibulls` | Securities |
-| 16 | `iifl` | Securities |
-| 17 | `iiflcapital` | Securities |
-| 18 | `indmoney` | Securities |
-| 19 | `jainamxts` | Securities |
-| 20 | `kotak` | Securities |
-| 21 | `motilal` | Securities |
-| 22 | `mstock` | Securities |
-| 23 | `nubra` | Securities |
-| 24 | `paytm` | Securities |
-| 25 | `pocketful` | Securities |
-| 26 | `rmoney` | Securities |
-| 27 | `samco` | Securities |
-| 28 | `shoonya` | Securities |
-| 29 | `tradejini` | Securities |
-| 30 | `tradesmart` | Securities |
-| 31 | `upstox` | Securities |
-| 32 | `wisdom` | Securities |
-| 33 | `zebu` | Securities |
-| 34 | `zerodha` | Securities |
+| 15 | `hdfcsecurities` | Securities |
+| 16 | `hdfcsky` | Securities |
+| 17 | `ibulls` | Securities |
+| 18 | `iifl` | Securities |
+| 19 | `iiflcapital` | Securities |
+| 20 | `indmoney` | Securities |
+| 21 | `jainamxts` | Securities |
+| 22 | `kotak` | Securities |
+| 23 | `motilal` | Securities |
+| 24 | `mstock` | Securities |
+| 25 | `nubra` | Securities |
+| 26 | `paytm` | Securities |
+| 27 | `pocketful` | Securities |
+| 28 | `rmoney` | Securities |
+| 29 | `samco` | Securities |
+| 30 | `shoonya` | Securities |
+| 31 | `tradejini` | Securities |
+| 32 | `tradesmart` | Securities |
+| 33 | `upstox` | Securities |
+| 34 | `wisdom` | Securities |
+| 35 | `zebu` | Securities |
+| 36 | `zerodha` | Securities |
