@@ -197,7 +197,7 @@ def start_order_update_adapters_on_boot(db_ready=None) -> None:
             know the schema exists.
     """
     if not _order_updates_enabled():
-        logger.info("Order-update adapters disabled via ORDER_UPDATES_ENABLED")
+        logger.debug("Order-update adapters disabled via ORDER_UPDATES_ENABLED")
         return
 
     def _boot():
