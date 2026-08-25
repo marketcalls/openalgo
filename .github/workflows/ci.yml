@@ -50,6 +50,7 @@ jobs:
             test/test_auth_resume.py test/test_auth_upsert_multisession.py \
             test/sandbox/test_execution_backlog.py test/test_event_bus_bounded.py \
             test/test_telegram_api_contract.py \
+            test/test_api_analyzer_numeric_validation.py \
             -v --timeout=60
 
   # Frontend linting
