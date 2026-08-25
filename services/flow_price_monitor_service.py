@@ -96,7 +96,7 @@ class FlowPriceMonitor:
         self._pending = set()
         self._pending_lock = threading.Lock()
         self._alerts_lock = threading.RLock()
-        logger.info("FlowPriceMonitor initialized")
+        logger.debug("FlowPriceMonitor initialized")
 
     # The editor and this monitor grew separate vocabularies for the same four
     # conditions, so every alert the UI could produce fell through to the final
