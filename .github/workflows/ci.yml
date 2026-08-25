@@ -56,6 +56,7 @@ jobs:
             test/sandbox/test_execution_backlog.py test/test_event_bus_bounded.py \
             test/test_telegram_api_contract.py test/test_cors_config.py \
             test/test_market_calendar_validation.py \
+            test/test_admin_client_error_url.py \
             test/test_multi_option_greeks_regression.py \
             test/test_history_format.py \
             test/test_precompress_assets.py \
