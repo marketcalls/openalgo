@@ -226,6 +226,14 @@ def cancel_all_orders(
         # Add API key to order data
         order_data["apikey"] = api_key
 
+        # Sandbox first: cancel_all_orders_with_auth() routes to the sandbox engine when
+        # analyze mode is on, and that path never reaches the broker. Resolving a
+        # live credential before that branch would let the daily rollover block a
+        # sandbox operation, coupling the sandbox to a live broker session that
+        # CLAUDE.md documents it as isolated from.
+        if get_analyze_mode():
+            return cancel_all_orders_with_auth(order_data, "", "", original_data)
+
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
             error_response, error_status = credential_error(api_key)

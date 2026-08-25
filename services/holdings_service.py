@@ -160,10 +160,22 @@ def get_holdings(
     """
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
+        original_data = {"apikey": api_key}
+
+        # Sandbox first: get_holdings_with_auth() routes to the sandbox engine
+        # when analyze mode is on and original_data is present, which it always
+        # is on this path, and that branch never reaches the broker. Resolving a
+        # live credential before it would let the daily rollover block a sandbox
+        # read, coupling the sandbox to a live broker session that CLAUDE.md
+        # documents it as isolated from.
+        from database.settings_db import get_analyze_mode
+
+        if get_analyze_mode():
+            return get_holdings_with_auth("", "", original_data)
+
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
             return False, *credential_error(api_key)
-        original_data = {"apikey": api_key}
         return get_holdings_with_auth(AUTH_TOKEN, broker_name, original_data)
 
     # Case 2: Direct internal call with auth_token and broker

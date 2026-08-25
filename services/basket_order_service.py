@@ -419,6 +419,14 @@ def place_basket_order(
         if should_route_to_pending(api_key, "basketorder"):
             return queue_order(api_key, original_data, "basketorder")
 
+        # Sandbox first: process_basket_order_with_auth() routes to the sandbox engine when
+        # analyze mode is on, and that path never reaches the broker. Resolving a
+        # live credential before that branch would let the daily rollover block a
+        # sandbox operation, coupling the sandbox to a live broker session that
+        # CLAUDE.md documents it as isolated from.
+        if get_analyze_mode():
+            return process_basket_order_with_auth(basket_data, "", "", original_data)
+
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
             error_response, error_status = credential_error(api_key)

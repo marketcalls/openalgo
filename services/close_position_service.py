@@ -247,6 +247,14 @@ def close_position(
         # Add API key to position data
         position_data["apikey"] = api_key
 
+        # Sandbox first: close_position_with_auth() routes to the sandbox engine when
+        # analyze mode is on, and that path never reaches the broker. Resolving a
+        # live credential before that branch would let the daily rollover block a
+        # sandbox operation, coupling the sandbox to a live broker session that
+        # CLAUDE.md documents it as isolated from.
+        if get_analyze_mode():
+            return close_position_with_auth(position_data, "", "", original_data)
+
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
             error_response, error_status = credential_error(api_key)

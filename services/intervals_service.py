@@ -2,6 +2,7 @@ import importlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database.auth_db import get_broker_name, verify_api_key
+from utils.credential_errors import credential_error
 from utils.logging import get_logger
 
 # Initialize logger
@@ -109,7 +110,17 @@ def get_intervals(
         # every morning for no reason.
         if not verify_api_key(api_key):
             return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
-        return get_intervals_with_auth("", get_broker_name(api_key))
+
+        # get_broker_name() answers None when the Auth row is absent or revoked,
+        # and this endpoint dispatches on the name: import_broker_module(None)
+        # would look for broker.None.api.data and answer 404 "Broker-specific
+        # module not found" plus an ERROR log line per call. The key is valid, so
+        # the honest answer is the shared credential one.
+        broker_name = get_broker_name(api_key)
+        if not broker_name:
+            return False, *credential_error(api_key)
+
+        return get_intervals_with_auth("", broker_name)
 
     # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:
