@@ -85,6 +85,25 @@ def _is_current(source: Path, variant: Path) -> bool:
     return variant_stat.st_size > 0 and variant_stat.st_mtime >= source.stat().st_mtime
 
 
+def _remove_variant(variant: Path) -> bool:
+    """Delete a variant that must not exist, returning whether one was there.
+
+    The invariant this enforces is that ``<asset>.gz`` exists **only** when it
+    holds a smaller, current encoding of ``<asset>``. Leaving one behind that no
+    longer matches is worse than having none at all: ``serve_assets`` prefers
+    any ``.gz`` sibling for a client that advertises gzip, so a stale variant is
+    served *in place of* the asset, and it is cached ``immutable`` for a year.
+    """
+    try:
+        variant.unlink()
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        logger.warning(f"Could not remove stale asset variant {variant}")
+        return False
+
+
 def _write_variant(source: Path, variant: Path) -> bool:
     """Compress ``source`` to ``variant``, returning whether it was written.
 
@@ -94,12 +113,16 @@ def _write_variant(source: Path, variant: Path) -> bool:
     could not be corrected by a rebuild. ``os.replace`` is atomic on POSIX and
     on Windows, so a reader sees either the old variant or the complete new one.
 
-    Returns False when compression does not actually shrink the asset, leaving
-    no variant behind so the raw file is served instead.
+    When compression does not shrink the asset there must be no variant at all,
+    so any existing one is removed rather than left in place. Returning early
+    without that removal would strand the *previous* build's bytes next to an
+    asset rewritten in place, and gzip clients would be served those bytes
+    instead of the current file.
     """
     raw = source.read_bytes()
     compressed = gzip.compress(raw, _GZIP_LEVEL, mtime=0)
     if len(compressed) >= len(raw):
+        _remove_variant(variant)
         return False
     tmp = variant.with_name(variant.name + ".tmp")
     try:
@@ -159,11 +182,23 @@ def ensure_precompressed_assets(dist_root: Path) -> None:
         written = 0
         skipped = 0
         failed = 0
+        removed_stale = 0
         for source in dist_root.rglob("*"):
             try:
-                if not _is_compressible(source):
+                if not source.is_file():
                     continue
-                variant = source.with_name(source.name + _GZIP_SUFFIX)
+                name = source.name
+                if name.endswith(_GZIP_SUFFIX) or name.endswith(_GZIP_SUFFIX + ".tmp"):
+                    continue  # our own output; the sweep below owns these
+                variant = source.with_name(name + _GZIP_SUFFIX)
+                if not _is_compressible(source):
+                    # It may have had a variant on a previous build and stopped
+                    # qualifying since, by shrinking below the threshold or
+                    # changing type. The old variant would otherwise keep being
+                    # served in place of the asset, so drop it.
+                    if _remove_variant(variant):
+                        removed_stale += 1
+                    continue
                 if _is_current(source, variant):
                     skipped += 1
                     continue
@@ -177,12 +212,12 @@ def ensure_precompressed_assets(dist_root: Path) -> None:
                 logger.warning(f"Could not compress {source}, serving it raw")
                 failed += 1
 
-        removed = _remove_orphans(dist_root)
+        removed = _remove_orphans(dist_root) + removed_stale
 
         if written or removed or failed:
             logger.info(
                 f"Frontend asset compression: {written} written, "
-                f"{skipped} already current, {removed} orphaned removed, "
+                f"{skipped} already current, {removed} stale removed, "
                 f"{failed} failed"
             )
         else:

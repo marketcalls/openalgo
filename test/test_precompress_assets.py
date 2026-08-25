@@ -90,6 +90,68 @@ def test_removes_variants_whose_source_is_gone(dist):
     assert not orphan.exists()
 
 
+def test_removes_the_variant_when_compression_stops_helping(dist):
+    """An asset rewritten in place with incompressible bytes must lose its .gz.
+
+    `serve_assets` prefers any .gz sibling for a gzip client, so a variant left
+    behind here is served *instead of* the asset, and it is cached immutable for
+    a year. The variant must exist only while it holds a smaller, current
+    encoding of the file next to it.
+    """
+    import os
+
+    source = dist / "assets" / "app-abc123.js"
+    variant = dist / "assets" / "app-abc123.js.gz"
+    ensure_precompressed_assets(dist)
+    assert variant.is_file()
+
+    source.write_bytes(os.urandom(4096))  # same name, no longer compressible
+    ensure_precompressed_assets(dist)
+
+    assert not variant.exists()
+
+
+def test_removes_the_variant_when_the_source_drops_below_the_threshold(dist):
+    """Same hazard, reached by the asset shrinking rather than by entropy."""
+    source = dist / "assets" / "app-abc123.js"
+    variant = dist / "assets" / "app-abc123.js.gz"
+    ensure_precompressed_assets(dist)
+    assert variant.is_file()
+
+    source.write_bytes(b"x=1")  # under _MIN_SOURCE_BYTES, no longer a candidate
+    ensure_precompressed_assets(dist)
+
+    assert not variant.exists()
+
+
+def test_never_serves_a_stale_variant_after_an_in_place_rewrite(dist, monkeypatch):
+    """The user-visible consequence of the two cases above."""
+    import os
+
+    flask = pytest.importorskip("flask")
+    from blueprints import react_app
+
+    monkeypatch.setattr(react_app, "FRONTEND_DIST", dist)
+    source = dist / "assets" / "app-abc123.js"
+    ensure_precompressed_assets(dist)
+    stale = source.read_bytes()
+
+    source.write_bytes(os.urandom(4096))
+    ensure_precompressed_assets(dist)
+
+    app = flask.Flask(__name__)
+    app.register_blueprint(react_app.react_bp)
+    got = app.test_client().get("/assets/app-abc123.js", headers={"Accept-Encoding": "gzip"})
+
+    body = (
+        gzip.decompress(got.get_data())
+        if got.headers.get("Content-Encoding") == "gzip"
+        else got.get_data()
+    )
+    assert body == source.read_bytes()
+    assert body != stale
+
+
 def test_sweeps_temporaries_from_an_interrupted_run(dist):
     leftover = dist / "assets" / "app-abc123.js.gz.tmp"
     leftover.write_bytes(b"partial")
