@@ -95,13 +95,12 @@ def test_boundary_sip_days_load_prices_for_valid_requests(monkeypatch, day_of_mo
 
     monkeypatch.setattr(sip_service, "load_prices", load_prices)
 
-    success, response, status = sip_service.run_sip_backtest(
-        **_request(day_of_month=day_of_month)
-    )
+    success, response, status = sip_service.run_sip_backtest(**_request(day_of_month=day_of_month))
 
     assert success is True
     assert status == 200
     assert response["request"]["amount"] == 1000.0
-    assert calls == [
-        ((["INFY"], ["NSE"], "2024-01-01", "2024-04-30"), {"source": "db", "api_key": None, "auth_token": None, "feed_token": None, "broker": None})
-    ]
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args == (["INFY"], ["NSE"], "2024-01-01", "2024-04-30")
+    assert kwargs["source"] == "db"

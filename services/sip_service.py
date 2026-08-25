@@ -48,6 +48,7 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 MAX_SIP_YEARS = 30
+INVALID_AMOUNT_MESSAGE = "amount must be a positive number"
 
 
 def _error(message: str, status: int = 400) -> tuple[bool, dict[str, Any], int]:
@@ -145,9 +146,12 @@ def run_sip_backtest(
             (the base symbol -- ``INFY``, ``SBIN``, ``TATAMOTORS``).
         start_date, end_date: ``YYYY-MM-DD``. ``start_date`` is the date the
             SIP begins; the first installment lands on or after it.
-        amount: the installment before any step-up.
+        amount: the installment before any step-up. Direct callers must provide
+            a finite, positive number or receive a 400 response.
         frequency: weekly, fortnightly, monthly or quarterly.
-        day_of_month: target day for monthly and quarterly SIPs, 1-28.
+        day_of_month: target day for monthly and quarterly SIPs. Direct callers
+            must provide an integer from 1 through 28 or receive a 400 response
+            before prices are loaded.
         step_up_percent: annual increase applied on each anniversary.
         brokerage_percent, brokerage_flat: charged per installment.
         benchmark, benchmark_exchange: an index to run the *same schedule*
@@ -172,9 +176,9 @@ def run_sip_backtest(
     try:
         investment_amount = float(amount)
     except (TypeError, ValueError, OverflowError):
-        return _error("amount must be a positive number")
+        return _error(INVALID_AMOUNT_MESSAGE)
     if not math.isfinite(investment_amount) or investment_amount <= 0:
-        return _error("amount must be a positive number")
+        return _error(INVALID_AMOUNT_MESSAGE)
     if frequency not in FREQUENCIES:
         return _error(f"frequency must be one of {', '.join(FREQUENCIES)}")
     if frequency in ("monthly", "quarterly") and (
