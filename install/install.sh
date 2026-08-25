@@ -725,7 +725,15 @@ check_status "Failed to create base directory"
 
 # Clone repository
 log_message "\nCloning OpenAlgo repository..." "$BLUE"
-sudo git clone https://github.com/marketcalls/openalgo.git $OPENALGO_PATH
+# --filter=blob:none makes this a partial clone: the server sends every
+# commit and tree but no file contents, so it pulls ~20 MB instead of
+# ~280 MB. Blobs outside the current checkout are fetched on demand, so
+# the full history stays usable -- all 4,824 commits, 62 tags, every
+# branch -- which keeps `git reset --hard HEAD~n`, tag checkouts and
+# branch switching working. Nearly all of that 280 MB is superseded
+# frontend/dist bundles that a server never reads. A host without filter
+# support just full-clones, so this is never worse than no flag at all.
+sudo git clone --filter=blob:none https://github.com/marketcalls/openalgo.git $OPENALGO_PATH
 check_status "Failed to clone OpenAlgo repository"
 
 # Create virtual environment using uv
