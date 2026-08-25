@@ -34,7 +34,7 @@ def _literal_dict_keys(value):
 
 
 def _extract_timeframe_map(data_file):
-    tree = ast.parse(data_file.read_text())
+    tree = ast.parse(data_file.read_text(encoding="utf-8"))
     assignments = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)]
     declared_maps = {}
     timeframe_map_value = None

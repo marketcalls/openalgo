@@ -210,6 +210,21 @@ class Ticker(Resource):
                 # Initialize broker's data handler
                 data_handler = broker_module.BrokerData(AUTH_TOKEN)
 
+                if history_data["interval"] not in data_handler.timeframe_map:
+                    supported_intervals = ", ".join(data_handler.timeframe_map) or "none"
+                    message = (
+                        f"Unsupported interval '{history_data['interval']}' for broker '{broker}'. "
+                        f"Supported intervals: {supported_intervals}."
+                    )
+                    if response_format == "txt":
+                        response = TextResponse(message)
+                        response.content_type = "text/plain"
+                        response.json = {
+                            "request_id": f"ticker_{symbol}_{history_data['interval']}"
+                        }
+                        return response, 400
+                    return make_response(jsonify({"status": "error", "message": message}), 400)
+
                 # Use chunked API call
                 df = data_handler.get_history(
                     history_data["symbol"],
