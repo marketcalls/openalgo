@@ -29,6 +29,7 @@ def stub_broker(df):
         def __init__(self, auth_token, feed_token=None):
             self.auth_token = auth_token
             self.feed_token = feed_token
+            self.timeframe_map = {"5m": "5minute"}
 
         def get_history(self, symbol, exchange, interval, start_date, end_date):
             return df
