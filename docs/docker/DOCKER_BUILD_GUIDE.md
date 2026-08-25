@@ -111,14 +111,11 @@ None required - all configuration is in `.env` file.
 
 ### Image Size
 
-Measured via `docker history` on a built image (sizes vary by platform):
-
-- **Base image** (`python:3.12-slim-bullseye`): ~115 MB
-- **Python dependencies**: ~795 MB
-- **Runtime libraries** (includes `chromium` for chart export): ~535 MB
-- **Application source**: ~35 MB
-- **Frontend dist**: ~10 MB
-- **Total final image**: ~1.5 GB
+- **Base image** (`python:3.12-slim-bullseye`): ~145 MB
+- **Python dependencies**: ~650 MB
+- **Runtime libraries**: ~15 MB
+- **Frontend dist**: ~5 MB
+- **Total final image**: ~815 MB
 
 ## Configuration Requirements
 
