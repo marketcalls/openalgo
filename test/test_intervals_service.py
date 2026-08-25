@@ -1,3 +1,5 @@
+"""Regression tests for interval service response contracts."""
+
 from types import SimpleNamespace
 
 import services.intervals_service as intervals_service
@@ -10,6 +12,7 @@ def broker_module_with_timeframes(timeframe_map):
 
 
 def test_intervals_group_and_sort_canonical_timeframes(monkeypatch):
+    """Sort canonical intervals within their response categories."""
     timeframe_map = {
         "15m": "provider-15-minute",
         "1h": "provider-60-minute",
@@ -49,20 +52,19 @@ def test_intervals_group_and_sort_canonical_timeframes(monkeypatch):
 
 
 def test_intervals_look_up_broker_from_api_key(monkeypatch):
+    """Resolve the broker name before loading its interval plugin."""
     requested_brokers = []
     monkeypatch.setattr(
         intervals_service,
         "get_auth_token_broker",
         lambda api_key: ("test-auth-token", "test-broker"),
     )
-    monkeypatch.setattr(
-        intervals_service,
-        "import_broker_module",
-        lambda broker: (
-            requested_brokers.append(broker)
-            or broker_module_with_timeframes({"1m": "provider-1-minute"})
-        ),
-    )
+
+    def import_broker_module(broker):
+        requested_brokers.append(broker)
+        return broker_module_with_timeframes({"1m": "provider-1-minute"})
+
+    monkeypatch.setattr(intervals_service, "import_broker_module", import_broker_module)
 
     success, response, status_code = intervals_service.get_intervals(api_key="test-api-key")
 
@@ -73,6 +75,7 @@ def test_intervals_look_up_broker_from_api_key(monkeypatch):
 
 
 def test_intervals_return_404_when_broker_module_is_missing(monkeypatch):
+    """Return the documented error when a broker plugin is unavailable."""
     monkeypatch.setattr(intervals_service, "import_broker_module", lambda broker: None)
 
     success, response, status_code = intervals_service.get_intervals_with_auth(
@@ -85,6 +88,8 @@ def test_intervals_return_404_when_broker_module_is_missing(monkeypatch):
 
 
 def test_intervals_return_500_when_broker_plugin_fails(monkeypatch):
+    """Return the documented error when plugin setup raises an exception."""
+
     def raise_plugin_error(auth_token):
         raise RuntimeError("plugin initialization failed")
 
@@ -101,3 +106,23 @@ def test_intervals_return_500_when_broker_plugin_fails(monkeypatch):
     assert success is False
     assert status_code == 500
     assert response == {"status": "error", "message": "plugin initialization failed"}
+
+
+def test_intervals_reject_invalid_api_key(monkeypatch):
+    """Reject an API key that cannot be resolved to a broker token."""
+    monkeypatch.setattr(intervals_service, "get_auth_token_broker", lambda api_key: (None, None))
+
+    success, response, status_code = intervals_service.get_intervals(api_key="bad-key")
+
+    assert success is False
+    assert status_code == 403
+    assert response == {"status": "error", "message": "Invalid openalgo apikey"}
+
+
+def test_intervals_reject_missing_parameters():
+    """Require an API key or a complete direct-authentication pair."""
+    success, response, status_code = intervals_service.get_intervals()
+
+    assert success is False
+    assert status_code == 400
+    assert response["message"] == "Either api_key or both auth_token and broker must be provided"
