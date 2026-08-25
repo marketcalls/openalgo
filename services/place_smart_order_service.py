@@ -17,6 +17,7 @@ from utils.constants import (
     VALID_PRICE_TYPES,
     VALID_PRODUCT_TYPES,
 )
+from utils.credential_errors import credential_error
 from utils.event_bus import bus
 from utils.logging import get_logger
 
@@ -318,9 +319,9 @@ def place_smart_order(
 
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
-            error_response = {"status": "error", "message": "Invalid openalgo apikey"}
+            error_response, error_status = credential_error(api_key)
             # Skip logging for invalid API keys to prevent database flooding
-            return False, error_response, 403
+            return False, error_response, error_status
 
         return place_smart_order_with_auth(
             order_data, AUTH_TOKEN, broker_name, original_data

@@ -5,6 +5,7 @@ from typing import Any, Dict, Tuple
 
 from database.auth_db import verify_api_key
 from database.chart_prefs_db import get_chart_prefs, update_chart_prefs
+from utils.credential_errors import credential_error
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -31,7 +32,7 @@ def get_chart_preferences(api_key: str) -> tuple[bool, dict[str, Any], int]:
     user_id = verify_api_key(api_key)
     if not user_id:
         logger.warning("[ChartService] get_chart_preferences: Invalid API Key")
-        return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+        return False, *credential_error(api_key)
 
     prefs = get_chart_prefs(api_key)
 
@@ -67,7 +68,7 @@ def update_chart_preferences(
     user_id = verify_api_key(api_key)
     if not user_id:
         logger.warning("[ChartService] update_chart_preferences: Invalid API Key")
-        return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+        return False, *credential_error(api_key)
 
     if not data:
         logger.warning("[ChartService] update_chart_preferences: No data provided")

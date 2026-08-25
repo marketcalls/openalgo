@@ -8,6 +8,7 @@ from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
 from extensions import socketio
 from services.tradebook_service import get_tradebook
+from utils.credential_errors import credential_error
 from utils.logging import get_logger
 
 # Initialize logger
@@ -316,9 +317,9 @@ def get_order_status(
 
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
-            error_response = {"status": "error", "message": "Invalid openalgo apikey"}
+            error_response, error_status = credential_error(api_key)
             # Skip logging for invalid API keys to prevent database flooding
-            return False, error_response, 403
+            return False, error_response, error_status
 
         return get_order_status_with_auth(status_data, AUTH_TOKEN, broker_name, original_data)
 

@@ -2,6 +2,7 @@ import importlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database.auth_db import get_auth_token_broker
+from utils.credential_errors import credential_error
 from utils.logging import get_logger
 
 # Initialize logger
@@ -161,7 +162,7 @@ def get_holdings(
     if api_key and not (auth_token and broker):
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
-            return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+            return False, *credential_error(api_key)
         original_data = {"apikey": api_key}
         return get_holdings_with_auth(AUTH_TOKEN, broker_name, original_data)
 

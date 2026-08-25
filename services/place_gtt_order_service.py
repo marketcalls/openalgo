@@ -5,6 +5,7 @@ from typing import Any
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
 from events import AnalyzerErrorEvent, GTTFailedEvent, GTTPlacedEvent
+from utils.credential_errors import credential_error
 from utils.event_bus import bus
 from utils.logging import get_logger
 
@@ -210,7 +211,7 @@ def place_gtt_order(
     if api_key and not (auth_token and broker):
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
-            return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+            return False, *credential_error(api_key)
         return place_gtt_order_with_auth(order_data, AUTH_TOKEN, broker_name, original_data)
 
     # Direct internal call

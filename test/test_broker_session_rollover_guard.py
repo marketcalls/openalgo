@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # after this one and break tests that expect their own tables. Isolation comes
 # from rebinding auth_db's session to a private in-memory engine below.
 
+import utils.credential_errors as credential_errors  # noqa: E402
 import utils.session as session_utils  # noqa: E402
 
 TEST_USER = "test_trader"
@@ -98,6 +99,7 @@ def _fresh_auth_db():
     auth_mod.invalid_api_key_cache.clear()
     auth_mod._session_freshness_cache.clear()
     auth_mod._stale_log_throttle.clear()
+    auth_mod._session_write_failed.clear()
     return auth_mod
 
 
@@ -391,6 +393,43 @@ class TestCredentialSurvives:
         assert len(emitted) == 1, f"expected one line for 50 rejections, got {len(emitted)}"
 
 
+class TestFailedSessionWriteIsUndecidable:
+    """A failed active_sessions write makes the inference disagree with reality."""
+
+    def test_failed_register_session_does_not_withhold_a_live_credential(
+        self, auth_mod, monkeypatch
+    ):
+        """handle_auth_success ignores register_session's return value, so the
+        user ends up with today's live token and yesterday's session rows. Those
+        rows are readable and all predate the boundary, which is a *decidable*
+        stale verdict -- confidently wrong, and it would refuse a working
+        credential for the rest of the trading session.
+        """
+        monkeypatch.setattr(
+            auth_mod, "get_active_sessions", lambda u: _session_rows(-timedelta(hours=5))
+        )
+
+        # Without the marker this is exactly the state that reads as stale.
+        assert auth_mod.get_auth_token_broker(TEST_API_KEY) == (None, None)
+
+        auth_mod._session_freshness_cache.clear()
+        auth_mod._session_write_failed[TEST_USER] = True
+
+        auth_token, broker = auth_mod.get_auth_token_broker(TEST_API_KEY)
+
+        assert (auth_token, broker) == (STORED_TOKEN, TEST_BROKER), (
+            "when the session write failed, active_sessions cannot be trusted; "
+            "the verdict must be unknown rather than a confident stale"
+        )
+
+    def test_a_successful_write_clears_the_marker(self, auth_mod, monkeypatch):
+        """It must not latch for a whole day after the next good login."""
+        auth_mod._session_write_failed[TEST_USER] = True
+        auth_mod.register_session(TEST_USER, "device-1", ip_address="127.0.0.1")
+
+        assert auth_mod._session_write_failed.get(TEST_USER) is None
+
+
 class TestCryptoBypass:
     """DISABLE_SESSION_EXPIRY=true brokers trade 24/7 and never roll over."""
 
@@ -420,7 +459,7 @@ class TestServiceResponses:
         monkeypatch.setattr(
             quotes_service, "get_auth_token_broker", lambda *a, **k: (None, None, None)
         )
-        monkeypatch.setattr(quotes_service, "is_broker_session_stale", lambda api_key: True)
+        monkeypatch.setattr(credential_errors, "verify_api_key", lambda key: TEST_USER)
 
         success, response, status = quotes_service.get_quotes("SBIN", "NSE", api_key=TEST_API_KEY)
 
@@ -435,7 +474,7 @@ class TestServiceResponses:
         monkeypatch.setattr(
             quotes_service, "get_auth_token_broker", lambda *a, **k: (None, None, None)
         )
-        monkeypatch.setattr(quotes_service, "is_broker_session_stale", lambda api_key: True)
+        monkeypatch.setattr(credential_errors, "verify_api_key", lambda key: TEST_USER)
 
         success, response, status = quotes_service.get_multiquotes(
             [{"symbol": "SBIN", "exchange": "NSE"}], api_key=TEST_API_KEY
@@ -451,7 +490,7 @@ class TestServiceResponses:
         monkeypatch.setattr(
             history_service, "get_auth_token_broker", lambda *a, **k: (None, None, None)
         )
-        monkeypatch.setattr(history_service, "is_broker_session_stale", lambda api_key: True)
+        monkeypatch.setattr(credential_errors, "verify_api_key", lambda key: TEST_USER)
 
         success, response, status = history_service.get_history(
             "SBIN", "NSE", "1d", "2026-08-01", "2026-08-20", api_key=TEST_API_KEY
@@ -476,7 +515,7 @@ class TestServiceResponses:
         monkeypatch.setattr(
             depth_service, "get_auth_token_broker", lambda *a, **k: (None, None, None)
         )
-        monkeypatch.setattr(depth_service, "is_broker_session_stale", lambda api_key: True)
+        monkeypatch.setattr(credential_errors, "verify_api_key", lambda key: TEST_USER)
 
         success, response, status = depth_service.get_depth("SBIN", "NSE", api_key=TEST_API_KEY)
 
@@ -492,7 +531,7 @@ class TestServiceResponses:
         monkeypatch.setattr(
             depth_service, "get_auth_token_broker", lambda *a, **k: (None, None, None)
         )
-        monkeypatch.setattr(depth_service, "is_broker_session_stale", lambda api_key: False)
+        monkeypatch.setattr(credential_errors, "verify_api_key", lambda key: None)
 
         success, response, status = depth_service.get_depth(
             "SBIN", "NSE", api_key="not-a-real-key"
@@ -510,7 +549,7 @@ class TestServiceResponses:
         monkeypatch.setattr(
             quotes_service, "get_auth_token_broker", lambda *a, **k: (None, None, None)
         )
-        monkeypatch.setattr(quotes_service, "is_broker_session_stale", lambda api_key: False)
+        monkeypatch.setattr(credential_errors, "verify_api_key", lambda key: None)
 
         success, response, status = quotes_service.get_quotes(
             "SBIN", "NSE", api_key="not-a-real-key"

@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from database.apilog_db import async_log_order, executor
 from database.auth_db import get_auth_token_broker
 from utils.constants import VALID_ACTIONS, VALID_EXCHANGES, VALID_PRICE_TYPES, VALID_PRODUCT_TYPES
+from utils.credential_errors import credential_error
 from utils.logging import get_logger
 
 # Initialize logger
@@ -263,9 +264,9 @@ def calculate_margin(
     if api_key and not (auth_token and broker):
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
-            error_response = {"status": "error", "message": "Invalid openalgo apikey"}
+            error_response, error_status = credential_error(api_key)
             # Skip logging for invalid API keys to prevent database flooding
-            return False, error_response, 403
+            return False, error_response, error_status
 
         return calculate_margin_with_auth(
             validated_positions, AUTH_TOKEN, broker_name, original_data

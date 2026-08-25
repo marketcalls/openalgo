@@ -60,6 +60,7 @@ jobs:
             test/test_precompress_assets.py \
             test/test_broker_session_rollover_guard.py \
             test/test_session_status_broker_expiry.py \
+            test/test_credential_error_uniformity.py \
             -v --timeout=60
 
   # Frontend linting

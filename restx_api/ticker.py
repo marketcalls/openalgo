@@ -10,6 +10,7 @@ from marshmallow import ValidationError
 
 from database.auth_db import get_auth_token_broker
 from limiter import limiter
+from utils.credential_errors import credential_error
 from utils.logging import get_logger
 
 from .data_schemas import TickerSchema
@@ -186,14 +187,13 @@ class Ticker(Resource):
             api_key = history_data["apikey"]
             AUTH_TOKEN, broker = get_auth_token_broker(api_key)
             if AUTH_TOKEN is None:
+                payload, status = credential_error(api_key)
                 if response_format == "txt":
-                    response = TextResponse("Invalid openalgo apikey\n")
+                    response = TextResponse(f"{payload['message']}\n")
                     response.content_type = "text/plain"
                     response.json = {"request_id": f"ticker_{symbol}_{history_data['interval']}"}
-                    return response, 403
-                return make_response(
-                    jsonify({"status": "error", "message": "Invalid openalgo apikey"}), 403
-                )
+                    return response, status
+                return make_response(jsonify(payload), status)
 
             broker_module = import_broker_module(broker)
             if broker_module is None:

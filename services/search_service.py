@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Tuple
 from database.auth_db import verify_api_key
 from database.qty_freeze_db import get_freeze_qty_for_option
 from database.token_db_enhanced import get_cache
+from utils.credential_errors import credential_error
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -29,7 +30,7 @@ def search_symbols(
             user_id = verify_api_key(api_key)
             if not user_id:
                 logger.warning("Invalid API key provided for search")
-                return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+                return False, *credential_error(api_key)
 
         # Validate input
         if not query or not query.strip():

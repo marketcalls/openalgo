@@ -359,9 +359,14 @@ def register_session(username, session_id, device_info=None, ip_address=None, br
         )
         db_session.add(active)
         db_session.commit()
+        _session_write_failed.pop(username, None)
         return True
     except Exception as e:
         db_session.rollback()
+        # Freshness is inferred from active_sessions, and this write is what
+        # keeps that inference true. Mark the divergence so the verdict answers
+        # unknown rather than a confident, wrong "stale".
+        _session_write_failed[username] = True
         # handle_auth_success ignores this return value, so a failure here leaves
         # the user with a live broker token and a fresh cookie while
         # active_sessions still holds only the previous session's row. Broker
@@ -1035,6 +1040,15 @@ _session_freshness_cache = TTLCache(maxsize=128, ttl=30)
 # effect.
 _stale_log_throttle = TTLCache(maxsize=128, ttl=3600)
 
+# Users whose active_sessions write failed. handle_auth_success ignores
+# register_session's return value, so a failed write leaves a live broker token
+# alongside the previous session's rows: readable logins that all predate the
+# boundary, which is a *decidable* stale verdict and would withhold a working
+# credential for the rest of the day. The freshness inference cannot see that
+# divergence, so record it here and answer unknown instead. A day's TTL covers
+# the trading session; a successful register_session clears it early.
+_session_write_failed = TTLCache(maxsize=128, ttl=86400)
+
 
 def is_broker_session_stale_for_user(user_id):
     """Return True only when the stored broker token is *confirmed* to predate
@@ -1066,6 +1080,11 @@ def is_broker_session_stale_for_user(user_id):
 
     # Crypto brokers trade 24/7 and have no rollover to be stale against.
     if is_session_expiry_disabled():
+        return False
+
+    # A failed session write makes active_sessions disagree with reality, so the
+    # inference cannot be trusted for this user until the next successful login.
+    if _session_write_failed.get(user_id):
         return False
 
     verdict = _session_freshness_cache.get(user_id)

@@ -4,6 +4,7 @@ from sqlalchemy import distinct, func
 
 from database.auth_db import verify_api_key
 from database.symbol import SymToken, db_session
+from utils.credential_errors import credential_error
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -30,7 +31,7 @@ def get_expiry_dates(
             user_id = verify_api_key(api_key)
             if not user_id:
                 logger.warning("Invalid API key provided for expiry dates")
-                return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+                return False, *credential_error(api_key)
 
         # Validate input
         if not symbol or not symbol.strip():

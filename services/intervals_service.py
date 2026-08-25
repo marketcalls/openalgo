@@ -1,7 +1,7 @@
 import importlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from database.auth_db import get_auth_token_broker
+from database.auth_db import get_broker_name, verify_api_key
 from utils.logging import get_logger
 
 # Initialize logger
@@ -103,10 +103,13 @@ def get_intervals(
     """
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
-        AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
-        if AUTH_TOKEN is None:
+        # Identity, not credential: this endpoint never calls the broker, so it
+        # must not be gated on a live broker session. get_auth_token_broker()
+        # withholds the token after the daily rollover, which would fail this
+        # every morning for no reason.
+        if not verify_api_key(api_key):
             return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
-        return get_intervals_with_auth(AUTH_TOKEN, broker_name)
+        return get_intervals_with_auth("", get_broker_name(api_key))
 
     # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:

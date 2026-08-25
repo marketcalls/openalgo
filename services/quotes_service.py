@@ -1,9 +1,10 @@
 import importlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from database.auth_db import get_auth_token_broker, is_broker_session_stale
+from database.auth_db import get_auth_token_broker
 from database.token_db import get_token
 from utils.constants import VALID_EXCHANGES
+from utils.credential_errors import credential_error
 from utils.logging import get_logger
 
 # Initialize logger
@@ -186,20 +187,7 @@ def get_quotes(
             api_key, include_feed_token=True
         )
         if AUTH_TOKEN is None:
-            if is_broker_session_stale(api_key):
-                # The API key is valid; the broker session died at the daily
-                # rollover. The distinct code lets the caller reconnect the
-                # broker instead of re-issuing a key that is fine (#1400).
-                return (
-                    False,
-                    {
-                        "status": "error",
-                        "code": "BROKER_SESSION_EXPIRED",
-                        "message": "Broker session expired - please reconnect your broker",
-                    },
-                    401,
-                )
-            return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+            return False, *credential_error(api_key)
         return get_quotes_with_auth(AUTH_TOKEN, FEED_TOKEN, broker_name, symbol, exchange)
 
     # Case 2: Direct internal call with auth_token and broker
@@ -367,20 +355,7 @@ def get_multiquotes(
             api_key, include_feed_token=True
         )
         if AUTH_TOKEN is None:
-            if is_broker_session_stale(api_key):
-                # Same condition and same answer as get_quotes above: /quotes and
-                # /multiquotes must not disagree about what a dead broker session
-                # looks like.
-                return (
-                    False,
-                    {
-                        "status": "error",
-                        "code": "BROKER_SESSION_EXPIRED",
-                        "message": "Broker session expired - please reconnect your broker",
-                    },
-                    401,
-                )
-            return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+            return False, *credential_error(api_key)
         return get_multiquotes_with_auth(AUTH_TOKEN, FEED_TOKEN, broker_name, symbols)
 
     # Case 2: Direct internal call with auth_token and broker

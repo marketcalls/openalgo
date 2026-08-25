@@ -68,6 +68,7 @@ from services.option_symbol_service import (
 )
 from services.quotes_service import get_multiquotes, get_quotes, import_broker_module
 from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
+from utils.credential_errors import credential_error
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -428,7 +429,7 @@ def get_option_chain(
             # and module import inside the same request.
             _auth, _feed, _broker = get_auth_token_broker(api_key, include_feed_token=True)
             if _auth is None:
-                return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+                return False, *credential_error(api_key)
             _bmod = import_broker_module(_broker)
             if _bmod is None:
                 return False, {"status": "error", "message": "Broker module not found"}, 404
