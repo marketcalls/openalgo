@@ -125,6 +125,20 @@ def get_history_with_auth(
             # Fallback to just auth token if we can't inspect
             data_handler = broker_module.BrokerData(auth_token)
 
+        if interval not in data_handler.timeframe_map:
+            supported_intervals = ", ".join(data_handler.timeframe_map) or "none"
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": (
+                        f"Unsupported interval '{interval}' for broker '{broker}'. "
+                        f"Supported intervals: {supported_intervals}."
+                    ),
+                },
+                400,
+            )
+
         # Call the broker's get_history method
         df = data_handler.get_history(symbol, exchange, interval, start_date, end_date)
 
