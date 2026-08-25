@@ -38,9 +38,9 @@ export function ChargeControls({ value, onChange, exchange, onExchange }: Props)
         </p>
       </div>
 
-      <fieldset className="m-0 min-w-0 border-0 p-0">
-        <legend className="text-[11px]">Exchange</legend>
-        <div className="mt-1 flex gap-1">
+      <div>
+        <Label className="text-[11px]">Exchange</Label>
+        <fieldset aria-label="Exchange" className="mt-1 flex min-w-0 gap-1">
           {(['NSE', 'BSE'] as const).map((ex) => (
             <button
               key={ex}
@@ -57,16 +57,17 @@ export function ChargeControls({ value, onChange, exchange, onExchange }: Props)
                   ? 'border-primary/50 bg-primary/15 text-primary'
                   : 'hover:bg-accent'
               )}
+              aria-pressed={exchange === ex}
             >
               {ex}
             </button>
           ))}
-        </div>
-      </fieldset>
+        </fieldset>
+      </div>
 
-      <fieldset className="m-0 min-w-0 space-y-2 border-0 border-t pt-2">
-        <legend className="text-[11px]">Brokerage</legend>
-        <div className="flex gap-1">
+      <div className="space-y-2 border-t pt-2">
+        <Label className="text-[11px]">Brokerage</Label>
+        <fieldset aria-label="Brokerage" className="flex min-w-0 gap-1">
           {(['flat', 'percent'] as const).map((m) => (
             <button
               key={m}
@@ -78,11 +79,12 @@ export function ChargeControls({ value, onChange, exchange, onExchange }: Props)
                   ? 'border-primary/50 bg-primary/15 text-primary'
                   : 'hover:bg-accent'
               )}
+              aria-pressed={value.brokerageMode === m}
             >
               {m === 'flat' ? '₹ / order' : '% of order'}
             </button>
           ))}
-        </div>
+        </fieldset>
         {value.brokerageMode === 'flat' ? (
           <div className={row}>
             <Label
@@ -138,7 +140,7 @@ export function ChargeControls({ value, onChange, exchange, onExchange }: Props)
           Delivery is free at most discount brokers, set 0 for a true delivery
           portfolio.
         </p>
-      </fieldset>
+      </div>
 
       <div className="space-y-2 border-t pt-2">
         {[
