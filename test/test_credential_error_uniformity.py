@@ -24,6 +24,12 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# restx_api must be imported first. services/place_order_service.py:8 imports
+# restx_api.schemas, whose package __init__ pulls in options_multiorder, which
+# imports place_order_service back: importing place_order_service directly hits
+# that cycle half-built. Importing the package first lets it complete.
+import restx_api  # noqa: E402,F401
+import services.place_order_service as place_order_service  # noqa: E402
 import utils.credential_errors as credential_errors  # noqa: E402
 from utils.credential_errors import credential_error  # noqa: E402
 
@@ -195,17 +201,51 @@ class TestNoBrokerEndpointsKeepWorking:
 class TestSandboxIsNotCoupledToTheBroker:
     """CLAUDE.md documents the sandbox engine as fully isolated from live
     trading. Resolving a live credential before the analyze-mode branch coupled
-    the two, so the daily rollover blocked sandbox orders that never reach a
-    broker.
+    the two, so the daily rollover rejected sandbox orders that never reach a
+    broker."""
 
-    This is asserted on the source rather than by calling place_order():
-    services/place_order_service.py cannot be imported on its own because of a
-    pre-existing circular import with options_multiorder_service (present on
-    main too, and out of scope here), so no test in this repo imports it. The
-    ordering is the whole fix, so pinning the ordering is what matters.
-    """
+    def test_analyze_mode_never_resolves_a_credential(self, monkeypatch):
+        """The functional proof: with analyze mode on, the order must reach the
+        sandbox without the resolver being consulted at all."""
+        monkeypatch.setattr(place_order_service, "get_analyze_mode", lambda: True)
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError(
+                "analyze mode must not resolve a live broker credential; the "
+                "sandbox never talks to the broker"
+            )
+
+        monkeypatch.setattr(place_order_service, "get_auth_token_broker", fail_if_called)
+        reached = {}
+        monkeypatch.setattr(
+            place_order_service,
+            "place_order_with_auth",
+            lambda *a, **k: reached.setdefault("yes", True)
+            and (True, {"status": "success", "mode": "analyze"}, 200),
+        )
+
+        order = {
+            "symbol": "SBIN",
+            "exchange": "NSE",
+            "action": "BUY",
+            "quantity": "1",
+            "pricetype": "MARKET",
+            "product": "MIS",
+            "strategy": "test",
+            "apikey": TEST_API_KEY,
+        }
+
+        success, response, status = place_order_service.place_order(
+            order, api_key=TEST_API_KEY, emit_event=False
+        )
+
+        assert reached.get("yes") is True, "the sandbox path was never reached"
+        assert success is True
+        assert status == 200
 
     def test_analyze_mode_is_checked_before_the_credential(self):
+        """Belt and braces: the ordering itself, so a refactor that reintroduces
+        the coupling fails even if the functional test is skipped."""
         src = open("services/place_order_service.py", encoding="utf-8").read()
         case_one = src[src.index("    # Case 1: API-based authentication") :]
         case_one = case_one[: case_one.index("    # Case 2:")]
@@ -213,8 +253,7 @@ class TestSandboxIsNotCoupledToTheBroker:
         analyze_at = case_one.find("if get_analyze_mode():")
         resolve_at = case_one.find("get_auth_token_broker(")
 
-        assert analyze_at != -1, "the analyze-mode branch left Case 1"
-        assert resolve_at != -1, "credential resolution left Case 1"
+        assert analyze_at != -1 and resolve_at != -1
         assert analyze_at < resolve_at, (
             "the sandbox branch must come first; otherwise a rolled-over broker "
             "session blocks a sandbox order that never touches the broker"
