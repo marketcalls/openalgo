@@ -294,7 +294,7 @@ class OptionsMultiOrderSchema(Schema):
     underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE)
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE)
     expiry_date = fields.Str(
-        required=False
+        required=False, validate=validate_option_expiry
     )  # Optional if underlying includes expiry (DDMMMYY format)
     strike_int = fields.Int(
         required=False, validate=validate.Range(min=1), allow_none=True

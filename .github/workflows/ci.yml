@@ -45,6 +45,7 @@ jobs:
       - name: Run CI-safe tests
         run: |
           uv run pytest test/test_log_location.py test/test_navigation_update.py \
+            test/test_option_expiry_validation.py \
             test/test_python_editor.py test/test_rate_limits_simple.py \
             test/test_logout_csrf.py test/test_auth_logout.py \
             test/test_auth_resume.py test/test_auth_upsert_multisession.py \

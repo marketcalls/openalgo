@@ -40,6 +40,9 @@ def validate_option_offset(data: str) -> bool:
 
 def validate_option_expiry(data: str) -> None:
     """Validate an option expiry date in the exact DDMMMYY format."""
+    if data == "":
+        return
+
     if not isinstance(data, str) or not re.fullmatch(r"\d{2}[A-Z]{3}\d{2}", data):
         raise ValidationError("Expiry date must use the DDMMMYY format (for example, 28AUG26).")
 
