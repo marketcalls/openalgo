@@ -420,7 +420,21 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error(f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}")
 
     def _start_data_polling(self) -> None:
-        """Start thread to poll market data from Motilal WebSocket client"""
+        """Start the market-data polling thread. At most one per adapter.
+
+        connect() is called on a LIVE adapter by several proxy recovery paths
+        (websocket_proxy/connection_manager.py:495,550 and server.py:982,1031).
+        Its guard only covers the connect thread, which has normally already
+        exited by then - it breaks out of the retry loop on success - so each of
+        those calls used to reach here and start ANOTHER poller. The old one
+        never stopped: it loops on _stop_poll/running, which a reconnect does
+        not touch. Three connects meant three threads republishing every
+        subscription to ZMQ every 500ms.
+        """
+        if self._data_poll_thread and self._data_poll_thread.is_alive():
+            self.logger.debug("Market data polling thread already running")
+            return
+
         self._stop_poll.clear()
         self._data_poll_thread = threading.Thread(target=self._poll_market_data, daemon=True)
         self._data_poll_thread.start()

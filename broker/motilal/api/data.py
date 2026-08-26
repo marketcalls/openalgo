@@ -385,22 +385,46 @@ class BrokerData:
                 pass
             return None
 
-        # Register this session and evict any other. OpenAlgo is single-user /
+        # Register this session, or fall in behind whatever another thread
+        # registered while we were connecting.
+        #
+        # The socket has to be built OUTSIDE the registry lock (connecting takes
+        # ~250ms and holding the lock would serialise every caller), so two
+        # requests that miss the cache together - the normal cold start, e.g. an
+        # option-chain and a depth call arriving at once - each build one. Only
+        # one can be registered; the other must be CLOSED, not dropped on the
+        # floor, or it becomes exactly the leak this registry was added to fix.
+        # The incumbent wins, because other requests may already be registering
+        # scrips on it.
+        #
+        # Sockets under other keys are evicted too: OpenAlgo is single-user /
         # single-broker, so a second auth token means the token rolled over
-        # (Motilal expires it daily at 6 AM) and the previous socket is
-        # authenticated with a dead one. Leaving it registered would strand a
-        # socket plus its reader thread every day in a worker that never
-        # restarts.
+        # (Motilal expires it daily at 6 AM) and that socket is authenticated
+        # with a dead one.
+        loser = None
+        to_close = []
         with _WS_REGISTRY_LOCK:
-            superseded = [
-                (key, sock) for key, sock in _WS_REGISTRY.items() if key != self.auth_token
-            ]
-            for key, _ in superseded:
-                del _WS_REGISTRY[key]
-            _WS_REGISTRY[self.auth_token] = ws
+            incumbent = _WS_REGISTRY.get(self.auth_token)
+            if incumbent is not None and incumbent is not ws and incumbent.is_connected:
+                loser, ws = ws, incumbent
+            else:
+                if incumbent is not None and incumbent is not ws:
+                    to_close.append(incumbent)  # dead entry we are replacing
+                for key in [k for k in _WS_REGISTRY if k != self.auth_token]:
+                    to_close.append(_WS_REGISTRY.pop(key))
+                _WS_REGISTRY[self.auth_token] = ws
 
-        for _, sock in superseded:
-            logger.info("Closing Motilal WebSocket for a superseded session")
+        if loser is not None:
+            logger.debug(
+                "Another thread registered a Motilal WebSocket first; closing the duplicate"
+            )
+            try:
+                loser.disconnect()
+            except Exception as exc:
+                logger.warning(f"Error closing duplicate WebSocket: {exc}")
+
+        for sock in to_close:
+            logger.info("Closing a superseded Motilal WebSocket")
             try:
                 sock.disconnect()
             except Exception as exc:

@@ -874,12 +874,20 @@ class MotilalWebSocket:
                     return
                 self.connect()
 
-            t = threading.Thread(target=delayed_reconnect, daemon=True)
             with self._reconnect_threads_lock:
                 # prune dead refs to keep the list bounded
                 self._reconnect_threads = [
                     th for th in self._reconnect_threads if th.is_alive()
                 ]
+                # One pending reconnect is all that is ever useful: connect()
+                # short-circuits while a connect thread is alive, so a burst of
+                # on_close events (several WebSocketApps unwinding together, a
+                # flapping link) would otherwise leave N threads sleeping on a
+                # backoff of up to 30s each to accomplish one reconnect.
+                if self._reconnect_threads:
+                    logger.debug("A Motilal reconnect is already pending; not scheduling another")
+                    return
+                t = threading.Thread(target=delayed_reconnect, daemon=True)
                 self._reconnect_threads.append(t)
             t.start()
 
@@ -1023,6 +1031,19 @@ class MotilalWebSocket:
             # unregistering NSE does not orphan an NSEFO registration sharing 'N'.
             if self._scrip_exchange.get((exchange_char, scrip_code)) == exchange_upper:
                 del self._scrip_exchange[(exchange_char, scrip_code)]
+
+            # Drop the cached tick data for this scrip. These three dicts are
+            # written on every inbound packet and used to be purged nowhere: the
+            # entry outlived the subscription. That was survivable while each
+            # request abandoned its own short-lived client, but the socket is
+            # pooled per session now (see data.py's _WS_REGISTRY), so the caches
+            # live as long as the login and would otherwise accumulate one entry
+            # per distinct scrip ever quoted - an option-chain sweep touches
+            # hundreds of strikes per refresh.
+            store_key = self._store_key(exchange_upper, scrip_code)
+            self.last_quotes.pop(store_key, None)
+            self.last_depth.pop(store_key, None)
+            self.last_oi.pop(store_key, None)
 
             # Map exchange type to single character
             exchange_type_char = exchange_type.upper()[0]
