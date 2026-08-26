@@ -6,7 +6,6 @@ Based on official Fyers library analysis
 
 import base64
 import json
-import logging
 import ssl
 import struct
 import threading
@@ -18,6 +17,7 @@ from typing import Any, Dict, List, Optional
 import websocket
 
 from database.auth_db import get_auth_token
+from utils.logging import get_logger
 
 
 class FyersHSMWebSocket:
@@ -135,7 +135,7 @@ class FyersHSMWebSocket:
         """
         self.access_token = access_token
         self.user_id = user_id
-        self.logger = logging.getLogger("fyers_hsm_websocket")
+        self.logger = get_logger("fyers_hsm_websocket")
 
         # Initialize health-check stop event BEFORE the HSM key extraction so
         # cleanup paths can reference it even when __init__ raises (the
@@ -1197,9 +1197,7 @@ class FyersHSMWebSocket:
             self.disconnect()
         except Exception as e:
             # Fallback logging if self.logger is not available
-            import logging
-
-            logger = logging.getLogger("fyers_hsm_websocket")
+            logger = get_logger("fyers_hsm_websocket")
             logger.error(f"Error in HSM WebSocket destructor: {e}")
 
     def force_cleanup(self):

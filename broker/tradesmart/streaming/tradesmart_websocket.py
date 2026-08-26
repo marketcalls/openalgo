@@ -8,7 +8,6 @@ and keep alive with heartbeat (``h``).
 """
 
 import json
-import logging
 import socket
 import threading
 import time
@@ -17,6 +16,8 @@ from typing import Any
 
 import websocket
 from websocket import ABNF
+
+from utils.logging import get_logger
 
 
 def close_frame_status(error: object) -> int | None:
@@ -103,7 +104,7 @@ class TradeSmartWebSocket:
         self.auth_failed = False
         self.auth_failure_reason: str | None = None
 
-        self.logger = logging.getLogger("tradesmart_websocket")
+        self.logger = get_logger("tradesmart_websocket")
 
     def connect(self) -> bool:
         """Establish the WebSocket connection and authenticate."""

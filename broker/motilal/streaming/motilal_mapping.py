@@ -6,9 +6,9 @@ This module handles:
 - Capability registry for supported exchanges, modes, and depth levels
 """
 
-import logging
+from utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class MotilalExchangeMapper:
