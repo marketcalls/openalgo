@@ -2,6 +2,7 @@ import json
 import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 
@@ -855,6 +856,27 @@ _MAX_CLIENT_URL_LEN = 2000
 _MAX_CLIENT_COMPONENT_STACK_LEN = 5000
 _MAX_CLIENT_USER_AGENT_LEN = 500
 _CLIENT_LEVEL_ALLOWLIST = frozenset({"ERROR", "WARN"})
+_REDACTED_CLIENT_URL_VALUE = "[redacted]"
+_SENSITIVE_CLIENT_URL_QUERY_PARAMETER_NAMES = frozenset(
+    {
+        "token",
+        "code",
+        "requesttoken",
+        "accesstoken",
+        "authtoken",
+        "refreshtoken",
+        "resettoken",
+        "apikey",
+        "email",
+        "state",
+        "password",
+        "otp",
+        "secret",
+        "clientsecret",
+        "idtoken",
+        "jwt",
+    }
+)
 
 # Logger dedicated to browser-reported errors. Distinct name so they're easy
 # to filter in errors.jsonl and in the grouped view.
@@ -877,6 +899,32 @@ def _scrub_control_chars(text):
     return "".join(ch for ch in text if ch == "\n" or ch == "\t" or (ch.isprintable()))
 
 
+def _sanitize_client_error_url(url):
+    """Redact sensitive query values and remove fragments before logging a URL."""
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return url.split("?", 1)[0].split("#", 1)[0]
+
+    if parsed.scheme in {"", "http", "https"}:
+        query = urlencode(
+            [
+                (
+                    key,
+                    _REDACTED_CLIENT_URL_VALUE
+                    if key.lower().replace("_", "").replace("-", "")
+                    in _SENSITIVE_CLIENT_URL_QUERY_PARAMETER_NAMES
+                    else value,
+                )
+                for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+            ]
+        )
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, ""))
+    if parsed.scheme.endswith("-extension"):
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    return f"{parsed.scheme}:"
+
+
 @admin_bp.route("/api/errors/client", methods=["POST"])
 @check_session_validity
 @limiter.limit(_CLIENT_REPORT_RATE)
@@ -897,7 +945,9 @@ def api_errors_client_report():
 
         message = _scrub_control_chars(str(data.get("message") or ""))[:_MAX_CLIENT_MESSAGE_LEN]
         stack = _scrub_control_chars(str(data.get("stack") or ""))[:_MAX_CLIENT_STACK_LEN]
-        url = _scrub_control_chars(str(data.get("url") or ""))[:_MAX_CLIENT_URL_LEN]
+        url = _sanitize_client_error_url(
+            _scrub_control_chars(str(data.get("url") or ""))
+        )[:_MAX_CLIENT_URL_LEN]
         component_stack = _scrub_control_chars(str(data.get("component_stack") or ""))[
             :_MAX_CLIENT_COMPONENT_STACK_LEN
         ]

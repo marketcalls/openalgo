@@ -105,14 +105,24 @@ export interface OptionsMultiOrderNodeData {
   exchange: 'NSE_INDEX' | 'BSE_INDEX'
   expiryDate: string
   legs: Array<{
-    offset: string
+    /** How the leg picks its strike. Absent means OFFSET, for legacy legs. */
+    strikeMode?: 'OFFSET' | 'STRIKE'
+    /** Required unless the leg names an absolute `strike`. */
+    offset?: string | number
+    /** An absolute strike, used as given rather than resolved from the LTP. */
+    strike?: string | number
+    /** Overrides the node expiry with an exact date, in DDMMMYY. */
+    expiry?: string
+    /** Overrides the node expiry with a relative type, e.g. `next_month`. */
+    expiryType?: string
     optionType: 'CE' | 'PE'
     action: 'BUY' | 'SELL'
-    quantity: number
+    quantity: number | string
     product?: 'MIS' | 'NRML'
     priceType?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
-    price?: number
-    triggerPrice?: number
+    price?: number | string
+    triggerPrice?: number | string
+    splitSize?: number | string
   }>
   priceType: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
   product: 'MIS' | 'NRML'

@@ -1220,13 +1220,20 @@ def replace_workflow(workflow_id):
 @flow_bp.route("/api/index-symbols", methods=["GET"])
 @check_session_validity
 def get_index_symbols_lot_sizes():
-    """
-    Get lot sizes for index symbols from master contract database.
-    Returns lot sizes for NSE and BSE index options (NIFTY, BANKNIFTY, etc.)
+    """Lot sizes for every underlying the options nodes offer.
+
+    Named for the index options it originally covered; it now also answers for
+    the MCX commodities, which the Options Order and Multi-Leg nodes list
+    alongside them. The route name is left alone because the frontend caches
+    against it.
+
+    An underlying with no usable lot size is omitted rather than returned with a
+    null, so the dropdown never offers something the executor would then refuse
+    to size.
     """
     from database.symbol import SymToken, db_session
     from database.token_db_enhanced import extract_underlying_from_symbol
-    from services.flow_executor_service import symbol_prefix_filter
+    from services.flow_executor_service import MCX_OPTION_UNDERLYINGS, symbol_prefix_filter
 
     # Define index symbols to look up
     nse_indices = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"]
@@ -1278,9 +1285,13 @@ def get_index_symbols_lot_sizes():
     results = []
 
     try:
-        for index_name, exchange in [(n, "NFO") for n in nse_indices] + [
-            (n, "BFO") for n in bse_indices
-        ]:
+        for index_name, exchange in (
+            [(n, "NFO") for n in nse_indices]
+            + [(n, "BFO") for n in bse_indices]
+            # MCX options trade on MCX itself, so the lot size is read from the
+            # same exchange the option is listed on.
+            + [(n, "MCX") for n in MCX_OPTION_UNDERLYINGS]
+        ):
             lot_size = _lot_size(index_name, exchange)
             if lot_size:
                 results.append(
@@ -1384,3 +1395,180 @@ def get_symbol_lot_sizes():
     except Exception as e:
         logger.exception(f"Error fetching lot sizes for {len(pairs)} pair(s): {e}")
         return jsonify({"status": "error", "message": "Failed to fetch lot sizes"}), 500
+
+
+def _sorted_expiry_codes(raw_dates: list) -> list[str]:
+    """Normalize broker expiry strings to DDMMMYY and sort them chronologically.
+
+    Brokers return expiries in several formats and in no guaranteed order, but
+    a symbol is built from the DDMMMYY code and the builder offers "nearest
+    first". An unparseable entry is kept, sorted last, rather than dropped -
+    hiding a listed expiry is worse than showing one out of order.
+    """
+    codes: list[str] = []
+    for raw in raw_dates:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        text = raw.strip().upper()
+        parsed = None
+        for fmt in ("%d-%b-%y", "%d-%b-%Y", "%d%b%y", "%d%b%Y"):
+            try:
+                parsed = datetime.strptime(text, fmt)
+                break
+            except ValueError:
+                continue
+        codes.append(parsed.strftime("%d%b%y").upper() if parsed else text)
+
+    def sort_key(code: str):
+        try:
+            return (0, datetime.strptime(code, "%d%b%y"))
+        except ValueError:
+            return (1, datetime.max)
+
+    # dict.fromkeys dedupes while keeping first-seen order for unparseable codes.
+    return sorted(dict.fromkeys(codes), key=sort_key)
+
+
+#: Strikes returned either side of ATM. Enough to reach a deep-ITM or far-OTM
+#: leg without shipping a whole chain into a sidebar dropdown.
+OPTION_STRIKE_WINDOW = 25
+
+
+@flow_bp.route("/api/option-strikes", methods=["GET"])
+@check_session_validity
+def get_option_strikes():
+    """Listed expiries and strikes for one underlying, for the manual leg builder.
+
+    A manually built leg can name an absolute strike and its own expiry. The
+    editor should offer contracts the exchange actually lists rather than a free
+    number and a typed date, so this answers with the master contract's own
+    list: every strike carries the symbol it resolves to and its moneyness, and
+    every relative expiry type carries the date it currently picks.
+
+    Both halves come back in one response because the builder needs them
+    together: pick an expiry, then a strike within it.
+
+    Structure only - no per-strike broker quotes - because the builder needs the
+    contract, not its price, and a quoted chain costs a multiquote round trip
+    every time a dropdown opens.
+    """
+    from services.expiry_service import get_expiry_dates
+    from services.flow_executor_service import resolve_option_exchanges
+    from services.flow_node_contracts import (
+        VALID_EXPIRY_TYPES,
+        format_expiry_for_api,
+        select_expiry,
+    )
+    from services.option_chain_service import get_option_chain
+    from services.option_symbol_service import parse_underlying_symbol
+
+    underlying = (request.args.get("underlying") or "").strip().upper()
+    if not underlying:
+        return jsonify({"status": "error", "message": "underlying is required"}), 400
+
+    option_type = (request.args.get("optionType") or "CE").strip().upper()
+    if option_type not in ("CE", "PE"):
+        return jsonify({"status": "error", "message": "optionType must be CE or PE"}), 400
+
+    requested_expiry = format_expiry_for_api(request.args.get("expiry") or "")
+    requested_expiry_type = (request.args.get("expiryType") or "").strip().lower()
+
+    api_key = get_current_api_key()
+    if not api_key:
+        return (
+            jsonify(
+                {"status": "error", "message": "API key not configured. Generate one at /apikey"}
+            ),
+            401,
+        )
+
+    try:
+        _, fo_exchange = resolve_option_exchanges(
+            underlying, (request.args.get("exchange") or "").strip().upper()
+        )
+        base_symbol, _embedded_expiry = parse_underlying_symbol(underlying)
+
+        success, response, status_code = get_expiry_dates(
+            symbol=base_symbol,
+            exchange=fo_exchange,
+            instrumenttype="options",
+            api_key=api_key,
+        )
+        if not success:
+            return jsonify(response), status_code
+
+        listed = response.get("data") or []
+        expiries = _sorted_expiry_codes(listed)
+        if not expiries:
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": f"No option expiries found for {base_symbol} on {fo_exchange}",
+                    }
+                ),
+                404,
+            )
+
+        # Resolved once here with the executor's own selector, so the panel can
+        # show which contract "current_week" means instead of leaving the author
+        # to find out at run time.
+        resolved = {
+            expiry_type: select_expiry(listed, expiry_type)
+            for expiry_type in sorted(VALID_EXPIRY_TYPES)
+        }
+
+        # Precedence matches the executor's: an explicit date wins over a
+        # relative type, and an expiry the contract does not list falls back to
+        # the nearest rather than answering with an empty strike list.
+        expiry = ""
+        if requested_expiry in expiries:
+            expiry = requested_expiry
+        elif requested_expiry_type:
+            expiry = resolved.get(requested_expiry_type) or ""
+        if expiry not in expiries:
+            expiry = expiries[0]
+
+        chain_ok, chain, chain_code = get_option_chain(
+            underlying=base_symbol,
+            exchange=fo_exchange,
+            expiry_date=expiry,
+            strike_count=OPTION_STRIKE_WINDOW,
+            api_key=api_key,
+            with_quotes=False,
+        )
+        if not chain_ok:
+            return jsonify(chain), chain_code
+
+        side = option_type.lower()
+        strikes = [
+            {
+                "strike": row.get("strike"),
+                "symbol": (row.get(side) or {}).get("symbol"),
+                # ATM / ITMn / OTMn, which differ per side at the same strike.
+                "label": (row.get(side) or {}).get("label"),
+            }
+            for row in chain.get("chain", []) or []
+            if row.get("strike") is not None
+        ]
+
+        return jsonify(
+            {
+                "status": "success",
+                "data": {
+                    "underlying": underlying,
+                    "exchange": fo_exchange,
+                    "expiry": chain.get("expiry_date", expiry),
+                    "expiries": expiries,
+                    "resolved": resolved,
+                    "optionType": option_type,
+                    "strikes": strikes,
+                    "atm": chain.get("atm_strike"),
+                    "underlyingLtp": chain.get("underlying_ltp"),
+                    "underlyingSymbol": chain.get("underlying_symbol"),
+                },
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Error fetching option strikes for {underlying}: {e}")
+        return jsonify({"status": "error", "message": "Failed to fetch option strikes"}), 500

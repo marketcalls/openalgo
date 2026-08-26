@@ -43,6 +43,7 @@ import type { BasketOrderItem } from '@/types/flow'
 import { showToast } from '@/utils/toast'
 import { IndicatorParamsFields } from './IndicatorParamsFields'
 import { MarginPositionsFields } from './MarginPositionsFields'
+import { CustomLegsFields } from './CustomLegsFields'
 import { getOptionsMultiStrategyUpdate, OrderPriceFields } from './OrderPriceFields'
 
 // ===== LOCAL CONSTANTS =====
@@ -239,6 +240,30 @@ export function ConfigPanel() {
   const getLotSizeFromDb = (underlying: string): number | null => {
     const dbSymbol = indexSymbolsQuery.data?.find((s) => s.value === underlying)
     return dbSymbol?.lotSize || null
+  }
+
+  const isMcxUnderlying = (underlying: string): boolean =>
+    INDEX_SYMBOLS.find((s) => s.value === underlying)?.exchange === 'MCX'
+
+  // MCX contracts expire monthly, so the weekly choices have nothing to select
+  // and would resolve to the nearest month anyway -- the label would be telling
+  // the author something the run does not do.
+  const expiryTypesFor = (underlying: string) =>
+    isMcxUnderlying(underlying)
+      ? EXPIRY_TYPES.filter((e) => e.value.endsWith('_month'))
+      : EXPIRY_TYPES
+
+  // Picking an MCX underlying while a weekly expiry is selected would leave the
+  // Select rendering an empty trigger, so move it to the nearest equivalent.
+  const applyUnderlying = (value: string) => {
+    handleDataChange('underlying', value)
+    const s = INDEX_SYMBOLS.find((x) => x.value === value)
+    if (!s) return
+    handleDataChange('exchange', s.exchange)
+    if (s.exchange === 'MCX') {
+      const expiryType = (nodeData.expiryType as string) || 'current_week'
+      if (!expiryType.endsWith('_month')) handleDataChange('expiryType', 'current_month')
+    }
   }
 
   const handleDataChange = useCallback(
@@ -1045,11 +1070,7 @@ export function ConfigPanel() {
                   <Select
                     value={(nodeData.underlying as string) || 'NIFTY'}
                     onValueChange={(v) => {
-                      handleDataChange('underlying', v)
-                      const s = INDEX_SYMBOLS.find((x) => x.value === v)
-                      if (s) {
-                        handleDataChange('exchange', s.exchange)
-                      }
+                      applyUnderlying(v)
                       // Deliberately does NOT write the lot size into quantity.
                       // This field is a lot COUNT and the executor multiplies it
                       // by the lot size, so storing the lot size here squared it
@@ -1080,7 +1101,7 @@ export function ConfigPanel() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {EXPIRY_TYPES.map((e) => (
+                      {expiryTypesFor((nodeData.underlying as string) || 'NIFTY').map((e) => (
                         <SelectItem key={e.value} value={e.value}>
                           {e.label}
                         </SelectItem>
@@ -1262,11 +1283,7 @@ export function ConfigPanel() {
                   <Label className="text-xs">Underlying</Label>
                   <Select
                     value={(nodeData.underlying as string) || 'NIFTY'}
-                    onValueChange={(v) => {
-                      handleDataChange('underlying', v)
-                      const s = INDEX_SYMBOLS.find((x) => x.value === v)
-                      if (s) handleDataChange('exchange', s.exchange)
-                    }}
+                    onValueChange={(v) => applyUnderlying(v)}
                   >
                     <SelectTrigger className="h-8">
                       <SelectValue />
@@ -1290,7 +1307,7 @@ export function ConfigPanel() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {EXPIRY_TYPES.map((e) => (
+                      {expiryTypesFor((nodeData.underlying as string) || 'NIFTY').map((e) => (
                         <SelectItem key={e.value} value={e.value}>
                           {e.label}
                         </SelectItem>
@@ -1492,10 +1509,23 @@ export function ConfigPanel() {
                       </>
                     )}
                     {nodeData.strategy === 'custom' && (
-                      <p className="text-muted-foreground">Configure custom legs via API</p>
+                      <p className="text-muted-foreground">Built below, leg by leg.</p>
                     )}
                   </div>
                 </div>
+                {nodeData.strategy === 'custom' && (
+                  <CustomLegsFields
+                    value={nodeData.legs}
+                    onChange={(legs) => handleDataChange('legs', legs)}
+                    commonPriceType={orderPriceType}
+                    commonProduct={(nodeData.product as string) || 'MIS'}
+                    commonExpiryType={(nodeData.expiryType as string) || 'current_week'}
+                    commonAction={(nodeData.action as string) || 'SELL'}
+                    commonQuantity={(nodeData.quantity as number) || 1}
+                    strangleWidth={(nodeData.strangleWidth as string) || 'OTM2'}
+                    underlying={(nodeData.underlying as string) || 'NIFTY'}
+                  />
+                )}
                 <div className="space-y-2">
                   <Label className="text-xs">Output Variable</Label>
                   <Input

@@ -187,7 +187,7 @@ def _node(node_id, node_type="log", **data):
 
 
 JSON_FENCE_RE = re.compile(r"^```json\s*\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
-MULTI_VALUE_JSON_FENCES = {5: 2, 27: 2, 38: 5}
+MULTI_VALUE_JSON_FENCES = {5: 2, 28: 2, 39: 5}
 
 
 def _json_fences(prompt):
@@ -355,19 +355,31 @@ def test_prompt_prose_documents_every_repaired_flow_contract():
 
     options_multi = _markdown_section(prompt, "#### optionsMultiOrder")
     require(
-        "options_multi_expiry",
-        "One common expiry" in options_multi
-        and "Per-leg expiries are not supported" in options_multi
-        and "calendar" not in options_multi.lower()
-        and "diagonal" not in options_multi.lower(),
-        "document one common expiry and make no calendar/diagonal claim",
+        "options_multi_leg_expiry",
+        # The node resolves its own expiryType once as the basket default, and a
+        # leg may override it with either an exact DDMMMYY date or its own
+        # relative type. That is what a calendar or diagonal spread needs, and
+        # the doc has to say so - it previously claimed the opposite, which sent
+        # anyone wanting one away from a feature that already worked.
+        "`expiry`" in options_multi
+        and "DDMMMYY" in options_multi
+        and "`expiryType`" in options_multi
+        and "calendar" in options_multi.lower(),
+        "document the per-leg expiry override and the calendar spread it enables",
+    )
+    require(
+        "options_multi_leg_strike",
+        "`strikeMode`" in options_multi
+        and "`OFFSET`" in options_multi
+        and "`STRIKE`" in options_multi
+        and "Required unless `strike` is given" in options_multi,
+        "document both strike selectors and that exactly one is required",
     )
     require(
         "options_multi_price_types",
         '`priceType` | `"MARKET"` \\| `"LIMIT"`' in options_multi
         and "generated legs do not support `SL`/`SL-M`" in options_multi
-        and "Custom leg `priceType` may be any of `MARKET`/`LIMIT`/`SL`/`SL-M`"
-        in options_multi,
+        and "a custom leg may use `SL`/`SL-M`" in options_multi,
         "distinguish generated MARKET/LIMIT from custom four-type legs",
     )
 
