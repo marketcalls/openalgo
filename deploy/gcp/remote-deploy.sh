@@ -7,6 +7,13 @@ die() { echo "remote-deploy: $*" >&2; exit 1; }
 
 [[ -d "$APP_ROOT" ]] || die "strategy directory not found: $APP_ROOT"
 [[ -d "$LEAN_ROOT" ]] || die "existing Lean installation not found: $LEAN_ROOT"
+
+if [[ "${REMOTE_BUILD_LEAN:-false}" == "true" ]]; then
+  command -v dotnet >/dev/null 2>&1 || die "dotnet is required for REMOTE_BUILD_LEAN=true"
+  dotnet restore "$LEAN_ROOT/QuantConnect.Lean.sln"
+  dotnet build "$LEAN_ROOT/QuantConnect.Lean.sln" -c "${LEAN_CONFIGURATION:-Debug}" --no-restore
+fi
+
 LEAN_LAUNCHER_DIR="${LEAN_LAUNCHER_DIR:-$LEAN_ROOT/Launcher/bin/Debug}"
 LEAN_LAUNCHER_DLL="${LEAN_LAUNCHER_DLL:-$LEAN_LAUNCHER_DIR/QuantConnect.Lean.Launcher.dll}"
 

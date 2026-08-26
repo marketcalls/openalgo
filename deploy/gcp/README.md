@@ -33,8 +33,16 @@ scripts/deploy-to-server.sh user@server \
 
 The laptop command uses `rsync` for code transfer, then remotely verifies the
 Lean launcher DLL under `LEAN_ROOT` or a `lean` CLI on `PATH`. It never updates
-or rebuilds the Lean checkout. Set `STRATEGY_RUNNER` remotely when a different
-runner is required.
+or rebuilds the Lean checkout by default. To regenerate Lean artifacts on the
+server from its existing source checkout, use:
+
+```bash
+REMOTE_BUILD_LEAN=true scripts/deploy-to-server.sh user@server
+```
+
+This is preferred over copying laptop-built artifacts because the server may
+use a different OS, architecture, Python runtime, or native dependencies. Set
+`STRATEGY_RUNNER` remotely when a different runner is required.
 
 Set `UPDATE_LEAN=true` only when the VM also has a clean Lean checkout and you
 want the script to fast-forward and build it. It defaults to `false`.

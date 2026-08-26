@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SSH_TARGET="${1:-${DEPLOY_SSH_TARGET:-}}"
 REMOTE_APP_ROOT="${REMOTE_APP_ROOT:-/opt/lean-strategies}"
 REMOTE_LEAN_ROOT="${REMOTE_LEAN_ROOT:-/opt/Lean}"
+REMOTE_BUILD_LEAN="${REMOTE_BUILD_LEAN:-false}"
 
 if [[ -z "$SSH_TARGET" ]]; then
   echo "Usage: $0 <ssh-user@server> [strategy-path] [algorithm-class]" >&2
@@ -28,7 +29,7 @@ rsync -az --exclude '.git/' --exclude '.env' --exclude '.tmp/' \
   --exclude 'results/runs/' --exclude '**/__pycache__/' \
   -e "ssh ${SSH_OPTS[*]}" "$REPO_ROOT/" "$SSH_TARGET:$REMOTE_APP_ROOT/"
 ssh "${SSH_OPTS[@]}" "$SSH_TARGET" \
-  "cd '$REMOTE_APP_ROOT' && APP_ROOT='$REMOTE_APP_ROOT' LEAN_ROOT='$REMOTE_LEAN_ROOT' ./deploy/gcp/remote-deploy.sh"
+  "cd '$REMOTE_APP_ROOT' && APP_ROOT='$REMOTE_APP_ROOT' LEAN_ROOT='$REMOTE_LEAN_ROOT' REMOTE_BUILD_LEAN='$REMOTE_BUILD_LEAN' ./deploy/gcp/remote-deploy.sh"
 
 if [[ -n "$STRATEGY_PATH" ]]; then
   [[ -n "$ALGORITHM_TYPE_NAME" ]] || ALGORITHM_TYPE_NAME="$(basename "$STRATEGY_PATH" .py)"
