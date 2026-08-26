@@ -6,7 +6,6 @@ WebSocket proxy infrastructure to provide standardized market data streaming.
 """
 
 import json
-import logging
 import os
 import sys
 import threading
@@ -18,6 +17,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
 
 from broker.motilal.api.motilal_websocket import MotilalWebSocket
 from database.auth_db import get_auth_token, get_user_id
+from utils.logging import get_logger
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_proxy.mapping import SymbolMapper
 
@@ -29,7 +29,7 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("motilal_websocket")
+        self.logger = get_logger("motilal_websocket")
         self.ws_client = None
         self.user_id = None
         self.broker_name = "motilal"

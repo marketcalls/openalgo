@@ -1,7 +1,6 @@
 import enum
 import hashlib
 import json
-import logging
 import os
 import ssl
 import threading
@@ -12,7 +11,9 @@ from time import sleep
 import requests
 import websocket
 
-logger = logging.getLogger(__name__)
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 Instrument = namedtuple("Instrument", ["exchange", "token", "symbol", "name", "expiry", "lot_size"])
 

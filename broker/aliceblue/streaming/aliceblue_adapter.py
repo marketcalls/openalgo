@@ -1,7 +1,6 @@
 import base64
 import hashlib
 import json
-import logging
 import os
 import ssl
 import sys
@@ -15,6 +14,7 @@ from dotenv import load_dotenv
 from database.auth_db import get_auth_token, get_feed_token, get_user_id
 from database.token_db import get_token
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
 
 from .aliceblue_client import Aliceblue, Instrument
 
@@ -37,7 +37,7 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("aliceblue_websocket")
+        self.logger = get_logger("aliceblue_websocket")
         self.ws_client = None
         self.aliceblue_client = None
         self.user_id = None

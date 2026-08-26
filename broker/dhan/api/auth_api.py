@@ -1,13 +1,13 @@
 import json
-import logging
 import os
 
 import httpx
 
 from broker.dhan.api.baseurl import BASE_URL, get_url
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Dhan Auth API endpoints
 AUTH_BASE_URL = "https://auth.dhan.co"
