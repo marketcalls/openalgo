@@ -676,6 +676,9 @@ def broker_callback(broker, para=None):
             totp_code = request.form.get("totp")
             date_of_birth = request.form.get("dob")
 
+            # to store user_id (Motilal client code) in the DB - the market data
+            # feed authenticates with it and dealer calls send it as clientcode
+            user_id = userid
             auth_token, feed_token, error_message = auth_function(
                 userid, password, totp_code, date_of_birth
             )
@@ -1003,7 +1006,7 @@ def broker_callback(broker, para=None):
             auth_token = f"{auth_token}"
 
         # For brokers that have user_id and feed_token from authenticate_broker
-        if broker in ["angel", "compositedge", "pocketful", "definedge", "dhan", "rmoney", "iiflcapital"]:
+        if broker in ["angel", "compositedge", "pocketful", "definedge", "dhan", "motilal", "rmoney", "iiflcapital"]:
             # For OAuth brokers, handle missing session user
             if broker in ("compositedge", "rmoney", "iiflcapital") and "user" not in session:
                 # Get the admin user from the database
