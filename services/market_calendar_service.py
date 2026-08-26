@@ -5,7 +5,7 @@ Handles business logic for market holidays and timings API
 """
 
 from datetime import date, datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from database.market_calendar_db import (
     SUPPORTED_EXCHANGES,
@@ -70,11 +70,10 @@ def get_timings(date_str: str) -> tuple[bool, dict[str, Any], int]:
         # Parse and validate date
         try:
             query_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-        except ValueError:
+        except (TypeError, ValueError):
             return False, {"status": "error", "message": "Invalid date format. Use YYYY-MM-DD"}, 400
 
         # Validate date range (not too far in past or future)
-        today = date.today()
         min_date = date(2020, 1, 1)
         max_date = date(2050, 12, 31)
 
@@ -115,7 +114,7 @@ def check_holiday(date_str: str, exchange: str | None = None) -> tuple[bool, dic
         # Parse and validate date
         try:
             query_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-        except ValueError:
+        except (TypeError, ValueError):
             return False, {"status": "error", "message": "Invalid date format. Use YYYY-MM-DD"}, 400
 
         # Validate exchange if provided

@@ -131,6 +131,19 @@ export const INDEX_SYMBOLS = [
   { value: 'SENSEX', label: 'SENSEX', exchange: 'BFO' },
   { value: 'BANKEX', label: 'BANKEX', exchange: 'BFO' },
   { value: 'SENSEX50', label: 'SENSEX50', exchange: 'BFO' },
+  // MCX commodities. Options trade on MCX itself, so the underlying exchange
+  // and the option exchange are the same value.
+  { value: 'GOLD', label: 'GOLD', exchange: 'MCX' },
+  { value: 'GOLDM', label: 'GOLDM', exchange: 'MCX' },
+  { value: 'SILVER', label: 'SILVER', exchange: 'MCX' },
+  { value: 'SILVERM', label: 'SILVERM', exchange: 'MCX' },
+  { value: 'CRUDEOIL', label: 'CRUDEOIL', exchange: 'MCX' },
+  { value: 'CRUDEOILM', label: 'CRUDEOILM', exchange: 'MCX' },
+  { value: 'NATURALGAS', label: 'NATURALGAS', exchange: 'MCX' },
+  { value: 'NATGASMINI', label: 'NATGASMINI', exchange: 'MCX' },
+  { value: 'COPPER', label: 'COPPER', exchange: 'MCX' },
+  { value: 'ZINC', label: 'ZINC', exchange: 'MCX' },
+  { value: 'MCXBULLDEX', label: 'MCXBULLDEX', exchange: 'MCX' },
 ] as const
 
 // =============================================================================

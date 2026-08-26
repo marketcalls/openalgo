@@ -17,7 +17,20 @@ import math
 import re
 from typing import Any
 
-from services.flow_node_contracts import VALID_STATUSES, normalize_status, parse_underlying_symbol
+from services.flow_node_contracts import (
+    EXPIRY_DATE_PATTERN as _EXPIRY_DATE_PATTERN,
+)
+from services.flow_node_contracts import (
+    OPTION_OFFSET_PATTERN as _OPTION_OFFSET_PATTERN,
+)
+from services.flow_node_contracts import (
+    VALID_EXPIRY_TYPES as VALID_LEG_EXPIRY_TYPES,
+)
+from services.flow_node_contracts import (
+    VALID_STATUSES,
+    normalize_status,
+    parse_underlying_symbol,
+)
 from utils.constants import VALID_ACTIONS as SHARED_VALID_ACTIONS
 from utils.constants import VALID_EXCHANGES as SHARED_VALID_EXCHANGES
 from utils.constants import VALID_PRICE_TYPES as SHARED_VALID_PRICE_TYPES
@@ -623,16 +636,138 @@ def _options_multi_errors(base: str, data: dict, strict: bool) -> list[dict]:
         for field in ("price", "triggerPrice"):
             if field not in effective_leg and field in data:
                 effective_leg[field] = data[field]
+        # A leg picks its strike one of two ways, so neither selector is
+        # required on its own -- demanding `offset` rejected every leg that
+        # names an absolute strike, which the executor has always accepted.
         found.extend(
             _static_order_leg_errors(
                 leg_base,
                 effective_leg,
                 strict,
-                ("offset", "optionType", "action", "quantity"),
+                ("optionType", "action", "quantity"),
                 price_type_key=price_type_key,
                 option_leg=True,
             )
         )
+        found.extend(_option_leg_strike_and_expiry_errors(leg_base, leg, strict))
+    return found
+
+
+def _option_leg_strike_and_expiry_errors(base: str, leg: dict, strict: bool) -> list[dict]:
+    """Check the two selectors a manually built leg adds: strike and expiry.
+
+    Both are optional in the sense that each has a fallback -- an offset instead
+    of a strike, the node's expiry instead of the leg's -- so the check is that
+    whatever the leg *does* name is usable, and that it names a strike one way
+    or the other. Mirrors execute_options_multi_order; a leg accepted here must
+    not fail at run time, because by then the rest of the basket may already be
+    filled.
+    """
+    found: list[dict] = []
+
+    def templated(value) -> bool:
+        return isinstance(value, str) and "{{" in value
+
+    strike_mode = leg.get("strikeMode")
+    if strike_mode is not None and not templated(strike_mode):
+        if not isinstance(strike_mode, str) or strike_mode.strip().upper() not in {
+            "OFFSET",
+            "STRIKE",
+        }:
+            found.append(
+                _err(
+                    f"{base}/strikeMode",
+                    "invalid_constant",
+                    f"'{strike_mode}' is not a valid strikeMode constant.",
+                    ["OFFSET", "STRIKE"],
+                    strike_mode,
+                )
+            )
+
+    names_strike = leg.get("strike") is not None and not (
+        isinstance(leg.get("strike"), str) and not leg["strike"].strip()
+    )
+    offset = leg.get("offset")
+    names_offset = offset is not None and not (
+        isinstance(offset, str) and not offset.strip()
+    )
+
+    if names_strike:
+        strike = leg["strike"]
+        if not templated(strike):
+            # bool is an int subclass, so True would otherwise pass as strike 1.
+            numeric = None
+            if isinstance(strike, bool):
+                numeric = None
+            elif isinstance(strike, (int, float)):
+                numeric = float(strike)
+            elif isinstance(strike, str):
+                try:
+                    numeric = float(strike.strip())
+                except ValueError:
+                    numeric = None
+            if numeric is None or numeric <= 0:
+                found.append(
+                    _err(
+                        f"{base}/strike",
+                        "invalid_strike",
+                        f"strike must be a positive number; {strike!r} names no contract.",
+                        "a positive number",
+                        strike,
+                    )
+                )
+    elif names_offset:
+        if not templated(offset):
+            text = str(offset).strip().upper()
+            if not _OPTION_OFFSET_PATTERN.fullmatch(text):
+                found.append(
+                    _err(
+                        f"{base}/offset",
+                        "invalid_constant",
+                        f"'{offset}' is not a valid offset.",
+                        "ATM, ITM1-ITM50 or OTM1-OTM50",
+                        offset,
+                    )
+                )
+    elif strict:
+        found.append(
+            _err(
+                f"{base}/offset",
+                "missing_required_field",
+                "A leg needs either an offset or an absolute strike before it can execute.",
+                "offset or strike",
+                None,
+            )
+        )
+
+    expiry = leg.get("expiry")
+    if expiry is not None and not templated(expiry):
+        text = str(expiry).strip().upper()
+        if text and not _EXPIRY_DATE_PATTERN.fullmatch(text):
+            found.append(
+                _err(
+                    f"{base}/expiry",
+                    "invalid_expiry",
+                    f"expiry must be in DDMMMYY format such as 28OCT25; got {expiry!r}.",
+                    "DDMMMYY",
+                    expiry,
+                )
+            )
+
+    expiry_type = leg.get("expiryType")
+    if expiry_type is not None and not templated(expiry_type):
+        text = str(expiry_type).strip().lower()
+        if text and text not in VALID_LEG_EXPIRY_TYPES:
+            found.append(
+                _err(
+                    f"{base}/expiryType",
+                    "invalid_constant",
+                    f"'{expiry_type}' is not a valid expiryType constant.",
+                    sorted(VALID_LEG_EXPIRY_TYPES),
+                    expiry_type,
+                )
+            )
+
     return found
 
 
