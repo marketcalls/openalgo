@@ -159,7 +159,7 @@ def place_order_api(data, auth):
 
     payload = "jData=" + json.dumps(newdata) + "&jKey=" + AUTH_TOKEN
 
-    logger.debug(f"{payload}")
+    logger.debug(f"{newdata}")
     # Get the shared httpx client
     client = get_httpx_client()
 
@@ -365,7 +365,6 @@ def modify_order(data, auth):
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     payload = "jData=" + json.dumps(transformed_data) + "&jKey=" + AUTH_TOKEN
 
-    logger.debug(f"Modify Order Payload: {payload}")
     logger.debug(f"Modify Order Data: {transformed_data}")
 
     # Get the shared httpx client

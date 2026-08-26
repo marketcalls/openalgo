@@ -162,7 +162,7 @@ class FivePaisaWebSocket:
         Connection URL format: wss://[server].5paisa.com/feeds/api/chat?Value1={{access_token}}|{{clientcode}}
         """
         connection_url = f"{self.websocket_url}?Value1={self.access_token}|{self.client_code}"
-        self.logger.debug(f"Connecting to: {connection_url[:80]}...")
+        self.logger.debug(f"Connecting to: {self.websocket_url}")
         self.logger.debug(f"Client Code: {self.client_code}")
 
         try:

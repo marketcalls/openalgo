@@ -28,14 +28,13 @@ def authenticate_broker(code, password=None, totp_code=None):
         BROKER_API_SECRET = os.getenv("BROKER_API_SECRET")
 
         logger.debug("Using configured broker API key")
-        logger.debug(f"Request Code: {code}")  # Debug print
+        logger.debug("Request code received")  # Debug print
 
         # Create the security hash as per Flattrade docs
         hash_input = f"{BROKER_API_KEY}{code}{BROKER_API_SECRET}"
         security_hash = hashlib.sha256(hash_input.encode()).hexdigest()
 
-        logger.debug(f"Hash Input: {hash_input}")  # Debug print
-        logger.debug(f"Security Hash: {security_hash}")  # Debug print
+        logger.debug("Security hash computed")  # Debug print
 
         url = "https://authapi.flattrade.in/trade/apitoken"
         data = {"api_key": BROKER_API_KEY, "request_code": code, "api_secret": security_hash}
