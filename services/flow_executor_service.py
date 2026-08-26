@@ -32,6 +32,7 @@ from services.flow_node_contracts import (
 from services.flow_node_contracts import (
     VALID_EXPIRY_TYPES,
     VALID_LEG_STRIKE_MODES,
+    default_product_for_exchange,
     select_expiry,
 )
 from services.flow_openalgo_client import FlowOpenAlgoClient, get_flow_client
@@ -669,13 +670,22 @@ class NodeExecutor:
         """Resolve the fields shared by regular, smart, and split orders."""
         values = RuntimeOrderResolver(self.context, node_data, label)
         quantity_minimum = 0 if allow_zero_quantity else 1
+        # The exchange decides the product default, so it is read out before the
+        # dict is built -- a node whose author never touched Product sends NRML
+        # on a derivative segment and MIS on cash. Symbol is still resolved
+        # first, so a node with several problems reports the same one it always
+        # did.
+        symbol = values.text("symbol")
+        exchange = values.enum("exchange", VALID_EXCHANGES, default="NSE")
         resolved = {
-            "symbol": values.text("symbol"),
-            "exchange": values.enum("exchange", VALID_EXCHANGES, default="NSE"),
+            "symbol": symbol,
+            "exchange": exchange,
             "action": values.enum("action", VALID_ACTIONS, default="BUY"),
             "quantity": values.integer("quantity", default=1, minimum=quantity_minimum),
             "price_type": values.enum("priceType", VALID_PRICE_TYPES, default="MARKET"),
-            "product": values.enum("product", VALID_PRODUCT_TYPES, default="MIS"),
+            "product": values.enum(
+                "product", VALID_PRODUCT_TYPES, default=default_product_for_exchange(exchange)
+            ),
             "price": values.number("price", default=0.0),
             "trigger_price": values.number("triggerPrice", default=0.0),
         }
@@ -964,7 +974,7 @@ class NodeExecutor:
             ).lower()
             action = values.enum("action", VALID_ACTIONS, default="SELL")
             quantity_lots = values.integer("quantity", default=1, minimum=1)
-            product = values.enum("product", VALID_PRODUCT_TYPES, default="MIS")
+            product = values.enum("product", VALID_PRODUCT_TYPES, default="NRML")
             strangle_width = values.text("strangleWidth", default="OTM2").upper()
             if not _OPTION_OFFSET_PATTERN.fullmatch(strangle_width):
                 raise ValueError(
@@ -1515,7 +1525,7 @@ class NodeExecutor:
             return result
 
         exchange = self._supplied(node_data, "exchange") or "NSE"
-        product = self._supplied(node_data, "product") or "MIS"
+        product = self._supplied(node_data, "product") or default_product_for_exchange(exchange)
         self.log(f"Closing position: {symbol}@{exchange} ({product})")
         result = self.client.close_position(
             symbol=symbol,
@@ -1578,11 +1588,21 @@ class NodeExecutor:
             return {"status": "error", "message": message}
 
         try:
-            common_product = required_text(common_value("product", "MIS"), "product").upper()
+            # One basket can mix segments, so a node that names no product lets
+            # every row fall back to its own exchange's default -- NSE rows MIS,
+            # NFO rows NRML -- instead of one blanket choice. A product that is
+            # present but blank stays an error, as before.
+            unset = object()
+            common_product_raw = common_value("product", unset)
+            common_product = (
+                ""
+                if common_product_raw is unset
+                else required_text(common_product_raw, "product").upper()
+            )
             common_price_type = required_text(
                 common_value("priceType", "MARKET"), "priceType"
             ).upper()
-            if common_product not in VALID_PRODUCT_TYPES:
+            if common_product and common_product not in VALID_PRODUCT_TYPES:
                 raise ValueError(f"invalid product {common_product!r}")
             if common_price_type not in VALID_PRICE_TYPES:
                 raise ValueError(f"invalid pricetype {common_price_type!r}")
@@ -1650,7 +1670,8 @@ class NodeExecutor:
                     raise ValueError(f"quantity must be positive, got {quantity}")
 
                 product = required_text(
-                    row_value("product", common_product), "product"
+                    row_value("product", common_product or default_product_for_exchange(exchange)),
+                    "product",
                 ).upper()
                 price_type = required_text(
                     row_value("pricetype", common_price_type, "priceType"), "pricetype"
@@ -1766,7 +1787,7 @@ class NodeExecutor:
         """Execute Open Position node"""
         symbol = self.get_str(node_data, "symbol", "")
         exchange = self.get_str(node_data, "exchange", "NSE")
-        product = self.get_str(node_data, "product", "MIS")
+        product = self.get_str(node_data, "product", default_product_for_exchange(exchange))
         self.log(f"Getting open position for: {symbol}")
         result = self.client.get_open_position(
             symbol=symbol, exchange=exchange, product_type=product
@@ -2455,7 +2476,7 @@ class NodeExecutor:
         exchange = self.get_str(node_data, "exchange", "NSE")
         quantity = self.get_int(node_data, "quantity", 1)
         price = self.get_float(node_data, "price", 0)
-        product_type = self.get_str(node_data, "product", "MIS")
+        product_type = self.get_str(node_data, "product", default_product_for_exchange(exchange))
         action = self.get_str(node_data, "action", "BUY")
         price_type = self.get_str(node_data, "priceType", "MARKET")
         if positions:
@@ -2981,7 +3002,7 @@ class NodeExecutor:
         """
         symbol = self.get_str(node_data, "symbol", "")
         exchange = self.get_str(node_data, "exchange", "NSE")
-        product = self.get_str(node_data, "product", "MIS")
+        product = self.get_str(node_data, "product", default_product_for_exchange(exchange))
         condition = self.get_str(node_data, "condition", "exists")
         threshold = self.get_float(node_data, "threshold", 0.0)
 
