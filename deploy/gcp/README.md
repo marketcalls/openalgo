@@ -1,4 +1,4 @@
-# GCP deployment
+# GCP code deployment
 
 The deployment target is a Linux Compute Engine VM with two sibling checkouts:
 
@@ -7,25 +7,15 @@ The deployment target is a Linux Compute Engine VM with two sibling checkouts:
 /opt/lean-strategies
 ```
 
-The VM must have the .NET SDK, Python runtime required by Lean, `jq`, and the
-brokerage runtime already installed. The deploy script only fast-forwards clean
-checkouts, builds Lean, validates JSON configuration, and restarts an existing
-systemd service. It does not copy credentials or create a live-trading config.
+The VM must have a clean checkout of `lean-strategies` at the configured path.
+The deploy script fetches and fast-forwards that checkout, validates JSON
+configuration, and stops there. It does not build Lean, start or restart a
+strategy, install a service, or copy credentials. OpenAlgo remains responsible
+for running the strategy.
 
-For the first install, create a `lean` service account, install the unit as root,
-and copy `lean-strategy.env.example` to
-`/etc/lean-strategy/lean-strategy.env`. Set `STRATEGY_RUNNER` to the appropriate
-runner for the strategy and keep `LIVE_CONFIRM=true` with paper trading until
-the deployment has been verified.
+Set `UPDATE_LEAN=true` only when the VM also has a clean Lean checkout and you
+want the script to fast-forward and build it. It defaults to `false`.
 
-```bash
-sudo install -d -m 0750 /etc/lean-strategy
-sudo install -m 0644 deploy/gcp/lean-strategy.service /etc/systemd/system/lean-strategy.service
-sudo install -m 0600 deploy/gcp/lean-strategy.env.example /etc/lean-strategy/lean-strategy.env
-sudo systemctl daemon-reload
-sudo systemctl enable lean-strategy
-```
-
-Configure these GitHub repository or environment secrets for the workflow:
+Configure these GitHub repository secrets for the workflow:
 `GCP_SSH_HOST`, `GCP_SSH_USER`, `GCP_SSH_PRIVATE_KEY`, and
 `GCP_DEPLOY_PATH`. `GCP_SSH_PORT` is optional and defaults to `22`.

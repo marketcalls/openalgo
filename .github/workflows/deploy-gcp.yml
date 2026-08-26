@@ -1,4 +1,4 @@
-name: Deploy Lean strategy to GCP
+name: Deploy Lean strategy code to GCP
 
 on:
   push:
@@ -27,7 +27,6 @@ jobs:
   deploy:
     needs: validate
     runs-on: ubuntu-latest
-    environment: production
     steps:
       - uses: actions/checkout@v4
       - name: Install SSH key
