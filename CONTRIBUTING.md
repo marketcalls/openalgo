@@ -384,6 +384,9 @@ git commit -m "refactor: optimize order processing pipeline"
 
 ### 5. Test Your Changes
 
+For a documentation-only change, see [Documentation-only changes](#documentation-only-changes)
+instead of this checklist.
+
 ```bash
 # Fast backend check (same maintained selection used by CI)
 uv run pytest test/test_log_location.py test/test_navigation_update.py \
@@ -934,8 +937,8 @@ git commit -m "docs: clarify order constants"
 
 Use the same style for the pull request title. In its description, link the
 issue (for example, `Closes #123`), summarize the reader-visible improvement,
-list the files reviewed, and report validation explicitly, including “code
-tests not run (Markdown-only change)” when applicable.
+list the files reviewed, and report validation explicitly, including "code
+tests not run (Markdown-only change)" when applicable.
 
 ### Code Documentation
 
