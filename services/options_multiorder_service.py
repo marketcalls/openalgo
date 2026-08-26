@@ -417,7 +417,7 @@ def resolve_and_place_leg(
                 "symbol": resolved_symbol,
                 "action": leg_data.get("action"),
                 "pricetype": leg_data.get("pricetype", "MARKET"),
-                "product": leg_data.get("product", "MIS"),
+                "product": leg_data.get("product", "NRML"),
                 "price": leg_data.get("price", 0.0),
                 "trigger_price": leg_data.get("trigger_price", 0.0),
                 "disclosed_quantity": leg_data.get("disclosed_quantity", 0),
@@ -466,7 +466,7 @@ def resolve_and_place_leg(
                 # The split path reports one aggregated leg. Without product,
                 # subscribers keying on (symbol, exchange, product) cannot match
                 # it, unlike the non-split path below.
-                "product": leg_data.get("product", "MIS"),
+                "product": leg_data.get("product", "NRML"),
                 "offset": leg_data.get("offset"),
                 "strike": leg_data.get("strike"),
                 "option_type": leg_data.get("option_type", "").upper(),
@@ -487,7 +487,7 @@ def resolve_and_place_leg(
             "action": leg_data.get("action"),
             "quantity": leg_data.get("quantity"),
             "pricetype": leg_data.get("pricetype", "MARKET"),
-            "product": leg_data.get("product", "MIS"),
+            "product": leg_data.get("product", "NRML"),
             "price": leg_data.get("price", 0.0),
             "trigger_price": leg_data.get("trigger_price", 0.0),
             "disclosed_quantity": leg_data.get("disclosed_quantity", 0),

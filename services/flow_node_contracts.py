@@ -23,6 +23,24 @@ VALID_LEG_STRIKE_MODES = frozenset({"OFFSET", "STRIKE"})
 VALID_EXPIRY_TYPES = frozenset({"current_week", "next_week", "current_month", "next_month"})
 
 
+#: Segments that trade contracts carried on margin rather than cash-settled
+#: holdings. A position in one of these is normally taken NRML, so that is what
+#: a node defaults to when its author never picked a product; MIS is the
+#: default everywhere else. Index pseudo-exchanges are absent because no order
+#: is ever placed on them.
+DERIVATIVE_EXCHANGES = frozenset({"NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "NCO"})
+
+
+def default_product_for_exchange(exchange: str | None) -> str:
+    """The product a node on ``exchange`` uses when its author picked none.
+
+    This is a *default*, never an override: a product the author actually chose
+    is stored on the node and wins, so an intraday NFO order stays MIS. The
+    editor resolves the same rule so the panel shows what the run will send.
+    """
+    return "NRML" if (exchange or "").strip().upper() in DERIVATIVE_EXCHANGES else "MIS"
+
+
 #: Expiry strings arrive from the master contract in a few shapes depending on
 #: the broker; all of them are accepted and normalized to DDMMMYY.
 _EXPIRY_INPUT_FORMATS = ("%d-%b-%y", "%d%b%y", "%d-%B-%Y", "%d%B%Y")

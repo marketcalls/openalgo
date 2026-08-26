@@ -567,6 +567,27 @@ positive `triggerPrice`. A missing, blank, zero, or negative required price is
 rejected. A `{{variable}}` price passes import validation and is checked after
 interpolation before the broker call.
 
+#### Product defaults
+
+`product` is optional on every order and position node. **Omit it and the
+node's `exchange` decides**: a derivative segment — `NFO`, `BFO`, `CDS`, `BCD`,
+`MCX`, `NCDEX`, `NCO` — defaults to `NRML`, and everything else to `MIS`.
+
+Write `product` only to override that. It is used exactly as given, so `MIS` on
+an `NFO` order really is an intraday order that the broker squares off at the
+close. An index pseudo-exchange (`NSE_INDEX`, ...) is not a segment orders are
+placed on and defaults to `MIS`.
+
+Two nodes do not follow their `exchange`, because on them that field names
+where the *underlying* is quoted rather than where the contract trades:
+`optionsOrder` and `optionsMultiOrder` default to `NRML` outright.
+
+`basketOrder` decides per row: with no `product` on the node, each row follows
+its own `exchange`, so one basket can mix an `MIS` cash row and an `NRML`
+commodity row. A `product` on the node covers every row that does not set its
+own. Present-but-blank is still an error — that is a `{{variable}}` that failed
+to resolve, and the node refuses rather than guessing.
+
 #### placeOrder — Place Order
 
 Single-leg order on any segment.
@@ -578,7 +599,7 @@ Single-leg order on any segment.
 | `action` | `"BUY"` \| `"SELL"` | `"BUY"` | |
 | `quantity` | int | `1` | In shares (not lots). |
 | `priceType` | `"MARKET"` \| `"LIMIT"` \| `"SL"` \| `"SL-M"` | `"MARKET"` | |
-| `product` | `"MIS"` \| `"CNC"` \| `"NRML"` | `"MIS"` | |
+| `product` | `"MIS"` \| `"CNC"` \| `"NRML"` | by `exchange` | See **Product defaults**. |
 | `price` | number | `0` | Required for `LIMIT`/`SL`. |
 | `triggerPrice` | number | `0` | Required for `SL`/`SL-M`. |
 | `outputVariable` | string | — | If set, exposes `{{name.orderid}}`, `{{name.status}}`. |
@@ -649,7 +670,7 @@ Single-leg options order resolved from underlying + offset + option type.
 | `action` | `"BUY"` \| `"SELL"` | `"BUY"` | |
 | `quantity` | int | `1` | **In lots** (executor multiplies by lot size). |
 | `priceType` | `"MARKET"` \| `"LIMIT"` \| `"SL"` \| `"SL-M"` | `"MARKET"` | |
-| `product` | `"MIS"` \| `"NRML"` | `"NRML"` | |
+| `product` | `"MIS"` \| `"NRML"` | `"NRML"` | Always a derivative; does not follow `exchange`. |
 | `price` | number | `0` | For `LIMIT`/`SL`. |
 | `triggerPrice` | number | `0` | For `SL`/`SL-M`. |
 | `splitSize` | int | `0` | If >0, splits into chunks. |
@@ -718,7 +739,7 @@ spreads / custom).
 | `action` | `"BUY"` \| `"SELL"` | — | Direction for the strategy (BUY=long volatility, SELL=short volatility). |
 | `quantity` | int | `1` | Lots per leg. |
 | `priceType` | `"MARKET"` \| `"LIMIT"` \| `"SL"` \| `"SL-M"` | `"MARKET"` | Common price type; generated legs do not support `SL`/`SL-M`, while custom legs may inherit all four types. |
-| `product` | `"MIS"` \| `"NRML"` | `"NRML"` | |
+| `product` | `"MIS"` \| `"NRML"` | `"NRML"` | Always a derivative; does not follow `exchange`. |
 | `price` | number | `0` | Common leg price. Must be positive when the effective price type is `LIMIT`/`SL`. |
 | `triggerPrice` | number | `0` | Common custom-leg trigger. Must be positive when the effective price type is `SL`/`SL-M`. |
 | `legs` | `Leg[]` | `[]` | **Required for `strategy="custom"`.** See **Custom legs** below. |
@@ -768,7 +789,7 @@ value, so write no key at all rather than an empty string. A leg naming neither
 `offset` nor `strike` cannot execute and is refused.
 
 The editor shows every inherited field as the value it currently resolves to -
-its expiry, product and price type read as `25AUG26`, `MIS`, `MARKET` rather
+its expiry, product and price type read as `25AUG26`, `NRML`, `MARKET` rather
 than naming the inheritance - and writes nothing until the field is changed. So
 a leg left alone keeps following the node, and adjusting the node still carries
 to it.
@@ -843,7 +864,7 @@ Place multiple orders in a single API call.
 |---|---|---|---|
 | `basketName` | string | `"flow_basket"` | |
 | `orders` | string \| `Order[]` | — | The editor writes multi-line `SYMBOL,EXCHANGE,ACTION,QTY` CSV. Imported arrays may set per-row `product`, `pricetype`, `price`, and `triggerprice`; common node values fill only omitted row fields. |
-| `product` | `"MIS"` \| `"CNC"` \| `"NRML"` | `"MIS"` | |
+| `product` | `"MIS"` \| `"CNC"` \| `"NRML"` | by `exchange` | See **Product defaults**. |
 | `priceType` | `"MARKET"` \| `"LIMIT"` \| `"SL"` \| `"SL-M"` | `"MARKET"` | Common to every CSV row. |
 | `price` | number | `0` | Common row price. Must be positive for `LIMIT`/`SL`. |
 | `triggerPrice` | number | `0` | Common row trigger price. Must be positive for `SL`/`SL-M`. |
@@ -966,7 +987,7 @@ products. With a `symbol`, closes only that position.
 |---|---|---|---|
 | `symbol` | string | `""` | Blank closes everything. Set it to scope the close. |
 | `exchange` | string | `NSE` | Only meaningful alongside `symbol`. |
-| `product` | string | `MIS` | Only meaningful alongside `symbol`. |
+| `product` | string | by `exchange` | Only meaningful alongside `symbol`. See **Product defaults**. |
 
 `exchange` and `product` do not filter on their own — without a `symbol` this is
 an unconditional square-off however they are set.
@@ -1009,7 +1030,7 @@ the same as any other failing node. A condition that evaluates cleanly to
 |---|---|---|---|
 | `symbol` | string | required | |
 | `exchange` | string | required | |
-| `product` | `"MIS"` \| `"CNC"` \| `"NRML"` | `"MIS"` | |
+| `product` | `"MIS"` \| `"CNC"` \| `"NRML"` | by `exchange` | See **Product defaults**. |
 | `condition` | `"exists"` \| `"not_exists"` \| `"quantity_above"` \| `"quantity_below"` \| `"pnl_above"` \| `"pnl_below"` | required | |
 | `threshold` | number | `0` | Only used by the `quantity_*` and `pnl_*` modes. |
 
@@ -2438,7 +2459,7 @@ OpenAlgo standardizes broker-specific symbols to the following format. See
 For convenience in one place:
 
 - **Action:** `BUY`, `SELL`
-- **Product:** `CNC` (cash & carry / delivery), `NRML` (futures & options carry), `MIS` (intraday)
+- **Product:** `CNC` (cash & carry / delivery), `NRML` (futures & options carry), `MIS` (intraday). Omit it and the node's `exchange` decides - see **Product defaults** in 7.2.
 - **Price type:** `MARKET`, `LIMIT`, `SL` (stop-loss limit), `SL-M` (stop-loss market)
 - **Option type:** `CE`, `PE`
 - **Strike offset:** `ATM`, `ITM1`–`ITM5`, `OTM1`–`OTM10`
