@@ -74,12 +74,14 @@ def manage_api_key():
             return send_file(index_path, mimetype="text/html")
 
         # Fallback to old template if React build not available
-        return render_template(
-            "apikey.html",
-            login_username=login_username,
-            has_api_key=has_api_key,
-            api_key=api_key,
-            order_mode=order_mode,
+        return no_store_response(
+            render_template(
+                "apikey.html",
+                login_username=login_username,
+                has_api_key=has_api_key,
+                api_key=api_key,
+                order_mode=order_mode,
+            )
         )
     else:
         user_id = request.json.get("user_id")

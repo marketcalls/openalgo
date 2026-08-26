@@ -37,7 +37,7 @@ class TestNoStoreResponseHelper:
 
 
 class TestApiKeyGetHeaders:
-    """GET /apikey must return no-store headers when serving JSON."""
+    """GET /apikey must return no-store headers on every key-bearing path."""
 
     def test_json_path_has_no_store(self):
         from blueprints.apikey import api_key_bp
@@ -61,6 +61,32 @@ class TestApiKeyGetHeaders:
             assert resp.headers["Cache-Control"] == "no-store, max-age=0"
             assert resp.headers["Pragma"] == "no-cache"
             assert FAKE_KEY in resp.get_data(as_text=True)
+
+    def test_html_fallback_has_no_store(self):
+        from blueprints.apikey import api_key_bp
+
+        app = Flask(__name__)
+        app.config["TESTING"] = True
+        app.config["SECRET_KEY"] = "test"
+        app.register_blueprint(api_key_bp)
+
+        with (
+            patch("utils.session.is_session_valid", return_value=True),
+            patch("blueprints.apikey.get_api_key_for_tradingview", return_value=FAKE_KEY),
+            patch("blueprints.apikey.get_order_mode", return_value="auto"),
+            patch("blueprints.apikey.FRONTEND_DIST") as frontend_dist,
+            patch("blueprints.apikey.render_template", return_value=f"API key: {FAKE_KEY}"),
+        ):
+            frontend_dist.__truediv__.return_value.exists.return_value = False
+            with app.test_client() as client:
+                with client.session_transaction() as sess:
+                    sess["user"] = FAKE_USER
+                resp = client.get("/apikey", headers={"Accept": "text/html"})
+
+            assert resp.status_code == 200
+            assert resp.headers["Cache-Control"] == "no-store, max-age=0"
+            assert resp.headers["Pragma"] == "no-cache"
+            assert resp.get_data(as_text=True) == f"API key: {FAKE_KEY}"
 
 
 class TestApiKeyPostHeaders:
