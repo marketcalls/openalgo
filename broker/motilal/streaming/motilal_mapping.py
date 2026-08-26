@@ -37,9 +37,15 @@ class MotilalExchangeMapper:
         "NSEFO": "N",  # NSEFO uses 'N' like NSE
     }
 
-    # Reverse mapping for binary packets
-    # Note: NSE and NSEFO both use 'N', differentiated by exchange type (CASH vs DERIVATIVES)
-    # We default 'N' to 'NSE' in the reverse mapping
+    # Reverse mapping for binary packets. LOSSY: NSE and NSEFO both use 'N' on
+    # the wire and are told apart only by the CASH/DERIVATIVES segment character,
+    # which inbound broadcast packets do not carry, so 'N' resolves to "NSE".
+    #
+    # Never build a cache/storage key from this: doing so put NSE cash and NFO
+    # tokens in the same bucket. MotilalWebSocket keys its stores on the full
+    # exchange name and resolves inbound packets through the (wire char, scrip)
+    # map that register_scrip() fills -- see the KEY SCHEME note in
+    # broker/motilal/api/motilal_websocket.py.
     CHAR_TO_EXCHANGE = {v: k for k, v in EXCHANGE_CHAR_MAP.items()}
     CHAR_TO_EXCHANGE["N"] = "NSE"  # Ensure 'N' maps to NSE (not NSEFO)
 
