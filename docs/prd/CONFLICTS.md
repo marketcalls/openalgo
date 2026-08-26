@@ -31,13 +31,13 @@ This file records unresolved implementation/documentation conflicts and delibera
 - RESTX Swagger is disabled with `doc=False`. `/api/docs` is intentionally absent and must not be treated as a broken route.
 - `mcp/mcpserver.py::check_holiday` is registered as an MCP tool but calls the absent `/api/v1/checkholiday` route. The internal `services.market_calendar_service.check_holiday()` function exists; the public REST contract does not. MCP/user documentation omits this tool until its implementation uses a supported path or service.
 - Analyzer GTT place, modify, cancel, and orderbook return 501 even though sandbox GTT tables exist.
-- Blueprint-route BDD coverage is representative. The complete 57-method RESTX inventory and all 34 broker plugins have explicit scenario-outline rows.
+- Blueprint-route BDD coverage is representative. The complete 57-method RESTX inventory and all 36 broker plugins have explicit scenario-outline rows.
 
 ## Resolved During This Sweep
 
 - Added Action Center dispatch and broker-result tracking for `optionsmultiorder` and `placegttorder`; unsupported GTT brokers still fail through the service's HTTP 501 capability gate.
 - Added a complete RESTX method/path inventory in `docs/bdd/rest_api_inventory.feature`.
-- Added a 34-plugin broker inventory in `docs/bdd/broker_plugin_inventory.feature`.
+- Added a 36-plugin broker inventory in `docs/bdd/broker_plugin_inventory.feature`.
 - Added live account, margin, open-position, and REST depth behavior in `docs/bdd/account_and_depth.feature`.
 - Corrected WebSocket source attribution and documented the ZeroMQ bind/connect topology.
 - Expanded analyzer GTT unsupported coverage to place, modify, cancel, and orderbook.
