@@ -9,6 +9,16 @@ boundary in the database clock.
 
 from datetime import UTC, datetime, timedelta
 
+import pytz
+
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+# Host session schedule is anchored to IST; a naive caller is treated as
+# IST wall-clock so the boundary is never silently read as UTC or system time.
+IST = pytz.timezone("Asia/Kolkata")
+
 
 def last_session_expiry_utc(session_expiry_str, now_local):
     """Resolve the most recent session boundary as a naive UTC datetime.
@@ -20,7 +30,21 @@ def last_session_expiry_utc(session_expiry_str, now_local):
     Returns:
         Naive UTC datetime of the most recent session expiry.
     """
-    expiry_hour, expiry_minute = map(int, session_expiry_str.split(":"))
+    if now_local.tzinfo is None:
+        logger.warning(
+            "last_session_expiry_utc received a naive datetime; assuming Asia/Kolkata"
+        )
+        now_local = IST.localize(now_local)
+
+    try:
+        expiry_hour, expiry_minute = map(int, session_expiry_str.split(":"))
+    except ValueError:
+        logger.warning(
+            f"Invalid SESSION_EXPIRY_TIME format: {session_expiry_str}. "
+            "Using default 03:00"
+        )
+        expiry_hour, expiry_minute = 3, 0
+
     boundary_today = now_local.replace(
         hour=expiry_hour, minute=expiry_minute, second=0, microsecond=0
     )
