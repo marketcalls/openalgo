@@ -29,6 +29,21 @@ the matching server directory. The copy does not delete existing server files.
 Set `COPY_LEAN_ARTIFACTS=false` to skip it, or set `LOCAL_LEAN_ARTIFACT_DIR`
 when the artifacts are in a different local configuration directory.
 
+Set up the server’s Python 3.11 environment once with the laptop SSH helper:
+
+```bash
+DEPLOY_SSH_KEY=$HOME/.ssh/your-key.pem \
+REMOTE_LEAN_ROOT=/opt/Lean \
+scripts/setup-server-python.sh user@server
+```
+
+This uses the server copy of `Lean/environment.python311.yml`, creates
+`/opt/Lean/.conda/lean-py311`, installs the pinned Python packages plus
+`pythonnet`/`clr-loader`, and verifies `libpython3.11.so`. It does not copy the
+macOS environment, modify strategy credentials, or alter the Lean source tree.
+The existing runners automatically use this environment and its native Python
+library on Linux.
+
 To deploy and immediately launch a strategy through the existing Lean launcher
 using the OpenAlgo runner, append the strategy path and class name:
 
