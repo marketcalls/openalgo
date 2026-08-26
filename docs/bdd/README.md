@@ -7,7 +7,7 @@ These Gherkin files describe current OpenAlgo behavior for review, acceptance-te
 | File | Domain | Definitions |
 |---|---|---:|
 | `rest_api_inventory.feature` | All 57 registered REST v1 method/path pairs | 1 outline |
-| `broker_plugin_inventory.feature` | All 34 broker plugins | 1 outline |
+| `broker_plugin_inventory.feature` | All 36 broker plugins | 1 outline |
 | `auth_and_setup.feature` | Setup, login, TOTP, route order, DB readiness, logout | 7 |
 | `session_lifecycle.feature` | Multi-session cap, heartbeat, rollover, reconnect | 5 |
 | `broker_sessions.feature` | Broker login, callbacks, credentials, capabilities | 4 |
