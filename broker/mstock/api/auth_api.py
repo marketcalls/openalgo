@@ -258,7 +258,7 @@ def verify_otp(otp_code, refresh_token):
         logger.debug(f"RefreshToken length: {len(refresh_token) if refresh_token else 0}")
         logger.debug(f"API Key (X-PrivateKey) length: {len(api_key) if api_key else 0}")
         logger.debug("Request URL: https://api.mstock.trade/openapi/typeb/session/token")
-        logger.debug(f"Request headers: {token_headers}")
+        logger.debug(f"Request header fields: {list(token_headers)}")
         logger.debug("Sending refresh token request with OTP")
 
         token_response = client.post(

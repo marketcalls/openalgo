@@ -920,7 +920,8 @@ def place_order_api(data, auth):
         # Prepare authorization
         auth_header = f"{api_key}:{AUTH_TOKEN}"
         logger.debug(
-            f"place_order_api - Using auth header: {api_key[:4]}...:{AUTH_TOKEN[-4:] if AUTH_TOKEN else 'None'}"
+            f"place_order_api - Authorization header built from api_key:access_token "
+            f"(access_token present: {bool(AUTH_TOKEN)})"
         )
 
         headers = {
@@ -934,7 +935,7 @@ def place_order_api(data, auth):
             url = "https://api.tradejini.com/v2/api/oms/place-order"
 
             logger.debug(f"place_order_api - Sending request to {url}")
-            logger.debug(f"place_order_api - Headers: {headers}")
+            logger.debug(f"place_order_api - Header keys: {list(headers)}")
 
             response = client.post(
                 url,

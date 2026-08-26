@@ -156,7 +156,7 @@ class FyersHSMWebSocket:
                 "access token has expired or is invalid"
             )
 
-        self.logger.debug(f"HSM key extracted: {self.hsm_key[:20]}...")
+        self.logger.debug("HSM key extracted from access token")
 
         # WebSocket connection
         self.ws = None

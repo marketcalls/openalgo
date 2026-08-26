@@ -12,6 +12,7 @@ import time
 import uuid
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 import websocket
@@ -422,7 +423,9 @@ class UpstoxWebSocketClient:
             auth_data = response.json()
             ws_url = auth_data.get("data", {}).get("authorized_redirect_uri")
             if ws_url:
-                self.logger.debug(f"Received WebSocket URL: {ws_url}")
+                self.logger.debug(
+                    f"Received WebSocket URL: {urlsplit(ws_url)._replace(query='').geturl()}"
+                )
                 return ws_url
             else:
                 self.logger.error("No WebSocket URL in auth response")

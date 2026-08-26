@@ -130,7 +130,7 @@ class FirstockWebSocket:
         """
         params = {"userId": self.user_id, "jKey": self.auth_token, "source": "developer-api"}
         connection_url = f"{self.ROOT_URI}?{urlencode(params)}"
-        self.logger.debug(f"Connection URL: {connection_url}")
+        self.logger.debug(f"Connection URL: {self.ROOT_URI}")
         return websocket.WebSocketApp(
             connection_url,
             on_open=self._on_open,
@@ -180,7 +180,7 @@ class FirstockWebSocket:
             self.logger.info(f"Connecting to Firstock WebSocket: {self.ROOT_URI}")
             self.logger.info(f"Using userId: {self.user_id}")
             self.logger.debug(
-                f"Using auth token (jKey): {self.auth_token[:10]}...{self.auth_token[-5:] if len(self.auth_token) > 15 else self.auth_token}"
+                f"Using auth token (jKey): {'present' if self.auth_token else 'missing'}"
             )
             self.logger.info(
                 "Note: The jKey must be the 'susertoken' obtained from Firstock's login API"
@@ -496,7 +496,7 @@ class FirstockWebSocket:
                             self.logger.error(f"Full response: {data}")
                             self.logger.error(f"Using userId: {self.user_id}")
                             self.logger.error(
-                                f"Using jKey (first 10 chars): {self.auth_token[:10] if self.auth_token else 'None'}..."
+                                f"Using jKey: {'present' if self.auth_token else 'None'}"
                             )
                             self.logger.error(
                                 "IMPORTANT: The jKey must be the 'susertoken' from Firstock's login API response"

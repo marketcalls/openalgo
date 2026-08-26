@@ -98,7 +98,10 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.broker_name = broker_name
 
         # Debug logging
-        self.logger.info(f"Initializing AliceBlue adapter with auth_data: {auth_data}")
+        self.logger.info(
+            f"Initializing AliceBlue adapter with auth_data fields: "
+            f"{sorted(auth_data) if auth_data else None}"
+        )
 
         try:
             if auth_data:

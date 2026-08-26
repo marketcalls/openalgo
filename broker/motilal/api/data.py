@@ -166,7 +166,7 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
         response.status = response.status_code
 
         if response.status_code == 403:
-            logger.debug(f"API returned 403 Forbidden. Headers: {headers}")
+            logger.debug(f"API returned 403 Forbidden. Header fields: {list(headers)}")
             logger.debug(f"Response text: {response.text}")
             raise Exception("Authentication failed. Please check your API key and auth token.")
 

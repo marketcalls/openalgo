@@ -49,7 +49,7 @@ def generate_consent(dhan_client_id):
         response = client.post(full_url, headers=headers)
 
         logger.info(f"Generate consent response status: {response.status_code}")
-        logger.info(f"Generate consent response: {response.text}")
+        logger.info("Generate consent response received")
 
         if response.status_code == 200:
             data = response.json()
@@ -100,7 +100,7 @@ def consume_consent(token_id):
         url = f"{AUTH_BASE_URL}/app/consumeApp-consent"
         params = {"tokenId": token_id}
 
-        logger.debug(f"Consuming consent with tokenId: {token_id}")
+        logger.debug("Consuming consent to obtain access token")
         response = client.post(url, headers=headers, params=params)
 
         if response.status_code == 200:
