@@ -54,12 +54,8 @@ class TestOptionGreeksKeyLogging:
         api = Api(app, prefix="/api/v1")
         api.add_namespace(greeks_api)
 
-        with patch(
-            "restx_api.option_greeks.verify_api_key", return_value=False
-        ):
-            with patch(
-                "restx_api.option_greeks.logger"
-            ) as mock_logger:
+        with patch("restx_api.option_greeks.verify_api_key", return_value=False):
+            with patch("restx_api.option_greeks.logger") as mock_logger:
                 with app.test_client() as client:
                     response = client.post(
                         "/api/v1/optiongreeks",
@@ -91,12 +87,8 @@ class TestMultiOptionGreeksKeyLogging:
         api = Api(app, prefix="/api/v1")
         api.add_namespace(multi_api)
 
-        with patch(
-            "restx_api.multi_option_greeks.verify_api_key", return_value=False
-        ):
-            with patch(
-                "restx_api.multi_option_greeks.logger"
-            ) as mock_logger:
+        with patch("restx_api.multi_option_greeks.verify_api_key", return_value=False):
+            with patch("restx_api.multi_option_greeks.logger") as mock_logger:
                 with app.test_client() as client:
                     response = client.post(
                         "/api/v1/multioptiongreeks",
