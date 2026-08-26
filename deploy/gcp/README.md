@@ -23,6 +23,12 @@ REMOTE_LEAN_ROOT=/opt/Lean \
 scripts/deploy-to-server.sh user@server
 ```
 
+By default this also copies the local `Lean/Launcher/bin/Debug` artifacts,
+including `QuantConnect.Brokerages.OpenAlgo.dll` and `OpenAlgo.NET.dll`, into
+the matching server directory. The copy does not delete existing server files.
+Set `COPY_LEAN_ARTIFACTS=false` to skip it, or set `LOCAL_LEAN_ARTIFACT_DIR`
+when the artifacts are in a different local configuration directory.
+
 To deploy and immediately launch a strategy through the existing Lean launcher
 using the OpenAlgo runner, append the strategy path and class name:
 
@@ -31,7 +37,7 @@ scripts/deploy-to-server.sh user@server \
   strategies/python/your_strategy/Strategy.py Strategy
 ```
 
-The laptop command uses `rsync` for code transfer, then remotely verifies the
+The laptop command uses `rsync` for code and Lean artifact transfer, then remotely verifies the
 Lean launcher DLL under `LEAN_ROOT` or a `lean` CLI on `PATH`. It never updates
 or rebuilds the Lean checkout by default. To regenerate Lean artifacts on the
 server from its existing source checkout, use:
@@ -40,9 +46,9 @@ server from its existing source checkout, use:
 REMOTE_BUILD_LEAN=true scripts/deploy-to-server.sh user@server
 ```
 
-This is preferred over copying laptop-built artifacts because the server may
-use a different OS, architecture, Python runtime, or native dependencies. Set
-`STRATEGY_RUNNER` remotely when a different runner is required.
+This is useful when the required managed DLLs are already present in the local
+launcher output. Set `STRATEGY_RUNNER` remotely when a different runner is
+required.
 
 Set `UPDATE_LEAN=true` only when the VM also has a clean Lean checkout and you
 want the script to fast-forward and build it. It defaults to `false`.
