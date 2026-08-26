@@ -20,7 +20,7 @@ When login TOTP is required, the password step stores a short-lived `pending_tot
 
 `utils/plugin_loader.py` reads `broker/*/plugin.json` and lazy-loads `broker.<key>.api.auth_api`. Generic callbacks are handled by `blueprints/brlogin.py`; specialized routes support brokers that need extra OTP, TOTP, or credential steps.
 
-The current plugin inventory is 34. Authentication shape varies by broker, and capability metadata is the correct way for UI code to discover supported exchanges and features.
+The current plugin inventory is 36. Authentication shape varies by broker, and capability metadata is the correct way for UI code to discover supported exchanges and features.
 
 ## Token Storage
 

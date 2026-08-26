@@ -1464,8 +1464,14 @@ This inventory is derived from `broker/*/plugin.json`. Authentication requiremen
 > # Count all broker plugin definitions
 > find broker -name "plugin.json" | wc -l
 >
-> # Check for hard-coded counts across documentation
-> rg -n "\b(3[0-9])\s+(plugins?|brokers?)\b" README.md CONTRIBUTING.md docs/INDEX.md docs/broker-integration-guide.md
+> # Confirm .sample.env stays in step with the directories on disk
+> grep VALID_BROKERS .sample.env | tr ',' '\n' | wc -l
+>
+> # Check for hard-coded counts across docs, skills, and shipped UI copy
+> rg -n "\b3[0-9]\+?\s*(plugins?|brokers?|Indian brokers?)\b|Inventory \(3[0-9]\)" \
+>    README.md CONTRIBUTING.md DOCKER_README.md DISCOVERY_MAP.md \
+>    docs/ .claude/skills/ frontend/src/ \
+>    --glob '!docs/audit/**' --glob '!docs/releases/**' --glob '!docs/superpowers/**'
 > ```
 
 | # | Directory | Type |

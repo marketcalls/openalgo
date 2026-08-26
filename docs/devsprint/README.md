@@ -18,7 +18,7 @@ day cost you the morning.
 ## 1. What OpenAlgo is (3 minute read)
 
 OpenAlgo is a self-hosted algorithmic trading platform for Indian markets. It puts
-one common API in front of 35 different broker APIs, so a strategy written once
+one common API in front of 36 different broker APIs, so a strategy written once
 runs against any supported broker without change.
 
 - Backend: Python 3.12+, Flask, SQLAlchemy, Flask-SocketIO
