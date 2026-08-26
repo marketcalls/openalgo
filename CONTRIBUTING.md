@@ -907,12 +907,17 @@ Keep the pull request focused on one documentation outcome. While editing:
 - run any command shown in a changed example when it is safe and does not
   require broker credentials or other secrets.
 
-Before committing, review the changed-file list, open each changed local link
-and anchor, and check the diff for whitespace errors:
+Before committing, inspect the working tree so new, untracked Markdown files
+are visible. Stage only the intended documentation, then review and check the
+exact content that will be committed. Open each changed local link and anchor
+as part of that review:
 
 ```bash
-git diff --name-only
 git diff --check
+git status --short
+git add docs/prompt/order-constants.md
+git diff --cached --name-only
+git diff --cached --check
 ```
 
 When the diff contains only Markdown, the backend pytest suite and frontend
@@ -924,7 +929,6 @@ request instead.
 Use a Conventional Commit with the `docs:` type:
 
 ```bash
-git add docs/prompt/order-constants.md
 git commit -m "docs: clarify order constants"
 ```
 
