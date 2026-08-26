@@ -78,7 +78,12 @@ configure_python_runtime() {
     candidates=(
       "$PYTHON_VENV/lib/libpython3.11.dylib"
       "$PYTHON_VENV/lib/libpython3.10.dylib"
+      "$PYTHON_VENV/lib/libpython3.11.so"
+      "$PYTHON_VENV/lib/libpython3.11.so.1.0"
+      "$PYTHON_VENV/lib/libpython3.10.so"
       "$LEAN_REPO/.conda/lean-py311/lib/libpython3.11.dylib"
+      "$LEAN_REPO/.conda/lean-py311/lib/libpython3.11.so"
+      "$LEAN_REPO/.conda/lean-py311/lib/libpython3.11.so.1.0"
     )
 
     local candidate
