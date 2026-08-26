@@ -41,7 +41,7 @@ PYTHONNET_PYDLL="${PYTHONNET_PYDLL:-$PYTHON_ENV_PREFIX/lib/libpython3.11.so}"
 [[ -x "$PYTHON_BIN" ]] || die "Python executable was not created: $PYTHON_BIN"
 [[ -f "$PYTHONNET_PYDLL" ]] || die "Python shared library was not created: $PYTHONNET_PYDLL"
 
-"$PYTHON_BIN" -c 'import sys, numpy, pandas, scipy, clr_loader, pythonnet; print(sys.version); print("pythonnet", pythonnet.__version__)'
+"$PYTHON_BIN" -c 'import sys, numpy, pandas, scipy, clr_loader, pythonnet, importlib.metadata; print(sys.version); print("pythonnet", importlib.metadata.version("pythonnet"))'
 
 echo
 echo "Lean Python environment is ready."
