@@ -16,8 +16,8 @@ interface ClosePositionsNodeProps {
 
 export const ClosePositionsNode = memo(({ data, selected }: ClosePositionsNodeProps) => {
   // Keyed on symbol, because that is what makes the executor scope the close.
-  // exchange and product ship pre-filled (NSE / MIS), so this was always true
-  // and every node advertised a scoped square-off it did not perform.
+  // exchange ships pre-filled (NSE), so keying on it made this always true and
+  // every node advertised a scoped square-off it did not perform.
   const hasFilter = Boolean(data.symbol)
 
   return (
