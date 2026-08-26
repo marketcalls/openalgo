@@ -163,12 +163,13 @@ class PortfolioBacktest(Resource):
                     jsonify(
                         {
                             "status": "error",
+                            "code": "BROKER_SESSION_EXPIRED",
                             "message": "No broker session for source='api'. "
                             "Log in to your broker, or use source='db' to "
                             "backtest from local history.",
                         }
                     ),
-                    403,
+                    401,
                 )
 
         try:
@@ -234,10 +235,11 @@ class PortfolioTearsheet(Resource):
                     jsonify(
                         {
                             "status": "error",
+                            "code": "BROKER_SESSION_EXPIRED",
                             "message": "No broker session for source='api'.",
                         }
                     ),
-                    403,
+                    401,
                 )
 
         try:
@@ -332,11 +334,12 @@ class PortfolioHoldings(Resource):
                 jsonify(
                     {
                         "status": "error",
+                        "code": "BROKER_SESSION_EXPIRED",
                         "message": "No broker session. Log in to your broker to "
                         "analyse live holdings.",
                     }
                 ),
-                403,
+                401,
             )
 
         try:

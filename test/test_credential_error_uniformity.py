@@ -217,6 +217,37 @@ class TestEveryConsumerInherits:
         assert service_key("/repo/services/ping_service.py") in NO_BROKER_SERVICES
         assert service_key(r"C:\repo\services\funds_service.py") not in NO_BROKER_SERVICES
 
+    def test_restx_resources_answer_the_same_way(self):
+        """services/ is not the whole API surface.
+
+        restx_api/portfolio.py and sip.py resolve through the same guarded
+        function but answer their own message, which never misdiagnosed the key
+        -- so the earlier rounds left them alone. The *status* still disagreed:
+        403 with no machine-readable code, where every other consumer answers
+        401 BROKER_SESSION_EXPIRED. A client cannot tell "reconnect your broker"
+        from "your key is bad" by looking at 403, which is the whole point of
+        the change. Each resolve-failure branch must carry one of the two
+        markers.
+        """
+        offenders = []
+        for full_path in sorted(glob.glob(os.path.join(REPO_ROOT, "restx_api", "*.py"))):
+            lines = open(full_path, encoding="utf-8").read().splitlines()
+            if not any("get_auth_token_broker(" in line for line in lines):
+                continue
+            for i, line in enumerate(lines):
+                if not re.match(r"\s*if (auth_token|AUTH_TOKEN) is None:\s*$", line):
+                    continue
+                window = "\n".join(lines[i : i + 15])
+                if "credential_error" in window or "BROKER_SESSION_EXPIRED" in window:
+                    continue
+                offenders.append(f"{PurePosixPath(full_path).name}:{i + 1}")
+
+        assert offenders == [], (
+            "these resolve-failure branches answer differently from every other "
+            "consumer; they must return 401 with code BROKER_SESSION_EXPIRED, "
+            f"via credential_error() or explicitly: {offenders}"
+        )
+
     def test_endpoints_that_never_call_a_broker_do_not_resolve_one(self):
         """ping, symbol, intervals and analyzer must not be gated on a live
         broker session. /api/v1/ping is the canonical health check, so gating it
