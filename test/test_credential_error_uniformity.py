@@ -347,7 +347,6 @@ class TestNoBrokerEndpointsKeepWorking:
         assert status == 403
         assert response["message"] == "Invalid openalgo apikey"
 
-
     def test_intervals_answers_401_when_the_broker_name_is_gone(self, monkeypatch):
         """Exempting intervals from the credential resolve replaced the token
         with get_broker_name(), which answers None for a revoked or absent Auth
@@ -376,8 +375,9 @@ class TestNoBrokerEndpointsKeepWorking:
         monkeypatch.setattr(
             intervals_service,
             "get_intervals_with_auth",
-            lambda token, broker: seen.setdefault("broker", broker)
-            and (True, {"status": "success"}, 200),
+            lambda token, broker: (
+                seen.setdefault("broker", broker) and (True, {"status": "success"}, 200)
+            ),
         )
 
         success, _, status = intervals_service.get_intervals(api_key=TEST_API_KEY)
@@ -483,9 +483,7 @@ class TestSandboxIsNotCoupledToTheBroker:
         if hasattr(module, "get_analyze_mode"):
             monkeypatch.setattr(module, "get_analyze_mode", lambda: True)
         # Semi-auto routing is a separate decision and would hit the real DB.
-        monkeypatch.setattr(
-            order_router_service, "should_route_to_pending", lambda *a, **k: False
-        )
+        monkeypatch.setattr(order_router_service, "should_route_to_pending", lambda *a, **k: False)
 
         def fail_if_called(*a, **k):
             raise AssertionError(
@@ -509,6 +507,5 @@ class TestSandboxIsNotCoupledToTheBroker:
         assert success is True
         assert status == 200
         assert "" in seen["args"], (
-            f"{module_name}: the sandbox branch must pass an empty credential, "
-            "not a resolved one"
+            f"{module_name}: the sandbox branch must pass an empty credential, not a resolved one"
         )

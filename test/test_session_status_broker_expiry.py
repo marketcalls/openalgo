@@ -159,9 +159,7 @@ class TestDashboardDataAgrees:
     frontend/src/pages/Dashboard.tsx:84 already implements.
     """
 
-    def test_stale_broker_session_answers_the_reconnect_code(
-        self, dashboard_request, monkeypatch
-    ):
+    def test_stale_broker_session_answers_the_reconnect_code(self, dashboard_request, monkeypatch):
         import database.settings_db as settings_db
 
         monkeypatch.setattr(auth_db, "get_auth_token", lambda user: "token-from-yesterday")
@@ -178,9 +176,7 @@ class TestDashboardDataAgrees:
         assert status == 401
         assert payload["code"] == "BROKER_SESSION_EXPIRED"
 
-    def test_fresh_broker_session_still_reaches_the_broker(
-        self, dashboard_request, monkeypatch
-    ):
+    def test_fresh_broker_session_still_reaches_the_broker(self, dashboard_request, monkeypatch):
         import database.settings_db as settings_db
 
         monkeypatch.setattr(auth_db, "get_auth_token", lambda user: "todays-token")
@@ -196,9 +192,7 @@ class TestDashboardDataAgrees:
         assert status == 200
         assert payload["data"]["availablecash"] == "1000"
 
-    def test_analyze_mode_is_not_gated_on_the_broker_session(
-        self, dashboard_request, monkeypatch
-    ):
+    def test_analyze_mode_is_not_gated_on_the_broker_session(self, dashboard_request, monkeypatch):
         """The sandbox is isolated from live trading, so a rolled-over broker
         session must not take the sandbox dashboard down with it -- the same
         rule the order services apply before resolving a credential."""
