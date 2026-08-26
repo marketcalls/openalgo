@@ -90,7 +90,7 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error("Missing required authentication data")
                 raise ValueError("Missing required authentication data")
 
-        self.logger.info(f"Using API Key: {api_key[:10]}... for Ibulls XTS connection")
+        self.logger.info("Using configured API key for Ibulls XTS connection")
 
         # Create Ibulls WebSocket client with API credentials
         self.ws_client = IbullsWebSocketClient(

@@ -113,7 +113,7 @@ def authenticate_with_totp(password, totp_code):
         final_data = verify_result["data"]
         auth_token = final_data.get("jwtToken")
         feed_token = final_data.get("feedToken")
-        logger.debug(f"Feed token received: {auth_token}")
+        logger.debug("Auth token received")
 
         if not auth_token:
             logger.error("No jwtToken in verification response")
@@ -259,7 +259,7 @@ def verify_otp(otp_code, refresh_token):
         logger.debug(f"API Key (X-PrivateKey) length: {len(api_key) if api_key else 0}")
         logger.debug("Request URL: https://api.mstock.trade/openapi/typeb/session/token")
         logger.debug(f"Request headers: {token_headers}")
-        logger.debug(f"Request body: refreshToken=[{refresh_token[:20]}...], otp={otp_code}")
+        logger.debug("Sending refresh token request with OTP")
 
         token_response = client.post(
             "https://api.mstock.trade/openapi/typeb/session/token",
