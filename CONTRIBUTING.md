@@ -885,6 +885,54 @@ npm run check
 
 ## Documentation
 
+### Documentation-only changes
+
+Start with [`docs/INDEX.md`](docs/INDEX.md), the map of OpenAlgo's canonical
+documentation. Follow it to the existing source for the topic and update that
+file instead of copying the same guidance into a second page. Use a `docs/`
+branch for a documentation-only change, for example:
+
+```bash
+git checkout -b docs/clarify-order-constants
+```
+
+Keep the pull request focused on one documentation outcome. While editing:
+
+- resolve relative links from the directory containing the changed Markdown
+  file, and preserve the exact case of repository paths;
+- check every changed heading link against the rendered GitHub anchor (for
+  example, `## Order Types` becomes `#order-types`);
+- preview the changed Markdown to catch broken lists, tables, code fences, and
+  callouts; and
+- run any command shown in a changed example when it is safe and does not
+  require broker credentials or other secrets.
+
+Before committing, review the changed-file list, open each changed local link
+and anchor, and check the diff for whitespace errors:
+
+```bash
+git diff --name-only
+git diff --check
+```
+
+When the diff contains only Markdown, the backend pytest suite and frontend
+test/build commands are not required: they do not validate prose, links, or
+anchors. If the documentation changes an executable example, API contract, or
+generated artifact, run the smallest relevant check and record it in the pull
+request instead.
+
+Use a Conventional Commit with the `docs:` type:
+
+```bash
+git add docs/prompt/order-constants.md
+git commit -m "docs: clarify order constants"
+```
+
+Use the same style for the pull request title. In its description, link the
+issue (for example, `Closes #123`), summarize the reader-visible improvement,
+list the files reviewed, and report validation explicitly, including “code
+tests not run (Markdown-only change)” when applicable.
+
 ### Code Documentation
 
 1. **Python Docstrings** - Use Google-style:
