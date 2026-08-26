@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import time
 
 import pandas as pd
@@ -12,6 +13,45 @@ from .baseurl import get_base_url, get_common_headers, get_url
 from .baseurl import get_client_code as baseurl_client_code
 
 logger = get_logger(__name__)
+
+# Live market-data WebSocket per broker session, shared across BrokerData
+# instances. It has to live at module scope because quotes_service/depth_service
+# build a new BrokerData for every request, so an instance attribute is always
+# empty: every depth and multiquote call opened a brand new socket, and nothing
+# ever closed it (the handlers only unregister scrips, which does not close the
+# connection). Each abandoned client kept its reader thread alive - the thread
+# holds a reference to the client, so it never even became garbage - and its
+# on_close handler kept scheduling reconnects, so file descriptors and threads
+# grew with request volume rather than with users.
+#
+# Keyed by auth token, so a re-login makes a new entry instead of reusing a
+# socket authenticated with a dead token (Motilal expires the AuthToken daily at
+# 6 AM). Bounded by definition: OpenAlgo is single-user, single-broker per
+# instance. Mirrors broker/aliceblue/api/data.py.
+_WS_REGISTRY: dict = {}
+_WS_REGISTRY_LOCK = threading.Lock()
+
+
+def close_all_websockets():
+    """Disconnect and drop every pooled market-data socket.
+
+    For shutdown and for logout, where the session behind these connections is
+    about to be revoked. Without it the sockets and their reader threads would
+    outlive the session that authenticated them.
+    """
+    with _WS_REGISTRY_LOCK:
+        sockets = list(_WS_REGISTRY.values())
+        _WS_REGISTRY.clear()
+
+    for sock in sockets:
+        try:
+            sock.disconnect()
+        except Exception as exc:
+            logger.warning(f"Error closing pooled Motilal WebSocket: {exc}")
+
+    if sockets:
+        logger.info(f"Closed {len(sockets)} pooled Motilal market data WebSocket(s)")
+
 
 # OpenAlgo pseudo-exchanges that hold index instruments. The token stored for
 # these is an Index Code from the index master (26000/26009/999912), NOT a
@@ -283,29 +323,41 @@ class BrokerData:
 
     def get_websocket(self, force_new=False):
         """
-        Get or create WebSocket instance for streaming market data.
+        Get the pooled market-data WebSocket for this session, or create it.
+
+        The live connection lives in the module-level ``_WS_REGISTRY``, NOT on
+        ``self``: the services construct a fresh BrokerData per request, so an
+        instance attribute could never hit and every depth/multiquote call built
+        - and then leaked - a whole new socket. See the registry comment above.
 
         Args:
-            force_new: Force creation of a new WebSocket connection
+            force_new: Discard the pooled connection and build a fresh one.
 
         Returns:
-            MotilalWebSocket instance
+            MotilalWebSocket, or None when a connection could not be established
+            (both call sites already treat None as "no socket").
         """
-        # Return existing connection if valid
-        if not force_new and self._websocket:
-            if hasattr(self._websocket, "is_connected") and self._websocket.is_connected:
-                logger.debug("Using existing WebSocket connection")
-                return self._websocket
-            else:
-                logger.debug("Existing WebSocket not connected, creating new connection")
+        if not self.auth_token:
+            logger.error("No auth token available; cannot open the market data WebSocket")
+            return None
 
-        # Disconnect old WebSocket before creating a new one
-        if self._websocket:
+        if not force_new:
+            with _WS_REGISTRY_LOCK:
+                cached = _WS_REGISTRY.get(self.auth_token)
+            if cached is not None and cached.is_connected:
+                logger.debug("Reusing pooled Motilal WebSocket connection")
+                self._websocket = cached
+                return cached
+
+        # Drop whatever was registered for this session before replacing it, so
+        # a stale socket and its threads are not left behind.
+        with _WS_REGISTRY_LOCK:
+            stale = _WS_REGISTRY.pop(self.auth_token, None)
+        if stale is not None:
             try:
-                self._websocket.disconnect()
+                stale.disconnect()
             except Exception as e:
-                logger.debug(f"Error disconnecting old WebSocket: {e}")
-            self._websocket = None
+                logger.warning(f"Error closing existing WebSocket: {e}")
 
         # App API key from the environment; the client code comes from the login
         # (BROKER_API_KEY/BROKER_API_SECRET are the app key/secret, as for every
@@ -313,34 +365,51 @@ class BrokerData:
         client_id = get_client_code() or ""
         api_key = os.getenv("BROKER_API_KEY", "")
 
-        # Import and create WebSocket instance
         from .motilal_websocket import MotilalWebSocket
 
-        self._websocket = MotilalWebSocket(client_id, self.auth_token, api_key)
+        logger.info("Creating new Motilal market data WebSocket connection")
+        ws = MotilalWebSocket(client_id, self.auth_token, api_key)
+        ws.connect()
 
-        # Connect and wait for authentication
-        self._websocket.connect()
+        # Poll at 50ms rather than 500ms: the coarse tick rounded every connect
+        # up to half a second even when the handshake finished immediately.
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not ws.is_connected:
+            time.sleep(0.05)
 
-        # Wait longer for connection to establish and authenticate
-        # Check connection status every 0.5 seconds for up to 5 seconds
-        max_wait = 5.0
-        wait_interval = 0.5
-        elapsed = 0
+        if not ws.is_connected:
+            logger.error("Motilal WebSocket did not connect within 10s")
+            try:
+                ws.disconnect()
+            except Exception:
+                pass
+            return None
 
-        while elapsed < max_wait:
-            if self._websocket.is_connected:
-                logger.debug(f"WebSocket connection established after {elapsed:.1f} seconds")
-                return self._websocket
-            time.sleep(wait_interval)
-            elapsed += wait_interval
+        # Register this session and evict any other. OpenAlgo is single-user /
+        # single-broker, so a second auth token means the token rolled over
+        # (Motilal expires it daily at 6 AM) and the previous socket is
+        # authenticated with a dead one. Leaving it registered would strand a
+        # socket plus its reader thread every day in a worker that never
+        # restarts.
+        with _WS_REGISTRY_LOCK:
+            superseded = [
+                (key, sock) for key, sock in _WS_REGISTRY.items() if key != self.auth_token
+            ]
+            for key, _ in superseded:
+                del _WS_REGISTRY[key]
+            _WS_REGISTRY[self.auth_token] = ws
 
-        # Connection may still be establishing
-        if self._websocket.is_connected:
-            logger.info("WebSocket connection established")
-        else:
-            logger.warning("WebSocket connection status uncertain after timeout")
+        for _, sock in superseded:
+            logger.info("Closing Motilal WebSocket for a superseded session")
+            try:
+                sock.disconnect()
+            except Exception as exc:
+                logger.warning(f"Error closing superseded WebSocket: {exc}")
 
-        return self._websocket
+        self._websocket = ws  # kept for callers that still read the attribute
+
+        logger.info("Motilal WebSocket connection established")
+        return ws
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
