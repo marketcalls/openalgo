@@ -150,7 +150,7 @@ The product purpose is to let a local trader connect a broker session, issue nor
 
 ## Broker Support
 
-Current broker count is 34. Broker support is plugin-based and loaded from `broker/*/plugin.json`. Live GTT modules were found only for Dhan and Zerodha. Trace: `DISCOVERY_MAP.md` `Broker Plugins`; BDD: `docs/bdd/broker_sessions.feature`, `docs/bdd/gtt_orders.feature`.
+Current broker count is 36. Broker support is plugin-based and loaded from `broker/*/plugin.json`. Live GTT modules were found only for Dhan and Zerodha. Trace: `DISCOVERY_MAP.md` `Broker Plugins`; BDD: `docs/bdd/broker_sessions.feature`, `docs/bdd/gtt_orders.feature`.
 
 | Broker key | Plugin name | Type | Leverage config | Exchanges |
 |---|---|---|---|---|
