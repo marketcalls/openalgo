@@ -112,7 +112,7 @@ def get_api_response(endpoint, auth, method="GET", data=None, params=None):
             )
 
         logger.debug(f"get_api_response - Response status: {response.status_code}")
-        logger.debug(f"get_api_response - Response headers: {dict(response.headers)}")
+        logger.debug(f"get_api_response - Response header fields: {list(response.headers)}")
         logger.debug(f"get_api_response - Response body: {response.text}")
 
         # Every documented path is relative to the /v2 base URL, so a 404 means
@@ -946,7 +946,7 @@ def place_order_api(data, auth):
 
             # Log response details
             logger.debug(f"place_order_api - Response status: {response.status_code}")
-            logger.debug(f"place_order_api - Response headers: {dict(response.headers)}")
+            logger.debug(f"place_order_api - Response header fields: {list(response.headers)}")
 
             response.raise_for_status()
             response_data = response.json()
