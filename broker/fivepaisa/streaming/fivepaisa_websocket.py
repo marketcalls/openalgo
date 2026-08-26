@@ -164,8 +164,6 @@ class FivePaisaWebSocket:
         connection_url = f"{self.websocket_url}?Value1={self.access_token}|{self.client_code}"
         self.logger.debug(f"Connecting to: {connection_url[:80]}...")
         self.logger.debug(f"Client Code: {self.client_code}")
-        self.logger.debug(f"Token prefix: {self.access_token[:50]}...")
-        self.logger.debug(f"Token suffix: ...{self.access_token[-50:]}")
 
         try:
             self.wsapp = websocket.WebSocketApp(

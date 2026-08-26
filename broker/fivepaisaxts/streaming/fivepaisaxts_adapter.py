@@ -90,7 +90,7 @@ class FivepaisaXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error("Missing required authentication data")
                 raise ValueError("Missing required authentication data")
 
-        self.logger.info(f"Using API Key: {api_key[:10]}... for Fivepaisa XTS connection")
+        self.logger.info("Using configured API key for Fivepaisa XTS connection")
 
         # Create Fivepaisa XTS WebSocket client with API credentials
         self.ws_client = FivepaisaXTSWebSocketClient(

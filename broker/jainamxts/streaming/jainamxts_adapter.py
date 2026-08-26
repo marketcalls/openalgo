@@ -90,7 +90,7 @@ class JainamXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error("Missing required authentication data")
                 raise ValueError("Missing required authentication data")
 
-        self.logger.debug(f"Using API Key: {api_key[:10]}... for JainamXTS XTS connection")
+        self.logger.debug("Using configured API key for JainamXTS XTS connection")
 
         # Create JainamXTS WebSocket client with API credentials
         self.ws_client = JainamXTSWebSocketClient(

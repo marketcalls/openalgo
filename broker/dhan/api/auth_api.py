@@ -38,7 +38,7 @@ def generate_consent(dhan_client_id):
         url = f"{AUTH_BASE_URL}/app/generate-consent"
 
         logger.info(f"Generating consent for Dhan Client ID: {dhan_client_id}")
-        logger.info(f"Using API Key: {BROKER_API_KEY[:8] if BROKER_API_KEY else 'None'}...")
+        logger.info("Using configured broker API key")
         logger.info(
             f"Using API Secret: {BROKER_API_SECRET[:8] if BROKER_API_SECRET else 'None'}..."
         )
@@ -115,7 +115,7 @@ def consume_consent(token_id):
                     "ddpi_status": data.get("givenPowerOfAttorney", False),
                     "token_expiry": data.get("expiryTime"),
                 }
-                logger.debug(f"Access Token obtained: {access_token}")
+                logger.debug("Access token obtained")
                 logger.debug(f"Additional Data: {additional_data}")
                 return access_token, additional_data
             else:
