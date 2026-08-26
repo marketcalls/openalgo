@@ -103,6 +103,15 @@ configure_python_runtime() {
   if [[ -n "${PYTHONNET_PYDLL:-}" ]]; then
     export PYTHONNET_PYDLL
   fi
+
+  # Linux servers may not have Mono installed. Lean targets .NET, so tell
+  # pythonnet to load CoreCLR using the launcher's runtime configuration.
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
+    export PATH="$DOTNET_ROOT:$PATH"
+    export PYTHONNET_RUNTIME="${PYTHONNET_RUNTIME:-coreclr}"
+    export PYTHONNET_CORECLR_RUNTIME_CONFIG="${PYTHONNET_CORECLR_RUNTIME_CONFIG:-$LEAN_LAUNCHER_DIR/QuantConnect.Lean.Launcher.runtimeconfig.json}"
+  fi
 }
 
 generate_config() {
