@@ -115,7 +115,7 @@ def authenticate_broker(password=None, twofa=None, twofa_type=None):
 
         # Print the full response for debugging
         logger.info(f"Tradejini Response Status: {response.status_code}")
-        logger.info(f"Tradejini Response Headers: {dict(response.headers)}")
+        logger.info(f"Tradejini Response header fields: {list(response.headers)}")
         logger.info(f"Tradejini Response Data: {response_data}")
 
         if response.status_code == 200:
