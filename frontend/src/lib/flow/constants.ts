@@ -39,6 +39,38 @@ export const PRODUCT_TYPES = [
   { value: 'NRML', label: 'NRML', description: 'Normal for futures and options' },
 ] as const
 
+/**
+ * Segments that trade contracts carried on margin rather than cash-settled
+ * holdings. A position in one of these is normally taken NRML, so that is what
+ * a node defaults to when its author never picked a product. Index
+ * pseudo-exchanges are absent because no order is ever placed on them.
+ *
+ * The backend keeps the same rule in services/flow_node_contracts.py; both
+ * sides must agree or the panel would promise a product the run does not send.
+ */
+export const DERIVATIVE_EXCHANGES = new Set<string>([
+  'NFO',
+  'BFO',
+  'CDS',
+  'BCD',
+  'MCX',
+  'NCDEX',
+  'NCO',
+])
+
+/**
+ * The product a node on `exchange` uses when its author picked none.
+ *
+ * A *default*, never an override: once a product is chosen it is stored on the
+ * node and wins, so a deliberately intraday NFO order stays MIS.
+ */
+export function defaultProductForExchange(exchange: string | undefined | null): 'MIS' | 'NRML' {
+  return DERIVATIVE_EXCHANGES.has((exchange || '').trim().toUpperCase()) ? 'NRML' : 'MIS'
+}
+
+/** Options nodes trade an option whatever their underlying's exchange reads. */
+export const OPTION_NODE_PRODUCT = 'NRML' as const
+
 export const PRICE_TYPES = [
   { value: 'MARKET', label: 'Market', description: 'Execute at current market price' },
   { value: 'LIMIT', label: 'Limit', description: 'Execute at specified price or better' },
@@ -131,6 +163,19 @@ export const INDEX_SYMBOLS = [
   { value: 'SENSEX', label: 'SENSEX', exchange: 'BFO' },
   { value: 'BANKEX', label: 'BANKEX', exchange: 'BFO' },
   { value: 'SENSEX50', label: 'SENSEX50', exchange: 'BFO' },
+  // MCX commodities. Options trade on MCX itself, so the underlying exchange
+  // and the option exchange are the same value.
+  { value: 'GOLD', label: 'GOLD', exchange: 'MCX' },
+  { value: 'GOLDM', label: 'GOLDM', exchange: 'MCX' },
+  { value: 'SILVER', label: 'SILVER', exchange: 'MCX' },
+  { value: 'SILVERM', label: 'SILVERM', exchange: 'MCX' },
+  { value: 'CRUDEOIL', label: 'CRUDEOIL', exchange: 'MCX' },
+  { value: 'CRUDEOILM', label: 'CRUDEOILM', exchange: 'MCX' },
+  { value: 'NATURALGAS', label: 'NATURALGAS', exchange: 'MCX' },
+  { value: 'NATGASMINI', label: 'NATGASMINI', exchange: 'MCX' },
+  { value: 'COPPER', label: 'COPPER', exchange: 'MCX' },
+  { value: 'ZINC', label: 'ZINC', exchange: 'MCX' },
+  { value: 'MCXBULLDEX', label: 'MCXBULLDEX', exchange: 'MCX' },
 ] as const
 
 // =============================================================================
@@ -1149,7 +1194,9 @@ export const DEFAULT_NODE_DATA = {
     action: 'BUY' as const,
     quantity: 1,
     priceType: 'MARKET' as const,
-    product: 'MIS' as const,
+    // No product: an untouched node follows its exchange, so switching it to a
+    // derivative segment shows -- and sends -- NRML while cash stays MIS. A
+    // product the author actually picks is stored and wins.
     price: 0,
     triggerPrice: 0,
   },
@@ -1160,7 +1207,9 @@ export const DEFAULT_NODE_DATA = {
     quantity: 1,
     positionSize: 0,
     priceType: 'MARKET' as const,
-    product: 'MIS' as const,
+    // No product: an untouched node follows its exchange, so switching it to a
+    // derivative segment shows -- and sends -- NRML while cash stays MIS. A
+    // product the author actually picks is stored and wins.
     price: 0,
     triggerPrice: 0,
   },
@@ -1198,7 +1247,9 @@ export const DEFAULT_NODE_DATA = {
     action: 'BUY' as const,
     quantity: 1,
     priceType: 'MARKET' as const,
-    product: 'MIS' as const,
+    // An option is a derivative contract whatever its underlying's exchange
+    // reads, so this defaults to NRML rather than following that field.
+    product: 'NRML' as const,
     price: 0,
     triggerPrice: 0,
   },
@@ -1214,7 +1265,9 @@ export const DEFAULT_NODE_DATA = {
     strangleWidth: 'OTM2' as const,
     priceType: 'MARKET' as const,
     price: 0,
-    product: 'MIS' as const,
+    // An option is a derivative contract whatever its underlying's exchange
+    // reads, so this defaults to NRML rather than following that field.
+    product: 'NRML' as const,
   },
   cancelOrder: {
     orderId: '',
@@ -1223,7 +1276,9 @@ export const DEFAULT_NODE_DATA = {
   closePositions: {
     symbol: '',
     exchange: 'NSE',
-    product: 'MIS' as const,
+    // No product: an untouched node follows its exchange, so switching it to a
+    // derivative segment shows -- and sends -- NRML while cash stays MIS. A
+    // product the author actually picks is stored and wins.
   },
   modifyOrder: {
     // Only the order id. symbol/exchange/action/product/priceType are read back
@@ -1236,7 +1291,9 @@ export const DEFAULT_NODE_DATA = {
   },
   basketOrder: {
     orders: '',
-    product: 'MIS' as const,
+    // No product: an untouched node follows its exchange, so switching it to a
+    // derivative segment shows -- and sends -- NRML while cash stays MIS. A
+    // product the author actually picks is stored and wins.
     priceType: 'MARKET' as const,
     price: 0,
     triggerPrice: 0,
@@ -1248,14 +1305,18 @@ export const DEFAULT_NODE_DATA = {
     quantity: 100,
     splitSize: 50,
     priceType: 'MARKET' as const,
-    product: 'MIS' as const,
+    // No product: an untouched node follows its exchange, so switching it to a
+    // derivative segment shows -- and sends -- NRML while cash stays MIS. A
+    // product the author actually picks is stored and wins.
     price: 0,
     triggerPrice: 0,
   },
   positionCheck: {
     symbol: '',
     exchange: 'NSE',
-    product: 'MIS' as const,
+    // No product: an untouched node follows its exchange, so switching it to a
+    // derivative segment shows -- and sends -- NRML while cash stays MIS. A
+    // product the author actually picks is stored and wins.
     condition: 'exists' as const,
     threshold: 0,
   },
@@ -1348,7 +1409,9 @@ export const DEFAULT_NODE_DATA = {
   openPosition: {
     symbol: '',
     exchange: 'NSE',
-    product: 'MIS' as const,
+    // No product: an untouched node follows its exchange, so switching it to a
+    // derivative segment shows -- and sends -- NRML while cash stays MIS. A
+    // product the author actually picks is stored and wins.
     outputVariable: '',
   },
   // The config panel renders this name as its input's fallback value, so the
@@ -1487,7 +1550,9 @@ export const DEFAULT_NODE_DATA = {
     exchange: 'NSE',
     quantity: 1,
     price: 0,
-    product: 'MIS' as const,
+    // No product: an untouched node follows its exchange, so switching it to a
+    // derivative segment shows -- and sends -- NRML while cash stays MIS. A
+    // product the author actually picks is stored and wins.
     action: 'BUY' as const,
     priceType: 'MARKET' as const,
     outputVariable: 'marginResult',

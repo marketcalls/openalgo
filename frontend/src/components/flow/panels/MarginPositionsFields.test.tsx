@@ -357,3 +357,45 @@ describe('accessibility', () => {
     expect(screen.getByRole('button', { name: 'SELL' })).toHaveAttribute('aria-pressed', 'false')
   })
 })
+
+describe('a leg follows its segment', () => {
+  /**
+   * margin_service requires a product on every leg, so unlike a node this row
+   * cannot store "not chosen yet" and let the exchange decide at run time. The
+   * default is carried across on an exchange change instead - but only while
+   * the leg is still sitting on the one its old exchange implied, so a product
+   * the author actually picked survives the move.
+   */
+  async function moveExchange(user: ReturnType<typeof userEvent.setup>, to: string) {
+    await user.click(screen.getByLabelText('Exchange'))
+    await user.click(await screen.findByRole('option', { name: to }))
+  }
+
+  it('prices an untouched cash leg moved to NFO as a carry position', async () => {
+    const user = userEvent.setup()
+    renderControlled(NSE_LEG)
+
+    await moveExchange(user, 'NFO')
+
+    await waitFor(() => expect(screen.getByLabelText('Product').textContent).toBe('NRML'))
+  })
+
+  it('takes a derivative leg moved to cash back to intraday', async () => {
+    const user = userEvent.setup()
+    renderControlled(CLEAN_NFO_LEG)
+
+    await moveExchange(user, 'NSE')
+
+    await waitFor(() => expect(screen.getByLabelText('Product').textContent).toBe('MIS'))
+  })
+
+  it('leaves a product the author chose alone', async () => {
+    const user = userEvent.setup()
+    renderControlled(NSE_LEG.replace('"MIS"', '"CNC"'))
+
+    await moveExchange(user, 'NFO')
+
+    await waitFor(() => expect(screen.getByLabelText('Exchange').textContent).toBe('NFO'))
+    expect(screen.getByLabelText('Product').textContent).toBe('CNC')
+  })
+})

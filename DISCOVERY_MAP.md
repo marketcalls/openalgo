@@ -7,7 +7,7 @@ Phase 1 discovery map. This file documents behavior found in the current source 
 - Backend runtime: Flask app with Flask-RESTX, Flask-SocketIO, SQLAlchemy, APScheduler, DuckDB, ZeroMQ, and a separate asyncio WebSocket proxy. Entry point is `app.py:134`.
 - Frontend runtime: React 19, Vite 8, TypeScript 5.9, served from `frontend/dist` by `blueprints/react_app.py` when available. React routes are registered before the REST/UI blueprints at `app.py:236`.
 - API surface documented here: 57 RESTX `/api/v1` endpoints, 459 Flask blueprint routes, and 1 app-level route. Total documented HTTP endpoints: 517.
-- Broker plugins: 34 broker plugin directories with `plugin.json`, matching `VALID_BROKERS` in `.sample.env:22`.
+- Broker plugins: 36 broker plugin directories with `plugin.json`, matching `VALID_BROKERS` in `.sample.env:22`.
 - Primary data stores: main `openalgo.db`, traffic `logs.db`, latency `latency.db`, health `health.db`, sandbox `sandbox.db`, and Historify `historify.duckdb`, configured in `.sample.env:54` through `.sample.env:61`.
 - Security baseline: `APP_KEY` and `API_KEY_PEPPER` are required and placeholder-rotated, API keys are Argon2-hashed plus encrypted for retrieval, broker tokens are Fernet-encrypted, CSRF is enabled for session routes, and `/api/v1` is CSRF-exempt for external callers. Sources: `.sample.env:24`, `database/auth_db.py:36`, `database/auth_db.py:761`, `app.py:171`, `app.py:248`.
 
@@ -144,8 +144,8 @@ The RESTX API blueprint has prefix `/api/v1` at `restx_api/__init__.py:4` throug
 
 - Broker capabilities are loaded from every `broker/*/plugin.json` with `supported_exchanges`, `broker_name`, `broker_type`, and `leverage_config`. Source: `utils/plugin_loader.py:17` through `utils/plugin_loader.py:54`.
 - Broker auth modules are lazy-loaded from `broker.{broker}.api.auth_api`. Source: `utils/plugin_loader.py:65` through `utils/plugin_loader.py:128`.
-- Current broker count is 34. Current `VALID_BROKERS` is `.sample.env:22`.
-- `docs/broker-integration-guide.md:1011` gives a deliberately vague "(24+)" broker count rather than an exact figure, so it no longer numerically conflicts with the plugin count.
+- Current broker count is 36. Current `VALID_BROKERS` is `.sample.env:22`.
+- `docs/broker-integration-guide.md:1011` now states an exact count that matches the plugin inventory, and the guide carries a maintainer note with the commands to re-verify it.
 - Live GTT broker modules exist only for Dhan and Zerodha: `broker/dhan/api/gtt_api.py`, `broker/zerodha/api/gtt_api.py`.
 
 ### Broker Matrix
@@ -742,7 +742,7 @@ blueprints/whatsapp.py:388 GET /whatsapp/stats stats
 
 ## Unverified
 
-- Broker-specific response payload shape is not exhaustively verified for all 34 brokers. The services dynamically import broker modules and normalize only the wrapper-level response.
+- Broker-specific response payload shape is not exhaustively verified for all 36 brokers. The services dynamically import broker modules and normalize only the wrapper-level response.
 - The static route inventory lists all blueprint decorators in source. Runtime registration may omit Remote MCP unless enabled and may omit React routes when `frontend/dist` is absent.
 - `HISTORIFY_DATABASE_URL` in `.sample.env` and `HISTORIFY_DATABASE_PATH` in `database/historify_db.py` need review before documenting a single env var as authoritative.
 - Sandbox GTT tables exist, but all GTT services return 501 in analyzer mode. The current behavior is "not implemented" for analyzer GTT, not the sandbox table state machine.

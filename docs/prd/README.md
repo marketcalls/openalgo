@@ -14,7 +14,7 @@ Use `PRD.md` as the source for current behavior. It is grounded in `DISCOVERY_MA
 - RESTX `/api/v1` endpoints: 57
 - Flask blueprint routes: 459
 - App-level routes: 1
-- Broker plugins: 34
+- Broker plugins: 36
 - RESTX Swagger UI: deliberately disabled (`doc=False`)
 - BDD feature files: 17
 - BDD scenario definitions: 86

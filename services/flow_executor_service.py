@@ -23,6 +23,18 @@ from database.flow_db import (
     get_workflow,
     update_execution_status,
 )
+from services.flow_node_contracts import (
+    EXPIRY_DATE_PATTERN as _EXPIRY_DATE_PATTERN,
+)
+from services.flow_node_contracts import (
+    OPTION_OFFSET_PATTERN as _OPTION_OFFSET_PATTERN,
+)
+from services.flow_node_contracts import (
+    VALID_EXPIRY_TYPES,
+    VALID_LEG_STRIKE_MODES,
+    default_product_for_exchange,
+    select_expiry,
+)
 from services.flow_openalgo_client import FlowOpenAlgoClient, get_flow_client
 from utils.constants import VALID_ACTIONS, VALID_EXCHANGES, VALID_PRICE_TYPES, VALID_PRODUCT_TYPES
 
@@ -88,9 +100,83 @@ ORDER_CRITICAL_FIELDS = frozenset(
 # What an unresolved reference looks like after interpolation: WorkflowContext
 # returns the original {{...}} text when a path does not resolve.
 _UNRESOLVED_PATTERN = re.compile(r"\{\{[^}]*\}\}")
-_EXPIRY_DATE_PATTERN = re.compile(r"\d{2}[A-Z]{3}\d{2}")
-_OPTION_OFFSET_PATTERN = re.compile(r"(?:ATM|(?:ITM|OTM)(?:[1-9]|[1-4]\d|50))")
 _MISSING_ORDER_VALUE = object()
+
+
+#: MCX products that list options in the master contract.
+#:
+#: MCX has no spot instrument, so an option's ATM reference is the near-month
+#: future rather than an index level, and there is no separate derivatives
+#: segment the way NFO is to NSE -- the future, the option and the quote all
+#: live on MCX. option_symbol_service resolves that future itself for every
+#: exchange in its NO_SPOT_EXCHANGES set.
+MCX_OPTION_UNDERLYINGS = (
+    "GOLD",
+    "GOLDM",
+    "SILVER",
+    "SILVERM",
+    "CRUDEOIL",
+    "CRUDEOILM",
+    "NATURALGAS",
+    "NATGASMINI",
+    "COPPER",
+    "ZINC",
+    "MCXBULLDEX",
+)
+
+#: underlying -> (exchange to quote for the ATM reference, exchange the option
+#: trades on). Anything absent is an NSE underlying, which is the overwhelming
+#: majority and keeps this table to the exceptions.
+OPTION_UNDERLYING_EXCHANGES: dict[str, tuple[str, str]] = {
+    "SENSEX": ("BSE_INDEX", "BFO"),
+    "BANKEX": ("BSE_INDEX", "BFO"),
+    "SENSEX50": ("BSE_INDEX", "BFO"),
+    **dict.fromkeys(MCX_OPTION_UNDERLYINGS, ("MCX", "MCX")),
+}
+
+DEFAULT_OPTION_EXCHANGES = ("NSE_INDEX", "NFO")
+
+#: Exchange the author may have declared on the node -> the same pair. Only
+#: consulted for an underlying the table above does not name, so a stored
+#: workflow whose `exchange` still holds the node default cannot reroute a
+#: known index.
+DECLARED_OPTION_EXCHANGES: dict[str, tuple[str, str]] = {
+    "BFO": ("BSE_INDEX", "BFO"),
+    "BSE": ("BSE_INDEX", "BFO"),
+    "BSE_INDEX": ("BSE_INDEX", "BFO"),
+    "NFO": ("NSE_INDEX", "NFO"),
+    "NSE": ("NSE_INDEX", "NFO"),
+    "NSE_INDEX": ("NSE_INDEX", "NFO"),
+    # No-spot exchanges quote and trade on themselves.
+    "MCX": ("MCX", "MCX"),
+    "CDS": ("CDS", "CDS"),
+    "BCD": ("BCD", "BCD"),
+    "NCDEX": ("NCDEX", "NCDEX"),
+    "NCO": ("NCO", "NCO"),
+}
+
+
+def resolve_option_exchanges(underlying: str, declared: str = "") -> tuple[str, str]:
+    """The quote exchange and the option exchange for an options underlying.
+
+    Both options nodes need this pair, and keeping it in one place is what
+    stops them drifting apart -- they already carried two copies of a hardcoded
+    BSE list, and adding MCX to only one of them would have left the multi-leg
+    node placing commodity legs on NFO.
+
+    A named underlying decides on its own. `declared` -- the node's `exchange`
+    field -- is the fallback for anything unnamed, which is how an imported
+    workflow reaches a commodity or a stock option this table does not list.
+    Name first, because the node default ships "NSE_INDEX" and is left untouched
+    unless the author changes the dropdown: trusting it would have sent every
+    imported SENSEX order to NFO.
+    """
+    name = (underlying or "").strip().upper()
+    if name in OPTION_UNDERLYING_EXCHANGES:
+        return OPTION_UNDERLYING_EXCHANGES[name]
+    return DECLARED_OPTION_EXCHANGES.get(
+        (declared or "").strip().upper(), DEFAULT_OPTION_EXCHANGES
+    )
 
 
 def symbol_prefix_filter(column, prefix: str):
@@ -410,6 +496,21 @@ class RuntimeOrderResolver:
         return int(number)
 
 
+def _optional_leg_text(resolver: RuntimeOrderResolver, key: str) -> str:
+    """Read a leg field that may be absent or blank, but must be text if given.
+
+    ``RuntimeOrderResolver.text`` rejects a blank value, which is right for a
+    required field and wrong for an optional override - an omitted per-leg
+    expiry has to mean "inherit the node's", not "reject the leg".
+    """
+    value = resolver.value(key, default="")
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must resolve to text, got {value!r}")
+    return value.strip()
+
+
 class NodeExecutor:
     """Executes individual workflow nodes"""
 
@@ -569,13 +670,22 @@ class NodeExecutor:
         """Resolve the fields shared by regular, smart, and split orders."""
         values = RuntimeOrderResolver(self.context, node_data, label)
         quantity_minimum = 0 if allow_zero_quantity else 1
+        # The exchange decides the product default, so it is read out before the
+        # dict is built -- a node whose author never touched Product sends NRML
+        # on a derivative segment and MIS on cash. Symbol is still resolved
+        # first, so a node with several problems reports the same one it always
+        # did.
+        symbol = values.text("symbol")
+        exchange = values.enum("exchange", VALID_EXCHANGES, default="NSE")
         resolved = {
-            "symbol": values.text("symbol"),
-            "exchange": values.enum("exchange", VALID_EXCHANGES, default="NSE"),
+            "symbol": symbol,
+            "exchange": exchange,
             "action": values.enum("action", VALID_ACTIONS, default="BUY"),
             "quantity": values.integer("quantity", default=1, minimum=quantity_minimum),
             "price_type": values.enum("priceType", VALID_PRICE_TYPES, default="MARKET"),
-            "product": values.enum("product", VALID_PRODUCT_TYPES, default="MIS"),
+            "product": values.enum(
+                "product", VALID_PRODUCT_TYPES, default=default_product_for_exchange(exchange)
+            ),
             "price": values.number("price", default=0.0),
             "trigger_price": values.number("triggerPrice", default=0.0),
         }
@@ -802,13 +912,9 @@ class NodeExecutor:
 
         self.log(f"Placing options order: {underlying} {option_type} {offset}")
 
-        # Get the underlying exchange for index
-        if underlying in ["SENSEX", "BANKEX", "SENSEX50"]:
-            underlying_exchange = "BSE_INDEX"
-            fo_exchange = "BFO"
-        else:
-            underlying_exchange = "NSE_INDEX"
-            fo_exchange = "NFO"
+        underlying_exchange, fo_exchange = resolve_option_exchanges(
+            underlying, self.get_str(node_data, "exchange", "")
+        )
 
         try:
             lot_size = self._resolve_lot_size(underlying, fo_exchange)
@@ -868,7 +974,7 @@ class NodeExecutor:
             ).lower()
             action = values.enum("action", VALID_ACTIONS, default="SELL")
             quantity_lots = values.integer("quantity", default=1, minimum=1)
-            product = values.enum("product", VALID_PRODUCT_TYPES, default="MIS")
+            product = values.enum("product", VALID_PRODUCT_TYPES, default="NRML")
             strangle_width = values.text("strangleWidth", default="OTM2").upper()
             if not _OPTION_OFFSET_PATTERN.fullmatch(strangle_width):
                 raise ValueError(
@@ -910,11 +1016,51 @@ class NodeExecutor:
                         self.context, leg, f"Options multi-order leg {index}"
                     )
                     try:
-                        offset = leg_values.text("offset").upper()
-                        if not _OPTION_OFFSET_PATTERN.fullmatch(offset):
+                        # A leg picks its strike one of two ways. An offset is
+                        # re-resolved against the live underlying on every run,
+                        # which is what a repeating workflow wants. An absolute
+                        # strike names one contract and is used as given, which
+                        # suits a one-shot or manually built spread.
+                        strike_mode = leg_values.enum(
+                            "strikeMode",
+                            VALID_LEG_STRIKE_MODES,
+                            default="OFFSET",
+                        )
+                        offset: str | None = None
+                        strike: float | None = None
+                        if strike_mode == "STRIKE":
+                            strike = leg_values.number("strike")
+                            if strike <= 0:
+                                raise ValueError(
+                                    f"strike must be a positive number, got {strike}"
+                                )
+                        else:
+                            offset = leg_values.text("offset").upper()
+                            if not _OPTION_OFFSET_PATTERN.fullmatch(offset):
+                                raise ValueError(
+                                    "offset must be ATM, ITM1-ITM50, or "
+                                    f"OTM1-OTM50, got {offset!r}"
+                                )
+                        # A leg may override the node expiry, which is what
+                        # makes a calendar or diagonal spread expressible.
+                        # Either an explicit DDMMMYY date or a relative type;
+                        # the date is resolved once the exchange is known.
+                        leg_expiry_date = _optional_leg_text(leg_values, "expiry").upper()
+                        if leg_expiry_date and not _EXPIRY_DATE_PATTERN.fullmatch(
+                            leg_expiry_date
+                        ):
                             raise ValueError(
-                                "offset must be ATM, ITM1-ITM50, or "
-                                f"OTM1-OTM50, got {offset!r}"
+                                "expiry must be in DDMMMYY format such as 28OCT25, "
+                                f"got {leg_expiry_date!r}"
+                            )
+                        leg_expiry_type = _optional_leg_text(
+                            leg_values, "expiryType"
+                        ).lower()
+                        if leg_expiry_type and leg_expiry_type not in VALID_EXPIRY_TYPES:
+                            raise ValueError(
+                                "expiryType must be one of "
+                                f"{', '.join(sorted(VALID_EXPIRY_TYPES))}, "
+                                f"got {leg_expiry_type!r}"
                             )
                         option_type = leg_values.enum(
                             "optionType", frozenset({"CE", "PE"})
@@ -949,6 +1095,9 @@ class NodeExecutor:
                     normalized_custom_legs.append(
                         {
                             "offset": offset,
+                            "strike": strike,
+                            "expiry_date": leg_expiry_date,
+                            "expiry_type": leg_expiry_type,
                             "option_type": option_type,
                             "action": leg_action,
                             "quantity_lots": leg_quantity,
@@ -966,13 +1115,9 @@ class NodeExecutor:
             f"Strategy: {strategy_type}, Action: {action}, Quantity: {quantity_lots} lots, Product: {product}"
         )
 
-        # Get the underlying exchange for index
-        if underlying in ["SENSEX", "BANKEX", "SENSEX50"]:
-            underlying_exchange = "BSE_INDEX"
-            fo_exchange = "BFO"
-        else:
-            underlying_exchange = "NSE_INDEX"
-            fo_exchange = "NFO"
+        underlying_exchange, fo_exchange = resolve_option_exchanges(
+            underlying, self.get_str(node_data, "exchange", "")
+        )
 
         # Same master-contract lookup the single-leg options node uses. A second
         # hardcoded table here drifted the same way the first one had: it still
@@ -1003,15 +1148,45 @@ class NodeExecutor:
         # Generate legs based on strategy type if no custom legs provided
         legs = []
         if normalized_custom_legs is not None:
-            for leg in normalized_custom_legs:
-                legs.append(
-                    {
-                        key: value
-                        for key, value in leg.items()
-                        if key != "quantity_lots"
-                    }
-                    | {"quantity": leg["quantity_lots"] * lot_size}
-                )
+            # A relative per-leg expiry costs a master-contract lookup, so legs
+            # sharing one expiry type resolve it once.
+            leg_expiry_cache: dict[str, str] = {}
+            for index, leg in enumerate(normalized_custom_legs, start=1):
+                leg_expiry = leg["expiry_date"]
+                expiry_type_override = leg["expiry_type"]
+                if not leg_expiry and expiry_type_override:
+                    leg_expiry = leg_expiry_cache.get(expiry_type_override, "")
+                    if not leg_expiry:
+                        resolved = self._resolve_expiry_date(
+                            underlying, fo_exchange, expiry_type_override
+                        )
+                        if not resolved:
+                            message = (
+                                f"leg {index}: could not resolve expiry for "
+                                f"{expiry_type_override}"
+                            )
+                            self.log(f"Options multi-order failed: {message}", "error")
+                            return {"status": "error", "message": message}
+                        leg_expiry_cache[expiry_type_override] = resolved
+                        leg_expiry = resolved
+
+                prepared = {
+                    key: value
+                    for key, value in leg.items()
+                    if key not in ("quantity_lots", "expiry_date", "expiry_type")
+                }
+                prepared["quantity"] = leg["quantity_lots"] * lot_size
+                # Only send an expiry that differs from the node's; the service
+                # falls back to the common expiry when the key is absent.
+                if leg_expiry:
+                    prepared["expiry_date"] = leg_expiry
+                # Send exactly one strike selector so the service's branch is
+                # unambiguous rather than relying on precedence.
+                if prepared.get("strike") is None:
+                    prepared.pop("strike", None)
+                else:
+                    prepared.pop("offset", None)
+                legs.append(prepared)
         else:
             # Generate legs from predefined strategy type
             # A generated strategy shares one price type across its legs. Its
@@ -1053,8 +1228,15 @@ class NodeExecutor:
 
         self.log(f"Placing options multi-order: {underlying} {strategy_type} with {len(legs)} legs")
         for i, leg in enumerate(legs):
+            # A manually built leg carries a strike instead of an offset, and
+            # may carry its own expiry.
+            selector = (
+                f"{leg['strike']:g}" if leg.get("strike") is not None else leg.get("offset")
+            )
+            expiry_note = f" {leg['expiry_date']}" if leg.get("expiry_date") else ""
             self.log(
-                f"  Leg {i + 1}: {leg['offset']} {leg['option_type']} {leg['action']} qty={leg['quantity']}"
+                f"  Leg {i + 1}: {selector}{expiry_note} {leg['option_type']} "
+                f"{leg['action']} qty={leg['quantity']}"
             )
 
         result = self.client.options_multi_order(
@@ -1141,7 +1323,13 @@ class NodeExecutor:
         return legs
 
     def _resolve_expiry_date(self, symbol: str, exchange: str, expiry_type: str) -> str | None:
-        """Resolve expiry type to actual expiry date"""
+        """The date a relative expiry type resolves to, in DDMMMYY.
+
+        The selection rule itself lives in flow_node_contracts.select_expiry so
+        the editor's expiry picker resolves it identically -- the panel shows
+        the author which date a leg will actually use, and a second copy of the
+        rule here would let that promise drift out of date.
+        """
         try:
             response = self.client.get_expiry(
                 symbol=symbol, exchange=exchange, instrumenttype="options"
@@ -1155,69 +1343,14 @@ class NodeExecutor:
                 self.log(f"No expiry dates found for {symbol} on {exchange}", "error")
                 return None
 
-            # Parse and sort expiry dates
-            def parse_expiry(exp_str: str) -> datetime | None:
-                """Parse expiry date string"""
-                if not exp_str or not isinstance(exp_str, str):
-                    return None
-                for fmt in ["%d-%b-%y", "%d%b%y", "%d-%B-%Y", "%d%B%Y"]:
-                    try:
-                        return datetime.strptime(exp_str.upper(), fmt)
-                    except ValueError:
-                        continue
-                return None
-
-            # Filter and sort expiries
-            valid_expiries = []
-            for exp_str in expiry_list:
-                parsed = parse_expiry(exp_str)
-                if parsed is not None:
-                    valid_expiries.append((exp_str, parsed))
-
-            if not valid_expiries:
-                self.log(f"No valid expiry dates found for {symbol}", "error")
-                return None
-
-            # Sort by parsed date
-            valid_expiries.sort(key=lambda x: x[1])
-            sorted_expiries = [exp[0] for exp in valid_expiries]
-            now = datetime.now()
-            current_month = now.month
-            current_year = now.year
-
-            # Calculate next month
-            if current_month == 12:
-                next_month, next_year = 1, current_year + 1
-            else:
-                next_month, next_year = current_month + 1, current_year
-
-            if expiry_type == "current_week":
-                if sorted_expiries:
-                    return self._format_expiry_for_api(sorted_expiries[0])
-                return None
-            elif expiry_type == "next_week":
-                if len(sorted_expiries) > 1:
-                    return self._format_expiry_for_api(sorted_expiries[1])
-                return None
-            elif expiry_type == "current_month":
-                result = None
-                for exp_str, exp_date in valid_expiries:
-                    if exp_date.month == current_month and exp_date.year == current_year:
-                        result = exp_str
-                if result:
-                    return self._format_expiry_for_api(result)
-                return None
-            elif expiry_type == "next_month":
-                result = None
-                for exp_str, exp_date in valid_expiries:
-                    if exp_date.month == next_month and exp_date.year == next_year:
-                        result = exp_str
-                if result:
-                    return self._format_expiry_for_api(result)
-                return None
-
-            self.log(f"Unknown expiry type: {expiry_type}", "error")
-            return None
+            selected = select_expiry(expiry_list, expiry_type)
+            if not selected:
+                self.log(
+                    f"No expiry matches {expiry_type} for {symbol} on {exchange} "
+                    f"among {len(expiry_list)} listed contract(s)",
+                    "error",
+                )
+            return selected
         except Exception as e:
             self.log(f"Error resolving expiry: {e}", "error")
             return None
@@ -1392,7 +1525,7 @@ class NodeExecutor:
             return result
 
         exchange = self._supplied(node_data, "exchange") or "NSE"
-        product = self._supplied(node_data, "product") or "MIS"
+        product = self._supplied(node_data, "product") or default_product_for_exchange(exchange)
         self.log(f"Closing position: {symbol}@{exchange} ({product})")
         result = self.client.close_position(
             symbol=symbol,
@@ -1455,11 +1588,21 @@ class NodeExecutor:
             return {"status": "error", "message": message}
 
         try:
-            common_product = required_text(common_value("product", "MIS"), "product").upper()
+            # One basket can mix segments, so a node that names no product lets
+            # every row fall back to its own exchange's default -- NSE rows MIS,
+            # NFO rows NRML -- instead of one blanket choice. A product that is
+            # present but blank stays an error, as before.
+            unset = object()
+            common_product_raw = common_value("product", unset)
+            common_product = (
+                ""
+                if common_product_raw is unset
+                else required_text(common_product_raw, "product").upper()
+            )
             common_price_type = required_text(
                 common_value("priceType", "MARKET"), "priceType"
             ).upper()
-            if common_product not in VALID_PRODUCT_TYPES:
+            if common_product and common_product not in VALID_PRODUCT_TYPES:
                 raise ValueError(f"invalid product {common_product!r}")
             if common_price_type not in VALID_PRICE_TYPES:
                 raise ValueError(f"invalid pricetype {common_price_type!r}")
@@ -1527,7 +1670,8 @@ class NodeExecutor:
                     raise ValueError(f"quantity must be positive, got {quantity}")
 
                 product = required_text(
-                    row_value("product", common_product), "product"
+                    row_value("product", common_product or default_product_for_exchange(exchange)),
+                    "product",
                 ).upper()
                 price_type = required_text(
                     row_value("pricetype", common_price_type, "priceType"), "pricetype"
@@ -1643,7 +1787,7 @@ class NodeExecutor:
         """Execute Open Position node"""
         symbol = self.get_str(node_data, "symbol", "")
         exchange = self.get_str(node_data, "exchange", "NSE")
-        product = self.get_str(node_data, "product", "MIS")
+        product = self.get_str(node_data, "product", default_product_for_exchange(exchange))
         self.log(f"Getting open position for: {symbol}")
         result = self.client.get_open_position(
             symbol=symbol, exchange=exchange, product_type=product
@@ -2332,7 +2476,7 @@ class NodeExecutor:
         exchange = self.get_str(node_data, "exchange", "NSE")
         quantity = self.get_int(node_data, "quantity", 1)
         price = self.get_float(node_data, "price", 0)
-        product_type = self.get_str(node_data, "product", "MIS")
+        product_type = self.get_str(node_data, "product", default_product_for_exchange(exchange))
         action = self.get_str(node_data, "action", "BUY")
         price_type = self.get_str(node_data, "priceType", "MARKET")
         if positions:
@@ -2858,7 +3002,7 @@ class NodeExecutor:
         """
         symbol = self.get_str(node_data, "symbol", "")
         exchange = self.get_str(node_data, "exchange", "NSE")
-        product = self.get_str(node_data, "product", "MIS")
+        product = self.get_str(node_data, "product", default_product_for_exchange(exchange))
         condition = self.get_str(node_data, "condition", "exists")
         threshold = self.get_float(node_data, "threshold", 0.0)
 

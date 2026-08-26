@@ -18,7 +18,7 @@ day cost you the morning.
 ## 1. What OpenAlgo is (3 minute read)
 
 OpenAlgo is a self-hosted algorithmic trading platform for Indian markets. It puts
-one common API in front of 35 different broker APIs, so a strategy written once
+one common API in front of 36 different broker APIs, so a strategy written once
 runs against any supported broker without change.
 
 - Backend: Python 3.12+, Flask, SQLAlchemy, Flask-SocketIO
@@ -393,7 +393,7 @@ git push --force-with-lease
 These are not style preferences. They are the things maintainers actually send PRs
 back for.
 
-**One feature or one fix per pull request.** OpenAlgo supports 35 brokers, and
+**One feature or one fix per pull request.** OpenAlgo supports 36 broker plugins, and
 every change has to be validated across that surface. Large combined PRs are not
 reviewable and will be asked to be split. The one exception is a brand new broker
 integration, which is self-contained inside its own `broker/` directory.

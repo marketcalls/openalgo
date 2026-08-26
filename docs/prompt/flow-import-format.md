@@ -567,6 +567,27 @@ positive `triggerPrice`. A missing, blank, zero, or negative required price is
 rejected. A `{{variable}}` price passes import validation and is checked after
 interpolation before the broker call.
 
+#### Product defaults
+
+`product` is optional on every order and position node. **Omit it and the
+node's `exchange` decides**: a derivative segment — `NFO`, `BFO`, `CDS`, `BCD`,
+`MCX`, `NCDEX`, `NCO` — defaults to `NRML`, and everything else to `MIS`.
+
+Write `product` only to override that. It is used exactly as given, so `MIS` on
+an `NFO` order really is an intraday order that the broker squares off at the
+close. An index pseudo-exchange (`NSE_INDEX`, ...) is not a segment orders are
+placed on and defaults to `MIS`.
+
+Two nodes do not follow their `exchange`, because on them that field names
+where the *underlying* is quoted rather than where the contract trades:
+`optionsOrder` and `optionsMultiOrder` default to `NRML` outright.
+
+`basketOrder` decides per row: with no `product` on the node, each row follows
+its own `exchange`, so one basket can mix an `MIS` cash row and an `NRML`
+commodity row. A `product` on the node covers every row that does not set its
+own. Present-but-blank is still an error — that is a `{{variable}}` that failed
+to resolve, and the node refuses rather than guessing.
+
 #### placeOrder — Place Order
 
 Single-leg order on any segment.
@@ -578,7 +599,7 @@ Single-leg order on any segment.
 | `action` | `"BUY"` \| `"SELL"` | `"BUY"` | |
 | `quantity` | int | `1` | In shares (not lots). |
 | `priceType` | `"MARKET"` \| `"LIMIT"` \| `"SL"` \| `"SL-M"` | `"MARKET"` | |
-| `product` | `"MIS"` \| `"CNC"` \| `"NRML"` | `"MIS"` | |
+| `product` | `"MIS"` \| `"CNC"` \| `"NRML"` | by `exchange` | See **Product defaults**. |
 | `price` | number | `0` | Required for `LIMIT`/`SL`. |
 | `triggerPrice` | number | `0` | Required for `SL`/`SL-M`. |
 | `outputVariable` | string | — | If set, exposes `{{name.orderid}}`, `{{name.status}}`. |
@@ -641,14 +662,15 @@ Single-leg options order resolved from underlying + offset + option type.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `underlying` | `"NIFTY"` \| `"BANKNIFTY"` \| `"FINNIFTY"` \| `"MIDCPNIFTY"` \| `"NIFTYNXT50"` \| `"SENSEX"` \| `"BANKEX"` \| `"SENSEX50"` | `"NIFTY"` | |
-| `expiryType` | `"current_week"` \| `"next_week"` \| `"current_month"` \| `"next_month"` | `"current_week"` | The Symbol service resolves to actual date. |
+| `underlying` | NSE: `"NIFTY"` \| `"BANKNIFTY"` \| `"FINNIFTY"` \| `"MIDCPNIFTY"` \| `"NIFTYNXT50"`; BSE: `"SENSEX"` \| `"BANKEX"` \| `"SENSEX50"`; MCX: `"GOLD"` \| `"GOLDM"` \| `"SILVER"` \| `"SILVERM"` \| `"CRUDEOIL"` \| `"CRUDEOILM"` \| `"NATURALGAS"` \| `"NATGASMINI"` \| `"COPPER"` \| `"ZINC"` \| `"MCXBULLDEX"` | `"NIFTY"` | Decides the exchange on its own — see **Underlying and exchange** below. |
+| `exchange` | `"NSE_INDEX"` \| `"NFO"` \| `"BSE_INDEX"` \| `"BFO"` \| `"MCX"` \| `"CDS"` \| `"BCD"` \| `"NCDEX"` \| `"NCO"` | `"NSE_INDEX"` | **Only consulted for an `underlying` not listed above.** |
+| `expiryType` | `"current_week"` \| `"next_week"` \| `"current_month"` \| `"next_month"` | `"current_week"` | The Symbol service resolves to actual date. MCX contracts are monthly, so use `"current_month"`/`"next_month"` there. |
 | `offset` | `"ATM"` \| `"ITM1"`–`"ITM5"` \| `"OTM1"`–`"OTM10"` | `"ATM"` | |
 | `optionType` | `"CE"` \| `"PE"` | `"CE"` | |
 | `action` | `"BUY"` \| `"SELL"` | `"BUY"` | |
 | `quantity` | int | `1` | **In lots** (executor multiplies by lot size). |
 | `priceType` | `"MARKET"` \| `"LIMIT"` \| `"SL"` \| `"SL-M"` | `"MARKET"` | |
-| `product` | `"MIS"` \| `"NRML"` | `"NRML"` | |
+| `product` | `"MIS"` \| `"NRML"` | `"NRML"` | Always a derivative; does not follow `exchange`. |
 | `price` | number | `0` | For `LIMIT`/`SL`. |
 | `triggerPrice` | number | `0` | For `SL`/`SL-M`. |
 | `splitSize` | int | `0` | If >0, splits into chunks. |
@@ -673,6 +695,37 @@ Single-leg options order resolved from underlying + offset + option type.
 }
 ```
 
+**Underlying and exchange.** The two options nodes resolve *two* exchanges: the
+one whose price sets the ATM reference, and the one the option contract trades
+on. Every underlying in the table above decides both by name:
+
+| Underlying | ATM reference quoted from | Option trades on |
+|---|---|---|
+| NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, NIFTYNXT50 | `NSE_INDEX` (the index level) | `NFO` |
+| SENSEX, BANKEX, SENSEX50 | `BSE_INDEX` (the index level) | `BFO` |
+| GOLD, GOLDM, SILVER, SILVERM, CRUDEOIL, CRUDEOILM, NATURALGAS, NATGASMINI, COPPER, ZINC, MCXBULLDEX | `MCX` (the **near-month future**) | `MCX` |
+
+MCX differs from the equity segments in two ways that matter when writing a
+workflow by hand:
+
+- **There is no separate derivatives exchange.** NFO is to NSE what nothing is
+  to MCX — the future, the option and the quote all live on `MCX`.
+- **There is no spot instrument.** `CRUDEOIL` on its own is not a tradable
+  symbol, so the ATM strike is priced off the nearest unexpired future
+  (`CRUDEOIL21SEP26FUT`), resolved automatically. If no unexpired future exists
+  the node fails rather than guessing a reference price.
+
+The `exchange` field is a **fallback, not an override**: it is read only when
+`underlying` is not one of the names above, which is how you reach a stock
+option (`"underlying": "SBIN", "exchange": "NFO"`) or a commodity the editor
+does not list (`"underlying": "MENTHAOIL", "exchange": "MCX"`). A named
+underlying always wins, so a workflow whose `exchange` still holds the node
+default cannot misroute a SENSEX or CRUDEOIL order.
+
+`quantity` is in **lots** for every underlying. The lot size comes from the
+master contract, and most MCX option contracts carry a lot size of 1, so one lot
+is one contract there.
+
 #### optionsMultiOrder — Multi-Leg Options Strategy
 
 Pre-defined or custom multi-leg strategies (straddle / strangle / iron condor /
@@ -686,14 +739,105 @@ spreads / custom).
 | `action` | `"BUY"` \| `"SELL"` | — | Direction for the strategy (BUY=long volatility, SELL=short volatility). |
 | `quantity` | int | `1` | Lots per leg. |
 | `priceType` | `"MARKET"` \| `"LIMIT"` \| `"SL"` \| `"SL-M"` | `"MARKET"` | Common price type; generated legs do not support `SL`/`SL-M`, while custom legs may inherit all four types. |
-| `product` | `"MIS"` \| `"NRML"` | `"NRML"` | |
+| `product` | `"MIS"` \| `"NRML"` | `"NRML"` | Always a derivative; does not follow `exchange`. |
 | `price` | number | `0` | Common leg price. Must be positive when the effective price type is `LIMIT`/`SL`. |
 | `triggerPrice` | number | `0` | Common custom-leg trigger. Must be positive when the effective price type is `SL`/`SL-M`. |
-| `legs` | `Leg[]` | `[]` | **Required for `strategy="custom"`.** Each leg requires `{ offset, optionType, action, quantity }`; optional `product`, `priceType` (or legacy `pricetype`), `price`, and `triggerPrice` override the common node value. Omitted optional fields inherit the common node values. Custom leg `priceType` may be any of `MARKET`/`LIMIT`/`SL`/`SL-M`; the resulting effective priced leg must have the required positive price fields. |
+| `legs` | `Leg[]` | `[]` | **Required for `strategy="custom"`.** See **Custom legs** below. |
 | `outputVariable` | string | — | Result includes `{{name.results}}` array per leg. |
 
-Options Multi-Order always resolves the node-level `expiryType` once and sends
-that one expiry for every leg. Per-leg expiries are not supported.
+**Custom legs.** A readymade strategy positions every leg at an offset from the
+money and gives them all one expiry. `strategy: "custom"` lifts both limits: a
+leg names its own strike, its own expiry and its own side, which is what makes a
+calendar spread, a diagonal, a ratio, or a basket pinned to chosen strikes
+expressible. The editor builds these leg by leg, and can load a readymade
+strategy's legs as a starting point to edit.
+
+In the editor the strike and expiry are chosen from the contracts the exchange
+actually lists - strikes carry their moneyness (`ATM`, `ITM3`, `OTM2`) and the
+symbol they resolve to, and expiry is a plain list of listed dates. A field can
+still be typed instead, which is how a `{{variable}}` strike or expiry is
+entered, and typing is the fallback whenever the contract lookup is unavailable.
+What gets stored is the same either way: a number and a `DDMMMYY` string.
+
+A leg with **no** `expiry` or `expiryType` follows the node's expiry, so a
+scheduled workflow rolls forward to the next contract on its own. Giving a leg
+its own `expiry` pins it to that one contract - correct for a calendar or
+diagonal spread, and a basket that stops working once that date passes for
+anything else. The editor leaves an untouched leg following the node and shows
+the date it currently resolves to; picking a date pins it. `expiryType` is
+accepted on import for a leg that should roll on a different schedule than the
+node, though the editor does not offer it.
+
+| Leg field | Type | Default | Notes |
+|---|---|---|---|
+| `strikeMode` | `"OFFSET"` \| `"STRIKE"` | `"OFFSET"` | Absent is `OFFSET`. A leg carrying `strike` and no mode is read as `STRIKE`. |
+| `offset` | `"ATM"` \| `"ITM1"`–`"ITM50"` \| `"OTM1"`–`"OTM50"` | — | **Required unless `strike` is given.** Re-resolved against the live underlying on every run. |
+| `strike` | number | — | **Required when `strikeMode` is `STRIKE`.** An absolute strike, used exactly as given; must be positive and must be listed for that expiry. |
+| `expiry` | string | — | Overrides the node expiry with an exact date in `DDMMMYY`, e.g. `28OCT25`. |
+| `expiryType` | `"current_week"` \| `"next_week"` \| `"current_month"` \| `"next_month"` | — | Overrides the node expiry with a relative one. Ignored when `expiry` is set. |
+| `optionType` | `"CE"` \| `"PE"` | — | Required. |
+| `action` | `"BUY"` \| `"SELL"` | — | Required. The leg's own side, independent of the node `action`. |
+| `quantity` | int | — | Required. **In lots**, multiplied by the lot size like the node-level quantity. |
+| `product` | `"MIS"` \| `"NRML"` | node `product` | |
+| `priceType` (or `pricetype`) | `"MARKET"` \| `"LIMIT"` \| `"SL"` \| `"SL-M"` | node `priceType` | Unlike a generated strategy, a custom leg may use `SL`/`SL-M`, because it can carry its own trigger. |
+| `price` | number | node `price` | Must be positive when the effective price type is `LIMIT`/`SL`. |
+| `triggerPrice` | number | node `triggerPrice` | Must be positive when the effective price type is `SL`/`SL-M`. |
+| `splitSize` | int | `0` | If >0, splits that leg into chunks. |
+
+An **omitted** optional field is what tells the executor to inherit the node's
+value, so write no key at all rather than an empty string. A leg naming neither
+`offset` nor `strike` cannot execute and is refused.
+
+The editor shows every inherited field as the value it currently resolves to -
+its expiry, product and price type read as `25AUG26`, `NRML`, `MARKET` rather
+than naming the inheritance - and writes nothing until the field is changed. So
+a leg left alone keeps following the node, and adjusting the node still carries
+to it.
+
+Every leg is placed against the node's `underlying`; only the strike, expiry,
+side and pricing vary per leg. A basket is capped at 10 legs in the editor.
+
+Legs are placed in order and **a multi-leg basket fails leg by leg** - if leg
+three is rejected, legs one and two are already filled. That is why a malformed
+strike or expiry is refused at save time rather than at run time.
+
+```json
+{
+  "id": "node_2",
+  "type": "optionsMultiOrder",
+  "position": { "x": 100, "y": 200 },
+  "data": {
+    "strategy": "custom",
+    "underlying": "NIFTY",
+    "expiryType": "current_week",
+    "quantity": 1,
+    "action": "SELL",
+    "priceType": "MARKET",
+    "product": "NRML",
+    "legs": [
+      {
+        "strikeMode": "STRIKE",
+        "strike": 24500,
+        "expiry": "28OCT25",
+        "optionType": "CE",
+        "action": "SELL",
+        "quantity": 1
+      },
+      {
+        "strikeMode": "STRIKE",
+        "strike": 24500,
+        "expiry": "25NOV25",
+        "optionType": "CE",
+        "action": "BUY",
+        "quantity": 1
+      }
+    ],
+    "outputVariable": "calendar"
+  }
+}
+```
+
+That is a calendar spread: one strike, two expiries, opposite sides.
 
 ```json
 {
@@ -720,7 +864,7 @@ Place multiple orders in a single API call.
 |---|---|---|---|
 | `basketName` | string | `"flow_basket"` | |
 | `orders` | string \| `Order[]` | — | The editor writes multi-line `SYMBOL,EXCHANGE,ACTION,QTY` CSV. Imported arrays may set per-row `product`, `pricetype`, `price`, and `triggerprice`; common node values fill only omitted row fields. |
-| `product` | `"MIS"` \| `"CNC"` \| `"NRML"` | `"MIS"` | |
+| `product` | `"MIS"` \| `"CNC"` \| `"NRML"` | by `exchange` | See **Product defaults**. |
 | `priceType` | `"MARKET"` \| `"LIMIT"` \| `"SL"` \| `"SL-M"` | `"MARKET"` | Common to every CSV row. |
 | `price` | number | `0` | Common row price. Must be positive for `LIMIT`/`SL`. |
 | `triggerPrice` | number | `0` | Common row trigger price. Must be positive for `SL`/`SL-M`. |
@@ -843,7 +987,7 @@ products. With a `symbol`, closes only that position.
 |---|---|---|---|
 | `symbol` | string | `""` | Blank closes everything. Set it to scope the close. |
 | `exchange` | string | `NSE` | Only meaningful alongside `symbol`. |
-| `product` | string | `MIS` | Only meaningful alongside `symbol`. |
+| `product` | string | by `exchange` | Only meaningful alongside `symbol`. See **Product defaults**. |
 
 `exchange` and `product` do not filter on their own — without a `symbol` this is
 an unconditional square-off however they are set.
@@ -886,7 +1030,7 @@ the same as any other failing node. A condition that evaluates cleanly to
 |---|---|---|---|
 | `symbol` | string | required | |
 | `exchange` | string | required | |
-| `product` | `"MIS"` \| `"CNC"` \| `"NRML"` | `"MIS"` | |
+| `product` | `"MIS"` \| `"CNC"` \| `"NRML"` | by `exchange` | See **Product defaults**. |
 | `condition` | `"exists"` \| `"not_exists"` \| `"quantity_above"` \| `"quantity_below"` \| `"pnl_above"` \| `"pnl_below"` | required | |
 | `threshold` | number | `0` | Only used by the `quantity_*` and `pnl_*` modes. |
 
@@ -2282,12 +2426,12 @@ Valid `exchange` values across all nodes:
 | `BFO` | BSE F&O |
 | `CDS` | NSE Currency |
 | `BCD` | BSE Currency |
-| `MCX` | Commodity |
+| `MCX` | Commodity, futures and options. Also the underlying exchange for a commodity `optionsOrder`/`optionsMultiOrder` - MCX has no separate F&O segment. |
 | `NCDEX` | Commodity |
 | `NCO` | NSE Commodities, futures and options (Zerodha only) |
 | `NSE_INDEX` | NSE Indices (for `optionsOrder`/`optionChain`/`optionSymbol`/`syntheticFuture`) |
 | `BSE_INDEX` | BSE Indices (same usage as above) |
-| `MCX_INDEX` | MCX sectoral indices such as MCXBULLDEX (quote only) |
+| `MCX_INDEX` | MCX sectoral index feeds - MCXBULLDEX, MCXMETLDEX, MCXAGRI (quote only). The tradable MCXBULLDEX futures and options live on `MCX`, not here. |
 | `GLOBAL_INDEX` | Global indices - US30, JAPAN225, HANGSENG, GIFTNIFTY (quote only, Zerodha) |
 | `CRYPTO` | Crypto derivatives (Delta Exchange only) |
 
@@ -2315,7 +2459,7 @@ OpenAlgo standardizes broker-specific symbols to the following format. See
 For convenience in one place:
 
 - **Action:** `BUY`, `SELL`
-- **Product:** `CNC` (cash & carry / delivery), `NRML` (futures & options carry), `MIS` (intraday)
+- **Product:** `CNC` (cash & carry / delivery), `NRML` (futures & options carry), `MIS` (intraday). Omit it and the node's `exchange` decides - see **Product defaults** in 7.2.
 - **Price type:** `MARKET`, `LIMIT`, `SL` (stop-loss limit), `SL-M` (stop-loss market)
 - **Option type:** `CE`, `PE`
 - **Strike offset:** `ATM`, `ITM1`–`ITM5`, `OTM1`–`OTM10`
@@ -2432,7 +2576,9 @@ funds (outputVariable=f)
   `optionsMultiOrder` accept `quantity` **in lots** (multiplied by lot size
   internally). `placeOrder` / `smartOrder` / `splitOrder` / `basketOrder`
   accept `quantity` **in shares**. Check this when generating from a single
-  source.
+  source. The lot size is read from the master contract, never guessed: an
+  underlying with no usable lot size fails the node rather than sizing an order
+  on an assumption. Most MCX option contracts carry a lot size of 1.
 
 ---
 

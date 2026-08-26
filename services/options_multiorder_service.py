@@ -7,6 +7,7 @@ Supports split orders per leg if splitsize is specified.
 """
 
 import copy
+import math
 import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -14,7 +15,13 @@ from typing import Any, Dict, List, Optional, Tuple
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
 from events import AnalyzerErrorEvent, MultiOrderCompletedEvent
-from services.option_symbol_service import get_option_symbol, parse_underlying_symbol
+from services.option_symbol_service import (
+    construct_option_symbol,
+    find_option_in_database,
+    get_option_exchange,
+    get_option_symbol,
+    parse_underlying_symbol,
+)
 from services.place_order_service import place_order
 from services.quotes_service import get_quotes
 from utils.event_bus import bus
@@ -190,6 +197,138 @@ def place_single_split_order_for_leg(
         }
 
 
+def resolve_leg_symbol_by_strike(
+    underlying: str,
+    exchange: str,
+    expiry_date: str,
+    strike: Any,
+    option_type: Any,
+    underlying_ltp: float | None = None,
+) -> tuple[bool, dict[str, Any], int]:
+    """Resolve a leg that names its own strike instead of an offset.
+
+    The offset path prices the strike off the underlying LTP at run time, which
+    is what a repeating workflow wants. A leg that names an absolute strike is
+    asking for one specific contract instead, so the strike is taken as given
+    and only has to exist in the master contract.
+
+    Returns the same ``(success, response, status_code)`` shape as
+    ``get_option_symbol()`` and carries the same three keys the caller reads:
+    ``symbol``, ``exchange`` and ``underlying_ltp``.
+    """
+    # bool is an int subclass, so True would otherwise pass as a strike of 1.
+    if (
+        isinstance(strike, bool)
+        or not isinstance(strike, (int, float))
+        or not math.isfinite(strike)
+        or strike <= 0
+    ):
+        return (
+            False,
+            {
+                "status": "error",
+                "message": f"Invalid strike: {strike!r}. Strike must be a positive number.",
+            },
+            400,
+        )
+
+    normalized_type = option_type.strip().upper() if isinstance(option_type, str) else option_type
+    if normalized_type not in ("CE", "PE"):
+        return (
+            False,
+            {
+                "status": "error",
+                "message": (
+                    f"Invalid option_type: {option_type!r}. Supported option types are CE and PE."
+                ),
+            },
+            400,
+        )
+
+    base_symbol, embedded_expiry = parse_underlying_symbol(underlying)
+    resolved_expiry = embedded_expiry or expiry_date
+    if not resolved_expiry:
+        return (
+            False,
+            {"status": "error", "message": "No expiry date available to resolve the leg symbol."},
+            400,
+        )
+
+    options_exchange = get_option_exchange(exchange or "")
+    option_symbol = construct_option_symbol(
+        base_symbol, resolved_expiry, strike, normalized_type
+    )
+
+    # A named strike is only usable if the exchange actually lists it. Saying
+    # which strike failed beats a broker-side "invalid symbol" further down.
+    option_info = find_option_in_database(option_symbol, options_exchange)
+    if not option_info:
+        return (
+            False,
+            {
+                "status": "error",
+                "message": (
+                    f"Option symbol {option_symbol} not found in {options_exchange}. "
+                    f"Check that strike {strike} is listed for {base_symbol} "
+                    f"{resolved_expiry}, or re-download the master contract."
+                ),
+            },
+            404,
+        )
+
+    return (
+        True,
+        {
+            "status": "success",
+            "symbol": option_info.get("symbol", option_symbol),
+            "exchange": option_info.get("exchange", options_exchange),
+            "strike": strike,
+            "expiry_date": resolved_expiry,
+            "option_type": normalized_type,
+            "underlying_ltp": underlying_ltp,
+        },
+        200,
+    )
+
+
+def resolve_leg_symbol(
+    leg_data: dict[str, Any],
+    common_data: dict[str, Any],
+    api_key: str,
+    underlying_ltp: float | None = None,
+) -> tuple[bool, dict[str, Any], int]:
+    """Resolve one leg to a tradable option symbol.
+
+    A leg either names an absolute strike or an offset resolved against the
+    live underlying. The strike wins when both are present, since it is the
+    more specific of the two. Both branches return the same shape, so callers
+    read ``symbol``/``exchange``/``underlying_ltp`` either way.
+    """
+    leg_expiry = leg_data.get("expiry_date") or common_data.get("expiry_date")
+    leg_strike = leg_data.get("strike")
+
+    if leg_strike is not None:
+        return resolve_leg_symbol_by_strike(
+            underlying=common_data.get("underlying"),
+            exchange=common_data.get("exchange"),
+            expiry_date=leg_expiry,
+            strike=leg_strike,
+            option_type=leg_data.get("option_type"),
+            underlying_ltp=underlying_ltp,
+        )
+
+    return get_option_symbol(
+        underlying=common_data.get("underlying"),
+        exchange=common_data.get("exchange"),
+        expiry_date=leg_expiry,
+        strike_int=common_data.get("strike_int"),
+        offset=leg_data.get("offset"),
+        option_type=leg_data.get("option_type"),
+        api_key=api_key,
+        underlying_ltp=underlying_ltp,
+    )
+
+
 def resolve_and_place_leg(
     leg_data: dict[str, Any],
     common_data: dict[str, Any],
@@ -222,23 +361,15 @@ def resolve_and_place_leg(
     try:
         # Step 1: Resolve option symbol
         # Use leg-specific expiry_date if provided, otherwise fall back to common expiry_date
-        leg_expiry = leg_data.get("expiry_date") or common_data.get("expiry_date")
-
-        success, symbol_response, status_code = get_option_symbol(
-            underlying=common_data.get("underlying"),
-            exchange=common_data.get("exchange"),
-            expiry_date=leg_expiry,
-            strike_int=common_data.get("strike_int"),
-            offset=leg_data.get("offset"),
-            option_type=leg_data.get("option_type"),
-            api_key=api_key,
-            underlying_ltp=underlying_ltp,
+        success, symbol_response, status_code = resolve_leg_symbol(
+            leg_data, common_data, api_key, underlying_ltp
         )
 
         if not success:
             return {
                 "leg": leg_index + 1,
                 "offset": leg_data.get("offset"),
+                "strike": leg_data.get("strike"),
                 "option_type": leg_data.get("option_type", "").upper(),
                 "action": leg_data.get("action", "").upper(),
                 "status": "error",
@@ -266,6 +397,7 @@ def resolve_and_place_leg(
                     "symbol": resolved_symbol,
                     "exchange": resolved_exchange,
                     "offset": leg_data.get("offset"),
+                    "strike": leg_data.get("strike"),
                     "option_type": leg_data.get("option_type", "").upper(),
                     "action": leg_data.get("action", "").upper(),
                     "status": "error",
@@ -285,7 +417,7 @@ def resolve_and_place_leg(
                 "symbol": resolved_symbol,
                 "action": leg_data.get("action"),
                 "pricetype": leg_data.get("pricetype", "MARKET"),
-                "product": leg_data.get("product", "MIS"),
+                "product": leg_data.get("product", "NRML"),
                 "price": leg_data.get("price", 0.0),
                 "trigger_price": leg_data.get("trigger_price", 0.0),
                 "disclosed_quantity": leg_data.get("disclosed_quantity", 0),
@@ -334,8 +466,9 @@ def resolve_and_place_leg(
                 # The split path reports one aggregated leg. Without product,
                 # subscribers keying on (symbol, exchange, product) cannot match
                 # it, unlike the non-split path below.
-                "product": leg_data.get("product", "MIS"),
+                "product": leg_data.get("product", "NRML"),
                 "offset": leg_data.get("offset"),
+                "strike": leg_data.get("strike"),
                 "option_type": leg_data.get("option_type", "").upper(),
                 "action": leg_data.get("action", "").upper(),
                 "status": overall_status,
@@ -354,7 +487,7 @@ def resolve_and_place_leg(
             "action": leg_data.get("action"),
             "quantity": leg_data.get("quantity"),
             "pricetype": leg_data.get("pricetype", "MARKET"),
-            "product": leg_data.get("product", "MIS"),
+            "product": leg_data.get("product", "NRML"),
             "price": leg_data.get("price", 0.0),
             "trigger_price": leg_data.get("trigger_price", 0.0),
             "disclosed_quantity": leg_data.get("disclosed_quantity", 0),
@@ -384,6 +517,7 @@ def resolve_and_place_leg(
                 # value is not authoritative for subscribers keying on the leg.
                 "product": order_data.get("product", ""),
                 "offset": leg_data.get("offset"),
+                "strike": leg_data.get("strike"),
                 "option_type": leg_data.get("option_type", "").upper(),
                 "action": leg_data.get("action", "").upper(),
                 "status": "success",
@@ -401,6 +535,7 @@ def resolve_and_place_leg(
                 "symbol": resolved_symbol,
                 "exchange": resolved_exchange,
                 "offset": leg_data.get("offset"),
+                "strike": leg_data.get("strike"),
                 "option_type": leg_data.get("option_type", "").upper(),
                 "action": leg_data.get("action", "").upper(),
                 "status": "error",
@@ -473,16 +608,8 @@ def process_multiorder_with_auth(
             # Resolve all option symbols first (DB lookups, fast)
             resolved_symbols = []
             for _, leg in buy_legs + sell_legs:
-                leg_expiry = leg.get("expiry_date") or common_data.get("expiry_date")
-                success_sym, sym_response, _ = get_option_symbol(
-                    underlying=common_data.get("underlying"),
-                    exchange=common_data.get("exchange"),
-                    expiry_date=leg_expiry,
-                    strike_int=common_data.get("strike_int"),
-                    offset=leg.get("offset"),
-                    option_type=leg.get("option_type"),
-                    api_key=api_key,
-                    underlying_ltp=underlying_ltp,
+                success_sym, sym_response, _ = resolve_leg_symbol(
+                    leg, common_data, api_key, underlying_ltp
                 )
                 if success_sym:
                     sym = sym_response.get("symbol")

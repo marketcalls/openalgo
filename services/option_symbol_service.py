@@ -684,6 +684,29 @@ def get_option_symbol(
                 quote_symbol = underlying.upper()
             else:
                 quote_symbol = base_symbol
+        elif exchange.upper() in NO_SPOT_EXCHANGES:
+            # The caller named a bare product ("CRUDEOIL") on an exchange that
+            # lists no spot instrument, so there is nothing to quote for the ATM
+            # reference. Price it off the near-month future, which is what the
+            # option chain, the IV surface and the straddle charts already do --
+            # without this the LTP lookup asked MCX for a symbol that cannot
+            # exist and the order failed with "Could not determine LTP".
+            resolved = resolve_underlying_quote(base_symbol, exchange.upper())
+            if not resolved:
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": (
+                            f"No unexpired futures contract for {base_symbol} on "
+                            f"{exchange.upper()}, so the ATM reference price cannot "
+                            "be determined. Check the symbol, or re-download the "
+                            "master contract."
+                        ),
+                    },
+                    404,
+                )
+            quote_symbol, quote_exchange = resolved
         else:
             quote_symbol = underlying
 

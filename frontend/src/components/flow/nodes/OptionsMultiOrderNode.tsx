@@ -6,6 +6,7 @@
 import { Handle, Position } from '@xyflow/react'
 import { Layers } from 'lucide-react'
 import { memo } from 'react'
+import { OPTION_NODE_PRODUCT } from '@/lib/flow/constants'
 import { cn } from '@/lib/utils'
 import type { OptionsMultiOrderNodeData } from '@/types/flow'
 
@@ -88,7 +89,7 @@ export const OptionsMultiOrderNode = memo(({ data, selected }: OptionsMultiOrder
             >
               {(nodeData.action as string) || 'SELL'}
             </span>
-            <span>{data.product || 'MIS'}</span>
+            <span>{data.product || OPTION_NODE_PRODUCT}</span>
           </div>
         </div>
       </div>

@@ -56,7 +56,7 @@ The **Analyzer Mode** works like a local sandbox—test signals, APIs, and strat
 
 ### Multi-Broker, Multi-Platform
 
-OpenAlgo ships **34 broker plugins**: 33 securities integrations and Delta Exchange for crypto derivatives. The securities plugins share a unified API and normalized WebSocket layer, reducing broker-specific strategy code.
+OpenAlgo ships **36 broker plugins**: 35 securities integrations and Delta Exchange for crypto derivatives. The securities plugins share a unified API and normalized WebSocket layer, reducing broker-specific strategy code.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -184,7 +184,7 @@ With direct broker APIs, you'd have to build:
 | **Trade Dashboard** | React UI, real-time updates | Full React frontend included |
 | **Log Storage** | Database, query interface | SQLite with traffic logs |
 | **Latency Tracking** | Timing, metrics, alerts | Latency monitor built-in |
-| **Multi-Broker Support** | N broker integrations | 34 plugins in the repository |
+| **Multi-Broker Support** | N broker integrations | 36 plugins in the repository |
 | **Security Layer** | Auth, rate limiting, CSRF | Enterprise security included |
 | **Notifications** | Telegram, alerts | Telegram bot integrated |
 
