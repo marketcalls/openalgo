@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional, Tuple
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
 from events import AnalyzerErrorEvent, GTTModifiedEvent, GTTModifyFailedEvent
+from utils.credential_errors import credential_error
 from utils.event_bus import bus
 from utils.logging import get_logger
 
@@ -168,7 +169,7 @@ def modify_gtt_order(
         order_data["apikey"] = api_key
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
-            return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+            return False, *credential_error(api_key)
         return modify_gtt_order_with_auth(order_data, AUTH_TOKEN, broker_name, original_data)
 
     # Direct internal call

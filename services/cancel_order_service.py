@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional, Tuple
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
 from events import AnalyzerErrorEvent, OrderCancelledEvent, OrderCancelFailedEvent
+from utils.credential_errors import credential_error
 from utils.event_bus import bus
 from utils.logging import get_logger
 
@@ -236,11 +237,19 @@ def cancel_order(
                     ))
                     return False, error_response, 403
 
+        # Sandbox first: cancel_order_with_auth() routes to the sandbox engine when
+        # analyze mode is on, and that path never reaches the broker. Resolving a
+        # live credential before that branch would let the daily rollover block a
+        # sandbox operation, coupling the sandbox to a live broker session that
+        # CLAUDE.md documents it as isolated from.
+        if get_analyze_mode():
+            return cancel_order_with_auth(orderid, "", "", original_data)
+
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
-            error_response = {"status": "error", "message": "Invalid openalgo apikey"}
+            error_response, error_status = credential_error(api_key)
             # Skip logging for invalid API keys to prevent database flooding
-            return False, error_response, 403
+            return False, error_response, error_status
 
         return cancel_order_with_auth(orderid, AUTH_TOKEN, broker_name, original_data)
 

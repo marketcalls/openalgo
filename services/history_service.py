@@ -7,6 +7,7 @@ import pandas as pd
 from database.auth_db import get_auth_token_broker
 from database.token_db import get_token
 from utils.constants import VALID_EXCHANGES
+from utils.credential_errors import credential_error
 from utils.logging import get_logger
 
 # Initialize logger
@@ -280,7 +281,7 @@ def get_history(
             api_key, include_feed_token=True
         )
         if AUTH_TOKEN is None:
-            return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+            return False, *credential_error(api_key)
         return get_history_with_auth(
             AUTH_TOKEN, FEED_TOKEN, broker_name, symbol, exchange, interval, start_date, end_date
         )

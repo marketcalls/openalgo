@@ -24,6 +24,7 @@ from services.option_symbol_service import (
 )
 from services.place_order_service import place_order
 from services.quotes_service import get_quotes
+from utils.credential_errors import credential_error
 from utils.event_bus import bus
 from utils.logging import get_logger
 
@@ -748,8 +749,8 @@ def place_options_multiorder(
 
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
-            error_response = {"status": "error", "message": "Invalid openalgo apikey"}
-            return False, error_response, 403
+            error_response, error_status = credential_error(api_key)
+            return False, error_response, error_status
 
         return process_multiorder_with_auth(
             multiorder_data, AUTH_TOKEN, broker_name, api_key, original_data

@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional, Tuple
 from database.analyzer_db import AnalyzerLog, db_session
 from database.apilog_db import async_log_order
 from database.apilog_db import executor as log_executor
-from database.auth_db import get_auth_token_broker
+from database.auth_db import get_broker_name, verify_api_key
 from database.settings_db import get_analyze_mode, set_analyze_mode
 from utils.logging import get_logger
 
@@ -170,11 +170,15 @@ def get_analyzer_status(
         # Add API key to analyzer data
         analyzer_data["apikey"] = api_key
 
-        AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
-        if AUTH_TOKEN is None:
+        # Identity, not credential: the analyzer drives the sandbox engine, which
+        # CLAUDE.md documents as fully isolated from live trading. Gating it on a
+        # live broker session couples the two, so a rollover would block sandbox
+        # use by a broker the caller is not using.
+        if not verify_api_key(api_key):
             error_response = {"status": "error", "message": "Invalid openalgo apikey"}
             # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
+        AUTH_TOKEN, broker_name = "", get_broker_name(api_key)
 
         return get_analyzer_status_with_auth(analyzer_data, AUTH_TOKEN, broker_name, original_data)
 
@@ -222,11 +226,15 @@ def toggle_analyzer_mode(
         # Add API key to analyzer data
         analyzer_data["apikey"] = api_key
 
-        AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
-        if AUTH_TOKEN is None:
+        # Identity, not credential: the analyzer drives the sandbox engine, which
+        # CLAUDE.md documents as fully isolated from live trading. Gating it on a
+        # live broker session couples the two, so a rollover would block sandbox
+        # use by a broker the caller is not using.
+        if not verify_api_key(api_key):
             error_response = {"status": "error", "message": "Invalid openalgo apikey"}
             # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
+        AUTH_TOKEN, broker_name = "", get_broker_name(api_key)
 
         # Check if in semi-auto mode - block analyzer toggle for RA compliance
         from database.auth_db import get_order_mode

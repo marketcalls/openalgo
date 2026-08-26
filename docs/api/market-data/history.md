@@ -139,6 +139,25 @@ curl -X POST http://127.0.0.1:5000/api/v1/history \
 
 - [Intervals](./intervals.md) - Get available time intervals
 
+## Error Responses
+
+| HTTP | code | Meaning | What to do |
+|------|------|---------|------------|
+| 403 | (none) | `Invalid openalgo apikey` - the key is unknown or has been regenerated | Re-issue the key at `/apikey` |
+| 401 | `BROKER_SESSION_EXPIRED` | The API key is valid, but the broker session ended at the daily rollover (`SESSION_EXPIRY_TIME`, default 03:00 IST) | Log in and reconnect the broker. Retrying with the same key will not help |
+
+```json
+{
+  "status": "error",
+  "code": "BROKER_SESSION_EXPIRED",
+  "message": "Broker session expired - please reconnect your broker"
+}
+```
+
+Indian broker tokens are invalidated broker-side every morning, and only a
+fresh broker login mints a new one. Crypto instances
+(`DISABLE_SESSION_EXPIRY=true`) have no rollover and never return this code.
+
 ---
 
 **Back to**: [API Documentation](../README.md)

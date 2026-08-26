@@ -76,6 +76,13 @@ def test_the_service_is_never_called_without_a_valid_key(client, monkeypatch):
 
 
 def test_source_api_requires_a_broker_session(client, monkeypatch):
+    """The key is valid; it is the broker session that is not.
+
+    This answered 403 with no machine-readable code, which is the same status a
+    bad API key gets, so a client could not tell "reconnect your broker" from
+    "your key is wrong" (issue #1858). The message was always honest here; the
+    status was not.
+    """
     monkeypatch.setattr(sip_api, "verify_api_key", lambda _k: "user")
     monkeypatch.setattr(
         sip_api, "get_auth_token_broker",
@@ -84,7 +91,8 @@ def test_source_api_requires_a_broker_session(client, monkeypatch):
 
     response = client.post("/sip/backtest", json=body(source="api"))
 
-    assert response.status_code == 403
+    assert response.status_code == 401
+    assert response.get_json()["code"] == "BROKER_SESSION_EXPIRED"
     assert "No broker session" in response.get_json()["message"]
 
 

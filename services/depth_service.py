@@ -1,9 +1,15 @@
 import importlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from database.auth_db import Auth, db_session, get_auth_token_broker, verify_api_key
+from database.auth_db import (
+    Auth,
+    db_session,
+    get_auth_token_broker,
+    verify_api_key,
+)
 from database.token_db import get_token
 from utils.constants import VALID_EXCHANGES
+from utils.credential_errors import credential_error
 from utils.logging import get_logger
 
 # Initialize logger
@@ -146,11 +152,16 @@ def get_depth(
     """
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
-        auth_info = get_auth_token_broker(api_key, include_feed_token=True)
-        if len(auth_info) == 3:
-            AUTH_TOKEN, FEED_TOKEN, broker_name = auth_info
-        else:
-            return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+        # include_feed_token=True always returns a 3-tuple, so a length check can
+        # never reject anything: it let (None, None, None) through, and
+        # get_depth_with_auth then reached import_broker_module(None) and answered
+        # 404 "Broker-specific module not found". Check the token itself, as
+        # quotes and history do.
+        AUTH_TOKEN, FEED_TOKEN, broker_name = get_auth_token_broker(
+            api_key, include_feed_token=True
+        )
+        if AUTH_TOKEN is None:
+            return False, *credential_error(api_key)
 
         # Get user_id from auth database
         extracted_user_id = None

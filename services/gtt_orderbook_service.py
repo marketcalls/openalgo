@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
+from utils.credential_errors import credential_error
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -59,7 +60,7 @@ def get_gtt_orderbook(
     if api_key and not (auth_token and broker):
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
-            return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+            return False, *credential_error(api_key)
         return get_gtt_orderbook_with_auth(AUTH_TOKEN, broker_name, {"apikey": api_key})
 
     if auth_token and broker:
