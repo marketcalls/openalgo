@@ -1220,18 +1220,42 @@ def get_dashboard_data():
         return jsonify({"status": "error", "message": "Broker not set in session"}), 400
 
     try:
-        from database.auth_db import get_api_key_for_tradingview, get_auth_token
+        from database.auth_db import (
+            get_api_key_for_tradingview,
+            get_auth_token,
+            is_broker_session_stale_for_user,
+        )
         from database.settings_db import get_analyze_mode
         from services.funds_service import get_funds
 
         AUTH_TOKEN = get_auth_token(login_username)
+        analyze_mode = get_analyze_mode()
 
-        if AUTH_TOKEN is None:
+        # A stored token is not proof of a live broker session: is_revoked is
+        # only flipped by the auto-expiry sweep, so between the daily rollover
+        # and the next sweep the dead token still reads as connected and this
+        # route hands it to the broker (issue #1858).
+        #
+        # The question is asked here rather than inside get_auth_token() on
+        # purpose. get_auth_token() is what websocket_proxy/base_adapter.py:446
+        # resolves through, so guarding it would put a freshness *inference* on
+        # the shared broker feed; asking at the one caller that needs the answer
+        # keeps that containment.
+        #
+        # Analyze mode is exempt for the same reason the sandbox branch runs
+        # before credential resolution in services/place_order_service.py: the
+        # dashboard then reads the sandbox engine, which CLAUDE.md documents as
+        # fully isolated from live trading.
+        broker_session_dead = AUTH_TOKEN is None or (
+            not analyze_mode and is_broker_session_stale_for_user(login_username)
+        )
+
+        if broker_session_dead:
             # The APP session is still valid -- it is the BROKER token that is
             # revoked/expired. The machine-readable code lets the dashboard
             # point the user at /broker (reconnect) instead of /login, which
             # would just bounce them back (issue #1400).
-            logger.warning(f"No auth token found for user {login_username}")
+            logger.warning(f"Broker session unusable for user {login_username}")
             return jsonify(
                 {
                     "status": "error",
@@ -1241,7 +1265,7 @@ def get_dashboard_data():
             ), 401
 
         # Check if in analyze mode
-        if get_analyze_mode():
+        if analyze_mode:
             api_key = get_api_key_for_tradingview(login_username)
             if api_key:
                 success, response, status_code = get_funds(api_key=api_key)

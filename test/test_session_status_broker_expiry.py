@@ -17,8 +17,10 @@ the route is called inside a bare Flask request context.
 
 import os
 import sys
+from datetime import datetime
 
 import pytest
+import pytz
 from flask import Flask, session
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -126,3 +128,97 @@ def test_missing_token_still_reports_reconnect(logged_in_request, monkeypatch):
 
     assert payload["broker_session_expired"] is True
     assert payload["logged_in"] is True
+
+
+@pytest.fixture()
+def dashboard_request(logged_in_request):
+    """/auth/dashboard-data is wrapped in @check_session_validity.
+
+    is_session_valid() requires session["login_time"]; without it the decorator
+    revokes the broker token and clears the session before the route body ever
+    runs, so the test would assert against the decorator rather than the route.
+    "now" always passes: if the boundary has been crossed the login is after it,
+    and if it has not, the expiry branch is not taken at all.
+    """
+    session["login_time"] = datetime.now(pytz.timezone("Asia/Kolkata")).isoformat()
+    yield
+
+
+class TestDashboardDataAgrees:
+    """/auth/session-status and /auth/dashboard-data must not disagree about
+    the same broker session.
+
+    The review noted that the recovery contract described at get_session_status
+    -- "dashboard-data returns BROKER_SESSION_EXPIRED and the dashboard renders
+    the Reconnect Broker action" -- was not implemented for the state this guard
+    creates. dashboard-data resolves through get_auth_token(), which is
+    deliberately unguarded so the freshness inference never reaches the shared
+    WebSocket feed (websocket_proxy/base_adapter.py:446), so a stale-but-present
+    token read as connected and the route handed it to the broker. The dashboard
+    then showed a broker error rather than the reconnect CTA that
+    frontend/src/pages/Dashboard.tsx:84 already implements.
+    """
+
+    def test_stale_broker_session_answers_the_reconnect_code(
+        self, dashboard_request, monkeypatch
+    ):
+        import database.settings_db as settings_db
+
+        monkeypatch.setattr(auth_db, "get_auth_token", lambda user: "token-from-yesterday")
+        monkeypatch.setattr(auth_db, "is_broker_session_stale_for_user", lambda user: True)
+        monkeypatch.setattr(settings_db, "get_analyze_mode", lambda: False)
+
+        def fail_if_called(*a, **k):
+            raise AssertionError("the broker was called with a stale credential")
+
+        monkeypatch.setattr("services.funds_service.get_funds", fail_if_called)
+
+        payload, status = _payload(auth_bp_module.get_dashboard_data())
+
+        assert status == 401
+        assert payload["code"] == "BROKER_SESSION_EXPIRED"
+
+    def test_fresh_broker_session_still_reaches_the_broker(
+        self, dashboard_request, monkeypatch
+    ):
+        import database.settings_db as settings_db
+
+        monkeypatch.setattr(auth_db, "get_auth_token", lambda user: "todays-token")
+        monkeypatch.setattr(auth_db, "is_broker_session_stale_for_user", lambda user: False)
+        monkeypatch.setattr(settings_db, "get_analyze_mode", lambda: False)
+        monkeypatch.setattr(
+            "services.funds_service.get_funds",
+            lambda *a, **k: (True, {"data": {"availablecash": "1000"}}, 200),
+        )
+
+        payload, status = _payload(auth_bp_module.get_dashboard_data())
+
+        assert status == 200
+        assert payload["data"]["availablecash"] == "1000"
+
+    def test_analyze_mode_is_not_gated_on_the_broker_session(
+        self, dashboard_request, monkeypatch
+    ):
+        """The sandbox is isolated from live trading, so a rolled-over broker
+        session must not take the sandbox dashboard down with it -- the same
+        rule the order services apply before resolving a credential."""
+        import database.settings_db as settings_db
+
+        monkeypatch.setattr(auth_db, "get_auth_token", lambda user: "token-from-yesterday")
+        monkeypatch.setattr(settings_db, "get_analyze_mode", lambda: True)
+
+        def fail_if_called(user):
+            raise AssertionError(
+                "analyze mode must not ask whether the live broker session is fresh"
+            )
+
+        monkeypatch.setattr(auth_db, "is_broker_session_stale_for_user", fail_if_called)
+        monkeypatch.setattr(
+            "services.funds_service.get_funds",
+            lambda *a, **k: (True, {"data": {"availablecash": "10000000"}}, 200),
+        )
+
+        payload, status = _payload(auth_bp_module.get_dashboard_data())
+
+        assert status == 200
+        assert payload["data"]["availablecash"] == "10000000"
