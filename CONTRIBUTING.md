@@ -91,7 +91,9 @@ OpenAlgo uses a **Python Flask** backend with a **React 19** single-page applica
 - **Flask-CORS** - CORS protection
 
 > [!IMPORTANT]
-> You will need **Python 3.12+**, **Node.js 20/22/24**, and the **uv** package manager.
+> You will need **Python 3.12+** and the **uv** package manager. **Node.js is only
+> required if you change frontend code**: `main` ships the built UI, so backend and
+> documentation contributors can skip it entirely.
 
 ---
 
@@ -102,7 +104,7 @@ OpenAlgo uses a **Python Flask** backend with a **React 19** single-page applica
 Before you begin, make sure you have the following installed:
 
 - **Python 3.12+** - [Download Python](https://www.python.org/downloads/)
-- **Node.js 20, 22, or 24** - [Download Node.js](https://nodejs.org/)
+- **Node.js (frontend contributors only)** - [Download Node.js](https://nodejs.org/). The `engines` field in `frontend/package.json` is the source of truth: `>=20.20.0 || >=22.22.0 || >=24.13.0`. Node below 20.20.0 will emit an `EBADENGINE` warning on `npm install`. Skip this if you are working on the backend or documentation.
 - **Git** - [Download Git](https://git-scm.com/downloads)
 - **Code Editor** - VS Code recommended with extensions:
   - Python
@@ -124,7 +126,10 @@ pip install uv
 # Sync Python dependencies (uv handles virtualenv automatically)
 uv sync
 
-# Build React frontend (required before first run)
+# That is the whole setup for backend and documentation work: a clone of main
+# already contains the built UI at frontend/dist/, so the app runs as-is.
+
+# Only if you are changing frontend code:
 cd frontend
 npm install
 npm run build
@@ -232,7 +237,7 @@ openalgo/
 │   ├── biome.json            # Biome linter/formatter config
 │   ├── tsconfig.json         # TypeScript configuration
 │   ├── vite.config.ts        # Vite build configuration
-│   └── dist/                 # Production build output (gitignored)
+│   └── dist/                 # Production build output (built by CI, tracked on main)
 ├── blueprints/               # Flask blueprints for web routes
 │   ├── auth.py               # Authentication routes
 │   ├── react_app.py          # Serves React SPA from frontend/dist/
@@ -286,20 +291,27 @@ git remote -v
 >
 > After forking, go to your fork's **Settings → Actions → General** (`https://github.com/YOUR_USERNAME/openalgo/settings/actions`) and select **"Disable actions"** under Actions permissions. This prevents CI workflows (frontend builds, Docker pushes) from running on your fork unnecessarily — those workflows are only meant to run on the upstream repository.
 
-### 2. Frontend Build Assets (Auto-Built by CI)
+### 2. Frontend Build Assets (Tracked on `main`, Built by CI)
 
-The `/frontend/dist` directory is **gitignored** and not tracked in the repository. CI automatically builds the frontend when changes are merged to main.
+`frontend/dist/` is listed in `.gitignore` **and is tracked on `main`**. That is not a
+contradiction: Git applies ignore rules only to untracked files, so the ignore entry stops
+only the *new* hashed assets a local build produces, while the copy already tracked on
+`main` keeps being updated by CI. Run `git ls-files frontend/dist` to see the tracked files.
+
+This is deliberate: **a plain `git pull` of `main` gives production servers and
+backend-only contributors a working UI with no Node.js installed.** That is the canonical
+upgrade path for a deployment.
 
 **How it works:**
-- PRs are tested with a fresh frontend build (but not committed)
-- When merged to main, CI automatically:
-  1. Builds the frontend (`cd frontend && npm run build`)
-  2. Pushes Docker image to Docker Hub
+- On a pull request, CI builds the frontend to prove it compiles and uploads the result as a workflow artifact. Nothing is committed to your branch.
+- After a push to `main`, the `commit-dist` job in `.github/workflows/ci.yml` rebuilds the frontend, force-adds it (`git add -f frontend/dist/`) and pushes a `chore: auto-build frontend dist [skip ci]` commit.
+- On a push to `main` the same workflow also builds and pushes the Docker image to Docker Hub. That job is skipped for fork pull requests, since it needs repository secrets.
 
-**For Contributors:**
-- Build locally for development: `cd frontend && npm install && npm run build`
-- Do NOT commit `frontend/dist/` — it is gitignored
-- Focus on source code changes — CI handles production builds
+**For contributors:**
+- **Do not commit `frontend/dist/` yourself.** CI owns that directory. The `.gitignore` entry does not protect you here, because those files are already tracked: a local `npm run build` modifies them and `git add .` stages the result. Check `git status` and run `git restore frontend/dist` before committing. A hand-built `dist/` in a pull request is review noise that conflicts on merge.
+- **Backend and documentation contributors:** nothing to do here. The UI in your clone is already built.
+- **Frontend contributors:** run `cd frontend && npm install && npm run build` (or `npm run dev`) to see your changes locally, and commit only your `frontend/src/` sources.
+- **Feature branches CI has not built** may carry a stale or missing `dist/`. Rebase onto recent `main`, or build locally.
 
 ### 3. Create a Feature Branch
 
@@ -417,8 +429,8 @@ npm run e2e
 - [ ] All existing features still work
 - [ ] New feature works as expected
 - [ ] CI-safe backend tests pass (the pytest selection above)
-- [ ] Frontend tests pass (`cd frontend && npm run test:run`)
-- [ ] No TypeScript errors (`cd frontend && npm run build`)
+- [ ] Frontend tests pass, if you changed frontend code (`cd frontend && npm run test:run`)
+- [ ] No TypeScript errors, if you changed frontend code (`cd frontend && npm run build`)
 - [ ] No linting errors (Ruff for Python, Biome for frontend)
 - [ ] API endpoints return correct responses
 - [ ] WebSocket connections work (if applicable)
@@ -1042,7 +1054,8 @@ npm run check
 #### Frontend Build Errors
 
 ```bash
-# Ensure correct Node.js version (20, 22, or 24)
+# Ensure a supported Node.js version: >=20.20.0, >=22.22.0 or >=24.13.0
+# (the engines field in frontend/package.json is the source of truth)
 node --version
 
 # Clean install
