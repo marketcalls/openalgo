@@ -30,10 +30,10 @@ else
   conda env update -n lean-py311 -f "$LEAN_ROOT/environment.python311.yml" --prune
 fi
 
-if [[ -d "$PYTHON_ENV_PREFIX" ]]; then
-  conda env update --prefix "$PYTHON_ENV_PREFIX" -f "$LEAN_ROOT/environment.python311.yml" --prune
-else
+if [[ ! -x "$PYTHON_ENV_PREFIX/bin/python" ]]; then
   conda create --prefix "$PYTHON_ENV_PREFIX" --clone lean-py311 --yes
+else
+  echo "Using existing Python environment: $PYTHON_ENV_PREFIX"
 fi
 
 PYTHON_BIN="$PYTHON_ENV_PREFIX/bin/python"
