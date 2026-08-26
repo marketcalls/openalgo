@@ -1,0 +1,21 @@
+[Unit]
+Description=QuantConnect Lean strategy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lean
+Group=lean
+WorkingDirectory=/opt/lean-strategies
+EnvironmentFile=-/etc/lean-strategy/lean-strategy.env
+ExecStart=/bin/bash -lc 'exec "$STRATEGY_RUNNER" "$STRATEGY_PATH" "$ALGORITHM_TYPE_NAME"'
+Restart=on-failure
+RestartSec=15
+KillSignal=SIGINT
+TimeoutStopSec=45
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

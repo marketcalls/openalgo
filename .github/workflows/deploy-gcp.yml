@@ -1,0 +1,59 @@
+name: Deploy Lean strategy to GCP
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lean-strategy-gcp-production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate deployment files
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n deploy/gcp/deploy.sh
+          find config -type f -name '*.json' -print0 | xargs -0 -n1 jq empty >/dev/null
+
+  deploy:
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SSH key
+        shell: bash
+        env:
+          GCP_SSH_PRIVATE_KEY: ${{ secrets.GCP_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$GCP_SSH_PRIVATE_KEY"
+          key="$RUNNER_TEMP/lean-deploy-key"
+          umask 077
+          printf '%s\n' "$GCP_SSH_PRIVATE_KEY" > "$key"
+          echo "DEPLOY_KEY=$key" >> "$GITHUB_ENV"
+      - name: Deploy over SSH
+        shell: bash
+        env:
+          GCP_SSH_HOST: ${{ secrets.GCP_SSH_HOST }}
+          GCP_SSH_USER: ${{ secrets.GCP_SSH_USER }}
+          GCP_SSH_PORT: ${{ secrets.GCP_SSH_PORT }}
+          GCP_DEPLOY_PATH: ${{ secrets.GCP_DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          test -n "$GCP_SSH_HOST"
+          test -n "$GCP_SSH_USER"
+          test -n "$GCP_DEPLOY_PATH"
+          port="${GCP_SSH_PORT:-22}"
+          ssh_opts=(-i "$DEPLOY_KEY" -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=accept-new)
+          ssh "${ssh_opts[@]}" "$GCP_SSH_USER@$GCP_SSH_HOST" \
+            "cd '$GCP_DEPLOY_PATH' && APP_ROOT='$GCP_DEPLOY_PATH' ./deploy/gcp/deploy.sh"
