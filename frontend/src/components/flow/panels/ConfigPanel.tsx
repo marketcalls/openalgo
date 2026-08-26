@@ -28,6 +28,7 @@ import {
   INDICATOR_CATALOG,
   INDICATOR_PARAMS,
   NODE_DEFINITIONS,
+  OPTION_NODE_PRODUCT,
   OPTION_STRATEGIES,
   OPTION_TYPES,
   ORDER_ACTIONS,
@@ -35,12 +36,19 @@ import {
   PRODUCT_TYPES,
   SCHEDULE_TYPES,
   STRIKE_OFFSETS,
+  defaultProductForExchange,
 } from '@/lib/flow/constants'
 import type { PriceType } from '@/lib/flow/constants'
 import { cn } from '@/lib/utils'
 import { useFlowWorkflowStore } from '@/stores/flowWorkflowStore'
 import type { BasketOrderItem } from '@/types/flow'
 import { showToast } from '@/utils/toast'
+
+/**
+ * The Basket node's "no blanket product" choice. Radix needs a non-empty item
+ * value, and the node stores the absence of a product rather than this string.
+ */
+const BASKET_PRODUCT_AUTO = 'AUTO'
 import { IndicatorParamsFields } from './IndicatorParamsFields'
 import { MarginPositionsFields } from './MarginPositionsFields'
 import { CustomLegsFields } from './CustomLegsFields'
@@ -307,6 +315,15 @@ export function ConfigPanel() {
   const nodeData = selectedNode.data as Record<string, unknown>
   const nodeType = selectedNode.type || 'unknown'
   const orderPriceType = (nodeData.priceType as PriceType | undefined) || 'MARKET'
+  // What the Product control shows. A product the author picked is stored on
+  // the node and always wins; with none stored the node follows its exchange,
+  // so a derivative segment reads NRML and cash reads MIS. Options nodes trade
+  // a derivative whatever their underlying's exchange field happens to be.
+  const nodeProduct =
+    (nodeData.product as string) ||
+    (nodeType === 'optionsOrder' || nodeType === 'optionsMultiOrder'
+      ? OPTION_NODE_PRODUCT
+      : defaultProductForExchange(nodeData.exchange as string | undefined))
   const basketOrders = nodeData.orders as string | BasketOrderItem[] | undefined
   const nodeTitle = NODE_TITLES[nodeType] || nodeInfo?.label || nodeType
 
@@ -872,7 +889,7 @@ export function ConfigPanel() {
                 <div className="space-y-2">
                   <Label className="text-xs">Product</Label>
                   <Select
-                    value={(nodeData.product as string) || 'MIS'}
+                    value={nodeProduct}
                     onValueChange={(v) => handleDataChange('product', v)}
                   >
                     <SelectTrigger className="h-8">
@@ -1010,7 +1027,7 @@ export function ConfigPanel() {
                 <div className="space-y-2">
                   <Label className="text-xs">Product</Label>
                   <Select
-                    value={(nodeData.product as string) || 'MIS'}
+                    value={nodeProduct}
                     onValueChange={(v) => handleDataChange('product', v)}
                   >
                     <SelectTrigger className="h-8">
@@ -1197,7 +1214,7 @@ export function ConfigPanel() {
                 <div className="space-y-2">
                   <Label className="text-xs">Product</Label>
                   <Select
-                    value={(nodeData.product as string) || 'MIS'}
+                    value={nodeProduct}
                     onValueChange={(v) => handleDataChange('product', v)}
                   >
                     <SelectTrigger className="h-8">
@@ -1355,7 +1372,7 @@ export function ConfigPanel() {
                 <div className="space-y-2">
                   <Label className="text-xs">Product</Label>
                   <Select
-                    value={(nodeData.product as string) || 'MIS'}
+                    value={nodeProduct}
                     onValueChange={(v) => handleDataChange('product', v)}
                   >
                     <SelectTrigger className="h-8">
@@ -1518,7 +1535,7 @@ export function ConfigPanel() {
                     value={nodeData.legs}
                     onChange={(legs) => handleDataChange('legs', legs)}
                     commonPriceType={orderPriceType}
-                    commonProduct={(nodeData.product as string) || 'MIS'}
+                    commonProduct={nodeProduct}
                     commonExpiryType={(nodeData.expiryType as string) || 'current_week'}
                     commonAction={(nodeData.action as string) || 'SELL'}
                     commonQuantity={(nodeData.quantity as number) || 1}
@@ -1583,14 +1600,21 @@ export function ConfigPanel() {
                 </div>
                 <div className="space-y-2">
                   <Label className="text-xs">Product</Label>
+                  {/* One basket can mix segments, so the default is decided per
+                      row rather than blanket: an NFO row goes NRML while an NSE
+                      row goes MIS. Choosing a product here overrides all of
+                      them. */}
                   <Select
-                    value={(nodeData.product as string) || 'MIS'}
-                    onValueChange={(v) => handleDataChange('product', v)}
+                    value={(nodeData.product as string) || BASKET_PRODUCT_AUTO}
+                    onValueChange={(v) =>
+                      handleDataChange('product', v === BASKET_PRODUCT_AUTO ? undefined : v)
+                    }
                   >
                     <SelectTrigger className="h-8">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value={BASKET_PRODUCT_AUTO}>By row exchange</SelectItem>
                       {PRODUCT_TYPES.map((t) => (
                         <SelectItem key={t.value} value={t.value}>
                           {t.label}
@@ -1718,7 +1742,7 @@ export function ConfigPanel() {
                 <div className="space-y-2">
                   <Label className="text-xs">Product</Label>
                   <Select
-                    value={(nodeData.product as string) || 'MIS'}
+                    value={nodeProduct}
                     onValueChange={(v) => handleDataChange('product', v)}
                   >
                     <SelectTrigger className="h-8">
@@ -1842,7 +1866,7 @@ export function ConfigPanel() {
                     <div className="space-y-2">
                       <Label className="text-xs">Product</Label>
                       <Select
-                        value={(nodeData.product as string) || 'MIS'}
+                        value={nodeProduct}
                         onValueChange={(v) => handleDataChange('product', v)}
                       >
                         <SelectTrigger className="h-8">
@@ -2054,7 +2078,7 @@ export function ConfigPanel() {
                 <div className="space-y-2">
                   <Label className="text-xs">Product</Label>
                   <Select
-                    value={(nodeData.product as string) || 'MIS'}
+                    value={nodeProduct}
                     onValueChange={(v) => handleDataChange('product', v)}
                   >
                     <SelectTrigger className="h-8">
@@ -3817,7 +3841,7 @@ export function ConfigPanel() {
                 <div className="space-y-2">
                   <Label className="text-xs">Product</Label>
                   <Select
-                    value={(nodeData.product as string) || 'MIS'}
+                    value={nodeProduct}
                     onValueChange={(v) => handleDataChange('product', v)}
                   >
                     <SelectTrigger className="h-8">
