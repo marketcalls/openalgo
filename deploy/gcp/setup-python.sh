@@ -24,7 +24,7 @@ command -v "$CONDA_BIN" >/dev/null 2>&1 || \
 CONDA_ROOT="$(cd "$(dirname "$(command -v "$CONDA_BIN")")/.." && pwd)"
 export PATH="$CONDA_ROOT/bin:$PATH"
 
-if ! conda env list --json | grep -q 'lean-py311'; then
+if ! conda env list | awk '$1 == "lean-py311" { found = 1 } END { exit !found }'; then
   conda env create -f "$LEAN_ROOT/environment.python311.yml"
 else
   conda env update -n lean-py311 -f "$LEAN_ROOT/environment.python311.yml" --prune
