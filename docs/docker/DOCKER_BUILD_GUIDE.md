@@ -55,7 +55,7 @@ docker run -d \
   -v openalgo_log:/app/log \
   -v openalgo_strategies:/app/strategies \
   -v openalgo_keys:/app/keys \
-  -v "$(pwd)/.env:/app/.env:ro" \
+  -v "$(pwd)/.env:/app/.env" \
   --tmpfs /app/tmp:size=1g,mode=1777 \
   --restart unless-stopped \
   openalgo:latest
@@ -469,7 +469,7 @@ kubectl apply -f k8s/deployment.yaml
 
 1. **Runs as non-root user:** Container runs as `appuser`
 2. **Restricted permissions:** Keys directory has `chmod 700`
-3. **Read-only .env:** Mounted with `:ro` flag
+3. **Writable `.env` mount:** `.env` is mounted writable so that v2.0.0.8+ automatic `APP_KEY`/`FERNET_SALT` key-rotation can atomically write `.env.tmp`. Mounting it `:ro` would crash the worker in a restart loop. If you don't use auto-rotation, apply host-side `chmod 600` and rely on filesystem permissions for at-rest confidentiality.
 4. **No privilege escalation:** No `--privileged` flag
 
 ## CI/CD Integration
