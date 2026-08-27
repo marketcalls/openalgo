@@ -142,7 +142,7 @@ Services do `importlib.import_module(f"broker.{broker}.api.<module>")` and call
 `auth` is always the decrypted broker token string (last positional arg).
 
 There is one more optional surface: an **order-update stream** (real-time fills,
-rejections, cancellations pushed to the client). 16 of 36 brokers implement it.
+rejections, cancellations pushed to the client). 17 of 36 brokers implement it.
 It is registered separately in `services/order_update_service.py`, not in the
 table above — see `references/order-updates.md`.
 
