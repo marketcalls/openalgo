@@ -44,6 +44,7 @@ Detailed procedures live in `.claude/skills/` and load on demand:
 - **`fd-audit`** — run after any change touching DB, WebSockets/streaming, threads/executors, subprocesses, files, or sockets
 - **`version-bump`** — releasing the platform, or bumping the pinned `openalgo` SDK (two unrelated version numbers)
 - **`broker-integration`** — adding or modifying a broker plugin
+- **`chart-indicator`** — building a custom indicator for the `/trading` chart (JavaScript, `openalgo-charts`). Not to be confused with **`custom-indicator`**, which is the Python `openalgo.ta` path.
 
 ## Security and Deployment Model
 
@@ -148,6 +149,19 @@ Session cleanup runs in `teardown_appcontext` after the response is sent.
 live dashboards.
 
 Ports: app 5000, WebSocket proxy 8765, ZeroMQ 5555.
+
+### Custom chart indicators are loaded at runtime, never bundled
+
+User indicators live in `strategies/indicators/*.js` (gitignored, mirroring
+`strategies/scripts/` for Python strategies, and inside the same Docker volume).
+`blueprints/custom_indicators.py` serves them; the chart fetches the index and
+`import()`s each one after the built-in tier
+(`frontend/src/lib/trading/customIndicators.ts`).
+
+- **Never bundle them.** `frontend/dist/` is built by CI from what is committed, so a bundled indicator would need committing first and the next `git pull` would erase it. Runtime loading keeps them outside the build: no Node.js, no rebuild, untouched by upgrades.
+- **They register after the built-ins**, so a custom id that collides with one of the 91 built-ins overrides it.
+- **They are not sandboxed.** An indicator runs on the app origin with the logged-in session and can reach `/api/v1/`. That matches the trust model of the Python strategy host, which already runs arbitrary user code, but it means an indicator from an untrusted source is as dangerous as any script.
+- Use the **`chart-indicator`** skill to write one. It validates against the real library and refuses to install a file that errors.
 
 Two built-in pages exercise the streaming stack end to end: **`/websocket/test`**
 (market data; `/20`, `/30`, `/50` variants request those depth levels) and

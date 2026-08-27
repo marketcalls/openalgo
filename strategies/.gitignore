@@ -8,6 +8,9 @@ strategy_env.json
 # Uploaded strategy scripts
 scripts/*.py
 
+# Custom chart indicators written by the user (see indicators/.gitignore)
+indicators/*.js
+
 # Keep example strategies
 !examples/
 !examples/*.py

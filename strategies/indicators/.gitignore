@@ -1,0 +1,15 @@
+# Ignore all custom chart indicators added by the user
+*.js
+
+# But keep this .gitignore and the folder README
+!.gitignore
+!README.md
+
+# Ignore backup and editor files
+*.bak
+*.backup
+*~
+
+# Keep the directory but ignore its contents.
+# This ensures the indicators folder exists in git while the indicators you
+# write stay on your own machine and are never pushed.
