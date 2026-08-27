@@ -30,7 +30,7 @@ broker/
 │   └── ... (same structure)
 ├── angel/
 │   └── ... (same structure)
-└── ... (34 broker plugins total)
+└── ... (36 broker plugins total)
 ```
 
 ## File Explanations

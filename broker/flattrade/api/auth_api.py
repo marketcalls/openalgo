@@ -21,21 +21,20 @@ def authenticate_broker(code, password=None, totp_code=None):
     """
     try:
         full_api_key = os.getenv("BROKER_API_KEY")
-        logger.debug(f"Full API Key: {full_api_key}")  # Debug print
+        logger.debug("Broker API key loaded")
 
         # Split the API key to get the actual key part
         BROKER_API_KEY = full_api_key.split(":::")[1]
         BROKER_API_SECRET = os.getenv("BROKER_API_SECRET")
 
-        logger.debug(f"Using API Key: {BROKER_API_KEY}")  # Debug print
-        logger.debug(f"Request Code: {code}")  # Debug print
+        logger.debug("Using configured broker API key")
+        logger.debug("Request code received")  # Debug print
 
         # Create the security hash as per Flattrade docs
         hash_input = f"{BROKER_API_KEY}{code}{BROKER_API_SECRET}"
         security_hash = hashlib.sha256(hash_input.encode()).hexdigest()
 
-        logger.debug(f"Hash Input: {hash_input}")  # Debug print
-        logger.debug(f"Security Hash: {security_hash}")  # Debug print
+        logger.debug("Security hash computed")  # Debug print
 
         url = "https://authapi.flattrade.in/trade/apitoken"
         data = {"api_key": BROKER_API_KEY, "request_code": code, "api_secret": security_hash}

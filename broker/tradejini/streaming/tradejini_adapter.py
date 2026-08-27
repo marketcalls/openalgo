@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import sys
 import threading
@@ -12,6 +11,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
 from broker.tradejini.api.auth_api import get_api_key
 from database.auth_db import get_auth_token
 from database.token_db import get_token
+from utils.logging import get_logger
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_proxy.mapping import SymbolMapper
 
@@ -24,7 +24,7 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("tradejini_websocket")
+        self.logger = get_logger("tradejini_websocket")
         self.ws_client = None
         self.user_id = None
         self.broker_name = "tradejini"

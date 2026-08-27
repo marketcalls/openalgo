@@ -217,7 +217,10 @@ class KotakWebSocket:
                 "Authorization": self.auth_config.get("auth_token"),
                 "Sid": self.auth_config.get("sid"),
             }
-            logger.debug(f"[KOTAK WSS SEND] Sending explicit connection request: {cn_msg}")
+            logger.debug(
+                "[KOTAK WSS SEND] Sending explicit connection request "
+                f"(auth={bool(cn_msg['Authorization'])}, sid={bool(cn_msg['Sid'])})"
+            )
             with self._send_lock:
                 self.ws.hs_send(json.dumps(cn_msg))
         except Exception as e:

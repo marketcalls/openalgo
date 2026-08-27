@@ -11,7 +11,13 @@
 // MarginPositionSchema declares quantity and price as fields.Str, so numbers
 // are rejected outright on the REST path.
 
-import { EXCHANGES, ORDER_ACTIONS, PRICE_TYPES, PRODUCT_TYPES } from '@/lib/flow/constants'
+import {
+  EXCHANGES,
+  ORDER_ACTIONS,
+  PRICE_TYPES,
+  PRODUCT_TYPES,
+  defaultProductForExchange,
+} from '@/lib/flow/constants'
 
 export interface MarginLeg {
   symbol: string
@@ -35,7 +41,7 @@ export const EMPTY_LEG: MarginLeg = {
   exchange: 'NSE',
   action: 'BUY',
   quantity: '1',
-  product: 'MIS',
+  product: defaultProductForExchange('NSE'),
   pricetype: 'MARKET',
   price: '0',
   trigger_price: '0',
@@ -77,12 +83,15 @@ function toLeg(entry: Record<string, unknown>): MarginLeg {
   for (const [key, val] of Object.entries(entry)) {
     if (!MODELLED_KEYS.has(key)) extra[key] = val
   }
+  const exchange = str('exchange', 'NSE')
   return {
     symbol: str('symbol', ''),
-    exchange: str('exchange', 'NSE'),
+    exchange,
     action: str('action', 'BUY').toUpperCase(),
     quantity: str('quantity', '1'),
-    product: str('product', 'MIS'),
+    // A leg that names no product follows its own exchange, so an NFO leg is
+    // priced as the NRML carry position it is rather than as intraday margin.
+    product: str('product', defaultProductForExchange(exchange)),
     pricetype: str('pricetype', 'MARKET'),
     price: str('price', '0'),
     trigger_price: str('trigger_price', '0'),

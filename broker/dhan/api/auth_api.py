@@ -1,13 +1,13 @@
 import json
-import logging
 import os
 
 import httpx
 
 from broker.dhan.api.baseurl import BASE_URL, get_url
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Dhan Auth API endpoints
 AUTH_BASE_URL = "https://auth.dhan.co"
@@ -38,7 +38,7 @@ def generate_consent(dhan_client_id):
         url = f"{AUTH_BASE_URL}/app/generate-consent"
 
         logger.info(f"Generating consent for Dhan Client ID: {dhan_client_id}")
-        logger.info(f"Using API Key: {BROKER_API_KEY[:8] if BROKER_API_KEY else 'None'}...")
+        logger.info("Using configured broker API key")
         logger.info(
             f"Using API Secret: {BROKER_API_SECRET[:8] if BROKER_API_SECRET else 'None'}..."
         )
@@ -49,7 +49,7 @@ def generate_consent(dhan_client_id):
         response = client.post(full_url, headers=headers)
 
         logger.info(f"Generate consent response status: {response.status_code}")
-        logger.info(f"Generate consent response: {response.text}")
+        logger.info("Generate consent response received")
 
         if response.status_code == 200:
             data = response.json()
@@ -100,7 +100,7 @@ def consume_consent(token_id):
         url = f"{AUTH_BASE_URL}/app/consumeApp-consent"
         params = {"tokenId": token_id}
 
-        logger.debug(f"Consuming consent with tokenId: {token_id}")
+        logger.debug("Consuming consent to obtain access token")
         response = client.post(url, headers=headers, params=params)
 
         if response.status_code == 200:
@@ -115,7 +115,7 @@ def consume_consent(token_id):
                     "ddpi_status": data.get("givenPowerOfAttorney", False),
                     "token_expiry": data.get("expiryTime"),
                 }
-                logger.debug(f"Access Token obtained: {access_token}")
+                logger.debug("Access token obtained")
                 logger.debug(f"Additional Data: {additional_data}")
                 return access_token, additional_data
             else:
