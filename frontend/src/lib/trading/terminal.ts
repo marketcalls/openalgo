@@ -919,6 +919,13 @@ export class TradingTerminal {
       style,
       priceFormat: { type: 'custom', formatter: (p: number) => p.toFixed(dp) },
     })
+    // Tell the engine the instrument's tick. Without it the price scale treats
+    // `minMove: 0` as "infer precision from the visible range", so RELIANCE at a
+    // 0.05 tick renders a decimal short, drawings snap to an invented grid, and
+    // an indicator asking `ctx.tickSize` is told nobody knows. The value is the
+    // same one this host already formats and snaps orders with.
+    const tick = this.tick()
+    if (tick > 0) this.chart.setPriceScaleOptions({ minMove: tick })
     // Volume rides an OVERLAY price scale inside the price pane rather than a
     // pane of its own: it autoscales independently but draws no axis, so the
     // right-hand column stays a clean price ladder instead of stacking a second
