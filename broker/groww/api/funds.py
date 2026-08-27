@@ -13,7 +13,7 @@ logger = get_logger(__name__)
 
 def get_margin_data(auth_token):
     """Fetch margin data directly from Groww API using the provided auth token."""
-    logger.info(f"Getting margin data with token: {auth_token}...")
+    logger.info("Getting margin data; auth_token_present=%s", bool(auth_token))
 
     try:
         # Define the API endpoint for user margin details
@@ -30,14 +30,12 @@ def get_margin_data(auth_token):
 
         # Check if the request was successful
         if response.status_code != 200:
-            logger.error(
-                f"Error fetching margin data: HTTP {{response.status_code}} - {response.text}"
-            )
+            logger.error(f"Error fetching margin data: HTTP {response.status_code}")
             return {}
 
         # Parse the JSON response
         response_data = response.json()
-        logger.info(f"Funds Details: {response_data}")
+        logger.info("Funds response received; status=%s", response_data.get("status"))
 
         # Check if the response was successful according to Groww's status field
         if response_data.get("status") != "SUCCESS":

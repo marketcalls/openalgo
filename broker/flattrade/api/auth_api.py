@@ -39,15 +39,14 @@ def authenticate_broker(code, password=None, totp_code=None):
         url = "https://authapi.flattrade.in/trade/apitoken"
         data = {"api_key": BROKER_API_KEY, "request_code": code, "api_secret": security_hash}
 
-        logger.debug(f"Request Data: {data}")  # Debug print
+        logger.debug("Request data prepared; fields=%s", list(data.keys()))
 
         # Get the shared httpx client
         client = get_httpx_client()
 
         response = client.post(url, json=data)
 
-        logger.debug(f"Response Status: {response.status_code}")  # Debug print
-        logger.debug(f"Response Content: {response.text}")  # Debug print
+        logger.debug("Response status: %s", response.status_code)
 
         if response.status_code == 200:
             response_data = response.json()
@@ -65,11 +64,11 @@ def authenticate_broker(code, password=None, totp_code=None):
                 error_msg = f"API error: {error_detail.get('emsg', 'Unknown error')}"
             except Exception:
                 error_msg = f"API error: Status {response.status_code}, Response: {response.text}"
-            logger.error(f"Request Error: {error_msg}")  # Debug print
+            logger.error("Authentication request failed; status=%s", response.status_code)
             return None, error_msg
 
     except Exception as e:
-        logger.debug(f"Exception: {e}")  # Debug print
+        logger.debug("Authentication exception; type=%s", type(e).__name__)
         return None, f"An exception occurred: {str(e)}"
 
 

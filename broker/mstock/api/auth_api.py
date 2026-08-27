@@ -32,7 +32,7 @@ def authenticate_with_totp(password, totp_code):
     if not totp_code:
         return None, None, "TOTP code is required."
 
-    logger.info(f"Using clientcode: {clientcode}")
+    logger.info("Using configured mStock clientcode")
 
     try:
         client = get_httpx_client()
@@ -65,7 +65,7 @@ def authenticate_with_totp(password, totp_code):
         status = login_result.get("status")
         if status not in [True, "true"] or "data" not in login_result:
             error_message = login_result.get("message", "Authentication failed.")
-            logger.error(f"Authentication failed: {error_message}")
+            logger.error("Authentication failed; status=%s", status)
             return None, None, error_message
 
         # Get refresh token from response (not the final auth token)
@@ -74,7 +74,7 @@ def authenticate_with_totp(password, totp_code):
 
         if not refresh_token:
             logger.error("No refreshToken in login response")
-            logger.info(f"Available fields in data: {data}")
+            logger.info("Login response data fields: %s", list(data.keys()))
             return None, None, "Failed to get refresh token from response."
 
         logger.info("Login with TOTP successful, now verifying TOTP to get final token")
@@ -106,7 +106,7 @@ def authenticate_with_totp(password, totp_code):
         status = verify_result.get("status")
         if status not in [True, "true"] or "data" not in verify_result:
             error_message = verify_result.get("message", "TOTP verification failed.")
-            logger.error(f"TOTP verification failed: {error_message}")
+            logger.error("TOTP verification failed; status=%s", status)
             return None, None, error_message
 
         # Get final authentication tokens
@@ -117,7 +117,7 @@ def authenticate_with_totp(password, totp_code):
 
         if not auth_token:
             logger.error("No jwtToken in verification response")
-            logger.debug(f"Available fields in data: {final_data}")
+            logger.debug("Verification response fields: %s", list(final_data.keys()))
             return None, None, "Failed to get authentication token from verification response."
 
         logger.info("TOTP authentication successful, got final jwtToken")
@@ -128,10 +128,10 @@ def authenticate_with_totp(password, totp_code):
         try:
             error_detail = e.response.json()
             error_msg += f" - {error_detail.get('message', e.response.text)}"
-            logger.error(f"HTTP Error: {e.response.status_code}, Details: {error_detail}")
+            logger.error("mStock authentication HTTP error; status=%s", e.response.status_code)
         except Exception:
             error_msg += f" - {e.response.text}"
-            logger.error(f"HTTP Error: {e.response.status_code}, Raw: {e.response.text}")
+            logger.error("mStock authentication HTTP error; status=%s", e.response.status_code)
         return None, None, error_msg
     except Exception as e:
         logger.exception("Unexpected error during TOTP authentication")
@@ -158,7 +158,7 @@ def send_otp(password):
     if not password:
         return None, None, "Password is required."
 
-    logger.debug(f"Using clientcode: {clientcode}")
+    logger.debug("Using configured mStock clientcode")
 
     try:
         client = get_httpx_client()
@@ -185,7 +185,7 @@ def send_otp(password):
         status = login_result.get("status")
         if status not in [True, "true"] or "data" not in login_result:
             error_message = login_result.get("message", "Login failed.")
-            logger.error(f"Login failed: {error_message}")
+            logger.error("Login failed; status=%s", status)
             return None, None, error_message
 
         # Check if refreshToken field exists first, otherwise use jwtToken
@@ -194,12 +194,10 @@ def send_otp(password):
 
         if not refresh_token:
             logger.error("No refreshToken or jwtToken in login response")
-            logger.debug(f"Available fields in data: {data}")
+            logger.debug("Login response data fields: %s", list(data.keys()))
             return None, None, "Failed to get refreshToken from login response."
 
-        logger.debug(
-            f"Using token as refreshToken: {refresh_token[:30]}... (length: {len(refresh_token)})"
-        )
+        logger.debug("Refresh token received; length=%s", len(refresh_token))
 
         success_message = login_result.get("message", "OTP sent successfully")
         logger.debug(f"Login successful, OTP sent. Message: {success_message}")
@@ -211,10 +209,10 @@ def send_otp(password):
         try:
             error_detail = e.response.json()
             error_msg += f" - {error_detail.get('message', e.response.text)}"
-            logger.error(f"HTTP Error: {e.response.status_code}, Details: {error_detail}")
+            logger.error("mStock OTP HTTP error; status=%s", e.response.status_code)
         except Exception:
             error_msg += f" - {e.response.text}"
-            logger.error(f"HTTP Error: {e.response.status_code}, Raw: {e.response.text}")
+            logger.error("mStock OTP HTTP error; status=%s", e.response.status_code)
         return None, None, error_msg
     except Exception as e:
         logger.exception("Unexpected error during OTP send")
@@ -268,8 +266,11 @@ def verify_otp(otp_code, refresh_token):
         )
 
         logger.debug(f"OTP verification HTTP status: {token_response.status_code}")
-        logger.debug(f"OTP verification response headers: {dict(token_response.headers)}")
-        logger.debug(f"OTP verification raw response text: [{token_response.text}]")
+        logger.debug(
+            "OTP verification response received; status=%s, content_type=%s",
+            token_response.status_code,
+            token_response.headers.get("content-type"),
+        )
 
         token_response.raise_for_status()
         token_result = token_response.json()
@@ -286,7 +287,7 @@ def verify_otp(otp_code, refresh_token):
             return auth_token, feed_token, None
         else:
             error_message = token_result.get("message", "Token generation failed.")
-            logger.error(f"OTP verification failed: {error_message}")
+            logger.error("OTP verification failed; status=%s", status)
             return None, None, error_message
 
     except httpx.HTTPStatusError as e:
@@ -294,10 +295,10 @@ def verify_otp(otp_code, refresh_token):
         try:
             error_detail = e.response.json()
             error_msg += f" - {error_detail.get('message', e.response.text)}"
-            logger.error(f"HTTP Error: {e.response.status_code}, Details: {error_detail}")
+            logger.error("mStock token HTTP error; status=%s", e.response.status_code)
         except Exception:
             error_msg += f" - {e.response.text}"
-            logger.error(f"HTTP Error: {e.response.status_code}, Raw: {e.response.text}")
+            logger.error("mStock token HTTP error; status=%s", e.response.status_code)
         return None, None, error_msg
     except Exception as e:
         logger.exception("Unexpected error during OTP verification")

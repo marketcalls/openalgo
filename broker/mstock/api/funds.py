@@ -43,8 +43,7 @@ def get_margin_data(auth_token):
         logger.debug(
             f"Fund summary response: status={margin_data.get('status')}, has_data={bool(margin_data.get('data'))}"
         )
-        logger.debug(f"Full margin data response: {margin_data}")
-        if margin_data.get("status") == True and margin_data.get("data"):
+        if margin_data.get("status") == True and margin_data.get("data"):  # noqa: E712
             data = margin_data["data"][0]
             key_mapping = {
                 "AVAILABLE_BALANCE": "availablecash",
@@ -65,19 +64,17 @@ def get_margin_data(auth_token):
                     formatted_value = "0.00"
                 filtered_data[openalgo_key] = formatted_value
 
-            logger.debug(f"filteredMargin Data: {filtered_data}")
+            logger.debug("Margin data processed; fields=%s", list(filtered_data.keys()))
             return filtered_data
 
         logger.error(f"Margin API failed: {margin_data.get('message', 'No data')}")
         return {}
 
     except httpx.HTTPStatusError as e:
-        logger.error(f"HTTP Error while fetching margin data: {e}")
-        logger.error(f"Response status code: {e.response.status_code}")
-        logger.error(f"Response body: {e.response.text}")
+        logger.error("HTTP error while fetching margin data; status=%s", e.response.status_code)
         try:
             error_detail = e.response.json()
-            logger.error(f"Error details: {error_detail}")
+            logger.error("Margin API error fields: %s", list(error_detail.keys()))
         except Exception:
             pass
         return {}
