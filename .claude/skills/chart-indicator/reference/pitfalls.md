@@ -302,3 +302,32 @@ existing indicator is untouched.
 
 `symbol` and `interval` can be `undefined`: the engine is handed bars, not an
 instrument, and only a host that supplies them will have them. Guard before use.
+
+---
+
+## 21. Do not ask the user for the tick size
+
+Since 1.8.2 the chart tells you: `ctx.tickSize` on the fourth `calc` argument,
+sourced from the price scale's `minMove`. An input for it is a second source of
+truth that will disagree with the axis the moment the user edits it.
+
+```js
+const tick = Number(ctx?.tickSize) || 0          // 0 means the host never set one
+```
+
+Guard for `undefined`, because a host that has not set `minMove` genuinely does
+not know, and the scale's `0` means "infer precision from the range" rather than
+one paisa.
+
+Snap the levels a trader acts on, and only those:
+
+| Snap | Leave alone |
+| --- | --- |
+| stops, band edges, entry and target levels | moving averages |
+| anything an order gets placed at | oscillators, ratios, z-scores |
+
+**Point value is different: the chart does not know it.** Nothing in the engine
+describes what one point of an instrument is worth, so a study needing it takes
+an input defaulting to 1, which is right for Indian markets.
+
+*Validator: no check. It cannot tell a tradeable level from a smoothed average.*

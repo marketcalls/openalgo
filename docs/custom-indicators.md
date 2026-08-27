@@ -36,6 +36,7 @@ it running against your live broker session.
 - [Candles as a plot](#candles-as-a-plot)
 - [Sessions, timeframes and colours](#sessions-timeframes-and-colours)
 - [Knowing what the chart is doing](#knowing-what-the-chart-is-doing)
+- [Tick size and point value](#tick-size-and-point-value)
 - [Indicators that need external data](#indicators-that-need-external-data)
 - [Worked example: Open Range Breakout](#worked-example-open-range-breakout)
 - [Porting from other charting scripts](#porting-from-other-charting-scripts)
@@ -412,6 +413,27 @@ calc(bars, settings, store, ctx) {
   // ctx.timezone, ctx.now()
 }
 ```
+
+## Tick size and point value
+
+The chart knows the instrument's tick and hands it to you, so do not add an
+input for it:
+
+```js
+calc(bars, settings, store, ctx) {
+  const tick = Number(ctx?.tickSize) || 0     // 0 means the host never set one
+  const snap = (v) => (Number.isFinite(v) && tick > 0 ? Math.round(v / tick) * tick : v)
+  ...
+}
+```
+
+Snap the levels a trader would place an order at, such as stops, band edges and
+entry levels: a price between two valid ticks cannot be traded. Leave moving
+averages and oscillators alone, where the extra precision is the point.
+
+**Point value is different.** Nothing in the chart describes what one point of an
+instrument is worth, so a study needing it takes an input defaulting to 1, which
+is correct for Indian equities, futures and options.
 
 ## Indicators that need external data
 

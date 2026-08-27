@@ -42,8 +42,32 @@ calc(bars, settings, store, ctx) {
   // ctx.barState.lastIndex
   // ctx.symbol, ctx.interval  may be undefined, see below
   // ctx.timezone, ctx.now()
+  // ctx.tickSize             1.8.2, the instrument tick, or undefined
 }
 ```
+
+### Tick size and point value
+
+`ctx.tickSize` is the instrument's tick, taken from the pane's price scale
+`minMove`. It is the same number the axis formats to and `snapToTick` snaps to,
+so **read it rather than adding an input for it**.
+
+It is `undefined` when the host has not set `minMove`. The scale treats 0 as
+"infer precision from the visible range", which is not a tick size, so guard:
+
+```js
+const tick = Number(ctx?.tickSize) || 0
+const snap = (v) => (Number.isFinite(v) && tick > 0 ? Math.round(v / tick) * tick : v)
+```
+
+**Snap any level a trader would act on.** A stop, a band edge, an entry level: a
+price sitting between two valid ticks cannot be traded. Do not snap a smoothed
+average or an oscillator, where the extra precision is the point.
+
+**Point value has no equivalent.** The chart knows what an instrument's prices
+look like, not what a point of it is worth. If a study needs it, take it as an
+input and default it to 1, which is correct for Indian equities, futures and
+options.
 
 `symbol` and `interval` are `undefined` under a plain `chart.addIndicator`: the
 engine is handed bars and never an instrument. A host that knows them supplies

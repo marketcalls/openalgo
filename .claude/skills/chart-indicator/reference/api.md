@@ -123,6 +123,17 @@ session that straddles a calendar boundary is not cut in half by them.
 | `DEFAULT_THEME`, `darkTheme`, `lightTheme` | theme palettes |
 | `VERSION` | library version |
 
+## The instrument (1.8.2)
+
+| | |
+| --- | --- |
+| `ctx.tickSize` | the pane price scale's `minMove`, or `undefined` if the host never set one |
+| `roundToTick(price, tick)` | snap a price to a tick, exported from the core |
+| `precisionForStep(tick)` | decimals implied by a tick |
+
+There is no point value: the chart knows how prices are quoted, not what a point
+is worth. Take it as an input, default 1.
+
 ## Sessions, timeframes and colours (1.8.1)
 
 | | |

@@ -175,6 +175,7 @@ hand-rolling anything, check whether one of these already covers it:
 | One plot on price from a pane study | `plot.overlay: true` |
 | Candles or bars as a plot | `plot.ohlc: { open, high, low, close }` |
 | Know the bar state, symbol, interval, clock | the 4th `calc` argument |
+| The instrument's tick size | `ctx.tickSize`, never an input for it |
 | Parse a session window | `parseSessionSpec`, `inSessionAt`, `sessionFlags` |
 | Reason about the timeframe | `intervalParts`, `isIntradayInterval`, ... |
 | A colour ramp or alpha | `fromGradient`, `withAlpha` |
@@ -205,6 +206,9 @@ Full list in `reference/pitfalls.md`. These four account for most failures:
   plot's `style`. Your own width input becomes a second control that disagrees.
 - Reuse a built-in id unless overriding it is the actual intent. Custom modules
   register last, so they win. The validator warns on this.
+- Add an input for the tick size. `ctx.tickSize` carries it since 1.8.2, and an
+  input is a second source of truth that disagrees with the axis. Point value is
+  the exception: the chart does not know it, so that one is an input at 1.
 - Assume the browser's local time. Use `zonedDayIndex` /
   `utcSecondsToZonedParts` with a zone, defaulting to `DEFAULT_TIMEZONE`.
 
