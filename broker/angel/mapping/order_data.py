@@ -250,12 +250,18 @@ def transform_positions_data(positions_data):
 
 def transform_holdings_data(holdings_data):
     transformed_data = []
-    for holdings in holdings_data["holdings"]:
+    # An account with nothing in demat comes back as holdings: null, not [].
+    for holdings in (holdings_data or {}).get("holdings") or []:
         transformed_position = {
             "symbol": holdings.get("tradingsymbol", ""),
             "exchange": holdings.get("exchange", ""),
             "quantity": _to_int(holdings.get("quantity", 0)),
             "product": holdings.get("product", ""),
+            # Angel reports both on every holding; dropping them left the
+            # holdings page showing a dash for average and LTP, and gave the
+            # portfolio analytics a zero investment value to weight by.
+            "average_price": _to_float(holdings.get("averageprice", 0.0)),
+            "ltp": _to_float(holdings.get("ltp", 0.0)),
             "pnl": _to_float(holdings.get("profitandloss", 0.0)),
             "pnlpercent": _to_float(holdings.get("pnlpercentage", 0.0)),
         }
@@ -278,8 +284,10 @@ def map_portfolio_data(portfolio_data):
     # Check if 'data' is None or doesn't contain 'holdings'
     if portfolio_data.get("data") is None or "holdings" not in portfolio_data["data"]:
         logger.info("No data available.")
-        # Return an empty structure or handle this scenario as needed
-        return {}
+        # Shaped like a real -- but empty -- portfolio. Returning a bare {} made
+        # the callers downstream raise KeyError and turned "no holdings" into a
+        # 500 for every account with an empty demat.
+        return {"holdings": [], "totalholding": None}
 
     # Directly work with 'data' for clarity and simplicity
     data = portfolio_data["data"]
@@ -294,10 +302,15 @@ def map_portfolio_data(portfolio_data):
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
                 portfolio["tradingsymbol"] = symbol_from_db
-            if portfolio["product"] == "DELIVERY":
-                portfolio["product"] = "CNC"  # Modify 'product' field
-            else:
-                logger.info("AngelOne Portfolio - Product Value for Delivery Not Found or Changed.")
+            if portfolio.get("product") != "DELIVERY":
+                logger.info(
+                    "AngelOne Portfolio - unexpected product %r, mapping to CNC.",
+                    portfolio.get("product"),
+                )
+            # Holdings live in the demat account, so CNC regardless of what
+            # Angel labels them -- an unmapped value would not match any
+            # product OpenAlgo understands.
+            portfolio["product"] = "CNC"
 
     # The function already works with 'data', which includes 'holdings' and 'totalholding',
     # so we can return 'data' directly without additional modifications.
@@ -305,18 +318,19 @@ def map_portfolio_data(portfolio_data):
 
 
 def calculate_portfolio_statistics(holdings_data):
-    if holdings_data["totalholding"] is None:
+    if (holdings_data or {}).get("totalholding") is None:
         totalholdingvalue = 0
         totalinvvalue = 0
         totalprofitandloss = 0
         totalpnlpercentage = 0
     else:
-        totalholdingvalue = holdings_data["totalholding"]["totalholdingvalue"]
-        totalinvvalue = holdings_data["totalholding"]["totalinvvalue"]
-        totalprofitandloss = holdings_data["totalholding"]["totalprofitandloss"]
+        totalholding = holdings_data["totalholding"]
+        totalholdingvalue = _to_float(totalholding.get("totalholdingvalue", 0))
+        totalinvvalue = _to_float(totalholding.get("totalinvvalue", 0))
+        totalprofitandloss = _to_float(totalholding.get("totalprofitandloss", 0))
 
-        # To avoid division by zero in the case when total_investment_value is 0
-        totalpnlpercentage = holdings_data["totalholding"]["totalpnlpercentage"]
+        # Angel computes this itself, so there is no division to guard here.
+        totalpnlpercentage = _to_float(totalholding.get("totalpnlpercentage", 0))
 
     return {
         "totalholdingvalue": totalholdingvalue,
