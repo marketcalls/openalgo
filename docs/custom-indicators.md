@@ -2,9 +2,9 @@
 
 Write your own indicators for the `/trading` charting terminal.
 
-Drop a `.js` file into `strategies/indicators/`, refresh the chart, and it is in
-the indicator picker alongside the 91 built-ins. No build step, no Node.js, no
-restart of OpenAlgo.
+Drop a `.js` file into `strategies/indicators/`, open the indicator picker, and
+it is there alongside the 91 built-ins. No build step, no Node.js, no restart of
+OpenAlgo, no page reload.
 
 ## Only add indicators you have read
 
@@ -103,8 +103,10 @@ export default function ({ registerIndicator, sourceValues }) {
 }
 ```
 
-Refresh `/trading`, open the indicator picker, and **My SMA** is under a
-**Custom** category.
+Open the indicator picker on `/trading` and **My SMA** is under a **Custom**
+category. No page reload: the picker re-reads the folder every time it opens, so
+a file you just added appears immediately, and a file you just edited is
+re-imported because the chart cache-busts on its modification time.
 
 Two rules that are easy to miss:
 
@@ -527,15 +529,24 @@ Check the file is `strategies/indicators/<name>.js`. The filename must be
 Then hard-refresh the chart (Ctrl+Shift+R).
 
 **A red toast appears on the chart.**
-That is your file failing to load, and the message is the actual error. The
-other indicators keep working: one broken file never takes the picker down.
+That is the chart telling you what is wrong with your file, and the message is
+the actual error. The other indicators keep working: one broken file never takes
+the picker down.
+
+The chart checks two things you cannot see otherwise. Before your indicator
+reaches the catalogue it validates the descriptor, so a bad `placement` or an
+unsupported input type is rejected with a reason instead of producing a picker
+entry that breaks when clicked. Then it wraps `calc` and measures its first
+result against the bars, which is what catches the two silent killers: a column
+that is not `bars.length` long, and a plot key `calc` never filled.
 
 **"module has no default-exported function".**
 The file parsed but does not `export default function (api) { ... }`.
 
 **Edits do not take effect.**
-The chart cache-busts on the file's modification time, so a normal refresh is
-enough. If you are behind a caching proxy, hard-refresh.
+Close and reopen the indicator picker: that is when the folder is re-read, and
+the chart cache-busts on the file's modification time. An indicator already on
+the chart keeps the version it was added with until you remove and re-add it.
 
 **The pane is flat or the line is missing.**
 `calc` almost certainly returned `0` for warmup bars instead of `null`, or

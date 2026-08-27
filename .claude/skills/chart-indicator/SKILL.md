@@ -40,8 +40,17 @@ errors, and exits 1 otherwise. If validation fails, fix the draft and re-run.
 Do not install a failing indicator, and do not weaken the validator to get a
 pass. Report warnings to the user rather than silently accepting them.
 
-The validator needs `frontend/node_modules/openalgo-charts`. If it is missing,
-run `cd frontend && npm install` first.
+**Never run `npm install` for this.** The full frontend tree is 560 MB across
+521 packages; the validator needs two ES modules totalling 368 KB. It finds them
+itself, in this order: `frontend/node_modules/openalgo-charts` if a React
+developer already has it, then its own `.cache/`, then it fetches just that one
+package at the version pinned in `frontend/package.json`. `openalgo-charts` has
+zero dependencies, so that is one small download, about a second, cached after.
+
+If the fetch fails (no network, npm unavailable), say so and offer the choice:
+fix connectivity, or install without the pre-flight check and rely on the
+chart's own validation, which reports the same structural problems as toasts
+when the indicator loads. Do not silently skip validation.
 
 ## Workflow
 
@@ -60,7 +69,22 @@ run `cd frontend && npm install` first.
    - `complex_session_vwap.js` — per-session state, `markers` with a signal
      latch, `table`, `calcTail`, zone-aware day boundaries
 4. **Draft to scratch. Validate. Iterate until it passes.**
-5. **Install**, then tell the user to hard-refresh `/trading`.
+5. **Install**, then tell the user to reopen the indicator picker on `/trading`.
+   No page reload is needed: the catalogue re-reads the folder every time the
+   picker opens, and an edited file is re-imported because the URL carries the
+   file's modification time. A reload is only needed for a chart that was
+   already open before the app itself changed.
+
+## Two layers of validation
+
+`validate.mjs` is a pre-flight check, and it is the one that can refuse to
+install. The chart validates again at load time, in the browser, where the
+library already is: it checks the descriptor before it reaches the catalogue,
+and wraps `calc` so its first result is measured against the bars. Anything
+wrong surfaces as a toast naming the file.
+
+That second layer is why a trader with no Node.js at all still gets told what is
+wrong instead of an indicator that quietly draws nothing.
 
 ## What the file has to look like
 

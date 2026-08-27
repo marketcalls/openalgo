@@ -17,14 +17,97 @@
  *   node validate.mjs <candidate.js> --install    check, then install on a pass
  */
 
-import { mkdirSync, copyFileSync, existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const REPO_ROOT = resolve(import.meta.dirname, '..', '..', '..')
 const INSTALL_DIR = join(REPO_ROOT, 'strategies', 'indicators')
-/** openalgo-charts is a frontend dependency; this script runs from the repo root. */
-const CHARTS_ROOT = join(REPO_ROOT, 'frontend', 'node_modules', 'openalgo-charts')
+/** A React developer already has it here, at the exact pinned version. */
+const DEV_CHARTS_ROOT = join(REPO_ROOT, 'frontend', 'node_modules', 'openalgo-charts')
+/** Everyone else gets just this one package cached here. Gitignored. */
+const CACHE_ROOT = join(import.meta.dirname, '.cache')
+
+/**
+ * Find the charting library, without making anyone run `npm install`.
+ *
+ * The full frontend tree is 560 MB across 521 packages; this script needs two
+ * ES modules totalling 368 KB. OpenAlgo users are traders, not React
+ * developers, and the whole point of runtime-loaded indicators is that they
+ * never need a build. So: use the dev copy if it happens to be there, else a
+ * small local cache, else fetch the single package. `openalgo-charts` has zero
+ * dependencies, so that is one small tarball and nothing else.
+ *
+ * The version is read from `frontend/package.json`, so the cache tracks the
+ * version the app actually ships and cannot silently validate against a
+ * different API.
+ */
+function pinnedVersion() {
+  try {
+    const pkg = JSON.parse(readFileSync(join(REPO_ROOT, 'frontend', 'package.json'), 'utf8'))
+    const spec = pkg.dependencies?.['openalgo-charts'] ?? pkg.devDependencies?.['openalgo-charts']
+    return typeof spec === 'string' ? spec.replace(/^[\^~]/, '') : null
+  } catch {
+    return null
+  }
+}
+
+function installedVersion(root) {
+  try {
+    return JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Fetch just this one package into `prefix`.
+ *
+ * `npm install --prefix` rather than `npm pack` plus `tar`: it is one call, it
+ * needs no shell (so nothing has to be quoted, which is where the Windows path
+ * with an `@` in it went wrong), and because `openalgo-charts` declares zero
+ * dependencies the result is exactly one package and no tree.
+ */
+function fetchPackage(version, prefix) {
+  mkdirSync(prefix, { recursive: true })
+  const spec = version ? `openalgo-charts@${version}` : 'openalgo-charts'
+  // npm is a .cmd on Windows, and Node refuses to spawn one without a shell.
+  // With a shell, nothing is auto-quoted, so the path args are quoted here or a
+  // checkout under "Program Files" would split into two arguments.
+  const win = process.platform === 'win32'
+  const q = (s) => (win ? `"${s}"` : s)
+  execFileSync(
+    win ? 'npm.cmd' : 'npm',
+    ['install', q(spec), '--prefix', q(prefix), '--no-save', '--no-package-lock',
+     '--no-audit', '--no-fund', '--loglevel', 'error'],
+    { stdio: ['ignore', 'ignore', 'pipe'], shell: win }
+  )
+}
+
+function resolveCharts() {
+  const want = pinnedVersion()
+
+  if (existsSync(join(DEV_CHARTS_ROOT, 'dist', 'openalgo-charts.mjs'))) {
+    return { root: DEV_CHARTS_ROOT, source: 'frontend/node_modules' }
+  }
+
+  // No '@' in the directory name: it survives every shell and path helper.
+  const prefix = join(CACHE_ROOT, `v${want ?? 'latest'}`)
+  const cached = join(prefix, 'node_modules', 'openalgo-charts')
+  if (existsSync(join(cached, 'dist', 'openalgo-charts.mjs'))) {
+    const have = installedVersion(cached)
+    if (!want || have === want) return { root: cached, source: 'skill cache' }
+  }
+
+  console.log(`Fetching openalgo-charts@${want ?? 'latest'} (one package, no dependencies)...`)
+  fetchPackage(want, prefix)
+  if (!existsSync(join(cached, 'dist', 'openalgo-charts.mjs'))) {
+    throw new Error('fetched package has no dist/openalgo-charts.mjs')
+  }
+  return { root: cached, source: 'downloaded' }
+}
 
 const errors = []
 const warnings = []
@@ -244,18 +327,24 @@ async function main() {
     console.error(`No such file: ${candidate}`)
     process.exit(2)
   }
-  if (!existsSync(CHARTS_ROOT)) {
+  let charts
+  try {
+    charts = resolveCharts()
+  } catch (e) {
     console.error(
-      `openalgo-charts is not installed at ${CHARTS_ROOT}.\n` +
-        `Run: cd frontend && npm install`
+      `Could not get hold of openalgo-charts: ${e.message}\n\n` +
+        `The chart itself needs nothing installed. This pre-flight check does,\n` +
+        `and it could not fetch the package. Either connect to the network once,\n` +
+        `or skip validation and rely on the chart's own checks, which report the\n` +
+        `same problems as toasts when the indicator loads.`
     )
     process.exit(2)
   }
 
-  // Import the real library, from the frontend's own node_modules.
-  const core = await import(pathToFileURL(join(CHARTS_ROOT, 'dist', 'openalgo-charts.mjs')).href)
+  // Import the real library, so every check runs against the build the app ships.
+  const core = await import(pathToFileURL(join(charts.root, 'dist', 'openalgo-charts.mjs')).href)
   const tier = await import(
-    pathToFileURL(join(CHARTS_ROOT, 'dist', 'openalgo-charts.indicators.mjs')).href
+    pathToFileURL(join(charts.root, 'dist', 'openalgo-charts.indicators.mjs')).href
   )
 
   const builtinIds = new Set(core.registeredIndicators().map((d) => d.id))

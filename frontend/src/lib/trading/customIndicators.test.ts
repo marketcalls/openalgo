@@ -1,17 +1,17 @@
 /**
  * The custom indicator loader.
  *
- * Everything here is about isolation. A user's indicator file is code the app
- * has never seen, fetched from disk at runtime, and the one thing it must never
- * do is take the other 91 indicators down with it. So the cases that matter are
- * the failures: no route, no session, a malformed index, and a module that
- * cannot be imported. None of them may throw, and none may leave the picker
- * empty.
+ * Two jobs, both tested here. It must isolate: a user's indicator file is code
+ * the app has never seen, fetched from disk at runtime, and it must never take
+ * the other 91 indicators down with it. And it must validate: the chart runtime
+ * swallows a short column or a mismatched plot key, drawing nothing and raising
+ * nothing, so a trader with no build step needs the loader itself to say what is
+ * wrong.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { loadCustomIndicators } from './customIndicators'
+import { calcOutputError, descriptorErrors, loadCustomIndicators } from './customIndicators'
 
 function mockIndex(body: unknown, ok = true) {
   const fetchMock = vi.fn(async () => ({ ok, json: async () => body }) as unknown as Response)
@@ -58,13 +58,35 @@ describe('loadCustomIndicators', () => {
     // syntax error in a user file: the import rejects. Both modules have to be
     // attempted, so one bad file does not hide the next.
     mockIndex([
-      { file: 'broken.js', mtime: 1 },
-      { file: 'alsobroken.js', mtime: 2 },
+      { file: 'broken-a.js', mtime: 1 },
+      { file: 'broken-b.js', mtime: 1 },
     ])
     const res = await loadCustomIndicators()
     expect(res.loaded).toEqual([])
-    expect(res.errors.map((e) => e.file)).toEqual(['broken.js', 'alsobroken.js'])
+    expect(res.errors.map((e) => e.file)).toEqual(['broken-a.js', 'broken-b.js'])
     expect(res.errors[0].message).toBeTruthy()
+  })
+
+  it('does not re-report a module it has already seen', async () => {
+    // The catalogue re-reads the index on every picker open so a newly added
+    // file appears without a page reload. That would repeat every warning on
+    // every open if unchanged modules were not skipped.
+    mockIndex([{ file: 'seen-once.js', mtime: 7 }])
+    const first = await loadCustomIndicators()
+    expect(first.errors).toHaveLength(1)
+
+    const second = await loadCustomIndicators()
+    expect(second.errors).toHaveLength(0)
+    expect(second.loaded).toHaveLength(0)
+  })
+
+  it('treats an edited file as new, so a fix is picked up', async () => {
+    mockIndex([{ file: 'edited.js', mtime: 1 }])
+    await loadCustomIndicators()
+    // Same filename, new mtime: a different cache-busted URL and a fresh import.
+    mockIndex([{ file: 'edited.js', mtime: 2 }])
+    const res = await loadCustomIndicators()
+    expect(res.errors.map((e) => e.file)).toEqual(['edited.js'])
   })
 
   it('asks the server for the index with the session cookie', async () => {
@@ -76,5 +98,78 @@ describe('loadCustomIndicators', () => {
       credentials: 'same-origin',
       headers: { Accept: 'application/json' },
     })
+  })
+})
+
+describe('descriptorErrors', () => {
+  const good = {
+    id: 'my-thing',
+    name: 'My Thing',
+    placement: 'pane',
+    inputs: [{ key: 'length', type: 'number', label: 'Length', default: 20 }],
+    plots: [{ key: 'x', type: 'line', title: 'X' }],
+    calc: () => ({}),
+  }
+
+  it('accepts a well-formed descriptor', () => {
+    expect(descriptorErrors(good)).toEqual([])
+  })
+
+  it.each([
+    ['a missing id', { id: '' }, /id must be a non-empty string/],
+    ['an id with whitespace', { id: 'my thing' }, /contains whitespace/],
+    ['a missing name', { name: '' }, /name is required/],
+    ['a bad placement', { placement: 'overlay' }, /placement must be/],
+    ['a non-function calc', { calc: 'nope' }, /calc must be a function/],
+    ['no plots', { plots: [] }, /plots must be a non-empty array/],
+    [
+      'duplicate plot keys',
+      {
+        plots: [
+          { key: 'x', type: 'line' },
+          { key: 'x', type: 'line' },
+        ],
+      },
+      /duplicate plot key/,
+    ],
+    [
+      'an unsupported input type',
+      { inputs: [{ key: 'a', type: 'slider', default: 1 }] },
+      /unsupported type/,
+    ],
+    ['an input with no default', { inputs: [{ key: 'a', type: 'number' }] }, /has no default/],
+    ['inputs that are not an array', { inputs: null }, /inputs must be an array/],
+  ])('rejects %s', (_label, patch, pattern) => {
+    const errors = descriptorErrors({ ...good, ...patch })
+    expect(errors.join('; ')).toMatch(pattern)
+  })
+})
+
+describe('calcOutputError', () => {
+  const plots = [{ key: 'a' }, { key: 'b' }]
+
+  it('accepts columns that line up with the bars', () => {
+    expect(calcOutputError({ a: [1, 2, 3], b: [null, 2, 3] }, 3, plots)).toBeNull()
+  })
+
+  it('catches a column that is one short', () => {
+    // The exact silent failure: the runtime reads undefined past the end and
+    // draws a gap, so the plot just stops partway with no error anywhere.
+    expect(calcOutputError({ a: [1, 2], b: [1, 2, 3] }, 3, plots)).toMatch(
+      /plot 'a' returned 2 values for 3 bars/
+    )
+  })
+
+  it('catches a plot key that calc never filled', () => {
+    expect(calcOutputError({ a: [1, 2, 3] }, 3, plots)).toMatch(/no column for plot 'b'/)
+  })
+
+  it('catches a column that is not an array', () => {
+    expect(calcOutputError({ a: 5, b: [1, 2, 3] }, 3, plots)).toMatch(/returned a number/)
+  })
+
+  it('catches calc returning something that is not an object', () => {
+    expect(calcOutputError([1, 2, 3], 3, plots)).toMatch(/must return an object/)
+    expect(calcOutputError(null, 3, plots)).toMatch(/must return an object/)
   })
 })

@@ -12,30 +12,31 @@
  * candles → on-chart order lines, right-click to place, drag to modify, ✕ to
  * cancel, real-time order stream, REST fallback) is unchanged.
  */
+
+import type { LinkGroup } from 'openalgo-charts'
 import {
   type Bar,
   BuySellButtons,
   CandleBuilder,
   compactVolume,
   createChart,
-  readChartSettings,
   type IPrimitive,
   LogoWatermark,
   type LtpEvent,
   type MarketDepth,
   OpenAlgoDataFeed,
-  tryResolveInterval,
-  withBarCache,
   OpenAlgoTradeFeed,
   OpenAlgoWsFeed,
   type PriceLine,
   ReplayController,
   type ReplayState,
+  readChartSettings,
   type SeriesApi,
   type SeriesStyle,
   type SeriesType,
+  tryResolveInterval,
+  withBarCache,
 } from 'openalgo-charts'
-import type { LinkGroup } from 'openalgo-charts'
 import type { DrawingController } from 'openalgo-charts/draw'
 import { runTransform } from 'openalgo-charts/transform'
 
@@ -1481,19 +1482,27 @@ export class TradingTerminal {
   }
 
   private async loadIndicators(): Promise<void> {
-    if (this.indicatorsLoaded) return
-    await import('openalgo-charts/indicators')
-    // The user's own modules come after the built-in tier, so one that reuses a
-    // built-in id overrides it rather than being overridden. Loading here, not
-    // at module scope, is what guarantees they are registered before anything
-    // can call `addIndicator`.
+    // The built-in tier is a static bundle: import it once.
+    if (!this.indicatorsLoaded) {
+      await import('openalgo-charts/indicators')
+      this.indicatorsLoaded = true
+    }
+    // The user's own modules are re-checked on every call, which is what makes a
+    // newly added indicator appear on the next picker open rather than after a
+    // page reload. The loader skips anything it has already imported, so a
+    // repeat call costs one small JSON fetch. They register after the built-in
+    // tier, so a module reusing a built-in id overrides it, not the reverse.
     const { loadCustomIndicators } = await import('./customIndicators')
-    const custom = await loadCustomIndicators()
+    const custom = await loadCustomIndicators({
+      // Raised while the indicator is running rather than while loading: a
+      // `calc` whose columns do not line up with the bars draws nothing and
+      // throws nothing, so this is the only place a user would hear about it.
+      onProblem: (message) => this.toast(message, 'err'),
+    })
     // A broken user file must not take the picker down with it, but it must not
     // fail silently either: without this the indicator is simply absent and
     // there is nothing anywhere to say why.
     for (const err of custom.errors) this.toast(`${err.file}: ${err.message}`, 'err')
-    this.indicatorsLoaded = true
   }
 
   /** Re-add the tracked indicators to a freshly built chart. */
