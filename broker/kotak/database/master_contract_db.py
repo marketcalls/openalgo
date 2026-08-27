@@ -314,7 +314,7 @@ def get_kotak_master_filepaths():
             # Construct full URL
             url = f"{base_url_attempt}{endpoint}"
 
-            logger.info(f"SCRIPMASTER API - Using access_token: {access_token[:10]}...")
+            logger.info("SCRIPMASTER API - Using configured access token")
             logger.info(f"Making request to: {url}")
 
             response = client.get(url, headers=headers, timeout=30)
@@ -322,14 +322,12 @@ def get_kotak_master_filepaths():
             logger.info(f"Response status: {response.status_code} from {base_url_attempt}")
 
             if response.status_code != 200:
-                logger.warning(
-                    f"HTTP {response.status_code} from {base_url_attempt}: {response.text}"
-                )
+                logger.warning(f"HTTP {response.status_code} from {base_url_attempt}")
 
             if response.status_code == 200:
                 try:
                     data_dict = json.loads(response.text)
-                    logger.debug(f"Response data: {data_dict}")
+                    logger.debug("Scripmaster response fields: %s", list(data_dict.keys()))
 
                     # Check for the expected response structure
                     if "data" in data_dict and "filesPaths" in data_dict["data"]:
@@ -363,19 +361,17 @@ def get_kotak_master_filepaths():
                         logger.info(f"Available files: {list(file_dict.keys())}")
                         return file_dict
                     else:
-                        logger.warning(
-                            f"Unexpected response structure from {base_url_attempt}: {data_dict}"
-                        )
+                        logger.warning(f"Unexpected response structure from {base_url_attempt}")
 
                 except json.JSONDecodeError as e:
                     logger.error(f"Failed to parse JSON from {base_url_attempt}: {e}")
-                    logger.debug(f"Raw response: {response.text}")
+                    logger.debug("Scripmaster response was not valid JSON")
 
         except httpx.HTTPError as e:
-            logger.error(f"HTTP error with {base_url_attempt}: {e}")
+            logger.error("HTTP error with %s; type=%s", base_url_attempt, type(e).__name__)
             continue
         except Exception as e:
-            logger.error(f"Error with {base_url_attempt}: {e}")
+            logger.error("Error with %s; type=%s", base_url_attempt, type(e).__name__)
             continue
 
     logger.error("All baseUrl attempts failed for scripmaster API")
