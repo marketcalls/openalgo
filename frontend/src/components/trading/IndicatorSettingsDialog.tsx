@@ -85,7 +85,15 @@ export function IndicatorSettingsDialog({ req, onApply, onDefaults, onClose }: P
             aria-label="Close"
             className="-mr-1 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
-            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              className="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.8}
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
               <path d="M6 6l12 12M18 6L6 18" />
             </svg>
           </button>
@@ -270,10 +278,32 @@ export function SettingsField({
               </option>
             ))}
           </select>
-          <svg viewBox="0 0 10 10" className="pointer-events-none absolute right-2 top-1/2 h-2.5 w-2.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true">
+          <svg
+            viewBox="0 0 10 10"
+            className="pointer-events-none absolute right-2 top-1/2 h-2.5 w-2.5 -translate-y-1/2 text-muted-foreground"
+            aria-hidden="true"
+          >
             <path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth={1.5} />
           </svg>
         </div>
+      </>
+    )
+  }
+
+  // Everything below falls through to the number control, so a string-valued
+  // input needs its own branch: `<input type="number">` rejects a value like
+  // '0915-1015' outright and renders an empty box with spinner arrows.
+  if (field.type === 'text') {
+    return (
+      <>
+        {label}
+        <input
+          id={id}
+          type="text"
+          value={typeof value === 'string' ? value : ''}
+          onChange={(e) => onChange(e.target.value)}
+          className={cn(CONTROL, 'w-full')}
+        />
       </>
     )
   }
@@ -282,7 +312,10 @@ export function SettingsField({
   const nudge = (dir: 1 | -1) => {
     const cur = Number(value)
     const next = (Number.isFinite(cur) ? cur : 0) + dir * step
-    const clamped = Math.min(field.max ?? Number.POSITIVE_INFINITY, Math.max(field.min ?? -Number.POSITIVE_INFINITY, next))
+    const clamped = Math.min(
+      field.max ?? Number.POSITIVE_INFINITY,
+      Math.max(field.min ?? -Number.POSITIVE_INFINITY, next)
+    )
     // Step can be fractional (0.5 thickness); round to its precision so the
     // value never drifts into 1.4000000000000001.
     onChange(Number(clamped.toFixed(String(step).split('.')[1]?.length ?? 0)))
@@ -304,11 +337,25 @@ export function SettingsField({
           className="w-full min-w-0 bg-transparent text-[13px] outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
         />
         <span className="flex h-full flex-col justify-center border-l border-border">
-          <button type="button" aria-label="Increase" onClick={() => nudge(1)} className="flex h-3 w-5 items-center justify-center text-muted-foreground hover:text-foreground">
-            <svg viewBox="0 0 10 6" className="h-1.5 w-2.5" aria-hidden="true"><path d="M1 5 5 1.5 9 5" fill="none" stroke="currentColor" strokeWidth={1.6} /></svg>
+          <button
+            type="button"
+            aria-label="Increase"
+            onClick={() => nudge(1)}
+            className="flex h-3 w-5 items-center justify-center text-muted-foreground hover:text-foreground"
+          >
+            <svg viewBox="0 0 10 6" className="h-1.5 w-2.5" aria-hidden="true">
+              <path d="M1 5 5 1.5 9 5" fill="none" stroke="currentColor" strokeWidth={1.6} />
+            </svg>
           </button>
-          <button type="button" aria-label="Decrease" onClick={() => nudge(-1)} className="flex h-3 w-5 items-center justify-center text-muted-foreground hover:text-foreground">
-            <svg viewBox="0 0 10 6" className="h-1.5 w-2.5" aria-hidden="true"><path d="M1 1 5 4.5 9 1" fill="none" stroke="currentColor" strokeWidth={1.6} /></svg>
+          <button
+            type="button"
+            aria-label="Decrease"
+            onClick={() => nudge(-1)}
+            className="flex h-3 w-5 items-center justify-center text-muted-foreground hover:text-foreground"
+          >
+            <svg viewBox="0 0 10 6" className="h-1.5 w-2.5" aria-hidden="true">
+              <path d="M1 1 5 4.5 9 1" fill="none" stroke="currentColor" strokeWidth={1.6} />
+            </svg>
           </button>
         </span>
       </div>

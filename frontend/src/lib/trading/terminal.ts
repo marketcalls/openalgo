@@ -1483,6 +1483,16 @@ export class TradingTerminal {
   private async loadIndicators(): Promise<void> {
     if (this.indicatorsLoaded) return
     await import('openalgo-charts/indicators')
+    // The user's own modules come after the built-in tier, so one that reuses a
+    // built-in id overrides it rather than being overridden. Loading here, not
+    // at module scope, is what guarantees they are registered before anything
+    // can call `addIndicator`.
+    const { loadCustomIndicators } = await import('./customIndicators')
+    const custom = await loadCustomIndicators()
+    // A broken user file must not take the picker down with it, but it must not
+    // fail silently either: without this the indicator is simply absent and
+    // there is nothing anywhere to say why.
+    for (const err of custom.errors) this.toast(`${err.file}: ${err.message}`, 'err')
     this.indicatorsLoaded = true
   }
 
