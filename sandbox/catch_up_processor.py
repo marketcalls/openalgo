@@ -158,11 +158,15 @@ def catch_up_t1_settlement():
     try:
         from database.sandbox_db import SandboxPositions
         from sandbox.holdings_manager import process_all_t1_settlements
+        from sandbox.session_boundary import as_db_utc
 
-        # Check if there are any CNC positions that need settlement
-        ist = IST
-        today = datetime.now(ist).date()
-        settlement_cutoff = datetime.combine(today, datetime.min.time())
+        # Check if there are any CNC positions that need settlement.
+        # created_at is the database clock (UTC). Build IST midnight, then
+        # convert, or the comparison is read as UTC and lands 5.5h late.
+        today = datetime.now(IST).date()
+        settlement_cutoff = as_db_utc(
+            IST.localize(datetime.combine(today, datetime.min.time()))
+        )
 
         pending_positions = (
             SandboxPositions.query.filter_by(product="CNC")
