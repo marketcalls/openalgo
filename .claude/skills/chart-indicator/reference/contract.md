@@ -109,12 +109,42 @@ Do not hand-roll them.
 
 ## Fills
 
+Shade the area between two plots.
+
 ```js
 fills: [{ between: ['upper', 'lower'], colorUp: '#4f8cff', colorDown: '#4f8cff', opacity: 0.08 }]
 ```
 
-Both keys must name real plots. `colorUp` applies where the first is above the
-second.
+Both keys must name real plots. `colorUp` applies where the first plot is above
+the second, `colorDown` where it is below, so pointing them at two different
+colours makes the band recolour where the series cross. Point both at the same
+colour to keep one tint regardless.
+
+`colorUpKey` / `colorDownKey` take the colour from an **input** key instead of a
+literal, which is what makes a ribbon restyleable from the settings dialog. They
+name an input, never a plot style, so a shaded indicator has to declare colour
+inputs even though plain plots do not need them.
+
+**A fill draws only where both endpoints are non-null.** That single rule is how
+Supertrend and HalfTrend get a ribbon that flips sides and recolours with the
+trend, with no per-bar colour logic:
+
+```js
+// The level is split in two. Each carries null while the other is active, so
+// the line recolours at a flip and each ribbon appears only in its own trend.
+plots: [
+  { key: 'up',       type: 'line', colorKey: 'upColor' },
+  { key: 'down',     type: 'line', colorKey: 'downColor' },
+  { key: 'upEdge',   type: 'line', colorKey: 'upColor' },
+  { key: 'downEdge', type: 'line', colorKey: 'downColor' },
+],
+fills: [
+  { between: ['up', 'upEdge'],     colorUpKey: 'upColor',   colorDownKey: 'upColor',   opacity: 0.15 },
+  { between: ['down', 'downEdge'], colorUpKey: 'downColor', colorDownKey: 'downColor', opacity: 0.15 },
+]
+```
+
+Worked out in full in `examples/shaded_trend_zone.js`.
 
 ## Markers
 

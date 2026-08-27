@@ -119,7 +119,7 @@ consistent rule, so check `reference/api.md`.
 
 ---
 
-## 8. Do not declare colour or width inputs
+## 8. Do not declare width inputs, and declare colour inputs only for fills
 
 The chart generates colour, opacity, thickness, line style and plot style for
 every plot, seeded from `plot.style`. A hand-rolled `lineWidth` input gives the
@@ -131,7 +131,13 @@ Set defaults on the plot instead:
 { key: 'ma', type: 'line', title: 'MA', style: { color: '#4f8cff', lineWidth: 2 } }
 ```
 
-*Validator: no check. Style.*
+**The exception is `fills`.** A fill takes `colorUpKey` / `colorDownKey`, and
+those name an **input** key, not a plot style. A shaded indicator therefore has
+to declare its colours as inputs, and its plots should reference the same ones
+via `colorKey` so a line and its ribbon cannot drift apart. This is what every
+built-in with a band does. See `examples/shaded_trend_zone.js`.
+
+*Validator: ERROR if a fill names a colour key with no matching input.*
 
 ---
 

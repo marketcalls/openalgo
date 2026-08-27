@@ -67,6 +67,8 @@ when the indicator loads. Do not silently skip validation.
    - `simple_zscore.js` — one pane, one plot, rolling window, levels, range
    - `intermediate_keltner_squeeze.js` — several plots, `fills`, `colorBy`, a
      second price scale, a boolean that hides part of the drawing
+   - `shaded_trend_zone.js` — shading between two series, Supertrend and
+     HalfTrend style, where the ribbon flips sides and recolours with the trend
    - `complex_session_vwap.js` — per-session state, `markers` with a signal
      latch, `table`, `calcTail`, zone-aware day boundaries
 4. **Draft to scratch. Validate. Iterate until it passes.**

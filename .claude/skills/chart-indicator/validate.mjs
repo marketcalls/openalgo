@@ -512,10 +512,25 @@ function validateDescriptor(d, { builtinIds, chartTypes, core }) {
     }
   }
 
-  /* fills reference real plots */
+  /* fills reference real plots, and real colour inputs */
   for (const fill of d.fills ?? []) {
-    for (const key of fill.between ?? []) {
+    if (!Array.isArray(fill?.between) || fill.between.length !== 2) {
+      err(`${id}: every fill needs 'between: [plotKeyA, plotKeyB]'.`)
+      continue
+    }
+    for (const key of fill.between) {
       if (!plotKeys.has(key)) err(`${id}: fill references plot '${key}', which does not exist.`)
+    }
+    // A fill takes its colour from an INPUT key, not from a plot's style, so a
+    // typo here leaves the ribbon on the library default with nothing to say so.
+    for (const prop of ['colorUpKey', 'colorDownKey']) {
+      const key = fill[prop]
+      if (key !== undefined && !inputKeys.has(key)) {
+        err(`${id}: fill ${prop} '${key}' names no input. A fill colour must come from an input.`)
+      }
+    }
+    if (fill.opacity !== undefined && (!Number.isFinite(fill.opacity) || fill.opacity < 0 || fill.opacity > 1)) {
+      err(`${id}: fill opacity must be between 0 and 1, got ${fill.opacity}.`)
     }
   }
 

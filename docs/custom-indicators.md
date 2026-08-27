@@ -31,6 +31,7 @@ it running against your live broker session.
   - [Optional fields](#optional-fields)
 - [The API you are handed](#the-api-you-are-handed)
 - [Signal markers](#signal-markers)
+- [Shading between two series](#shading-between-two-series)
 - [Indicators that need external data](#indicators-that-need-external-data)
 - [Worked example: Open Range Breakout](#worked-example-open-range-breakout)
 - [Porting from Pine Script](#porting-from-pine-script)
@@ -286,6 +287,50 @@ function markerPad(bars) {
 ```
 
 Half a mean bar range reads the same on a 24000 index and a 100 rupee stock.
+
+---
+
+## Shading between two series
+
+`fills` shades the area between two plots. Both keys must name real plots, and
+the colour comes from an **input** key rather than a plot style:
+
+```js
+inputs: [{ key: 'bandColor', type: 'color', label: 'Band', default: '#4f8cff' }],
+plots: [
+  { key: 'upper', type: 'line', title: 'Upper' },
+  { key: 'lower', type: 'line', title: 'Lower' },
+],
+fills: [{ between: ['upper', 'lower'], colorUpKey: 'bandColor', colorDownKey: 'bandColor', opacity: 0.1 }],
+```
+
+`colorUp` applies where the first plot is above the second and `colorDown` where
+it is below, so two different colours make the band recolour where the series
+cross. The same colour in both keeps one tint.
+
+**Trend zones that flip sides, like Supertrend and HalfTrend.** A fill draws only
+where *both* endpoints are non-null, and that one rule is the whole technique.
+Split the level into two plots, give each `null` while the other is active, then
+declare one fill per side:
+
+```js
+plots: [
+  { key: 'up',       type: 'line', colorKey: 'upColor' },    // null in a downtrend
+  { key: 'down',     type: 'line', colorKey: 'downColor' },  // null in an uptrend
+  { key: 'upEdge',   type: 'line', colorKey: 'upColor' },
+  { key: 'downEdge', type: 'line', colorKey: 'downColor' },
+],
+fills: [
+  { between: ['up', 'upEdge'],     colorUpKey: 'upColor',   colorDownKey: 'upColor',   opacity: 0.15 },
+  { between: ['down', 'downEdge'], colorUpKey: 'downColor', colorDownKey: 'downColor', opacity: 0.15 },
+]
+```
+
+The line recolours at the flip because the renderer breaks across the null gap,
+and each ribbon appears only during its own trend. No per-bar colour logic.
+
+This is the one case where you should declare colour inputs. Plain plots get
+their style controls generated for you, but a fill needs an input to point at.
 
 ---
 
