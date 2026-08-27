@@ -11,6 +11,8 @@ Place a new GTT (Good Till Triggered) order — a price-trigger that sits with t
 
 > **In SINGLE there is no second leg and no automatic cancel** — once your one trigger fires and the order is placed, the GTT is finished.
 
+> **Upstox users:** the OCO row above does **not** describe Upstox. There, an OCO opens a position at market before arming the two legs — see [Upstox — OCO opens a position](#upstox--oco-opens-a-position). Use SINGLE to protect an existing holding.
+
 ## How to Choose `triggerprice_sl` vs `triggerprice_tg` (SINGLE only)
 
 For SINGLE, exactly **one** of these two fields is your trigger price; set the other to `0`. Pick based on **where your trigger sits relative to LTP** — this also matches the leg name the broker assigns internally:
@@ -188,6 +190,30 @@ LTP is currently below 1450 → trigger sits **above** LTP → use `triggerprice
   - Futures: `NIFTY25AUG26FUT`
   - Options: `NIFTY25AUG2625000CE`
 
+## Broker-Specific Behaviour
+
+### Upstox — OCO opens a position
+
+> **Warning.** On Upstox, `trigger_type=OCO` does **not** behave like it does on Zerodha or Dhan. It will **open a position at market** before arming your two legs. If you meant to protect something you already hold, use `SINGLE` instead.
+
+Upstox has no exit-only two-leg GTT. Every Upstox GTT must carry an `ENTRY` rule (error `UDAPI1141`), and a multi-rule GTT needs 2–3 rules (`UDAPI1137`) — so there is no combination that omits the entry. What Upstox calls a multi-leg GTT is a **bracket**: an entry, with a target and stop-loss attached that stay dormant until the entry fills. Upstox Pro's own GTT ticket builds exactly this ("Place order if price is below X", plus optional *Add stop loss* / *Add target*).
+
+OpenAlgo's OCO describes only exits on a position assumed to already exist, so it carries no entry price. Mapping it onto Upstox therefore adds an `ENTRY` rule sent as `IMMEDIATE` at LTP, which Upstox acts on straight away:
+
+| You send | Upstox does |
+|----------|-------------|
+| `action: "SELL"` | **BUYs** at market now, then arms target/stop |
+| `action: "BUY"` | **SELLs** at market now, then arms target/stop |
+
+The entry side is the inverse of `action`, because OpenAlgo's OCO `action` is the side of both *exit* legs. Every OCO placement logs a warning naming the position that will open.
+
+Two further consequences on Upstox:
+
+- **`stoploss` and `target` limit prices are discarded.** Upstox has no per-rule limit-price field; each rule fires at its own trigger price, optionally widened by a market-protection band. A dropped limit is logged.
+- **A delivery sell entry needs EDIS.** If the entry leg sells, Upstox rejects the GTT with `UDAPI100500 — EDIS is not validated` until you authorise EDIS once via Upstox Pro. The message mentions demat authorisation rather than the entry leg, which makes it easy to misread.
+
+**What to use instead.** A stop or a target on an existing holding is a `SINGLE` sell GTT, which works on Upstox exactly as it does elsewhere. Upstox's bracket GTT is a genuinely useful product, but it needs an entry trigger price that the OCO request shape has no field for; exposing it would require a separate OpenAlgo request type.
+
 ## Error Scenarios
 
 | Error | Cause |
@@ -200,6 +226,7 @@ LTP is currently below 1450 → trigger sits **above** LTP → use `triggerprice
 | `Fractional quantity is not allowed for non-crypto exchanges` | Non-integer qty on equity/F&O |
 | `GTT orders are not supported for broker 'X' yet` (501) | Broker doesn't ship a `gtt_api` module |
 | `Sandbox GTT support not yet implemented` (501) | Analyzer mode is enabled |
+| `UDAPI100500: EDIS is not validated...` (Upstox) | The OCO entry leg is a delivery sell. Authorise EDIS once via Upstox Pro — and see [Upstox — OCO opens a position](#upstox--oco-opens-a-position), since the entry leg may not be what you intended |
 
 ---
 
