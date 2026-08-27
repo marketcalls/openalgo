@@ -1,7 +1,7 @@
 ---
 name: chart-indicator
-description: Build a custom indicator for the OpenAlgo /trading charting terminal (openalgo-charts). Use when asked to create, port, or debug a chart indicator, overlay, oscillator, band, or on-chart signal, including porting a Pine Script / TradingView study to the chart. Writes a plain-JS descriptor into strategies/indicators/, but only after it validates against the real library. This is the chart path, not the Python openalgo.ta path used from strategies and scanners.
-argument-hint: "[indicator name or Pine script]"
+description: Build a custom indicator for the OpenAlgo /trading charting terminal (openalgo-charts). Use when asked to create, port, or debug a chart indicator, overlay, oscillator, band, or on-chart signal, including porting a study written for another charting platform. Writes a plain-JS descriptor into strategies/indicators/, but only after it validates against the real library. This is the chart path, not the Python openalgo.ta path used from strategies and scanners.
+argument-hint: "[indicator name or a study to port]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---
 
@@ -55,7 +55,8 @@ when the indicator loads. Do not silently skip validation.
 
 ## Workflow
 
-1. **Read the request.** If it is a Pine script, read it fully and identify:
+1. **Read the request.** If it is a study from another platform, read it fully
+   and identify:
    what is plotted, what is a signal, what state carries across bars, and what
    resets per day or per session.
 2. **Load the context you need.** `reference/contract.md` for the descriptor
@@ -121,7 +122,8 @@ Full list in `reference/pitfalls.md`. These four account for most failures:
    not error, they just stop drawing partway.
 2. **Warmup.** Use `null` (or `nulls(...)` on a helper's NaN output). A `0` puts
    a spike at the bottom of the pane and wrecks autoscale.
-3. **`na` semantics.** In Pine every comparison against `na` is false. In
+3. **`na` semantics.** Script languages with a not-available value treat every
+   comparison against it as false. In
    JavaScript `5 > null` is **true**. Guard with `x != null` or signals fire
    through the warmup gap.
 4. **Marker anchoring.** `aboveBar` / `belowBar` anchor to *this indicator's own

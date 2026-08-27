@@ -45,7 +45,8 @@ helper's NaN output. `null`, `undefined` and `NaN` are all treated as gaps.
 
 ## 4. `na` semantics are inverted in JavaScript
 
-In Pine, every comparison against `na` is false, so nothing fires during warmup.
+In script languages with a not-available value, every comparison against it is
+false, so nothing fires during warmup.
 In JavaScript:
 
 ```js

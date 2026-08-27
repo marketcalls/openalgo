@@ -49,7 +49,8 @@ during warmup.
 | `nulls(values)` | NaN to null, for a plot column |
 
 `ema` seeds from `values[0]` and emits a value from index 0, matching
-`openalgo.ta`. TradingView's `ta.ema` seeds from the SMA of the first `period`
+`openalgo.ta`. The common reference implementation seeds from the SMA of the
+first `period`
 values and is NaN before that, so the two disagree for roughly the first
 `period` bars and converge after. The library has an SMA-seeded variant
 internally but **does not export it**: when reproducing a reference platform

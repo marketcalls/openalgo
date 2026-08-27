@@ -10,8 +10,8 @@ OpenAlgo, no page reload.
 
 An indicator file is **not sandboxed**. It is JavaScript running on the OpenAlgo
 origin with your logged-in session, so it can call `/api/v1/` and place orders,
-read your positions, and send data anywhere. This is not Pine Script, which runs
-in a sandbox. It is closer to pasting a script into the browser console.
+read your positions, and send data anywhere. It is not a sandboxed scripting
+language. It is closer to pasting a script into the browser console.
 
 Treat an indicator copied from a forum, a chat group or a stranger exactly as you
 would treat any script you are about to run on your trading machine: read it
@@ -34,7 +34,7 @@ it running against your live broker session.
 - [Shading between two series](#shading-between-two-series)
 - [Indicators that need external data](#indicators-that-need-external-data)
 - [Worked example: Open Range Breakout](#worked-example-open-range-breakout)
-- [Porting from Pine Script](#porting-from-pine-script)
+- [Porting from other charting scripts](#porting-from-other-charting-scripts)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -534,9 +534,9 @@ export default function ({
 
 ---
 
-## Porting from Pine Script
+## Porting from other charting scripts
 
-| Pine | Here |
+| Elsewhere | Here |
 |---|---|
 | `indicator(overlay=true)` | `placement: 'onchart'` |
 | `indicator(overlay=false)` | `placement: 'pane'` |
@@ -559,7 +559,8 @@ Three differences that catch people out:
    `createTier2Indicator` to fetch it. Deriving is often more correct anyway: a
    `request.security` call on a 60-minute bar returns that whole bar's high, which
    is lookahead if your window is shorter than the bar.
-2. **`na` comparisons.** In Pine every comparison against `na` is false. In
+2. **`na` comparisons.** In script languages built around a not-available value,
+   every comparison against `na` is false. In
    JavaScript `5 > null` is `true`. Guard explicitly with `x != null` or your
    indicator will fire signals during its own warmup.
 3. **`linewidth` is not yours to set.** The Style tab already generates it.
