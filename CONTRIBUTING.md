@@ -1076,6 +1076,11 @@ tests not run (Markdown-only change)" when applicable.
    quotes = broker.get_quotes_batch(symbols)
    ```
 
+### Database Migrations
+
+1. **Self-Healing Schemas**
+   When adding new columns to existing SQLite tables, always implement a "self-healing" migration path (e.g., an `ensure_schema_up_to_date()` check). This function should detect missing columns and dynamically add them at startup. This prevents runtime crashes for existing users who pull your changes.
+
 ### Code Quality
 
 1. **Write self-documenting code**

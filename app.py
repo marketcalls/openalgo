@@ -129,6 +129,7 @@ from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.telegram_db import get_bot_config
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
 from database.user_db import init_db as ensure_user_tables_exists
+from database.master_contract_status_db import reset_all_stuck_statuses
 from database.whatsapp_db import (
     get_bot_config as get_whatsapp_bot_config,  # noqa: F401  (triggers module-level init_db)
 )
@@ -805,6 +806,12 @@ def setup_environment(app):
                     "placed, but per-strategy P&L will report an error until restart "
                     "rather than a misleading zero."
                 )
+
+            # Reset any stuck master contract downloads from previous session
+            try:
+                reset_all_stuck_statuses()
+            except Exception as e:
+                logger.error(f"Failed to reset stuck master contract statuses: {e}")
 
             # Signal that DB tables are ready (unblocks cache restoration)
             app.db_ready.set()
