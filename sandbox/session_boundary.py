@@ -36,18 +36,21 @@ def last_session_expiry_utc(session_expiry_str, now_local):
         )
         now_local = IST.localize(now_local)
 
+    # Parse and range-check together. Splitting them leaves "25:00" parsing
+    # cleanly as two ints and then raising from replace() below, which the
+    # caller's broad `except Exception` swallows -- so a config typo silently
+    # skips the MIS square-off instead of falling back.
     try:
         expiry_hour, expiry_minute = map(int, session_expiry_str.split(":"))
+        boundary_today = now_local.replace(
+            hour=expiry_hour, minute=expiry_minute, second=0, microsecond=0
+        )
     except ValueError:
         logger.warning(
             f"Invalid SESSION_EXPIRY_TIME format: {session_expiry_str}. "
             "Using default 03:00"
         )
-        expiry_hour, expiry_minute = 3, 0
-
-    boundary_today = now_local.replace(
-        hour=expiry_hour, minute=expiry_minute, second=0, microsecond=0
-    )
+        boundary_today = now_local.replace(hour=3, minute=0, second=0, microsecond=0)
     if now_local >= boundary_today:
         boundary = boundary_today
     else:

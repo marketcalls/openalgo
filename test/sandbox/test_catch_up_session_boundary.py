@@ -75,6 +75,35 @@ def test_last_session_expiry_utc_before_boundary_ist():
     assert boundary == datetime(2026, 8, 16, 21, 30)
 
 
+@pytest.mark.parametrize(
+    "bad_value",
+    ["", "abc", "3", "03:00:00", "25:00", "-1:00", "03:99"],
+)
+def test_malformed_session_expiry_falls_back_to_default(bad_value):
+    """A bad SESSION_EXPIRY_TIME must fall back, never raise.
+
+    catch_up_mis_squareoff() wraps its whole body in `except Exception`, so a
+    raise here is swallowed and the MIS square-off silently does not run. An
+    out-of-range hour like "25:00" parses as two ints and only fails later in
+    replace(), so parsing and range-checking have to happen together.
+    """
+    from sandbox.session_boundary import last_session_expiry_utc
+
+    now = datetime(2026, 8, 18, 10, 0, tzinfo=IST)
+    expected = last_session_expiry_utc("03:00", now)
+
+    assert last_session_expiry_utc(bad_value, now) == expected
+
+
+def test_valid_session_expiry_is_not_swallowed_by_the_fallback():
+    """The fallback must not mask a perfectly good non-default value."""
+    from sandbox.session_boundary import last_session_expiry_utc
+
+    now = datetime(2026, 8, 18, 10, 0, tzinfo=IST)
+    # 09:15 IST on Aug 18 = 03:45 UTC the same day.
+    assert last_session_expiry_utc("09:15", now) == datetime(2026, 8, 18, 3, 45)
+
+
 def test_reopened_mis_position_survives_catch_up():
     """Row reuse keeps old created_at; updated_at after boundary means live MIS."""
     from database.sandbox_db import SandboxPositions
