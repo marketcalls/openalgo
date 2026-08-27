@@ -59,12 +59,17 @@ when the indicator loads. Do not silently skip validation.
    and identify:
    what is plotted, what is a signal, what state carries across bars, and what
    resets per day or per session.
-2. **Load the context you need.** `reference/contract.md` for the descriptor
+2. **Before writing a formula, check `reference/cookbook.md`.** Every
+   author-facing call is demonstrated there, and the first section is the one
+   that saves the most work: the 91 built-ins are descriptors, so
+   `getIndicator('macd').calc(bars, settings, {})` gives you MACD's own columns
+   rather than a reimplementation that can drift from the chart's.
+3. **Load the context you need.** `reference/contract.md` for the descriptor
    shape and the runtime's exact behaviour, `reference/api.md` for what is
    available inside the module, `reference/pitfalls.md` for the traps. Read
    `reference/pitfalls.md` before writing anything; most first drafts fail on
    something in it.
-3. **Pick the closest example** in `examples/` and work from it:
+4. **Pick the closest example** in `examples/` and work from it:
    - `simple_zscore.js` — one pane, one plot, rolling window, levels, range
    - `intermediate_keltner_squeeze.js` — several plots, `fills`, `colorBy`, a
      second price scale, a boolean that hides part of the drawing
@@ -81,8 +86,8 @@ when the indicator loads. Do not silently skip validation.
      context, replacing a hand-rolled session parser
    - `tier2_external_data.js` — `createTier2Indicator` and the manual `attach`
      lifecycle, for data the chart does not have
-4. **Draft to scratch. Validate. Iterate until it passes.**
-5. **Install**, then tell the user to reopen the indicator picker on `/trading`.
+5. **Draft to scratch. Validate. Iterate until it passes.**
+6. **Install**, then tell the user to reopen the indicator picker on `/trading`.
    No page reload is needed: the catalogue re-reads the folder every time the
    picker opens, and an edited file is re-imported because the URL carries the
    file's modification time. A reload is only needed for a chart that was
@@ -180,6 +185,7 @@ hand-rolling anything, check whether one of these already covers it:
 | Reason about the timeframe | `intervalParts`, `isIntradayInterval`, ... |
 | A colour ramp or alpha | `fromGradient`, `withAlpha` |
 | Pivots, rank, correlation, linreg | `pivotHigh`, `pivotLow`, `percentRank`, `correlation`, `linreg`, ... |
+| **Any built-in's maths** | `getIndicator(id).calc(bars, settings, {})`, never a reimplementation |
 
 Full list in `reference/api.md`, which is generated from the installed build.
 
@@ -219,7 +225,8 @@ Full list in `reference/pitfalls.md`. These four account for most failures:
 | `strategies/indicators/*.js` | installed indicators, gitignored, never pushed |
 | `.claude/skills/chart-indicator/validate.mjs` | the gate |
 | `.claude/skills/chart-indicator/examples/` | three validated worked examples |
-| `.claude/skills/chart-indicator/reference/` | contract, API surface, pitfalls |
+| `.claude/skills/chart-indicator/reference/` | contract, API surface, pitfalls, cookbook |
+| `.claude/skills/chart-indicator/coverage.mjs` | fails if an API or capability is documented but never demonstrated |
 | `docs/custom-indicators.md` | the user-facing guide |
 | `blueprints/custom_indicators.py` | serves the folder to the chart |
 | `frontend/src/lib/trading/customIndicators.ts` | the loader |

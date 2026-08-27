@@ -513,7 +513,7 @@ function validateDescriptor(d, { builtinIds, chartTypes, core }) {
           `histogram, column.`
       )
     }
-    if (typeof plot.title !== 'string' || plot.title === '') {
+    if ((typeof plot.title !== 'string' || plot.title === '') && plot.style?.visible !== false) {
       warn(`${id}: plot '${plot.key}' has no title, so the legend has nothing to show.`)
     }
     if (plot.colorKey !== undefined && !inputKeys.has(plot.colorKey)) {
@@ -582,7 +582,13 @@ function validateDescriptor(d, { builtinIds, chartTypes, core }) {
       // network here its columns are legitimately empty, and warning about it
       // trains people to ignore the warning that matters.
       const external = typeof d.attach === 'function'
-      const primary = !external && fixture === FIXTURES[0] && variant === variants[0]
+      // A study whose output is a table carries a hidden placeholder plot, only
+      // because a descriptor needs one. The built-in seasonality does the same.
+      // Its emptiness is the design, not a mistake worth a warning.
+      const tableOnly =
+        typeof d.table === 'function' && d.plots.every((p) => p.style?.visible === false)
+      const primary =
+        !external && !tableOnly && fixture === FIXTURES[0] && variant === variants[0]
       const store = {}
       let values
       try {
