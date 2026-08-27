@@ -44,6 +44,8 @@ const LEG_PALETTE = [
 interface MultiStrikeOITabProps {
   underlying: string
   exchange: string
+  underlyingSymbol?: string
+  underlyingExchange?: string
   legs: StrategyLeg[]
   optionExchange: string
 }
@@ -113,6 +115,8 @@ function legsIdentity(legs: StrategyLeg[]): string {
 export default function MultiStrikeOITab({
   underlying,
   exchange,
+  underlyingSymbol,
+  underlyingExchange,
   legs,
   optionExchange,
 }: MultiStrikeOITabProps) {
@@ -138,6 +142,7 @@ export default function MultiStrikeOITab({
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const underlyingSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
+  const requestGenerationRef = useRef(0)
   // Keyed by leg symbol — survives leg reordering / re-render cycles.
   const legSeriesRef = useRef<Map<string, ISeriesApi<'Line'>>>(new Map())
   const tooltipRef = useRef<HTMLDivElement | null>(null)
@@ -518,6 +523,7 @@ export default function MultiStrikeOITab({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: legs is read inside but intentionally keyed via the stable `identity` string (memoized above) instead of the raw `legs` reference, so a new array with identical contents does not retrigger this network fetch; depending on `legs` directly would cause repeated OI data requests.
   const loadData = useCallback(async () => {
+    const generation = ++requestGenerationRef.current
     if (!underlying || !exchange) return
     const payloadLegs = legs
       .filter((l) => l.segment === 'OPTION' && l.active && l.symbol)
@@ -533,6 +539,7 @@ export default function MultiStrikeOITab({
         expiry: l.expiry,
       }))
     if (payloadLegs.length === 0) {
+      setIsLoading(false)
       chartDataRef.current = null
       setChartData(null)
       // Clear leg series
@@ -555,10 +562,13 @@ export default function MultiStrikeOITab({
       const res = await strategyChartApi.getMultiStrikeOI({
         underlying,
         exchange,
+        underlying_symbol: underlyingSymbol,
+        underlying_exchange: underlyingExchange,
         legs: payloadLegs,
         interval: selectedInterval,
         days: parseInt(selectedDays, 10),
       })
+      if (generation !== requestGenerationRef.current) return
       if (res.status === 'success' && res.data) {
         chartDataRef.current = res.data
         setChartData(res.data)
@@ -567,15 +577,18 @@ export default function MultiStrikeOITab({
         showToast.error(res.message || 'Failed to load OI data')
       }
     } catch (err) {
+      if (generation !== requestGenerationRef.current) return
       const msg = err instanceof Error ? err.message : 'Failed to load OI data'
       showToast.error(msg)
     } finally {
-      setIsLoading(false)
+      if (generation === requestGenerationRef.current) setIsLoading(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     underlying,
     exchange,
+    underlyingSymbol,
+    underlyingExchange,
     identity,
     selectedInterval,
     selectedDays,
@@ -587,7 +600,10 @@ export default function MultiStrikeOITab({
     const handle = setTimeout(() => {
       loadData()
     }, 300)
-    return () => clearTimeout(handle)
+    return () => {
+      clearTimeout(handle)
+      requestGenerationRef.current += 1
+    }
   }, [loadData])
 
   const toggle = useCallback((key: string) => {

@@ -55,7 +55,7 @@ export const scalpingApi = {
     exchange: string
   ): Promise<{
     status: string
-    data: Array<{ symbol: string; expiry: string; lotsize: number }>
+    data: Array<{ symbol: string; expiry: string; lotsize: number; tick_size: number | null }>
   }> => {
     const response = await webClient.get('/scalping/api/futures', {
       params: { underlying, exchange },

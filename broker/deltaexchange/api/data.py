@@ -16,6 +16,14 @@ import httpx
 import pandas as pd
 
 from broker.deltaexchange.api.baseurl import BASE_URL
+from broker.deltaexchange.api.rate_limiter import (
+    MAX_WAIT_SECONDS,
+    PUBLIC,
+    consume,
+    note_429,
+    retry_delay_from_headers,
+    server_requested_delay,
+)
 from database.token_db import get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -54,6 +62,67 @@ _MAX_RETRIES = 2        # up to 2 retries (3 total attempts)
 _RETRY_DELAY = 0.3      # seconds between retries
 
 
+def _public_get(path: str, timeout: float = 15.0, params: dict | None = None):
+    """GET a public Delta endpoint under the shared weighted quota, retrying 429s.
+
+    Market data is sent unauthenticated, so it is throttled by IP and draws on
+    a bucket separate from the one order placement uses.  A 429 here used to
+    surface as a bare "HTTP 429" exception per symbol, which the option chain
+    swallows into a blank row -- retrying on the reset the exchange reports is
+    what turns that back into data.
+    """
+    url = f"{BASE_URL}{path}"
+    last_exc: Exception | None = None
+
+    for attempt in range(_MAX_RETRIES + 1):
+        consume(path, method="GET", bucket=PUBLIC)
+        try:
+            client = get_httpx_client()
+            resp = client.get(
+                url, headers={"Accept": "application/json"}, timeout=timeout, params=params
+            )
+        except _TRANSIENT_ERRORS as exc:
+            last_exc = exc
+            if attempt >= _MAX_RETRIES:
+                raise
+            logger.warning(
+                "Transient error on %s (attempt %s/%s): %s - retrying",
+                path, attempt + 1, _MAX_RETRIES + 1, exc,
+            )
+            time.sleep(_RETRY_DELAY)
+            continue
+
+        if resp.status_code == 429:
+            note_429(resp.headers, bucket=PUBLIC)
+            wait = retry_delay_from_headers(resp.headers, attempt)
+            requested = server_requested_delay(resp.headers)
+
+            # Only retry when the wait the server asked for is short enough to
+            # be worth sitting through. Past the ceiling, sleeping is pure
+            # delay: the next consume() would refuse the call anyway, so return
+            # the 429 and let the caller report it. This covers Retry-After as
+            # well as X-RATE-LIMIT-RESET -- either can name a wait far longer
+            # than a request should ever block for.
+            if attempt >= _MAX_RETRIES or (requested is not None
+                                           and requested > MAX_WAIT_SECONDS):
+                logger.warning(
+                    "Delta rate-limited (429) on %s; server asked for %ss, not retrying",
+                    path, round(requested) if requested is not None else "unknown",
+                )
+                return resp
+
+            logger.warning(
+                "Delta rate-limited (429) on %s (attempt %s/%s); retrying in %ss",
+                path, attempt + 1, _MAX_RETRIES + 1, round(wait, 1),
+            )
+            time.sleep(wait)
+            continue
+
+        return resp
+
+    raise last_exc if last_exc else Exception(f"No response for {path}")
+
+
 def _get_ticker(symbol: str) -> dict:
     """
     Fetch ticker for a single symbol via GET /v2/tickers/{symbol}.
@@ -63,24 +132,7 @@ def _get_ticker(symbol: str) -> dict:
     Retries up to _MAX_RETRIES times on transient HTTP/2 socket errors
     (e.g. WinError 10035 / WSAEWOULDBLOCK under concurrent load).
     """
-    url = f"{BASE_URL}/v2/tickers/{symbol}"
-    last_err: Exception | None = None
-
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            client = get_httpx_client()
-            resp = client.get(url, headers={"Accept": "application/json"}, timeout=15.0)
-            break  # success
-        except _TRANSIENT_ERRORS as exc:
-            last_err = exc
-            if attempt < _MAX_RETRIES:
-                logger.warning(
-                    "Transient error fetching ticker %s (attempt %d/%d): %s – retrying",
-                    symbol, attempt + 1, _MAX_RETRIES + 1, exc,
-                )
-                time.sleep(_RETRY_DELAY)
-            else:
-                raise
+    resp = _public_get(f"/v2/tickers/{symbol}")
 
     if resp.status_code != 200:
         raise Exception(f"Ticker HTTP {resp.status_code} for {symbol}: {resp.text[:200]}")
@@ -119,24 +171,7 @@ def _get_l2orderbook(product_id: int) -> dict:
 
     Retries up to _MAX_RETRIES times on transient HTTP/2 socket errors.
     """
-    url = f"{BASE_URL}/v2/l2orderbook/{product_id}"
-    last_err: Exception | None = None
-
-    for attempt in range(_MAX_RETRIES + 1):
-        try:
-            client = get_httpx_client()
-            resp = client.get(url, headers={"Accept": "application/json"}, timeout=15.0)
-            break  # success
-        except _TRANSIENT_ERRORS as exc:
-            last_err = exc
-            if attempt < _MAX_RETRIES:
-                logger.warning(
-                    "Transient error fetching l2orderbook %s (attempt %d/%d): %s – retrying",
-                    product_id, attempt + 1, _MAX_RETRIES + 1, exc,
-                )
-                time.sleep(_RETRY_DELAY)
-            else:
-                raise
+    resp = _public_get(f"/v2/l2orderbook/{product_id}")
 
     if resp.status_code != 200:
         raise Exception(
@@ -469,8 +504,6 @@ class BrokerData:
             )
 
             all_candles = []
-            url    = f"{BASE_URL}/v2/history/candles"
-            client = get_httpx_client()
 
             for chunk_start, chunk_end in chunks:
                 start_ts = self._to_epoch(chunk_start, end_of_day=False)
@@ -488,12 +521,7 @@ class BrokerData:
                     f"({start_ts} → {end_ts})"
                 )
 
-                resp = client.get(
-                    url,
-                    params=params,
-                    headers={"Accept": "application/json"},
-                    timeout=30.0,
-                )
+                resp = _public_get("/v2/history/candles", timeout=30.0, params=params)
 
                 if resp.status_code != 200:
                     raise Exception(

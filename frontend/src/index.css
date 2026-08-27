@@ -760,9 +760,38 @@
    track/thumb that reads as a bright seam on a dark chart pane, and it is not
    worth remembering to opt in per element. `.scrollbar-thin` below still exists
    for places that want the narrower variant. */
+
+/* Scrollbar chrome, and why it is a literal colour rather than a token.
+   ---------------------------------------------------------------------------
+   This file carries two incompatible token systems: the base :root and .dark
+   define channels ("240 3.8% 46.1%") for hsl(var(--x)), while .analyzer and the
+   accent themes define complete oklch() colours. hsl(var(--muted-foreground))
+   is therefore invalid under half of them, and an invalid scrollbar-color
+   silently falls back to `auto`, which paints the browser's light default on a
+   dark panel. That is exactly what shipped.
+
+   color-scheme is the real fix and covers more than scrollbars: it tells the
+   engine to render every native control (scrollbars, selects, checkboxes, date
+   pickers) in the matching palette. The scrollbar-color below is a literal
+   slate that reads on either theme, so it cannot be invalidated by whichever
+   token system is in force. */
+:root,
+.sandbox {
+  color-scheme: light;
+}
+
+/* .analyzer is a dark palette (background oklch(0.16 ...)) applied INSTEAD of
+   .dark, not alongside it: the theme store removes 'dark' when it adds
+   'analyzer'. So it has to declare dark itself or every native control in
+   Analyze Mode renders light on a dark page. .sandbox is the light one. */
+.dark,
+.analyzer {
+  color-scheme: dark;
+}
+
 * {
   scrollbar-width: thin;
-  scrollbar-color: hsl(var(--muted-foreground) / 0.35) transparent;
+  scrollbar-color: rgb(113 122 143 / 0.45) transparent;
 }
 
 *::-webkit-scrollbar {
@@ -775,14 +804,14 @@
 }
 
 *::-webkit-scrollbar-thumb {
-  background: hsl(var(--muted-foreground) / 0.3);
+  background: rgb(113 122 143 / 0.38);
   border: 2px solid transparent;
   background-clip: content-box;
   border-radius: 999px;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground) / 0.55);
+  background: rgb(113 122 143 / 0.62);
   background-clip: content-box;
 }
 
@@ -815,11 +844,11 @@
 /* Thin scrollbar utility class */
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+  scrollbar-color: rgb(113 122 143 / 0.38) transparent;
 }
 
 .scrollbar-thin:hover {
-  scrollbar-color: hsl(var(--muted-foreground) / 0.5) transparent;
+  scrollbar-color: rgb(113 122 143 / 0.62) transparent;
 }
 
 /* WebKit browsers (Chrome, Safari, Edge) */

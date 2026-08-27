@@ -111,6 +111,11 @@ from broker.arrow.streaming.arrow_adapter import ArrowWebSocketAdapter
 # Import the hdfcsky_adapter
 from broker.hdfcsky.streaming.hdfcsky_adapter import HDFCSkyWebSocketAdapter
 
+# Import the hdfcsecurities_adapter
+from broker.hdfcsecurities.streaming.hdfcsecurities_adapter import (
+    HDFCSecuritiesWebSocketAdapter,
+)
+
 # AliceBlue adapter will be loaded dynamically
 
 # Register adapters
@@ -142,6 +147,7 @@ register_adapter("nubra", NubraWebSocketAdapter)
 register_adapter("rmoney", RMoneyWebSocketAdapter)
 register_adapter("arrow", ArrowWebSocketAdapter)
 register_adapter("hdfcsky", HDFCSkyWebSocketAdapter)
+register_adapter("hdfcsecurities", HDFCSecuritiesWebSocketAdapter)
 
 # AliceBlue adapter will be registered dynamically when first used
 
@@ -196,4 +202,5 @@ __all__ = [
     "RMoneyWebSocketAdapter",
     "ArrowWebSocketAdapter",
     "HDFCSkyWebSocketAdapter",
+    "HDFCSecuritiesWebSocketAdapter",
 ]

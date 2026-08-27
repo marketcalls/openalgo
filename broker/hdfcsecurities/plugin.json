@@ -1,0 +1,15 @@
+{
+    "Plugin Name": "hdfcsecurities",
+    "supported_exchanges": [
+        "NSE",
+        "BSE",
+        "NFO",
+        "BFO",
+        "CDS",
+        "MCX",
+        "NSE_INDEX",
+        "BSE_INDEX"
+    ],
+    "broker_type": "IN_stock",
+    "leverage_config": false
+}

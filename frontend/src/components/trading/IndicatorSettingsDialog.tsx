@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { IndicatorField, IndicatorSettingsRequest } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
 import { PlotStyleRow } from './PlotStyleRow'
+import { TickBox } from './TickBox'
 
 interface Props {
   req: IndicatorSettingsRequest | null
@@ -25,7 +26,7 @@ const SOURCES = ['open', 'high', 'low', 'close', 'hl2', 'hlc3', 'ohlc4']
 const LINE_STYLES = ['solid', 'dashed', 'dotted']
 
 /** Shared control chrome — compact, flat, dark-first. */
-const CONTROL =
+export const CONTROL =
   'h-7 rounded border border-border bg-background px-2 text-[13px] text-foreground outline-none transition-colors focus:border-primary'
 
 export function IndicatorSettingsDialog({ req, onApply, onDefaults, onClose }: Props) {
@@ -130,7 +131,7 @@ export function IndicatorSettingsDialog({ req, onApply, onDefaults, onClose }: P
           ) : (
             <div className="grid grid-cols-[minmax(0,1fr)_150px] items-center gap-x-5 gap-y-3">
               {fields.map((f) => (
-                <Field
+                <SettingsField
                   key={f.key}
                   field={f}
                   id={`${req.instanceId}-${f.key}`}
@@ -191,8 +192,14 @@ function groupsOf(fields: IndicatorField[]): [string, IndicatorField[]][] {
   return [...out]
 }
 
-/** One label → control row, rendered by the field's declared type. */
-function Field({
+/**
+ * One label -> control row, rendered by the field's declared type.
+ *
+ * Exported because the chart settings dialog renders the same vocabulary: the
+ * engine describes its own settings with `IndicatorInput`, so both forms share
+ * one control set and a new widget only has to be written once.
+ */
+export function SettingsField({
   field,
   id,
   value,
@@ -213,13 +220,7 @@ function Field({
     return (
       <>
         {label}
-        <input
-          id={id}
-          type="checkbox"
-          checked={value === true}
-          onChange={(e) => onChange(e.target.checked)}
-          className="h-4 w-4 accent-[hsl(var(--primary))]"
-        />
+        <TickBox id={id} checked={value === true} onChange={onChange} />
       </>
     )
   }
@@ -236,8 +237,10 @@ function Field({
             value={v}
             onChange={(e) => onChange(e.target.value)}
             aria-label={field.label}
-            // Native swatch chrome is bulky; clip it to a flat colour chip.
-            className="h-6 w-10 cursor-pointer rounded border border-border bg-transparent p-0 [&::-moz-color-swatch]:rounded-sm [&::-moz-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0.5 [&::-webkit-color-swatch]:rounded-sm [&::-webkit-color-swatch]:border-0"
+            // A colour control is a swatch, not a bar: square and small enough
+            // that a column of them reads as a palette rather than as blocks.
+            // Native swatch chrome is bulky, so it is clipped to a flat chip.
+            className="h-[26px] w-[26px] cursor-pointer rounded-md border border-border bg-transparent p-0 [&::-moz-color-swatch]:rounded [&::-moz-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-[3px] [&::-webkit-color-swatch]:rounded [&::-webkit-color-swatch]:border-0"
           />
         </div>
       </>

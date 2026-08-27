@@ -25,11 +25,15 @@ import pandas as pd
 import pytz
 
 from services.history_service import get_history
-from services.option_symbol_service import (
-    NO_SPOT_EXCHANGES,
-    resolve_underlying_quote,
-)
 from services.quotes_service import get_quotes
+from services.strategy_builder_reference_service import (
+    BSE_INDEX_SYMBOLS,
+    NSE_INDEX_SYMBOLS,
+    resolve_strategy_builder_reference,
+)
+from services.strategy_builder_reference_service import (
+    get_quote_exchange as _get_quote_exchange,
+)
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -73,36 +77,6 @@ def _cap_last_n_trading_dates(series: list[dict], n: int, ist_tz: pytz.BaseTzInf
     distinct_dates = sorted({d for d, _ in tagged}, reverse=True)
     keep = set(distinct_dates[:n])
     return [r for d, r in tagged if d in keep]
-
-
-NSE_INDEX_SYMBOLS = {
-    "NIFTY",
-    "BANKNIFTY",
-    "FINNIFTY",
-    "MIDCPNIFTY",
-    "NIFTYNXT50",
-    "NIFTYIT",
-    "NIFTYPHARMA",
-    "NIFTYBANK",
-}
-
-BSE_INDEX_SYMBOLS = {"SENSEX", "BANKEX", "SENSEX50"}
-
-
-def _get_quote_exchange(base_symbol: str, underlying_exchange: str) -> str:
-    """Resolve the exchange to use for fetching underlying quotes/history."""
-    upper = (underlying_exchange or "").upper()
-    if base_symbol in NSE_INDEX_SYMBOLS:
-        return "NSE_INDEX"
-    if base_symbol in BSE_INDEX_SYMBOLS:
-        return "BSE_INDEX"
-    if upper == "NFO":
-        return "NSE"
-    if upper == "BFO":
-        return "BSE"
-    if upper in ("NSE_INDEX", "BSE_INDEX"):
-        return upper
-    return upper
 
 
 def _convert_timestamp_to_ist(df: pd.DataFrame) -> pd.DataFrame | None:
@@ -172,6 +146,8 @@ def get_strategy_chart_data(
     interval: str,
     api_key: str,
     days: int = 5,
+    underlying_symbol: str | None = None,
+    underlying_exchange: str | None = None,
 ):
     """
     Build the Strategy Chart time series for a user-defined options strategy.
@@ -198,7 +174,9 @@ def get_strategy_chart_data(
         if not base_symbol:
             return False, {"status": "error", "message": "underlying is required"}, 400
 
-        normalized_legs = [nl for nl in (_normalize_leg(l) for l in (legs or [])) if nl]
+        normalized_legs = [
+            normalized for normalized in (_normalize_leg(leg) for leg in (legs or [])) if normalized
+        ]
         if not normalized_legs:
             return (
                 False,
@@ -206,28 +184,24 @@ def get_strategy_chart_data(
                 400,
             )
 
-        quote_exchange = _get_quote_exchange(base_symbol, exchange)
-
-        # MCX and the currency segments have no tradable spot, so the history
-        # series for the underlying comes from the near-month future. Asking for
-        # "CRUDEOIL" on MCX returns nothing and the chart loses its underlying
-        # line entirely.
-        underlying_symbol = base_symbol
-        if exchange.upper() in NO_SPOT_EXCHANGES:
-            _resolved = resolve_underlying_quote(base_symbol, exchange.upper())
-            if _resolved is None:
-                return (
-                    False,
-                    {
-                        "status": "error",
-                        "message": (
-                            f"No unexpired futures found for {base_symbol} on "
-                            f"{exchange.upper()}"
-                        ),
-                    },
-                    404,
-                )
-            underlying_symbol, quote_exchange = _resolved
+        resolved_reference = resolve_strategy_builder_reference(
+            base_symbol,
+            exchange,
+            underlying_symbol,
+            underlying_exchange,
+        )
+        if resolved_reference is None:
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": (
+                        f"No unexpired futures found for {base_symbol} on {exchange.upper()}"
+                    ),
+                },
+                404,
+            )
+        reference_symbol, quote_exchange = resolved_reference
 
         # ── Underlying history ────────────────────────────────────────
         # Some brokers (e.g., Zerodha's Kite API) don't return intraday
@@ -238,7 +212,7 @@ def get_strategy_chart_data(
         underlying_missing = False
         df_underlying: pd.DataFrame | None = None
         success_u, resp_u, _ = get_history(
-            symbol=underlying_symbol,
+            symbol=reference_symbol,
             exchange=quote_exchange,
             interval=interval,
             start_date=start_date_str,
@@ -268,7 +242,7 @@ def get_strategy_chart_data(
 
         # ── Per-leg history (deduped by (symbol, exchange)) ───────────
         leg_price_lookup: dict[tuple[str, str], dict] = {}
-        unique_keys = {(l["symbol"], l["exchange"]) for l in normalized_legs}
+        unique_keys = {(leg["symbol"], leg["exchange"]) for leg in normalized_legs}
 
         for symbol, leg_exchange in unique_keys:
             success_l, resp_l, _ = get_history(
@@ -362,7 +336,7 @@ def get_strategy_chart_data(
 
         # ── Latest underlying LTP for the info bar ────────────────────
         success_q, quote_resp, _ = get_quotes(
-            symbol=base_symbol,
+            symbol=reference_symbol,
             exchange=quote_exchange,
             api_key=api_key,
         )

@@ -2,6 +2,142 @@
 
 All notable changes to OpenAlgo will be documented in this file.
 
+Point releases between minor versions are documented in
+[docs/releases](releases/) rather than here.
+
+## [2.0.2.1] - 2026-08-21
+
+### Flow Release
+
+25 commits since 2.0.2.0. Full notes: [version-2.0.2.1-released.md](releases/version-2.0.2.1-released.md).
+
+---
+
+### Highlights
+
+- **Flow QA audit remediation** - one production QA audit and three re-audits validated finding by finding against source, then closed across triggers, the scheduler lifecycle, execution reporting, node contracts, the editor, the import format and the generated documentation
+- **Logic gates repaired** - a `False` input never reached an AND/OR/NOT gate, so OR behaved like AND, NOT could never fire, and the result depended on traversal order
+- **The editor stopped losing work** - a failed fetch rendered a blank canvas that the next save wrote over the real graph, clicking Activate discarded unsaved edits, and a save race let Run Now execute a revision the user was no longer looking at
+- **Typed fields replace hand-written JSON** on the Indicator and Margin Calculator nodes, with Margin gaining a leg editor and lot-based quantity
+- **Order nodes fail on unresolved variables** instead of placing a successful order for the wrong size at the wrong price type
+- **Charting terminal: 20 to 91 built-in indicators** across `openalgo-charts` 1.1.0 and 1.2.0, with search in the indicator menu
+- **The endless "Loading new version" reload loop** ended, along with the unsafe `Vary`-less asset representations behind it
+- **Migrations got the app's 15-second SQLite lock timeout**, which they had never had
+
+---
+
+### New Features
+
+- Flow Indicator node renders each indicator's real parameters as typed fields, generated from the `openalgo.ta` signatures
+- Flow Margin Calculator gains a repeatable leg editor with lot-based quantity for NFO and BFO, backed by a batched `POST /flow/api/symbol-lotsizes`
+- Flow execution history is bounded by `FLOW_EXECUTION_RETENTION_COUNT` (500) and `FLOW_EXECUTION_RETENTION_DAYS` (30)
+- `reconcile_scheduler_jobs()` and `restore_price_alerts()` run at startup, so Flow triggers survive a restart and stale jobs are cleared
+- Charting terminal indicator menu has a search box, filtering on display name and id
+- `GET /python/api/exchanges` serves session windows from the market calendar DB
+- Home page "One platform, many desks" section, with counts read from the code
+- Devsprint contributor prep guide (#1804)
+
+### Flow Fixes
+
+- Price Alert node evaluates the editor's own condition vocabulary; a monitor-fired run carries the trigger price rather than re-fetching a quote
+- Condition results are delivered into logic gates instead of being filtered by the branch taken
+- Condition nodes return an error rather than a substituted `false`; `timeCondition` keeps its seconds
+- Order-defining fields are checked for unresolved `{{references}}` before the broker call
+- Modify Order reads the live order and changes only what was supplied; its editor default no longer ships exchange and action
+- Close Positions honours its symbol/exchange/product filter; HTTP Request parses headers, supports PATCH, reads a millisecond timeout capped at 60s and refuses non-http(s), loopback, private, link-local and reserved destinations
+- Fund Check and Position Check fail closed; Delay is capped at 300s
+- One-shot triggers are spent only when the workflow actually ran, and clear `is_active` when consumed
+- Duplicate-run guard is an atomic try-acquire; a node returning error stops its branch and marks the run failed
+- Activation persists before registering and rolls back on failure; the API key is no longer pickled into the jobstore
+- Output variable names on nine node types are persisted rather than shown as a fallback
+- Basket Order and Margin node subtitles count the fields the editor actually writes
+- `flow_workflows.api_key` migration ships for existing installations; `create_execution` stamps `started_at` and history orders by id
+- Both Flow monitors release their pools, threads and bus subscription at exit
+- Webhook lookups cache the workflow id rather than a detached ORM instance; secret rotation evicts the cache
+
+### Platform Fixes
+
+- Endless "Loading new version" reload loop, and `/assets/<file>` serving three representations of one URL with no `Vary` header (#1807)
+- Forced upgrade header removed from `change-domain.sh` and the Ubuntu server design doc sample (#1807)
+- Migrations use the same `PRAGMA busy_timeout=15000` as the app, via `upgrade/_pragmas.py` (#1726)
+- `/api/v1/telegram` write endpoints repaired and `/notify` gated (#1577)
+- MCP loopback health probe honours `MCP_LOOPBACK_URL` (#1441)
+- Order latency recorded for routes outside the RESTX API (#1805)
+- `/python` schedule prefill no longer cuts NFO and BFO strategies off ten minutes early
+
+### Broker Fixes
+
+- TradeSmart: WebSocket lifecycle aligned with its Noren siblings, interruptible heartbeat, close frames told from faults, rate limits corrected to 10/sec and 120/min, bulk quotes served from the WebSocket feed (#1805, #1802)
+- Delta Exchange: the pooled feed stays alive after the last unsubscribe, so an option chain keeps delivering ticks across an expiry or strike change (#1799)
+
+### Dependencies
+
+- `openalgo-charts`: **1.0.29** to **1.2.0** (20 to 91 built-in indicators, VWAP and CPR session anchoring, frontend only)
+- No Python dependencies changed
+
+---
+
+## [2.0.2.0] - 2026-08-14
+
+### Brokers and Options Release
+
+58 commits since 2.0.1.9. Full notes: [version-2.0.2.0-released.md](releases/version-2.0.2.0-released.md).
+
+---
+
+### Highlights
+
+- **HDFC Securities InvestRight** - new broker plugin covering auth, funds, master contract, orders, quotes, depth, WebSocket streaming and the option tools
+- **AliceBlue rebuild** - order-update feed repaired, market-data reconnect storm ended, session-long socket reuse, documented rate limits enforced, index symbology and daily history boundaries corrected
+- **Option Chain live Greeks** - client-side Black-76 recomputed on every tick, with a Price/Greeks view mode (shortcut G) and `with_greeks` on `POST /api/v1/optionchain`
+- **Strategy Builder repair** - valuation aligned with Black-76, exact listed-contract resolution, live-market freshness, and a run of payoff and forward-curve corrections
+- **MCP hardening** - tool annotations, a single structured error shape, a trust envelope, and toolset/read-only filtering on both transports
+- **Samco Trade API v3.2**, **Tradejini CubePlus v2**, and **Delta Exchange** market data moved to the public WebSocket endpoint
+- **Derivative underlying normalized once** on the shared master-contract path, fixing options orders, expiry lists and the underlying dropdown for every broker
+
+---
+
+### New Features
+
+- HDFC Securities InvestRight broker integration (#1784)
+- Option Chain streams live Greeks with a Price/Greeks column-preset toggle
+- `POST /api/v1/optionchain` accepts `with_greeks` and `interest_rate`, and returns `expiry_ts` and `server_ts`
+- HalfTrend added to the charting terminal as the 20th built-in indicator
+- MCP tool annotations, structured errors, trust envelope, and `OPENALGO_MCP_TOOLSETS` / `OPENALGO_MCP_READ_ONLY` filtering
+- AliceBlue EC error codes expand into readable messages
+- PnL Tracker splits PnL and drawdown into 3:1 panes
+
+### Broker Fixes
+
+- AliceBlue: order-update WebSocket token host, market-data reconnect storm, session-long socket reuse, 1800 req / 15 min rate limit, bounded symbol-lock registry, integer master-contract tokens, BSE historical data, daily history day boundary at midnight IST, index symbology and `::index` history routing
+- Samco: migrated to Trade API v3.2; a stalled streaming worker is now always replaced on reconnect (#1783)
+- Tradejini: realigned to the refreshed CubePlus v2 API docs (#1787)
+- Delta Exchange: market data moved to the public WebSocket endpoint with batched subscriptions; expiry dropdown fixed - requires a master contract re-download (#1790)
+- Definedge: no longer loses a full trading day at each history chunk boundary (#1790)
+- All brokers: the derivative underlying root is normalized once on the shared master-contract path, fixing Fyers and any broker that ships a contract description in `name`
+
+### Platform Fixes
+
+- 23 unregistered React routes were feeding `Error404Tracker` and pushing logged-out users toward an automatic IP ban; Flask rules added
+- Strategy Builder: Black-76 scenario valuation, aggregate horizons, exact listed-contract resolution, stale margin invalidation, WebSocket-bound freshness, closed-leg exclusion, and exact tick rounding (#1786)
+- Strategy Builder payoff charts: one carry curve per strategy, forward converging to spot at expiry, no breakeven at an underlying of zero, x-axis no longer collapsing, and zoom preserved
+- Flow: option lot size resolved without trusting `SymToken.name`; open strategy legs sort ahead of flat ones
+- Greeks: parsed option expiry kept naive
+- Charting terminal: screenshots include the readout and exclude the order buttons
+- Option Chain: a hidden column now hides on both sides in one toggle
+
+### Documentation
+
+- WebSocket client connection limits clarified (#1764, #1788)
+- Option Chain `with_greeks` documented, examples moved to 25AUG26
+
+### Dependencies
+
+- `openalgo-charts`: **1.0.28** to **1.0.29** (HalfTrend indicator, frontend only)
+- No Python dependencies changed
+
+---
+
 ## [2.0.0.0] - 2026-01-22
 
 ### Major Release: Complete Frontend Rewrite & Feature Expansion

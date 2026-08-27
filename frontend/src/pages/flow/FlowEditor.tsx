@@ -84,6 +84,33 @@ import { useFlowWorkflowStore } from '@/stores/flowWorkflowStore'
 import { useThemeStore } from '@/stores/themeStore'
 
 let nodeId = 0
+
+/**
+ * Fill in the output-variable name the config panel displays for a node that
+ * was saved without one.
+ *
+ * The panel renders the name as its input's fallback, so the box looks filled
+ * while the stored value is an empty string - the executor then stores nothing
+ * and every downstream {{name.path}} resolves to its own literal text. New
+ * nodes now carry the name in DEFAULT_NODE_DATA; this repairs the ones already
+ * saved, so what the panel shows is what the next save will persist.
+ */
+function withDefaultOutputVariables(nodes: Node[]): { nodes: Node[]; repaired: boolean } {
+  let repaired = false
+  const next = nodes.map((node) => {
+    const defaults = DEFAULT_NODE_DATA[node.type as keyof typeof DEFAULT_NODE_DATA] as
+      | { outputVariable?: string }
+      | undefined
+    const fallback = defaults?.outputVariable
+    const current = (node.data as { outputVariable?: string } | undefined)?.outputVariable
+    if (!fallback || (typeof current === 'string' && current.trim())) {
+      return node
+    }
+    repaired = true
+    return { ...node, data: { ...node.data, outputVariable: fallback } }
+  })
+  return { nodes: next, repaired }
+}
 const getNodeId = () => `node_${nodeId++}`
 
 function FlowEditorContent() {
@@ -98,6 +125,7 @@ function FlowEditorContent() {
     nodes,
     edges,
     selectedNodeId,
+    selectedEdgeId,
     isModified,
     setWorkflow,
     setName,
@@ -140,14 +168,33 @@ function FlowEditorContent() {
     await toggleAppMode()
   }
 
-  const { isLoading, data: workflow } = useQuery({
+  const {
+    isLoading,
+    isError,
+    error: loadError,
+    refetch,
+    data: workflow,
+  } = useQuery({
     queryKey: flowQueryKeys.workflow(Number(id)),
     queryFn: () => getWorkflow(Number(id)),
     enabled: !!id,
   })
 
+  // Activate and Deactivate invalidate this query, and the refetch returns a new
+  // object identity, which re-ran this effect and called setWorkflow - silently
+  // replacing the canvas with the last saved graph and clearing isModified. Ten
+  // minutes of unsaved edits vanished a moment after clicking Activate, with no
+  // warning and no undo. Hydrate only when the loaded workflow is not the one
+  // already open; keep is_active in its own effect so status still updates.
+  const hydratedIdRef = useRef<number | null>(null)
+
   useEffect(() => {
-    if (workflow) {
+    setIsActive(Boolean(workflow?.is_active))
+  }, [workflow?.is_active])
+
+  useEffect(() => {
+    if (workflow && hydratedIdRef.current !== workflow.id) {
+      hydratedIdRef.current = workflow.id
       // Ensure nodes and edges are arrays
       const workflowNodes = workflow.nodes || []
       const workflowEdges = workflow.edges || []
@@ -158,14 +205,22 @@ function FlowEditorContent() {
         type: 'insertable',
         animated: true,
       }))
+      const { nodes: hydratedNodes, repaired } = withDefaultOutputVariables(workflowNodes as Node[])
       setWorkflow({
         id: workflow.id,
         name: workflow.name,
         description: workflow.description || '',
-        nodes: workflowNodes as Node[],
+        nodes: hydratedNodes,
         edges: convertedEdges,
       })
-      setIsActive(workflow.is_active)
+      if (repaired) {
+        // setWorkflow marks the canvas clean, so a repair made here would live
+        // only in memory: Run Now saves nothing, the backend executes the
+        // stored graph with the blank names, and the run fails on a variable
+        // the panel shows as filled. Flagging it dirty is also honest -- the
+        // canvas really does differ from what is stored.
+        useFlowWorkflowStore.setState({ isModified: true })
+      }
       // Set node ID counter
       const maxId = Math.max(
         0,
@@ -185,24 +240,67 @@ function FlowEditorContent() {
   }, [resetWorkflow])
 
   const saveMutation = useMutation({
-    mutationFn: () =>
-      updateWorkflow(Number(id), {
-        name,
-        nodes,
-        edges,
-      }),
-    onSuccess: () => {
-      markSaved()
+    mutationFn: () => {
+      // Captured with the payload, so onSuccess can tell whether the canvas
+      // moved on while the request was in flight.
+      const revision = useFlowWorkflowStore.getState().revision()
+      const state = useFlowWorkflowStore.getState()
+      return updateWorkflow(Number(id), {
+        name: state.name,
+        nodes: state.nodes,
+        edges: state.edges,
+      }).then((saved) => ({ ...saved, revision }))
+    },
+    onSuccess: (saved) => {
+      markSaved(saved.revision)
       queryClient.invalidateQueries({ queryKey: flowQueryKeys.workflows() })
-      showToast.success('Workflow saved', 'flow')
+      // The server re-arms a changed trigger during the save. It only reports
+      // needs_reactivate when that failed, in which case it has stood the
+      // workflow down rather than leave it running a stale registration.
+      if (saved?.needs_reactivate) {
+        showToast.warning(
+          'Saved, but the new trigger could not be registered, so the workflow was deactivated. Activate it again once the trigger is valid.',
+          'flow'
+        )
+      } else {
+        showToast.success('Workflow saved', 'flow')
+      }
     },
     onError: (error: Error) => {
       showToast.error(error.message, 'flow')
     },
   })
 
+  // Run Now and Activate send only the workflow id, so the backend acts on the
+  // last SAVED graph. With the buttons enabled while the canvas was dirty, a
+  // user who changed a quantity and hit Run Now watched a successful run of the
+  // previous graph and had no way to tell. Saving first makes the graph that
+  // runs the graph on screen; awaiting it also closes the race where a pending
+  // Ctrl+S PUT and the execute POST were in flight together.
+  const saveIfDirty = useCallback(async () => {
+    // Loops because an edit made during the PUT leaves the workflow dirty: the
+    // save that just finished does not contain it, so executing now would run
+    // the previous revision. Bounded, because a canvas being edited continuously
+    // would otherwise never converge -- and failing loudly is far better than
+    // silently trading a graph the user is no longer looking at.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (!useFlowWorkflowStore.getState().isModified) {
+        return
+      }
+      await saveMutation.mutateAsync()
+    }
+    if (useFlowWorkflowStore.getState().isModified) {
+      throw new Error(
+        'The canvas kept changing while it was being saved. Stop editing, save, then try again.'
+      )
+    }
+  }, [saveMutation])
+
   const activateMutation = useMutation({
-    mutationFn: () => activateWorkflow(Number(id)),
+    mutationFn: async () => {
+      await saveIfDirty()
+      return activateWorkflow(Number(id))
+    },
     onSuccess: () => {
       setIsActive(true)
       queryClient.invalidateQueries({ queryKey: flowQueryKeys.workflow(Number(id)) })
@@ -214,7 +312,10 @@ function FlowEditorContent() {
   })
 
   const deactivateMutation = useMutation({
-    mutationFn: () => deactivateWorkflow(Number(id)),
+    mutationFn: async () => {
+      await saveIfDirty()
+      return deactivateWorkflow(Number(id))
+    },
     onSuccess: () => {
       setIsActive(false)
       queryClient.invalidateQueries({ queryKey: flowQueryKeys.workflow(Number(id)) })
@@ -226,7 +327,8 @@ function FlowEditorContent() {
   })
 
   const executeMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
+      await saveIfDirty()
       setExecutionStatus('running')
       setExecutionLogs([])
       setShowLogPanel(true)
@@ -260,8 +362,11 @@ function FlowEditorContent() {
       }
 
       // Delete/Backspace - delete selected node or edge
+      // selectedEdgeId was never consulted, and selectEdge clears selectedNodeId,
+      // so after clicking an edge this guard was always false. With
+      // deleteKeyCode={null} on the canvas there was no other way to remove one.
       if (event.key === 'Delete' || event.key === 'Backspace') {
-        if (selectedNodeId) {
+        if (selectedNodeId || selectedEdgeId) {
           event.preventDefault()
           deleteSelected()
         }
@@ -278,6 +383,7 @@ function FlowEditorContent() {
       // Escape - Deselect
       if (event.key === 'Escape') {
         selectNode(null)
+        selectEdge(null)
       }
 
       // ? - Open keyboard shortcuts
@@ -288,7 +394,16 @@ function FlowEditorContent() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedNodeId, deleteSelected, selectNode, isModified, saveMutation, navigate])
+  }, [
+    selectedNodeId,
+    selectedEdgeId,
+    deleteSelected,
+    selectNode,
+    selectEdge,
+    isModified,
+    saveMutation,
+    navigate,
+  ])
 
   const handleDragStart = useCallback((event: React.DragEvent, nodeType: string) => {
     event.dataTransfer.setData('application/reactflow', nodeType)
@@ -325,6 +440,23 @@ function FlowEditorContent() {
       addNode(newNode)
     },
     [screenToFlowPosition, addNode]
+  )
+
+  // Same placement logic as a drop, but at the middle of the visible canvas,
+  // for adding a node without a pointer.
+  const handleAddNode = useCallback(
+    (type: string) => {
+      const bounds = reactFlowWrapper.current?.getBoundingClientRect()
+      const position = screenToFlowPosition({
+        x: bounds ? bounds.x + bounds.width / 2 : window.innerWidth / 2,
+        y: bounds ? bounds.y + bounds.height / 2 : window.innerHeight / 2,
+      })
+      const defaultData = DEFAULT_NODE_DATA[type as keyof typeof DEFAULT_NODE_DATA] || {}
+      const newNode: Node = { id: getNodeId(), type, position, data: { ...defaultData } }
+      addNode(newNode)
+      selectNode(newNode.id)
+    },
+    [screenToFlowPosition, addNode, selectNode]
   )
 
   const handleNodeClick = useCallback(
@@ -435,6 +567,43 @@ function FlowEditorContent() {
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back to Workflows
           </Button>
+        </div>
+      </div>
+    )
+  }
+
+  // A failed load left isLoading false and workflow undefined, so the editor
+  // rendered a blank canvas indistinguishable from a new workflow. Dropping two
+  // nodes on it and saving PUT those two nodes over the real graph, and reset
+  // the name to the store default. Never render the canvas without its data.
+  if (isError) {
+    return (
+      <div className="flex h-screen flex-col bg-background text-foreground">
+        <div className="h-12 border-b border-border flex items-center px-2 bg-card/50">
+          <div className="flex items-center gap-2 px-2">
+            <img src="/images/android-chrome-192x192.png" alt="OpenAlgo" className="w-6 h-6" />
+            <span className="font-semibold text-sm">openalgo</span>
+          </div>
+          <div className="flex-1" />
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          <div className="max-w-md text-center space-y-4 px-6">
+            <h2 className="text-lg font-semibold">Could not load this workflow</h2>
+            <p className="text-sm text-muted-foreground">
+              {loadError instanceof Error ? loadError.message : 'The workflow could not be loaded.'}
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Editing is disabled so the stored workflow is not overwritten.
+            </p>
+            <div className="flex items-center justify-center gap-2">
+              <Button size="sm" onClick={() => refetch()}>
+                Retry
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => navigate('/flow')}>
+                Back to workflows
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
     )
@@ -670,7 +839,7 @@ function FlowEditorContent() {
               variant="outline"
               size="sm"
               onClick={() => deactivateMutation.mutate()}
-              disabled={deactivateMutation.isPending}
+              disabled={deactivateMutation.isPending || saveMutation.isPending}
             >
               {deactivateMutation.isPending ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -683,7 +852,7 @@ function FlowEditorContent() {
             <Button
               size="sm"
               onClick={() => activateMutation.mutate()}
-              disabled={activateMutation.isPending}
+              disabled={activateMutation.isPending || saveMutation.isPending}
             >
               {activateMutation.isPending ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -702,7 +871,7 @@ function FlowEditorContent() {
             <DropdownMenuContent align="end">
               <DropdownMenuItem
                 onClick={() => executeMutation.mutate()}
-                disabled={executeMutation.isPending}
+                disabled={executeMutation.isPending || saveMutation.isPending}
               >
                 Run Now
               </DropdownMenuItem>
@@ -733,7 +902,7 @@ function FlowEditorContent() {
       <div className="flex flex-1 overflow-hidden">
         {/* Node Palette - Left Sidebar */}
         <div className="w-56 flex-shrink-0">
-          <NodePalette onDragStart={handleDragStart} />
+          <NodePalette onDragStart={handleDragStart} onAdd={handleAddNode} />
         </div>
 
         {/* Canvas */}
@@ -752,6 +921,7 @@ function FlowEditorContent() {
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             fitView
+            fitViewOptions={{ maxZoom: 1 }}
             snapToGrid
             snapGrid={[16, 16]}
             deleteKeyCode={null}

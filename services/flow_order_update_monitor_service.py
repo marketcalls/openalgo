@@ -13,12 +13,15 @@ see docs/prompt/websockets-format.md "Order Updates") instead of running its
 own polling thread.
 """
 
+import atexit
+import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Optional
 
+from services.flow_node_contracts import VALID_STATUSES, normalize_status
 from utils.env_config import env_int
 from utils.event_bus import bus
 from utils.logging import get_logger
@@ -33,22 +36,6 @@ _WORKFLOW_POOL = ThreadPoolExecutor(
     max_workers=env_int("FLOW_ORDER_UPDATE_WORKERS", 4, minimum=1),
     thread_name_prefix="flow-order-update",
 )
-
-# order_status values a watch can match on; "any" matches every update.
-VALID_STATUSES = {"any", "open", "trigger pending", "complete", "rejected", "cancelled"}
-
-
-def normalize_status(value: str | None) -> str:
-    """Canonicalize an order_status for comparison.
-
-    Broker adapters disagree on the multi-word spelling: Zerodha's order
-    adapter emits "trigger pending" (matching docs/prompt/websockets-format.md
-    and the sandbox engine) while other paths use "trigger_pending". Comparing
-    raw strings makes the Trigger Pending filter silently never match. Fold
-    underscores to spaces and lowercase so both spellings compare equal.
-    """
-    return str(value or "").strip().lower().replace("_", " ")
-
 
 @dataclass
 class OrderUpdateWatch:
@@ -243,8 +230,33 @@ class FlowOrderUpdateMonitor:
             f"orderid={event.orderid} status={event.order_status}"
         )
 
+        # Whether the workflow actually ran. A one-shot watch is only spent by
+        # a run that reached the graph.
+        executed = False
+
         def run_workflow():
+            nonlocal executed
             try:
+                # A queued run can sit behind a slow execution while the user
+                # deactivates or deletes the workflow. execute_workflow does not
+                # require the workflow to be active, so without these guards a
+                # stale order event still places live orders. Identity, not id:
+                # a deactivate/reactivate cycle installs a new watch under the
+                # same key, and this run has no claim on that one.
+                if self.get_watch(watch.workflow_id) is not watch:
+                    logger.info(
+                        f"Dropping queued order-update run for workflow "
+                        f"{watch.workflow_id}: the watch was removed or replaced "
+                        "before this run claimed it."
+                    )
+                    return
+                if not self._workflow_is_active(watch.workflow_id):
+                    logger.info(
+                        f"Dropping queued order-update run for workflow "
+                        f"{watch.workflow_id}: the workflow is no longer active."
+                    )
+                    return
+
                 from services.flow_executor_service import execute_workflow
 
                 webhook_data = {
@@ -264,11 +276,24 @@ class FlowOrderUpdateMonitor:
                 logger.info(
                     f"Workflow {watch.workflow_id} execution result: {result.get('status')}"
                 )
+                # `already_running` means this event never reached the graph.
+                executed = not result.get("already_running")
             except Exception:
                 logger.exception(f"Failed to execute workflow {watch.workflow_id}")
             finally:
                 if watch.trigger != "every_time":
-                    self.remove_watch(watch.workflow_id)
+                    if executed:
+                        self._retire_one_shot(watch)
+                    else:
+                        # Nothing ran, so the watch must not be consumed. It was
+                        # retired unconditionally, so an order event colliding
+                        # with an in-flight run spent the trigger and
+                        # deactivated its workflow without executing anything.
+                        watch.triggered = False
+                        logger.info(
+                            f"Re-arming one-shot order-update watch for workflow "
+                            f"{watch.workflow_id}: the run did not execute."
+                        )
                 else:
                     watch.triggered = False
                 # No app context here, so teardown_appcontext never runs and
@@ -278,20 +303,140 @@ class FlowOrderUpdateMonitor:
 
                 remove_all_scoped_sessions()
 
-        _WORKFLOW_POOL.submit(run_workflow)
+        try:
+            _WORKFLOW_POOL.submit(run_workflow)
+        except Exception:
+            # The claim is made under the lock before submitting; if the submit
+            # fails it has to come back off or the watch never fires again.
+            watch.triggered = False
+            logger.exception(
+                f"Could not queue the order-update run for workflow {watch.workflow_id}; "
+                "the watch stays armed."
+            )
+            # Unlike a price alert, this event is not re-derivable: the bus
+            # delivers a fill once and never replays it, so re-arming alone
+            # would leave the workflow silently skipping that order. Run it
+            # inline instead -- the caller is the bus dispatch thread, which is
+            # the same thread that would otherwise have queued it.
+            self._run_undeliverable(run_workflow, watch)
+
+    def _run_undeliverable(self, run_workflow, watch: OrderUpdateWatch) -> None:
+        """Last resort for an event the pool refused: run it on this thread.
+
+        Blocks the bus dispatch for the length of one workflow, which is worse
+        than queueing it -- but only ever happens when the pool is saturated or
+        shut down, and a delayed fill is recoverable where a dropped one is not.
+        A failure here is logged with the event so the run can be reconstructed
+        by hand.
+        """
+        try:
+            run_workflow()
+        except Exception:
+            logger.exception(
+                f"Order-update event for workflow {watch.workflow_id} could be "
+                f"neither queued nor run inline (order {watch.order_id or 'any'}, "
+                f"symbol {watch.symbol or 'any'}). The trigger did not fire for "
+                "this event."
+            )
+
+    def _retire_one_shot(self, watch: OrderUpdateWatch) -> None:
+        """Consume a one-shot watch: drop it and clear the workflow's active flag.
+
+        Removal is by identity so a run that finishes after the user has
+        deactivated and reactivated cannot delete the newer registration --
+        that left the workflow `is_active` with nothing watching, and the
+        activate endpoint then refused to re-arm it as `already_active`.
+
+        Clearing `is_active` is the other half: without it a spent one-shot
+        watch is restored on every restart by restore_order_update_watches and
+        fires again on the next matching order.
+        """
+        workflow_id = watch.workflow_id
+        with self._watches_lock:
+            if self._watches.get(workflow_id) is not watch:
+                logger.debug(
+                    f"One-shot order-update watch for workflow {workflow_id} was "
+                    "already replaced; leaving the current registration alone."
+                )
+                return
+            del self._watches[workflow_id]
+            logger.info(f"Removed order-update watch for workflow {workflow_id}")
+
+        try:
+            from database.flow_db import deactivate_workflow
+
+            deactivate_workflow(workflow_id)
+            logger.info(
+                f"One-shot order-update watch for workflow {workflow_id} consumed; "
+                "workflow deactivated."
+            )
+        except Exception:
+            logger.exception(
+                f"Could not deactivate workflow {workflow_id} after its one-shot "
+                "order-update watch fired"
+            )
+
+    @staticmethod
+    def _workflow_is_active(workflow_id: int) -> bool:
+        """Whether the workflow is still active. Fails closed on error."""
+        try:
+            from database.flow_db import get_workflow
+
+            workflow = get_workflow(workflow_id)
+            return bool(workflow and workflow.is_active)
+        except Exception:
+            logger.exception(f"Could not confirm workflow {workflow_id} is active")
+            return False
 
     def shutdown(self):
+        """Unsubscribe from the bus and release the worker pool.
+
+        Registered with atexit below; it had no caller before, so the
+        subscription and the pool's threads survived until the process was
+        killed.
+
+        Idempotent, and it clears `_initialized` so a later
+        get_flow_order_update_monitor() re-runs __init__ and re-subscribes.
+        Without that the singleton was unrecoverable: __init__ returns early on
+        the flag, so nothing could ever re-attach to the bus.
+        """
+        if getattr(self, "_shutdown_done", False):
+            return
+        self._shutdown_done = True
+
         bus.unsubscribe("order.update", self._on_order_update)
         with self._watches_lock:
             self._watches.clear()
         # Let in-flight workflows finish; the pool's threads are released with
         # it rather than left running past shutdown.
         _WORKFLOW_POOL.shutdown(wait=False)
+        self._initialized = False
         logger.info("FlowOrderUpdateMonitor shutdown")
 
 
 # Singleton instance
 flow_order_update_monitor = FlowOrderUpdateMonitor()
+
+
+# Unsubscribe from the bus and release the pool on the way out. Without this the
+# subscription and the pool's threads were held until the process was killed.
+def _shutdown_at_exit() -> None:
+    """atexit entry point.
+
+    Logging handlers are often already closed by the time interpreter shutdown
+    reaches us -- pytest closes its capture streams first -- and logging into a
+    closed stream prints a "Logging error" traceback that looks like a fault
+    but is only ordering. Nothing after this point needs a log line, so quiet
+    the loggers before releasing the pool.
+    """
+    logging.disable(logging.CRITICAL)
+    try:
+        flow_order_update_monitor.shutdown()
+    except Exception:
+        pass
+
+
+atexit.register(_shutdown_at_exit)
 
 
 def get_flow_order_update_monitor() -> FlowOrderUpdateMonitor:

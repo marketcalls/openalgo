@@ -4,21 +4,62 @@ Serves the pre-built React app for migrated routes.
 """
 
 import mimetypes
+import os
 from pathlib import Path
 
-from flask import Blueprint, request, send_file, send_from_directory
+from flask import Blueprint, abort, request, send_file, send_from_directory
 
 react_bp = Blueprint("react", __name__)
 
 # Pre-compressed encodings to negotiate, in preference order (best ratio first).
-# The Vite build (vite-plugin-compression2) emits <asset>.br and <asset>.gz next
-# to each hashed asset; CI commits them with frontend/dist/. Serving these lets
-# no-nginx (laptop) installs ship compressed bytes with zero per-request CPU,
-# and nginx-fronted servers pass the Content-Encoding through untouched.
+# utils/precompress_assets.py writes <asset>.gz next to each hashed asset at
+# startup. They are deliberately NOT committed with frontend/dist/: compressed
+# output can be neither deflated nor delta-compressed by git, so re-committing
+# it on every CI rebuild grew to two thirds of the repository history.
+#
+# Serving these lets installs with no compressing proxy ship compressed bytes
+# at zero per-request CPU, and nginx or Cloudflare in front passes the
+# Content-Encoding through untouched rather than re-compressing.
+#
+# ".br" stays in the list although nothing in the repo produces it now: the
+# lookup is one stat that misses, and it means an operator whose own pipeline
+# emits brotli gets it served without a code change. Missing variants always
+# fall back to the raw asset.
 _PRECOMPRESSED_ENCODINGS = ((".br", "br"), (".gz", "gzip"))
+
+
+def _accepts_encoding(header: str, encoding: str) -> bool:
+    """Whether ``header`` actually accepts ``encoding``.
+
+    A substring test is not enough: ``Accept-Encoding: gzip, br;q=0`` contains
+    "br" while explicitly refusing it, and a client that refuses an encoding
+    cannot decode it if we send it anyway.
+    """
+    for part in header.split(","):
+        token, _, params = part.strip().partition(";")
+        if token.strip().lower() != encoding:
+            continue
+        for param in params.split(";"):
+            key, _, value = param.partition("=")
+            if key.strip().lower() == "q":
+                try:
+                    return float(value.strip()) > 0
+                except ValueError:
+                    return True
+        return True
+    return False
 
 # Path to the pre-built React frontend
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+
+
+def _configured_brokers():
+    """Broker names this deployment loads, per VALID_BROKERS in .env."""
+    return {
+        broker.strip().lower()
+        for broker in (os.getenv("VALID_BROKERS") or "").split(",")
+        if broker.strip()
+    }
 
 
 def is_react_frontend_available():
@@ -121,6 +162,24 @@ def react_broker():
 # Broker TOTP routes - serve React for broker authentication forms
 @react_bp.route("/broker/<broker>/totp")
 def react_broker_totp(broker):
+    return serve_react_app()
+
+
+# Samco keeps its own auth form path rather than the generic TOTP one.
+@react_bp.route("/broker/samco/auth", strict_slashes=False)
+def react_broker_samco_auth():
+    return serve_react_app()
+
+
+# Generic per-broker auth form, matching the React "/:broker/auth" route.
+@react_bp.route("/<broker>/auth", strict_slashes=False)
+def react_broker_auth(broker):
+    # A root-level dynamic rule matches anything, so serving the SPA
+    # unconditionally would let "/<probe>/auth" bypass the unauthenticated 404
+    # tracking that feeds the IP ban. Only brokers this deployment actually
+    # loads are served; everything else falls through to the not-found path.
+    if broker.strip().lower() not in _configured_brokers():
+        abort(404)
     return serve_react_app()
 
 
@@ -304,6 +363,66 @@ def react_arbitrage():
     return serve_react_app()
 
 
+# Option Chain - live chain with Greeks and click-to-trade
+@react_bp.route("/optionchain", strict_slashes=False)
+def react_optionchain():
+    return serve_react_app()
+
+
+# OI Range - open interest across a custom strike range
+@react_bp.route("/oirange", strict_slashes=False)
+def react_oirange():
+    return serve_react_app()
+
+
+# Gamma Density
+@react_bp.route("/gammadensity", strict_slashes=False)
+def react_gammadensity():
+    return serve_react_app()
+
+
+# Straddle PnL
+@react_bp.route("/straddlepnl", strict_slashes=False)
+def react_straddlepnl():
+    return serve_react_app()
+
+
+# Strategy Builder - multi-leg option strategy builder with payoff diagram
+@react_bp.route("/strategybuilder", strict_slashes=False)
+def react_strategybuilder():
+    return serve_react_app()
+
+
+# Strategy Portfolio - saved strategies across MyTrades and Simulation
+@react_bp.route("/strategybuilder/portfolio", strict_slashes=False)
+def react_strategybuilder_portfolio():
+    return serve_react_app()
+
+
+# Former Strategy Builder paths. Registered so an existing bookmark reaches the
+# SPA, which redirects to the current route instead of showing not-found.
+@react_bp.route("/tools/strategy", strict_slashes=False)
+def react_tools_strategy_legacy():
+    return serve_react_app()
+
+
+@react_bp.route("/tools/strategy/portfolio", strict_slashes=False)
+def react_tools_strategy_portfolio_legacy():
+    return serve_react_app()
+
+
+# Portfolio Backtester results
+@react_bp.route("/portfolio-backtester/results", strict_slashes=False)
+def react_portfolio_backtester_results():
+    return serve_react_app()
+
+
+# SIP Backtester results
+@react_bp.route("/sip-backtester/results", strict_slashes=False)
+def react_sip_backtester_results():
+    return serve_react_app()
+
+
 # WebSocket market data test page
 @react_bp.route("/websocket/test")
 def react_websocket_test():
@@ -323,6 +442,12 @@ def react_websocket_test_30():
 
 @react_bp.route("/websocket/test/50")
 def react_websocket_test_50():
+    return serve_react_app()
+
+
+# WebSocket order and trade update stream test page
+@react_bp.route("/websocket/order", strict_slashes=False)
+def react_websocket_order():
     return serve_react_app()
 
 
@@ -393,6 +518,18 @@ def react_python_logs(strategy_id):
     return serve_react_app()
 
 
+# Distinct from python_strategy_bp's "/python/schedule/<strategy_id>" POST -
+# the segments are reversed, so the two rules do not overlap.
+@react_bp.route("/python/<strategy_id>/schedule", strict_slashes=False)
+def react_python_schedule(strategy_id):
+    return serve_react_app()
+
+
+@react_bp.route("/python/guide", strict_slashes=False)
+def react_python_guide():
+    return serve_react_app()
+
+
 # Chartink Strategies
 # Note: Using strict_slashes=False to handle both /chartink and /chartink/
 @react_bp.route("/chartink", strict_slashes=False)
@@ -444,6 +581,18 @@ def react_admin_timings():
     return serve_react_app()
 
 
+# Admin - System Diagnostics
+@react_bp.route("/admin/diagnostics", strict_slashes=False)
+def react_admin_diagnostics():
+    return serve_react_app()
+
+
+# Admin - Remote MCP
+@react_bp.route("/admin/remote-mcp", strict_slashes=False)
+def react_admin_remote_mcp():
+    return serve_react_app()
+
+
 # Leverage Configuration (Crypto)
 @react_bp.route("/leverage", strict_slashes=False)
 def react_leverage():
@@ -474,6 +623,13 @@ def react_telegram_analytics():
     return serve_react_app()
 
 
+# WhatsApp - Dashboard. whatsapp_bp is prefixed "/whatsapp" but registers no
+# root route, so the bare path would otherwise 404.
+@react_bp.route("/whatsapp", strict_slashes=False)
+def react_whatsapp_index():
+    return serve_react_app()
+
+
 # ============================================================
 # Phase 7 Routes - Monitoring Dashboards
 # ============================================================
@@ -494,6 +650,13 @@ def react_traffic():
 # Latency Dashboard
 @react_bp.route("/latency", strict_slashes=False)
 def react_latency():
+    return serve_react_app()
+
+
+# Health Monitor. health_bp is prefixed "/health" but registers no root route,
+# so the bare path would otherwise 404.
+@react_bp.route("/health", strict_slashes=False)
+def react_health():
     return serve_react_app()
 
 
@@ -556,6 +719,24 @@ def react_historify():
     return serve_react_app()
 
 
+# Historify Charts
+@react_bp.route("/historify/charts", strict_slashes=False)
+def react_historify_charts():
+    return serve_react_app()
+
+
+# String, not path: the React ":symbol" segment does not match slashes.
+@react_bp.route("/historify/charts/<symbol>", strict_slashes=False)
+def react_historify_charts_symbol(symbol):
+    return serve_react_app()
+
+
+# Master Contract status and download
+@react_bp.route("/master-contract", strict_slashes=False)
+def react_master_contract():
+    return serve_react_app()
+
+
 # ============================================================
 # Flow Routes - Visual Workflow Automation
 # ============================================================
@@ -573,6 +754,12 @@ def react_flow_editor(workflow_id):
     return serve_react_app()
 
 
+# Flow Keyboard Shortcuts reference
+@react_bp.route("/flow/shortcuts", strict_slashes=False)
+def react_flow_shortcuts():
+    return serve_react_app()
+
+
 # ============================================================
 # Static Assets - Always served for React app
 # ============================================================
@@ -587,6 +774,21 @@ def serve_assets(filename):
     ``Content-Encoding`` and the original file's ``Content-Type``. Otherwise
     fall back to the raw asset (i.e. worst case == previous behavior). All paths
     go through ``send_from_directory`` so traversal protection is preserved.
+
+    One URL therefore has up to three representations of very different lengths
+    (brotli, gzip, identity), so two things are non-negotiable:
+
+    * ``Vary: Accept-Encoding`` on **every** response, the identity fallback
+      included. A stored response with no ``Vary`` matches any later request for
+      the same URI (RFC 9111), and these are cached ``immutable`` for a year, so
+      omitting it on one branch lets a cache hand the raw 150 KB copy to a
+      client that negotiated brotli.
+    * No byte ranges on the compressed branches. A range is served from whichever
+      representation the *current* request negotiates, so a client resuming or
+      revalidating against a range it captured from a different representation
+      splices mismatched bytes together and the module fails to parse. That
+      surfaces as a chunk-load error and, before the guard in
+      ``utils/chunkReload.ts`` was fixed, an endless reload loop (issue #1807).
     """
     assets_dir = FRONTEND_DIST / "assets"
     if not assets_dir.exists():
@@ -595,16 +797,18 @@ def serve_assets(filename):
     accept_encoding = request.headers.get("Accept-Encoding", "")
     response = None
     for ext, encoding in _PRECOMPRESSED_ENCODINGS:
-        if encoding in accept_encoding and (assets_dir / (filename + ext)).is_file():
-            response = send_from_directory(assets_dir, filename + ext)
+        if _accepts_encoding(accept_encoding, encoding) and (
+            assets_dir / (filename + ext)
+        ).is_file():
+            # conditional=False disables Werkzeug's 206/Range handling, so the
+            # compressed representation is only ever served whole.
+            response = send_from_directory(assets_dir, filename + ext, conditional=False)
             response.headers["Content-Encoding"] = encoding
             # Type must reflect the ORIGINAL asset, not the .br/.gz wrapper.
             content_type = mimetypes.guess_type(filename)[0]
             if content_type:
                 response.headers["Content-Type"] = content_type
-            # Caches must key on encoding so a br copy is never sent to a
-            # client that only speaks gzip (or none).
-            response.headers["Vary"] = "Accept-Encoding"
+            response.headers["Accept-Ranges"] = "none"
             break
     if response is None:
         response = send_from_directory(assets_dir, filename)
@@ -612,6 +816,8 @@ def serve_assets(filename):
     # Cache assets for 1 year — safe because filenames are content-hashed, so a
     # new build produces new URLs and users never need to clear their cache.
     response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    # Set on every branch, not just the compressed ones — see the docstring.
+    response.headers["Vary"] = "Accept-Encoding"
     return response
 
 

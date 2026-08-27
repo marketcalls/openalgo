@@ -195,7 +195,7 @@ def _spawn_websocket_subprocess():
             # Do NOT set start_new_session=True — staying in the gunicorn
             # cgroup means systemd reaps the child if gunicorn dies hard.
         )
-        logger.info(f"WebSocket subprocess started with PID {_websocket_subprocess.pid}")
+        logger.debug(f"WebSocket subprocess started with PID {_websocket_subprocess.pid}")
     except Exception as e:
         logger.exception(f"Failed to spawn WebSocket subprocess: {e}")
         _websocket_subprocess = None

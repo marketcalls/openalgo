@@ -2,32 +2,45 @@
 delta_websocket.py
 Low-level WebSocket client for Delta Exchange real-time feed.
 
-Endpoint : wss://socket.india.delta.exchange
+Delta runs two endpoints and this client is instantiated once per endpoint:
+
+  wss://public-socket.india.delta.exchange   market data, no auth
+  wss://socket.india.delta.exchange          account channels, auth required
+
+Public market-data channels used to live on the private endpoint under the
+names v2/ticker / l1_orderbook / l2_orderbook.  Delta migrated them to the
+public endpoint (ticker / ob_l1 / ob_l2) and scheduled the old names for
+removal on 31 July 2026; the legacy l2_orderbook also silently caps a
+connection at 20 symbols, which is fewer than one option chain needs.  Both
+reasons make the public endpoint the only viable target.
+
 Protocol : JSON over secure WebSocket
-Auth msg : { "type": "auth", "payload": { "api-key": "...", "signature": "...", "timestamp": "..." } }
+Auth msg : { "type": "key-auth", "payload": { "api-key": "...", "signature": "...", "timestamp": "..." } }
 Signature: HMAC-SHA256(api_secret, "GET" + timestamp + "/live")
 
-Public channels  (no auth needed):
-  subscribe:  { "type": "subscribe", "payload": { "channels": [{ "name": "v2/ticker", "symbols": ["BTCUSD"] }] } }
-  unsubscribe: { "type": "unsubscribe", ... }
-
 Channel names:
-  v2/ticker          -> ticker updates (mark_price, open, high, low, volume, oi, best_bid, best_ask)
-  l2_orderbook       -> level-2 order book (buy/sell lists with price+size)
-  orders             -> order updates (requires auth)
-  positions          -> position updates (requires auth)
+  ticker      -> price/OI/quote snapshot, published every 5s (public endpoint)
+  ob_l2       -> top-15 order book, published every 500ms (public endpoint)
+  orders      -> order updates (private endpoint, requires auth)
+  positions   -> position updates (private endpoint, requires auth)
+  margins     -> wallet / margin updates (private endpoint, requires auth)
+
+Subscribe / unsubscribe frame (same shape on both endpoints):
+  { "type": "subscribe", "payload": { "channels": [{ "name": "ticker", "symbols": ["BTCUSD"] }] } }
 
 Incoming message examples:
-  Ticker:  { "type": "v2/ticker", "symbol": "BTCUSD",
-             "mark_price": "67000", "open": 66000, "high": 68000,
-             "low": 65000, "close": 66500, "volume": 1234,
-             "oi": "5000", "quotes": { "best_bid": "66990", "best_ask": "67010" } }
+  Ticker:  { "type": "ticker", "sy": "BTCUSD", "sp": "63860.7", "ts": 1786521801671015,
+             "d": [{ "s": "BTCUSD", "m": "63838.06", "ohlc": [open, high, low, close],
+                     "oi": [oi_contracts, oi_change_usd_6h],
+                     "q": [best_ask, ask_size, best_bid, bid_size, impact_mid],
+                     "g": [delta, gamma, rho, theta, vega],
+                     "qiv": [ask_iv, bid_iv, mark_iv] }] }
 
-  L2 book: { "type": "l2_orderbook", "symbol": "BTCUSD",
-             "buy":  [{"price": "66990", "size": 1000, "depth": 1}, ...],
-             "sell": [{"price": "67010", "size":  800, "depth": 1}, ...] }
+  Order book: { "type": "ob_l2", "sy": "BTCUSD", "ts": 1786521801671015,
+                "a": [["63834", "718"], ...],    // asks, price + size, best first
+                "b": [["63833", "4388"], ...] }  // bids
 
-References: https://docs.delta.exchange/#websocket-channels
+References: https://docs.delta.exchange/#public-channels
 """
 
 import hashlib
@@ -50,22 +63,31 @@ class DeltaWebSocket:
 
     Usage
     -----
-    ws = DeltaWebSocket(api_key="...", api_secret="...", on_message=cb)
-    ws.connect()
-    ws.subscribe_ticker(["BTCUSD", "ETHUSD"])
-    ws.subscribe_l2_orderbook(["BTCUSD"])
+    md = DeltaWebSocket(url=DeltaWebSocket.PUBLIC_WS_URL, authenticate=False, on_message=cb)
+    md.connect()
+    md.subscribe_ticker(["BTCUSD", "ETHUSD"])
+    md.subscribe_orderbook(["BTCUSD"])
     ...
-    ws.close()
+    md.close_connection()
     """
 
     # ── constants ─────────────────────────────────────────────────────────────
-    WS_URL            = "wss://socket.india.delta.exchange"
+    PUBLIC_WS_URL      = "wss://public-socket.india.delta.exchange"
+    PRIVATE_WS_URL     = "wss://socket.india.delta.exchange"
     HEARTBEAT_INTERVAL = 30      # seconds between pings
     MSG_TYPE_AUTH      = "key-auth"
     MSG_TYPE_SUB       = "subscribe"
     MSG_TYPE_UNSUB     = "unsubscribe"
-    CHANNEL_TICKER     = "v2/ticker"
-    CHANNEL_L2_BOOK    = "l2_orderbook"
+    # Public channels — new public endpoint only
+    CHANNEL_TICKER     = "ticker"
+    CHANNEL_OB_L2      = "ob_l2"
+    # Symbols Delta accepts in a single subscribe frame, per channel.
+    # None = no limit found (ticker took 150 in one frame, verified live
+    # 2026-08-12); ob_l2 rejects anything above one symbol outright.
+    MAX_SYMBOLS_PER_FRAME = {
+        CHANNEL_TICKER: None,
+        CHANNEL_OB_L2:  1,
+    }
     # Private authenticated channels (require auth message to be sent first)
     CHANNEL_ORDERS    = "orders"      # real-time order fill / cancel / modify events
     CHANNEL_POSITIONS = "positions"   # real-time position updates
@@ -82,9 +104,17 @@ class DeltaWebSocket:
         max_retry_attempt: int = 5,
         retry_delay: int = 5,
         retry_multiplier: int = 2,
+        url: str | None = None,
+        authenticate: bool = True,
+        name: str = "private",
     ):
         self.api_key    = api_key
         self.api_secret = api_secret
+        # One client per endpoint; `name` only tags log lines so the two are
+        # distinguishable in the log stream.
+        self.url          = url or self.PRIVATE_WS_URL
+        self.authenticate = authenticate
+        self.name         = name
 
         # User-supplied callbacks
         self.on_message = on_message  or (lambda ws, msg: None)
@@ -100,15 +130,25 @@ class DeltaWebSocket:
         self._lock   = threading.Lock()
         self._connected = False
         self._stop_flag = False
-        # Persistent subscription registry: deterministic_key → raw JSON message.
-        # Serves two purposes:
-        #   1. Pre-connect buffer: messages accumulate here and are sent in
+        # Set by _ws_on_open; the retry loop reads it to tell "this connection
+        # was healthy and later dropped" apart from "we never got through".
+        self._connect_succeeded = False
+        # Persistent subscription registry, tracked per symbol rather than per
+        # sent frame.  Serves two purposes:
+        #   1. Pre-connect buffer: symbols accumulate here and are subscribed in
         #      _ws_on_open when the socket first connects.
-        #   2. Reconnect replay: the dict is NEVER cleared, so every reconnect
-        #      (after a disconnect) re-sends all active subscriptions, restoring
-        #      all streams automatically without the caller needing to re-subscribe.
-        # Unsubscribe removes the entry so the channel is not replayed.
-        self._active_sub_msgs: dict[str, str] = {}
+        #   2. Reconnect replay: the registry is NEVER cleared, so every reconnect
+        #      re-subscribes everything still active, restoring all streams
+        #      without the caller needing to re-subscribe.
+        # Tracking symbols (not frames) is what lets one symbol be dropped out of
+        # a batch: a frame-keyed registry would keep replaying the whole batch.
+        self._active_symbols: dict[str, set[str]] = {}   # channel → symbols
+        self._active_private: dict[str, str] = {}        # channel → raw message
+
+    @property
+    def is_connected(self) -> bool:
+        """True while this endpoint's socket is up and able to carry frames."""
+        return self._connected
 
     # ── auth helper ───────────────────────────────────────────────────────────
 
@@ -142,74 +182,85 @@ class DeltaWebSocket:
         }
         return json.dumps(msg)
 
-    def _send(self, text: str) -> None:
-        if self.wsapp and self._connected:
+    def _frames(self, channel: str, symbols: list[str], unsub: bool = False) -> list[str]:
+        """Split a symbol list into as few frames as the channel allows.
+
+        `ticker` takes the whole list in one frame — 150 symbols verified live.
+        `ob_l2` rejects any frame carrying more than one symbol
+        ("subscription forbidden on this channel with more than 1 symbol"), so
+        it always costs one frame per symbol.
+        """
+        size = self.MAX_SYMBOLS_PER_FRAME.get(channel)
+        if not size or size >= len(symbols):
+            return [self._build_sub_msg(channel, symbols, unsub=unsub)] if symbols else []
+        return [
+            self._build_sub_msg(channel, symbols[i:i + size], unsub=unsub)
+            for i in range(0, len(symbols), size)
+        ]
+
+    def _send_all_locked(self, msgs: list[str]) -> None:
+        """Send frames, or drop them when the socket is down. Caller must hold _lock.
+
+        Why the lock spans both the registry write AND the sends:
+          It prevents the TOCTOU race where _ws_on_close flips _connected=False
+          between our check and the send, causing frames to be dropped from the
+          wire while the registry still claims they are active. It also keeps
+          wire order matching registry order — otherwise an overlapping
+          subscribe and unsubscribe for the same symbol could update the
+          registry in one order and reach Delta in the other, leaving the
+          exchange streaming a symbol the registry says was dropped.
+        """
+        if not self._connected or not self.wsapp:
+            logger.debug("DeltaWS[%s] buffered %s frame(s) (not connected)",
+                         self.name, len(msgs))
+            return
+        for msg in msgs:
             try:
-                self.wsapp.send(text)
+                self.wsapp.send(msg)
             except Exception as exc:
-                logger.error("DeltaWS _send error: %s", exc)
-
-    def _queue_or_send(self, key: str, msg: str) -> None:
-        """
-        Register and immediately send (or buffer) a subscription message.
-
-        The key is a deterministic string identifying the subscription
-        (e.g. "ticker:BTCUSD,ETHUSD") so duplicates overwrite rather than
-        stack, and unsubscribes can remove the exact entry.
-
-        Why the lock spans both the registry write AND the send:
-          Holding the lock across the send prevents the TOCTOU race where
-          _ws_on_close flips _connected=False between our check and the send,
-          causing the message to be dropped from both the wire and the registry.
-
-        On reconnect, _ws_on_open replays the entire _active_sub_msgs dict,
-        so no explicit re-subscribe call from the caller is ever needed.
-        """
-        with self._lock:
-            self._active_sub_msgs[key] = msg   # persist for reconnect replay
-            if self._connected:
-                try:
-                    if self.wsapp:
-                        self.wsapp.send(msg)
-                except Exception as exc:
-                    logger.error("DeltaWS _send error: %s", exc)
-                    # Send failed mid-flight; message already stored in
-                    # _active_sub_msgs and will be replayed on reconnect.
-            else:
-                logger.debug("DeltaWS buffered subscription (not connected): %s", key)
+                logger.error("DeltaWS[%s] _send error: %s", self.name, exc)
+                # Send failed mid-flight; the symbol is already in
+                # _active_symbols and will be replayed on reconnect.
 
     # ── public API ────────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _sub_key(channel: str, symbols: list[str]) -> str:
-        """Deterministic registry key for a public channel subscription."""
-        return f"{channel}:{','.join(sorted(symbols))}"
+    def _subscribe(self, channel: str, symbols: list[str]) -> None:
+        with self._lock:
+            self._active_symbols.setdefault(channel, set()).update(symbols)
+            self._send_all_locked(self._frames(channel, symbols))
+
+    def _unsubscribe(self, channel: str, symbols: list[str]) -> None:
+        with self._lock:
+            active = self._active_symbols.get(channel)
+            if active:
+                active.difference_update(symbols)
+            self._send_all_locked(self._frames(channel, symbols, unsub=True))
 
     def subscribe_ticker(self, symbols: list[str]) -> None:
-        """Subscribe to v2/ticker channel for the given symbols."""
-        self._queue_or_send(
-            self._sub_key(self.CHANNEL_TICKER, symbols),
-            self._build_sub_msg(self.CHANNEL_TICKER, symbols),
-        )
+        """Subscribe to the ticker channel for the given symbols."""
+        self._subscribe(self.CHANNEL_TICKER, symbols)
 
-    def subscribe_l2_orderbook(self, symbols: list[str]) -> None:
-        """Subscribe to l2_orderbook channel for the given symbols."""
-        self._queue_or_send(
-            self._sub_key(self.CHANNEL_L2_BOOK, symbols),
-            self._build_sub_msg(self.CHANNEL_L2_BOOK, symbols),
-        )
+    def subscribe_orderbook(self, symbols: list[str]) -> None:
+        """Subscribe to the ob_l2 (top-15 order book) channel for the given symbols."""
+        self._subscribe(self.CHANNEL_OB_L2, symbols)
 
     def unsubscribe_ticker(self, symbols: list[str]) -> None:
-        key = self._sub_key(self.CHANNEL_TICKER, symbols)
-        with self._lock:
-            self._active_sub_msgs.pop(key, None)
-        self._send(self._build_sub_msg(self.CHANNEL_TICKER, symbols, unsub=True))
+        self._unsubscribe(self.CHANNEL_TICKER, symbols)
 
-    def unsubscribe_l2_orderbook(self, symbols: list[str]) -> None:
-        key = self._sub_key(self.CHANNEL_L2_BOOK, symbols)
+    def unsubscribe_orderbook(self, symbols: list[str]) -> None:
+        self._unsubscribe(self.CHANNEL_OB_L2, symbols)
+
+    def forget_subscriptions(self) -> None:
+        """Drop the replay registry.
+
+        The registry deliberately survives a dropped connection so the retry
+        loop can restore every stream on reconnect.  An explicit teardown is
+        different: the subscriptions are gone, so anything left here would be
+        resubscribed by a later connect() with no client behind it.
+        """
         with self._lock:
-            self._active_sub_msgs.pop(key, None)
-        self._send(self._build_sub_msg(self.CHANNEL_L2_BOOK, symbols, unsub=True))
+            self._active_symbols.clear()
+            self._active_private.clear()
 
     # ── private (authenticated) channel subscriptions ─────────────────────────
 
@@ -227,6 +278,13 @@ class DeltaWebSocket:
             "payload": {"channels": [channel_entry]},
         })
 
+    def _subscribe_private(self, channel: str) -> None:
+        """Register and send an account-channel subscription."""
+        msg = self._build_private_sub_msg(channel)
+        with self._lock:
+            self._active_private[channel] = msg
+            self._send_all_locked([msg])
+
     def subscribe_orders_channel(self) -> None:
         """Subscribe to the authenticated 'orders' channel.
 
@@ -234,7 +292,7 @@ class DeltaWebSocket:
         authenticated user.  The WebSocket session must be authenticated first
         (the auth message is sent automatically in _ws_on_open).
         """
-        self._queue_or_send(self.CHANNEL_ORDERS, self._build_private_sub_msg(self.CHANNEL_ORDERS))
+        self._subscribe_private(self.CHANNEL_ORDERS)
 
     def subscribe_positions_channel(self) -> None:
         """Subscribe to the authenticated 'positions' channel.
@@ -242,7 +300,7 @@ class DeltaWebSocket:
         Delivers real-time position updates (size, entry price, PnL) whenever
         a position changes for the authenticated user.
         """
-        self._queue_or_send(self.CHANNEL_POSITIONS, self._build_private_sub_msg(self.CHANNEL_POSITIONS))
+        self._subscribe_private(self.CHANNEL_POSITIONS)
 
     def subscribe_margins_channel(self) -> None:
         """Subscribe to the authenticated 'margins' channel.
@@ -250,7 +308,7 @@ class DeltaWebSocket:
         Delivers real-time wallet and margin balance updates whenever a fill,
         funding payment, or realised-PnL event changes the account balance.
         """
-        self._queue_or_send(self.CHANNEL_MARGINS, self._build_private_sub_msg(self.CHANNEL_MARGINS))
+        self._subscribe_private(self.CHANNEL_MARGINS)
 
     def connect(self) -> None:
         """Start the WebSocket connection (blocking — run in a thread)."""
@@ -260,9 +318,10 @@ class DeltaWebSocket:
 
         while not self._stop_flag and retry_attempts <= self.max_retry_attempt:
             try:
-                logger.info("DeltaWS connecting to %s (attempt %s)", self.WS_URL, retry_attempts + 1)
+                logger.info("DeltaWS[%s] connecting to %s (attempt %s)",
+                            self.name, self.url, retry_attempts + 1)
                 self.wsapp = websocket.WebSocketApp(
-                    self.WS_URL,
+                    self.url,
                     on_open    = self._ws_on_open,
                     on_message = self._ws_on_message,
                     on_error   = self._ws_on_error,
@@ -276,19 +335,28 @@ class DeltaWebSocket:
                 # run_forever returns when connection closes
                 if self._stop_flag:
                     break
+                # A connection that came up healthy and only later dropped
+                # restores the full retry budget.  Without this the counter is
+                # cumulative over the process lifetime, so a long-lived feed
+                # that reconnects once a day silently exhausts the budget after
+                # max_retry_attempt drops and never comes back.
+                if self._connect_succeeded:
+                    self._connect_succeeded = False
+                    retry_attempts = 0
+                    delay = self.retry_delay
                 retry_attempts += 1
-                logger.warning("DeltaWS disconnected; retry in %ss", delay)
+                logger.warning("DeltaWS[%s] disconnected; retry in %ss", self.name, delay)
                 time.sleep(delay)
                 delay = min(delay * self.retry_multiplier, 60)
 
             except Exception as exc:
-                logger.error("DeltaWS connect error: %s", exc)
+                logger.error("DeltaWS[%s] connect error: %s", self.name, exc)
                 retry_attempts += 1
                 time.sleep(delay)
                 delay = min(delay * self.retry_multiplier, 60)
 
         if retry_attempts > self.max_retry_attempt:
-            logger.error("DeltaWS max reconnect attempts reached; giving up")
+            logger.error("DeltaWS[%s] max reconnect attempts reached; giving up", self.name)
 
     def close_connection(self) -> None:
         """Cleanly stop the WebSocket."""
@@ -302,29 +370,37 @@ class DeltaWebSocket:
     # ── internal WS callbacks ─────────────────────────────────────────────────
 
     def _ws_on_open(self, wsapp) -> None:
-        logger.info("DeltaWS connected")
+        logger.info("DeltaWS[%s] connected", self.name)
 
-        # Authenticate (required for order/position channels)
-        try:
-            wsapp.send(self._build_auth_msg())
-        except Exception as exc:
-            logger.error("DeltaWS auth send error: %s", exc)
+        # Authenticate (required for order/position channels).  The public
+        # market-data endpoint rejects auth frames, so only the private
+        # connection sends one.
+        if self.authenticate:
+            try:
+                wsapp.send(self._build_auth_msg())
+            except Exception as exc:
+                logger.error("DeltaWS[%s] auth send error: %s", self.name, exc)
 
         # Set _connected and replay all active subscriptions atomically.
-        # _active_sub_msgs serves as both the pre-connect buffer (messages
-        # registered before the socket was up) AND the reconnect replay list
-        # (messages registered during a previous session that must be
-        # resubscribed after a disconnect/reconnect).  The dict is never
-        # cleared, so every reconnect restores all streams automatically.
+        # The registry serves as both the pre-connect buffer (symbols registered
+        # before the socket was up) AND the reconnect replay list (symbols
+        # registered during a previous session that must be resubscribed after a
+        # disconnect).  It is never cleared, so every reconnect restores all
+        # streams automatically.  Replay is re-framed from scratch, so a whole
+        # ticker book goes back up in one frame however it was subscribed.
         with self._lock:
             self._connected = True
-            to_replay = list(self._active_sub_msgs.values())
+            self._connect_succeeded = True
+            to_replay = list(self._active_private.values())
+            for channel, symbols in self._active_symbols.items():
+                if symbols:
+                    to_replay.extend(self._frames(channel, sorted(symbols)))
 
         for msg in to_replay:
             try:
                 wsapp.send(msg)
             except Exception as exc:
-                logger.error("DeltaWS subscription replay send error: %s", exc)
+                logger.error("DeltaWS[%s] subscription replay send error: %s", self.name, exc)
 
         self.on_open(wsapp)
 
@@ -332,28 +408,29 @@ class DeltaWebSocket:
         try:
             msg = json.loads(raw)
         except Exception:
-            logger.debug("DeltaWS non-JSON message: %s", raw[:120])
+            logger.debug("DeltaWS[%s] non-JSON message: %s", self.name, raw[:120])
             return
 
         msg_type = msg.get("type", "")
 
         if msg_type in ("key-auth", "subscriptions"):
-            logger.info("DeltaWS ack: %s", msg_type)
+            logger.debug("DeltaWS[%s] ack: %s", self.name, msg_type)
             return
 
         if msg_type in ("error",):
-            logger.error("DeltaWS server error: %s", msg)
+            logger.error("DeltaWS[%s] server error: %s", self.name, msg)
             return
 
-        logger.debug("DeltaWS dispatching: type=%s symbol=%s", msg_type, msg.get("symbol", ""))
+        logger.debug("DeltaWS[%s] dispatching: type=%s symbol=%s",
+                     self.name, msg_type, msg.get("sy") or msg.get("symbol", ""))
         self.on_message(wsapp, msg)
 
     def _ws_on_error(self, wsapp, error) -> None:
-        logger.error("DeltaWS error: %s", error)
+        logger.error("DeltaWS[%s] error: %s", self.name, error)
         self.on_error(wsapp, error)
 
     def _ws_on_close(self, wsapp, *args) -> None:
-        logger.info("DeltaWS closed")
+        logger.info("DeltaWS[%s] closed", self.name)
         # Acquire the lock before clearing _connected so that any subscribe
         # call currently deciding whether to send vs. queue (also under the
         # same lock via _queue_or_send) completes atomically before we flip

@@ -6,7 +6,7 @@ from utils.constants import VALID_EXCHANGES
 
 
 # Custom validator for date or timestamp string
-def validate_date_or_timestamp(data):
+def validate_date_or_timestamp(data: str) -> None:
     """
     Validates that the input string is either in 'YYYY-MM-DD' format or a numeric timestamp.
     """
@@ -19,7 +19,7 @@ def validate_date_or_timestamp(data):
 
 
 # Custom validator for option offset
-def validate_option_offset(data):
+def validate_option_offset(data: str) -> bool:
     """
     Validates option offset: ATM, ITM1-ITM50, OTM1-OTM50
     """
@@ -145,7 +145,7 @@ class SearchSchema(Schema):
 #: three schemas, and NCO was added to the platform without reaching any of
 #: them, so every expiry and option-chain request for NSE commodities was
 #: rejected at the API boundary before the service ever ran. See #1748.
-F_AND_O_EXCHANGES = ["NFO", "BFO", "MCX", "CDS", "NCO", "BCD", "CRYPTO"]
+F_AND_O_EXCHANGES = ["NFO", "BFO", "MCX", "CDS", "NCO", "BCD", "NCDEX", "CRYPTO"]
 
 
 class ExpirySchema(Schema):
@@ -226,6 +226,12 @@ class OptionChainSchema(Schema):
     strike_count = fields.Int(
         required=False, validate=validate.Range(min=1, max=100), allow_none=True
     )  # Number of strikes above/below ATM. If not provided, returns entire chain
+    with_greeks = fields.Bool(
+        required=False, load_default=False
+    )  # Attach IV + delta/gamma/theta/vega to every leg, from the quotes already fetched
+    interest_rate = fields.Float(
+        required=False, validate=validate.Range(min=0, max=100), allow_none=True
+    )  # Annualized risk-free rate percentage, Greeks only. Defaults to the exchange default (0)
 
 
 class MarketHolidaysSchema(Schema):
