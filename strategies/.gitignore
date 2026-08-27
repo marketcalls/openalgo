@@ -10,6 +10,8 @@ scripts/*.py
 
 # Custom chart indicators written by the user (see indicators/.gitignore)
 indicators/*.js
+# except the reference indicator that ships with OpenAlgo
+!indicators/open_range_breakout.js
 
 # Keep example strategies
 !examples/

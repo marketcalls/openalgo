@@ -444,6 +444,13 @@ are `null`.
 
 ## Worked example: Open Range Breakout
 
+> This example hand-rolls its session parsing, because it predates
+> `parseSessionSpec`. It still runs, and it is a good read for the signal
+> latch and the marker padding. For anything new, use `parseSessionSpec` and
+> `inSessionAt` instead of the `parseSession` function below: they handle
+> weekday filters and a window that wraps midnight, neither of which this does.
+
+
 The opening range is the high and low of a fixed early window. Once the window
 closes both levels freeze for the rest of the day and are traded as breakout
 triggers. This example uses most of what the guide covers: a text input, per-day

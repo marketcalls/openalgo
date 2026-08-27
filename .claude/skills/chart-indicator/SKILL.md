@@ -73,13 +73,57 @@ when the indicator loads. Do not silently skip validation.
    - `complex_session_vwap.js` — per-session state, `markers` with a signal
      latch, `table`, `calcTail`, zone-aware day boundaries
    - `regime_shading.js` — `background()`, `barColors()`, declared `alerts`
-     and a data-derived `levels(ctx)`, the 1.8.1 surface
+     and a data-derived `levels(ctx)`
+   - `zones_with_draws.js` — `draws()` with all four kinds, driven by
+     `pivotHigh` / `pivotLow`. The pattern behind structure studies
+   - `heikin_ashi_candles.js` — a plot fed by four columns via `ohlc`
+   - `session_range_modern.js` — `parseSessionSpec`, `inSessionAt` and the calc
+     context, replacing a hand-rolled session parser
+   - `tier2_external_data.js` — `createTier2Indicator` and the manual `attach`
+     lifecycle, for data the chart does not have
 4. **Draft to scratch. Validate. Iterate until it passes.**
 5. **Install**, then tell the user to reopen the indicator picker on `/trading`.
    No page reload is needed: the catalogue re-reads the folder every time the
    picker opens, and an edited file is re-imported because the URL carries the
    file's modification time. A reload is only needed for a chart that was
    already open before the app itself changed.
+
+## Migrating a study, construct by construct
+
+Work through the source in this order. Each row is a mechanical translation;
+the judgement is in the last two.
+
+| In the source | Here |
+| --- | --- |
+| `overlay=true` / `false` | `placement: 'onchart'` / `'pane'` |
+| every `input.*` | one `inputs[]` entry, matching type |
+| every `plot()` | a plot key plus that column from `calc` |
+| `plotshape` / `plotchar` / `plotarrow` | `markers()` |
+| `hline` | `levels(ctx)` |
+| `fill()` | `fills`, or `background()` if it shades the whole pane |
+| `bgcolor()` | `background()` |
+| `barcolor()` | `barColors()` |
+| `plotcandle` / `plotbar` | a plot with `ohlc: { open, high, low, close }` |
+| `line.new` / `box.new` / `label.new` / `polyline.new` | `draws()` |
+| `alertcondition()` | an `alerts[]` entry |
+| `var` state across bars | a variable outside the `calc` loop |
+| `x[1]`, `x[n]` | `arr[i - 1]`, `arr[i - n]` |
+| `na` | `null`, and guard every comparison |
+| `barstate.*` | `ctx.barState` on the 4th `calc` argument |
+| session strings | `parseSessionSpec` + `inSessionAt` |
+| `ta.*` | the exported helper of the same job, see `reference/api.md` |
+
+Then the two that need thought:
+
+**A higher-timeframe request.** There is no `request.security`. Either fold the
+chart's own bars up to the higher timeframe, or fetch with
+`createTier2Indicator`. Folding is usually more correct: a request against a
+60-minute bar returns that whole bar's high, which is lookahead if your window
+is shorter than the bar.
+
+**Anything drawn at a future bar.** Not expressible: a column is one value per
+bar and there is no bar yet. Shift the meaning back onto existing bars, or drop
+it. This is the one thing that can make a study genuinely unportable today.
 
 ## Two layers of validation
 

@@ -5,11 +5,14 @@
 !.gitignore
 !README.md
 
+# Open Range Breakout ships with OpenAlgo as a working reference indicator, so
+# a fresh install has one real example to read and modify. It is the ONLY .js
+# tracked here; anything else you write stays on your own machine.
+!open_range_breakout.js
+
 # Ignore backup and editor files
 *.bak
 *.backup
 *~
 
-# Keep the directory but ignore its contents.
-# This ensures the indicators folder exists in git while the indicators you
-# write stay on your own machine and are never pushed.
+# Keep the directory but ignore its contents beyond the exceptions above.

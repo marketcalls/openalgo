@@ -577,7 +577,12 @@ function validateDescriptor(d, { builtinIds, chartTypes, core }) {
       const ctx = `${fixture.label} / ${variant.label}`
       // The one combination an indicator is really expected to produce output
       // for: a realistic two-day series with the settings it ships with.
-      const primary = fixture === FIXTURES[0] && variant === variants[0]
+      //
+      // An indicator whose data comes from outside the chart is exempt: with no
+      // network here its columns are legitimately empty, and warning about it
+      // trains people to ignore the warning that matters.
+      const external = typeof d.attach === 'function'
+      const primary = !external && fixture === FIXTURES[0] && variant === variants[0]
       const store = {}
       let values
       try {
