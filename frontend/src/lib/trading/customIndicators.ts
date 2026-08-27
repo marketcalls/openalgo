@@ -44,7 +44,22 @@ type ProblemReporter = (message: string) => void
 
 const INDEX_URL = '/custom-indicators/index.json'
 
-const INPUT_TYPES = new Set(['number', 'boolean', 'color', 'text', 'select', 'source'])
+// Kept in step with the library's IndicatorInput union. 'session', 'timeframe'
+// and 'symbol' are strings the indicator parses itself; 'price' and 'time' are
+// numbers a host may also let the user pick off the chart.
+const INPUT_TYPES = new Set([
+  'number',
+  'boolean',
+  'color',
+  'text',
+  'select',
+  'source',
+  'session',
+  'timeframe',
+  'symbol',
+  'price',
+  'time',
+])
 const PLACEMENTS = new Set(['onchart', 'pane'])
 
 /**
@@ -132,13 +147,27 @@ export function descriptorErrors(d: Record<string, unknown>): string[] {
 export function calcOutputError(
   values: unknown,
   barCount: number,
-  plots: { key: string }[]
+  plots: { key: string; ohlc?: { open: string; high: string; low: string; close: string } }[]
 ): string | null {
   if (typeof values !== 'object' || values === null || Array.isArray(values)) {
     return 'calc must return an object of columns'
   }
   const cols = values as Record<string, unknown>
   for (const plot of plots) {
+    // A candle or bar plot is fed by four named columns rather than one keyed
+    // by the plot itself, so check those instead.
+    const keys = plot.ohlc
+      ? [plot.ohlc.open, plot.ohlc.high, plot.ohlc.low, plot.ohlc.close]
+      : [plot.key]
+    for (const key of keys) {
+      const c = cols[key]
+      if (c === undefined) return `calc returned no column '${key}' for plot '${plot.key}'`
+      if (!Array.isArray(c)) return `column '${key}' is a ${typeof c}, expected an array`
+      if (c.length !== barCount) {
+        return `column '${key}' returned ${c.length} values for ${barCount} bars`
+      }
+    }
+    if (plot.ohlc) continue
     const col = cols[plot.key]
     if (col === undefined) {
       return `calc returned no column for plot '${plot.key}', so it draws nothing`

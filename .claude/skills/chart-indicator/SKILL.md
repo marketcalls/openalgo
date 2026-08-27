@@ -68,10 +68,12 @@ when the indicator loads. Do not silently skip validation.
    - `simple_zscore.js` — one pane, one plot, rolling window, levels, range
    - `intermediate_keltner_squeeze.js` — several plots, `fills`, `colorBy`, a
      second price scale, a boolean that hides part of the drawing
-   - `shaded_trend_zone.js` — shading between two series, Supertrend and
-     HalfTrend style, where the ribbon flips sides and recolours with the trend
+   - `shaded_trend_zone.js` — shading between two series, where the ribbon
+     flips sides and recolours with the trend
    - `complex_session_vwap.js` — per-session state, `markers` with a signal
      latch, `table`, `calcTail`, zone-aware day boundaries
+   - `regime_shading.js` — `background()`, `barColors()`, declared `alerts`
+     and a data-derived `levels(ctx)`, the 1.8.1 surface
 4. **Draft to scratch. Validate. Iterate until it passes.**
 5. **Install**, then tell the user to reopen the indicator picker on `/trading`.
    No page reload is needed: the catalogue re-reads the folder every time the
@@ -113,6 +115,28 @@ export default function ({ registerIndicator, sourceValues, sma, nulls }) {
 
 A `bar` is `{ time, open, high, low, close, volume }` with `time` in **UTC
 seconds**.
+
+## What the library gives you (1.8.1)
+
+The descriptor is much wider than the plot-plus-calc it started as. Before
+hand-rolling anything, check whether one of these already covers it:
+
+| Want | Use |
+| --- | --- |
+| A trendline, zone, box or free label | `draws(ctx)` |
+| Shade the pane by state | `background(ctx)` |
+| Repaint the price candles | `barColors(ctx)` |
+| A horizontal level from the data | `levels(ctx)`, which receives `bars` and `values` |
+| A condition the chart watches | `alerts[]` with a `when(ctx)` predicate |
+| One plot on price from a pane study | `plot.overlay: true` |
+| Candles or bars as a plot | `plot.ohlc: { open, high, low, close }` |
+| Know the bar state, symbol, interval, clock | the 4th `calc` argument |
+| Parse a session window | `parseSessionSpec`, `inSessionAt`, `sessionFlags` |
+| Reason about the timeframe | `intervalParts`, `isIntradayInterval`, ... |
+| A colour ramp or alpha | `fromGradient`, `withAlpha` |
+| Pivots, rank, correlation, linreg | `pivotHigh`, `pivotLow`, `percentRank`, `correlation`, `linreg`, ... |
+
+Full list in `reference/api.md`, which is generated from the installed build.
 
 ## The four things that go wrong most
 

@@ -128,7 +128,15 @@ const err = once(errors)
 const warn = once(warnings)
 const note = once(notes)
 
-const INPUT_TYPES = new Set(['number', 'boolean', 'color', 'text', 'select', 'source'])
+// The library's IndicatorInput union. The last five are 1.8.1: 'session',
+// 'timeframe' and 'symbol' are strings the indicator parses itself, 'price' and
+// 'time' are numbers a host may also resolve from a chart click.
+const INPUT_TYPES = new Set([
+  'number', 'boolean', 'color', 'text', 'select', 'source',
+  'session', 'timeframe', 'symbol', 'price', 'time',
+])
+const STRING_INPUTS = new Set(['text', 'select', 'source', 'session', 'timeframe', 'symbol'])
+const NUMBER_INPUTS = new Set(['number', 'price', 'time'])
 const SOURCES = new Set(['open', 'high', 'low', 'close', 'hl2', 'hlc3', 'ohlc4', 'volume'])
 const PLACEMENTS = new Set(['onchart', 'pane'])
 const MARKER_POSITIONS = new Set(['aboveBar', 'belowBar', 'inBar', 'atPrice'])
@@ -137,6 +145,7 @@ const MARKER_SHAPES = new Set([
   'diamond', 'flag', 'text', 'labelUp', 'labelDown',
 ])
 const MARKER_SIZES = new Set(['tiny', 'small', 'medium', 'big'])
+const DRAW_KINDS = new Set(['line', 'box', 'label', 'polyline'])
 
 /* ── synthetic bars ────────────────────────────────────────────────────────
  * Five shapes, because the failures cluster at the edges rather than in the
@@ -198,7 +207,7 @@ function settingsVariants(descriptor, indicatorDefaults) {
   const cleared = { ...base }
   let clearedAny = false
   for (const input of descriptor.inputs ?? []) {
-    if (input.type === 'text' || input.type === 'number') {
+    if (STRING_INPUTS.has(input.type) || NUMBER_INPUTS.has(input.type)) {
       cleared[input.key] = ''
       clearedAny = true
     }
@@ -209,7 +218,7 @@ function settingsVariants(descriptor, indicatorDefaults) {
   const extreme = { ...base }
   let extremeAny = false
   for (const input of descriptor.inputs ?? []) {
-    if (input.type === 'number') {
+    if (NUMBER_INPUTS.has(input.type)) {
       extreme[input.key] = input.min ?? 1
       extremeAny = true
     }
@@ -450,7 +459,7 @@ function validateDescriptor(d, { builtinIds, chartTypes, core }) {
     if (typeof input.label !== 'string' || input.label === '') {
       warn(`${id}: input '${input.key}' has no label, so the dialog falls back to the key.`)
     }
-    if (input.type === 'number') {
+    if (NUMBER_INPUTS.has(input.type)) {
       if (typeof input.default !== 'number') {
         err(`${id}: number input '${input.key}' has a non-numeric default.`)
       } else {
@@ -510,6 +519,14 @@ function validateDescriptor(d, { builtinIds, chartTypes, core }) {
     if (plot.colorKey !== undefined && !inputKeys.has(plot.colorKey)) {
       err(`${id}: plot '${plot.key}' names colorKey '${plot.colorKey}' with no matching input.`)
     }
+    // A candle or bar plot is fed by four named columns rather than by its own
+    // key. A missing name throws out of addIndicator, so catch it here instead.
+    if (plot.ohlc !== undefined) {
+      const need = ['open', 'high', 'low', 'close']
+      if (!isPlainObject(plot.ohlc) || need.some((k) => typeof plot.ohlc[k] !== 'string')) {
+        err(`${id}: plot '${plot.key}' has an ohlc group missing one of open/high/low/close.`)
+      }
+    }
   }
 
   /* fills reference real plots, and real colour inputs */
@@ -534,6 +551,25 @@ function validateDescriptor(d, { builtinIds, chartTypes, core }) {
     }
   }
 
+  /* alerts */
+  if (d.alerts !== undefined) {
+    if (!Array.isArray(d.alerts)) {
+      err(`${id}: alerts must be an array.`)
+    } else {
+      const alertIds = new Set()
+      for (const al of d.alerts) {
+        if (!isPlainObject(al)) { err(`${id}: every alert must be an object.`); break }
+        if (typeof al.id !== 'string' || al.id === '') err(`${id}: every alert needs an id.`)
+        else if (alertIds.has(al.id)) err(`${id}: duplicate alert id '${al.id}'.`)
+        alertIds.add(al.id)
+        if (typeof al.title !== 'string' || al.title === '') {
+          err(`${id}: alert '${al.id}' needs a title; it is what a host shows.`)
+        }
+        if (typeof al.when !== 'function') err(`${id}: alert '${al.id}' needs a when() predicate.`)
+      }
+    }
+  }
+
   /* run it */
   const variants = settingsVariants(d, core.indicatorDefaults)
   for (const variant of variants) {
@@ -555,6 +591,14 @@ function validateDescriptor(d, { builtinIds, chartTypes, core }) {
         continue
       }
       for (const plot of d.plots) {
+        // A candle or bar plot is fed by four named columns, not by its own key.
+        if (plot.ohlc && typeof plot.ohlc.close === 'string') {
+          for (const k of ['open', 'high', 'low', 'close']) {
+            const name = plot.ohlc[k]
+            if (typeof name === 'string') checkColumn(d, name, values[name], fixture.bars, ctx, primary)
+          }
+          continue
+        }
         checkColumn(d, plot.key, values[plot.key], fixture.bars, ctx, primary)
       }
 
@@ -592,6 +636,65 @@ function validateDescriptor(d, { builtinIds, chartTypes, core }) {
           err(`${id}: range threw on ${ctx}: ${e.message}`)
         }
       }
+      if (typeof d.draws === 'function') {
+        try {
+          const items = d.draws({ bars: fixture.bars, values, settings: variant.settings })
+          if (!Array.isArray(items)) err(`${id}: draws must return an array.`, `${id}|draws-array`)
+          else for (const it of items) {
+            if (!isPlainObject(it) || !DRAW_KINDS.has(it.kind)) {
+              err(`${id}: every drawing needs a kind of ${[...DRAW_KINDS].join(', ')}.`, `${id}|draws-kind`)
+              break
+            }
+            const anchors = it.kind === 'label' ? [it.at]
+              : it.kind === 'polyline' ? (it.points || [])
+              : [it.from, it.to]
+            if (anchors.some((p) => !isPlainObject(p) || !Number.isFinite(p.time) || !Number.isFinite(p.price))) {
+              err(`${id}: a '${it.kind}' drawing has an anchor without a finite time and price.`, `${id}|draws-anchor`)
+              break
+            }
+            if (it.kind === 'label' && (typeof it.text !== 'string' || it.text === '')) {
+              err(`${id}: a 'label' drawing needs text.`, `${id}|draws-text`)
+              break
+            }
+          }
+        } catch (e) {
+          err(`${id}: draws threw on ${ctx}: ${e.message}`, `${id}|draws-throw|${e.message}`)
+        }
+      }
+      for (const hook of ['background', 'barColors']) {
+        if (typeof d[hook] !== 'function') continue
+        try {
+          const out = d[hook]({ bars: fixture.bars, values, settings: variant.settings })
+          if (!Array.isArray(out)) {
+            err(`${id}: ${hook} must return an array.`, `${id}|${hook}-array`)
+          } else if (out.length !== fixture.bars.length) {
+            err(
+              `${id}: ${hook} returned ${out.length} entries for ${fixture.bars.length} bars. ` +
+                `It is indexed by bar, so a mismatch shifts the colours off the bars.`,
+              `${id}|${hook}-len`
+            )
+          } else if (out.some((v) => v !== null && v !== undefined && typeof v !== 'string')) {
+            err(`${id}: ${hook} entries must be a colour string or null.`, `${id}|${hook}-type`)
+          }
+        } catch (e) {
+          err(`${id}: ${hook} threw on ${ctx}: ${e.message}`, `${id}|${hook}-throw|${e.message}`)
+        }
+      }
+      if (Array.isArray(d.alerts) && fixture.bars.length > 0) {
+        for (const al of d.alerts) {
+          if (typeof al?.when !== 'function') continue
+          try {
+            // Judge every bar: a predicate that only survives the middle of the
+            // series still fires on bar 0 in production.
+            for (let i = 0; i < fixture.bars.length; i++) {
+              al.when({ bars: fixture.bars, values, settings: variant.settings, index: i })
+            }
+          } catch (e) {
+            err(`${id}: alert '${al.id}' when() threw on ${ctx}: ${e.message}`, `${id}|alert-throw|${al.id}|${e.message}`)
+          }
+        }
+      }
+
       if (typeof d.table === 'function') {
         try {
           const t = d.table({ bars: fixture.bars, values, settings: variant.settings })

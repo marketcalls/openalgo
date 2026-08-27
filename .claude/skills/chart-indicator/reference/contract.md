@@ -15,15 +15,99 @@ not inferred from the type declarations.
   inputs: IndicatorInput[],      // required (use [] for none)
   plots: IndicatorPlot[],        // required, at least one
   fills?: IndicatorFillSpec[],
-  calc(bars, settings, store): IndicatorValues,   // required
-  calcTail?(bars, settings, fromIndex, previous, store),
+  calc(bars, settings, store, ctx?): IndicatorValues,   // required
+  calcTail?(bars, settings, fromIndex, previous, store, ctx?),
   markers?({ bars, values, settings }),
-  levels?(settings),
+  draws?({ bars, values, settings }),          // 1.7.1
+  levels?(ctx),                                // 1.7.1: ctx carries bars + values
   range?(settings),
   table?({ bars, values, settings }),
+  background?({ bars, values, settings }),     // 1.8.1
+  barColors?({ bars, values, settings }),      // 1.8.1
+  alerts?: IndicatorAlertSpec[],               // 1.8.1
   attach?(ctx),
 }
 ```
+
+## The calculation context (1.8.1)
+
+`calc` and `calcTail` take an optional trailing `ctx`. Optional and last, so
+nothing written before it changes.
+
+```js
+calc(bars, settings, store, ctx) {
+  // ctx.barState.isNew        the last update appended a bar
+  // ctx.barState.isConfirmed  the last bar is closed, not still forming
+  // ctx.barState.isRealtime   a live feed is driving updates
+  // ctx.barState.lastIndex
+  // ctx.symbol, ctx.interval  may be undefined, see below
+  // ctx.timezone, ctx.now()
+}
+```
+
+`symbol` and `interval` are `undefined` under a plain `chart.addIndicator`: the
+engine is handed bars and never an instrument. A host that knows them supplies
+them through its own `IndicatorHost`. Always guard.
+
+## Drawings (1.7.1)
+
+`draws(ctx)` returns free-standing geometry anchored to `{ time, price }`:
+
+| kind | shape |
+| --- | --- |
+| `line` | `from`, `to`, plus `extendLeft` / `extendRight` |
+| `box` | `from`, `to`, `fillColor`, `opacity`, `text` |
+| `label` | `at`, `text` (splits on `
+`), `align` |
+| `polyline` | `points[]`, `closed`, `fillColor` |
+
+Anchors are **times, not indices**: paging history in shifts every index, so an
+index-anchored trendline slides off its pivots. The layer contributes nothing to
+autoscale, and shapes fully off-pane are culled.
+
+## Background and bar colours (1.8.1)
+
+```js
+background: ({ bars, values }) => bars.map((b, i) => cond(i) ? '#26a69a22' : null),
+barColors:  ({ bars, values }) => bars.map((b, i) => cond(i) ? '#26a69a' : null),
+```
+
+One entry per bar, exactly `bars.length` long, `null` to leave a bar alone.
+`background` shades the pane behind the plots; `barColors` repaints the **main
+price candles**, overriding the up/down verdict for that bar. Removing the
+indicator restores the original colours, and the shared bar data is never
+mutated.
+
+## Candle and bar plots (1.8.1)
+
+A plot may be fed by four columns instead of one:
+
+```js
+plots: [{ key: 'ha', type: 'candlestick', title: 'Heikin Ashi',
+          ohlc: { open: 'o', high: 'h', low: 'l', close: 'c' } }]
+calc: () => ({ o: [...], h: [...], l: [...], c: [...] })
+```
+
+The plot key is only a label. A missing or wrong-length column throws out of
+`addIndicator`.
+
+## Alerts (1.8.1)
+
+```js
+alerts: [{
+  id: 'cross-up',
+  title: 'Close crossed above the mean',
+  message: 'optional, defaults to title',
+  when: ({ bars, values, settings, index }) => /* boolean */,
+}]
+```
+
+Evaluated **once per bar, only on a tail-only change**. Loading history,
+changing settings, paging history and switching symbol fire nothing. Delivery is
+`chart.on('indicator:alert', cb)` with `{ indicatorId, instanceId, alertId,
+title, message, time, index }`.
+
+`ctx.emit(event, payload)` on the attach context covers the imperative case.
 
 ## Bars
 
@@ -201,6 +285,38 @@ it saves nothing.
 
 A `calcTail` that disagrees with `calc` makes the live chart differ from what a
 reload shows. The validator checks the two agree at the boundary index.
+
+## The attach context
+
+`attach(ctx)` runs once per instance and returns a teardown function. It is how
+an indicator that owns external data fetches it, and it is the only hook that
+can reach the chart rather than just the bars.
+
+```js
+attach(ctx) {
+  ctx.settings()          // live settings, read at call time
+  ctx.bars()              // the chart's current source bars
+  ctx.store               // the same scratch object calc receives
+  ctx.requestRecompute()  // re-run calc and repaint, after data arrives
+  ctx.timezone()          // the chart's configured zone
+  ctx.now()               // UTC seconds from the chart clock
+  ctx.paneIndex()         // which pane this instance landed on
+  ctx.symbol?.()          // may be undefined: the engine is handed bars
+  ctx.interval?.()        // may be undefined, same reason
+  ctx.addPrimitive(p)     // attach your own IPrimitive to this indicator's pane
+  ctx.removePrimitive(p)  // and detach it; do this in the teardown
+  ctx.emit(event, data)   // imperative alert, alongside the declarative slot
+  return () => { /* teardown: remove primitives, cancel timers, close sockets */ }
+}
+```
+
+`requestRecompute` is the one to understand: `calc` is pure and synchronous, so
+anything asynchronous lands in `store` and then asks for a recompute. Everything
+returned from `attach` must be undone in the teardown, or a symbol change leaks
+it.
+
+`addPrimitive` / `removePrimitive` are the escape hatch for drawing something the
+descriptor cannot express. Prefer `draws()`, which needs no lifecycle management.
 
 ## attach (Tier 2)
 

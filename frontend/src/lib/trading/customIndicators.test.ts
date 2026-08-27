@@ -156,16 +156,29 @@ describe('calcOutputError', () => {
     // The exact silent failure: the runtime reads undefined past the end and
     // draws a gap, so the plot just stops partway with no error anywhere.
     expect(calcOutputError({ a: [1, 2], b: [1, 2, 3] }, 3, plots)).toMatch(
-      /plot 'a' returned 2 values for 3 bars/
+      /column 'a' returned 2 values for 3 bars/
     )
   })
 
   it('catches a plot key that calc never filled', () => {
-    expect(calcOutputError({ a: [1, 2, 3] }, 3, plots)).toMatch(/no column for plot 'b'/)
+    expect(calcOutputError({ a: [1, 2, 3] }, 3, plots)).toMatch(/no column 'b' for plot 'b'/)
   })
 
   it('catches a column that is not an array', () => {
-    expect(calcOutputError({ a: 5, b: [1, 2, 3] }, 3, plots)).toMatch(/returned a number/)
+    expect(calcOutputError({ a: 5, b: [1, 2, 3] }, 3, plots)).toMatch(/column 'a' is a number/)
+  })
+
+  it('checks all four columns of a candle plot', () => {
+    // A plot fed by an ohlc group is not keyed by the plot itself, so the four
+    // named columns are what must exist and line up.
+    const candle = [{ key: 'c', ohlc: { open: 'o', high: 'h', low: 'l', close: 'cl' } }]
+    const good = { o: [1, 2, 3], h: [1, 2, 3], l: [1, 2, 3], cl: [1, 2, 3] }
+    expect(calcOutputError(good, 3, candle)).toBeNull()
+    expect(calcOutputError({ ...good, h: [1, 2] }, 3, candle)).toMatch(
+      /column 'h' returned 2 values/
+    )
+    const { l, ...missingLow } = good
+    expect(calcOutputError(missingLow, 3, candle)).toMatch(/no column 'l'/)
   })
 
   it('catches calc returning something that is not an object', () => {

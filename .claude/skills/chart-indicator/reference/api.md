@@ -47,26 +47,17 @@ during warmup.
 | `highest(values, period)`, `lowest(values, period)` | rolling extremes |
 | `connorsStreak(values)` | consecutive up/down streak length per bar |
 | `nulls(values)` | NaN to null, for a plot column |
+| `pivotHigh`, `pivotLow` | pivot detection, the basis of structure studies |
+| `change`, `roc`, `dev`, `linreg`, `swma`, `stoch`, `cci` | further parity helpers, all exported since 1.8.1 |
+| `percentRank`, `percentileNearestRank`, `correlation` | rank and correlation |
+| `alma`, `vwma`, `rollingSum`, `cumulative` | further averages and running totals |
+| `highestBars`, `lowestBars` | bars since the rolling extreme |
 
-`ema` seeds from `values[0]` and emits a value from index 0, matching
-`openalgo.ta`. The common reference implementation seeds from the SMA of the
-first `period`
+`ema` seeds from `values[0]` and emits from index 0, matching `openalgo.ta`.
+The common reference implementation seeds from the SMA of the first `period`
 values and is NaN before that, so the two disagree for roughly the first
-`period` bars and converge after. The library has an SMA-seeded variant
-internally but **does not export it**: when reproducing a reference platform
-plot exactly, seed it yourself.
-
-```js
-const seeded = new Array(src.length).fill(NaN)
-const base = sma(src, period)
-let prev = base[period - 1]
-seeded[period - 1] = prev
-const k = 2 / (period + 1)
-for (let i = period; i < src.length; i++) {
-  prev = src[i] * k + prev * (1 - k)
-  seeded[i] = prev
-}
-```
+`period` bars. **`smaSeededEma` is exported since 1.8.1**, so reproducing a
+reference plot no longer needs a hand-rolled seed.
 
 `sma` is NaN-safe: it counts non-finite inputs rather than poisoning its running
 sum, so chaining it onto another indicator's warmup gap works.
@@ -132,10 +123,25 @@ session that straddles a calendar boundary is not cut in half by them.
 | `DEFAULT_THEME`, `darkTheme`, `lightTheme` | theme palettes |
 | `VERSION` | library version |
 
+## Sessions, timeframes and colours (1.8.1)
+
+| | |
+| --- | --- |
+| `parseSessionSpec(spec)` | `'0915-1015'` or `'0930-1600:23456'` to `{ start, end, days? }`, null if unparseable |
+| `inSessionAt(utcSeconds, spec, zone?)` | membership test, half-open end, handles a midnight wrap |
+| `sessionFlags(times, spec, zone?)` | per-bar boolean array |
+| `intervalParts(code)` | `{ multiplier, unit }` |
+| `isIntradayInterval`, `isDailyInterval`, `isSecondsInterval`, `isTickInterval` | interval predicates |
+| `withAlpha(color, alpha)` | alpha applied to `#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb()`, `rgba()` |
+| `fromGradient(value, min, max, low, high)` | interpolate a colour by where a value sits in a range |
+
+These remove the two things every ported study used to hand-roll: a session
+parser and a colour ramp.
+
 ## Complete export index
 
-Every one of the 303 names on the API object, so nothing is a surprise.
-Generated from the installed `openalgo-charts` build.
+All 337 names on the API object, so nothing is a surprise. Generated from the
+installed openalgo-charts@1.8.1 build.
 
 **Registration and introspection** (14)
 
@@ -145,35 +151,34 @@ Generated from the installed `openalgo-charts` build.
 
 `sourceValues`, `sourceValue`, `INDICATOR_SOURCES`, `toBar`, `mergeBars`, `conflateBars`, `conflateItems`, `isWhitespace`, `generateBars`, `FakeDataFeed`
 
-**Moving averages and statistics** (9)
+**Moving averages and statistics** (28)
 
-`sma`, `wma`, `rma`, `ema`, `stdev`, `highest`, `lowest`, `nulls`, `connorsStreak`
+`sma`, `wma`, `rma`, `ema`, `smaSeededEma`, `stdev`, `dev`, `highest`, `lowest`, `highestBars`, `lowestBars`, `rollingSum`, `cumulative`, `linreg`, `swma`, `alma`, `vwma`, `percentRank`, `percentileNearestRank`, `correlation`, `nulls`, `connorsStreak`, `change`, `roc`, `stoch`, `cci`, `pivotHigh`, `pivotLow`
 
 **OHLC studies** (7)
 
 `trueRange`, `atr`, `rsi`, `supertrend`, `emaSeries`, `rsiSeries`, `supertrendSeries`
 
-**Time, calendar and sessions** (40)
+**Sessions, time and timeframes** (48)
 
-`DEFAULT_TIMEZONE`, `IST_OFFSET_SECONDS`, `isValidTimezone`, `utcSecondsToZonedParts`, `utcSecondsToIstParts`, `zonedDayIndex`, `zonedWeekIndex`, `zoneOffsetSeconds`, `isNewZonedDay`, `isNewZonedWeek`, `isNewZonedMonth`, `isNewZonedQuarter`, `isNewZonedYear`, `isNewZonedPeriod`, `isNewIstDay`, `startOfZonedDay`, `startOfZonedWeek`, `startOfZonedMonth`, `sessionStartFlags`, `sessionStartIndices`, `calendarPeriodFlags`, `epochMsToUtcSeconds`, `istStringToUtcSeconds`, `zonedStringToUtcSeconds`, `zonedWallClockToUtcSeconds`, `utcSecondsToIstDateString`, `utcSecondsToZonedDateString`, `rowTimeToUtcSeconds`, `barCloseSec`, `bucketStartOf`, `nextBucketStart`, `isTimeBucketed`, `intervalToSeconds`, `isKnownInterval`, `resolveInterval`, `tryResolveInterval`, `registeredIntervals`, `registerInterval`, `unregisterInterval`, `UnknownIntervalError`
+`DEFAULT_TIMEZONE`, `IST_OFFSET_SECONDS`, `isValidTimezone`, `utcSecondsToZonedParts`, `utcSecondsToIstParts`, `zonedDayIndex`, `zonedWeekIndex`, `zoneOffsetSeconds`, `isNewZonedDay`, `isNewZonedWeek`, `isNewZonedMonth`, `isNewZonedQuarter`, `isNewZonedYear`, `isNewZonedPeriod`, `isNewIstDay`, `startOfZonedDay`, `startOfZonedWeek`, `startOfZonedMonth`, `sessionStartFlags`, `sessionStartIndices`, `calendarPeriodFlags`, `parseSessionSpec`, `inSessionAt`, `sessionFlags`, `epochMsToUtcSeconds`, `istStringToUtcSeconds`, `zonedStringToUtcSeconds`, `zonedWallClockToUtcSeconds`, `utcSecondsToIstDateString`, `utcSecondsToZonedDateString`, `rowTimeToUtcSeconds`, `barCloseSec`, `bucketStartOf`, `nextBucketStart`, `isTimeBucketed`, `intervalToSeconds`, `intervalParts`, `isIntradayInterval`, `isDailyInterval`, `isSecondsInterval`, `isTickInterval`, `isKnownInterval`, `resolveInterval`, `tryResolveInterval`, `registeredIntervals`, `registerInterval`, `unregisterInterval`, `UnknownIntervalError`
 
-**Formatting labels** (10)
+**Formatting** (10)
 
 `formatIstTime`, `formatIstTimeSeconds`, `formatIstDate`, `formatIstCrosshairLabel`, `formatZonedTime`, `formatZonedTimeSeconds`, `formatZonedDate`, `formatZonedCrosshairLabel`, `compactVolume`, `precisionForStep`
 
-**Numbers and geometry** (18)
+**Colours, numbers and geometry** (20)
 
-`clamp`, `lerp`, `roundToTick`, `niceTicks`, `autoscaleRange`, `optimalBarWidth`, `snapToDevicePixel`, `bitmapSize`, `dashPattern`, `verticalGradient`, `markerSizePx`, `effectiveMarkerPx`, `drawShape`, `drawLabel`, `bestHit`, `tableOrigin`, `watermarkRect`, `resolvePlotMargins`
+`withAlpha`, `fromGradient`, `verticalGradient`, `clamp`, `lerp`, `roundToTick`, `niceTicks`, `autoscaleRange`, `optimalBarWidth`, `snapToDevicePixel`, `bitmapSize`, `dashPattern`, `markerSizePx`, `effectiveMarkerPx`, `drawShape`, `drawLabel`, `bestHit`, `tableOrigin`, `watermarkRect`, `resolvePlotMargins`
 
-**Style and option lists** (19)
+**Style and option lists** (21)
 
-`INDICATOR_LINE_STYLES`, `INDICATOR_PLOT_STYLES`, `PRICE_SCALE_MODES`, `PRICE_LEVEL_KINDS`, `DEFAULT_THEME`, `darkTheme`, `lightTheme`, `ALT_PRESET`, `VERSION`, `version`, `CHART_STATE_VERSION`, `DEFAULT_CANDLE_STYLE`, `DEFAULT_HISTOGRAM_STYLE`, `DEFAULT_TRADING_COLORS`, `resolveCrosshairStyle`, `resolveGridStyle`, `resolveScaleStyle`, `seriesStyleForLastPriceLevel`, `lastPriceLevelFromSeriesStyle`
+`INDICATOR_LINE_STYLES`, `INDICATOR_PLOT_STYLES`, `PRICE_SCALE_MODES`, `PRICE_LEVEL_KINDS`, `DEFAULT_THEME`, `darkTheme`, `lightTheme`, `ALT_PRESET`, `VERSION`, `version`, `CHART_STATE_VERSION`, `DEFAULT_CANDLE_STYLE`, `DEFAULT_HISTOGRAM_STYLE`, `DEFAULT_TRADING_COLORS`, `resolveCrosshairStyle`, `resolveGridStyle`, `resolveScaleStyle`, `seriesStyleForLastPriceLevel`, `lastPriceLevelFromSeriesStyle`, `IndicatorBackground`, `IndicatorFill`
 
-**Chart infrastructure, not for indicators** (176)
+**Chart infrastructure, not for indicators** (179)
 
-These build and drive a chart: panes, scales, feeds, drawing primitives,
-trading controllers, link groups, replay. An indicator describes what to
-compute and what to plot; the chart owns all of this. Listed for completeness.
+Panes, scales, feeds, drawing primitives, trading controllers, link groups, replay.
+An indicator describes what to compute and what to plot; the chart owns these.
 
-`ADAPTIVE_INDICATORS`, `ADL`, `ADX`, `ALLIGATOR`, `ALMA`, `ALPHATREND`, `AROON`, `AROON_OSCILLATOR`, `ATR`, `AVERAGE_DAILY_RANGE`, `AVERAGE_INDICATORS`, `AWESOME_OSCILLATOR`, `BALANCE_OF_POWER`, `BB_TREND`, `BOLLINGER`, `BOLLINGER_BANDWIDTH`, `BOLLINGER_PERCENT_B`, `BUILTIN_COMMANDS`, `BarCache`, `BuySellButtons`, `CCI`, `CHAIKIN_MONEY_FLOW`, `CHAIKIN_OSCILLATOR`, `CHANDELIER_EXIT`, `CHANDE_KROLL_STOP`, `CHANDE_MOMENTUM`, `CHOPPINESS_INDEX`, `CHOP_ZONE`, `CONNORS_RSI`, `COPPOCK_CURVE`, `CPR`, `CandleBuilder`, `Chart`, `ChartTable`, `ComparisonController`, `DEFAULT_CANDLE_BUILDER_OPTIONS`, `DEFAULT_CHART_TABLE_OPTIONS`, `DEFAULT_KEYMAP`, `DEFAULT_PRICE_SCALE_OPTIONS`, `DEFAULT_TIME_NAVIGATOR_OPTIONS`, `DEFAULT_TIME_SCALE_OPTIONS`, `DEMA`, `DONCHIAN`, `DPO`, `EASE_OF_MOVEMENT`, `ELDER_FORCE_INDEX`, `EMA`, `ENVELOPE`, `EventMarkers`, `FISHER_TRANSFORM`, `FLOW_INDICATORS`, `HALFTREND`, `HISTORICAL_VOLATILITY`, `HMA`, `ICHIMOKU`, `INDEX_INDICATORS`, `IndicatorFill`, `InvalidationLevel`, `KAMA`, `KELTNER_CHANNEL`, `KLINGER_OSCILLATOR`, `KNOW_SURE_THING`, `LINK_CROSSHAIR_ALPHA`, `LSMA`, `LinkCrosshair`, `LinkGroup`, `LogoWatermark`, `MACD`, `MASS_INDEX`, `MA_CROSS`, `MA_RIBBON`, `MCGINLEY_DYNAMIC`, `MEDIAN`, `MFI`, `MOMENTUM`, `NVI`, `OBV`, `OSCILLATOR_INDICATORS`, `OVERLAY_INDICATORS`, `OpenAlgoDataFeed`, `OpenAlgoLiveDataFeed`, `OpenAlgoTradeFeed`, `OpenAlgoWsFeed`, `PARABOLIC_SAR`, `PPO`, `PVI`, `PVO`, `PVT`, `Pane`, `PaneLegend`, `PriceLevels`, `PriceLine`, `PriceScale`, `RANGE_ANALYSIS`, `RANGE_INDICATORS`, `RELATIVE_VIGOR_INDEX`, `RELATIVE_VOLATILITY_INDEX`, `ROC`, `RSI`, `RSI_DIVERGENCE`, `ReplayController`, `SCALE_FONT_MAX`, `SCALE_FONT_MIN`, `SEASONALITY`, `SEASONALITY_INDICATORS`, `SIGNAL_INDICATORS`, `SMA`, `SMI`, `SMI_ERGODIC_INDICATOR`, `SMI_ERGODIC_OSCILLATOR`, `SPECIAL_K`, `STOCHASTIC`, `STOCHASTIC_RSI`, `STRENGTH_INDICATORS`, `STUDY_INDICATORS`, `SUPERTREND`, `SeriesMarkers`, `ShortcutManager`, `TEMA`, `TREND_STRENGTH_INDEX`, `TRIX`, `TSI`, `TWAP`, `TickBarAggregator`, `TimeNavigator`, `TimeScale`, `TradeMarkersPrimitive`, `TradingController`, `ULCER_INDEX`, `ULTIMATE_OSCILLATOR`, `VOLATILITY_INDICATORS`, `VOLATILITY_STOP`, `VOLUME`, `VORTEX`, `VWAP`, `VWMA`, `WAVETREND`, `WAVETREND_INDICATORS`, `WILLIAMS_FRACTALS`, `WILLIAMS_PERCENT_R`, `WILLIAMS_VIX_FIX`, `WMA`, `WOODIES_CCI`, `addComparison`, `alignToPrimary`, `applyChartSettings`, `backoffDelayMs`, `barCacheKey`, `chartSettingsSchema`, `classifyAuthAck`, `comparisonController`, `computePriceLevels`, `conflationGroupSize`, `createChart`, `createLinkGroup`, `decodeOrder`, `eventToCombo`, `followerIndex`, `followerRange`, `formatCombo`, `formatSubscribe`, `formatUnsubscribe`, `isRebasing`, `isReservedCombo`, `isValidCombo`, `mapHistoryResponse`, `mapOrder`, `mapOrderStatus`, `mapPosition`, `normalizeCombo`, `parseCombo`, `parseMessage`, `parseTopic`, `readChartSettings`, `readSequence`, `withBarCache`
+`ADAPTIVE_INDICATORS`, `ADL`, `ADX`, `ALLIGATOR`, `ALMA`, `ALPHATREND`, `AROON`, `AROON_OSCILLATOR`, `ATR`, `AVERAGE_DAILY_RANGE`, `AVERAGE_INDICATORS`, `AWESOME_OSCILLATOR`, `BALANCE_OF_POWER`, `BB_TREND`, `BOLLINGER`, `BOLLINGER_BANDWIDTH`, `BOLLINGER_PERCENT_B`, `BUILTIN_COMMANDS`, `BarCache`, `BuySellButtons`, `CCI`, `CHAIKIN_MONEY_FLOW`, `CHAIKIN_OSCILLATOR`, `CHANDELIER_EXIT`, `CHANDE_KROLL_STOP`, `CHANDE_MOMENTUM`, `CHOPPINESS_INDEX`, `CHOP_ZONE`, `CONNORS_RSI`, `COPPOCK_CURVE`, `CPR`, `CandleBuilder`, `Chart`, `ChartTable`, `ComparisonController`, `DEFAULT_CANDLE_BUILDER_OPTIONS`, `DEFAULT_CHART_TABLE_OPTIONS`, `DEFAULT_KEYMAP`, `DEFAULT_PRICE_SCALE_OPTIONS`, `DEFAULT_TIME_NAVIGATOR_OPTIONS`, `DEFAULT_TIME_SCALE_OPTIONS`, `DEMA`, `DONCHIAN`, `DPO`, `EASE_OF_MOVEMENT`, `ELDER_FORCE_INDEX`, `EMA`, `ENVELOPE`, `EventMarkers`, `FISHER_TRANSFORM`, `FLOW_INDICATORS`, `HALFTREND`, `HISTORICAL_VOLATILITY`, `HMA`, `ICHIMOKU`, `INDEX_INDICATORS`, `IndicatorDrawings`, `InvalidationLevel`, `KAMA`, `KELTNER_CHANNEL`, `KLINGER_OSCILLATOR`, `KNOW_SURE_THING`, `LINK_CROSSHAIR_ALPHA`, `LSMA`, `LinkCrosshair`, `LinkGroup`, `LogoWatermark`, `MACD`, `MASS_INDEX`, `MA_CROSS`, `MA_RIBBON`, `MCGINLEY_DYNAMIC`, `MEDIAN`, `MFI`, `MOMENTUM`, `NVI`, `OBV`, `OSCILLATOR_INDICATORS`, `OVERLAY_INDICATORS`, `OpenAlgoDataFeed`, `OpenAlgoLiveDataFeed`, `OpenAlgoTradeFeed`, `OpenAlgoWsFeed`, `PARABOLIC_SAR`, `PPO`, `PVI`, `PVO`, `PVT`, `Pane`, `PaneLegend`, `PriceLevels`, `PriceLine`, `PriceScale`, `RANGE_ANALYSIS`, `RANGE_INDICATORS`, `RELATIVE_VIGOR_INDEX`, `RELATIVE_VOLATILITY_INDEX`, `ROC`, `RSI`, `RSI_DIVERGENCE`, `ReplayController`, `SCALE_FONT_MAX`, `SCALE_FONT_MIN`, `SEASONALITY`, `SEASONALITY_INDICATORS`, `SIGNAL_INDICATORS`, `SMA`, `SMI`, `SMI_ERGODIC_INDICATOR`, `SMI_ERGODIC_OSCILLATOR`, `SPECIAL_K`, `STOCHASTIC`, `STOCHASTIC_RSI`, `STRENGTH_INDICATORS`, `STUDY_INDICATORS`, `SUPERTREND`, `SeriesMarkers`, `ShortcutManager`, `TEMA`, `TREND_STRENGTH_INDEX`, `TRIX`, `TSI`, `TWAP`, `TickBarAggregator`, `TimeNavigator`, `TimeScale`, `TradeMarkersPrimitive`, `TradingController`, `ULCER_INDEX`, `ULTIMATE_OSCILLATOR`, `VOLATILITY_INDICATORS`, `VOLATILITY_STOP`, `VOLUME`, `VORTEX`, `VWAP`, `VWMA`, `WAVETREND`, `WAVETREND_INDICATORS`, `WILLIAMS_FRACTALS`, `WILLIAMS_PERCENT_R`, `WILLIAMS_VIX_FIX`, `WMA`, `WOODIES_CCI`, `addComparison`, `alignToPrimary`, `applyChartSettings`, `backoffDelayMs`, `barCacheKey`, `barsSince`, `beginPick`, `chartSettingsSchema`, `classifyAuthAck`, `comparisonController`, `computePriceLevels`, `conflationGroupSize`, `createChart`, `createLinkGroup`, `decodeOrder`, `eventToCombo`, `followerIndex`, `followerRange`, `formatCombo`, `formatSubscribe`, `formatUnsubscribe`, `isRebasing`, `isReservedCombo`, `isValidCombo`, `mapHistoryResponse`, `mapOrder`, `mapOrderStatus`, `mapPosition`, `normalizeCombo`, `parseCombo`, `parseMessage`, `parseTopic`, `readChartSettings`, `readSequence`, `valueWhen`, `withBarCache`
 

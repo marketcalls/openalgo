@@ -85,6 +85,10 @@ A fixed number of points looks right on one symbol and wrong on every other.
 
 *Validator: WARNING on `aboveBar`/`belowBar` for an `onchart` indicator.*
 
+Marker text is multi-line since 1.7.1: `
+` splits it into stacked rows. Earlier
+guidance that it was single-line no longer applies.
+
 ---
 
 ## 6. A cleared input arrives as `''`
@@ -131,6 +135,11 @@ Set defaults on the plot instead:
 ```js
 { key: 'ma', type: 'line', title: 'MA', style: { color: '#4f8cff', lineWidth: 2 } }
 ```
+
+**Per-bar colour now reaches line, area and step**, not only histogram and
+column, since 1.7.1. The two-plot split-and-null trick is still the way to make a
+line *recolour at a trend flip*, because that also breaks the line at the flip,
+but a simple colour ramp no longer needs it.
 
 **The exception is `fills`.** A fill takes `colorUpKey` / `colorDownKey`, and
 those name an **input** key, not a plot style. A shaded indicator therefore has
@@ -237,3 +246,59 @@ Pure `calc` functions of `(bars, settings)` need no state at all, which is the
 better answer where possible.
 
 *Validator: no check. It validates one instance.*
+
+---
+
+## 17. `background` and `barColors` are indexed by bar
+
+Both return one entry per bar, `null` to leave that bar alone, and both must be
+exactly `bars.length` long. One short and every colour shifts onto the wrong bar,
+which reads as an indicator that is subtly, confusingly wrong rather than broken.
+
+`barColors` recolours the **main price candles**, so two indicators publishing at
+once is last-writer-wins. Removing an indicator restores what was there before.
+
+*Validator: ERROR on a length mismatch or a non-string, non-null entry.*
+
+---
+
+## 18. Alerts fire only on new bars, by design
+
+`alerts[].when(ctx)` is evaluated on a tail-only change. Loading history,
+changing a setting, paging history in, and switching symbol all fire **nothing**,
+even though `calc` re-runs over every bar.
+
+That is what you want: the naive implementation fires once per historical
+crossing the moment the indicator is added, then again on every settings change.
+Do not try to defeat it by keeping your own state in `store`.
+
+Every alert needs an `id` and a `title`. The `title` is what a host shows.
+
+*Validator: ERROR on a missing id or title, or a `when` that throws.*
+
+---
+
+## 19. A candle plot is fed by four columns, not one
+
+```js
+plots: [{ key: 'ha', type: 'candlestick', title: 'HA',
+          ohlc: { open: 'o', high: 'h', low: 'l', close: 'c' } }]
+calc: () => ({ o: [...], h: [...], l: [...], c: [...] })   // four columns, not 'ha'
+```
+
+The plot key is a label; the four names in `ohlc` are what `calc` must return. A
+missing or wrong-length column throws out of `addIndicator` rather than drawing
+nothing.
+
+*Validator: ERROR on an incomplete ohlc group or a bad column.*
+
+---
+
+## 20. The calc context is optional, and so is everything on it
+
+`calc(bars, settings, store, ctx)` gains a fourth argument carrying `barState`,
+`symbol`, `interval`, `timezone` and `now()`. It is optional and last, so every
+existing indicator is untouched.
+
+`symbol` and `interval` can be `undefined`: the engine is handed bars, not an
+instrument, and only a host that supplies them will have them. Guard before use.

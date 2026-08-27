@@ -25,6 +25,28 @@ interface Props {
 const SOURCES = ['open', 'high', 'low', 'close', 'hl2', 'hlc3', 'ohlc4']
 const LINE_STYLES = ['solid', 'dashed', 'dotted']
 
+/**
+ * Input types the engine defines as strings. The indicator parses the value,
+ * so the dialog's job is a text box and a hint of the shape, not a widget per
+ * type: a session picker or a symbol search would be a different control that
+ * still has to hand back the same string.
+ */
+const TEXT_TYPES = new Set(['text', 'session', 'timeframe', 'symbol'])
+const TEXT_PLACEHOLDER: Record<string, string | undefined> = {
+  session: '0915-1015 or 0930-1600:23456',
+  timeframe: '5m, 1h, D',
+  symbol: 'RELIANCE',
+}
+
+/**
+ * 'price' and 'time' are numbers, so the number control already fits. The
+ * engine can resolve them from a chart click (`chart.beginPick`), but this
+ * dialog is modal: offering that here means dismissing the dialog to reach the
+ * chart and restoring it afterwards, which is a flow worth designing rather
+ * than bolting on. Typing the value works today.
+ */
+const NUMERIC_PICKABLE = new Set(['price', 'time'])
+
 /** Shared control chrome — compact, flat, dark-first. */
 export const CONTROL =
   'h-7 rounded border border-border bg-background px-2 text-[13px] text-foreground outline-none transition-colors focus:border-primary'
@@ -293,7 +315,11 @@ export function SettingsField({
   // Everything below falls through to the number control, so a string-valued
   // input needs its own branch: `<input type="number">` rejects a value like
   // '0915-1015' outright and renders an empty box with spinner arrows.
-  if (field.type === 'text') {
+  //
+  // 'session', 'timeframe' and 'symbol' are the semantic string types the
+  // library added: the indicator parses them itself, so the control is a text
+  // box with a hint of the shape expected rather than a bespoke widget.
+  if (TEXT_TYPES.has(field.type)) {
     return (
       <>
         {label}
@@ -302,13 +328,17 @@ export function SettingsField({
           type="text"
           value={typeof value === 'string' ? value : ''}
           onChange={(e) => onChange(e.target.value)}
+          placeholder={TEXT_PLACEHOLDER[field.type]}
           className={cn(CONTROL, 'w-full')}
         />
       </>
     )
   }
 
-  const step = field.step ?? 1
+  // 'price' and 'time' land here deliberately: both are numbers, so the stepper
+  // control is already the right one. See NUMERIC_PICKABLE for why there is no
+  // click-the-chart affordance in this modal yet.
+  const step = field.step ?? (NUMERIC_PICKABLE.has(field.type) ? 0.05 : 1)
   const nudge = (dir: 1 | -1) => {
     const cur = Number(value)
     const next = (Number.isFinite(cur) ? cur : 0) + dir * step

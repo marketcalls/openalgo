@@ -32,6 +32,10 @@ it running against your live broker session.
 - [The API you are handed](#the-api-you-are-handed)
 - [Signal markers](#signal-markers)
 - [Shading between two series](#shading-between-two-series)
+- [Shading, painting and alerts](#shading-painting-and-alerts)
+- [Candles as a plot](#candles-as-a-plot)
+- [Sessions, timeframes and colours](#sessions-timeframes-and-colours)
+- [Knowing what the chart is doing](#knowing-what-the-chart-is-doing)
 - [Indicators that need external data](#indicators-that-need-external-data)
 - [Worked example: Open Range Breakout](#worked-example-open-range-breakout)
 - [Porting from other charting scripts](#porting-from-other-charting-scripts)
@@ -333,6 +337,81 @@ This is the one case where you should declare colour inputs. Plain plots get
 their style controls generated for you, but a fill needs an input to point at.
 
 ---
+
+## Shading, painting and alerts
+
+Three hooks added in 1.8.1, each indexed by bar and exactly `bars.length` long,
+with `null` meaning "leave this bar alone".
+
+```js
+// Shade the pane behind the plots.
+background: ({ bars, values }) =>
+  bars.map((b, i) => values.ma[i] == null ? null : (b.close > values.ma[i] ? '#26a69a1f' : '#ef53501f')),
+
+// Repaint the MAIN price candles, overriding their up/down colour.
+barColors: ({ bars, values }) =>
+  bars.map((b, i) => values.ma[i] == null ? null : (b.close > values.ma[i] ? '#26a69a' : '#ef5350')),
+
+// A condition the chart watches for you.
+alerts: [{
+  id: 'cross-up',
+  title: 'Close crossed above the mean',
+  when: ({ bars, values, index: i }) =>
+    i > 0 && values.ma[i - 1] != null && bars[i - 1].close <= values.ma[i - 1] && bars[i].close > values.ma[i],
+}],
+```
+
+Removing the indicator restores the original candle colours, and the shared bar
+data is never mutated, so other indicators and the data feed are unaffected.
+
+**Alerts fire only on new bars.** Loading history, changing a setting, paging
+history in and switching symbol all fire nothing, even though `calc` re-runs over
+every bar. That is deliberate: the naive version fires once per historical
+crossing the moment you add the indicator. Listen with:
+
+```js
+chart.on('indicator:alert', ({ indicatorId, alertId, title, message, time, index }) => { ... })
+```
+
+## Candles as a plot
+
+A plot can be fed by four columns instead of one, which is how a Heikin Ashi or
+any custom aggregation is drawn:
+
+```js
+plots: [{ key: 'ha', type: 'candlestick', title: 'Heikin Ashi',
+          ohlc: { open: 'o', high: 'h', low: 'l', close: 'c' } }],
+calc: () => ({ o: [...], h: [...], l: [...], c: [...] }),
+```
+
+The plot key is only a label. A missing or wrong-length column throws rather
+than silently drawing nothing.
+
+## Sessions, timeframes and colours
+
+The helpers that used to be hand-rolled in every ported study:
+
+```js
+const spec = parseSessionSpec('0915-1015')        // or '0930-1600:23456' for weekdays
+const inWindow = inSessionAt(bars[i].time, spec, 'Asia/Kolkata')
+const flags = sessionFlags(bars.map(b => b.time), '0915-1015')
+
+isIntradayInterval(ctx.interval)                  // from the calc context
+fromGradient(value, 0, 100, '#26a69a', '#ef5350') // colour ramp
+withAlpha('#26a69a', 0.12)                        // alpha on any colour form
+```
+
+## Knowing what the chart is doing
+
+`calc` takes an optional fourth argument:
+
+```js
+calc(bars, settings, store, ctx) {
+  // ctx.barState.isNew / isConfirmed / isRealtime / lastIndex
+  // ctx.symbol, ctx.interval   may be undefined, guard before use
+  // ctx.timezone, ctx.now()
+}
+```
 
 ## Indicators that need external data
 
