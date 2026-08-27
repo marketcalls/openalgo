@@ -13,6 +13,7 @@ import uuid
 from AlgorithmImports import *
 
 from rules import build_strikes, calculate_credit_metrics
+from strategies.python.common.strategy_state import StrategyStateStore
 
 
 class Spx1_45PmSandwichStrategy(QCAlgorithm):
@@ -35,7 +36,15 @@ class Spx1_45PmSandwichStrategy(QCAlgorithm):
         self.place_orders = self._bool_parameter("sandwich-place-orders", True)
         self.force_exit_before_close = self._bool_parameter("sandwich-force-exit", False)
         self.state_scope = self.get_parameter("sandwich-state-scope") or "paper"
-        self.state_key = f"{self.STATE_KEY_PREFIX}/{self.state_scope}/ledger.json"
+        self._legacy_state_key = f"{self.STATE_KEY_PREFIX}/{self.state_scope}/ledger.json"
+        self._state_store = StrategyStateStore(
+            self.object_store,
+            "spx-1-45pm-sandwich",
+            self.state_scope,
+            1,
+            self._default_ledger,
+        )
+        self._state_reconciliation_required = False
         self._ledger = self._load_ledger()
         self._ledger_reconciled = False
 
@@ -60,6 +69,10 @@ class Spx1_45PmSandwichStrategy(QCAlgorithm):
 
     def on_data(self, slice: Slice) -> None:
         if self.is_warming_up:
+            return
+
+        if self._state_reconciliation_required:
+            self._log_decision("blocked: state reconciliation required")
             return
 
         if not self._ledger_reconciled:
@@ -234,29 +247,62 @@ class Spx1_45PmSandwichStrategy(QCAlgorithm):
         return match.group(1) if match else None
 
     def _load_ledger(self):
-        default = {
+        result = self._state_store.load()
+        if result.is_valid:
+            ledger = result.payload
+        elif result.status == "missing":
+            ledger = self._load_legacy_ledger()
+            if ledger is None:
+                return self._default_ledger()
+            self._state_store.save(ledger, self.time.isoformat())
+            self.debug("ownership ledger migrated into shared storage.")
+        else:
+            self._state_reconciliation_required = True
+            self.error(
+                f"Unable to restore ownership ledger: {result.status}; "
+                "new entries are blocked pending reconciliation."
+            )
+            return self._default_ledger()
+
+        ledger.setdefault("trades", {})
+        ledger.setdefault("seen_execution_ids", [])
+        return ledger
+
+    def _default_ledger(self):
+        return {
             "schema_version": 1,
             "strategy_id": "spx-1-45pm-sandwich",
             "trades": {},
             "seen_execution_ids": [],
         }
+
+    def _load_legacy_ledger(self):
         try:
-            if not self.object_store.contains_key(self.state_key):
-                return default
-            loaded = json.loads(self.object_store.read(self.state_key))
-            if loaded.get("schema_version") != 1 or loaded.get("strategy_id") != default["strategy_id"]:
-                self.debug("Ignoring incompatible ownership ledger; reconciliation is required.")
-                return default
-            loaded.setdefault("trades", {})
-            loaded.setdefault("seen_execution_ids", [])
-            return loaded
+            if not self.object_store.contains_key(self._legacy_state_key):
+                return None
+            loaded = json.loads(self.object_store.read(self._legacy_state_key))
         except Exception as error:
-            self.error(f"Unable to load ownership ledger: {error}")
-            return default
+            self._state_reconciliation_required = True
+            self.error(
+                f"Unable to load legacy ownership ledger: {error}; "
+                "new entries are blocked pending reconciliation."
+            )
+            return None
+
+        if (not isinstance(loaded, dict)
+                or loaded.get("schema_version") != 1
+                or loaded.get("strategy_id") != "spx-1-45pm-sandwich"):
+            self._state_reconciliation_required = True
+            self.error(
+                "Incompatible legacy ownership ledger; "
+                "new entries are blocked pending reconciliation."
+            )
+            return None
+        return loaded
 
     def _save_ledger(self):
         self._ledger["updated_at"] = self.time.isoformat()
-        self.object_store.save(self.state_key, json.dumps(self._ledger, sort_keys=True))
+        self._state_store.save(self._ledger, self.time.isoformat())
 
     def _reconcile_ledger(self):
         # IB/LEAN account synchronization has completed before the first live
