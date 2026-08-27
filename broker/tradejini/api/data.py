@@ -72,9 +72,7 @@ class TradejiniWebSocket:
             )
 
             # Connect with formatted auth token
-            logger.debug(
-                f"Connecting with auth token format: {auth_header.split(':')[0][:4]}***:{auth_header.split(':')[1][:4]}***"
-            )
+            logger.debug("Connecting with auth token in api_key:access_token format")
             self.nx_stream.connect(auth_header)
 
             # Wait for connection

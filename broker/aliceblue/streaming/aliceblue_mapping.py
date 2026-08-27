@@ -127,9 +127,9 @@ class AliceBlueMessageMapper:
                 # Extract symbol and clean it (remove suffixes like -EQ for OpenAlgo format)
                 raw_symbol = message.get("ts", "")
                 # Log the raw symbol for debugging
-                import logging
+                from utils.logging import get_logger
 
-                logger = logging.getLogger("aliceblue_mapping")
+                logger = get_logger("aliceblue_mapping")
                 logger.debug(f"Raw symbol from AliceBlue: '{raw_symbol}'")
                 clean_symbol = raw_symbol.split("-")[0] if raw_symbol else ""
                 logger.debug(f"Cleaned symbol: '{clean_symbol}'")

@@ -4,7 +4,6 @@ Handles market data streaming from Shoonya broker
 """
 
 import json
-import logging
 import os
 import sys
 import threading
@@ -14,6 +13,7 @@ from collections import Counter
 from typing import Any
 
 from database.auth_db import get_auth_token
+from utils.logging import get_logger
 
 # Add parent directory to path to allow imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -58,7 +58,7 @@ class MarketDataCache:
         self._cache = {}
         self._initialized_scrips = set()
         self._lock = threading.Lock()
-        self.logger = logging.getLogger("market_cache")
+        self.logger = get_logger("market_cache")
 
     def get(self, scrip: str) -> dict[str, Any]:
         """Get cached data for a scrip"""
@@ -272,7 +272,7 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("shoonya_websocket")
+        self.logger = get_logger("shoonya_websocket")
         self._setup_adapter()
         self._setup_market_cache()
         self._setup_connection_management()

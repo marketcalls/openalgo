@@ -21,7 +21,7 @@ def get_margin_data(auth_token):
     logger.info(
         f"Fetching margin data with auth_token length: {len(auth_token) if auth_token else 0}"
     )
-    logger.debug(f"Auth token (first 30 chars): {auth_token[:30] if auth_token else 'None'}...")
+    logger.debug("Auth token present" if auth_token else "Auth token missing")
     logger.debug(f"API key length: {len(api_key) if api_key else 0}")
 
     headers = {

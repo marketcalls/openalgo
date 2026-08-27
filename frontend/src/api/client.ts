@@ -68,14 +68,20 @@ authClient.interceptors.request.use(
       !isExempt &&
       (config.method === 'post' || config.method === 'put' || config.method === 'delete')
     ) {
+      // Fail the request rather than sending it without a token. Continuing
+      // meant Flask-WTF rejected it anyway, but the caller saw an opaque CSRF
+      // error instead of the real cause, and a failed logout still cleared
+      // local state and routed to /login while the server session survived.
+      let csrfToken: string
       try {
-        const csrfToken = await fetchCSRFToken()
-        if (csrfToken) {
-          config.headers['X-CSRFToken'] = csrfToken
-        }
-      } catch {
-        // Continue without CSRF for auth operations - backend may handle differently
+        csrfToken = await fetchCSRFToken()
+      } catch (cause) {
+        throw new Error(`Could not obtain a CSRF token for ${config.method} ${url}`, { cause })
       }
+      if (!csrfToken) {
+        throw new Error(`Empty CSRF token returned for ${config.method} ${url}`)
+      }
+      config.headers['X-CSRFToken'] = csrfToken
     }
     return config
   },

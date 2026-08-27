@@ -83,9 +83,9 @@ def authenticate_broker(mobile_number, totp, mpin):
         )
 
         logger.debug(f"TOTP Login Response Status: {response.status_code}")
-        logger.debug(f"TOTP Login Response: {response.text}")
 
         data_dict = json.loads(response.text)
+        logger.debug(f"TOTP Login Response fields: {list(data_dict)}")
 
         # Check for errors in TOTP login
         if "data" not in data_dict or data_dict.get("data", {}).get("status") != "success":
@@ -119,9 +119,9 @@ def authenticate_broker(mobile_number, totp, mpin):
         )
 
         logger.debug(f"MPIN Validation Response Status: {response.status_code}")
-        logger.debug(f"MPIN Validation Response: {response.text}")
 
         data_dict = json.loads(response.text)
+        logger.debug(f"MPIN Validation Response fields: {list(data_dict)}")
 
         # Check for errors in MPIN validation
         if "data" not in data_dict or data_dict.get("data", {}).get("status") != "success":
@@ -143,9 +143,7 @@ def authenticate_broker(mobile_number, totp, mpin):
         # Create auth string: trading_token:::trading_sid:::base_url:::access_token
         # This format allows extracting all components needed for subsequent API calls
         auth_string = f"{trading_token}:::{trading_sid}:::{base_url}:::{access_token}"
-        logger.debug(
-            f"AUTH TOKEN CREATED: {trading_token[:10]}...:::{trading_sid}:::{base_url}:::{access_token[:10]}..."
-        )
+        logger.debug(f"AUTH TOKEN CREATED for base URL: {base_url}")
 
         return auth_string, None
 

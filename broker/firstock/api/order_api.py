@@ -236,7 +236,8 @@ def place_order_api(data, auth):
     transformed_data = transform_data(data, token, auth)
     transformed_data.update({"jKey": auth, "userId": api_key})
 
-    logger.debug(f"{transformed_data}")
+    safe_data = {k: v for k, v in transformed_data.items() if k != "jKey"}
+    logger.debug(f"{safe_data}")
 
     try:
         # Get the shared httpx client with connection pooling

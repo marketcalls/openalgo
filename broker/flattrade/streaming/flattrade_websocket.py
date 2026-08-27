@@ -4,13 +4,14 @@ Handles connection to Flattrade's market data streaming API
 """
 
 import json
-import logging
 import threading
 import time
 from collections.abc import Callable
 from typing import Any, Dict, Optional
 
 import websocket
+
+from utils.logging import get_logger
 
 
 class FlattradeWebSocket:
@@ -96,7 +97,7 @@ class FlattradeWebSocket:
         self._heartbeat_lock = threading.Lock()
 
         # Logging
-        self.logger = logging.getLogger("flattrade_websocket")
+        self.logger = get_logger("flattrade_websocket")
 
     def connect(self) -> bool:
         """

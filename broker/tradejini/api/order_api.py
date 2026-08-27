@@ -112,7 +112,7 @@ def get_api_response(endpoint, auth, method="GET", data=None, params=None):
             )
 
         logger.debug(f"get_api_response - Response status: {response.status_code}")
-        logger.debug(f"get_api_response - Response headers: {dict(response.headers)}")
+        logger.debug(f"get_api_response - Response header fields: {list(response.headers)}")
         logger.debug(f"get_api_response - Response body: {response.text}")
 
         # Every documented path is relative to the /v2 base URL, so a 404 means
@@ -920,7 +920,8 @@ def place_order_api(data, auth):
         # Prepare authorization
         auth_header = f"{api_key}:{AUTH_TOKEN}"
         logger.debug(
-            f"place_order_api - Using auth header: {api_key[:4]}...:{AUTH_TOKEN[-4:] if AUTH_TOKEN else 'None'}"
+            f"place_order_api - Authorization header built from api_key:access_token "
+            f"(access_token present: {bool(AUTH_TOKEN)})"
         )
 
         headers = {
@@ -934,7 +935,7 @@ def place_order_api(data, auth):
             url = "https://api.tradejini.com/v2/api/oms/place-order"
 
             logger.debug(f"place_order_api - Sending request to {url}")
-            logger.debug(f"place_order_api - Headers: {headers}")
+            logger.debug(f"place_order_api - Header keys: {list(headers)}")
 
             response = client.post(
                 url,
@@ -945,7 +946,7 @@ def place_order_api(data, auth):
 
             # Log response details
             logger.debug(f"place_order_api - Response status: {response.status_code}")
-            logger.debug(f"place_order_api - Response headers: {dict(response.headers)}")
+            logger.debug(f"place_order_api - Response header fields: {list(response.headers)}")
 
             response.raise_for_status()
             response_data = response.json()

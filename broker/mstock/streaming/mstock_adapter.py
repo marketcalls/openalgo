@@ -6,7 +6,6 @@ with eventlet in gunicorn+eventlet deployments.
 """
 import copy
 import json
-import logging
 import os
 import sys
 import threading
@@ -17,6 +16,7 @@ from broker.mstock.api.data import BrokerData
 from broker.mstock.api.mstockwebsocket import MstockWebSocket
 from database.auth_db import get_auth_token
 from database.token_db import get_token
+from utils.logging import get_logger
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
 
@@ -31,7 +31,7 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("mstock_websocket")
+        self.logger = get_logger("mstock_websocket")
         self.ws_client = None
         self.data_client = None
         self.user_id = None

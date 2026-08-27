@@ -24,7 +24,13 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import { EXCHANGES, ORDER_ACTIONS, PRICE_TYPES, PRODUCT_TYPES } from '@/lib/flow/constants'
+import {
+  EXCHANGES,
+  ORDER_ACTIONS,
+  PRICE_TYPES,
+  PRODUCT_TYPES,
+  defaultProductForExchange,
+} from '@/lib/flow/constants'
 import {
   EMPTY_LEG,
   hasVariableReference,
@@ -291,6 +297,22 @@ interface LegRowProps {
   onRemove: () => void
 }
 
+/**
+ * The product patch that goes with a leg's new exchange.
+ *
+ * margin_service requires a product on every leg, so unlike a node this row
+ * cannot store "no choice yet" and let the exchange decide at run time. The
+ * next best thing: carry the default across when the leg is still sitting on
+ * the one its old exchange implied, and leave a product the author actually
+ * changed alone. Moving an untouched NSE leg to NFO therefore prices it NRML,
+ * while a leg deliberately set to MIS stays intraday wherever it goes.
+ */
+function productForExchange(leg: MarginLeg, exchange: string): Partial<MarginLeg> {
+  if (leg.product !== defaultProductForExchange(leg.exchange)) return {}
+  const next = defaultProductForExchange(exchange)
+  return next === leg.product ? {} : { product: next }
+}
+
 function LegRow({ leg, index, lot, onRetryLookup, onUpdate, onRemove }: LegRowProps) {
   const problems: LegProblems = validateLeg(leg)
   const units = Number.parseInt(leg.quantity, 10) || 0
@@ -356,7 +378,10 @@ function LegRow({ leg, index, lot, onRetryLookup, onUpdate, onRemove }: LegRowPr
           <Label htmlFor={id('exchange')} className="text-[10px] text-muted-foreground">
             Exchange
           </Label>
-          <Select value={leg.exchange} onValueChange={(v) => onUpdate({ exchange: v })}>
+          <Select
+            value={leg.exchange}
+            onValueChange={(v) => onUpdate({ exchange: v, ...productForExchange(leg, v) })}
+          >
             <SelectTrigger id={id('exchange')} className="h-8" aria-label="Exchange">
               <SelectValue />
             </SelectTrigger>
