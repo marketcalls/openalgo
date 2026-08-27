@@ -104,6 +104,43 @@ def test_valid_session_expiry_is_not_swallowed_by_the_fallback():
     assert last_session_expiry_utc("09:15", now) == datetime(2026, 8, 18, 3, 45)
 
 
+def test_t1_settlement_does_not_sweep_in_a_position_created_early_today(monkeypatch):
+    """A CNC position from 01:00 IST today must not be settled a day early.
+
+    created_at is the database clock (UTC). Building IST midnight and comparing
+    it naive means the cutoff is read as UTC and lands 5.5 hours late, so a
+    position created between 00:00 and 05:30 IST today looks like yesterday's.
+    """
+    from sandbox import catch_up_processor
+    from sandbox.session_boundary import as_db_utc
+
+    user_id = "test-t1-cutoff"
+    _clear_test_user(user_id)
+
+    ist_midnight = datetime.combine(datetime.now(IST).date(), datetime.min.time(), tzinfo=IST)
+    _create_position(
+        user_id=user_id,
+        symbol="SBIN",
+        exchange="NSE",
+        product="CNC",
+        quantity=10,
+        average_price=800.00,
+        created_at=as_db_utc(ist_midnight + timedelta(hours=1)),   # 01:00 IST today
+        updated_at=as_db_utc(ist_midnight + timedelta(hours=1)),
+    )
+
+    called = []
+    monkeypatch.setattr(
+        "sandbox.holdings_manager.process_all_t1_settlements",
+        lambda *a, **k: called.append(True),
+    )
+
+    catch_up_processor.catch_up_t1_settlement()
+
+    assert not called, "a position created after IST midnight was settled a day early"
+
+    _clear_test_user(user_id)
+
 def test_reopened_mis_position_survives_catch_up():
     """Row reuse keeps old created_at; updated_at after boundary means live MIS."""
     from database.sandbox_db import SandboxPositions

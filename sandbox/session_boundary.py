@@ -20,6 +20,26 @@ logger = get_logger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
 
 
+def as_db_utc(aware_local):
+    """Convert a timezone-aware local datetime to the naive UTC the database stores.
+
+    ``created_at`` and ``updated_at`` on the sandbox tables are naive DateTime
+    columns written by ``func.now()``, which on SQLite is ``CURRENT_TIMESTAMP``,
+    i.e. UTC. A naive IST value compared against them is not rejected, it is
+    simply read as UTC, so the comparison silently skews by the offset. That is
+    the same mistake twice over in this codebase: the MIS session boundary and
+    the T+1 settlement cutoff were each 5.5 hours out. Route every local-to-column
+    comparison through here rather than converting by hand at the call site.
+
+    Args:
+        aware_local: Timezone-aware datetime in any zone.
+
+    Returns:
+        Naive UTC datetime, directly comparable with the columns.
+    """
+    return aware_local.astimezone(UTC).replace(tzinfo=None)
+
+
 def last_session_expiry_utc(session_expiry_str, now_local):
     """Resolve the most recent session boundary as a naive UTC datetime.
 
@@ -55,4 +75,4 @@ def last_session_expiry_utc(session_expiry_str, now_local):
         boundary = boundary_today
     else:
         boundary = boundary_today - timedelta(days=1)
-    return boundary.astimezone(UTC).replace(tzinfo=None)
+    return as_db_utc(boundary)
