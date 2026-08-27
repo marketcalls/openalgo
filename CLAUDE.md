@@ -44,7 +44,7 @@ Detailed procedures live in `.claude/skills/` and load on demand:
 - **`fd-audit`** — run after any change touching DB, WebSockets/streaming, threads/executors, subprocesses, files, or sockets
 - **`version-bump`** — releasing the platform, or bumping the pinned `openalgo` SDK (two unrelated version numbers)
 - **`broker-integration`** — adding or modifying a broker plugin
-- **`chart-indicator`** — building a custom indicator for the `/trading` chart (JavaScript, `openalgo-charts`). Not to be confused with **`custom-indicator`**, which is the Python `openalgo.ta` path.
+- **`chart-indicator`** — building a custom indicator for the `/trading` chart. These are plain JavaScript descriptors on `openalgo-charts`, unrelated to the Python `openalgo.ta` indicators used from strategies and scanners.
 
 ## Security and Deployment Model
 

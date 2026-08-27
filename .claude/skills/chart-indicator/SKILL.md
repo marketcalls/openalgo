@@ -1,6 +1,6 @@
 ---
 name: chart-indicator
-description: Build a custom indicator for the OpenAlgo /trading charting terminal (openalgo-charts). Use when asked to create, port, or debug a chart indicator, overlay, oscillator, band, or on-chart signal, including porting a Pine Script / TradingView study to the chart. Writes a plain-JS descriptor into strategies/indicators/, but only after it validates against the real library. Not for openalgo.ta Python indicators, which is the custom-indicator skill.
+description: Build a custom indicator for the OpenAlgo /trading charting terminal (openalgo-charts). Use when asked to create, port, or debug a chart indicator, overlay, oscillator, band, or on-chart signal, including porting a Pine Script / TradingView study to the chart. Writes a plain-JS descriptor into strategies/indicators/, but only after it validates against the real library. This is the chart path, not the Python openalgo.ta path used from strategies and scanners.
 argument-hint: "[indicator name or Pine script]"
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep
 ---
@@ -11,9 +11,10 @@ Build an indicator for the charting terminal. It becomes a picker entry with a
 generated settings dialog, a legend row and saved-layout persistence, with no
 build step and no restart.
 
-**This is the chart (JavaScript) path.** For a Python `openalgo.ta` indicator
-used from a strategy or scanner, use the **`custom-indicator`** skill instead.
-The two share nothing.
+**This is the chart (JavaScript) path.** It has nothing to do with the Python
+`openalgo.ta` indicators used from strategies, scanners and backtests: different
+language, different runtime, different API. If the request is for a Python
+indicator, this skill is the wrong one.
 
 ## The one rule
 
