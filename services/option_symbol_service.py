@@ -36,10 +36,11 @@ Example Usage (OLD METHOD - Legacy):
 import importlib
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from database.auth_db import get_auth_token_broker
 from database.symbol import SymToken, db_session
+from services.flow_node_contracts import parse_underlying_symbol
 from services.quotes_service import get_quotes
 from utils.constants import CRYPTO_EXCHANGES
 from utils.logging import get_logger
@@ -73,35 +74,6 @@ def clear_strikes_cache():
     _STRIKES_CACHE.clear()
     _CACHE_STATS = {"hits": 0, "misses": 0, "total_queries": 0}
     logger.info("Strikes cache cleared")
-
-
-def parse_underlying_symbol(underlying: str) -> tuple[str, str | None]:
-    """
-    Parse underlying symbol to extract base symbol and expiry date if present.
-
-    Args:
-        underlying: Symbol like "NIFTY" or "NIFTY28OCT25FUT" or "RELIANCE31JAN25FUT"
-
-    Returns:
-        Tuple of (base_symbol, expiry_date)
-        e.g., ("NIFTY", "28OCT25") or ("NIFTY", None)
-    """
-    # Pattern to match: SYMBOL + DDMMMYY + optional FUT
-    # Examples: NIFTY28OCT25FUT, BANKNIFTY31JAN25FUT, RELIANCE28MAR24FUT
-    pattern = r"^([A-Z]+)(\d{2}[A-Z]{3}\d{2})(?:FUT)?$"
-
-    match = re.match(pattern, underlying.upper())
-    if match:
-        base_symbol = match.group(1)
-        expiry_date = match.group(2)
-        logger.info(
-            f"Parsed underlying '{underlying}' -> base: '{base_symbol}', expiry: '{expiry_date}'"
-        )
-        return base_symbol, expiry_date
-
-    # If no pattern match, treat the entire string as base symbol
-    logger.info(f"Underlying '{underlying}' has no embedded expiry, using as-is")
-    return underlying.upper(), None
 
 
 #: Exchanges whose options have no tradable spot instrument. The underlying
@@ -712,6 +684,29 @@ def get_option_symbol(
                 quote_symbol = underlying.upper()
             else:
                 quote_symbol = base_symbol
+        elif exchange.upper() in NO_SPOT_EXCHANGES:
+            # The caller named a bare product ("CRUDEOIL") on an exchange that
+            # lists no spot instrument, so there is nothing to quote for the ATM
+            # reference. Price it off the near-month future, which is what the
+            # option chain, the IV surface and the straddle charts already do --
+            # without this the LTP lookup asked MCX for a symbol that cannot
+            # exist and the order failed with "Could not determine LTP".
+            resolved = resolve_underlying_quote(base_symbol, exchange.upper())
+            if not resolved:
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": (
+                            f"No unexpired futures contract for {base_symbol} on "
+                            f"{exchange.upper()}, so the ATM reference price cannot "
+                            "be determined. Check the symbol, or re-download the "
+                            "master contract."
+                        ),
+                    },
+                    404,
+                )
+            quote_symbol, quote_exchange = resolved
         else:
             quote_symbol = underlying
 

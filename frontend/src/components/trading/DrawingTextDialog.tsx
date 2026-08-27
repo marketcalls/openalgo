@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { DrawTextStyle } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
+import { TickBox } from './TickBox'
 
 export interface TextRequest {
   id: string
@@ -167,12 +168,7 @@ export function DrawingTextDialog({ req, onSubmit, onClose }: Props) {
           {/* Each toggle owns its colour, which stays visible but inert while
               the toggle is off — so its value survives being switched off. */}
           <label className="flex items-center gap-2 text-[13px]">
-            <input
-              type="checkbox"
-              checked={v.background}
-              onChange={(e) => set('background', e.target.checked)}
-              className="h-3.5 w-3.5 accent-primary"
-            />
+            <TickBox checked={v.background} onChange={(next) => set('background', next)} />
             <span className="flex-1">Background</span>
             <input
               type="color"
@@ -185,12 +181,7 @@ export function DrawingTextDialog({ req, onSubmit, onClose }: Props) {
           </label>
 
           <label className="flex items-center gap-2 text-[13px]">
-            <input
-              type="checkbox"
-              checked={v.border}
-              onChange={(e) => set('border', e.target.checked)}
-              className="h-3.5 w-3.5 accent-primary"
-            />
+            <TickBox checked={v.border} onChange={(next) => set('border', next)} />
             <span className="flex-1">Border</span>
             <input
               type="color"
@@ -203,12 +194,7 @@ export function DrawingTextDialog({ req, onSubmit, onClose }: Props) {
           </label>
 
           <label className="flex items-center gap-2 text-[13px]">
-            <input
-              type="checkbox"
-              checked={v.wrap}
-              onChange={(e) => set('wrap', e.target.checked)}
-              className="h-3.5 w-3.5 accent-primary"
-            />
+            <TickBox checked={v.wrap} onChange={(next) => set('wrap', next)} />
             <span className="flex-1">Text wrap</span>
           </label>
         </div>

@@ -316,7 +316,7 @@ get_instruments(exchange=None, api_key=None, format="json")
 get_option_symbol(underlying, exchange, expiry_date, strike_int, offset,
                   option_type, api_key, underlying_ltp=None)
 get_option_chain(underlying, exchange, expiry_date, strike_count, api_key,
-                 with_quotes=True)
+                 with_quotes=True, with_greeks=False, interest_rate=None)
 get_option_greeks(option_symbol, exchange, interest_rate=None,
                   forward_price=None, underlying_symbol=None,
                   underlying_exchange=None, expiry_time=None, api_key=None)
@@ -331,6 +331,14 @@ toggle_analyzer_mode(analyzer_data, api_key=None, auth_token=None, broker=None)
 get_chart_preferences(api_key)
 update_chart_preferences(api_key, data)
 ```
+
+`get_option_chain(..., with_greeks=True)` attaches `implied_volatility` and
+`delta`/`gamma`/`theta`/`vega` to every leg, computed from the quotes the call has
+already fetched. It costs no extra broker requests and is not bound by the
+50-symbol cap that `get_multi_option_greeks` enforces, so prefer it over a second
+Greeks call whenever a whole chain is involved. The response also carries
+`expiry_ts`, `server_ts` and `forward_price`; the forward comes from the ATM call
+and put via put-call parity, not from spot.
 
 ## Payload rules
 
@@ -442,20 +450,26 @@ get_flow_client(api_key)
 get_flow_price_monitor()
 FlowPriceMonitor.add_alert(workflow_id, symbol, exchange, condition,
                            target_price, price_lower=None, price_upper=None,
-                           percentage=None, api_key=None)
+                           percentage=None, api_key=None, trigger="once",
+                           expiration="none")
 FlowPriceMonitor.remove_alert(workflow_id)
 FlowPriceMonitor.get_alert(workflow_id)
 FlowPriceMonitor.get_status()
 FlowPriceMonitor.shutdown()
+restore_price_alerts()          # re-arm active priceAlert workflows at startup
 
 init_flow_scheduler(db_url=None, api_key=None)
 get_flow_scheduler()
-execute_workflow_scheduled(workflow_id, api_key=None)
+execute_workflow_scheduled(workflow_id, api_key=None, market_hours_only=False)
+# api_key is only for jobs pickled by an older build; the current key is read
+# from the workflow row on every run, and is never stored in the jobstore.
 FlowScheduler.add_workflow_job(workflow_id, schedule_type, time_str="09:15",
                                days=None, execute_at=None,
                                interval_value=None, interval_unit=None,
-                               func=None)
-FlowScheduler.remove_workflow_job(workflow_id)
+                               func=None, market_hours_only=False)
+FlowScheduler.remove_workflow_job(workflow_id, strict=False)
+# strict=True raises on a jobstore failure instead of returning False, so a
+# caller cannot mark a workflow inactive while its job is still armed.
 FlowScheduler.pause_job(job_id)
 FlowScheduler.resume_job(job_id)
 FlowScheduler.shutdown()
@@ -472,7 +486,7 @@ Data:   get_quotes, get_multi_quotes, get_depth, get_history, get_order_status,
         orderbook, tradebook, positionbook, holdings, funds, get_open_position
 Lookup: symbol, search_symbols, get_expiry, get_intervals, optionchain,
         optionsymbol, syntheticfuture, get_option_greeks
-Other:  holidays, timings, margin, telegram
+Other:  holidays, timings, margin, telegram, whatsapp
 ```
 
 Node execution belongs in `NodeExecutor` and `execute_node_chain(...)`. New Flow
@@ -778,9 +792,13 @@ get_option_exchange(underlying_exchange)
 check_opengreeks_availability()
 parse_option_symbol(symbol, exchange, custom_expiry_time=None)
 get_underlying_exchange(base_symbol, options_exchange)
+get_exchange_expiry_time(exchange, custom_expiry_time=None)
+get_expiry_datetime(expiry_date, exchange, custom_expiry_time=None)
 calculate_time_to_expiry(expiry)
 calculate_greeks(option_symbol, exchange, spot_price, option_price,
                  interest_rate=None, expiry_time=None, api_key=None)
+calculate_chain_greeks(strikes, ce_prices, pe_prices, forward_price,
+                       time_to_expiry_years, interest_rate=None)
 
 # WhatsApp identity and attachment validation
 normalize_phone(raw)
@@ -788,6 +806,13 @@ phone_to_jid(phone_digits)
 jid_to_phone(jid)
 validate_attachment_path(path)
 ```
+
+`calculate_chain_greeks` solves a whole strike ladder in one vectorized pass using
+the `opengreeks.black76` `*_array` batch functions, rather than calling
+`calculate_greeks` per leg. Use it for anything chain-wide. `get_exchange_expiry_time`
+and `get_expiry_datetime` are the single source of truth for expiry cut-off times
+(NFO and BFO 15:30, CDS 12:30, MCX 23:30) — read them instead of re-deriving the
+policy, so time to expiry stays consistent across services.
 
 The following public-named functions are implementation helpers, not stable
 feature contracts: `import_broker_module`, `import_broker_gtt_module`,

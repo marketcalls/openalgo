@@ -30,7 +30,7 @@ from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_proxy.mapping import SymbolMapper
 
 from .tradesmart_mapping import TradeSmartCapabilityRegistry, TradeSmartExchangeMapper
-from .tradesmart_websocket import TradeSmartWebSocket
+from .tradesmart_websocket import TradeSmartWebSocket, close_frame_status
 
 
 class Config:
@@ -135,6 +135,9 @@ class TradeSmartWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.lock = threading.Lock()
         self.reconnect_attempts = 0
         self._reconnect_timer = None
+        # Guards against two callbacks scheduling the same reconnect. See
+        # _on_error / _on_close below.
+        self._reconnecting = False
 
         # Batch subscription coalescing
         self.subscription_queue = []
@@ -278,10 +281,15 @@ class TradeSmartWebSocketAdapter(BaseBrokerWebSocketAdapter):
         )
 
     def _validate_subscription_params(self, symbol: str, exchange: str, mode: int) -> bool:
-        return bool(symbol) and bool(exchange) and mode in (
-            Config.MODE_LTP,
-            Config.MODE_QUOTE,
-            Config.MODE_DEPTH,
+        return (
+            bool(symbol)
+            and bool(exchange)
+            and mode
+            in (
+                Config.MODE_LTP,
+                Config.MODE_QUOTE,
+                Config.MODE_DEPTH,
+            )
         )
 
     def _create_subscription(
@@ -383,7 +391,19 @@ class TradeSmartWebSocketAdapter(BaseBrokerWebSocketAdapter):
             except Exception as e:
                 self.logger.error(f"Batch depth subscription failed: {e}")
 
+    def _ws_is_connected(self) -> bool:
+        """Whether there is a live socket to send on."""
+        ws_client = self.ws_client
+        return bool(ws_client and ws_client.is_connected())
+
     def _websocket_unsubscribe(self, subscription: dict) -> None:
+        # Reference counts are decremented whether or not the socket is up, but
+        # the unsubscribe frame is only worth sending on a live one. The broker
+        # drops every subscription along with the session, so unsubscribing
+        # over a dead socket asks it to forget something it has already
+        # forgotten -- and tearing down a pool of 83 scrips one at a time
+        # logged 83 "Cannot send depth unsubscription: not connected" warnings.
+        can_send = self._ws_is_connected()
         scrip = subscription["scrip"]
         mode = subscription["mode"]
         if scrip not in self.ws_subscription_refs:
@@ -391,13 +411,13 @@ class TradeSmartWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if mode in (Config.MODE_LTP, Config.MODE_QUOTE):
             self.ws_subscription_refs[scrip]["touchline_count"] -= 1
             if self.ws_subscription_refs[scrip]["touchline_count"] <= 0:
-                if self.ws_client:
+                if can_send:
                     self.ws_client.unsubscribe_touchline(scrip)
                 self.ws_subscription_refs[scrip]["touchline_count"] = 0
         elif mode == Config.MODE_DEPTH:
             self.ws_subscription_refs[scrip]["depth_count"] -= 1
             if self.ws_subscription_refs[scrip]["depth_count"] <= 0:
-                if self.ws_client:
+                if can_send:
                     self.ws_client.unsubscribe_depth(scrip)
                 self.ws_subscription_refs[scrip]["depth_count"] = 0
 
@@ -407,28 +427,78 @@ class TradeSmartWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._resubscribe_all()
 
     def _on_error(self, ws, error):
-        self.logger.error(f"TradeSmart WebSocket error: {error}")
-        if self.running:
-            self._schedule_reconnection()
+        """Log the failure. The close callback owns reconnect scheduling.
+
+        websocket-client always follows on_error with on_close for the same
+        disconnect, so scheduling from both fired the backoff twice per drop:
+        the second call cancelled the first timer and re-armed it, pushing the
+        retry out by an extra delay and logging a duplicate
+        "Reconnecting in Ns (attempt 1)". Shoonya splits the responsibility
+        the same way -- see shoonya_adapter.py::_on_error.
+        """
+        close_code = close_frame_status(error)
+        if close_code is not None:
+            self.logger.info(f"TradeSmart WebSocket closed by server (code {close_code})")
+        else:
+            self.logger.error(f"TradeSmart WebSocket error: {error}")
+
+        if self.is_auth_error(str(error)):
+            self.logger.error(
+                "Auth-failure error on TradeSmart WS; stopping the reconnect loop "
+                "rather than hammering the broker with a dead token"
+            )
+            with self.lock:
+                self.running = False
+                self._reconnecting = False
+                if self._reconnect_timer:
+                    self._reconnect_timer.cancel()
+                    self._reconnect_timer = None
 
     def _on_close(self, ws, close_status_code, close_msg):
         self.logger.info(f"TradeSmart WebSocket closed: {close_status_code} - {close_msg}")
-        self.connected = False
+
+        # A rejected connect task means the token is dead; retrying cannot fix
+        # it and only burns broker quota until the user logs in again.
+        ws_client = self.ws_client
+        if ws_client is not None and getattr(ws_client, "auth_failed", False):
+            reason = getattr(ws_client, "auth_failure_reason", None)
+            self.logger.error(
+                f"Auth failure on TradeSmart WS ({reason}); stopping the reconnect "
+                f"loop. User must re-login to refresh the auth token."
+            )
+            with self.lock:
+                self.connected = False
+                self.running = False
+                self._reconnecting = False
+                if self._reconnect_timer:
+                    self._reconnect_timer.cancel()
+                    self._reconnect_timer = None
+            return
+
         with self.lock:
+            self.connected = False
             if self.batch_timer:
                 self.batch_timer.cancel()
                 self.batch_timer = None
             self.subscription_queue.clear()
-        if self.running:
-            self._schedule_reconnection()
+            if not self.running:
+                return
+            if self._reconnecting:
+                self.logger.debug("Reconnection already in progress, skipping")
+                return
+            self._reconnecting = True
+
+        self._schedule_reconnection()
 
     def _schedule_reconnection(self) -> None:
         with self.lock:
             if not self.running:
+                self._reconnecting = False
                 return
             if self.reconnect_attempts >= Config.MAX_RECONNECT_ATTEMPTS:
                 self.logger.error("Maximum reconnection attempts reached")
                 self.running = False
+                self._reconnecting = False
                 return
             delay = min(
                 Config.BASE_RECONNECT_DELAY * (2**self.reconnect_attempts),
@@ -442,43 +512,90 @@ class TradeSmartWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self._reconnect_timer.start()
 
     def _attempt_reconnection(self) -> None:
+        # Decide and snapshot under the lock, then do every blocking call
+        # outside it. connect() waits up to CONNECTION_TIMEOUT (15s) and
+        # get_auth_token() hits the database; holding self.lock across them
+        # stalled subscribe, unsubscribe and feed routing for that whole time.
+        # shoonya_adapter.py::_attempt_reconnection is shaped the same way.
         with self.lock:
             self._reconnect_timer = None
             if not self.running:
+                self._reconnecting = False
                 return
             self.reconnect_attempts += 1
-            try:
-                if self.ws_client:
-                    try:
-                        self.ws_client.stop()
-                    except Exception as cleanup_err:
-                        self.logger.warning(f"Error cleaning up old WebSocket: {cleanup_err}")
-                    self.ws_client = None
+            old_ws = self.ws_client
+            self.ws_client = None
+            user_id = self.user_id
+            accesstoken = self.accesstoken
+            actid = self.actid
 
-                # Re-read a fresh token — TradeSmart tokens roll over daily ~3 AM IST
-                fresh_token = get_auth_token(self.user_id, bypass_cache=True)
-                if fresh_token:
-                    fresh_uid, self.accesstoken = parse_auth(fresh_token)
-                    if fresh_uid:
-                        self.actid = fresh_uid
+        connected = False
+        ws_client = None
+        try:
+            if old_ws:
+                try:
+                    old_ws.stop()
+                except Exception as cleanup_err:
+                    self.logger.warning(f"Error cleaning up old WebSocket: {cleanup_err}")
 
-                self.ws_client = TradeSmartWebSocket(
-                    user_id=self.actid,
-                    actid=self.actid,
-                    accesstoken=self.accesstoken,
-                    on_message=self._on_message,
-                    on_error=self._on_error,
-                    on_close=self._on_close,
-                    on_open=self._on_open,
-                )
-                if self.ws_client.connect():
+            # Re-read a fresh token — TradeSmart tokens roll over daily ~3 AM IST
+            fresh_token = get_auth_token(user_id, bypass_cache=True)
+            if fresh_token:
+                fresh_uid, accesstoken = parse_auth(fresh_token)
+                if fresh_uid:
+                    actid = fresh_uid
+
+            ws_client = TradeSmartWebSocket(
+                user_id=actid,
+                actid=actid,
+                accesstoken=accesstoken,
+                on_message=self._on_message,
+                on_error=self._on_error,
+                on_close=self._on_close,
+                on_open=self._on_open,
+            )
+
+            # Publish before connecting, never after. connect() opens a socket
+            # and starts its reader thread, so a client only reachable through
+            # this local is unstoppable if connect() raises rather than
+            # returning False -- and under eventlet it can, since Timeout and
+            # GreenletExit are BaseException and slip past its own except.
+            # _on_close also reads self.ws_client to spot an auth rejection, so
+            # it has to be visible for the duration of the connect.
+            with self.lock:
+                self.accesstoken = accesstoken
+                self.actid = actid
+                self.ws_client = ws_client
+
+            connected = ws_client.connect()
+
+            if connected:
+                with self.lock:
                     self.connected = True
                     self.reconnect_attempts = 0
-                    self.logger.info("Reconnected successfully")
-                else:
-                    self.logger.error("Reconnection failed")
-            except Exception as e:
-                self.logger.error(f"Reconnection error: {e}")
+                self.logger.info("Reconnected successfully")
+            else:
+                self.logger.error("Reconnection failed")
+        except Exception as e:
+            self.logger.error(f"Reconnection error: {e}")
+        finally:
+            # finally, not except, so a BaseException escaping connect() still
+            # releases the socket. Retries are unbounded across a broker
+            # outage, so one stranded client per attempt would accumulate for
+            # the life of the worker.
+            if not connected and ws_client is not None:
+                try:
+                    ws_client.stop()
+                except Exception as cleanup_err:
+                    self.logger.warning(f"Error stopping failed WebSocket: {cleanup_err}")
+            with self.lock:
+                self._reconnecting = False
+                if not connected and self.ws_client is ws_client:
+                    self.ws_client = None
+            if not connected:
+                # Nothing else will retry: a socket that never opened fires no
+                # close callback, so this attempt owns scheduling the next one.
+                self._schedule_reconnection()
 
     def _resubscribe_all(self):
         with self.lock:

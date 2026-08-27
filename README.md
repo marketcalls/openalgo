@@ -319,7 +319,7 @@ OpenAlgo uses the modern `uv` package manager for faster, more reliable installa
 
 ```bash
 # Clone the repository
-git clone https://github.com/marketcalls/openalgo.git
+git clone --filter=blob:none https://github.com/marketcalls/openalgo.git
 cd openalgo
 
 # Install UV package manager

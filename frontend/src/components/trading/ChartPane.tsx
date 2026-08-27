@@ -1,5 +1,9 @@
-import { ChevronDown, RefreshCw, Search } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+// ChevronDown survives for the context menu's submenu arrow only. The
+// toolbar buttons carry no caret: a chevron on every control is dead
+// weight when the whole row opens menus, and it reads as a dated form
+// control. Reserve the glyph for where it distinguishes something.
+import { ChevronDown, RefreshCw, Search, Settings } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -11,20 +15,26 @@ import {
 import { Input } from '@/components/ui/input'
 import { CHART_TYPE_GROUPS, CHART_TYPES, chartTypeIcon } from '@/lib/trading/chartTypes'
 import type { IntervalGroup } from '@/lib/trading/intervals'
+import { lotInfoText } from '@/lib/trading/legend'
 import {
+  type ChartSettingsRequest,
   type CtxItem,
   type DrawSelection,
   type DrawStats,
   type IndicatorSettingsRequest,
+  type ReplayState,
   type SymbolView,
   type TerminalCallbacks,
   TradingTerminal,
 } from '@/lib/trading/terminal'
+import type { LinkGroup } from 'openalgo-charts'
 import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
+import { ChartSettingsDialog } from './ChartSettingsDialog'
 import { DrawingStyleBar } from './DrawingStyleBar'
 import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
+import { IndicatorPickerDialog } from './IndicatorPickerDialog'
 import { IndicatorSettingsDialog } from './IndicatorSettingsDialog'
 import { SymbolSearchDialog } from './SymbolSearchDialog'
 
@@ -53,10 +63,22 @@ const glyph = {
   strokeLinejoin: 'round' as const,
 }
 
+/**
+ * An oscillator crossing its threshold: a signal line weaving over and under a
+ * dashed level, with the crossing marked.
+ *
+ * The old glyph was a bare zig-zag, which is the generic "chart" mark this
+ * toolbar already uses for the chart-type button and the legend. This one says
+ * what an indicator IS here rather than that a chart exists: a derived series
+ * read against a level. The dashed rule and the dot survive 16px, which a
+ * busier picture of a whole sub-pane would not.
+ */
 function IndicatorIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" {...glyph} className={className} aria-hidden="true">
-      <path d="M3 16.5l4-7 3.5 3.5L14 5l3.5 5.5L21 8" />
+      <path d="M3 12h18" strokeDasharray="2.5 2.6" opacity={0.55} />
+      <path d="M3 17.5c2.2 0 2.4-9 5-9s2.6 8 5 8 2.6-9 5-9 2.6 4.5 3 5" />
+      <circle cx="13" cy="12" r="1.6" fill="currentColor" stroke="none" />
     </svg>
   )
 }
@@ -70,10 +92,55 @@ function PencilIcon({ className }: { className?: string }) {
   )
 }
 
-/** Three rising bars — the volume histogram in miniature. */
+/**
+ * Rewind: two triangles pointing back to a bar.
+ *
+ * It was a circular arrow, which is the universal glyph for "reload" and reads
+ * as though the button refetches the chart. Replay winds the session back and
+ * plays it forward, so a transport control is the honest picture. Filled rather
+ * than stroked, so it stays legible at 16px where two thin outlined triangles
+ * turn to mush.
+ */
+function ReplayIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden="true">
+      <path d="M11.5 6.4v11.2a.7.7 0 0 1-1.1.6l-7.1-5.6a.7.7 0 0 1 0-1.2l7.1-5.6a.7.7 0 0 1 1.1.6Z" />
+      <path d="M20.5 6.4v11.2a.7.7 0 0 1-1.1.6l-7.1-5.6a.7.7 0 0 1 0-1.2l7.1-5.6a.7.7 0 0 1 1.1.6Z" />
+    </svg>
+  )
+}
+
+/** Curved arrow back. Mirrored for redo, so the pair reads as one control. */
+function UndoIcon({ className, flip }: { className?: string; flip?: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={flip ? { transform: 'scaleX(-1)' } : undefined}
+    >
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h10a6 6 0 0 1 0 12h-3" />
+    </svg>
+  )
+}
+
 function VolumeIcon({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden="true">
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
       <path d="M5 20v-6M12 20V8M19 20v-9" />
     </svg>
   )
@@ -102,17 +169,6 @@ function ledClass(state: string): string {
   return 'bg-amber-500'
 }
 
-function lotInfoText(v: SymbolView | null, qty: number): string {
-  if (!v) return ''
-  if (v.lots) {
-    const lots = Math.max(1, Math.floor(qty || 1))
-    let t = `${lots} × ${v.lotsize} = ${lots * v.lotsize} qty`
-    if (v.freezeQty > 1 && lots * v.lotsize > v.freezeQty) t += ` ⚠ freeze ${v.freezeQty}`
-    return t
-  }
-  return v.quoteOnly ? 'quote-only (no trading)' : ''
-}
-
 interface Props {
   /** Stable pane id — namespaces the pane's persisted symbol/interval/type. */
   paneId: string
@@ -130,9 +186,18 @@ interface Props {
   onFocusPane?(terminal: TradingTerminal | null): void
   /** Drawing state of this pane, for the shared rail's buttons. */
   onDrawStats?(stats: DrawStats): void
+  /** Workspace link group this pane joins, if the page made one. */
+  linkGroup?: LinkGroup | null
   /** Show/hide the page-level rail — the action lives in each pane's menu. */
   onToggleRail?(): void
   railVisible?: boolean
+  /**
+   * The grid layout picker, rendered next to this pane's Indicators button.
+   * It used to own a full-width row of its own that carried 134px of content
+   * across 1536px and cost 45px of chart height. It belongs to the page rather
+   * than to a pane, so the page passes it in, and passes it to one pane only.
+   */
+  layoutPicker?: React.ReactNode
 }
 
 /**
@@ -149,8 +214,10 @@ export function ChartPane({
   sharedMagnet,
   onFocusPane,
   onDrawStats,
+  linkGroup,
   onToggleRail,
   railVisible,
+  layoutPicker,
 }: Props) {
   const chartRef = useRef<HTMLDivElement>(null)
   const legendRef = useRef<HTMLDivElement>(null)
@@ -173,6 +240,22 @@ export function ChartPane({
   const [sym, setSym] = useState<SymbolView | null>(null)
   const [qty, setQty] = useState(1)
   const [wsState, setWsState] = useState('connecting')
+  /**
+   * Just the two history flags, mirrored locally. The full DrawStats is pushed
+   * to the parent for the drawing rail, but the toolbar's undo/redo sit in THIS
+   * component, and reading a parent's state back down would make the buttons
+   * lag a shape behind. Narrowed to two booleans on purpose: every drawing edit
+   * fires this, and re-rendering the toolbar because a tool was armed or a
+   * shape was selected would be work for nothing.
+   */
+  const [history, setHistory] = useState({ canUndo: false, canRedo: false })
+  const noteHistory = useCallback((s: DrawStats) => {
+    setHistory((prev) =>
+      prev.canUndo === s.canUndo && prev.canRedo === s.canRedo
+        ? prev
+        : { canUndo: s.canUndo, canRedo: s.canRedo }
+    )
+  }, [])
 
   // symbol search modal (per-pane; opened from the toolbar symbol pill)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -180,16 +263,23 @@ export function ChartPane({
   // drawing + indicator controls (additive; the trading controls are unchanged)
   const [indicators, setIndicators] = useState<{ id: string; name: string }[]>([])
   const [catalog, setCatalog] = useState<{ id: string; name: string; category: string }[]>([])
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [grid, setGrid] = useState({ vertical: true, horizontal: true })
   const [fullscreen, setFullscreen] = useState(false)
   const [gridSub, setGridSub] = useState(false)
   const [volumeOn, setVolumeOn] = useState(true)
   const [drawSel, setDrawSel] = useState<DrawSelection | null>(null)
   const [indSettings, setIndSettings] = useState<IndicatorSettingsRequest | null>(null)
+  // Read from the chart each time the gear is clicked rather than held: the
+  // schema depends on the live series type, theme and timezone.
+  const [chartSettings, setChartSettings] = useState<ChartSettingsRequest | null>(null)
   const [textReq, setTextReq] = useState<TextRequest | null>(null)
 
   // right-click menu: order entry, then the view actions
   const [ctx, setCtx] = useState<{ x: number; y: number; items: CtxItem[] } | null>(null)
+  // Null whenever the chart is live. The transport bar renders only while
+  // replay owns the data, so there is nothing to hide when it does not.
+  const [replay, setReplay] = useState<ReplayState | null>(null)
 
   /* ── boot this pane's terminal once ───────────────────────────────────── */
   useEffect(() => {
@@ -219,10 +309,12 @@ export function ChartPane({
       onDrawChange: (s) => {
         if (!aliveRef.current) return
         statsCbRef.current?.(s)
+        noteHistory(s)
       },
       onIndicatorsChange: (list) => aliveRef.current && setIndicators(list),
       onIndicatorSettings: (req) => aliveRef.current && setIndSettings(req),
       onDrawSelect: (sel) => aliveRef.current && setDrawSel(sel),
+      onReplayChange: (state) => aliveRef.current && setReplay(state),
       onDrawTextEdit: (r) => {
         if (!aliveRef.current) return
         // The ref, not the local: `terminal` is still unassigned while this
@@ -247,7 +339,10 @@ export function ChartPane({
       })
       terminalRef.current = terminal
       terminal.init()
-      statsCbRef.current?.(terminal.drawStats())
+      terminal.setLinkGroup(linkGroup ?? null)
+      const stats0 = terminal.drawStats()
+      statsCbRef.current?.(stats0)
+      noteHistory(stats0)
       setGrid(terminal.gridState())
       setVolumeOn(terminal.volumeVisible())
     }
@@ -257,7 +352,9 @@ export function ChartPane({
       terminal?.destroy()
       terminalRef.current = null
     }
-  }, [paneId, apiKey, wsUrl])
+    // linkGroup is held in a ref by the page and created once, so its identity
+    // is stable and listing it here does not re-run the boot effect.
+  }, [paneId, apiKey, wsUrl, noteHistory, linkGroup])
 
   /* ── follow the page-level drawing rail ───────────────────────────────── */
   useEffect(() => {
@@ -378,12 +475,6 @@ export function ChartPane({
   /** Portal target for menus: the pane itself in fullscreen, body otherwise. */
   const menuHost = fullscreen ? paneRef.current : null
 
-  const catalogGroups = catalog.reduce<Record<string, typeof catalog>>((acc, d) => {
-    const list = acc[d.category] ?? []
-    list.push(d)
-    acc[d.category] = list
-    return acc
-  }, {})
 
   // The product the toggle switches to; with two options that is "the other".
   const nextProduct = sym
@@ -424,7 +515,6 @@ export function ChartPane({
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" className="h-8 min-w-12 shrink-0 gap-1 font-medium">
               {interval || '—'}
-              <ChevronDown className="h-3.5 w-3.5 opacity-60" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent container={menuHost} align="start" className="w-64">
@@ -455,9 +545,13 @@ export function ChartPane({
         {/* Chart type */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-8 shrink-0 gap-1" title={chartTypeDef.label}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 shrink-0 gap-1"
+              title={chartTypeDef.label}
+            >
               <span className="h-4 w-4">{chartTypeIcon(chartTypeDef.iconKey)}</span>
-              <ChevronDown className="h-3.5 w-3.5 opacity-60" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent container={menuHost} align="start" className="w-52">
@@ -496,7 +590,10 @@ export function ChartPane({
 
         {/* Quantity */}
         <div className="flex shrink-0 items-center gap-1">
-          <label className="whitespace-nowrap text-[11px] text-muted-foreground" htmlFor={`qty-${paneId}`}>
+          <label
+            className="whitespace-nowrap text-[11px] text-muted-foreground"
+            htmlFor={`qty-${paneId}`}
+          >
             {sym?.lots ? 'Lots' : 'Qty'}
           </label>
           <Input
@@ -509,75 +606,78 @@ export function ChartPane({
           />
         </div>
 
-        {/* Indicators (additive) */}
-        <DropdownMenu onOpenChange={(o) => o && void openIndicators()}>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-8 shrink-0 gap-1" title="Indicators">
-              <IndicatorIcon className="h-4 w-4" />
-              <span className="hidden sm:inline">Indicators</span>
-              {indicators.length > 0 && (
-                <span className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary">
-                  {indicators.length}
-                </span>
-              )}
-              <ChevronDown className="h-3.5 w-3.5 opacity-60" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent container={menuHost} align="start" className="max-h-80 w-64 overflow-y-auto">
-            {indicators.length > 0 && (
-              <>
-                <div className="px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  On this chart
-                </div>
-                {indicators.map((i) => (
-                  <DropdownMenuItem
-                    key={i.id}
-                    onSelect={(e) => {
-                      // Settings and remove on one row; the gear must not fall
-                      // through to the row's remove action.
-                      const target = e.target as HTMLElement
-                      if (target.closest('[data-act="settings"]')) {
-                        e.preventDefault()
-                        terminalRef.current?.openIndicatorSettings(i.id)
-                        return
-                      }
-                      terminalRef.current?.removeIndicatorById(i.id)
-                    }}
-                    className="justify-between gap-2 text-sm"
-                  >
-                    {i.name}
-                    <span className="flex items-center gap-2">
-                      <span data-act="settings" className="text-xs text-primary hover:underline">
-                        settings
-                      </span>
-                      <span className="text-xs text-muted-foreground">remove</span>
-                    </span>
-                  </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-              </>
-            )}
-            {Object.entries(catalogGroups).map(([cat, list]) => (
-              <div key={cat}>
-                <div className="px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                  {cat}
-                </div>
-                {list.map((d) => (
-                  <DropdownMenuItem
-                    key={d.id}
-                    onSelect={() => void terminalRef.current?.addIndicatorById(d.id)}
-                    className="text-sm"
-                  >
-                    {d.name}
-                  </DropdownMenuItem>
-                ))}
-              </div>
-            ))}
-            {catalog.length === 0 && (
-              <div className="px-2 py-3 text-sm text-muted-foreground">Loading…</div>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {/* Indicators. A dialog rather than a dropdown: 88 built-ins in a
+            264px column was a scroll race, with no way to jump to a category
+            and no memory of what you reach for daily. */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 shrink-0 gap-1"
+          title="Indicators"
+          onClick={() => {
+            setPickerOpen(true)
+            void openIndicators()
+          }}
+        >
+          <IndicatorIcon className="h-4 w-4" />
+          <span className="hidden sm:inline">Indicators</span>
+          {indicators.length > 0 && (
+            <span className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary">
+              {indicators.length}
+            </span>
+          )}
+        </Button>
+
+        {/* The layout picker sits here, immediately after Indicators, because
+            that is where a chart terminal puts it. It is page-level, so only
+            the first pane is given one. */}
+        {layoutPicker}
+
+        {/* Replay. A toolbar action rather than a context-menu entry: it changes
+            what the whole chart is showing, and the transport bar it opens has
+            to be discoverable without a right-click. */}
+        <Button
+          variant="outline"
+          size="sm"
+          className={cn('h-8 shrink-0 gap-1', replay && 'border-primary text-primary')}
+          onClick={() => terminalRef.current?.startReplay()}
+          disabled={!!replay}
+          title={replay ? 'Replay is running' : 'Replay this session'}
+        >
+          <ReplayIcon className="h-4 w-4" />
+          <span className="hidden sm:inline">Replay</span>
+        </Button>
+
+        {/* Undo / redo for drawings. Also on the drawing rail, and deliberately
+            here as well: the rail can be hidden, and these two are reached far
+            more often than the tool that made the shape. Both stay mounted and
+            go disabled rather than disappearing, so the toolbar does not reflow
+            as you draw. The engine's history is drawing-only, so the labels say
+            so -- a bare "Undo" next to a Replay button would imply it could
+            take back an order. */}
+        <div className="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden="true" />
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          onClick={() => terminalRef.current?.undoDraw()}
+          disabled={!history.canUndo}
+          title="Undo drawing (Ctrl + Z)"
+          aria-label="Undo drawing"
+        >
+          <UndoIcon className="h-[17px] w-[17px]" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          onClick={() => terminalRef.current?.redoDraw()}
+          disabled={!history.canRedo}
+          title="Redo drawing (Ctrl + Shift + Z)"
+          aria-label="Redo drawing"
+        >
+          <UndoIcon className="h-[17px] w-[17px]" flip />
+        </Button>
 
         {/* Right side: connection LED + actions */}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -600,7 +700,9 @@ export function ChartPane({
             variant="ghost"
             size="icon"
             className="h-8 w-8"
-            onClick={() => terminalRef.current?.screenshot()}
+            onClick={() => {
+              void terminalRef.current?.screenshot()
+            }}
             title="Save chart screenshot"
             aria-label="Save chart screenshot"
           >
@@ -621,6 +723,22 @@ export function ChartPane({
           req={textReq}
           onSubmit={(id, value) => terminalRef.current?.applyDrawText(id, value)}
           onClose={() => setTextReq(null)}
+        />
+        <IndicatorPickerDialog
+          open={pickerOpen}
+          catalog={catalog}
+          active={indicators}
+          onAdd={(id) => void terminalRef.current?.addIndicatorById(id)}
+          onRemove={(id) => terminalRef.current?.removeIndicatorById(id)}
+          onSettings={(id) => terminalRef.current?.openIndicatorSettings(id)}
+          onClose={() => setPickerOpen(false)}
+        />
+        <ChartSettingsDialog
+          req={chartSettings}
+          onApply={(patch) => {
+            void terminalRef.current?.applyChartSettings(patch)
+          }}
+          onClose={() => setChartSettings(null)}
         />
         <IndicatorSettingsDialog
           req={indSettings}
@@ -648,6 +766,81 @@ export function ChartPane({
         {!ready && (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
             Loading…
+          </div>
+        )}
+
+        {/*
+          Replay transport. The engine's controller is headless by design, so the
+          bar, the clock and the scrub are ours to draw. It renders only while
+          replay owns the chart's data: `replay` is null the moment we are live
+          again, which is also the signal that Exit has done its work.
+        */}
+        {replay && (
+          <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-border bg-popover/95 px-2 py-1.5 shadow-lg backdrop-blur">
+            <button
+              type="button"
+              className="rounded px-2 py-1 text-xs hover:bg-accent"
+              title="Step back one bar"
+              onClick={() => terminalRef.current?.replayStepBack()}
+            >
+              Prev
+            </button>
+            <button
+              type="button"
+              className="rounded bg-primary px-3 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
+              title={replay.playing ? 'Pause' : 'Play'}
+              onClick={() =>
+                replay.playing
+                  ? terminalRef.current?.replayPause()
+                  : terminalRef.current?.replayPlay()
+              }
+            >
+              {replay.playing ? 'Pause' : 'Play'}
+            </button>
+            <button
+              type="button"
+              className="rounded px-2 py-1 text-xs hover:bg-accent"
+              title="Step forward one bar"
+              onClick={() => terminalRef.current?.replayStep()}
+            >
+              Next
+            </button>
+
+            <input
+              type="range"
+              min={0}
+              max={Math.max(0, replay.total - 1)}
+              value={replay.index}
+              className="mx-1 h-1 w-40 cursor-pointer accent-primary"
+              title="Scrub the session"
+              onChange={(e) => terminalRef.current?.replaySeek(Number(e.target.value))}
+            />
+
+            <span className="tabular-nums text-[11px] text-muted-foreground">
+              {replay.index + 1} / {replay.total}
+            </span>
+
+            <select
+              className="rounded border border-border bg-background px-1 py-0.5 text-[11px]"
+              value={replay.speed}
+              title="Bars per second"
+              onChange={(e) => terminalRef.current?.replayPlay(Number(e.target.value))}
+            >
+              {[0.5, 1, 2, 4, 10].map((x) => (
+                <option key={x} value={x}>
+                  {x}x
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+              title="Leave replay and return to the live chart"
+              onClick={() => terminalRef.current?.stopReplay()}
+            >
+              Exit
+            </button>
           </div>
         )}
 
@@ -682,9 +875,28 @@ export function ChartPane({
             {/* View actions live here rather than in the toolbar — they are
                 occasional, and the row they used to occupy is chart height. */}
             {ctx.items.length > 0 && <div className="my-1 h-px bg-border" />}
-            <button type="button" className={ctxRow} onClick={() => run(() => terminalRef.current?.resetScale())}>
+            <button
+              type="button"
+              className={ctxRow}
+              onClick={() => run(() => terminalRef.current?.resetScale())}
+            >
               <RefreshCw className="h-3.5 w-3.5 opacity-70" />
               Reset chart view
+            </button>
+            {/* Settings sits on the chart it configures rather than in the
+                toolbar: right-click is where a terminal user reaches for it, and
+                the toolbar row is already the most contended space on the page. */}
+            <button
+              type="button"
+              className={ctxRow}
+              onClick={() =>
+                run(() => {
+                  void terminalRef.current?.chartSettings().then((cs) => cs && setChartSettings(cs))
+                })
+              }
+            >
+              <Settings className="h-3.5 w-3.5 opacity-70" />
+              Chart settings...
             </button>
             {onToggleRail && (
               <button type="button" className={ctxRow} onClick={() => run(onToggleRail)}>

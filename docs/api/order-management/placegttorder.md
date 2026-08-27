@@ -185,8 +185,8 @@ LTP is currently below 1450 → trigger sits **above** LTP → use `triggerprice
 - **OCO direction**: stoploss-leg trigger must be **below** target-leg trigger (`triggerprice_sl < triggerprice_tg`). The `action` (BUY or SELL) applies to both legs.
 - **Symbol format**:
   - Equity: `RELIANCE`
-  - Futures: `NIFTY30JAN25FUT`
-  - Options: `NIFTY30JAN2525000CE`
+  - Futures: `NIFTY25AUG26FUT`
+  - Options: `NIFTY25AUG2625000CE`
 
 ## Error Scenarios
 

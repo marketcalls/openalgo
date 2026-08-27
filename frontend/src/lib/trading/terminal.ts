@@ -16,20 +16,33 @@ import {
   type Bar,
   BuySellButtons,
   CandleBuilder,
+  compactVolume,
   createChart,
+  readChartSettings,
+  type IPrimitive,
   LogoWatermark,
   type LtpEvent,
   type MarketDepth,
   OpenAlgoDataFeed,
+  tryResolveInterval,
+  withBarCache,
   OpenAlgoTradeFeed,
   OpenAlgoWsFeed,
   type PriceLine,
+  ReplayController,
+  type ReplayState,
   type SeriesApi,
   type SeriesStyle,
   type SeriesType,
 } from 'openalgo-charts'
+import type { LinkGroup } from 'openalgo-charts'
 import type { DrawingController } from 'openalgo-charts/draw'
 import { runTransform } from 'openalgo-charts/transform'
+
+// Re-exported so the React layer imports its chart types from this facade
+// rather than reaching into the library directly, as it already does for
+// SymbolView, DrawStats and the rest.
+export type { ReplayState }
 
 type ChartInstance = ReturnType<typeof createChart>
 type BuySellButtonsInstance = InstanceType<typeof BuySellButtons>
@@ -54,7 +67,7 @@ export interface DrawStats {
 }
 
 import type { AppMode, ThemeMode } from '@/stores/themeStore'
-import { buildChartTheme, isLightTheme, volumeColor } from './chartTheme'
+import { buildChartTheme, isLightTheme, resolveCssColor, volumeColor } from './chartTheme'
 import { CHART_TYPES } from './chartTypes'
 import { fmtPrice, money, priceDp, snapTick, tickSize } from './format'
 import {
@@ -65,6 +78,16 @@ import {
   lookbackDays,
   pickInterval,
 } from './intervals'
+import {
+  buildChartLegend,
+  DN,
+  type LegendRun,
+  LTP_NEUTRAL,
+  legendHtml,
+  legendToneStyle,
+  lotInfoText,
+  UP,
+} from './legend'
 
 export type OrderSide = 'BUY' | 'SELL'
 export type OrderType = 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
@@ -143,6 +166,11 @@ export interface TerminalCallbacks {
   /** A drawing was selected (or deselected), for the style popover. */
   onDrawSelect?(sel: DrawSelection | null): void
   /**
+   * The replay playhead moved, or replay was entered or left. Null means the
+   * chart is live again, which is the transport bar's cue to hide itself.
+   */
+  onReplayChange?(state: ReplayState | null): void
+  /**
    * A text-bearing drawing needs its content. The engine renders `style.text`
    * but has no DOM to collect it with, so the host prompts.
    */
@@ -173,6 +201,68 @@ export interface IndicatorField {
   min?: number
   max?: number
   step?: number
+}
+
+/**
+ * A bullish/bearish colour pair on one labelled row, with an optional switch in
+ * front of it. The engine adds this one widget on top of the indicator input
+ * vocabulary because a candle's up/down colours are the property a trader
+ * changes most, and expressing them as two stacked `color` rows costs three
+ * times the height.
+ *
+ * `key` names the row, not a value: the values live at `up.key`, `down.key` and
+ * `enabled.key`, each an ordinary flat key, so applying this row is exactly the
+ * same patch operation as applying a plain colour.
+ */
+export interface ChartSettingsPairField {
+  key: string
+  type: 'colorPair'
+  label: string
+  group?: string
+  enabled?: { key: string; default: boolean }
+  up: { key: string; label: string; default: string }
+  down: { key: string; label: string; default: string }
+}
+
+export type ChartSettingsField = IndicatorField | ChartSettingsPairField
+
+export interface ChartSettingsTabView {
+  id: string
+  label: string
+  inputs: ChartSettingsField[]
+}
+
+/** Everything needed to generate the chart settings form. */
+export interface ChartSettingsRequest {
+  tabs: ChartSettingsTabView[]
+  values: Record<string, string | number | boolean>
+  /**
+   * The chart as this terminal builds it, before a single stored preference is
+   * replayed. What "Reset to defaults" restores, and deliberately NOT the
+   * engine's own defaults: this host turns the session clock and the bar
+   * countdown on at construction, so resetting to the engine's answer would
+   * switch off chrome the user never asked to lose.
+   */
+  defaults: Record<string, string | number | boolean>
+}
+
+/**
+ * Normalize one engine input into the flat field shape both settings forms
+ * render. Shared by the indicator dialog and the chart dialog: the engine
+ * deliberately describes chart settings with the same `IndicatorInput`
+ * vocabulary, so a host that can render one renders the other for free.
+ */
+function toField(f: { key: string; type: string; label?: string; group?: string }): IndicatorField {
+  return {
+    key: f.key,
+    type: f.type,
+    label: f.label ?? f.key,
+    group: f.group,
+    options: (f as { options?: { label: string; value: unknown }[] }).options,
+    min: (f as { min?: number }).min,
+    max: (f as { max?: number }).max,
+    step: (f as { step?: number }).step,
+  }
 }
 
 /** The selected drawing's editable style. */
@@ -234,18 +324,47 @@ export function usesLots(exchange: string): boolean {
 const QUOTE_ONLY = new Set(['NSE_INDEX', 'BSE_INDEX', 'MCX_INDEX', 'GLOBAL_INDEX'])
 const STRATEGY = 'chart-trading'
 const VISIBLE_BARS = 120
-/** Candle direction colours, shared by the OHLC legend and the last-price line. */
-const UP = '#26a69a'
-const DN = '#ef5350'
-/** Last-price line before any bar exists to take a direction from. */
-const LTP_NEUTRAL = '#e0b020'
+
+/**
+ * Where the exported PNG paints the OHLC readout, in CSS px. These mirror the
+ * DOM overlay's own placement in `ChartPane` (`left-3 top-1.5`, a 12px line and
+ * a 10px line under it), so the saved image puts the text where the screen
+ * does rather than inventing a second layout.
+ */
+const LEGEND_X = 12
+const LEGEND_Y = 8
+const LEGEND_SUB_Y = 25
+/** Space between two legend runs, in CSS px (the DOM renderer joins with ' '). */
+const LEGEND_GAP = 6
 
 const nowSec = () => Math.floor(Date.now() / 1000)
-const esc = (s: unknown) =>
-  String(s).replace(
-    /[&<>"]/g,
-    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string
-  )
+
+/**
+ * Resolve once the chart has repainted.
+ *
+ * The chart schedules its repaint on `requestAnimationFrame`, and rAF callbacks
+ * run in registration order, so a frame requested after `removePrimitive()`
+ * runs after the repaint that call triggered. Two frames are waited on because
+ * an invalidation raised during a paint defers to the next one. The timeout is
+ * the escape hatch for a background tab, where rAF may never fire at all.
+ */
+function nextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      resolve()
+    }
+    const timer = setTimeout(finish, 250)
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        clearTimeout(timer)
+        finish()
+      })
+    )
+  })
+}
 
 export class TradingTerminal {
   private readonly apiKey: string
@@ -280,13 +399,47 @@ export class TradingTerminal {
   private gridV = true
   private gridH = true
   private drawShortcuts: Record<string, string> = {}
-  private matchShortcut: ((e: { key: string; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => string | null) | null = null
+  private matchShortcut:
+    | ((e: {
+        key: string
+        altKey?: boolean
+        ctrlKey?: boolean
+        metaKey?: boolean
+        shiftKey?: boolean
+      }) => string | null)
+    | null = null
   private ltpLine: PriceLine | null = null
   private posLine: PriceLine | null = null
   private tradeBtns: BuySellButtonsInstance | null = null
+  /** The bar the OHLC readout is currently showing; replayed into the export. */
+  private legendBar: Bar | null = null
+  /**
+   * Canvas primitives that are interaction affordances rather than chart
+   * content. They are detached for the duration of a screenshot and re-attached
+   * straight after, so a saved image carries nothing that invites a click.
+   *
+   * Registering here is how an overlay opts out: the capture path matches on
+   * nothing, so a future overlay only has to add itself to be left out too.
+   */
+  private readonly screenshotExcluded: { primitive: IPrimitive; paneIndex: number }[] = []
 
   private ws: InstanceType<typeof OpenAlgoWsFeed> | null = null
   private rest: InstanceType<typeof OpenAlgoDataFeed> | null = null
+  /**
+   * The same feed with warm-load caching in front of it.
+   *
+   * Deliberately a SECOND handle rather than a replacement for `rest`: the
+   * periodic reconcile exists to re-ask the broker about bars it may already
+   * have, so it must keep going to the wire. Everything else -- opening a
+   * symbol, paging in older history -- is immutable closed history and is
+   * exactly what a cache is for.
+   *
+   * The cache never stores a forming bar, so a warm load is short by at most
+   * the bar currently building, which the WebSocket supplies within a tick. A
+   * chart with Buy and Sell buttons on it can be a bar behind for a moment; it
+   * must never be confidently wrong about a price.
+   */
+  private cachedBars: ReturnType<typeof withBarCache> | null = null
   private trade: TradeFeedInstance | null = null
   private builder: CandleBuilder | null = null
   private offLtp: (() => void) | null = null
@@ -294,6 +447,32 @@ export class TradingTerminal {
   private depthActive = false
 
   private rawBars: Bar[] = []
+  /**
+   * What the price series is actually showing: `rawBars`, or the output of the
+   * chart type's transform (Heikin Ashi, Renko, ...). Replay has to walk this
+   * rather than `rawBars`, because on a transformed chart the two differ in
+   * both values and length.
+   */
+  private shownBars: Bar[] = []
+  /**
+   * The persisted chart-settings patch, kept as the flat dotted-key record the
+   * engine reads and writes. Held here as well as in storage so an apply merges
+   * onto what is already saved rather than replacing it.
+   */
+  private chartSettingsSaved: Record<string, string | number | boolean> = {}
+  /**
+   * The chart as this terminal builds it, captured once per build. See
+   * {@link snapshotChartDefaults}.
+   */
+  private chartDefaults: Record<string, string | number | boolean> = {}
+  /** The workspace link group this pane belongs to, if sync is on. */
+  private link: LinkGroup | null = null
+  /** Non-null only while the chart is showing a replayed prefix. */
+  private replay: ReplayController | null = null
+  /** The price axis's autoscale state before replay forced it on. */
+  private replayAutoScale = true
+  /** Held so it can be moved to whichever pane is currently at the bottom. */
+  private watermark: LogoWatermark | null = null
   private shownCount = 0
   private liveBucket: number | null = null
   private lastLtp: number | null = null
@@ -418,7 +597,7 @@ export class TradingTerminal {
       const t = runTransform(cfg.transform(this.boxOf()), this.rawBars)
       this.price.setData(t)
       this.volume.setData(this.bucketVolume(t))
-      this.shownCount = t.length
+      this.shownBars = t
     } else {
       this.price.setData(this.rawBars)
       this.volume.setData(
@@ -430,8 +609,9 @@ export class TradingTerminal {
           close: b.volume || 0,
         }))
       )
-      this.shownCount = this.rawBars.length
+      this.shownBars = this.rawBars
     }
+    this.shownCount = this.shownBars.length
   }
 
   private bucketVolume(tbars: Bar[]): Bar[] {
@@ -460,29 +640,36 @@ export class TradingTerminal {
 
   /* ── legend (imperative; high-frequency, kept off React state) ────────── */
   private setLegend(bar: Bar | null) {
+    this.legendBar = bar
     if (!this.sym) {
       this.legendEl.innerHTML = ''
       return
     }
-    const lots = this.sym.lots ? ` · lot ${this.sym.lotsize}` : ''
-    const up = UP
-    const dn = DN
-    const col = bar && bar.close >= bar.open ? up : dn
-    const chg =
-      this.lastLtp != null && this.prevClose
-        ? ((this.lastLtp - this.prevClose) / this.prevClose) * 100
-        : null
-    this.legendEl.innerHTML =
-      `<b>${esc(this.sym.symbol)}</b> <span style="opacity:.55">· ${esc(this.interval)} · ${esc(this.sym.exchange)}${lots}</span>` +
-      (bar
-        ? ` <span style="color:${col}">O ${this.fmt(bar.open)} H ${this.fmt(bar.high)} L ${this.fmt(bar.low)} C ${this.fmt(bar.close)}</span>`
-        : '') +
-      (this.lastLtp != null
-        ? ` <span style="color:#e0b020">LTP ${this.fmt(this.lastLtp)}</span>`
-        : '') +
-      (chg != null
-        ? ` <span style="color:${chg >= 0 ? up : dn}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>`
-        : '')
+    this.legendEl.innerHTML = legendHtml(this.legendModel(bar))
+  }
+
+  /**
+   * The readout's content, independent of how it is drawn. The DOM overlay and
+   * the PNG export both render this, which is what stops the saved image from
+   * quoting different numbers than the screen it was taken from.
+   */
+  private legendModel(bar: Bar | null): LegendRun[] {
+    const sym = this.sym
+    if (!sym) return []
+    return buildChartLegend({
+      symbol: sym.symbol,
+      interval: this.interval,
+      exchange: sym.exchange,
+      lotsize: sym.lots ? sym.lotsize : null,
+      bar,
+      ltp: this.lastLtp,
+      changePct:
+        this.lastLtp != null && this.prevClose
+          ? ((this.lastLtp - this.prevClose) / this.prevClose) * 100
+          : null,
+      fmt: (n) => this.fmt(n),
+      fmtVolume: compactVolume,
+    })
   }
 
   /* ── order lines / position marker ────────────────────────────────────── */
@@ -680,11 +867,38 @@ export class TradingTerminal {
     // Snapshot drawings before the chart they live on goes away.
     this.detachDrawing()
     if (this.chart) this.chart.destroy()
+    // The primitives registered here belonged to the chart just destroyed.
+    this.screenshotExcluded.length = 0
     this.container.innerHTML = ''
     const { mode, appMode } = this.getTheme()
     this.chart = createChart(this.container, {
       priceAxisWidth: 78,
       theme: buildChartTheme(mode, appMode),
+      // Corner clock and bar countdown. Both are off by default in the engine,
+      // deliberately: a countdown repaints every second, and on the historical
+      // range a chart usually opens on it counts against a bar that closed months
+      // ago. A live trading terminal is the case they are for, so this host opts
+      // in. The clock reads the exchange's wall time through the chart's
+      // configured timezone, which is what a trader is actually watching.
+      axisChrome: { sessionClock: { showOffset: true }, barCountdown: true },
+      // The library's built-in screenshot command calls its own
+      // `downloadScreenshot()`, which knows nothing about this terminal's DOM
+      // OHLC readout or its trade panel. Unbind it and claim the same chord for
+      // `screenshot()` below, so the keyboard and the toolbar button produce the
+      // same image instead of two different ones.
+      shortcuts: {
+        disabledCommands: ['screenshot'],
+        customShortcuts: [
+          {
+            command: 'app:screenshot',
+            label: 'Screenshot (PNG)',
+            combos: 'Alt+Shift+KeyS',
+            onTrigger: () => {
+              void this.screenshot()
+            },
+          },
+        ],
+      },
       // The pane's top-left already holds this terminal's own OHLC readout (and
       // the lot line under it). Start the canvas indicator legends below both,
       // or they land underneath and their settings / close buttons cannot be
@@ -719,6 +933,21 @@ export class TradingTerminal {
     // A rebuild makes a fresh series, so the preference has to be re-applied
     // rather than assumed -- switching chart type or theme would show it again.
     if (!this.volumeOn) this.volume.applyOptions({ visible: false })
+    // Same reasoning for the settings patch: a chart-type or theme switch
+    // rebuilds the chart, and without this the user's colours, timezone and
+    // scale options would silently revert to the engine defaults.
+    //
+    // The baseline is captured on the line before, and the order is the whole
+    // point: one statement later the chart is carrying restored preferences and
+    // is no longer a picture of anything's defaults. Synchronous for the same
+    // reason -- `restoreChartSettings` and the grid re-apply further down both
+    // write to this chart, and an awaited snapshot would land after them.
+    this.snapshotChartDefaults()
+    void this.restoreChartSettings()
+    // A theme or chart-type switch throws the old Chart away, so membership has
+    // to be re-established against the new one or the pane silently drops out
+    // of the group it still believes it is in.
+    this.joinLink()
     this.setPriceData()
 
     // Default zoom: a FIXED number of recent bars, so the visible price range
@@ -748,24 +977,25 @@ export class TradingTerminal {
     // there rather than a pane of its own — pane 1 only exists once an
     // indicator asks for one, so anchoring to it would have been conditional.
     const watermark = new LogoWatermark({
-        // The symbol on its own, not the app icon: that asset is a full-bleed
-        // plate with the mark filling under half of it and the wordmark
-        // beneath, so scaling it up scaled the padding too. This one's square
-        // viewBox is tight to the symbol, so height alone gives 32x32, and
-        // 3 of plate padding puts it in a 38x38 square.
-        src: '/images/openalgo-glyph.svg',
-        position: 'bottom-left',
-        height: 32,
-        padding: 3,
-        margin: 10,
-        opacity: 0.85,
-        // Mark alone at rest; the wording unrolls to its right on hover, so it
-        // names itself when looked at without occupying the corner always. The
-        // mark and text share one colour, so this sets both.
-        label: 'OpenAlgo Charts',
-        labelColor: light ? '#3c4354' : '#e4e8f4',
-        href: 'https://openalgo.in',
+      // The symbol on its own, not the app icon: that asset is a full-bleed
+      // plate with the mark filling under half of it and the wordmark
+      // beneath, so scaling it up scaled the padding too. This one's square
+      // viewBox is tight to the symbol, so height alone gives 32x32, and
+      // 3 of plate padding puts it in a 38x38 square.
+      src: '/images/openalgo-glyph.svg',
+      position: 'bottom-left',
+      height: 32,
+      padding: 3,
+      margin: 10,
+      opacity: 0.85,
+      // Mark alone at rest; the wording unrolls to its right on hover, so it
+      // names itself when looked at without occupying the corner always. The
+      // mark and text share one colour, so this sets both.
+      label: 'OpenAlgo Charts',
+      labelColor: light ? '#3c4354' : '#e4e8f4',
+      href: 'https://openalgo.in',
     })
+    this.watermark = watermark
     this.chart.addPrimitive(watermark, 0)
 
     // inline SELL · qty · BUY panel, docked top-left below the OHLC legend.
@@ -778,7 +1008,9 @@ export class TradingTerminal {
         scale: 0.72,
       })
       if (lp != null) this.tradeBtns.setMark(lp)
-      this.chart.addPrimitive(this.tradeBtns, 0)
+      // Order entry is an affordance, not chart content: it is left out of a
+      // saved image (see `screenshotExcluded`).
+      this.addExcludedPrimitive(this.tradeBtns, 0)
     } else this.tradeBtns = null
 
     this.chart.subscribeCrosshairMove((e) =>
@@ -857,6 +1089,7 @@ export class TradingTerminal {
     // list still held it — so the next rebuild (timeframe, chart type, theme)
     // brought the deleted indicator back.
     this.chart.on('indicatorRemoved', () => this.syncIndicators())
+    this.chart.on('paneRemoved', () => this.placeWatermark())
     // Scrolling back past the loaded range pages in older bars.
     this.chart.setHistoryLoader(() => void this.loadOlderHistory())
   }
@@ -893,6 +1126,15 @@ export class TradingTerminal {
     // Absent means shown: only an explicit '0' hides it, so existing panes and
     // a first visit both keep volume.
     this.volumeOn = this.lsGet('vol') !== '0'
+    try {
+      const raw = this.lsGet('chartsettings')
+      const parsed = raw ? (JSON.parse(raw) as Record<string, string | number | boolean>) : null
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        this.chartSettingsSaved = parsed
+      }
+    } catch {
+      /* ignore */
+    }
   }
 
   /**
@@ -980,7 +1222,9 @@ export class TradingTerminal {
    */
   private async attachDrawing(): Promise<void> {
     if (this.draw || !this.chart) return
-    const { DrawingController, drawingShortcuts, matchDrawingShortcut } = await import('openalgo-charts/draw')
+    const { DrawingController, drawingShortcuts, matchDrawingShortcut } = await import(
+      'openalgo-charts/draw'
+    )
     // The await is a real suspension point: the pane can be destroyed, or the
     // chart rebuilt again, while the tier is in flight.
     if (this.destroyed || !this.chart || this.draw) return
@@ -1095,7 +1339,7 @@ export class TradingTerminal {
       // the dark and light themes.
       backgroundColor: (st.backgroundColor as string) ?? '#434651',
       border: st.border === true,
-      borderColor: (st.borderColor as string) ?? ((st.color as string) ?? '#e4e8f4'),
+      borderColor: (st.borderColor as string) ?? (st.color as string) ?? '#e4e8f4',
       wrap: st.wrap === true,
     }
   }
@@ -1168,7 +1412,13 @@ export class TradingTerminal {
    * caller can swallow the key. The tier owns the chord table, so this is a
    * no-op until drawing has been attached.
    */
-  armByShortcut(e: { key: string; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }): boolean {
+  armByShortcut(e: {
+    key: string
+    altKey?: boolean
+    ctrlKey?: boolean
+    metaKey?: boolean
+    shiftKey?: boolean
+  }): boolean {
     const id = this.matchShortcut?.(e) ?? null
     if (id === null) return false
     void this.setDrawTool(id)
@@ -1268,21 +1518,6 @@ export class TradingTerminal {
     // Value inputs and generated style inputs stay separate so the form can tab
     // them the way a charting package does; one component covers every
     // indicator without a line of indicator-specific code.
-    const toField = (f: {
-      key: string
-      type: string
-      label?: string
-      group?: string
-    }): IndicatorField => ({
-      key: f.key,
-      type: f.type,
-      label: f.label ?? f.key,
-      group: (f as { group?: string }).group,
-      options: (f as { options?: { label: string; value: unknown }[] }).options,
-      min: (f as { min?: number }).min,
-      max: (f as { max?: number }).max,
-      step: (f as { step?: number }).step,
-    })
     this.cb.onIndicatorSettings({
       instanceId,
       name: inst.name,
@@ -1314,6 +1549,133 @@ export class TradingTerminal {
     void this.emitIndicatorSettings(instanceId)
   }
 
+  /* ── chart settings ─────────────────────────────────────────────────────
+   * The engine is canvas-only and ships no DOM, so it describes its settings
+   * dialog declaratively and the host renders it — the same contract the
+   * indicator form already uses, which is why `toField` is shared.
+   */
+
+  /**
+   * The settings schema and its current values. Read at open time rather than
+   * cached: the Price tab depends on the live series type, the colour defaults
+   * come from the active theme, and the timezone list has to include whatever
+   * zone the chart is already in.
+   */
+  async chartSettings(): Promise<ChartSettingsRequest | null> {
+    if (!this.chart) return null
+    const { chartSettingsSchema, readChartSettings } = await import('openalgo-charts')
+    const tabs = chartSettingsSchema(this.chart).map((t) => ({
+      id: t.id,
+      label: t.label,
+      inputs: t.inputs.map((i) =>
+        i.type === 'colorPair'
+          ? (i as unknown as ChartSettingsPairField)
+          : toField(i as { key: string; type: string; label?: string; group?: string })
+      ),
+    }))
+    return {
+      tabs,
+      values: { ...readChartSettings(this.chart) },
+      defaults: { ...this.chartDefaults },
+    }
+  }
+
+  /**
+   * Record the chart as this terminal builds it: engine defaults with this
+   * host's construction options already on top, and nothing restored from
+   * storage yet. That combination is what a user means by "default" here.
+   *
+   * The engine's own per-control defaults, which the schema does publish, are
+   * the wrong answer to reset against. This host opts into the corner session
+   * clock and the bar countdown at construction, both off in the engine, so a
+   * reset driven from the schema would quietly switch off chrome the user never
+   * touched. It would also fight the grid, which the context menu owns under a
+   * separate key: the engine's default is on, and a reset would flip the grid
+   * back on for someone who had turned it off from the menu, leaving the two
+   * owners disagreeing about the same two booleans.
+   *
+   * Re-taken on every build, which is also what keeps it honest across a theme
+   * switch: `applyTheme` rebuilds the chart, so the colours here are always the
+   * live theme's rather than whichever palette was on at boot.
+   */
+  private snapshotChartDefaults(): void {
+    if (!this.chart) return
+    this.chartDefaults = { ...readChartSettings(this.chart) }
+  }
+
+  /**
+   * Apply a patch from the settings dialog and persist it.
+   *
+   * Persistence is a merge, not a replace: the dialog sends only the keys it
+   * changed, and a key the engine no longer knows is ignored on the way back
+   * in, so a layout saved by a newer build still restores into an older one.
+   *
+   * What is stored is then pruned back to the keys that genuinely DIFFER from
+   * the baseline, and that prune is what makes "reset to defaults" survive a
+   * reload. A reset arrives here as an ordinary patch setting each key back to
+   * its baseline value; merging it blindly would store the entire default set,
+   * and `restoreChartSettings` would replay it on the next boot. Since a colour
+   * baseline is the active theme's, that replay would nail the chart to the
+   * palette of whichever theme happened to be on at reset time, and a later
+   * switch to light or dark would leave the candles behind. Storing only real
+   * deviations lets an untouched control keep following the theme, which is
+   * what "default" has to mean for the reset to be worth having.
+   */
+  async applyChartSettings(patch: Record<string, string | number | boolean>): Promise<void> {
+    if (!this.chart) return
+    const { applyChartSettings } = await import('openalgo-charts')
+    applyChartSettings(this.chart, patch)
+    const merged = { ...this.chartSettingsSaved, ...patch }
+    const kept: Record<string, string | number | boolean> = {}
+    for (const [k, v] of Object.entries(merged)) {
+      // A key absent from the baseline is kept: an unrecognised control is not
+      // evidence that its value is the default one.
+      if (!(k in this.chartDefaults) || this.chartDefaults[k] !== v) kept[k] = v
+    }
+    this.chartSettingsSaved = kept
+    this.lsSet('chartsettings', JSON.stringify(kept))
+    this.adoptGridFromPatch(patch)
+  }
+
+  /**
+   * Keep the two owners of grid visibility from disagreeing.
+   *
+   * Grid lines can be changed from two places: the context menu, which writes
+   * `gridV`/`gridH` and its own storage key, and the settings dialog, which
+   * patches `canvas.grid.*` straight through to the engine. Left alone the two
+   * drift apart, and the context menu -- which is re-applied verbatim on every
+   * rebuild -- eventually wins, so a grid switched from the dialog silently
+   * comes back on the next theme or chart-type change. Mirroring the patch here
+   * makes the dialog write through the same field the menu reads, so the menu's
+   * tick matches the chart and a rebuild re-applies what the user last chose,
+   * whichever control they chose it with.
+   */
+  private adoptGridFromPatch(patch: Record<string, string | number | boolean>): void {
+    const v = patch['canvas.grid.vertLines']
+    const h = patch['canvas.grid.horzLines']
+    if (v === undefined && h === undefined) return
+    this.gridV = v === undefined ? this.gridV : v === true
+    this.gridH = h === undefined ? this.gridH : h === true
+    this.lsSet('grid', `${this.gridV ? 1 : 0}${this.gridH ? 1 : 0}`)
+  }
+
+  /**
+   * Re-apply the persisted settings once the chart exists. Called from the
+   * chart's own setup rather than `restoreChartTools`, because these write
+   * through the live chart object instead of seeding a field read at build
+   * time. A malformed entry is dropped: a stale setting must never stop the
+   * terminal booting.
+   */
+  private async restoreChartSettings(): Promise<void> {
+    if (!this.chart || !Object.keys(this.chartSettingsSaved).length) return
+    try {
+      const { applyChartSettings } = await import('openalgo-charts')
+      applyChartSettings(this.chart, this.chartSettingsSaved)
+    } catch {
+      /* ignore */
+    }
+  }
+
   /**
    * Re-read the tracked list from the chart, which is the only thing that knows
    * the truth — indicators can also be removed from their own on-chart legend.
@@ -1321,8 +1683,27 @@ export class TradingTerminal {
    * two SMAs differ only by instance id, so "remove the one with this
    * indicatorId" would drop an arbitrary one of them.
    */
+  /**
+   * Keep the brand mark in the chart's bottom corner rather than pane 0's.
+   *
+   * A primitive belongs to a pane, and an oscillator that asks for its own
+   * pane pushes a new one underneath. "Bottom of pane 0" is then the middle
+   * of the chart, which is where the mark was ending up. The engine emits no
+   * event when a pane is created (only paneRemoved), so this is driven from
+   * the indicator funnel, which is the only thing that creates one here.
+   */
+  private placeWatermark(): void {
+    const mark = this.watermark
+    if (!this.chart || !mark) return
+    const bottom = this.chart.panes().length - 1
+    if (bottom < 0) return
+    this.chart.removePrimitive(mark)
+    this.chart.addPrimitive(mark, bottom)
+  }
+
   private syncIndicators(): void {
     if (!this.chart || this.applyingIndicators) return
+    this.placeWatermark()
     this.activeIndicators = this.chart.indicators().map((i) => ({
       indicatorId: i.indicatorId,
       settings: { ...i.settings() },
@@ -1352,6 +1733,67 @@ export class TradingTerminal {
     return this.chart ? this.chart.indicators().map((i) => ({ id: i.id, name: i.name })) : []
   }
 
+  /**
+   * Join or leave the workspace link group.
+   *
+   * The engine has no notion of a symbol, so following one is a callback: the
+   * group decides WHEN, this host decides HOW. `loadSymbol` is the same path
+   * the symbol search uses, so a linked change behaves exactly like a typed one
+   * -- same fetch, same cache, same teardown of a running replay.
+   */
+  setLinkGroup(group: LinkGroup | null): void {
+    if (this.link && this.chart && this.link !== group) this.link.remove(this.chart)
+    this.link = group
+    this.joinLink()
+  }
+
+  /**
+   * The group's symbol is `EXCHANGE:SYMBOL`, not a bare ticker.
+   *
+   * The engine treats the value as an opaque string, and a bare symbol is not
+   * an instrument here: the same ticker exists on more than one exchange, so
+   * following one would be a coin toss over which book you ended up charting.
+   */
+  private linkSymbol(): string | undefined {
+    return this.sym ? `${this.sym.exchange}:${this.sym.symbol}` : undefined
+  }
+
+  private joinLink(): void {
+    if (!this.link || !this.chart) return
+    this.link.add(this.chart, {
+      symbol: this.linkSymbol(),
+      onSymbol: (next) => {
+        // Ignore an echo of what this pane already shows: the group puts a
+        // joining member onto the agreed symbol, and reloading a chart onto the
+        // instrument it already displays would throw away its viewport.
+        if (this.linkSymbol() === next) return
+        const cut = next.indexOf(':')
+        if (cut <= 0) return // not ours to interpret
+        void this.loadSymbol({ symbol: next.slice(cut + 1), exchange: next.slice(0, cut) })
+      },
+    })
+  }
+
+  /**
+   * Now, snapped down to the bar grid.
+   *
+   * The cache keys on symbol, exchange and interval and then slices by range,
+   * so the range has to be STABLE between two loads inside the same bar. A raw
+   * `nowSec()` moves every second, which the cache reads as a request for data
+   * it does not hold, and the hit rate is then exactly zero. Snapping makes
+   * every load inside one bar ask the identical question.
+   *
+   * Count-driven and calendar codes have no fixed grid to snap to, so they fall
+   * through unsnapped and simply do not benefit. That is the honest outcome
+   * rather than inventing a grid they do not have.
+   */
+  private gridNow(): number {
+    const found = tryResolveInterval(this.interval)
+    const step = found?.bucketing.mode === 'interval' ? found.bucketing.seconds : 0
+    const now = nowSec()
+    return step > 0 ? Math.floor(now / step) * step : now
+  }
+
   /** Grid visibility, independently per axis. */
   setGrid(vertical: boolean, horizontal: boolean): void {
     this.gridV = vertical
@@ -1379,6 +1821,95 @@ export class TradingTerminal {
 
   volumeVisible(): boolean {
     return this.volumeOn
+  }
+
+  /* ── market replay ──────────────────────────────────────────────────────
+   * Walk the loaded session forward a bar at a time. The engine's controller
+   * feeds the series a prefix of the bars, which is what makes every indicator
+   * redraw as it stood at that moment rather than needing replay-aware code of
+   * its own.
+   *
+   * Both the price and the volume series are driven: the chart merges every
+   * series onto one time axis, so a volume histogram left at full length would
+   * drag future timestamps back onto the axis and undo the illusion.
+   */
+
+  /** True while the chart is showing a replayed prefix rather than live data. */
+  replayActive(): boolean {
+    return this.replay !== null
+  }
+
+  replayState(): ReplayState | null {
+    return this.replay?.state() ?? null
+  }
+
+  /**
+   * Enter replay. Defaults to a quarter of the way in, so there is history to
+   * read on the left and session left to walk on the right: opening on bar 0
+   * shows an empty chart, which reads as broken.
+   */
+  startReplay(startIndex?: number): void {
+    if (this.replay || !this.chart || !this.price || this.shownBars.length < 2) return
+    const driven = this.volume ? [this.price, this.volume] : [this.price]
+    // Walk what the price series is showing, not the raw feed: on Heikin Ashi
+    // or Renko those are different arrays of different lengths, so replaying
+    // rawBars would repaint the chart as plain candles and put the playhead at
+    // the wrong bar.
+    const bars = this.shownBars
+    const from = startIndex ?? Math.floor(bars.length / 4)
+    this.replay = new ReplayController(this.chart, {
+      series: driven,
+      bars,
+      startIndex: from,
+      onFrame: (state) => this.cb.onReplayChange?.(state),
+    })
+    // Entering replay truncates the series to a prefix, but leaves the viewport
+    // and the price range where the user had them -- which is at the right edge
+    // on the newest bars, hundreds of bars past the end of that prefix and at a
+    // price the prefix never trades at. The result is an apparently empty chart
+    // with the candles clipped off the top. Put the view on the playhead and
+    // re-measure the axis, the same way the initial load does.
+    const to = from + 4
+    this.chart.timeScale.setVisibleLogicalRange(
+      from > VISIBLE_BARS ? { from: to - VISIBLE_BARS, to } : { from: -1, to }
+    )
+    // Remembered so a hand-pinned axis is not silently lost: replay has to
+    // autoscale to stay readable as it walks, but that is replay's state, not
+    // a change to the chart the user set up.
+    this.replayAutoScale = this.chart.panes()[0]?.priceScale.autoScale ?? true
+    this.chart.setAutoScale(true)
+    this.cb.onReplayChange?.(this.replay.state())
+  }
+
+  /** Leave replay and put the live chart back exactly where the user left it. */
+  stopReplay(): void {
+    if (!this.replay) return
+    this.replay.stop()
+    this.replay = null
+    if (!this.replayAutoScale) this.chart?.setAutoScale(false)
+    this.cb.onReplayChange?.(null)
+  }
+
+  replayPlay(speed?: number): void {
+    this.replay?.play(speed === undefined ? undefined : { speed })
+    this.cb.onReplayChange?.(this.replayState())
+  }
+
+  replayPause(): void {
+    this.replay?.pause()
+    this.cb.onReplayChange?.(this.replayState())
+  }
+
+  replayStep(n = 1): void {
+    this.replay?.step(n)
+  }
+
+  replayStepBack(n = 1): void {
+    this.replay?.stepBack(n)
+  }
+
+  replaySeek(index: number): void {
+    this.replay?.seek(index)
   }
 
   /* ── WS-down fallback: poll quotes so LTP + the forming candle stay live ─ */
@@ -1551,6 +2082,10 @@ export class TradingTerminal {
   /* ── symbol selection ─────────────────────────────────────────────────── */
   async loadSymbol(pick: SearchRow, opts: { silent?: boolean } = {}): Promise<boolean> {
     if (!this.rest) return false
+    // Replay holds a snapshot of the bars it was started on, and stop() puts
+    // that snapshot back. Carrying it across a symbol change would restore the
+    // previous instrument's data onto the new one.
+    this.stopReplay()
     // swap the live stream: drop the previous symbol's subscription
     if (
       this.ws &&
@@ -1607,15 +2142,19 @@ export class TradingTerminal {
     }
     this.qty = 1
     this.lsSet('symbol', JSON.stringify({ symbol: this.sym.symbol, exchange: this.sym.exchange }))
+    // Tell the group before the history fetch below, so a linked grid starts
+    // loading together rather than one pane at a time. The group's own echo
+    // guard stops this coming straight back at us.
+    if (this.link && this.chart) this.link.setSymbol(this.chart, `${exchange}:${this.sym.symbol}`)
 
     // history
-    const to = nowSec()
+    const to = this.gridNow()
     this.lastLtp = null
     this.prevClose = null
     this.liveBucket = null
     this.noMoreHistory = false
     try {
-      this.rawBars = await this.rest.getBars({
+      this.rawBars = await (this.cachedBars ?? this.rest).getBars({
         symbol: this.sym.symbol,
         exchange: this.sym.exchange,
         interval: this.interval,
@@ -1650,6 +2189,7 @@ export class TradingTerminal {
 
   /* ── toolbar setters (called by the React page) ───────────────────────── */
   setInterval(iv: string) {
+    this.stopReplay() // same reason as loadSymbol: the bars are about to change
     this.interval = iv
     this.lsSet('interval', iv)
     if (this.sym) this.reloadCurrent()
@@ -1682,10 +2222,121 @@ export class TradingTerminal {
     this.chart?.resetScale()
   }
 
-  screenshot() {
-    if (!this.chart || !this.sym) return
+  /* ── PNG export ───────────────────────────────────────────────────────── */
+
+  /**
+   * Attach a primitive that must never appear in an exported image.
+   *
+   * Anything an image cannot be used for — a button, a drag handle — belongs
+   * here rather than on `addPrimitive` directly. See `screenshotExcluded`.
+   */
+  private addExcludedPrimitive(primitive: IPrimitive, paneIndex = 0) {
+    this.chart?.addPrimitive(primitive, paneIndex)
+    this.screenshotExcluded.push({ primitive, paneIndex })
+  }
+
+  /**
+   * Save the chart as a PNG.
+   *
+   * openalgo-charts' own `downloadScreenshot()` is deliberately not used. It
+   * composites the pane canvases and nothing else, which gets both halves of
+   * this wrong: the OHLC readout is a DOM overlay this terminal owns, so it is
+   * invisible to a canvas composite and vanished from the saved image, while
+   * the SELL/qty/BUY panel *is* a canvas primitive, so it was baked in — a
+   * static image with order buttons on it. So the export is driven from here:
+   * detach the interaction-only overlays, take the composite, paint the readout
+   * onto it, restore. Filename convention and canvas theme are unchanged.
+   */
+  async screenshot(): Promise<void> {
+    const chart = this.chart
+    if (!chart || !this.sym) return
     const stamp = new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-')
-    this.chart.downloadScreenshot(`${this.sym.symbol}-${this.interval}-${stamp}.png`)
+    const filename = `${this.sym.symbol}-${this.interval}-${stamp}.png`
+    try {
+      const canvas = await this.captureCanvas(chart)
+      if (!canvas) return
+      const a = document.createElement('a')
+      a.href = canvas.toDataURL('image/png')
+      a.download = filename
+      a.click()
+    } catch (e) {
+      this.toast(this.cleanError(e), 'err')
+    }
+  }
+
+  /**
+   * Composite the chart into an offscreen canvas with the export excluded
+   * overlays taken down, then paint the OHLC readout into the corner the DOM
+   * overlay occupies on screen.
+   *
+   * The detach/re-attach is why this is async: `removePrimitive` only marks the
+   * pane dirty, so the buttons are still in the canvas bitmap until the chart
+   * repaints on the next frame.
+   */
+  private async captureCanvas(chart: ChartInstance): Promise<HTMLCanvasElement | null> {
+    const hidden = [...this.screenshotExcluded]
+    for (const o of hidden) chart.removePrimitive(o.primitive)
+    // Selection handles are grab targets; the drawing itself stays.
+    const selected = this.draw?.selected() ?? null
+    if (selected) this.draw?.select(null)
+    try {
+      await nextPaint()
+      // A theme toggle or an interval change during that frame rebuilds the
+      // chart, and the one captured here would no longer be on screen.
+      if (this.destroyed || this.chart !== chart) return null
+      const shot = chart.takeScreenshot()
+      this.paintLegend(shot)
+      return shot
+    } finally {
+      if (!this.destroyed && this.chart === chart) {
+        for (const o of hidden) chart.addPrimitive(o.primitive, o.paneIndex)
+        if (selected) this.draw?.select(selected)
+      }
+    }
+  }
+
+  /**
+   * Paint the OHLC readout onto a captured canvas, where the DOM overlay sits
+   * on screen and in the colours it is showing.
+   *
+   * The capture is device-pixel sized, and the ratio is derived from the canvas
+   * against the container rather than read from `devicePixelRatio` — that is
+   * the ratio the chart actually rendered at, which is what has to be matched
+   * for the text to land in the right place on a fractional-scaling display.
+   *
+   * The foreground goes through `resolveCssColor` because the app's theme
+   * tokens are oklch, which a canvas is not guaranteed to parse: assigning one
+   * to `fillStyle` is silently ignored and the text would paint in whatever
+   * colour was set last (black, on a dark chart).
+   */
+  private paintLegend(canvas: HTMLCanvasElement) {
+    const ctx = canvas.getContext('2d')
+    if (!ctx || !this.sym) return
+    const cssWidth = this.container.clientWidth || canvas.width
+    const ratio = canvas.width / cssWidth
+    const css = getComputedStyle(this.legendEl)
+    const family = css.fontFamily || 'system-ui, sans-serif'
+    const foreground = css.color ? resolveCssColor(css.color) : '#e4e8f4'
+    ctx.save()
+    ctx.scale(ratio, ratio)
+    ctx.textBaseline = 'top'
+    ctx.font = `500 12px ${family}`
+    let x = LEGEND_X
+    for (const run of this.legendModel(this.legendBar)) {
+      const tone = legendToneStyle(run.tone, foreground)
+      ctx.fillStyle = tone.color
+      ctx.globalAlpha = tone.alpha
+      ctx.fillText(run.text, x, LEGEND_Y)
+      x += ctx.measureText(run.text).width + LEGEND_GAP
+    }
+    const sub = lotInfoText(this.sym, this.qty)
+    if (sub) {
+      ctx.font = `10px ${family}`
+      ctx.fillStyle = foreground
+      ctx.globalAlpha = 0.65
+      ctx.fillText(sub, LEGEND_X, LEGEND_SUB_Y)
+    }
+    ctx.restore()
   }
 
   /* ── right-click order menu ───────────────────────────────────────────── */
@@ -1730,6 +2381,7 @@ export class TradingTerminal {
   /* ── bootstrap + teardown ─────────────────────────────────────────────── */
   async init() {
     this.rest = new OpenAlgoDataFeed({ baseUrl: '', apiKey: this.apiKey })
+    this.cachedBars = withBarCache(this.rest, { ttlMs: 10 * 60_000 })
     this.trade = new OpenAlgoTradeFeed({ baseUrl: '', apiKey: this.apiKey, strategy: STRATEGY })
 
     // broker-supported intervals → the timeframe dropdown
@@ -1830,11 +2482,17 @@ export class TradingTerminal {
       /* already closed */
     }
     try {
+      this.stopReplay() // release the controller before its chart disappears
+    } catch {
+      /* nothing to leave */
+    }
+    try {
       this.chart?.destroy()
     } catch {
       /* already gone */
     }
     this.chart = null
     this.ws = null
+    this.screenshotExcluded.length = 0
   }
 }
