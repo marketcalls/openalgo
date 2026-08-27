@@ -21,7 +21,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash -n deploy/gcp/deploy.sh
+          bash -n scripts/deploy-to-server.sh
+          bash -n deploy/gcp/remote-deploy.sh
           find config -type f -name '*.json' -print0 | xargs -0 -n1 jq empty >/dev/null
 
   deploy:
@@ -47,12 +48,16 @@ jobs:
           GCP_SSH_USER: ${{ secrets.GCP_SSH_USER }}
           GCP_SSH_PORT: ${{ secrets.GCP_SSH_PORT }}
           GCP_DEPLOY_PATH: ${{ secrets.GCP_DEPLOY_PATH }}
+          GCP_LEAN_PATH: ${{ secrets.GCP_LEAN_PATH }}
         run: |
           set -euo pipefail
           test -n "$GCP_SSH_HOST"
           test -n "$GCP_SSH_USER"
           test -n "$GCP_DEPLOY_PATH"
-          port="${GCP_SSH_PORT:-22}"
-          ssh_opts=(-i "$DEPLOY_KEY" -p "$port" -o BatchMode=yes -o StrictHostKeyChecking=accept-new)
-          ssh "${ssh_opts[@]}" "$GCP_SSH_USER@$GCP_SSH_HOST" \
-            "cd '$GCP_DEPLOY_PATH' && APP_ROOT='$GCP_DEPLOY_PATH' ./deploy/gcp/deploy.sh"
+          REMOTE_LEAN_ROOT="${GCP_LEAN_PATH:-/home/$GCP_SSH_USER/Lean}"
+          DEPLOY_SSH_KEY="$DEPLOY_KEY" \
+          REMOTE_APP_ROOT="$GCP_DEPLOY_PATH" \
+          REMOTE_LEAN_ROOT="$REMOTE_LEAN_ROOT" \
+          COPY_LEAN_ARTIFACTS=false \
+          DEPLOY_SSH_PORT="${GCP_SSH_PORT:-22}" \
+            ./scripts/deploy-to-server.sh "$GCP_SSH_USER@$GCP_SSH_HOST"

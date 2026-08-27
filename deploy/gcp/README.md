@@ -68,6 +68,17 @@ required.
 Set `UPDATE_LEAN=true` only when the VM also has a clean Lean checkout and you
 want the script to fast-forward and build it. It defaults to `false`.
 
-Configure these GitHub repository secrets for the workflow:
-`GCP_SSH_HOST`, `GCP_SSH_USER`, `GCP_SSH_PRIVATE_KEY`, and
-`GCP_DEPLOY_PATH`. `GCP_SSH_PORT` is optional and defaults to `22`.
+The GitHub Actions workflow deploys the private repository contents from the
+Actions runner over SSH; the VM does not need GitHub credentials or a GitHub
+checkout. Configure these GitHub repository secrets:
+
+* `GCP_SSH_HOST`: VM address, for example `34.14.217.110`
+* `GCP_SSH_USER`: VM user, for example `arifkhan`
+* `GCP_SSH_PRIVATE_KEY`: the complete private SSH key accepted by the VM
+* `GCP_DEPLOY_PATH`: application path, for example `/home/arifkhan/lean-strategies`
+* `GCP_LEAN_PATH`: optional existing Lean path, for example `/home/arifkhan/Lean`
+* `GCP_SSH_PORT`: optional SSH port, defaults to `22`
+
+The workflow excludes `.env`, runtime output, and the existing Lean artifacts
+from the transfer. This preserves server credentials and the existing Lean
+installation while updating strategy code and deployment scripts.
