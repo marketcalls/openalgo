@@ -896,7 +896,10 @@ class FyersHSMWebSocket:
                     on_close=self._on_ws_close,
                     on_ping=self._on_ws_ping,
                     on_pong=self._on_ws_pong,
-                    header={"Authorization": self.access_token, "User-Agent": f"{self.source}/1.0"},
+                    # Fyers HSM endpoint ignores the binary auth frame if the WS upgrade
+                    # request carries an Authorization header, causing connect() to time out
+                    # after 15s. The official fyers-apiv3 SDK sends no upgrade headers; auth
+                    # is carried in the binary auth frame's hsm_key field.
                 )
 
                 # Run until disconnection. Enable protocol ping/pong keepalive so
