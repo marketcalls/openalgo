@@ -13,7 +13,10 @@ import sys
 
 # Add parent directory to path to import modules
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+# Register the app's SQLite pragmas on this process's engines, so a migration
+# waits the same 15s for a write lock the running app does instead of the
+# sqlite3 default of 5s (GitHub issue #1726).
+import _pragmas  # noqa: F401,E402
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, inspect, text
 
@@ -82,30 +85,30 @@ def migrate_settings_table():
                         )
                         conn.execute(alter_sql)
                         conn.commit()
-                        logger.info(f"✅ Added column: {column_name}")
+                        logger.info(f"Added column: {column_name}")
                         columns_added += 1
                     except Exception as col_error:
                         # Column might already exist in some edge cases
                         logger.warning(f"Could not add column {column_name}: {col_error}")
                 else:
-                    logger.info(f"✓ Column already exists: {column_name}")
+                    logger.info(f"Column already exists: {column_name}")
                     columns_existing += 1
 
-        logger.info("\n📊 Migration Summary:")
+        logger.info("\n Migration Summary:")
         logger.info(f"   - Columns added: {columns_added}")
         logger.info(f"   - Columns already existing: {columns_existing}")
         logger.info(f"   - Total security columns: {len(security_columns)}")
 
         if columns_added > 0:
-            logger.info("\n✅ Settings table migration completed successfully!")
+            logger.info("\n Settings table migration completed successfully!")
             logger.info("   New security columns have been added to your database.")
         else:
-            logger.info("\n✅ No migration needed - all security columns already exist!")
+            logger.info("\n No migration needed - all security columns already exist!")
 
         return True
 
     except Exception as e:
-        logger.error(f"❌ Error during migration: {e}")
+        logger.error(f"Error during migration: {e}")
         return False
 
 
@@ -123,14 +126,14 @@ def main():
     logger.info("-" * 60)
     if success:
         logger.info("Migration process completed!")
-        logger.info("\n📌 Next Steps:")
+        logger.info("\n Next Steps:")
         logger.info("   1. Restart your OpenAlgo application")
         logger.info("   2. The /security endpoint should now work properly")
         logger.info("   3. You can access security settings at: http://127.0.0.1:5000/security")
         return 0
     else:
         logger.error("Migration failed! Please check the error messages above.")
-        logger.error("\n📌 Troubleshooting:")
+        logger.error("\n Troubleshooting:")
         logger.error("   1. Ensure the database file exists and is accessible")
         logger.error("   2. Check that you have write permissions to the database")
         logger.error("   3. Verify your DATABASE_URL in the .env file")

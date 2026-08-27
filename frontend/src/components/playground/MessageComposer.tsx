@@ -17,7 +17,7 @@ import type { MessageTemplate } from '@/types/websocket'
 
 // Extended template type with category
 interface CategorizedTemplate extends MessageTemplate {
-  category: 'auth' | 'subscribe' | 'depth' | 'unsubscribe' | 'broker'
+  category: 'auth' | 'subscribe' | 'depth' | 'orders' | 'unsubscribe' | 'broker'
 }
 
 // Message templates organized by category
@@ -134,6 +134,21 @@ function getMessageTemplates(isCrypto: boolean): CategorizedTemplate[] {
       },
       category: 'depth',
     },
+    // Order Updates (account-level, no symbols)
+    {
+      key: 'subscribe_orders',
+      label: 'Subscribe Order Updates',
+      description: 'Real-time order status stream (fills, rejections, cancels)',
+      template: { action: 'subscribe_orders' },
+      category: 'orders',
+    },
+    {
+      key: 'unsubscribe_orders',
+      label: 'Unsubscribe Order Updates',
+      description: 'Stop the order status stream',
+      template: { action: 'unsubscribe_orders' },
+      category: 'orders',
+    },
     // Unsubscribe
     {
       key: 'unsubscribe_ltp',
@@ -221,6 +236,7 @@ const CATEGORY_LABELS: Record<CategorizedTemplate['category'], string> = {
   auth: 'Authentication',
   subscribe: 'Subscriptions',
   depth: 'Market Depth',
+  orders: 'Order Updates',
   unsubscribe: 'Unsubscribe',
   broker: 'Broker Info',
 }

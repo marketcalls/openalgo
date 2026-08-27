@@ -47,7 +47,7 @@ generate_hex() {
 
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,deltaexchange_demo,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,arrow,compositedge,definedge,deltaexchange,deltaexchange_demo,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,hdfcsecurities,hdfcsky,ibulls,iifl,iiflcapital,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,rmoney,samco,shoonya,tradejini,tradesmart,upstox,wisdom,zebu,zerodha"
     [[ ",$valid_brokers," == *",$broker,"* ]]
 }
 
@@ -690,8 +690,12 @@ server {
     location / {
         proxy_pass http://127.0.0.1:9000;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
+        # Plain HTTP only: /ws, /ws/ and /socket.io/ have their own blocks.
+        # Forcing "Connection: upgrade" here sent every ordinary request
+        # upstream with a bogus upgrade header and an empty Upgrade:, which
+        # breaks HTTP/1.1 keep-alive to gunicorn and shows up as intermittent
+        # truncated asset responses and 5xx (GitHub issue #1807).
+        proxy_set_header Connection "";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -772,7 +776,15 @@ for i in "${!CONF_DOMAINS[@]}"; do
             log "Directory exists but is not a valid git repo. Backing up and re-cloning..." "$YELLOW"
             mv "$INSTANCE_DIR" "${INSTANCE_DIR}_backup_$(date +%s)"
         fi
-        git clone "$REPO_URL" "$INSTANCE_DIR"
+        # --filter=blob:none makes this a partial clone: the server sends every
+        # commit and tree but no file contents, so it pulls ~20 MB instead of
+        # ~280 MB. Blobs outside the current checkout are fetched on demand, so
+        # the full history stays usable -- all 4,824 commits, 62 tags, every
+        # branch -- which keeps `git reset --hard HEAD~n`, tag checkouts and
+        # branch switching working. Nearly all of that 280 MB is superseded
+        # frontend/dist bundles that a server never reads. A host without filter
+        # support just full-clones, so this is never worse than no flag at all.
+        git clone --filter=blob:none "$REPO_URL" "$INSTANCE_DIR"
     else
         log "Updating existing repository..." "$GREEN"
         cd "$INSTANCE_DIR"

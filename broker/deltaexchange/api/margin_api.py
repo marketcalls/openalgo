@@ -5,6 +5,7 @@
 import os
 
 from broker.deltaexchange.api.baseurl import BASE_URL, get_auth_headers
+from broker.deltaexchange.api.rate_limiter import PRIVATE, DeltaRateLimitError, consume
 from broker.deltaexchange.mapping.margin_data import parse_margin_response, transform_margin_positions
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -35,6 +36,9 @@ def get_margin_mode(auth: str) -> str:
 
     path = "/v2/users/trading_preferences"
     try:
+        # consume() before signing: it can block on the quota window and Delta
+        # rejects signatures older than 5 seconds ("SignatureExpired").
+        consume(path, method="GET", bucket=PRIVATE)
         headers = get_auth_headers(
             method="GET",
             path=path,
@@ -128,6 +132,19 @@ def calculate_margin_api(positions, auth):
 
         query_string = "?" + "&".join(f"{k}={v}" for k, v in sorted(params.items()))
         url = BASE_URL + path + query_string
+
+        # Quota first, then sign: consume() can block and a signature older
+        # than 5 seconds is rejected outright.  A rate-limit failure here is
+        # request-wide, not per-product -- swallowing it would report a
+        # successful basket whose margin silently excludes this leg.
+        try:
+            consume(path, method="GET", bucket=PRIVATE)
+        except DeltaRateLimitError as exc:
+            logger.error(f"[DeltaExchange] margin calculation aborted: {exc}")
+            return MockResponse(429), {
+                "status": "error",
+                "message": f"Delta Exchange rate limit reached during margin calculation: {exc}",
+            }
 
         try:
             headers = get_auth_headers(

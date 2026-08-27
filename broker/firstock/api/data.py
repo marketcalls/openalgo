@@ -45,7 +45,8 @@ def get_api_response(endpoint, auth, method="POST", payload=None, custom_timeout
 
         # Debug print
         logger.debug(f"Endpoint: {endpoint}")
-        logger.debug(f"Payload: {json.dumps(data, indent=2)}")
+        safe_data = {k: v for k, v in data.items() if k != "jKey"}
+        logger.debug(f"Payload: {json.dumps(safe_data, indent=2)}")
 
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
 
@@ -506,7 +507,7 @@ class BrokerData:
                 chunk_end_str = chunk_end.strftime("%Y-%m-%d")
                 chunk_count += 1
 
-                print(f"📊 Fetching chunk {chunk_count}: {chunk_start_str} to {chunk_end_str}")
+                logger.info(f"Fetching chunk {chunk_count}: {chunk_start_str} to {chunk_end_str}")
 
                 try:
                     # Fetch data for this chunk
@@ -516,23 +517,20 @@ class BrokerData:
 
                     if not chunk_data.empty:
                         all_data.append(chunk_data)
-                        print(f"✅ Chunk {chunk_count}: Retrieved {len(chunk_data)} candles")
+                        logger.info(f"Chunk {chunk_count}: Retrieved {len(chunk_data)} candles")
                     else:
-                        print(f"⚠️  Chunk {chunk_count}: No data returned")
+                        logger.warning(f"Chunk {chunk_count}: No data returned")
 
                 except Exception as e:
                     failed_chunks += 1
-                    print(
-                        f"❌ Error fetching chunk {chunk_count} ({chunk_start_str} to {chunk_end_str}): {e}"
-                    )
                     logger.error(
                         f"Error fetching chunk {chunk_count} ({chunk_start_str} to {chunk_end_str}): {e}"
                     )
 
                     # If too many chunks fail, suggest smaller chunk size
                     if failed_chunks >= 3:
-                        print(
-                            f"⚠️  Multiple chunks failing. Consider using smaller chunk size (current: {max_days} days)"
+                        logger.warning(
+                            f"Multiple chunks failing. Consider using smaller chunk size (current: {max_days} days)"
                         )
 
                     # Continue with next chunk instead of failing completely
@@ -546,13 +544,13 @@ class BrokerData:
 
             # Combine all chunks
             if not all_data:
-                print("❌ No data retrieved from any chunks")
+                logger.warning("No data retrieved from any chunks")
                 if failed_chunks > 0:
-                    print(f"All {failed_chunks} chunks failed. This might be due to:")
-                    print("1. Network connectivity issues")
-                    print("2. API rate limiting")
-                    print("3. Invalid symbol or date range")
-                    print("4. Firstock API service issues")
+                    logger.warning(
+                        f"All {failed_chunks} chunks failed. This might be due to: "
+                        "network connectivity issues, API rate limiting, invalid symbol or "
+                        "date range, or Firstock API service issues"
+                    )
                 return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
             # Concatenate all DataFrames
@@ -567,20 +565,20 @@ class BrokerData:
             success_rate = (
                 ((chunk_count - failed_chunks) / chunk_count) * 100 if chunk_count > 0 else 0
             )
-            print(
-                f"🎉 Chunked loading complete: Retrieved {len(combined_df)} total candles from {chunk_count} chunks"
+            logger.info(
+                f"Chunked loading complete: Retrieved {len(combined_df)} total candles from {chunk_count} chunks"
             )
-            print(
-                f"📈 Success rate: {success_rate:.1f}% ({chunk_count - failed_chunks}/{chunk_count} chunks successful)"
+            logger.info(
+                f"Success rate: {success_rate:.1f}% ({chunk_count - failed_chunks}/{chunk_count} chunks successful)"
             )
 
             if failed_chunks > 0:
-                print(f"⚠️  {failed_chunks} chunks failed - data may be incomplete")
+                logger.warning(f"{failed_chunks} chunks failed - data may be incomplete")
 
             if len(combined_df) > 0:
                 start_time = datetime.fromtimestamp(combined_df["timestamp"].min())
                 end_time = datetime.fromtimestamp(combined_df["timestamp"].max())
-                print(f"📅 Final data range: {start_time} to {end_time}")
+                logger.info(f"Final data range: {start_time} to {end_time}")
 
             return combined_df
 
@@ -835,7 +833,7 @@ class BrokerData:
                 chunk_count += 1
 
                 logger.debug(
-                    f"📊 Fetching chunk {chunk_count}: {chunk_start_str} to {chunk_end_str}"
+                    f"Fetching chunk {chunk_count}: {chunk_start_str} to {chunk_end_str}"
                 )
 
                 try:
@@ -847,12 +845,12 @@ class BrokerData:
                     if not chunk_df.empty:
                         dfs.append(chunk_df)
                         successful_chunks += 1
-                        logger.debug(f"✅ Chunk {chunk_count} successful: {len(chunk_df)} records")
+                        logger.debug(f"Chunk {chunk_count} successful: {len(chunk_df)} records")
                     else:
-                        logger.warning(f"⚠️ Chunk {chunk_count} returned no data")
+                        logger.warning(f"Chunk {chunk_count} returned no data")
 
                 except Exception as chunk_error:
-                    logger.error(f"❌ Chunk {chunk_count} failed: {str(chunk_error)}")
+                    logger.error(f"Chunk {chunk_count} failed: {str(chunk_error)}")
 
                 # Move to next chunk
                 current_start = current_end + timedelta(days=1)
@@ -879,9 +877,9 @@ class BrokerData:
             )
 
             success_rate = (successful_chunks / chunk_count) * 100 if chunk_count > 0 else 0
-            logger.info(f"🎯 Chunked loading complete: {len(combined_df)} total records")
+            logger.info(f"Chunked loading complete: {len(combined_df)} total records")
             logger.info(
-                f"📈 Success rate: {success_rate:.1f}% ({successful_chunks}/{chunk_count} chunks successful)"
+                f"Success rate: {success_rate:.1f}% ({successful_chunks}/{chunk_count} chunks successful)"
             )
 
             return combined_df

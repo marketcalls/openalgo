@@ -561,11 +561,32 @@ def transform_holdings_data(holdings_data):
                 logger.warning(f"Skipping holdings with empty symbol: {holdings}")
                 continue
 
+            # Convert broker symbol to OpenAlgo format, as the orderbook,
+            # tradebook and position transforms above already do. Holdings was
+            # the only path that skipped it, so /holdings rendered AliceBlue
+            # symbols ("NIFTYBEES-EQ") where every other view shows OpenAlgo
+            # format ("NIFTYBEES"). Fall back to the broker symbol if the
+            # instrument is not in the master contract.
+            oa_symbol = get_oa_symbol(brsymbol=symbol, exchange=exchange)
+            if oa_symbol:
+                symbol = oa_symbol
+            else:
+                logger.warning(
+                    f"No OpenAlgo symbol for {symbol} on {exchange}; keeping the broker symbol"
+                )
+
             transformed_position = {
                 "symbol": symbol,
                 "exchange": exchange,
                 "quantity": quantity,
                 "product": holdings.get("Pcode", "CNC"),
+                # average_price and ltp are part of the holdings row contract -
+                # see the same transform in broker/dhan and broker/fyers. Both
+                # were computed above for the P&L maths but never emitted, so
+                # the Avg Price and LTP columns rendered blank while the totals
+                # and P&L (derived from the same two numbers) looked correct.
+                "average_price": round(price, 2),
+                "ltp": round(ltp, 2),
                 "pnl": pnl,  # Rounded to two decimals
                 "pnlpercent": pnlpercent,  # Rounded to two decimals
             }

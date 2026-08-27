@@ -64,11 +64,7 @@ class KotakWebSocket:
         self._on_close = on_close
 
     def connect(self):
-        """Start the websocket connection in a new thread."""
-        with self._lock:
-            if not self._should_run:
-                logger.warning("connect() called on a closed KotakWebSocket, ignoring")
-                return
+        """Start the websocket connection in a new thread. Idempotent."""
 
         def _run():
             try:
@@ -87,8 +83,23 @@ class KotakWebSocket:
                     self._on_error(e)
 
         thread = threading.Thread(target=_run, daemon=True)
+
+        # Check and claim the thread slot atomically. is_connected() is still
+        # False while the handshake is in flight, so callers cannot guard this
+        # themselves — a second connect() during that window would start a
+        # second run thread and orphan the first WebSocketApp along with its
+        # socket, which nothing would ever close.
         with self._lock:
+            if not self._should_run:
+                logger.warning("connect() called on a closed KotakWebSocket, ignoring")
+                return
+            if self._thread is not None and self._thread.is_alive():
+                logger.warning(
+                    "connect() called while a connection thread is already running, ignoring"
+                )
+                return
             self._thread = thread
+
         thread.start()
 
     def close(self):
@@ -206,7 +217,10 @@ class KotakWebSocket:
                 "Authorization": self.auth_config.get("auth_token"),
                 "Sid": self.auth_config.get("sid"),
             }
-            logger.debug(f"[KOTAK WSS SEND] Sending explicit connection request: {cn_msg}")
+            logger.debug(
+                "[KOTAK WSS SEND] Sending explicit connection request "
+                f"(auth={bool(cn_msg['Authorization'])}, sid={bool(cn_msg['Sid'])})"
+            )
             with self._send_lock:
                 self.ws.hs_send(json.dumps(cn_msg))
         except Exception as e:

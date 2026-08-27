@@ -5,13 +5,14 @@ Based on Noren WebSocket API (same as Flattrade)
 """
 
 import json
-import logging
 import threading
 import time
 from collections.abc import Callable
 from typing import Any, Dict, Optional
 
 import websocket
+
+from utils.logging import get_logger
 
 
 class ZebuWebSocket:
@@ -20,7 +21,7 @@ class ZebuWebSocket:
     # Connection constants
     # Try different URL patterns based on other Noren brokers:
     # - Shoonya: wss://api.shoonya.com/NorenWSTP/
-    # - Flattrade: wss://piconnect.flattrade.in/PiConnectWSTp/
+    # - Flattrade: wss://piconnect.flattrade.in/PiConnectWSAPI/
     # - AliceBlue: wss://ws1.aliceblueonline.com/NorenWS/
     # - DefinEdge: wss://trade.definedgesecurities.com/NorenWSTRTP/
     WS_URL = "wss://go.mynt.in/NorenWSAPI/"  # Zebu OAuth WebSocket endpoint
@@ -91,7 +92,7 @@ class ZebuWebSocket:
         self._heartbeat_lock = threading.Lock()
 
         # Logging
-        self.logger = logging.getLogger("zebu_websocket")
+        self.logger = get_logger("zebu_websocket")
 
     def connect(self) -> bool:
         """

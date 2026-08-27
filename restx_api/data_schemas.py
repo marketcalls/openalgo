@@ -6,7 +6,7 @@ from utils.constants import VALID_EXCHANGES
 
 
 # Custom validator for date or timestamp string
-def validate_date_or_timestamp(data):
+def validate_date_or_timestamp(data: str) -> None:
     """
     Validates that the input string is either in 'YYYY-MM-DD' format or a numeric timestamp.
     """
@@ -19,7 +19,7 @@ def validate_date_or_timestamp(data):
 
 
 # Custom validator for option offset
-def validate_option_offset(data):
+def validate_option_offset(data: str) -> bool:
     """
     Validates option offset: ATM, ITM1-ITM50, OTM1-OTM50
     """
@@ -141,11 +141,18 @@ class SearchSchema(Schema):
     exchange = fields.Str(required=False, validate=validate.OneOf(VALID_EXCHANGES))  # Optional exchange filter (e.g., NSE, BSE)
 
 
+#: Exchanges that list derivatives. Defined once: the same list was repeated in
+#: three schemas, and NCO was added to the platform without reaching any of
+#: them, so every expiry and option-chain request for NSE commodities was
+#: rejected at the API boundary before the service ever ran. See #1748.
+F_AND_O_EXCHANGES = ["NFO", "BFO", "MCX", "CDS", "NCO", "BCD", "NCDEX", "CRYPTO"]
+
+
 class ExpirySchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
     symbol = fields.Str(required=True)  # Underlying symbol (e.g., NIFTY, BANKNIFTY)
     exchange = fields.Str(
-        required=True, validate=validate.OneOf(["NFO", "BFO", "MCX", "CDS", "CRYPTO"])
+        required=True, validate=validate.OneOf(F_AND_O_EXCHANGES)
     )  # Exchange (e.g., NFO, BFO, MCX, CDS, CRYPTO)
     instrumenttype = fields.Str(
         required=True, validate=validate.OneOf(["futures", "options"])
@@ -177,7 +184,7 @@ class OptionGreeksSchema(Schema):
     apikey = fields.Str(required=True, validate=validate.Length(min=1, max=256))  # API Key for authentication
     symbol = fields.Str(required=True)  # Option symbol (e.g., NIFTY28NOV2424000CE)
     exchange = fields.Str(
-        required=True, validate=validate.OneOf(["NFO", "BFO", "CDS", "MCX", "CRYPTO"])
+        required=True, validate=validate.OneOf(F_AND_O_EXCHANGES)
     )  # Exchange (NFO, BFO, CDS, MCX, CRYPTO)
     interest_rate = fields.Float(
         required=False, validate=validate.Range(min=0, max=100)
@@ -219,6 +226,12 @@ class OptionChainSchema(Schema):
     strike_count = fields.Int(
         required=False, validate=validate.Range(min=1, max=100), allow_none=True
     )  # Number of strikes above/below ATM. If not provided, returns entire chain
+    with_greeks = fields.Bool(
+        required=False, load_default=False
+    )  # Attach IV + delta/gamma/theta/vega to every leg, from the quotes already fetched
+    interest_rate = fields.Float(
+        required=False, validate=validate.Range(min=0, max=100), allow_none=True
+    )  # Annualized risk-free rate percentage, Greeks only. Defaults to the exchange default (0)
 
 
 class MarketHolidaysSchema(Schema):
@@ -237,7 +250,7 @@ class OptionSymbolRequest(Schema):
     """Schema for a single option symbol request in batch"""
 
     symbol = fields.Str(required=True)  # Option symbol (e.g., NIFTY28NOV2424000CE)
-    exchange = fields.Str(required=True, validate=validate.OneOf(["NFO", "BFO", "CDS", "MCX", "CRYPTO"]))
+    exchange = fields.Str(required=True, validate=validate.OneOf(F_AND_O_EXCHANGES))
     underlying_symbol = fields.Str(required=False)  # Optional: Specify underlying symbol
     underlying_exchange = fields.Str(required=False)  # Optional: Specify underlying exchange
 

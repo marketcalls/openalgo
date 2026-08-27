@@ -41,16 +41,16 @@ class TelegramAlertService:
     def __init__(self):
         self.enabled = True
         self.alert_templates = {
-            "placeorder": "📈 *Order Placed*\n{details}",
-            "placesmartorder": "🎯 *Smart Order Placed*\n{details}",
-            "basketorder": "🛒 *Basket Order Executed*\n{details}",
-            "splitorder": "✂️ *Split Order Executed*\n{details}",
-            "optionsorder": "📊 *Options Order Executed*\n{details}",
-            "optionsmultiorder": "📊 *Options Multi-Order Executed*\n{details}",
-            "modifyorder": "✏️ *Order Modified*\n{details}",
-            "cancelorder": "❌ *Order Cancelled*\n{details}",
-            "cancelallorder": "🚫 *All Orders Cancelled*\n{details}",
-            "closeposition": "🔒 *Position Closed*\n{details}",
+            "placeorder": "*Order Placed*\n{details}",
+            "placesmartorder": "*Smart Order Placed*\n{details}",
+            "basketorder": "*Basket Order Executed*\n{details}",
+            "splitorder": "*Split Order Executed*\n{details}",
+            "optionsorder": "*Options Order Executed*\n{details}",
+            "optionsmultiorder": "*Options Multi-Order Executed*\n{details}",
+            "modifyorder": "*Order Modified*\n{details}",
+            "cancelorder": "*Order Cancelled*\n{details}",
+            "cancelallorder": "*All Orders Cancelled*\n{details}",
+            "closeposition": "*Position Closed*\n{details}",
         }
 
     def format_order_details(
@@ -64,10 +64,10 @@ class TelegramAlertService:
             # Add mode indicator at the top
             mode = response.get("mode", "live")
             if mode == "analyze":
-                details.append("🔬 *ANALYZE MODE - No Real Order*")
+                details.append("*ANALYZE MODE - No Real Order*")
                 details.append("─────────────────────")
             else:
-                details.append("💰 *LIVE MODE - Real Order*")
+                details.append("*LIVE MODE - Real Order*")
                 details.append("─────────────────────")
 
             if order_type == "placeorder":
@@ -107,13 +107,13 @@ class TelegramAlertService:
                     details.extend(
                         [
                             f"Total Orders: {len(results)}",
-                            f"✅ Successful: {success_count}",
-                            f"❌ Failed: {failed_count}",
+                            f"Successful: {success_count}",
+                            f"Failed: {failed_count}",
                         ]
                     )
                     # Add first few order details
                     for result in results[:3]:  # Show first 3 orders
-                        status_emoji = "✅" if result.get("status") == "success" else "❌"
+                        status_emoji = "[OK]" if result.get("status") == "success" else "[FAILED]"
                         details.append(
                             f"{status_emoji} {result.get('symbol', 'N/A')}: {result.get('orderid', result.get('message', 'N/A'))}"
                         )
@@ -130,14 +130,14 @@ class TelegramAlertService:
                         f"Total Quantity: {response.get('total_quantity', 'N/A')}",
                         f"Split Size: {response.get('split_size', 'N/A')}",
                         f"Total Orders: {len(results)}",
-                        f"✅ Successful: {success_count}",
-                        f"❌ Failed: {failed_count}",
+                        f"Successful: {success_count}",
+                        f"Failed: {failed_count}",
                     ]
                 )
                 if failed_count > 0 and success_count == 0:
-                    details.append("⚠️ All orders rejected")
+                    details.append("All orders rejected")
                 elif failed_count > 0:
-                    details.append("⚠️ Partial fill")
+                    details.append("Partial fill")
                     # Show first failure reason
                     first_fail = next((r for r in results if r.get("status") != "success"), None)
                     if first_fail and first_fail.get("message"):
@@ -153,16 +153,16 @@ class TelegramAlertService:
                     ]
                 )
                 if response.get("status") == "success":
-                    details.append("✅ Modification Successful")
+                    details.append("Modification Successful")
                 else:
-                    details.append(f"❌ Error: {response.get('message', 'Failed')}")
+                    details.append(f"Error: {response.get('message', 'Failed')}")
 
             elif order_type == "cancelorder":
                 details.extend([f"Order ID: `{order_data.get('orderid', 'N/A')}`"])
                 if response.get("status") == "success":
-                    details.append("✅ Cancellation Successful")
+                    details.append("Cancellation Successful")
                 else:
-                    details.append(f"❌ Error: {response.get('message', 'Failed')}")
+                    details.append(f"Error: {response.get('message', 'Failed')}")
 
             elif order_type == "cancelallorder":
                 if response.get("status") == "success":
@@ -170,8 +170,8 @@ class TelegramAlertService:
                     failed = response.get("failed_cancellations", [])
                     details.extend(
                         [
-                            f"✅ Cancelled: {len(canceled)} orders",
-                            f"❌ Failed: {len(failed)} orders",
+                            f"Cancelled: {len(canceled)} orders",
+                            f"Failed: {len(failed)} orders",
                         ]
                     )
                     if canceled and len(canceled) <= 5:
@@ -195,14 +195,14 @@ class TelegramAlertService:
                         if closed or failed:
                             details.extend(
                                 [
-                                    f"✅ Closed: {closed} positions",
-                                    f"❌ Failed: {failed} positions",
+                                    f"Closed: {closed} positions",
+                                    f"Failed: {failed} positions",
                                 ]
                             )
                         else:
-                            details.append("✅ All positions closed successfully")
+                            details.append("All positions closed successfully")
                 else:
-                    details.append(f"❌ Error: {response.get('message', 'Failed')}")
+                    details.append(f"Error: {response.get('message', 'Failed')}")
 
             elif order_type == "optionsorder":
                 details.append(f"Underlying: `{order_data.get('underlying', 'N/A')}`")
@@ -214,12 +214,12 @@ class TelegramAlertService:
                         details.extend(
                             [
                                 f"Total Orders: {len(results)}",
-                                f"✅ Successful: {success_count}",
-                                f"❌ Failed: {failed_count}",
+                                f"Successful: {success_count}",
+                                f"Failed: {failed_count}",
                             ]
                         )
                         for result in results[:5]:
-                            status_emoji = "✅" if result.get("status") == "success" else "❌"
+                            status_emoji = "[OK]" if result.get("status") == "success" else "[FAILED]"
                             details.append(
                                 f"{status_emoji} `{result.get('symbol', 'N/A')}` {result.get('action', '')} → {result.get('orderid', result.get('message', 'N/A'))}"
                             )
@@ -234,7 +234,7 @@ class TelegramAlertService:
                             ]
                         )
                 else:
-                    details.append(f"❌ Error: {response.get('message', 'Failed')}")
+                    details.append(f"Error: {response.get('message', 'Failed')}")
 
             elif order_type == "optionsmultiorder":
                 details.append(f"Underlying: `{order_data.get('underlying', 'N/A')}`")
@@ -245,12 +245,12 @@ class TelegramAlertService:
                     details.extend(
                         [
                             f"Total Legs: {len(results)}",
-                            f"✅ Successful: {success_count}",
-                            f"❌ Failed: {failed_count}",
+                            f"Successful: {success_count}",
+                            f"Failed: {failed_count}",
                         ]
                     )
                     for result in results:
-                        status_emoji = "✅" if result.get("status") == "success" else "❌"
+                        status_emoji = "[OK]" if result.get("status") == "success" else "[FAILED]"
                         symbol = result.get("symbol", "N/A")
                         action = result.get("action", "")
                         oid = result.get("orderid", result.get("message", "N/A"))
@@ -258,9 +258,9 @@ class TelegramAlertService:
                     if response.get("underlying_ltp"):
                         details.append(f"Underlying LTP: {response.get('underlying_ltp')}")
                 else:
-                    details.append(f"❌ Error: {response.get('message', 'Failed')}")
+                    details.append(f"Error: {response.get('message', 'Failed')}")
 
-            details.append(f"⏰ Time: {timestamp}")
+            details.append(f"Time: {timestamp}")
 
             # Add strategy if available
             if order_data.get("strategy"):
@@ -429,7 +429,7 @@ class TelegramAlertService:
             )
 
             # Format message
-            template = self.alert_templates.get(order_type, "📊 *Order Update*\n{details}")
+            template = self.alert_templates.get(order_type, "*Order Update*\n{details}")
             details = self.format_order_details(order_type, order_data, response)
             message = template.format(details=details)
 

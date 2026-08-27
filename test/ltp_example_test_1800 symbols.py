@@ -46,11 +46,11 @@ def load_symbols(limit=1800):
                     symbols.append({"exchange": exchange, "symbol": symbol})
                     count += 1
 
-        print(f"✅ Successfully loaded {len(symbols)} symbols from CSV")
+        print(f"Successfully loaded {len(symbols)} symbols from CSV")
         return symbols
 
     except FileNotFoundError:
-        print(f"❌ NSE SYMBOLS.csv not found at {csv_path}")
+        print(f"NSE SYMBOLS.csv not found at {csv_path}")
         print("Using fallback symbols...")
 
         # Fallback to popular NSE symbols only
@@ -213,7 +213,7 @@ def main():
                         )
 
         except Exception as e:
-            print(f"❌ Error processing data: {e}")
+            print(f"Error processing data: {e}")
 
     def print_statistics():
         """Print comprehensive statistics for 1800 symbols"""
@@ -223,22 +223,22 @@ def main():
             print("\n" + "=" * 80)
             print(f"LIVE STATISTICS - {current_time.strftime('%Y-%m-%d %H:%M:%S')}")
             print("=" * 80)
-            print(f"📊 Total Updates Received: {update_count:,}")
-            print(f"📈 Symbols Subscribed: {len(test_symbols):,}")
-            print(f"✅ Symbols with Data: {len(symbol_data):,}")
-            print(f"📡 Success Rate: {(len(symbol_data) / len(test_symbols) * 100):.1f}%")
+            print(f"Total Updates Received: {update_count:,}")
+            print(f"Symbols Subscribed: {len(test_symbols):,}")
+            print(f"Symbols with Data: {len(symbol_data):,}")
+            print(f"Success Rate: {(len(symbol_data) / len(test_symbols) * 100):.1f}%")
 
             if connection_start_time:
                 elapsed = (current_time - connection_start_time).total_seconds()
                 rate = update_count / elapsed if elapsed > 0 else 0
-                print(f"⏱️  Running Time: {elapsed:.0f}s")
-                print(f"⚡ Update Rate: {rate:.1f} updates/sec")
+                print(f"Running Time: {elapsed:.0f}s")
+                print(f"Update Rate: {rate:.1f} updates/sec")
 
             if subscription_start_time:
                 sub_elapsed = (current_time - subscription_start_time).total_seconds()
-                print(f"📡 Subscription Time: {sub_elapsed:.1f}s")
+                print(f"Subscription Time: {sub_elapsed:.1f}s")
 
-            print("\n📂 Category-wise Active Symbols:")
+            print("\n Category-wise Active Symbols:")
             for category, count in sorted(category_stats.items()):
                 print(f"  {category:12}: {count:>4} symbols")
 
@@ -248,7 +248,7 @@ def main():
                     symbol_data.items(), key=lambda x: x[1].get("update_count", 0), reverse=True
                 )[:10]
 
-                print("\n🔥 Top 10 Most Active Symbols:")
+                print("\n Top 10 Most Active Symbols:")
                 for i, (symbol, data) in enumerate(top_symbols, 1):
                     updates = data.get("update_count", 0)
                     ltp = data.get("ltp", 0)
@@ -257,35 +257,35 @@ def main():
                 # Symbols without updates
                 no_updates = len(test_symbols) - len(symbol_data)
                 if no_updates > 0:
-                    print(f"\n⚠️  Symbols without updates: {no_updates}")
+                    print(f"\n Symbols without updates: {no_updates}")
 
             print("=" * 80 + "\n")
 
     try:
-        print(f"📡 Connecting to WebSocket at {client.ws_url}...")
+        print(f"Connecting to WebSocket at {client.ws_url}...")
         connection_start_time = datetime.now()
 
         client.connect()
-        print("✅ Connected successfully!")
+        print("Connected successfully!")
 
         # Inform about all exchanges subscribed
         exchanges = sorted(set(s["exchange"] for s in test_symbols))
         print(
-            f"📊 Subscribing to {len(test_symbols):,} symbols across exchanges: {', '.join(exchanges)}"
+            f"Subscribing to {len(test_symbols):,} symbols across exchanges: {', '.join(exchanges)}"
         )
-        print("⏳ This may take a few minutes due to batching...")
+        print("This may take a few minutes due to batching...")
 
         subscription_start_time = datetime.now()
         client.subscribe_ltp(test_symbols, on_data_received=on_data_received)
 
         subscription_end_time = datetime.now()
         subscription_duration = (subscription_end_time - subscription_start_time).total_seconds()
-        print(f"✅ Subscription completed in {subscription_duration:.1f} seconds!")
+        print(f"Subscription completed in {subscription_duration:.1f} seconds!")
 
-        print("\n🚀 Starting LTP monitoring for 1800 symbols...")
-        print("📈 Statistics will be printed every 15 seconds")
-        print("💡 Only every 100th update is printed to avoid spam")
-        print("🛑 Press Ctrl+C to stop\n")
+        print("\n Starting LTP monitoring for 1800 symbols...")
+        print("Statistics will be printed every 15 seconds")
+        print("Only every 100th update is printed to avoid spam")
+        print("Press Ctrl+C to stop\n")
 
         # Monitor with longer intervals for 1800 symbols
         test_start_time = time.time()
@@ -296,8 +296,8 @@ def main():
 
             # Check if we're receiving data
             if update_count == 0 and time.time() - test_start_time > 60:
-                print("⚠️ No data received for 60 seconds.")
-                print("💡 This might be normal if market is closed or during low activity periods.")
+                print("No data received for 60 seconds.")
+                print("This might be normal if market is closed or during low activity periods.")
 
                 # Ask user if they want to continue
                 try:
@@ -309,31 +309,31 @@ def main():
                     break
 
     except KeyboardInterrupt:
-        print("\n🛑 Stopping test...")
+        print("\n Stopping test...")
 
     except Exception as e:
-        print(f"❌ Error occurred: {e}")
+        print(f"Error occurred: {e}")
         import traceback
 
         traceback.print_exc()
 
     finally:
-        print("\n🧹 Cleaning up...")
+        print("\n Cleaning up...")
         cleanup_start = time.time()
 
         try:
-            print("📡 Unsubscribing from all symbols...")
+            print("Unsubscribing from all symbols...")
             client.unsubscribe_ltp(test_symbols)
-            print("✅ Unsubscribed successfully")
+            print("Unsubscribed successfully")
         except Exception as e:
-            print(f"❌ Error during unsubscribe: {e}")
+            print(f"Error during unsubscribe: {e}")
 
         try:
-            print("🔌 Disconnecting from WebSocket...")
+            print("Disconnecting from WebSocket...")
             client.disconnect()
-            print("✅ Disconnected successfully")
+            print("Disconnected successfully")
         except Exception as e:
-            print(f"❌ Error during disconnect: {e}")
+            print(f"Error during disconnect: {e}")
 
         cleanup_time = time.time() - cleanup_start
 
@@ -346,22 +346,22 @@ def main():
             if connection_start_time:
                 total_time = (datetime.now() - connection_start_time).total_seconds()
                 print(
-                    f"🕐 Total Test Duration: {total_time:.1f} seconds ({total_time / 60:.1f} minutes)"
+                    f"Total Test Duration: {total_time:.1f} seconds ({total_time / 60:.1f} minutes)"
                 )
 
-            print(f"📊 Total Updates Received: {update_count:,}")
-            print(f"📈 Symbols Subscribed: {len(test_symbols):,}")
-            print(f"✅ Symbols with Data: {len(symbol_data):,}")
-            print(f"📡 Overall Success Rate: {(len(symbol_data) / len(test_symbols) * 100):.1f}%")
+            print(f"Total Updates Received: {update_count:,}")
+            print(f"Symbols Subscribed: {len(test_symbols):,}")
+            print(f"Symbols with Data: {len(symbol_data):,}")
+            print(f"Overall Success Rate: {(len(symbol_data) / len(test_symbols) * 100):.1f}%")
 
             if update_count > 0 and connection_start_time:
                 avg_rate = update_count / total_time
-                print(f"⚡ Average Update Rate: {avg_rate:.1f} updates/second")
+                print(f"Average Update Rate: {avg_rate:.1f} updates/second")
 
-            print(f"🧹 Cleanup Time: {cleanup_time:.1f} seconds")
+            print(f"Cleanup Time: {cleanup_time:.1f} seconds")
 
             if category_stats:
-                print("\n📂 Final Category Statistics:")
+                print("\n Final Category Statistics:")
                 for category, count in sorted(category_stats.items()):
                     print(f"  {category:12}: {count:>4} symbols with data")
 
@@ -369,7 +369,7 @@ def main():
                 # Most active symbols
                 most_active = max(symbol_data.items(), key=lambda x: x[1].get("update_count", 0))
                 print(
-                    f"\n🏆 Most Active Symbol: {most_active[0]} ({most_active[1].get('update_count', 0)} updates)"
+                    f"\n Most Active Symbol: {most_active[0]} ({most_active[1].get('update_count', 0)} updates)"
                 )
 
                 # Average updates per symbol
@@ -377,9 +377,9 @@ def main():
                     data.get("update_count", 0) for data in symbol_data.values()
                 )
                 avg_updates = total_symbol_updates / len(symbol_data)
-                print(f"📊 Average Updates per Symbol: {avg_updates:.1f}")
+                print(f"Average Updates per Symbol: {avg_updates:.1f}")
 
-        print("\n🎉 1800 Symbol LTP Test Completed!")
+        print("\n 1800 Symbol LTP Test Completed!")
         print("=" * 80)
 
 

@@ -31,7 +31,10 @@ import sys
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+# Register the app's SQLite pragmas on this process's engines, so a migration
+# waits the same 15s for a write lock the running app does instead of the
+# sqlite3 default of 5s (GitHub issue #1726).
+import _pragmas  # noqa: F401,E402
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 
@@ -113,7 +116,7 @@ def create_gtt_tables(conn):
     )
 
     conn.commit()
-    logger.info("✅ GTT tables created (or already present)")
+    logger.info("GTT tables created (or already present)")
 
 
 def create_gtt_indexes(conn):
@@ -158,7 +161,7 @@ def create_gtt_indexes(conn):
     )
 
     conn.commit()
-    logger.info("✅ GTT indexes created (or already present)")
+    logger.info("GTT indexes created (or already present)")
 
 
 def _sandbox_config_exists(conn):
@@ -218,7 +221,7 @@ def insert_default_config(conn):
             added += 1
 
     conn.commit()
-    logger.info(f"✅ Added {added} GTT default config entries")
+    logger.info(f"Added {added} GTT default config entries")
 
 
 def upgrade():
@@ -233,11 +236,11 @@ def upgrade():
             create_gtt_indexes(conn)
             insert_default_config(conn)
 
-        logger.info(f"✅ Migration {MIGRATION_NAME} completed successfully")
+        logger.info(f"Migration {MIGRATION_NAME} completed successfully")
         return True
 
     except Exception as e:
-        logger.error(f"❌ Migration failed: {e}")
+        logger.error(f"Migration failed: {e}")
         import traceback
 
         traceback.print_exc()
@@ -267,13 +270,13 @@ def status():
                 if not row:
                     missing_tables.append(t)
             if missing_tables:
-                logger.info(f"❌ Missing tables: {', '.join(missing_tables)}")
+                logger.info(f"Missing tables: {', '.join(missing_tables)}")
                 return False
 
             # Config present? (sandbox_config may be absent on a truly fresh DB.)
             if not _sandbox_config_exists(conn):
                 logger.info(
-                    "⚠️  sandbox_config table is missing — run migrate_sandbox.py first."
+                    "sandbox_config table is missing — run migrate_sandbox.py first."
                 )
                 return False
 
@@ -286,19 +289,19 @@ def status():
                 if not row:
                     missing_configs.append(k)
             if missing_configs:
-                logger.info(f"⚠️  Missing config keys: {', '.join(missing_configs)}")
+                logger.info(f"Missing config keys: {', '.join(missing_configs)}")
                 return False
 
             # Stats
             gtt_count = conn.execute(text("SELECT COUNT(*) FROM sandbox_gtt")).scalar()
             leg_count = conn.execute(text("SELECT COUNT(*) FROM sandbox_gtt_legs")).scalar()
-            logger.info("✅ GTT schema is fully configured")
+            logger.info("GTT schema is fully configured")
             logger.info(f"   Total GTTs: {gtt_count}")
             logger.info(f"   Total GTT legs: {leg_count}")
             return True
 
     except Exception as e:
-        logger.error(f"❌ Status check failed: {e}")
+        logger.error(f"Status check failed: {e}")
         return False
 
 

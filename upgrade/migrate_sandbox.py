@@ -26,7 +26,10 @@ from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+# Register the app's SQLite pragmas on this process's engines, so a migration
+# waits the same 15s for a write lock the running app does instead of the
+# sqlite3 default of 5s (GitHub issue #1726).
+import _pragmas  # noqa: F401,E402
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -86,7 +89,7 @@ def create_all_tables(conn):
             trigger_price DECIMAL(10, 2),
             price_type VARCHAR(20) NOT NULL CHECK(price_type IN ('MARKET', 'LIMIT', 'SL', 'SL-M')),
             product VARCHAR(20) NOT NULL CHECK(product IN ('CNC', 'NRML', 'MIS')),
-            order_status VARCHAR(20) NOT NULL DEFAULT 'open' CHECK(order_status IN ('open', 'complete', 'cancelled', 'rejected')),
+            order_status VARCHAR(20) NOT NULL DEFAULT 'open' CHECK(order_status IN ('open', 'trigger pending', 'complete', 'cancelled', 'rejected')),
             average_price DECIMAL(10, 2),
             filled_quantity INTEGER DEFAULT 0,
             pending_quantity INTEGER NOT NULL,
@@ -196,7 +199,7 @@ def create_all_tables(conn):
     )
 
     conn.commit()
-    logger.info("✅ All sandbox tables created successfully")
+    logger.info("All sandbox tables created successfully")
 
 
 def create_all_indexes(conn):
@@ -246,7 +249,7 @@ def create_all_indexes(conn):
     conn.execute(text("CREATE INDEX IF NOT EXISTS idx_config_key ON sandbox_config(config_key)"))
 
     conn.commit()
-    logger.info("✅ All indexes created successfully")
+    logger.info("All indexes created successfully")
 
 
 def add_missing_columns(conn):
@@ -265,7 +268,7 @@ def add_missing_columns(conn):
             ADD COLUMN margin_blocked DECIMAL(10,2) DEFAULT 0.00
         """)
         )
-        logger.info("✅ Added margin_blocked column to sandbox_orders")
+        logger.info("Added margin_blocked column to sandbox_orders")
 
     # Check and add accumulated_realized_pnl to sandbox_positions if missing
     result = conn.execute(text("PRAGMA table_info(sandbox_positions)"))
@@ -278,7 +281,7 @@ def add_missing_columns(conn):
             ADD COLUMN accumulated_realized_pnl DECIMAL(10,2) DEFAULT 0.00
         """)
         )
-        logger.info("✅ Added accumulated_realized_pnl column to sandbox_positions")
+        logger.info("Added accumulated_realized_pnl column to sandbox_positions")
 
     # Check and add margin_blocked to sandbox_positions if missing
     if "margin_blocked" not in columns:
@@ -288,7 +291,7 @@ def add_missing_columns(conn):
             ADD COLUMN margin_blocked DECIMAL(15,2) DEFAULT 0.00
         """)
         )
-        logger.info("✅ Added margin_blocked column to sandbox_positions")
+        logger.info("Added margin_blocked column to sandbox_positions")
 
     conn.commit()
 
@@ -364,7 +367,7 @@ def insert_default_config(conn):
             added_count += 1
 
     conn.commit()
-    logger.info(f"✅ Added {added_count} default configuration entries")
+    logger.info(f"Added {added_count} default configuration entries")
 
 
 def upgrade():
@@ -387,11 +390,11 @@ def upgrade():
             # Insert default config
             insert_default_config(conn)
 
-        logger.info(f"✅ Migration {MIGRATION_NAME} completed successfully")
+        logger.info(f"Migration {MIGRATION_NAME} completed successfully")
         return True
 
     except Exception as e:
-        logger.error(f"❌ Migration failed: {e}")
+        logger.error(f"Migration failed: {e}")
         import traceback
 
         traceback.print_exc()
@@ -428,7 +431,7 @@ def status():
                     missing_tables.append(table)
 
             if missing_tables:
-                logger.info(f"❌ Missing tables: {', '.join(missing_tables)}")
+                logger.info(f"Missing tables: {', '.join(missing_tables)}")
                 logger.info("   Migration needed")
                 return False
 
@@ -437,7 +440,7 @@ def status():
             columns = [row[1] for row in result]
 
             if "margin_blocked" not in columns:
-                logger.info("⚠️  Missing margin_blocked column in sandbox_orders")
+                logger.info("Missing margin_blocked column in sandbox_orders")
                 logger.info("   Migration needed")
                 return False
 
@@ -446,12 +449,12 @@ def status():
             columns = [row[1] for row in result]
 
             if "accumulated_realized_pnl" not in columns:
-                logger.info("⚠️  Missing accumulated_realized_pnl column in sandbox_positions")
+                logger.info("Missing accumulated_realized_pnl column in sandbox_positions")
                 logger.info("   Migration needed")
                 return False
 
             if "margin_blocked" not in columns:
-                logger.info("⚠️  Missing margin_blocked column in sandbox_positions")
+                logger.info("Missing margin_blocked column in sandbox_positions")
                 logger.info("   Migration needed")
                 return False
 
@@ -468,7 +471,7 @@ def status():
             )
 
             stats = result.fetchone()
-            logger.info("✅ Sandbox database is fully configured")
+            logger.info("Sandbox database is fully configured")
             logger.info(f"   Total Orders: {stats[0]}")
             logger.info(f"   Total Trades: {stats[1]}")
             logger.info(f"   Open Positions: {stats[2]}")
@@ -478,7 +481,7 @@ def status():
             return True
 
     except Exception as e:
-        logger.error(f"❌ Status check failed: {e}")
+        logger.error(f"Status check failed: {e}")
         return False
 
 

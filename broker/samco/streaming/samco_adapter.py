@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import sys
 import threading
@@ -10,6 +9,7 @@ from urllib.parse import unquote
 from broker.samco.api.data import BrokerData
 from broker.samco.streaming.samcoWebSocket import SamcoWebSocket
 from database.auth_db import get_auth_token
+from utils.logging import get_logger
 
 # Add parent directory to path to allow imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -25,7 +25,7 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def __init__(self):
         super().__init__()
-        self.logger = logging.getLogger("samco_websocket")
+        self.logger = get_logger("samco_websocket")
         self.ws_client = None
         self.user_id = None
         self.broker_name = "samco"

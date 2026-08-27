@@ -3,7 +3,6 @@ Fixed Dhan WebSocket adapter for OpenAlgo.
 Implements the broker-specific WebSocket adapter for Dhan with proper mode mapping.
 """
 
-import logging
 import os
 
 # Add the project root to Python path if not already there
@@ -19,6 +18,7 @@ if project_root not in sys.path:
 # Now import using relative paths from the project root
 from database.auth_db import get_auth_token
 from database.token_db import get_token
+from utils.logging import get_logger
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 
 from .dhan_mapping import get_dhan_exchange, get_openalgo_exchange
@@ -50,7 +50,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Initialize the WebSocket adapter"""
         super().__init__()
         # Set a default logger name, will be updated in initialize()
-        self.logger = logging.getLogger("websocket_adapter")
+        self.logger = get_logger("websocket_adapter")
         self.ws_client = None
         self.user_id = None
         # broker_name will be set in initialize()
@@ -99,7 +99,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         self.broker_name = broker_name.lower()  # Store broker name for later use
         # Update logger name based on broker name
-        self.logger = logging.getLogger(f"{self.broker_name}_websocket_adapter")
+        self.logger = get_logger(f"{self.broker_name}_websocket_adapter")
         self.logger.info(f"Initializing {self.broker_name} WebSocket adapter")
         self.user_id = user_id
 
@@ -436,9 +436,9 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.token_to_symbol[int(actual_token)] = (symbol, exchange)
 
                 self.logger.info(
-                    f"📝 Stored token mapping: {actual_token} -> ({symbol}, {exchange})"
+                    f"Stored token mapping: {actual_token} -> ({symbol}, {exchange})"
                 )
-                self.logger.info(f"📝 Current token_to_symbol: {self.token_to_symbol}")
+                self.logger.info(f"Current token_to_symbol: {self.token_to_symbol}")
 
             # Map OpenAlgo exchange to Dhan exchange code
             exchange_code = 1  # Default to NSE_EQ
@@ -466,12 +466,12 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             # Subscribe to token with Dhan WebSocket, passing exchange code
             self.logger.info(
-                f"🚀 Subscribing to {dhan_exchange}:{symbol} with token {actual_token} in mode '{dhan_mode}' using exchange code {exchange_code}"
+                f"Subscribing to {dhan_exchange}:{symbol} with token {actual_token} in mode '{dhan_mode}' using exchange code {exchange_code}"
             )
 
             # Check if WebSocket client is properly initialized and connected
             if not self.ws_client:
-                self.logger.error("❌ WebSocket client is None!")
+                self.logger.error("WebSocket client is None!")
                 return {"status": "error", "message": "WebSocket client not initialized"}
 
             # Check connection status
@@ -480,7 +480,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             if not is_connected:
                 self.logger.warning(
-                    "⚠️ WebSocket client may not be connected, but attempting subscription anyway"
+                    "WebSocket client may not be connected, but attempting subscription anyway"
                 )
                 # Don't fail here - let the subscription attempt proceed
 
@@ -618,7 +618,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         Callback handler for WebSocket connection event.
         """
-        self.logger.info("🟢 WebSocket connected callback triggered")
+        self.logger.info("WebSocket connected callback triggered")
         self.connected = True
 
     def _on_disconnect(self):
@@ -626,7 +626,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Callback handler for WebSocket disconnection event.
         Attempts to reconnect if needed.
         """
-        self.logger.warning("🔴 WebSocket disconnected callback triggered")
+        self.logger.warning("WebSocket disconnected callback triggered")
         self.connected = False
 
         # Attempt to reconnect if we're still running
@@ -644,7 +644,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Args:
             error: Error object or message from WebSocket
         """
-        self.logger.error(f"🚨 WebSocket error callback triggered: {error}")
+        self.logger.error(f"WebSocket error callback triggered: {error}")
 
         # Attempt to reconnect on error if still running
         if self.running and self.ws_client:
@@ -664,7 +664,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.warning("No ticks received in _on_ticks callback")
                 return
 
-            self.logger.info(f"🎯 Received {len(ticks)} ticks from Dhan WebSocket")
+            self.logger.info(f"Received {len(ticks)} ticks from Dhan WebSocket")
 
             # Debug: Log raw tick data
             for i, tick in enumerate(ticks):
@@ -696,7 +696,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         token_keys = list(self.token_to_symbol.keys())
                         token_types = [(k, type(k).__name__) for k in token_keys]
                         self.logger.warning(
-                            f"❌ TOKEN MAPPING FAILURE: Received token {token} (type: {type(token).__name__}) not found"
+                            f"TOKEN MAPPING FAILURE: Received token {token} (type: {type(token).__name__}) not found"
                         )
                         self.logger.warning(f"Available tokens: {token_types}")
 
@@ -705,7 +705,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             try:
                                 if int(k) == int(token):
                                     self.logger.info(
-                                        f"✅ Found match using int conversion: {k} -> {v}"
+                                        f"Found match using int conversion: {k} -> {v}"
                                     )
                                     symbol_exchange = v
                                     break
@@ -714,7 +714,7 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                         if not symbol_exchange:
                             self.logger.error(
-                                f"❌ CRITICAL: No symbol found for token {token}, skipping tick"
+                                f"CRITICAL: No symbol found for token {token}, skipping tick"
                             )
                             continue  # Still no match, skip this tick
 
@@ -981,11 +981,11 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             normalized["ask_qty"] = sell_levels[0]["quantity"]
 
                         self.logger.info(
-                            f"✅ Depth data added to normalized tick for {normalized.get('symbol')}: {len(buy_levels)} buy, {len(sell_levels)} sell levels"
+                            f"Depth data added to normalized tick for {normalized.get('symbol')}: {len(buy_levels)} buy, {len(sell_levels)} sell levels"
                         )
                     else:
                         self.logger.warning(
-                            f"❌ No valid depth levels found for {normalized.get('symbol')}"
+                            f"No valid depth levels found for {normalized.get('symbol')}"
                         )
 
                 except Exception as e:

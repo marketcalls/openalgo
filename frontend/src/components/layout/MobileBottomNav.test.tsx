@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import { axe, toHaveNoViolations } from 'jest-axe'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { describe, expect, it } from 'vitest'
 import { bottomNavItems } from '@/config/navigation'
 import { MobileBottomNav } from './MobileBottomNav'
@@ -54,6 +54,7 @@ describe('MobileBottomNav', () => {
 
       const dashboardLink = screen.getByRole('link', { name: /dashboard/i })
       expect(dashboardLink).toHaveClass('text-primary')
+      expect(dashboardLink).toHaveAttribute('aria-current', 'page')
     })
 
     it('highlights Positions when on positions route', () => {

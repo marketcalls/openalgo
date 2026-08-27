@@ -37,7 +37,7 @@ class CSRFTester:
         """Log test results"""
         result = {"test": test_name, "passed": passed, "details": details}
         self.results["tests"].append(result)
-        status = "✓ PASS" if passed else "✗ FAIL"
+        status = "PASS" if passed else "FAIL"
         print(f"{status}: {test_name}")
         if details:
             print(f"  Details: {details}")

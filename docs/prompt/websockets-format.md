@@ -199,6 +199,60 @@ If a client requests a depth level not supported by their broker:
 }
 ```
 
+### Order Updates (Account-Level Stream)
+
+Real-time order status changes (fills, partial fills, rejections,
+cancellations) pushed by the broker — or by the sandbox engine in analyze
+mode. No symbols or modes; one subscription covers the whole account.
+
+Subscribe (after authentication):
+
+```json
+{
+  "action": "subscribe_orders"
+}
+```
+
+Unsubscribe with `{"action": "unsubscribe_orders"}`. Each event arrives as:
+
+```json
+{
+  "type": "order_update",
+  "user_id": "openalgo-user",
+  "mode": "live",
+  "broker": "upstox",
+  "orderid": "240221025997024",
+  "symbol": "RELIANCE",
+  "exchange": "NSE",
+  "action": "BUY",
+  "quantity": 10,
+  "price": 1424.0,
+  "trigger_price": 0,
+  "pricetype": "LIMIT",
+  "product": "MIS",
+  "order_status": "complete",
+  "filled_quantity": 10,
+  "pending_quantity": 0,
+  "average_price": 1423.85,
+  "rejection_reason": ""
+}
+```
+
+Fields use OpenAlgo's common order constants: `symbol` is in OpenAlgo symbol
+format (mapped from the broker's own symbology, e.g. `NHPC-EQ` → `NHPC`,
+`NIFTY28JUL26FUT` for NFO futures), `action` BUY/SELL, `pricetype`
+MARKET/LIMIT/SL/SL-M, `product` CNC/NRML/MIS; `order_status` is lowercase
+`open` / `trigger pending` / `complete` / `rejected` / `cancelled` (plus broker extras such as
+`expired`); `rejection_reason` carries the broker's full RMS/OMS text when
+rejected; `mode` is `live` (broker) or `analyze` (sandbox).
+
+Sources: dedicated broker order feeds (Zerodha, Dhan, Fyers, Upstox,
+AliceBlue, Definedge, IndMoney, Angel One, Nubra, Arrow, IIFL Capital, Kotak),
+REST-orderbook polling for brokers without push (Groww), and
+`/postback/<broker>` HTTPS
+webhooks on production deployments. If both a broker feed and a postback are
+configured, deduplicate on `orderid` + `order_status` + `filled_quantity`.
+
 ### Heartbeat and Reconnection
 
 * Server sends `ping` messages every 30 seconds.

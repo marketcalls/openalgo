@@ -14,30 +14,30 @@ Instrument under test: **NIFTY** ATM CE/PE and the nearest **NIFTY FUT** on NFO
 ### Core lifecycle (12/12)
 | # | Scenario | Expectation | Result |
 |---|----------|-------------|--------|
-| 1 | Analyzer mode + ATM chain resolve | Sandbox on, ATM CE resolved | ✅ |
-| 2 | Clean slate (flatten existing) | Start qty = 0 | ✅ |
-| 3 | Entry — BUY 1 lot (MARKET, NRML) | order accepted, code 200, orderid | ✅ |
-| 4 | Positionbook reflects entry | qty = +1 lot (65) | ✅ |
-| 5 | Scale-in — BUY 1 lot | qty = +2 lots (130) | ✅ |
-| 6 | Partial exit via `close_leg` — SELL 1 lot | qty = 65 | ✅ |
-| 7 | Full exit via `close_leg` | qty = 0 (flat) | ✅ |
-| 8 | Reject non-lot-multiple qty | 400 "whole number of lots" | ✅ |
-| 9 | Reject > 20-lot cap | 400 "exceeds the 20-lot cap" | ✅ |
-| 10 | Accept valid 1-lot qty | no error | ✅ |
-| 11 | Equity (NSE) bypasses lot rules | `_is_derivative('NSE')` = False | ✅ |
-| 12 | `cancel_all_orders` | code 200 | ✅ |
+| 1 | Analyzer mode + ATM chain resolve | Sandbox on, ATM CE resolved | Yes |
+| 2 | Clean slate (flatten existing) | Start qty = 0 | Yes |
+| 3 | Entry — BUY 1 lot (MARKET, NRML) | order accepted, code 200, orderid | Yes |
+| 4 | Positionbook reflects entry | qty = +1 lot (65) | Yes |
+| 5 | Scale-in — BUY 1 lot | qty = +2 lots (130) | Yes |
+| 6 | Partial exit via `close_leg` — SELL 1 lot | qty = 65 | Yes |
+| 7 | Full exit via `close_leg` | qty = 0 (flat) | Yes |
+| 8 | Reject non-lot-multiple qty | 400 "whole number of lots" | Yes |
+| 9 | Reject > 20-lot cap | 400 "exceeds the 20-lot cap" | Yes |
+| 10 | Accept valid 1-lot qty | no error | Yes |
+| 11 | Equity (NSE) bypasses lot rules | `_is_derivative('NSE')` = False | Yes |
+| 12 | `cancel_all_orders` | code 200 | Yes |
 
 ### Extended scenarios (8/8)
 | # | Scenario | Expectation | Result |
 |---|----------|-------------|--------|
-| 13 | Short entry — SELL to open (PE) | qty = −1 lot (−65) | ✅ |
-| 14 | Short exit — BUY to close | flat | ✅ |
-| 15 | Build 28-lot position (1820 qty) | qty = 1820 | ✅ |
-| 16 | **Freeze-split close** (qty > 27-lot freeze) | split into ≥2 whole-lot orders (27 + 1) | ✅ |
-| 17 | Freeze-split close → flat | qty = 0 | ✅ |
-| 18 | Futures entry — BUY 1 lot (NIFTY FUT) | qty = +1 lot | ✅ |
-| 19 | Futures exit | flat | ✅ |
-| 20 | Track + list scalping symbol | tracked list contains the leg | ✅ |
+| 13 | Short entry — SELL to open (PE) | qty = −1 lot (−65) | Yes |
+| 14 | Short exit — BUY to close | flat | Yes |
+| 15 | Build 28-lot position (1820 qty) | qty = 1820 | Yes |
+| 16 | **Freeze-split close** (qty > 27-lot freeze) | split into ≥2 whole-lot orders (27 + 1) | Yes |
+| 17 | Freeze-split close → flat | qty = 0 | Yes |
+| 18 | Futures entry — BUY 1 lot (NIFTY FUT) | qty = +1 lot | Yes |
+| 19 | Futures exit | flat | Yes |
+| 20 | Track + list scalping symbol | tracked list contains the leg | Yes |
 
 ## What this validates
 - **Entry / scale-in / partial / full exit** place real sandbox orders and the

@@ -23,7 +23,7 @@ from utils.email_utils import send_test_email, validate_smtp_settings
 
 def setup_test_smtp():
     """Setup test SMTP configuration (Gmail example)"""
-    print("\n📧 SMTP Configuration Setup")
+    print("\n SMTP Configuration Setup")
     print("=" * 40)
 
     smtp_server = input("SMTP Server (e.g., smtp.gmail.com): ").strip()
@@ -43,7 +43,7 @@ def setup_test_smtp():
     use_tls = input("Use TLS/SSL? (Y/n): ").strip().lower()
     use_tls = use_tls != "n"
 
-    print("\n💾 Saving SMTP settings...")
+    print("\n Saving SMTP settings...")
 
     try:
         set_smtp_settings(
@@ -54,44 +54,44 @@ def setup_test_smtp():
             smtp_use_tls=use_tls,
             smtp_from_email=smtp_from_email,
         )
-        print("✅ SMTP settings saved successfully!")
+        print("SMTP settings saved successfully!")
         return True
     except Exception as e:
-        print(f"❌ Failed to save SMTP settings: {e}")
+        print(f"Failed to save SMTP settings: {e}")
         return False
 
 
 def test_smtp_connection():
     """Test SMTP connection without sending email"""
-    print("\n🔧 Testing SMTP Connection...")
+    print("\n Testing SMTP Connection...")
 
     smtp_settings = get_smtp_settings()
     if not smtp_settings:
-        print("❌ No SMTP settings found. Please configure SMTP first.")
+        print("No SMTP settings found. Please configure SMTP first.")
         return False
 
     result = validate_smtp_settings(smtp_settings)
 
     if result["success"]:
-        print("✅ SMTP connection successful!")
-        print(f"📧 Server: {smtp_settings['smtp_server']}:{smtp_settings['smtp_port']}")
-        print(f"🔐 TLS: {'Enabled' if smtp_settings.get('smtp_use_tls') else 'Disabled'}")
+        print("SMTP connection successful!")
+        print(f"Server: {smtp_settings['smtp_server']}:{smtp_settings['smtp_port']}")
+        print(f"TLS: {'Enabled' if smtp_settings.get('smtp_use_tls') else 'Disabled'}")
         return True
     else:
-        print(f"❌ SMTP connection failed: {result['message']}")
+        print(f"SMTP connection failed: {result['message']}")
         return False
 
 
 def send_test_email_interactive(test_email):
     """Send test email interactively"""
-    print(f"\n📨 Sending test email to: {test_email}")
+    print(f"\n Sending test email to: {test_email}")
 
     smtp_settings = get_smtp_settings()
     if not smtp_settings:
-        print("❌ No SMTP settings found. Use --setup-smtp to configure.")
+        print("No SMTP settings found. Use --setup-smtp to configure.")
         return False
 
-    print("📧 SMTP Configuration:")
+    print("SMTP Configuration:")
     print(f"   Server: {smtp_settings['smtp_server']}:{smtp_settings['smtp_port']}")
     print(f"   From: {smtp_settings['smtp_from_email']}")
     print(f"   TLS: {'Enabled' if smtp_settings.get('smtp_use_tls') else 'Disabled'}")
@@ -101,16 +101,16 @@ def send_test_email_interactive(test_email):
         result = send_test_email(test_email, sender_name="Test Script")
 
         if result["success"]:
-            print("✅ Test email sent successfully!")
-            print(f"📬 Message: {result['message']}")
-            print("\n💡 Next steps:")
+            print("Test email sent successfully!")
+            print(f"Message: {result['message']}")
+            print("\n Next steps:")
             print("   1. Check your inbox (and spam folder)")
             print("   2. Verify the email content and formatting")
             print("   3. Your SMTP configuration is working correctly")
             return True
         else:
-            print(f"❌ Failed to send test email: {result['message']}")
-            print("\n🔧 Troubleshooting tips:")
+            print(f"Failed to send test email: {result['message']}")
+            print("\n Troubleshooting tips:")
             print("   1. Verify your SMTP credentials")
             print("   2. Check if 2FA is enabled (use App Password)")
             print("   3. Ensure 'Less secure app access' is enabled (Gmail)")
@@ -118,7 +118,7 @@ def send_test_email_interactive(test_email):
             return False
 
     except Exception as e:
-        print(f"❌ Unexpected error: {e}")
+        print(f"Unexpected error: {e}")
         return False
 
 
@@ -134,13 +134,13 @@ def main():
 
     args = parser.parse_args()
 
-    print("🚀 OpenAlgo Email Test Script")
+    print("OpenAlgo Email Test Script")
     print("=" * 40)
 
     # Load environment variables from .env if it exists
     env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
     if os.path.exists(env_path):
-        print(f"📋 Loading environment from: {env_path}")
+        print(f"Loading environment from: {env_path}")
         with open(env_path) as f:
             for line in f:
                 line = line.strip()
@@ -151,9 +151,9 @@ def main():
     # Initialize database
     try:
         init_db()
-        print("✅ Database initialized")
+        print("Database initialized")
     except Exception as e:
-        print(f"❌ Database initialization failed: {e}")
+        print(f"Database initialization failed: {e}")
         return 1
 
     success = True
@@ -175,10 +175,10 @@ def main():
         success = send_test_email_interactive(args.email)
 
     if success:
-        print("\n🎉 All tests completed successfully!")
+        print("\n All tests completed successfully!")
         return 0
     else:
-        print("\n❌ Some tests failed. Check the output above for details.")
+        print("\n Some tests failed. Check the output above for details.")
         return 1
 
 

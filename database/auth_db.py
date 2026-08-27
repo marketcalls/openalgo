@@ -264,6 +264,7 @@ class LoginAttempt(Base):
 def _now_ist():
     """Get current time in IST."""
     from datetime import datetime
+
     import pytz
     return datetime.now(pytz.timezone("Asia/Kolkata"))
 
@@ -610,6 +611,24 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
         # Don't fail auth on cleanup error — the user can still trade via
         # HTTP endpoints; only the WS layer is affected.
         logger.warning(f"Failed to invalidate WS adapter pool for {name}/{broker}: {e}")
+
+    # Order-update adapter lifecycle (services/order_update_service.py): the
+    # always-on broker order-feed follows the same real-token-change gate as
+    # the teardown above — restart with fresh credentials on change, stop on
+    # revoke, and (by virtue of the early return above) stay untouched on a
+    # multi-session resume.
+    try:
+        from services.order_update_service import (
+            start_order_update_adapter,
+            stop_order_update_adapter,
+        )
+
+        if revoke:
+            stop_order_update_adapter(name)
+        else:
+            start_order_update_adapter(name, broker)
+    except Exception as e:
+        logger.warning(f"Order-update adapter lifecycle failed for {name}/{broker}: {e}")
 
     return auth_obj.id
 

@@ -206,11 +206,13 @@ class OrderManager:
                     ).first()
 
                     # Calculate total available quantity
-                    position_qty = (
-                        existing_position.quantity
-                        if existing_position and existing_position.quantity > 0
-                        else 0
-                    )
+                    # SIGNED on purpose. A CNC sell now leaves a negative day
+                    # position until T+1 reduces the holding, so the holding
+                    # still reads at full quantity for the rest of the session.
+                    # Counting only positive positions would let the same shares
+                    # be sold repeatedly: hold 70, sell 10 (position -10, holding
+                    # still 70), and a naive check would offer 70 more.
+                    position_qty = existing_position.quantity if existing_position else 0
                     holdings_qty = (
                         existing_holdings.quantity
                         if existing_holdings and existing_holdings.quantity > 0
@@ -234,6 +236,7 @@ class OrderManager:
             # Determine price for margin calculation based on order type
             margin_calculation_price = None
             cached_quote = None  # Cache quote for reuse in immediate execution
+            trigger_price_met = False  # Set below for SL/SL-M; decides initial order_status
 
             # Check for existing position early (needed for fallback pricing)
             temp_existing_position = SandboxPositions.query.filter_by(
@@ -369,7 +372,19 @@ class OrderManager:
                 # Fetch current LTP to check if trigger is already met
                 # If so, execute immediately instead of waiting for next tick
                 # Use pre-fetched quote if available, otherwise REST API with retry
+                #
+                # trigger_price_met is tracked separately from cached_quote: on a
+                # real exchange an SL/SL-M order rests in a distinct Stop-Loss
+                # order book until the trigger price is touched, reported back as
+                # order_status "trigger pending" (not "open" - that's reserved for
+                # an order actually resting in the regular/normal book). cached_quote
+                # only gets set when the order is immediately fillable (SL-M: trigger
+                # met; SL: trigger AND limit both met) - trigger_price_met also
+                # covers the case where the trigger fired but the limit didn't, which
+                # should start the order as "open" (live in the book, unfilled)
+                # rather than "trigger pending" (not in the book at all yet).
                 trigger_checked = False
+                trigger_price_met = False
 
                 if prefetched_quote and prefetched_quote.get("ltp"):
                     try:
@@ -382,6 +397,7 @@ class OrderManager:
                                 trigger_met = True
 
                             if trigger_met:
+                                trigger_price_met = True
                                 if price_type == "SL-M":
                                     cached_quote = prefetched_quote
                                     logger.info(
@@ -416,6 +432,7 @@ class OrderManager:
                                     trigger_met = True
 
                                 if trigger_met:
+                                    trigger_price_met = True
                                     if price_type == "SL-M":
                                         cached_quote = quote
                                         logger.info(
@@ -554,6 +571,14 @@ class OrderManager:
                 logger.info(
                     f"No margin blocking required for {symbol} {action} {product} (CNC SELL of owned shares)"
                 )
+                # Nothing was blocked, so the order must not claim otherwise.
+                # actual_margin_to_block is computed above for every order, but
+                # it is only ever debited when should_block_margin is true.
+                # Recording the notional here would let _update_position copy it
+                # onto the resulting position and later "release" margin that was
+                # never taken -- inventing cash. Harmless while a CNC sell never
+                # created a position; real once one does.
+                actual_margin_to_block = Decimal("0")
 
             # Generate unique order ID
             orderid = self._generate_order_id()
@@ -582,6 +607,12 @@ class OrderManager:
                     pending_quantity=0,
                     rejection_reason=cnc_sell_rejection_reason,
                     margin_blocked=Decimal("0"),  # No margin blocked for rejected orders
+                    # Deliberately NOT correlated to the GTT leg. The column is
+                    # unique and recovery reads it as proof the GTT fired, so a
+                    # rejected attempt claiming it would both mark the GTT
+                    # triggered and permanently block that leg from ever
+                    # ordering again. Rejections are audited via the order's own
+                    # strategy/rejection_reason instead.
                     order_timestamp=datetime.now(pytz.timezone("Asia/Kolkata")),
                 )
 
@@ -590,6 +621,10 @@ class OrderManager:
 
                 logger.info(
                     f"Order rejected: {orderid} - {symbol} {action} {quantity} - Reason: {cnc_sell_rejection_reason}"
+                )
+
+                self._publish_order_update_event(
+                    order, order_status="rejected", rejection_reason=cnc_sell_rejection_reason
                 )
 
                 return (
@@ -607,6 +642,19 @@ class OrderManager:
             # For MARKET orders, store the LTP we used for margin calculation as reference price
             order_price_to_store = margin_calculation_price if price_type == "MARKET" else price
 
+            # SL/SL-M orders whose trigger hasn't fired yet start life resting in
+            # the exchange's Stop-Loss order book, not the regular order book -
+            # mirrored here as "trigger pending" rather than "open" (matches the
+            # live broker vocabulary in broker/zerodha/streaming/
+            # zerodha_order_adapter.py's _STATUS_MAP and docs/api/
+            # websocket-streaming/order-updates.md). An SL/SL-M order whose
+            # trigger was already met at placement time (trigger_price_met) skips
+            # this state entirely, exactly like a real exchange releasing it from
+            # the SL book immediately - it starts "open" same as today.
+            initial_order_status = "open"
+            if price_type in ("SL", "SL-M") and not trigger_price_met:
+                initial_order_status = "trigger pending"
+
             order = SandboxOrders(
                 orderid=orderid,
                 user_id=self.user_id,
@@ -619,12 +667,13 @@ class OrderManager:
                 trigger_price=trigger_price,
                 price_type=price_type,
                 product=product,
-                order_status="open",
+                order_status=initial_order_status,
                 average_price=None,
                 filled_quantity=0,
                 pending_quantity=quantity,
                 rejection_reason=None,
                 margin_blocked=actual_margin_to_block,  # Store exact margin blocked
+                gtt_leg_id=order_data.get("gtt_leg_id"),
                 order_timestamp=datetime.now(pytz.timezone("Asia/Kolkata")),
             )
 
@@ -633,15 +682,38 @@ class OrderManager:
 
             logger.info(f"Order placed: {orderid} - {symbol} {action} {quantity} @ {price_type}")
 
+            # Announce the accepted order on the real-time order-update stream,
+            # matching live-broker behaviour — brokers push an "open" (or
+            # "trigger pending" for SL/SL-M) event when an order enters their
+            # OMS. MARKET / marketable orders will follow up with "complete"
+            # moments later, exactly like a live feed does.
+            self._publish_order_update_event(order, order_status=initial_order_status)
+
             # Execute orders immediately when conditions are already met
             # MARKET: always immediate, LIMIT: if marketable, SL/SL-M: if trigger already met
             # This must happen BEFORE notifying the WebSocket engine to prevent
             # duplicate execution (WebSocket tick arriving before immediate execution completes)
             if price_type == "MARKET" or (cached_quote and price_type in ["LIMIT", "SL", "SL-M"]):
                 try:
-                    from sandbox.execution_engine import ExecutionEngine
+                    from sandbox.execution_engine import ExecutionEngine, quote_looks_stale
 
                     exec_engine = ExecutionEngine()
+
+                    # Stale-quote guard (issue #1638): if the quote's LTP
+                    # contradicts its own day OHLC, skip the immediate fill and
+                    # leave the order open -- the WebSocket/polling engines will
+                    # fill it once a coherent quote arrives. MARKET orders get
+                    # the same guard inside _process_order; this covers the
+                    # marketable LIMIT / SL / SL-M branches below, which call
+                    # _execute_order directly.
+                    if cached_quote and quote_looks_stale(cached_quote):
+                        logger.warning(
+                            f"Deferring immediate execution of {orderid} ({symbol}): quote LTP "
+                            f"{cached_quote.get('ltp')} is outside its own day range "
+                            f"[{cached_quote.get('low')}, {cached_quote.get('high')}] "
+                            f"-- treating as stale (see issue #1638)"
+                        )
+                        cached_quote = None
 
                     # Use cached quote from earlier check (already fetched above)
                     if cached_quote:
@@ -685,11 +757,13 @@ class OrderManager:
                     logger.exception(f"Error executing order immediately: {e}")
                     # Order remains in 'open' status if execution fails
 
-            # Only notify WebSocket execution engine for orders that are STILL open
-            # (not already executed immediately above). This prevents the WebSocket
-            # engine from re-executing an already completed order.
+            # Only notify WebSocket execution engine for orders that are STILL
+            # pending (open or trigger pending - not already executed
+            # immediately above). This prevents the WebSocket engine from
+            # re-executing an already completed order, while still tick-monitoring
+            # trigger-pending SL/SL-M orders for their trigger price.
             db_session.refresh(order)
-            if order.order_status == "open":
+            if order.order_status in ("open", "trigger pending"):
                 try:
                     from sandbox.websocket_execution_engine import (
                         get_websocket_execution_engine,
@@ -735,7 +809,11 @@ class OrderManager:
                     404,
                 )
 
-            if order.order_status != "open":
+            # Orders resting in the exchange's regular book (open) or its
+            # Stop-Loss book (trigger pending) can both be modified on a real
+            # exchange - only a terminal status (complete/cancelled/rejected)
+            # blocks it.
+            if order.order_status not in ("open", "trigger pending"):
                 return (
                     False,
                     {
@@ -848,7 +926,11 @@ class OrderManager:
                     404,
                 )
 
-            if order.order_status != "open":
+            # Orders resting in the exchange's regular book (open) or its
+            # Stop-Loss book (trigger pending) can both be cancelled on a real
+            # exchange - only a terminal status (complete/cancelled/rejected)
+            # blocks it.
+            if order.order_status not in ("open", "trigger pending"):
                 return (
                     False,
                     {
@@ -943,6 +1025,8 @@ class OrderManager:
 
             logger.info(f"Order cancelled: {orderid}")
 
+            self._publish_order_update_event(order, order_status="cancelled")
+
             return (
                 True,
                 {
@@ -966,6 +1050,39 @@ class OrderManager:
                 },
                 500,
             )
+
+    def _publish_order_update_event(self, order, order_status, rejection_reason=""):
+        """Publish OrderUpdateEvent for a sandbox order transition (rejection
+        at placement, cancellation) so the real-time order-update channel
+        (socketio + websocket_proxy relay, see subscribers/wsproxy_subscriber.py)
+        picks it up. Error-isolated — never let event-bus failures break order
+        placement/cancellation.
+        """
+        try:
+            from events import OrderUpdateEvent
+            from utils.event_bus import bus
+
+            bus.publish(
+                OrderUpdateEvent(
+                    mode="analyze",
+                    api_type="sandbox.order_update",
+                    request_data={"user_id": self.user_id} if self.user_id else {},
+                    broker="sandbox",
+                    orderid=order.orderid,
+                    symbol=order.symbol,
+                    exchange=order.exchange,
+                    action=order.action,
+                    quantity=int(order.quantity),
+                    price=float(order.price or 0),
+                    pricetype=order.price_type or "",
+                    trigger_price=float(order.trigger_price or 0),
+                    product=order.product,
+                    order_status=order_status,
+                    rejection_reason=rejection_reason,
+                )
+            )
+        except Exception as pub_err:
+            logger.debug(f"Failed to publish OrderUpdateEvent for {order.orderid}: {pub_err}")
 
     def get_orderbook(self):
         """Get all orders for the user for current session only"""
@@ -1215,6 +1332,7 @@ class OrderManager:
         total_completed_orders = sum(1 for o in orders if o.order_status == "complete")
         total_open_orders = sum(1 for o in orders if o.order_status == "open")
         total_rejected_orders = sum(1 for o in orders if o.order_status == "rejected")
+        total_trigger_pending_orders = sum(1 for o in orders if o.order_status == "trigger pending")
 
         return {
             "total_buy_orders": total_buy_orders,
@@ -1222,4 +1340,5 @@ class OrderManager:
             "total_completed_orders": total_completed_orders,
             "total_open_orders": total_open_orders,
             "total_rejected_orders": total_rejected_orders,
+            "total_trigger_pending_orders": total_trigger_pending_orders,
         }

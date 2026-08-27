@@ -223,22 +223,38 @@ class IndWebSocket:
             raise e
 
     def _send_subscribe_chunks(self, instruments, mode):
-        """Send a subscribe request in chunks of MAX_INSTRUMENTS_PER_SUBSCRIBE."""
+        """
+        Send a subscribe request, split by segment and then chunked.
+
+        A frame mixing segments (NSE/BSE/NFO/BFO/NIDX/BIDX) has been observed to
+        deliver ticks only for the first segment in the list. This is the single
+        chokepoint both subscribe() and resubscribe() go through, so grouping
+        here keeps the guarantee on every path - including the automatic
+        reconnect resubscribe, which iterates input_request_dict by mode alone
+        and would otherwise rebuild exactly the mixed frames we split up.
+        """
         if not self.wsapp:
             return
-        total = len(instruments)
-        for start in range(0, total, self.MAX_INSTRUMENTS_PER_SUBSCRIBE):
-            chunk = instruments[start : start + self.MAX_INSTRUMENTS_PER_SUBSCRIBE]
-            request_data = {
-                "action": self.SUBSCRIBE_ACTION,
-                "mode": mode,
-                "instruments": chunk,
-            }
-            self.wsapp.send(json.dumps(request_data))
-            logger.info(
-                f"[OK] Subscribed to {len(chunk)} instruments in {mode} mode "
-                f"(chunk {start // self.MAX_INSTRUMENTS_PER_SUBSCRIBE + 1}, {total} total)"
-            )
+
+        by_segment = {}
+        for instrument in instruments:
+            segment = str(instrument).split(":", 1)[0]
+            by_segment.setdefault(segment, []).append(instrument)
+
+        for segment, seg_instruments in by_segment.items():
+            total = len(seg_instruments)
+            for start in range(0, total, self.MAX_INSTRUMENTS_PER_SUBSCRIBE):
+                chunk = seg_instruments[start : start + self.MAX_INSTRUMENTS_PER_SUBSCRIBE]
+                request_data = {
+                    "action": self.SUBSCRIBE_ACTION,
+                    "mode": mode,
+                    "instruments": chunk,
+                }
+                self.wsapp.send(json.dumps(request_data))
+                logger.info(
+                    f"[OK] Subscribed to {len(chunk)} {segment} instruments in {mode} mode "
+                    f"(chunk {start // self.MAX_INSTRUMENTS_PER_SUBSCRIBE + 1}, {total} total)"
+                )
 
     def unsubscribe(self, instruments, mode="ltp"):
         """

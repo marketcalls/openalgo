@@ -42,6 +42,7 @@ tmp/
 checkpoint.txt
 checkpoints.json
 log/ws_proxy_stats.json
+log/test/
 
 
 # Strategy encryption key
@@ -77,6 +78,14 @@ build/
 out/
 
 # Frontend specific
+# Pre-compressed asset variants are NOT committed. Gzip output cannot be
+# deflated or delta-compressed by git, and Vite's content-hashed filenames make
+# every rebuild a brand new blob, so committing these grew to two thirds of the
+# repository history. utils/precompress_assets.py regenerates them at startup.
+frontend/dist/**/*.gz
+frontend/dist/**/*.br
+frontend/dist/**/*.gz.tmp
+
 # frontend/dist/ is built by CI/CD pipeline
 frontend/dist/
 frontend/.cache/
@@ -94,3 +103,29 @@ yarn-error.log*
 
 # Windows NUL file
 nul
+
+# Personal workspace: your own indicators, research, backtests and notes.
+# Only the readme is tracked -- everything else is yours and stays local.
+# NOTE: gitignore is not a secrecy boundary. `git add -f` bypasses it, and
+# the Docker build copies the repo tree, so workspace/ is excluded in
+# .dockerignore too. Real secrets belong in .env or keys/, never here.
+workspace/**
+!workspace/**/
+!workspace/readme.md
+!workspace/**/readme.md
+
+# Environment files, everywhere and in every variant. Plain `.env` was
+# already covered, but `.env.production` / `.env.bak` / `env.backup` were
+# not -- `.env.local` only escaped by accidentally matching `*.local`.
+# A committed secret must be rotated, not just deleted, so cast wide.
+.env.*
+*.env
+env.backup
+!.sample.env
+!**/.sample.env
+# ...but the negation above must not punch a hole in workspace/, whose
+# promise is that only readmes are tracked. Last matching rule wins.
+workspace/**/.sample.env
+
+# Local Git worktrees created for isolated feature and documentation work.
+.worktrees/

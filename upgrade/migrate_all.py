@@ -54,6 +54,7 @@ MIGRATIONS = [
     ("migrate_sandbox.py", "Sandbox Mode"),
     ("migrate_order_mode.py", "Order Mode & Action Center"),
     ("migrate_sandbox_pnl.py", "Sandbox Day-wise PnL Tracking"),
+    ("migrate_sandbox_trigger_pending.py", "Sandbox Trigger-Pending Order Status"),
     ("migrate_gtt.py", "GTT Order Support"),
     # Performance migrations
     ("migrate_indexes.py", "Database Performance Indexes"),
@@ -69,6 +70,8 @@ MIGRATIONS = [
     ("migrate_samco_auth.py", "Samco 2FA Authentication"),
     ("migrate_zerodha_new_exchanges.py", "Zerodha NCO/GLOBAL_INDEX & GIFTNIFTY Cleanup"),
     ("add_totp_purpose_flags.py", "Per-Purpose 2FA Flags (login/MCP/reset)"),
+    ("migrate_gtt_sandbox.py", "Sandbox GTT Support & CAS F&O Close (15:40)"),
+    ("migrate_historify_drop_indexes.py", "Historify Unused Index Removal (#1779)"),
 ]
 
 

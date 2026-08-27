@@ -1,51 +1,15 @@
 # api/funds.py
 
 import json
-import logging
-import time
 
 from broker.indmoney.api.baseurl import get_url
+from broker.indmoney.api.rate_limiter import rate_limited_request
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# 429 (rate-limit) retry configuration. IndStocks enforces per-category rate
-# limits (Non-Trading 15/s) and returns 429 on breach (docs 03-conventions /
-# 14-errors), so requests retry with backoff.
-_MAX_RETRIES = 3
-_RATE_LIMIT_BASE_DELAY = 1.0  # seconds; doubled each attempt (1s, 2s, 4s)
 
-
-def request_with_retry(client, method, url, **kwargs):
-    """
-    Perform an httpx request, retrying HTTP 429 with exponential backoff
-    (honouring Retry-After when present). Sets ``.status`` for compatibility
-    with the existing codebase.
-    """
-    response = None
-    for attempt in range(_MAX_RETRIES):
-        response = client.request(method.upper(), url, **kwargs)
-        if response.status_code == 429 and attempt < _MAX_RETRIES - 1:
-            retry_after = response.headers.get("Retry-After")
-            try:
-                delay = (
-                    min(float(retry_after), 30.0)
-                    if retry_after
-                    else _RATE_LIMIT_BASE_DELAY * (2 ** attempt)
-                )
-            except (TypeError, ValueError):
-                delay = _RATE_LIMIT_BASE_DELAY * (2 ** attempt)
-            logger.warning(
-                f"Rate limit hit (429) on {url}, retrying in {delay:.1f}s "
-                f"(attempt {attempt + 1}/{_MAX_RETRIES})"
-            )
-            time.sleep(delay)
-            continue
-        break
-    if response is not None:
-        response.status = response.status_code
-    return response
 
 # Default response format for margin data (OpenAlgo standard format)
 DEFAULT_MARGIN_RESPONSE = {
@@ -55,6 +19,46 @@ DEFAULT_MARGIN_RESPONSE = {
     "m2munrealized": "0.00",
     "utiliseddebits": "0.00",
 }
+
+# Cash-segment keys within `detailed_avl_balance`. The equity delivery limit is
+# the closest analogue to plain "available cash": option_buy can exceed it
+# because of premium-specific limits, and reporting that as cash would overstate
+# what is spendable on stock.
+_CASH_BALANCE_KEYS = ("eq_cnc", "eq_mis", "eq_mtf")
+
+
+def _as_float(value, default=0.0):
+    """Coerce a broker numeric to float, tolerating strings, None, and blanks."""
+    if value is None:
+        return default
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _available_cash(data, fallback):
+    """
+    Pick the balance available to trade from `detailed_avl_balance`.
+
+    Prefers the equity delivery limit, then any other cash-segment key, and
+    finally falls back to `withdrawal_balance` when the breakdown is absent.
+    """
+    detailed = data.get("detailed_avl_balance")
+    if isinstance(detailed, dict):
+        for key in _CASH_BALANCE_KEYS:
+            if detailed.get(key) is not None:
+                return _as_float(detailed[key])
+        # Unexpected shape: fall through to withdrawal_balance rather than
+        # guessing. Taking the largest value in the breakdown would happily
+        # return option_buy - which exceeds the cash limit (4449.65 vs 2980.40
+        # in the docs' own sample) - and reporting premium buying power as
+        # stock cash overstates available funds and therefore order size.
+        logger.warning(
+            "IndMoney detailed_avl_balance has no recognised cash key "
+            f"({sorted(detailed)}); using withdrawal_balance for available cash."
+        )
+    return fallback
 
 
 def get_margin_data(auth_token):
@@ -67,13 +71,12 @@ def get_margin_data(auth_token):
     Returns:
         dict: Formatted margin data or default values if request fails
     """
-    logger.info(f"Getting margin data from Indmoney API with token: {auth_token[:10]}...")
+    logger.info("Getting margin data from Indmoney API")
 
     try:
         # Get the shared httpx client with connection pooling
         client = get_httpx_client()
-        logger.info(f"Making request to: {auth_token}")
-        # Headers that exactly mimic Bruno's request to avoid Cloudflare detection
+        # Never log the access token itself, at any level.
         headers = {"Authorization": auth_token}
 
         # Get the API URL from baseurl
@@ -82,7 +85,7 @@ def get_margin_data(auth_token):
         logger.info(f"Making request to: {url}")
 
         # Make the API request with standard timeout (429-aware)
-        response = request_with_retry(client, "GET", url, headers=headers, timeout=30.0)
+        response = rate_limited_request(client, "GET", url, headers=headers, timeout=30.0)
 
         # Check if the request was successful
         if response.status_code != 200:
@@ -119,14 +122,23 @@ def get_margin_data(auth_token):
                 return DEFAULT_MARGIN_RESPONSE
 
             # Extract values from the response and convert to float
-            sod_balance = float(data.get("sod_balance", 0.0))
-            withdrawal_balance = float(data.get("withdrawal_balance", 0.0))
-            pledge_received = float(data.get("pledge_received", 0.0))
-            realized_pnl = float(data.get("realized_pnl", 0.0))
-            unrealized_pnl = float(data.get("unrealized_pnl", 0.0))
+            sod_balance = _as_float(data.get("sod_balance"))
+            withdrawal_balance = _as_float(data.get("withdrawal_balance"))
+            pledge_received = _as_float(data.get("pledge_received"))
+            realized_pnl = _as_float(data.get("realized_pnl"))
+            unrealized_pnl = _as_float(data.get("unrealized_pnl"))
 
-            # Calculate utilized debits (SOD balance minus withdrawal balance)
-            utilised_debits = max(0, sod_balance - withdrawal_balance)
+            # Available cash is the balance available to TRADE, which is what
+            # `detailed_avl_balance` reports per product/segment. It is not
+            # `withdrawal_balance` - that is only what may be withdrawn, and is
+            # typically lower (in the docs' own sample, option_buy is 4449.65
+            # against a withdrawal_balance of 2983.47). Using the withdrawal
+            # figure under-reports buying power and makes sizing over-cautious.
+            available_cash = _available_cash(data, withdrawal_balance)
+
+            # Utilised margin: what the day's activity has consumed out of the
+            # start-of-day balance.
+            utilised_debits = max(0.0, sod_balance - available_cash)
 
             # OpenAlgo standard required keys (matching Angel broker format)
             required_keys = [
@@ -142,11 +154,11 @@ def get_margin_data(auth_token):
 
             # Map INDmoney fields to OpenAlgo standard fields
             field_mapping = {
-                "availablecash": withdrawal_balance,  # Available cash is the withdrawal balance
+                "availablecash": available_cash,  # Balance available to trade
                 "collateral": pledge_received,  # Collateral is the pledge received
                 "m2mrealized": realized_pnl,  # Realized P&L
                 "m2munrealized": unrealized_pnl,  # Unrealized P&L
-                "utiliseddebits": utilised_debits,  # Utilized debits (SOD - withdrawal)
+                "utiliseddebits": utilised_debits,  # SOD balance consumed so far
             }
 
             # Format each value to 2 decimal places
@@ -157,6 +169,16 @@ def get_margin_data(auth_token):
                 except (ValueError, TypeError):
                     formatted_value = "0.00"
                 processed_data[key] = formatted_value
+
+            # Day charges are newly documented but have no slot in OpenAlgo's
+            # 5-field funds contract, which is shared by every broker. Log them
+            # rather than widening a response shape other brokers also return.
+            logger.debug(
+                "IndMoney day charges: brokerage=%s eq_charges=%s fno_charges=%s",
+                _as_float(data.get("brokerage")),
+                _as_float(data.get("eq_charges")),
+                _as_float(data.get("fno_charges")),
+            )
 
             logger.info("Successfully processed margin data from Indmoney API")
             return processed_data

@@ -253,23 +253,35 @@ class IiflcapitalWebSocketAdapter(BaseBrokerWebSocketAdapter):
         segment = brexchange.strip()  # store uppercase; lower-casing happens in the feed client
 
         is_index = is_index_exchange(exchange)
-        feed_mode = self._MODE_OA_TO_IIFL[mode]
-        # OI is only meaningful for derivatives — see iiflcapital_mapping.
-        include_oi = mode != 1 and supports_open_interest(exchange) and not is_index
 
         key = f"{exchange}:{symbol}"
         topic_suffix = f"{normalize_segment(segment)}/{token}"
 
         with self.lock:
+            # Track modes as a set (issue #1664): the protocol lets a client
+            # hold LTP and Depth on the same symbol at once. A single "mode"
+            # field made the second subscribe overwrite the first, so
+            # _handle_ticks stopped publishing the overwritten mode's topic.
+            existing = self.subscribed_symbols.get(key)
+            modes = set(existing["modes"]) if existing else set()
+            modes.add(mode)
             self.subscribed_symbols[key] = {
                 "exchange": exchange,
                 "symbol": symbol,
                 "segment": segment,
                 "token": token,
-                "mode": mode,
+                "modes": modes,
                 "is_index": is_index,
             }
             self._key_to_symbol[topic_suffix] = (symbol, exchange)
+
+        # Subscribe the broker stream at the HIGHEST subscribed mode -- its
+        # packet is a superset and _handle_ticks fans out per mode. Without
+        # the max(), a later LTP subscribe would downgrade an active feed.
+        effective_mode = max(modes)
+        feed_mode = self._MODE_OA_TO_IIFL[effective_mode]
+        # OI is only meaningful for derivatives — see iiflcapital_mapping.
+        include_oi = effective_mode != 1 and supports_open_interest(exchange) and not is_index
 
         try:
             self.ws_client.subscribe_instruments(
@@ -301,7 +313,22 @@ class IiflcapitalWebSocketAdapter(BaseBrokerWebSocketAdapter):
     ) -> dict[str, Any]:
         key = f"{exchange}:{symbol}"
         with self.lock:
-            sub = self.subscribed_symbols.pop(key, None)
+            sub = self.subscribed_symbols.get(key)
+            if sub is None:
+                pass
+            elif mode is not None and sub["modes"] - {mode}:
+                # Mode-specific unsubscribe with other modes still active:
+                # drop just that mode and keep the broker stream up (its
+                # packet is a superset; _handle_ticks fans out per remaining
+                # mode). See issue #1664.
+                sub["modes"].discard(mode)
+                self.logger.info(
+                    f"Unsubscribed IIFL {exchange}:{symbol} mode {mode}; "
+                    f"stream retained for modes {sorted(sub['modes'])}"
+                )
+                return {"status": "success", "message": f"Unsubscribed from {symbol}"}
+            else:
+                self.subscribed_symbols.pop(key, None)
         if sub is None:
             return {"status": "error", "message": f"Not subscribed to {symbol}"}
 
@@ -346,10 +373,12 @@ class IiflcapitalWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     continue
 
                 symbol, exchange = symbol_info
-                sub_mode = sub_info["mode"]
+                sub_modes = sub_info["modes"]
 
                 # The feed client always returns the full decoded packet; we
-                # produce per-mode payloads from the same source dict.
+                # produce per-mode payloads from the same source dict -- one
+                # publish per SUBSCRIBED mode (issue #1664), not just the
+                # last mode that happened to subscribe.
                 base = {
                     "symbol": symbol,
                     "exchange": exchange,
@@ -358,9 +387,10 @@ class IiflcapitalWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "timestamp": tick.get("timestamp", int(time.time() * 1000)),
                 }
 
-                if sub_mode == 1:
+                if 1 in sub_modes:
                     payload = {**base, "mode": "ltp"}
                     self._publish(symbol, exchange, "LTP", payload)
+                if sub_modes == {1}:
                     continue
 
                 # Quote / Depth share the OHLC + bid/ask + volume block.
@@ -388,13 +418,13 @@ class IiflcapitalWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     payload["oi"] = tick["open_interest"]
                     payload["open_interest"] = tick["open_interest"]
 
-                if sub_mode == 2:
-                    payload["mode"] = "quote"
-                    self._publish(symbol, exchange, "QUOTE", payload)
-                else:  # mode 3 — depth
-                    payload["mode"] = "full"
-                    payload["depth"] = tick.get("depth", {"buy": [], "sell": []})
-                    self._publish(symbol, exchange, "DEPTH", payload)
+                if 2 in sub_modes:
+                    quote_payload = {**payload, "mode": "quote"}
+                    self._publish(symbol, exchange, "QUOTE", quote_payload)
+                if 3 in sub_modes:
+                    depth_payload = {**payload, "mode": "full"}
+                    depth_payload["depth"] = tick.get("depth", {"buy": [], "sell": []})
+                    self._publish(symbol, exchange, "DEPTH", depth_payload)
 
             except Exception as e:
                 self.logger.exception(f"Error processing IIFL tick: {e}")

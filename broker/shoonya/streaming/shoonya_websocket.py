@@ -4,7 +4,6 @@ Handles connection to Shoonya's market data streaming API
 """
 
 import json
-import logging
 import threading
 import time
 from collections import deque
@@ -12,6 +11,8 @@ from collections.abc import Callable
 from typing import Any
 
 import websocket
+
+from utils.logging import get_logger
 
 
 class ShoonyaWebSocket:
@@ -119,7 +120,7 @@ class ShoonyaWebSocket:
         self._shutdown_event = threading.Event()
 
         # Logging
-        self.logger = logging.getLogger("shoonya_websocket")
+        self.logger = get_logger("shoonya_websocket")
 
     def __del__(self):
         try:

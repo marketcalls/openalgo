@@ -1,4 +1,4 @@
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation } from 'react-router'
 import { bottomNavItems, isActiveRoute } from '@/config/navigation'
 import { cn } from '@/lib/utils'
 
@@ -20,6 +20,7 @@ export function MobileBottomNav() {
                   ? 'text-primary'
                   : 'text-muted-foreground hover:text-foreground active:bg-muted'
               )}
+              aria-current={active ? 'page' : undefined}
             >
               <item.icon className="h-5 w-5" />
               <span className="text-[10px] font-medium">{item.label}</span>

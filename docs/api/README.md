@@ -125,8 +125,9 @@ WebSocket streaming is not mounted below `/api/v1`. Clients connect to the proxy
 | LTP | [LTP subscription](./websocket-streaming/ltp.md) |
 | Quote | [Quote subscription](./websocket-streaming/quote.md) |
 | Depth | [Depth subscription](./websocket-streaming/depth.md) |
+| Order Updates | [Order-update stream](./websocket-streaming/order-updates.md) |
 
-Supported actions are `authenticate`, `subscribe`, `unsubscribe`, `unsubscribe_all`, `get_broker_info`, `get_supported_brokers`, and `ping`.
+Supported actions are `authenticate`, `subscribe`, `unsubscribe`, `unsubscribe_all`, `subscribe_orders`, `unsubscribe_orders`, `get_broker_info`, `get_supported_brokers`, and `ping`.
 
 ## Order Constants
 

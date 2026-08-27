@@ -13,9 +13,7 @@ Architecture:
 - Exposes synchronous subscribe/unsubscribe/get_* methods
 """
 import json
-import logging
 import threading
-import time
 from typing import Dict, List, Optional, Set, Tuple
 
 import websocket
@@ -32,7 +30,9 @@ if _nubra_dir not in sys.path:
 
 from protos import nubrafrontend_pb2
 
-logger = logging.getLogger("NubraWebSocket")
+from utils.logging import get_logger
+
+logger = get_logger("NubraWebSocket")
 
 # Production WebSocket URL
 WS_URL = "wss://api.nubra.io/apibatch/ws"

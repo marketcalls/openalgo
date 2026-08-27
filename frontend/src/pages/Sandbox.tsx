@@ -1,6 +1,6 @@
 import { BarChart3, RotateCcw, Save, Settings } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -221,6 +221,47 @@ export default function Sandbox() {
               {DAYS_OF_WEEK.map((day) => (
                 <SelectItem key={day} value={day}>
                   {day}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            size="sm"
+            variant={isModified ? 'default' : 'secondary'}
+            onClick={() => saveConfig(configKey)}
+          >
+            <Save className="h-4 w-4 mr-1" />
+            Set
+          </Button>
+        </div>
+      )
+    }
+
+    // F&O expiry settlement selectors
+    if (configKey === 'expiry_settlement_timing' || configKey === 'option_expiry_settlement') {
+      const options =
+        configKey === 'expiry_settlement_timing'
+          ? [
+              { value: 'expiry_day_close', label: 'On expiry day at market close' },
+              { value: 'next_day', label: 'Next day after expiry (legacy)' },
+            ]
+          : [
+              { value: 'ltp', label: 'Last traded price (keeps ITM value)' },
+              { value: 'zero', label: 'Zero - all options expire worthless' },
+            ]
+      return (
+        <div className="flex gap-2">
+          <Select
+            value={configData.value}
+            onValueChange={(value) => updateConfig(configKey, value)}
+          >
+            <SelectTrigger className="flex-1">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {options.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
                 </SelectItem>
               ))}
             </SelectContent>

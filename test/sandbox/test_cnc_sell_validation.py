@@ -20,7 +20,7 @@ from sandbox.order_manager import OrderManager
 
 def reset_test_data(user_id="testuser"):
     """Reset test data"""
-    print(f"\n🔄 Resetting data for user: {user_id}")
+    print(f"\n Resetting data for user: {user_id}")
 
     # Delete all existing data - also delete ALL orders to avoid ID conflicts
     SandboxOrders.query.delete()  # Delete ALL orders to reset ID counter
@@ -42,7 +42,7 @@ def reset_test_data(user_id="testuser"):
         funds.used_margin = Decimal("0.00")
 
     db_session.commit()
-    print("✅ Data reset complete")
+    print("Data reset complete")
 
 
 def test_cnc_sell_without_position():
@@ -70,11 +70,9 @@ def test_cnc_sell_without_position():
     )
 
     if not success and "No positions or holdings available" in response.get("message", ""):
-        print(f"✅ PASS: {response['message']}")
-        return True
+        print(f"PASS: {response['message']}")
     else:
-        print(f"❌ FAIL: Expected rejection, got: {response}")
-        return False
+        raise AssertionError(f"Expected rejection, got: {response}")
 
 
 def test_cnc_sell_with_position():
@@ -97,7 +95,7 @@ def test_cnc_sell_with_position():
     )
     db_session.add(position)
     db_session.commit()
-    print("✅ Created position: RELIANCE 100 shares")
+    print("Created position: RELIANCE 100 shares")
 
     om = OrderManager(user_id)
 
@@ -115,11 +113,9 @@ def test_cnc_sell_with_position():
     )
 
     if success:
-        print(f"✅ PASS: Order placed successfully - {response.get('orderid')}")
-        return True
+        print(f"PASS: Order placed successfully - {response.get('orderid')}")
     else:
-        print(f"❌ FAIL: Order rejected: {response.get('message')}")
-        return False
+        raise AssertionError(f"Order rejected: {response.get('message')}")
 
 
 def test_cnc_sell_exceeding_position():
@@ -142,7 +138,7 @@ def test_cnc_sell_exceeding_position():
     )
     db_session.add(position)
     db_session.commit()
-    print("✅ Created position: RELIANCE 50 shares")
+    print("Created position: RELIANCE 50 shares")
 
     om = OrderManager(user_id)
 
@@ -160,11 +156,9 @@ def test_cnc_sell_exceeding_position():
     )
 
     if not success and "Only 50 shares available" in response.get("message", ""):
-        print(f"✅ PASS: {response['message']}")
-        return True
+        print(f"PASS: {response['message']}")
     else:
-        print(f"❌ FAIL: Expected rejection for exceeding quantity, got: {response}")
-        return False
+        raise AssertionError(f"Expected rejection for exceeding quantity, got: {response}")
 
 
 def test_cnc_sell_with_holdings():
@@ -189,7 +183,7 @@ def test_cnc_sell_with_holdings():
     )
     db_session.add(holding)
     db_session.commit()
-    print("✅ Created holdings: RELIANCE 200 shares")
+    print("Created holdings: RELIANCE 200 shares")
 
     om = OrderManager(user_id)
 
@@ -207,11 +201,9 @@ def test_cnc_sell_with_holdings():
     )
 
     if success:
-        print(f"✅ PASS: Order placed successfully - {response.get('orderid')}")
-        return True
+        print(f"PASS: Order placed successfully - {response.get('orderid')}")
     else:
-        print(f"❌ FAIL: Order rejected: {response.get('message')}")
-        return False
+        raise AssertionError(f"Order rejected: {response.get('message')}")
 
 
 def test_mis_short_selling():
@@ -239,11 +231,9 @@ def test_mis_short_selling():
     )
 
     if success:
-        print(f"✅ PASS: MIS short sell order placed - {response.get('orderid')}")
-        return True
+        print(f"PASS: MIS short sell order placed - {response.get('orderid')}")
     else:
-        print(f"❌ FAIL: MIS short sell rejected: {response.get('message')}")
-        return False
+        raise AssertionError(f"MIS short sell rejected: {response.get('message')}")
 
 
 def test_cnc_sell_with_position_and_holdings():
@@ -280,7 +270,7 @@ def test_cnc_sell_with_position_and_holdings():
     db_session.add(holding)
     db_session.commit()
 
-    print("✅ Created position: 50 shares + holdings: 100 shares = Total: 150 shares")
+    print("Created position: 50 shares + holdings: 100 shares = Total: 150 shares")
 
     om = OrderManager(user_id)
 
@@ -298,18 +288,16 @@ def test_cnc_sell_with_position_and_holdings():
     )
 
     if success:
-        print(f"✅ PASS: Order placed successfully - {response.get('orderid')}")
-        return True
+        print(f"PASS: Order placed successfully - {response.get('orderid')}")
     else:
-        print(f"❌ FAIL: Order rejected: {response.get('message')}")
-        return False
+        raise AssertionError(f"Order rejected: {response.get('message')}")
 
 
 if __name__ == "__main__":
     # Initialize database
     init_db()
 
-    print("\n🧪 TESTING CNC SELL VALIDATION")
+    print("\n TESTING CNC SELL VALIDATION")
     print("=" * 60)
 
     tests = [
@@ -331,7 +319,7 @@ if __name__ == "__main__":
             else:
                 failed += 1
         except Exception as e:
-            print(f"❌ TEST ERROR: {e}")
+            print(f"TEST ERROR: {e}")
             import traceback
 
             traceback.print_exc()
@@ -342,8 +330,8 @@ if __name__ == "__main__":
     print("=" * 60)
 
     if failed == 0:
-        print("🎉 ALL TESTS PASSED!")
+        print("ALL TESTS PASSED!")
         sys.exit(0)
     else:
-        print("❌ SOME TESTS FAILED")
+        print("SOME TESTS FAILED")
         sys.exit(1)

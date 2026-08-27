@@ -4,14 +4,15 @@ Based on the pyintegrate library and DefinedGe WebSocket API documentation.
 """
 
 import json
-import logging
 import ssl
 import threading
 import time
 
 import websocket
 
-logger = logging.getLogger(__name__)
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class DefinedGeWebSocket:

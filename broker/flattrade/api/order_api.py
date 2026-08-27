@@ -5,6 +5,7 @@ import httpx
 import threading
 import time
 
+from broker.flattrade.mapping.order_data import normalize_order_status
 from broker.flattrade.mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
@@ -158,7 +159,7 @@ def place_order_api(data, auth):
 
     payload = "jData=" + json.dumps(newdata) + "&jKey=" + AUTH_TOKEN
 
-    logger.debug(f"{payload}")
+    logger.debug(f"{newdata}")
     # Get the shared httpx client
     client = get_httpx_client()
 
@@ -364,7 +365,6 @@ def modify_order(data, auth):
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     payload = "jData=" + json.dumps(transformed_data) + "&jKey=" + AUTH_TOKEN
 
-    logger.debug(f"Modify Order Payload: {payload}")
     logger.debug(f"Modify Order Data: {transformed_data}")
 
     # Get the shared httpx client
@@ -396,9 +396,11 @@ def cancel_all_orders_api(data, auth):
     if order_book_response is None:
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
-    # Filter orders that are in 'open' or 'trigger_pending' state
+    # Filter orders still working at the exchange (OPEN / PENDING / TRIGGER_PENDING)
     orders_to_cancel = [
-        order for order in order_book_response if order["status"] in ["OPEN", "TRIGGER_PENDING"]
+        order
+        for order in order_book_response
+        if normalize_order_status(order.get("status")) == "open"
     ]
     # logger.debug(f"{orders_to_cancel}")
     canceled_orders = []

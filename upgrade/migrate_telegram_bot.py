@@ -19,7 +19,10 @@ from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+# Register the app's SQLite pragmas on this process's engines, so a migration
+# waits the same 15s for a write lock the running app does instead of the
+# sqlite3 default of 5s (GitHub issue #1726).
+import _pragmas  # noqa: F401,E402
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 
@@ -135,7 +138,7 @@ class TelegramBotMigration:
                 )
                 conn.commit()
 
-            logger.info(f"✓ Recorded migration: {MIGRATION_NAME} v{MIGRATION_VERSION}")
+            logger.info(f"Recorded migration: {MIGRATION_NAME} v{MIGRATION_VERSION}")
             return True
 
         except Exception as e:
@@ -221,7 +224,7 @@ class TelegramBotMigration:
                     conn.execute(text("DROP TABLE bot_config"))
                     conn.execute(text("ALTER TABLE bot_config_new RENAME TO bot_config"))
                     logger.info(
-                        "✓ Updated bot_config table schema (removed webhook_url and polling_mode)"
+                        "Updated bot_config table schema (removed webhook_url and polling_mode)"
                     )
                 else:
                     # Create new bot_config table
@@ -241,7 +244,7 @@ class TelegramBotMigration:
                         )
                     """)
                     )
-                    logger.info("✓ Created bot_config table")
+                    logger.info("Created bot_config table")
 
                 # Create telegram_users table if it doesn't exist
                 if not self.table_exists("telegram_users"):
@@ -265,9 +268,9 @@ class TelegramBotMigration:
                         )
                     """)
                     )
-                    logger.info("✓ Created telegram_users table")
+                    logger.info("Created telegram_users table")
                 else:
-                    logger.info("✓ telegram_users table already exists")
+                    logger.info("telegram_users table already exists")
 
                 # Create command_logs table if it doesn't exist
                 if not self.table_exists("command_logs"):
@@ -284,9 +287,9 @@ class TelegramBotMigration:
                         )
                     """)
                     )
-                    logger.info("✓ Created command_logs table")
+                    logger.info("Created command_logs table")
                 else:
-                    logger.info("✓ command_logs table already exists")
+                    logger.info("command_logs table already exists")
 
                 # Create notification_queue table if it doesn't exist
                 if not self.table_exists("notification_queue"):
@@ -305,9 +308,9 @@ class TelegramBotMigration:
                         )
                     """)
                     )
-                    logger.info("✓ Created notification_queue table")
+                    logger.info("Created notification_queue table")
                 else:
-                    logger.info("✓ notification_queue table already exists")
+                    logger.info("notification_queue table already exists")
 
                 # Create user_preferences table if it doesn't exist
                 if not self.table_exists("user_preferences"):
@@ -328,9 +331,9 @@ class TelegramBotMigration:
                         )
                     """)
                     )
-                    logger.info("✓ Created user_preferences table")
+                    logger.info("Created user_preferences table")
                 else:
-                    logger.info("✓ user_preferences table already exists")
+                    logger.info("user_preferences table already exists")
 
                 # Commit all changes
                 conn.commit()
@@ -338,7 +341,7 @@ class TelegramBotMigration:
             # Record successful migration
             if self.record_migration():
                 logger.info(
-                    f"✅ Migration {MIGRATION_NAME} v{MIGRATION_VERSION} completed successfully!"
+                    f"Migration {MIGRATION_NAME} v{MIGRATION_VERSION} completed successfully!"
                 )
                 logger.info("\nTelegram bot tables are ready. You can now:")
                 logger.info("1. Configure your bot token in the web interface")
@@ -373,7 +376,7 @@ class TelegramBotMigration:
                 for table in tables:
                     try:
                         conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
-                        logger.info(f"✓ Dropped {table} table")
+                        logger.info(f"Dropped {table} table")
                     except Exception as e:
                         logger.warning(f"Could not drop {table}: {e}")
 
@@ -384,7 +387,7 @@ class TelegramBotMigration:
                 )
                 conn.commit()
 
-            logger.info("✅ Downgrade completed. Telegram bot tables removed.")
+            logger.info("Downgrade completed. Telegram bot tables removed.")
             return True
 
         except Exception as e:
@@ -403,7 +406,7 @@ class TelegramBotMigration:
             return False
 
         if status["applied"]:
-            logger.info(f"✓ Migration '{MIGRATION_NAME}' is APPLIED")
+            logger.info(f"Migration '{MIGRATION_NAME}' is APPLIED")
             logger.info(f"  Version: {status['version']}")
             logger.info(f"  Applied at: {status['applied_at']}")
 
@@ -420,7 +423,7 @@ class TelegramBotMigration:
                 logger.info("\n  Table status:")
                 for table in tables:
                     exists = self.table_exists(table)
-                    status_icon = "✓" if exists else "✗"
+                    status_icon = "[OK]" if exists else "[MISSING]"
                     logger.info(f"    {status_icon} {table}")
 
                 # Check for deprecated columns in bot_config
@@ -433,11 +436,11 @@ class TelegramBotMigration:
 
                     if deprecated:
                         logger.warning(
-                            f"\n  ⚠️  Deprecated columns found in bot_config: {', '.join(deprecated)}"
+                            f"\n Deprecated columns found in bot_config: {', '.join(deprecated)}"
                         )
                         logger.warning("  Run migration upgrade to update schema")
         else:
-            logger.info(f"✗ Migration '{MIGRATION_NAME}' is NOT APPLIED")
+            logger.info(f"Migration '{MIGRATION_NAME}' is NOT APPLIED")
             logger.info("  Run with no arguments to apply the migration")
 
         return True

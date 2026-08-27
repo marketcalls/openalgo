@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import httpx
 import pandas as pd
 
+from broker.aliceblue.api.rate_limiter import apply_rate_limit
 from database.auth_db import Auth
 from database.token_db import get_br_symbol, get_brexchange, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
@@ -21,6 +22,32 @@ logger = get_logger(__name__)
 # AliceBlue V3 API URLs
 BASE_URL = "https://a3.aliceblueonline.com/"
 HISTORICAL_API_URL = BASE_URL + "open-api/od/ChartAPIService/api/chart/history"
+
+# Live market-data WebSocket per broker session, shared across BrokerData
+# instances. It has to live at module scope because quotes_service builds a new
+# BrokerData for every request, so an instance attribute is always empty and the
+# connection got rebuilt from scratch on each call. Keyed by session_id, so a
+# re-login makes a new entry instead of reusing a socket authenticated with a
+# dead token; bounded by the one broker session this instance can hold.
+_WS_REGISTRY: dict = {}
+_WS_REGISTRY_LOCK = threading.Lock()
+
+
+def close_all_websockets():
+    """Disconnect and drop every pooled market-data socket.
+
+    For shutdown and for logout, where the session behind these connections is
+    about to be revoked. Without it the sockets and their reader and heartbeat
+    threads would outlive the session that authenticated them.
+    """
+    with _WS_REGISTRY_LOCK:
+        sockets = list(_WS_REGISTRY.values())
+        _WS_REGISTRY.clear()
+    for ws in sockets:
+        try:
+            ws.disconnect()
+        except Exception as exc:
+            logger.warning(f"Error closing pooled AliceBlue WebSocket: {exc}")
 
 
 class BrokerData:
@@ -65,20 +92,38 @@ class BrokerData:
         Returns:
             AliceBlueWebSocket: WebSocket client instance or None if creation fails
         """
-        # Return existing connection if it's valid and not forced to create a new one
-        if not force_new and hasattr(self, "_websocket") and self._websocket:
-            if hasattr(self._websocket, "is_websocket_connected") and self._websocket.is_websocket_connected():
-                return self._websocket
+        # The live connection lives in a module-level registry, NOT on self.
+        #
+        # services/quotes_service.py constructs a fresh BrokerData per request,
+        # so the old `self._websocket` cache could never hit: every quotes call
+        # invalidated, recreated, reconnected and re-authenticated the whole
+        # session. Measured 692ms of that churn wrapped around 64ms of actual
+        # data, and it spent two REST calls (invalidateWsSess + createWsSess)
+        # each time - against a documented budget of 1800 requests / 15 minutes
+        # for everything except orders, an option chain polling every 5s burned
+        # roughly a fifth of the quota producing nothing.
+        #
+        # Keyed by session_id so a re-login gets a fresh connection rather than
+        # reusing one authenticated with a dead token. Bounded by definition:
+        # OpenAlgo is single-user, single-broker per instance.
+        if not self.session_id:
+            logger.error("Session ID not available. Please login first.")
+            return None
+
+        if not force_new:
+            with _WS_REGISTRY_LOCK:
+                cached = _WS_REGISTRY.get(self.session_id)
+            if cached is not None and cached.is_websocket_connected():
+                return cached
 
         try:
-            if not self.session_id:
-                logger.error("Session ID not available. Please login first.")
-                return None
-
-            # Clean up any existing connection
-            if hasattr(self, "_websocket") and self._websocket:
+            # Drop whatever was registered for this session before replacing it,
+            # so a stale socket and its threads are not left behind.
+            with _WS_REGISTRY_LOCK:
+                stale = _WS_REGISTRY.pop(self.session_id, None)
+            if stale is not None:
                 try:
-                    self._websocket.disconnect()
+                    stale.disconnect()
                 except Exception as e:
                     logger.warning(f"Error closing existing WebSocket: {str(e)}")
 
@@ -104,22 +149,49 @@ class BrokerData:
 
             # Create new websocket connection
             logger.info("Creating new WebSocket connection for AliceBlue")
-            self._websocket = AliceBlueWebSocket(user_id, self.session_id)
-            self._websocket.connect()
+            ws = AliceBlueWebSocket(user_id, self.session_id)
+            ws.connect()
 
-            # Wait for connection to establish
-            wait_time = 0
-            max_wait = 10  # Maximum 10 seconds to wait
-            while wait_time < max_wait and not self._websocket.is_connected:
-                time.sleep(0.5)
-                wait_time += 0.5
+            # Wait for connection to establish. Poll at 50ms rather than 500ms:
+            # the handshake completes in ~250ms live, so the coarse tick was
+            # rounding every connect up to half a second.
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and not ws.is_connected:
+                time.sleep(0.05)
 
-            if not self._websocket.is_connected:
+            if not ws.is_connected:
                 logger.error("Failed to connect WebSocket within timeout")
+                try:
+                    ws.disconnect()
+                except Exception:
+                    pass
                 return None
 
+            # Register this session and evict any other. OpenAlgo is
+            # single-user/single-broker, so a second session_id means the token
+            # rolled over (AliceBlue expires it around 3am) and the previous
+            # socket is authenticated with a dead one. Leaving it registered
+            # would strand a socket plus its reader and heartbeat threads every
+            # single day in a worker that never restarts.
+            with _WS_REGISTRY_LOCK:
+                superseded = [
+                    (sid, sock) for sid, sock in _WS_REGISTRY.items() if sid != self.session_id
+                ]
+                for sid, _ in superseded:
+                    del _WS_REGISTRY[sid]
+                _WS_REGISTRY[self.session_id] = ws
+
+            for _, sock in superseded:
+                logger.info("Closing AliceBlue WebSocket for a superseded session")
+                try:
+                    sock.disconnect()
+                except Exception as exc:
+                    logger.warning(f"Error closing superseded WebSocket: {exc}")
+
+            self._websocket = ws  # kept for callers that still read the attribute
+
             logger.info("WebSocket connection established successfully")
-            return self._websocket
+            return ws
 
         except Exception as e:
             logger.error(f"Error creating WebSocket: {str(e)}")
@@ -365,11 +437,28 @@ class BrokerData:
 
             subscribed = True
 
-            # Wait for data to arrive — use higher cap for large batches
-            # (Vol Surface / OI Profile can request 60+ symbols at once)
-            wait_time = min(max(len(instruments) * 0.08, 2), 20)
-            logger.debug(f"Waiting {wait_time:.1f}s for quote data ({len(instruments)} instruments)...")
-            time.sleep(wait_time)
+            # Poll until every subscribed instrument has a quote, rather than
+            # sleeping a fixed duration and hoping. The old code slept
+            # min(max(n * 0.08, 2), 20) unconditionally - 6.4s for an 80-strike
+            # option chain, and a full 2s even for 3 symbols whose ticks had
+            # already arrived. The deadline below is that same worst case, so
+            # nothing waits longer than before; the common case returns as soon
+            # as the data is actually there.
+            deadline_seconds = min(max(len(instruments) * 0.08, 2), 20)
+            poll_interval = 0.05
+            deadline = time.monotonic() + deadline_seconds
+            expected = list(symbol_map.keys())
+
+            while time.monotonic() < deadline:
+                if all(ws.get_quote(*key.split(":")) for key in expected):
+                    break
+                time.sleep(poll_interval)
+
+            waited = deadline_seconds - max(deadline - time.monotonic(), 0)
+            logger.debug(
+                f"Quote data for {len(instruments)} instruments after {waited:.2f}s "
+                f"(deadline {deadline_seconds:.1f}s)"
+            )
 
             # Helper to format a quote dict
             def _format_quote(q):
@@ -401,7 +490,13 @@ class BrokerData:
             # Retry pass for symbols that didn't return data on first attempt
             if missing_keys:
                 logger.info(f"{len(missing_keys)}/{len(symbol_map)} symbols missing after first pass, retrying...")
-                time.sleep(3.0)  # Extra wait for stragglers
+                # Same idea as the first pass: poll for the stragglers up to the
+                # old fixed 3s rather than always burning it.
+                straggler_deadline = time.monotonic() + 3.0
+                while time.monotonic() < straggler_deadline:
+                    if all(ws.get_quote(*key.split(":")) for key in missing_keys):
+                        break
+                    time.sleep(0.05)
 
                 for key in missing_keys:
                     api_exchange, token = key.split(":")
@@ -534,72 +629,6 @@ class BrokerData:
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
 
-    def _get_index_history_via_futures(
-        self, symbol: str, original_exchange: str, timeframe: str, start_date: str, end_date: str
-    ) -> pd.DataFrame:
-        """Fallback: fetch nearest-month futures data as proxy for index historical data.
-
-        AliceBlue's historical API doesn't serve index candle data (e.g. NIFTY on NSE).
-        This method finds the nearest expiry futures contract on NFO/BFO and fetches
-        its history instead. The futures price closely tracks the index intraday.
-        """
-        from database.token_db_enhanced import fno_search_symbols
-
-        # Map index exchange to F&O exchange
-        fno_exchange_map = {"NSE_INDEX": "NFO", "BSE_INDEX": "BFO", "MCX_INDEX": "MCX"}
-        fno_exchange = fno_exchange_map.get(original_exchange)
-        if not fno_exchange:
-            return pd.DataFrame()
-
-        try:
-            # Search for futures contracts for this underlying
-            results = fno_search_symbols(
-                underlying=symbol.upper(),
-                exchange=fno_exchange,
-                instrumenttype="FUT",
-                limit=10,
-            )
-            if not results:
-                logger.warning(f"No futures contracts found for {symbol} on {fno_exchange}")
-                return pd.DataFrame()
-
-            # Pick the nearest expiry futures contract
-            from datetime import datetime as _dt
-            nearest = None
-            nearest_expiry = None
-            today = _dt.now().date()
-
-            for r in results:
-                expiry_str = r.get("expiry", "")
-                if not expiry_str:
-                    continue
-                try:
-                    exp_date = _dt.strptime(expiry_str, "%d-%b-%y").date()
-                except ValueError:
-                    continue
-                # Only consider non-expired contracts
-                if exp_date >= today:
-                    if nearest_expiry is None or exp_date < nearest_expiry:
-                        nearest = r
-                        nearest_expiry = exp_date
-
-            if not nearest:
-                logger.warning(f"No active futures contract found for {symbol} on {fno_exchange}")
-                return pd.DataFrame()
-
-            fut_symbol = nearest["symbol"]
-            logger.info(
-                f"Index history fallback: using futures {fut_symbol} on {fno_exchange} "
-                f"(expiry {nearest['expiry']}) as proxy for {symbol}"
-            )
-
-            # Recursively call get_history with the futures symbol on NFO
-            return self.get_history(fut_symbol, fno_exchange, timeframe, start_date, end_date)
-
-        except Exception as e:
-            logger.warning(f"Futures fallback failed for {symbol}: {e}")
-            return pd.DataFrame()
-
     def get_history(
         self, symbol: str, exchange: str, timeframe: str, start_date: str, end_date: str
     ) -> pd.DataFrame:
@@ -621,9 +650,6 @@ class BrokerData:
             logger.debug(f"Date range: {start_date} to {end_date}")
             logger.debug(f"Date types - start_date: {type(start_date)}, end_date: {type(end_date)}")
 
-            # Remember original exchange for index fallback
-            original_exchange = exchange
-
             # Get token for the symbol
             token = get_token(symbol, exchange)
             if not token:
@@ -639,25 +665,50 @@ class BrokerData:
 
             logger.debug(f"Found token {token} for {symbol}:{exchange}")
 
-            # Convert exchange for AliceBlue API (same as Angel)
+            # Convert exchange for AliceBlue API.
+            #
+            # Indices need a "::index" suffix on the exchange - "NSE::index",
+            # not "NSE". Without it the chart API answers "No data available"
+            # for every index token, on every exchange spelling, resolution and
+            # date range, which is what made index history look like a broker
+            # limitation (see #1776). It is not: the suffix is undocumented in
+            # the REST reference but is what AliceBlue's own SDK sends, from
+            # Ant-A3-tradehub-sdk-production TradeMaster/TradeSync.py:
+            #
+            #   "exchange": instrument.exchange if not indices
+            #               else f"{instrument.exchange}::index"
+            #
+            # Verified live: NIFTY 50, NIFTY BANK, INDIA VIX, NIFTY FIN SERVICE,
+            # NIFTY MIDCAP SELECT, SENSEX and BANKEX all return daily and 1m
+            # candles, back 2 years.
+            #
+            # The suffix is index-only - "NSE::index" with an equity token
+            # returns no data, exactly as "NSE" with an index token does.
             if exchange == "NSE_INDEX":
-                exchange = "NSE"
+                exchange = "NSE::index"
             elif exchange == "BSE_INDEX":
-                exchange = "BSE"
+                exchange = "BSE::index"
             elif exchange == "MCX_INDEX":
-                exchange = "MCX"
+                # MCXENERGY and MCXMETAL return nothing either way, so this is
+                # for consistency rather than data we have seen.
+                exchange = "MCX::index"
 
-            # Check for exchange limitations based on AliceBlue API documentation
-            # BSE/BCD equity historical data is not supported by AliceBlue.
-            # BFO (BSE F&O) is allowed through — futures contracts work fine.
-            if exchange in ["BSE", "BCD"]:
-                # If this was an index exchange, try the futures fallback first
-                if original_exchange in ("BSE_INDEX",):
-                    fut_df = self._get_index_history_via_futures(
-                        symbol, original_exchange, timeframe, start_date, end_date
-                    )
-                    if not fut_df.empty:
-                        return fut_df
+            # Check for exchange limitations based on AliceBlue API documentation.
+            #
+            # BSE used to be blocked here alongside BCD. It should not have been:
+            # probed against a live account, BSE serves history on every
+            # timeframe (issue #1775, bug C).
+            #
+            #   BSE RELIANCE  D  365d -> 247 rows
+            #   BSE RELIANCE  5m  30d -> 1621 rows
+            #   BSE RELIANCE  1m   5d -> 1706 rows
+            #
+            # The block meant no BSE history anywhere - charts, /api/v1/history,
+            # Historify, indicators - and it failed before issuing a request, so
+            # nothing in the logs suggested the data was actually available.
+            # BCD stays blocked; that one is genuinely unsupported.
+            # BFO (BSE F&O) was already allowed through.
+            if exchange == "BCD":
                 logger.error(f"Historical data not available for {exchange} exchange on AliceBlue")
                 return pd.DataFrame()
 
@@ -792,6 +843,29 @@ class BrokerData:
                 logger.warning(f"End date {end_date} is in the future. Capping to current time.")
                 end_ts = str(current_time_ms)
 
+            # Daily needs a day boundary, not a wall-clock instant. Verified
+            # against a live account - identical request, only "to" differs:
+            #
+            #   to = midnight            -> 246 rows
+            #   to = now (intraday ms)   -> 0 rows, {"emsg": "No data available"}
+            #
+            # Same for BHEL and RELIANCE, so it is not symbol-specific. Because
+            # the cap above rewrites "to" to the wall clock whenever the range
+            # ends today, and virtually every real request ends today, daily
+            # history came back empty for every cash symbol. Past-year ranges
+            # worked only because their end date was already a past midnight,
+            # which is what made this look like "AliceBlue refuses the current
+            # calendar year" (issue #1775, bug A). It is not the year - it is
+            # the time of day on the "to" timestamp.
+            if timeframe == "D":
+                day_boundary = int(
+                    pd.Timestamp(int(end_ts), unit="ms").normalize().timestamp() * 1000
+                )
+                if day_boundary != int(end_ts):
+                    # Round up to the following midnight so today's session is
+                    # still inside the window.
+                    end_ts = str(day_boundary + 86400000)
+
             # Ensure start and end times are different and valid
             if start_ts == end_ts:
                 logger.warning(
@@ -825,6 +899,9 @@ class BrokerData:
             # Make request to historical API
             client = get_httpx_client()
             try:
+                # Historical data is a non-order request, so it draws on the
+                # 1800/15min budget like quotes and books do.
+                apply_rate_limit()
                 response = client.post(HISTORICAL_API_URL, headers=headers, json=payload, timeout=15)
                 response.raise_for_status()
                 data = response.json()
@@ -841,15 +918,6 @@ class BrokerData:
                 error_msg = data.get("emsg", "Unknown error")
                 logger.warning(f"Historical data response for {symbol}:{exchange}: {error_msg}")
 
-                # AliceBlue doesn't serve index historical data (e.g. NIFTY on NSE).
-                # Fallback: use nearest month futures contract as a proxy.
-                if original_exchange in ("NSE_INDEX", "BSE_INDEX", "MCX_INDEX"):
-                    fut_df = self._get_index_history_via_futures(
-                        symbol, original_exchange, timeframe, start_date, end_date
-                    )
-                    if not fut_df.empty:
-                        return fut_df
-
                 # Provide more helpful error messages based on the error
                 if "No data available" in error_msg or "market time" in error_msg.lower() or "Session" in error_msg:
                     if exchange in ["MCX", "NFO", "CDS"]:
@@ -859,7 +927,7 @@ class BrokerData:
                         logger.error(
                             f"Symbol '{symbol}' might be an expired contract or not a current expiry."
                         )
-                    elif exchange in ["BSE", "BCD"]:
+                    elif exchange == "BCD":
                         logger.error(
                             f"AliceBlue does not support historical data for {exchange} exchange yet."
                         )
@@ -899,12 +967,23 @@ class BrokerData:
 
             # Handle different timeframes for timestamp conversion
             if timeframe == "D":
-                # For daily data, normalize to date only then add IST offset
-                # Match Angel's approach: naive datetime + 5:30, no tz_localize
-                df["timestamp"] = df["timestamp"].dt.normalize()
-                df["timestamp"] = df["timestamp"] + pd.Timedelta(hours=5, minutes=30)
+                # A daily bar is midnight IST. Localize to IST exactly as the
+                # intraday branch below does, rather than adding 5:30 to a naive
+                # value and letting pandas read it as UTC.
+                #
+                # The old form shifted the wrong way: normalize gave
+                # 2026-08-03 00:00 naive, +5:30 made it 05:30, and casting to
+                # int64 treated that as UTC. The SDK then handed back
+                # "2026-08-03 05:30:00", tz-naive, where the same call at 1m
+                # correctly returned "2026-08-07 09:15:00+05:30" as
+                # datetime64[ns, Asia/Kolkata]. Daily was both offset and
+                # missing its timezone, and inconsistent with intraday from the
+                # same broker.
+                import pytz as _pytz_daily
 
-                # Convert directly to Unix epoch (naive → treated as UTC by pandas)
+                _ist_daily = _pytz_daily.timezone("Asia/Kolkata")
+                df["timestamp"] = df["timestamp"].dt.normalize()
+                df["timestamp"] = df["timestamp"].dt.tz_localize(_ist_daily)
                 df["timestamp"] = df["timestamp"].astype("int64") // 10**9
             else:
                 # For intraday data, adjust timestamps to represent the start of the candle

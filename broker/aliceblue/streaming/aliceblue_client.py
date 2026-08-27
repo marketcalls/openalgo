@@ -1,7 +1,6 @@
 import enum
 import hashlib
 import json
-import logging
 import os
 import ssl
 import threading
@@ -12,7 +11,9 @@ from time import sleep
 import requests
 import websocket
 
-logger = logging.getLogger(__name__)
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 Instrument = namedtuple("Instrument", ["exchange", "token", "symbol", "name", "expiry", "lot_size"])
 
@@ -134,7 +135,9 @@ class Aliceblue:
         url = self.base + sub_url
         headers = self._user_agent()
 
-        response = requests.get(url, headers=headers, params=data, verify=not self.disable_ssl)
+        response = requests.get(
+            url, headers=headers, params=data, verify=not self.disable_ssl, timeout=10
+        )
 
         if response.status_code == 200:
             if "json" in response.headers.get("content-type"):
@@ -148,7 +151,9 @@ class Aliceblue:
     def _post(self, sub_url, data=None):
         url = self.base + sub_url
         headers = self._user_agent()
-        response = requests.post(url, json=data, headers=headers, verify=not self.disable_ssl)
+        response = requests.post(
+            url, json=data, headers=headers, verify=not self.disable_ssl, timeout=10
+        )
 
         if response.status_code == 200:
             if "json" in response.headers.get("content-type"):
@@ -161,7 +166,9 @@ class Aliceblue:
     # Post method declaration
     def _dummypost(self, url, data=None):
         headers = self._user_agent()
-        response = requests.post(url, json=data, headers=headers, verify=not self.disable_ssl)
+        response = requests.post(
+            url, json=data, headers=headers, verify=not self.disable_ssl, timeout=10
+        )
 
         if response.status_code == 200:
             if "json" in response.headers.get("content-type"):
@@ -192,16 +199,18 @@ class Aliceblue:
         # Debug logging for WebSocket session creation
         if "createWsSession" in method:
             logger.info(f"Creating WebSocket session - URL: {url}")
-            logger.info(f"Request headers: {headers}")
+            logger.info(f"Request header fields: {sorted(headers)}")
             logger.info(f"Request data: {data}")
 
-        response = requests.post(url, json=data, headers=headers, verify=not self.disable_ssl)
+        response = requests.post(
+            url, json=data, headers=headers, verify=not self.disable_ssl, timeout=10
+        )
 
         # Debug logging for WebSocket session response
         if "createWsSession" in method:
             logger.info(f"Response status: {response.status_code}")
             logger.info(f"Response headers: {dict(response.headers)}")
-            logger.info(f"Response content: {response.text}")
+            logger.info(f"Response content length: {len(response.text)} bytes")
 
         if response.status_code == 200:
             if "json" in response.headers.get("content-type"):
@@ -299,7 +308,7 @@ class Aliceblue:
 
     def get_contract_master(self, exchange):
         url = self.base_url_c % exchange
-        response = requests.get(url)
+        response = requests.get(url, timeout=30)
 
         if response.status_code == 200:
             return response.content

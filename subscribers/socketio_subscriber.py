@@ -239,9 +239,98 @@ def on_sandbox_t1_settlement(event):
     _emit_analyzer_update(event)
 
 
+def on_order_update(event):
+    """Emit order_update for asynchronous order status changes (broker
+    postback/order-WS fills+rejections, or sandbox engine-internal
+    transitions). Global emit — matches every other socketio event in this
+    file (single-user-per-deployment, no rooms needed)."""
+    socketio.emit(
+        "order_update",
+        {
+            "mode": event.mode,
+            "broker": event.broker,
+            "orderid": event.orderid,
+            "symbol": event.symbol,
+            "exchange": event.exchange,
+            "action": event.action,
+            "quantity": event.quantity,
+            "price": event.price,
+            "trigger_price": event.trigger_price,
+            "pricetype": event.pricetype,
+            "product": event.product,
+            "order_status": event.order_status,
+            "filled_quantity": event.filled_quantity,
+            "pending_quantity": event.pending_quantity,
+            "average_price": event.average_price,
+            "rejection_reason": event.rejection_reason,
+        },
+    )
+
+
 def _emit_analyzer_update(event):
     """Helper to emit the analyzer_update socketio event."""
     socketio.emit(
         "analyzer_update",
         {"request": event.request_data, "response": event.response_data},
     )
+
+
+# --- GTT ------------------------------------------------------------------
+
+
+def _emit_gtt_event(event, name):
+    """Emit a GTT event to the UI, or an analyzer update in analyze mode.
+
+    Analyze mode reuses analyzer_update so the analyzer view refreshes the same
+    way it does for orders; live mode gets its own gtt_event so the GTT tab can
+    refresh without reloading the whole orderbook.
+    """
+    if event.mode == "analyze":
+        _emit_analyzer_update(event)
+        return
+    try:
+        socketio.emit(
+            "gtt_event",
+            {
+                "event": name,
+                "symbol": getattr(event, "symbol", ""),
+                "exchange": getattr(event, "exchange", ""),
+                "trigger_id": getattr(event, "trigger_id", ""),
+                "triggered_order_id": getattr(event, "triggered_order_id", ""),
+                "mode": "live",
+            },
+        )
+    except Exception as e:
+        logger.exception(f"Error emitting gtt_event {name}: {e}")
+
+
+def on_gtt_placed(event):
+    _emit_gtt_event(event, "placed")
+
+
+def on_gtt_failed(event):
+    _emit_gtt_event(event, "failed")
+
+
+def on_gtt_modified(event):
+    _emit_gtt_event(event, "modified")
+
+
+def on_gtt_modify_failed(event):
+    _emit_gtt_event(event, "modify_failed")
+
+
+def on_gtt_cancelled(event):
+    _emit_gtt_event(event, "cancelled")
+
+
+def on_gtt_cancel_failed(event):
+    _emit_gtt_event(event, "cancel_failed")
+
+
+def on_gtt_triggered(event):
+    _emit_gtt_event(event, "triggered")
+
+
+def on_gtt_expired(event):
+    _emit_gtt_event(event, "expired")

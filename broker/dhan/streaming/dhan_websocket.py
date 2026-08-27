@@ -4,7 +4,6 @@ Handles both 5-level and 20-level market depth connections
 """
 
 import json
-import logging
 import struct
 import threading
 import time
@@ -15,6 +14,7 @@ from urllib.parse import urlencode
 import websocket
 
 from database.auth_db import get_auth_token
+from utils.logging import get_logger
 
 
 class DhanWebSocket:
@@ -103,7 +103,7 @@ class DhanWebSocket:
         self._health_check_thread: threading.Thread | None = None
 
         # Logging
-        self.logger = logging.getLogger(f"dhan_websocket_{'20depth' if is_20_depth else '5depth'}")
+        self.logger = get_logger(f"dhan_websocket_{'20depth' if is_20_depth else '5depth'}")
 
         # Build WebSocket URL
         self._build_url()

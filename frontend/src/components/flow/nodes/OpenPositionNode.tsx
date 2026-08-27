@@ -6,6 +6,7 @@
 import { Handle, Position } from '@xyflow/react'
 import { Briefcase } from 'lucide-react'
 import { memo } from 'react'
+import { defaultProductForExchange } from '@/lib/flow/constants'
 import { cn } from '@/lib/utils'
 import type { OpenPositionNodeData } from '@/types/flow'
 
@@ -34,7 +35,7 @@ export const OpenPositionNode = memo(({ data, selected }: OpenPositionNodeProps)
             <span className="mono-data text-[10px] font-medium">{data.symbol || '-'}</span>
           </div>
           <div className="text-center text-[9px] text-muted-foreground">
-            {data.product || 'MIS'}
+            {data.product || defaultProductForExchange(data.exchange)}
           </div>
         </div>
       </div>

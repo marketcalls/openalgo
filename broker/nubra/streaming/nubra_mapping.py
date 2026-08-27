@@ -2,24 +2,48 @@
 Nubra exchange mapping and capability registry for WebSocket streaming.
 """
 
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 class NubraExchangeMapper:
     """Maps OpenAlgo exchange codes to Nubra-specific exchanges."""
 
-    # OpenAlgo exchange -> Nubra WebSocket exchange
+    # OpenAlgo exchange -> Nubra WebSocket exchange.
+    # Nubra sends the exchange at the message level and accepts exactly
+    # NSE, BSE and MCX (SDK ExchangeEnum). NSE/BSE derivatives ride on their
+    # cash exchange; MCX is its own message-level exchange and must NOT be
+    # folded into NSE, or the subscribe is silently accepted and never ticks.
     EXCHANGE_MAP = {
         "NSE": "NSE",
         "BSE": "BSE",
         "NFO": "NSE",
         "BFO": "BSE",
+        "MCX": "MCX",
         "NSE_INDEX": "NSE",
         "BSE_INDEX": "BSE",
     }
 
     @staticmethod
     def to_nubra_exchange(exchange: str) -> str:
-        """Convert OpenAlgo exchange to Nubra exchange."""
-        return NubraExchangeMapper.EXCHANGE_MAP.get(exchange, "NSE")
+        """
+        Convert OpenAlgo exchange to Nubra exchange.
+
+        Unmapped exchanges still fall back to NSE so a subscribe never hard
+        fails, but the fallback is logged: Nubra accepts an unknown-for-that-
+        exchange symbol without an error and simply never sends a tick, so a
+        silent fallback surfaces only as "connected but no data".
+        """
+        nubra_exchange = NubraExchangeMapper.EXCHANGE_MAP.get(exchange)
+        if nubra_exchange is None:
+            logger.warning(
+                f"Exchange {exchange!r} is not mapped for Nubra streaming; "
+                f"falling back to NSE. Nubra supports NSE, BSE and MCX only, "
+                f"so ticks for this symbol will likely never arrive."
+            )
+            return "NSE"
+        return nubra_exchange
 
     @staticmethod
     def is_index_exchange(exchange: str) -> bool:
@@ -30,13 +54,14 @@ class NubraExchangeMapper:
 class NubraCapabilityRegistry:
     """Registry of Nubra broker's streaming capabilities."""
 
-    exchanges = ["NSE", "BSE", "NFO", "BFO"]
+    exchanges = ["NSE", "BSE", "NFO", "BFO", "MCX"]
     subscription_modes = [1, 2, 3]  # 1: LTP, 2: Quote, 3: Depth
     depth_support = {
         "NSE": [5],
         "BSE": [5],
         "NFO": [5],
         "BFO": [5],
+        "MCX": [5],
     }
 
     @classmethod

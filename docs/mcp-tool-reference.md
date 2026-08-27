@@ -15,9 +15,18 @@ The currently supported tools are listed below. The live MCP `tools/list` schema
 - **Exchange codes**: `NSE`, `BSE`, `NFO`, `BFO`, `CDS`, `BCD`, `MCX` + `NSE_INDEX` / `BSE_INDEX` for index values.
 - **Lot size**: never hardcoded. The model will call `get_option_symbol` / `get_option_chain` / `get_symbol_info` to read the live `lotsize` from the broker master contract, then compute `quantity = lots × lotsize` for you.
 
+## Response Format and Safety Controls
+
+Applies to every tool below. Full detail in the [MCP Server Setup Guide](../mcp/README.md).
+
+- **Annotations**: each tool declares `readOnlyHint` / `destructiveHint`, so your client can tell `get_quote` apart from `cancel_all_orders` before asking you to approve a call.
+- **Trust envelope**: responses arrive as `{"_openalgo_mcp_security": {...}, "data": {...}}`. The payload you care about is under `data`; the wrapper tells the model not to treat broker-relayed text as instructions.
+- **Structured errors**: failures return `{"error": {"message": ..., "error_type": ...}}`. A timed-out write is reported separately from a rejection, with `retry_safe: false`, because an order that timed out may still have reached the broker.
+- **Narrowing the server**: `OPENALGO_MCP_READ_ONLY=1` exposes only the read-only tools; `OPENALGO_MCP_TOOLSETS=marketdata,research` limits it further. Both are enforced at startup, so unlike analyzer mode the assistant cannot switch them off.
+
 ---
 
-## 📦 Order Management
+## Order Management
 
 ### `place_order`
 
@@ -132,7 +141,7 @@ Change price / quantity / type / trigger on a working order.
 
 ---
 
-## 📊 Positions & Holdings
+## Positions & Holdings
 
 ### `close_all_positions`
 
@@ -178,7 +187,7 @@ Cash, collateral, realized/unrealized M2M, utilized margin.
 
 ---
 
-## 📋 Order Tracking
+## Order Tracking
 
 ### `get_order_status`
 
@@ -204,7 +213,7 @@ Only executed fills.
 
 ---
 
-## 📈 Market Data
+## Market Data
 
 ### `get_quote`
 
@@ -255,7 +264,7 @@ Real-time chain with CE/PE data per strike — LTP, bid/ask, OHLC, volume, OI, `
 
 ---
 
-## 🔍 Instrument Search & Symbols
+## Instrument Search & Symbols
 
 ### `search_instruments`
 
@@ -341,7 +350,7 @@ Returns the full standardized OpenAlgo index symbol list (57 NSE + 40 BSE), roll
 
 ---
 
-## 💰 Margin
+## Margin
 
 ### `calculate_margin`
 
@@ -353,7 +362,7 @@ SPAN + exposure margin for a hypothetical position set. Accepts an array of legs
 
 ---
 
-## 🧪 Analyzer
+## Analyzer
 
 ### `analyzer_status`
 
@@ -373,7 +382,7 @@ Flip between simulated and live trading. Analyzer mode returns `SB-xxx` pseudo-o
 
 ---
 
-## 📅 Market Calendar
+## Market Calendar
 
 ### `get_holidays`
 
@@ -393,7 +402,7 @@ Exchange open/close epoch timestamps for a given date (date optional → default
 
 ---
 
-## 🛠️ Utilities
+## Utilities
 
 ### `get_openalgo_version`
 
@@ -477,7 +486,7 @@ Align two symbols on common timestamps and return rolling correlation, rolling b
 
 ---
 
-## 🧠 Worked Multi-Tool Workflows
+## Worked Multi-Tool Workflows
 
 Real strength shows when the assistant chains tools on its own. Example prompts:
 
