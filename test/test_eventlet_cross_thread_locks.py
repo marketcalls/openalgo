@@ -189,3 +189,127 @@ def test_the_locks_that_cross_the_boundary_are_real():
         """
     )
     assert "OK" in result.stdout, result.stderr
+
+
+def test_joining_a_real_thread_does_not_freeze_the_hub():
+    """`Thread.join()` on a real OS thread blocks, and a greenlet blocking stops
+    every other request on the worker. Reached from the /telegram stop route and
+    from websocket client teardown, both greenlet contexts."""
+    result = run(
+        """
+        import utils.real_threading as rt
+
+        RUNS_FOR = 0.4
+
+        def measure(joiner):
+            ticks = []
+
+            def hub_alive():
+                while True:
+                    ticks.append(1)
+                    eventlet.sleep(0.02)
+
+            g = eventlet.spawn(hub_alive)
+            t = rt._threading.Thread(target=lambda: time.sleep(RUNS_FOR), daemon=True)
+            t.start()
+            eventlet.sleep(0.05)
+            before, t0 = len(ticks), time.monotonic()
+            finished = joiner(t)
+            took, during = time.monotonic() - t0, len(ticks) - before
+            g.kill()
+            return finished, took, during
+
+        _, took, ticks = measure(lambda t: t.join(timeout=5) or not t.is_alive())
+        assert ticks <= 1, f"expected a blocking join to freeze the hub, got {ticks} ticks"
+
+        finished, took, ticks = measure(lambda t: rt.join(t, timeout=5))
+        assert finished, "cooperative join did not see the thread finish"
+        assert took < RUNS_FOR + 0.3, f"woke late, after {took:.2f}s"
+        assert ticks > 5, f"cooperative join froze the hub: only {ticks} ticks"
+
+        # A timeout must still be honoured, and reported.
+        slow = rt._threading.Thread(target=lambda: time.sleep(5), daemon=True)
+        slow.start()
+        t0 = time.monotonic()
+        assert rt.join(slow, timeout=0.3) is False, "expected False on timeout"
+        assert time.monotonic() - t0 < 1.0, "timeout not honoured"
+        print("OK")
+        """
+    )
+    assert "OK" in result.stdout, result.stderr
+
+
+def test_subscriber_callbacks_never_run_on_the_websocket_loop_thread():
+    """The loop thread must only enqueue.
+
+    Its callbacks reach SocketIO, the event bus and the sandbox engine, all of
+    which use eventlet primitives, so calling them from the asyncio OS thread
+    is the crossing reported in #1402, #1473 and #1569. The loop thread hands
+    the payload over and a green thread does the calling.
+    """
+    result = run(
+        """
+        import threading as _t
+        from services.websocket_client import WebSocketClient
+
+        client = WebSocketClient("test-key")
+        client.running = True
+
+        seen = {}
+
+        def on_tick(data):
+            seen["thread"] = _t.current_thread().name
+            seen["data"] = data
+
+        client.register_callback("market_data", on_tick)
+
+        # The dispatcher is a plain Thread, i.e. green under eventlet.
+        dispatcher = _t.Thread(target=client._run_dispatch_loop, daemon=True)
+        dispatcher.start()
+
+        loop_thread_name = {}
+
+        def loop_thread_side():
+            loop_thread_name["name"] = _t.current_thread().name
+            client._dispatch("market_data", {"symbol": "RELIANCE"})
+
+        t = _orig.Thread(target=loop_thread_side, name="fake-asyncio-loop", daemon=True)
+        t.start()
+
+        deadline = time.monotonic() + 5
+        while "data" not in seen and time.monotonic() < deadline:
+            eventlet.sleep(0.02)
+        client.running = False
+
+        assert seen.get("data") == {"symbol": "RELIANCE"}, f"callback never ran: {seen}"
+        assert seen["thread"] != loop_thread_name["name"], (
+            f"callback ran on the loop thread ({seen['thread']}), which is the defect"
+        )
+        print("OK")
+        """
+    )
+    assert "OK" in result.stdout, result.stderr
+
+
+def test_the_dispatch_queue_is_bounded():
+    """The feed never blocks, so an unbounded queue grows until the worker is
+    OOM-killed if a subscriber stalls."""
+    result = run(
+        """
+        from services.websocket_client import WebSocketClient
+
+        client = WebSocketClient("test-key")
+        assert client.DISPATCH_QUEUE_MAX > 0
+        for _ in range(client.DISPATCH_QUEUE_MAX + 500):
+            client._dispatch("market_data", {"x": 1})
+
+        assert client._dispatch_queue.qsize() <= client.DISPATCH_QUEUE_MAX, (
+            "queue grew past its bound"
+        )
+        assert client._dispatch_dropped >= 500, (
+            f"expected drops to be counted, got {client._dispatch_dropped}"
+        )
+        print("OK")
+        """
+    )
+    assert "OK" in result.stdout, result.stderr

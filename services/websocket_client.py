@@ -33,6 +33,16 @@ class WebSocketClient:
     Handles authentication, subscriptions, and data routing.
     """
 
+    #: Bound on callback payloads queued for the hub. The producer is a feed
+    #: that never blocks, so an unbounded queue would grow until the worker is
+    #: OOM-killed if a subscriber stalled. Shedding the newest is the right
+    #: trade for market data: the next tick supersedes it anyway.
+    DISPATCH_QUEUE_MAX = 10000
+
+    #: Idle poll gap for the dispatcher. It drains everything available before
+    #: sleeping, so this only bounds latency when the queue is empty.
+    DISPATCH_POLL_SECONDS = 0.005
+
     def __init__(self, api_key: str, host: str = "localhost", port: int = 8765):
         """
         Initialize the WebSocket client
@@ -60,6 +70,18 @@ class WebSocketClient:
             "unsubscribe": [],
             "error": [],
         }
+
+        # Callbacks are handed to the hub, never run on the loop thread.
+        # _handle_message() runs on the asyncio loop's real OS thread, and the
+        # callbacks registered here reach SocketIO, the event bus and the
+        # sandbox engine, all of which use eventlet primitives. Touching one
+        # from a foreign thread raises "greenlet.error: Cannot switch to a
+        # different thread" inside the hub and wedges that thread for good
+        # (issues #1402, #1473, #1569). So the loop thread only enqueues, and a
+        # green thread does the calling.
+        self._dispatch_queue = _original_threading.Queue(maxsize=self.DISPATCH_QUEUE_MAX)
+        self._dispatch_thread = None
+        self._dispatch_dropped = 0
 
         # Subscription tracking.
         #
@@ -105,6 +127,15 @@ class WebSocketClient:
             self.thread.daemon = True
             self.thread.start()
 
+            # Green thread (threading is monkey-patched under eventlet), so
+            # callbacks run on the hub and never on self.thread.
+            self._dispatch_thread = threading.Thread(
+                target=self._run_dispatch_loop,
+                daemon=True,
+                name="openalgo-ws-dispatch",
+            )
+            self._dispatch_thread.start()
+
             # Wait for connection
             timeout = 10
             start_time = time.time()
@@ -141,7 +172,10 @@ class WebSocketClient:
 
         # Wait for thread to finish
         if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=5)
+            # Cooperative: this is a real OS thread, and disconnect() is
+            # called from greenlets (scalping teardown, close_all_clients),
+            # where a blocking join would stop the worker for 5s.
+            _original_threading.join(self.thread, timeout=5)
 
         self.connected = False
         self.authenticated = False
@@ -371,6 +405,42 @@ class WebSocketClient:
             else:
                 return dict(self.market_data_cache)
 
+    def _dispatch(self, event_type: str, data: dict) -> None:
+        """Hand a callback payload to the hub. Runs on the loop thread."""
+        try:
+            self._dispatch_queue.put_nowait((event_type, data))
+        except Exception:
+            self._dispatch_dropped += 1
+            if self._dispatch_dropped == 1 or self._dispatch_dropped % 1000 == 0:
+                logger.warning(
+                    f"WebSocket dispatch queue full ({self.DISPATCH_QUEUE_MAX}); "
+                    f"dropped {self._dispatch_dropped} callback payload(s). A "
+                    f"subscriber is slower than the feed."
+                )
+
+    def _run_dispatch_loop(self) -> None:
+        """Call subscriber callbacks, on the hub rather than the loop thread.
+
+        A plain threading.Thread runs this, which under eventlet is a green
+        thread owned by the hub. That is the whole point: everything a callback
+        touches (SocketIO, the event bus, the sandbox engine, the database) is
+        then reached from the world those primitives belong to.
+
+        The queue is real, so get_nowait() plus a yield is the only safe way to
+        read it; a blocking get() from a green thread would freeze the worker.
+        """
+        while self.running:
+            try:
+                event_type, data = self._dispatch_queue.get_nowait()
+            except _original_threading.Empty:
+                time.sleep(self.DISPATCH_POLL_SECONDS)
+                continue
+            for callback in list(self.callbacks.get(event_type, ())):
+                try:
+                    callback(data)
+                except Exception as e:
+                    logger.exception(f"Error in {event_type} callback: {e}")
+
     def register_callback(self, event_type: str, callback: Callable):
         """
         Register a callback for specific event types
@@ -477,11 +547,7 @@ class WebSocketClient:
                     logger.error(f"Authentication failed: {data.get('message')}")
 
                 # Trigger auth callbacks
-                for callback in self.callbacks["auth"]:
-                    try:
-                        callback(data)
-                    except Exception as e:
-                        logger.exception(f"Error in auth callback: {e}")
+                self._dispatch("auth", data)
 
             # Handle market data
             elif msg_type == "market_data":
@@ -495,11 +561,7 @@ class WebSocketClient:
                         self.market_data_cache[key] = data
 
                     # Trigger market data callbacks
-                    for callback in self.callbacks["market_data"]:
-                        try:
-                            callback(data)
-                        except Exception as e:
-                            logger.exception(f"Error in market data callback: {e}")
+                    self._dispatch("market_data", data)
 
             # Handle subscription responses
             elif msg_type == "subscribe":
@@ -511,11 +573,7 @@ class WebSocketClient:
                     if fut is not None and not fut.done():
                         fut.set_result(data)
                 # Generic subscribe-event callbacks still fire (backward compat).
-                for callback in self.callbacks["subscribe"]:
-                    try:
-                        callback(data)
-                    except Exception as e:
-                        logger.exception(f"Error in subscribe callback: {e}")
+                self._dispatch("subscribe", data)
 
             # Handle unsubscription responses
             elif msg_type == "unsubscribe":
@@ -524,11 +582,7 @@ class WebSocketClient:
                     fut = self._pending_acks.get(rid)
                     if fut is not None and not fut.done():
                         fut.set_result(data)
-                for callback in self.callbacks["unsubscribe"]:
-                    try:
-                        callback(data)
-                    except Exception as e:
-                        logger.exception(f"Error in unsubscribe callback: {e}")
+                self._dispatch("unsubscribe", data)
 
             # Handle errors
             elif data.get("status") == "error":
@@ -543,11 +597,7 @@ class WebSocketClient:
                     fut = self._pending_acks.get(rid)
                     if fut is not None and not fut.done():
                         fut.set_result(data)
-                for callback in self.callbacks["error"]:
-                    try:
-                        callback(data)
-                    except Exception as e:
-                        logger.exception(f"Error in error callback: {e}")
+                self._dispatch("error", data)
 
         except json.JSONDecodeError:
             logger.error(f"Invalid JSON message: {message}")

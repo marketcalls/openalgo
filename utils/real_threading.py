@@ -25,6 +25,7 @@ database and network work after the release.
 Where eventlet is absent these are simply the stdlib primitives.
 """
 
+import queue
 import sys
 import threading
 import time
@@ -33,14 +34,21 @@ if "eventlet" in sys.modules:
     import eventlet
 
     _threading = eventlet.patcher.original("threading")
+    _queue = eventlet.patcher.original("queue")
 else:
     _threading = threading
+    _queue = queue
 
 Lock = _threading.Lock
 RLock = _threading.RLock
 Event = _threading.Event
 Thread = _threading.Thread
 Condition = _threading.Condition
+
+#: A real queue, for handing work from a real OS thread to the hub. Drain it
+#: with get_nowait() from a greenlet; a blocking get() would freeze the hub.
+Queue = _queue.Queue
+Empty = _queue.Empty
 
 
 def wait_for(event, timeout, poll=0.02):
@@ -70,4 +78,35 @@ def wait_for(event, timeout, poll=0.02):
     return True
 
 
-__all__ = ["Condition", "Event", "Lock", "RLock", "Thread", "wait_for"]
+def join(thread, timeout=None, poll=0.02):
+    """Wait for a real OS thread to finish without freezing the hub.
+
+    ``Thread.join()`` on a real thread blocks, and a greenlet blocking stops
+    every other request on the worker for the whole wait. Polling ``is_alive``
+    costs a flag read and yields in between.
+
+    Joining a *green* thread needs none of this: eventlet's own join already
+    yields. This is only for threads created from ``Thread`` in this module.
+
+    Returns True if the thread finished, False if the timeout ran out, so a
+    caller can tell the difference the way ``is_alive()`` after ``join()`` does.
+    """
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while thread.is_alive():
+        if deadline is not None and time.monotonic() >= deadline:
+            return False
+        time.sleep(poll)
+    return True
+
+
+__all__ = [
+    "Condition",
+    "Empty",
+    "Event",
+    "Lock",
+    "Queue",
+    "RLock",
+    "Thread",
+    "join",
+    "wait_for",
+]
