@@ -27,6 +27,11 @@ _last_api_call_time = {"data": 0.0, "quote": 0.0}
 DHAN_DATA_INTERVAL = 0.2  # seconds between /v2/charts/* requests (5 req/s)
 DHAN_QUOTE_INTERVAL = 1.1  # seconds between /v2/marketfeed/* requests (1 req/s)
 
+# MCX index derivatives. Dhan classifies these as FUTIDX / OPTIDX, not the
+# FUTCOM / OPTFUT used by the commodity contracts, so the history API needs the
+# index instrument type for them.
+MCX_INDEX_UNDERLYINGS = ("MCXBULLDEX", "MCXMETLDEX", "MCXENRGDEX")
+
 
 def _apply_rate_limit(category="data"):
     """Apply per-category rate limiting to avoid Dhan API error 805 (too many requests)"""
@@ -289,13 +294,21 @@ class BrokerData:
                 # For stock futures
                 return "FUTSTK"
 
-        # For commodity market (MCX)
-        elif exchange == "MCX":
-            # For commodity options on futures
+        # NSE commodity derivatives. Dhan lists these as OPTFUT, the same
+        # instrument name it uses for MCX commodity options.
+        elif exchange == "NCO":
             if symbol.endswith("CE") or symbol.endswith("PE"):
                 return "OPTFUT"
-            # For commodity futures
             return "FUTCOM"
+
+        # For commodity market (MCX)
+        elif exchange == "MCX":
+            is_index = symbol.startswith(MCX_INDEX_UNDERLYINGS)
+            # For commodity options on futures, or options on an MCX index
+            if symbol.endswith("CE") or symbol.endswith("PE"):
+                return "OPTIDX" if is_index else "OPTFUT"
+            # For commodity futures, or an MCX index future
+            return "FUTIDX" if is_index else "FUTCOM"
 
         # For currency market (CDS, BCD)
         elif exchange in ["CDS", "BCD"]:
