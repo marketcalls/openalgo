@@ -55,6 +55,22 @@ export default function ({
 
   const num = (v, dp = 2) => (v == null || !Number.isFinite(v) ? '-' : v.toFixed(dp))
 
+  /**
+   * Volume of the most recent bar that actually traded.
+   *
+   * The last bar is often one the live feed has just opened, so its volume is
+   * still 0. Reporting that is technically true and useless: the cell reads
+   * "Volume: 0" on a symbol visibly trading. Walking back to the last bar with
+   * volume answers the question the cell is actually asking.
+   */
+  function lastVolume(bars) {
+    for (let i = bars.length - 1; i >= 0 && i > bars.length - 5; i--) {
+      const v = bars[i].volume
+      if (Number.isFinite(v) && v > 0) return v
+    }
+    return bars.length ? (bars[bars.length - 1].volume ?? null) : null
+  }
+
   registerIndicator({
     id: 'oa-indicator-table',
     name: '4x5 Indicator Table',
@@ -119,8 +135,11 @@ export default function ({
         none: new Array(n).fill(null),
         smaFast: nulls(sma(close, int('smaFast', 20))),
         smaSlow: nulls(sma(close, int('smaSlow', 50))),
-        emaFast: runBuiltin('ema', bars, { length: int('emaFast', 20) }).ema,
-        emaSlow: runBuiltin('ema', bars, { length: int('emaSlow', 50) }).ema,
+        // Every moving-average built-in plots under the key 'ma', not under its
+        // own name. Reading `.ema` yields undefined, and a missing column draws
+        // nothing at all: check `getIndicator(id).plots` before assuming a key.
+        emaFast: runBuiltin('ema', bars, { length: int('emaFast', 20) }).ma,
+        emaSlow: runBuiltin('ema', bars, { length: int('emaSlow', 50) }).ma,
         rsi: rsiOut.rsi,
         macd: macd.macd,
         signal: macd.signal,
@@ -170,7 +189,7 @@ export default function ({
         rows: [
           [head('Moving Averages'), head('Oscillators'), head('Volatility'), head('Volume & Trend')],
           [cell(`SMA${settings.smaFast}: ${num(at('smaFast'))}`), cell(`RSI: ${num(at('rsi'))}`),
-           cell(`ATR: ${num(at('atr'))}`), cell(`Volume: ${bars[i].volume == null ? '-' : compactVolume(bars[i].volume)}`)],
+           cell(`ATR: ${num(at('atr'))}`), cell(`Volume: ${lastVolume(bars) == null ? '-' : compactVolume(lastVolume(bars))}`)],
           [cell(`SMA${settings.smaSlow}: ${num(at('smaSlow'))}`), cell(`MACD: ${num(macd)}`),
            cell(`BB Upper: ${num(at('bbUpper'))}`), cell(`OBV: ${at('obv') == null ? '-' : compactVolume(at('obv'))}`)],
           [cell(`EMA${settings.emaFast}: ${num(at('emaFast'))}`), cell(`Signal: ${num(signal)}`),

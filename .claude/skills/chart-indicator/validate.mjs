@@ -597,10 +597,46 @@ function validateDescriptor(d, { builtinIds, chartTypes, core }) {
         err(`${id}: calc threw on ${ctx}: ${e.message}`, `${id}|calc-throw|${e.message}`)
         continue
       }
+      // Hand the hooks a recording view of the values so a read of a column
+      // that was never produced is caught here rather than rendering a blank.
+      const missedReads = new Set()
+      const watched = isPlainObject(values)
+        ? new Proxy(values, {
+            get(target, key) {
+              if (typeof key === 'string' && !(key in target)) missedReads.add(key)
+              return target[key]
+            },
+          })
+        : values
+
       if (!isPlainObject(values)) {
         err(`${id}: calc must return an object of columns, got ${typeof values} on ${ctx}.`, `${id}|calc-shape`)
         continue
       }
+      // Columns nothing plots are still read: by `table`, `markers`,
+      // `background`, `barColors` and `alerts`, none of which the plot checks
+      // below can see. A key holding `undefined` is the signature of a built-in
+      // read under the wrong plot key, which draws nothing and says nothing.
+      if (isPlainObject(values)) {
+        for (const [key, col] of Object.entries(values)) {
+          if (col === undefined || col === null) {
+            err(
+              `${id}: calc returned '${key}' as ${col === null ? 'null' : 'undefined'}. ` +
+                `A built-in read under the wrong plot key does this: check ` +
+                `getIndicator(id).plots for the real column names.`,
+              `${id}|${key}|undef`
+            )
+          } else if (!Array.isArray(col)) {
+            err(`${id}: calc returned '${key}' as a ${typeof col}, expected an array.`, `${id}|${key}|notarr`)
+          } else if (col.length !== fixture.bars.length) {
+            err(
+              `${id}: column '${key}' has ${col.length} values for ${fixture.bars.length} bars.`,
+              `${id}|${key}|len`
+            )
+          }
+        }
+      }
+
       for (const plot of d.plots) {
         // A candle or bar plot is fed by four named columns, not by its own key.
         if (plot.ohlc && typeof plot.ohlc.close === 'string') {
@@ -615,7 +651,7 @@ function validateDescriptor(d, { builtinIds, chartTypes, core }) {
 
       if (typeof d.markers === 'function') {
         try {
-          checkMarkers(d, d.markers({ bars: fixture.bars, values, settings: variant.settings }), fixture.bars, ctx)
+          checkMarkers(d, d.markers({ bars: fixture.bars, values: watched, settings: variant.settings }), fixture.bars, ctx)
         } catch (e) {
           err(`${id}: markers threw on ${ctx}: ${e.message}`, `${id}|markers-throw|${e.message}`)
         }
@@ -649,7 +685,7 @@ function validateDescriptor(d, { builtinIds, chartTypes, core }) {
       }
       if (typeof d.draws === 'function') {
         try {
-          const items = d.draws({ bars: fixture.bars, values, settings: variant.settings })
+          const items = d.draws({ bars: fixture.bars, values: watched, settings: variant.settings })
           if (!Array.isArray(items)) err(`${id}: draws must return an array.`, `${id}|draws-array`)
           else for (const it of items) {
             if (!isPlainObject(it) || !DRAW_KINDS.has(it.kind)) {
@@ -675,7 +711,7 @@ function validateDescriptor(d, { builtinIds, chartTypes, core }) {
       for (const hook of ['background', 'barColors']) {
         if (typeof d[hook] !== 'function') continue
         try {
-          const out = d[hook]({ bars: fixture.bars, values, settings: variant.settings })
+          const out = d[hook]({ bars: fixture.bars, values: watched, settings: variant.settings })
           if (!Array.isArray(out)) {
             err(`${id}: ${hook} must return an array.`, `${id}|${hook}-array`)
           } else if (out.length !== fixture.bars.length) {
@@ -698,7 +734,7 @@ function validateDescriptor(d, { builtinIds, chartTypes, core }) {
             // Judge every bar: a predicate that only survives the middle of the
             // series still fires on bar 0 in production.
             for (let i = 0; i < fixture.bars.length; i++) {
-              al.when({ bars: fixture.bars, values, settings: variant.settings, index: i })
+              al.when({ bars: fixture.bars, values: watched, settings: variant.settings, index: i })
             }
           } catch (e) {
             err(`${id}: alert '${al.id}' when() threw on ${ctx}: ${e.message}`, `${id}|alert-throw|${al.id}|${e.message}`)
@@ -708,13 +744,24 @@ function validateDescriptor(d, { builtinIds, chartTypes, core }) {
 
       if (typeof d.table === 'function') {
         try {
-          const t = d.table({ bars: fixture.bars, values, settings: variant.settings })
+          const t = d.table({ bars: fixture.bars, values: watched, settings: variant.settings })
           if (t !== null && t !== undefined && !Array.isArray(t.rows)) {
             err(`${id}: table must return null or { rows: [...] }.`)
           }
         } catch (e) {
           err(`${id}: table threw on ${ctx}: ${e.message}`)
         }
+      }
+
+      // Every hook has now run against the recording view, so anything it
+      // reached for that calc never produced is known.
+      for (const key of missedReads) {
+        err(
+          `${id}: a hook read column '${key}', which calc never returned. ` +
+            `markers, table, background, barColors and alerts all read columns ` +
+            `no plot declares, so nothing else catches this.`,
+          `${id}|${key}|phantom`
+        )
       }
     }
   }

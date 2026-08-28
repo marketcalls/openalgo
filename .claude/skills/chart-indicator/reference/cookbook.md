@@ -37,8 +37,24 @@ export default function ({ registerIndicator, getIndicator, indicatorDefaults, h
 ```
 
 `indicatorDefaults(d)` fills every key the descriptor declares, so overriding
-only the periods keeps working if the built-in gains a setting later. The plot
-keys are the column names: check them with `getIndicator(id).plots.map(p => p.key)`.
+only the periods keeps working if the built-in gains a setting later.
+
+**The column names are the plot keys, and they are not the built-in's id:**
+
+| built-in | columns |
+| --- | --- |
+| `sma`, `ema`, `wma`, `hma`, and the other averages | `ma` |
+| `macd` | `macd`, `signal`, `histogram` |
+| `bollinger` | `upper`, `basis`, `lower` |
+| `rsi` | `rsi` |
+| `atr` | `atr` |
+| `obv` | `obv`, `ma`, `bbUpper`, `bbLower` |
+
+`run('ema', bars).ema` is `undefined` and draws nothing. Always check:
+
+```js
+getIndicator('bollinger').plots.map((p) => p.key)   // ['upper','basis','lower']
+```
 
 Why this matters beyond brevity: a table or a signal built this way **cannot
 drift** from the same indicator the user has on the chart.

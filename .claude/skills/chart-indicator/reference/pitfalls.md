@@ -331,3 +331,40 @@ describes what one point of an instrument is worth, so a study needing it takes
 an input defaulting to 1, which is right for Indian markets.
 
 *Validator: no check. It cannot tell a tradeable level from a smoothed average.*
+
+---
+
+## 22. A built-in's column is not named after the built-in
+
+```js
+run('ema', bars, { length: 20 }).ema     // WRONG: undefined
+run('ema', bars, { length: 20 }).ma      // right
+```
+
+Every moving-average built-in plots under `ma`. `macd` plots `macd`, `signal`
+and `histogram`. `bollinger` plots `upper`, `basis`, `lower`, not `middle`.
+Check before assuming:
+
+```js
+getIndicator('bollinger').plots.map((p) => p.key)   // ['upper','basis','lower']
+```
+
+Reading the wrong key yields `undefined`, and a column of `undefined` draws
+nothing and raises nothing, so the cell or plot simply goes blank.
+
+*Validator: ERROR. Any column returned as `undefined` is reported, and so is any
+column a hook reads that `calc` never produced.*
+
+---
+
+## 23. Columns only a hook reads are still columns
+
+`markers`, `table`, `background`, `barColors` and `alerts` all receive `values`
+and none of them receives `store`, so anything they need has to be returned from
+`calc`, even when no plot draws it.
+
+Those columns sit outside the plot checks: nothing verifies a key the table reads
+unless it is also plotted. A typo there is invisible.
+
+*Validator: ERROR. The hooks are handed a recording view of `values`, so a read
+of a column that does not exist is caught.*
