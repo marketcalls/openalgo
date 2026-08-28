@@ -516,6 +516,18 @@ function validateDescriptor(d, { builtinIds, chartTypes, core }) {
     if ((typeof plot.title !== 'string' || plot.title === '') && plot.style?.visible !== false) {
       warn(`${id}: plot '${plot.key}' has no title, so the legend has nothing to show.`)
     }
+    // colorBy is a function the runtime calls per bar, but it reads like a
+    // column reference, so it gets handed a string. The runtime then calls that
+    // string and the whole chart dies with 'a is not a function' -- at render
+    // time, far from the descriptor, with a minified name that says nothing.
+    if (plot.colorBy !== undefined && typeof plot.colorBy !== 'function') {
+      err(
+        `${id}: plot '${plot.key}' has colorBy as ${typeof plot.colorBy}, but colorBy is a ` +
+          `function the runtime calls per bar, not the name of a column. Write ` +
+          `colorBy: ({ index, values, settings }) => values.myColumn[index] > 0 ? up : down.`,
+        `${id}|${plot.key}|colorBy`
+      )
+    }
     if (plot.colorKey !== undefined && !inputKeys.has(plot.colorKey)) {
       err(`${id}: plot '${plot.key}' names colorKey '${plot.colorKey}' with no matching input.`)
     }

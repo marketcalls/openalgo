@@ -207,7 +207,7 @@ Single-column plot types: `line`, `line-markers`, `step`, `area`, `histogram`,
 `volume-candle`, `bar`, `high-low`, `hlc-area`, `baseline`, which expect richer
 data and are rarely right for an indicator.
 
-`colorBy` is honoured by `histogram` and `column`. It is skipped for non-finite
+`colorBy` is a **function**, not the name of a column: passing a string means the runtime calls it, and the chart dies with `a is not a function`. It reaches the renderer as `Bar.color`, so every Family-A plot type honours it: `histogram`, `column`, candles, OHLC bars, `line`, `step` and `area`. It is skipped for non-finite
 values.
 
 **Style controls are generated for you.** `indicatorStyleInputs` derives colour,
