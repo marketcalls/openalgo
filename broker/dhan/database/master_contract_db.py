@@ -112,6 +112,37 @@ def download_csv_dhan_data(output_path):
             )
 
 
+def format_strike(strike):
+    """Render a strike in OpenAlgo format: exact value, no trailing zeros.
+
+    SEM_CUSTOM_SYMBOL renders strikes at two decimals, which both misformats
+    (87.5 shown as "87.50") and, in currency, loses precision outright - EURUSD
+    1.010 and 1.015 both display as "1.01". Building the strike from the
+    authoritative SEM_STRIKE_PRICE avoids both. See #1930.
+    """
+    if pd.isna(strike):
+        return ""
+    # Format with decimals first so rstrip cannot eat significant zeros: "100"
+    # would strip to "1", whereas "100.000000" stops at the decimal point.
+    return f"{float(strike):.6f}".rstrip("0").rstrip(".") or "0"
+
+
+def qualify_equity_symbol(trading_symbol, series):
+    """Suffix a non-EQ NSE series onto the symbol, matching Zerodha's convention.
+
+    Several NSE securities share a SEM_TRADING_SYMBOL across series - ELECTCAST
+    is both the equity (EQ) and its warrant (W1), and IMC1 is three different
+    bond tranches (N1/N2/N3). Without the series in the symbol, get_token()
+    takes the first match and an order can reach the warrant. See #1930.
+    """
+    if pd.isna(series):
+        return trading_symbol
+    series = str(series).strip()
+    if not series or series == "EQ":
+        return trading_symbol
+    return f"{trading_symbol}-{series}"
+
+
 def reformat_symbol(row):
     symbol = row["SEM_CUSTOM_SYMBOL"]
     instrument_type = row["instrumenttype"]
@@ -119,7 +150,11 @@ def reformat_symbol(row):
     expiry = row["expiry"].replace("-", "")
 
     if equity == "EQUITY":
-        symbol = row["SEM_TRADING_SYMBOL"]
+        # NSE qualifies by series; BSE ships one row per symbol and has none.
+        if row["SEM_EXM_EXCH_ID"] == "NSE":
+            symbol = qualify_equity_symbol(row["SEM_TRADING_SYMBOL"], row["SEM_SERIES"])
+        else:
+            symbol = row["SEM_TRADING_SYMBOL"]
     elif equity == "INDEX":
         symbol = row["SEM_TRADING_SYMBOL"]
 
@@ -131,12 +166,11 @@ def reformat_symbol(row):
         if len(parts) == 4:  # Make sure the symbol has the correct format
             symbol = f"{parts[0]}{expiry}{instrument_type}"
     elif instrument_type in ["CE", "PE"]:
-        # For CE/PE, rearrange the parts and remove spaces
+        # For CE/PE take the underlying from the display string but the strike
+        # from SEM_STRIKE_PRICE, which is exact.
         parts = symbol.split(" ")
-        if len(parts) == 4:  # Make sure the symbol has the correct format
-            symbol = f"{parts[0]}{expiry}{parts[2]}{instrument_type}"
-        if len(parts) == 5:  # Make sure the symbol has the correct format
-            symbol = f"{parts[0]}{expiry}{parts[3]}{instrument_type}"
+        if len(parts) in (4, 5):
+            symbol = f"{parts[0]}{expiry}{format_strike(row['SEM_STRIKE_PRICE'])}{instrument_type}"
 
     else:
         symbol = symbol  # No change for other instrument types
@@ -439,6 +473,25 @@ def process_dhan_csv(path):
             f"{collisions.groupby(['exchange', 'token']).ngroups} pairs "
             f"(by exchange: {collisions['exchange'].value_counts().to_dict()}). "
             f"Position reverse-lookup is ambiguous for these. Samples: {samples}"
+        )
+
+    # The mirror of the check above: (symbol, exchange) is what get_token()
+    # forward-looks-up before placing an order, so it has to be unique too. Two
+    # rows sharing one pair means an order can reach the wrong instrument -
+    # historically a warrant instead of the equity, or a neighbouring strike
+    # (#1930). Logged, not raised, for the same reason as above.
+    sym_collisions = df[df.duplicated(subset=["symbol", "exchange"], keep=False)]
+    if not sym_collisions.empty:
+        samples = [
+            f"{r.exchange}/{r.symbol} -> {r.brsymbol} (token {r.token})"
+            for r in sym_collisions.sort_values(["exchange", "symbol"]).head(6).itertuples()
+        ]
+        logger.error(
+            f"Dhan master contract: {len(sym_collisions)} rows share a duplicate "
+            f"(symbol, exchange) across "
+            f"{sym_collisions.groupby(['symbol', 'exchange']).ngroups} pairs "
+            f"(by exchange: {sym_collisions['exchange'].value_counts().to_dict()}). "
+            f"Order forward-lookup is ambiguous for these. Samples: {samples}"
         )
 
     # List of columns to remove
