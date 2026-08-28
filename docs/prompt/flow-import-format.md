@@ -296,6 +296,28 @@ Label fields are deliberately exempt -- `strategy`, `strategyTag` and
 When a webhook may legitimately omit a value, give the node a literal instead of
 a variable, or branch on a condition node first.
 
+### Schedules run on the clock, and inside market hours
+
+**An `interval` schedule is anchored to the clock, not to activation.** "Every
+minute" fires at HH:MM:05 and "every 5 minutes" at :00, :05, :10, whenever the
+workflow happened to be switched on. It used to count from activation time, so
+the phase changed on every restart, which decides by luck whether a bar-reading
+strategy sees the candle that just closed. A small offset (`FLOW_INTERVAL_ALIGN_OFFSET`,
+default 2 seconds) puts the run just inside the new bar rather than racing the
+one that is closing. Sub-minute intervals are left unaligned; there is no
+meaningful boundary.
+
+**A schedule is only as fresh as the history cache.** The indicator and history
+nodes reuse a fetch for `FLOW_HISTORY_CACHE_TTL` seconds, 30 by default. That is
+well under a 5-minute candle and half of a 1-minute one, so lower it for a
+1-minute strategy or it can act on the previous bar.
+
+**The window narrows the exchange's session, it never reopens it.** A holiday
+or a weekend stays shut whatever `marketHoursStart` and `marketHoursEnd` say,
+because the day is resolved through the platform's own market calendar. Set
+`marketHoursExchange` to what you trade so MCX and CRYPTO inherit their real
+hours instead of equity ones.
+
 ### What a node does when something fails
 
 A node that cannot get a trustworthy answer returns an error rather than a
@@ -532,6 +554,10 @@ Fires on a clock schedule.
 | `executeAt` | `"YYYY-MM-DD"` | — | Required when `scheduleType="once"`. |
 | `intervalValue` | number | `1` | For `interval` mode. |
 | `intervalUnit` | `"seconds"` \| `"minutes"` \| `"hours"` | `"minutes"` | For `interval` mode. |
+| `marketHoursOnly` | boolean | `true` | Skip runs outside the trading window. |
+| `marketHoursStart` | `"HH:MM"` | `"09:15"` | Start of the window. |
+| `marketHoursEnd` | `"HH:MM"` | `"15:15"` | End of the window. |
+| `marketHoursExchange` | exchange code | `"NSE"` | Which calendar to read. MCX runs to 23:55 and CRYPTO never closes, so this matters for anything but equity. |
 | `marketHoursOnly` | boolean | `true` | If true, the schedule pauses outside the trading window below. |
 | `marketHoursExchange` | string | `"NSE"` | Which exchange calendar sets the window. `MCX` runs to 23:55, `CRYPTO` never closes. |
 | `marketHoursStart` | `"HH:MM"` | exchange open | Narrows or widens the start. Omit to use the exchange's own open. |

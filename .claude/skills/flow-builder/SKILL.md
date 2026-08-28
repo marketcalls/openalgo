@@ -129,6 +129,26 @@ condition by two paths fires its branch once, not twice.
 **`waitUntil` is capped at 30 minutes.** It sleeps inside the triggering request,
 so anything longer belongs on a `start` schedule trigger.
 
+**A schedule is clock-aligned and market-hours gated.** `interval` fires on the
+clock (HH:MM:02, not activation time + 60s), and the `start` node carries
+`marketHoursOnly` (default on), `marketHoursStart` (09:15), `marketHoursEnd`
+(15:15) and `marketHoursExchange` (NSE). The window narrows the exchange's
+session; it never reopens a holiday.
+
+**A 1-minute strategy needs a shorter history cache.** The indicator node
+reuses a fetch for `FLOW_HISTORY_CACHE_TTL` seconds, 30 by default, which is
+half a one-minute candle. Set it to 2-3 for 1m work.
+
+**Read a closed bar, not a forming one.** `{{ind.latest.*}}` is the bar still
+being built and repaints within the period. `{{ind.previous.*}}` is the last
+closed bar. With `offsetBars: 2`, `{{ind.at_offset.*}}` is the bar before that,
+so one node gives both bars a flip test needs.
+
+**A tuple indicator returns `out0`, `out1`, ...** not `value`. Supertrend gives
+`out0` (the line) and `out1` (direction), and its direction is inverted from the
+usual convention: **-1 is the uptrend**, +1 the downtrend. Verify an
+indicator's encoding before trading it.
+
 **Conditions need `sourceHandle`.** An edge leaving `priceCondition`,
 `timeCondition`, `timeWindow`, `positionCheck`, `fundCheck` or `varCondition`
 must say which branch it is.

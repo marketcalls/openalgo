@@ -68,14 +68,30 @@ def executor_keys() -> dict[str, list[str]]:
         end = starts[idx + 1][0] if idx + 1 < len(starts) else len(lines)
         bodies[name] = "\n".join(lines[i:end])
 
-    out: dict[str, list[str]] = {}
-    for node, method in dispatch.items():
-        body = bodies.get(method, "")
-        keys = set(
+    def keys_in(body: str) -> set[str]:
+        return set(
             re.findall(r'get_(?:str|int|float|bool)\(\s*node_data,\s*"([a-zA-Z_]+)"', body)
             + re.findall(r'node_data\.get\(\s*"([a-zA-Z_]+)"', body)
             + re.findall(r'values\.(?:text|enum|integer|number)\(\s*"([a-zA-Z_]+)"', body)
+            # A key handed to a helper as an argument rather than read inline:
+            # `self._operand(node_data, "leftValue")`. varCondition reads both
+            # of its operands this way and nothing else, so without this the
+            # node appeared to read only its operator.
+            + re.findall(r'self\.\w+\(\s*node_data,\s*"([a-zA-Z_]+)"', body)
         )
+
+    out: dict[str, list[str]] = {}
+    for node, method in dispatch.items():
+        body = bodies.get(method, "")
+        keys = keys_in(body)
+        # Follow the helpers the method delegates to. Several order nodes read
+        # almost nothing directly: placeOrder, smartOrder and splitOrder all
+        # hand `node_data` to `resolve_standard_order`, so scanning only the
+        # method body reported action, quantity, product and priceType as read
+        # by nothing -- which is the exact warning this reference exists to make
+        # trustworthy. One level is enough for every node here.
+        for helper in set(re.findall(r'self\.(\w+)\(\s*node_data', body)):
+            keys |= keys_in(bodies.get(helper, ""))
         out[node] = sorted(keys)
     return out
 
