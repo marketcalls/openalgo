@@ -133,6 +133,7 @@ def map_exchange_type(exchange):
         "BFO": "BSE_FNO",
         "BCD": "BSE_CURRENCY",
         "MCX": "MCX_COMM",
+        "NCO": "NSE_COMM",
     }
     return exchange_mapping.get(exchange)  # Default to MARKET if not found
 
@@ -149,6 +150,7 @@ def map_exchange(brexchange):
         "BSE_FNO": "BFO",
         "BSE_CURRENCY": "BCD",
         "MCX_COMM": "MCX",
+        "NSE_COMM": "NCO",
     }
     return exchange_mapping.get(brexchange)  # Default to MARKET if not found
 
