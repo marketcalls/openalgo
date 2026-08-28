@@ -119,6 +119,24 @@ FD leak prevention rests on five session-cleanup layers: `app.py`
 `finally`; `security_middleware.py` for the banned-IP WSGI path; and teardown
 handlers in `blueprints/traffic.py` and `blueprints/security.py`.
 
+### A lock shared with a real OS thread must be a real lock
+
+`services/websocket_client.py` runs its asyncio loop on a **real OS thread**
+(asyncio cannot run on a green one) and invokes **every registered market-data,
+auth and error callback from that thread**. Under eventlet `threading.Lock`,
+`RLock` and `Event` are green: they belong to the hub and can only be passed
+between greenlets. Anything those callbacks touch therefore spans two worlds.
+
+- **Use `utils/real_threading` for any primitive both sides touch.** It exports `Lock`, `RLock`, `Event`, `Thread`, `Condition` and `wait_for`, resolving to the unpatched originals under eventlet and to the stdlib otherwise.
+- **Keep the critical section to in-memory bookkeeping.** A greenlet blocking on a real lock blocks the whole hub until it is released, so copy what you need out of the dict and do the database and network work after.
+- **Never wait on one for long.** A green `Event` never wakes on a `set()` from a real thread, so the waiter sits out its entire timeout; a real `Event.wait()` does wake but freezes every other request for the duration. `real_threading.wait_for(event, timeout)` polls the flag and yields between checks, which is the only form that does both.
+- **Why:** contended across that boundary, the hub tries to resume a waiter belonging to another thread and raises `greenlet.error: Cannot switch to a different thread` inside `fire_timers`, leaving the loop thread blocked on that lock **forever**. The feed then stops answering pings and stops resolving subscribe acks, so every later subscribe waits out its full timeout. The symptom is the first order working and the next one appearing to hang the app, minutes later, with the order itself having taken milliseconds. See issue #1591-adjacent reports and `test/test_eventlet_cross_thread_locks.py`, which proves each direction under a real hub.
+- **It cannot be caught locally.** `uv run app.py` never patches anything, so every one of these cases behaves correctly on the dev server whatever the primitive is made of. This is the same trap as `asyncio` in the section above, and the reason the test runs eventlet in a subprocess rather than asserting about the source.
+
+Current crossings: `WebSocketClient.lock`, the sandbox engine's `_lock`
+(`_on_market_data`), the scalping risk monitor's `_lock` (`_on_tick`,
+`_on_auth`), and the Flow executor's tick `data_event`.
+
 ## Architecture
 
 Six isolated databases: `openalgo.db` (main), `logs.db`, `latency.db`,

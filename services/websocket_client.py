@@ -6,7 +6,6 @@ This client handles authentication and provides a simple interface for services.
 import asyncio
 import json
 import os
-import sys
 import threading
 import time
 import uuid
@@ -17,17 +16,12 @@ from typing import Any, Dict, List, Optional
 import websockets
 from dotenv import load_dotenv
 
+# The asyncio event loop needs a real OS thread: eventlet's monkey-patching
+# turns threading.Thread into a green thread, where asyncio.new_event_loop()
+# cannot work. Anything that thread shares with the greenlets has to be real
+# too, which is what this module is for.
+from utils import real_threading as _original_threading
 from utils.logging import get_logger
-
-# Import the original threading module to run the asyncio event loop in a real
-# OS thread, bypassing eventlet's monkey-patching which turns threading.Thread
-# into green threads where asyncio.new_event_loop() cannot work.
-if "eventlet" in sys.modules:
-    import eventlet
-
-    _original_threading = eventlet.patcher.original("threading")
-else:
-    _original_threading = threading
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -67,9 +61,20 @@ class WebSocketClient:
             "error": [],
         }
 
-        # Subscription tracking
+        # Subscription tracking.
+        #
+        # A REAL lock, never eventlet's green semaphore. _handle_message()
+        # takes it on the asyncio loop's OS thread while subscribe(),
+        # unsubscribe() and get_market_data() take it from greenlets.
+        # Contended across that boundary a green semaphore raises
+        # "greenlet.error: Cannot switch to a different thread" inside the
+        # hub and leaves the loop thread blocked forever: acks stop
+        # resolving, ping/pong goes unanswered, and every later subscribe
+        # burns its full timeout. The feed dies silently, and only under
+        # gunicorn+eventlet. Each section this guards is a dict update, so
+        # a real lock costs microseconds.
         self.active_subscriptions = {}
-        self.lock = threading.Lock()
+        self.lock = _original_threading.Lock()
 
         # Market data cache
         self.market_data_cache = {}
@@ -528,6 +533,16 @@ class WebSocketClient:
             # Handle errors
             elif data.get("status") == "error":
                 logger.error(f"Error from server: {data.get('message')}")
+                # Settle the request this error answers, if it names one.
+                # The proxy refuses a subscribe outright when the user has
+                # no broker adapter; without this the ack future stayed
+                # pending and the caller waited its whole timeout for a
+                # reply that had already arrived.
+                rid = data.get("request_id")
+                if rid:
+                    fut = self._pending_acks.get(rid)
+                    if fut is not None and not fut.done():
+                        fut.set_result(data)
                 for callback in self.callbacks["error"]:
                     try:
                         callback(data)
