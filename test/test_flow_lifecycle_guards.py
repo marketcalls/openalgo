@@ -133,3 +133,53 @@ def test_a_run_without_a_workflow_id_records_nothing():
 def test_context_carries_its_workflow_id():
     assert fes.WorkflowContext(workflow_id=42).workflow_id == 42
     assert fes.WorkflowContext().workflow_id is None
+
+
+# --- what a failed run tells the network ------------------------------------
+
+
+def test_a_failed_run_is_not_reported_as_a_server_fault():
+    """502 made every proxy in front of OpenAlgo call a refused order an outage.
+
+    A workflow that declines to place an order has not broken the server: the
+    request was understood, the run happened, and the result names the node that
+    refused. Cloudflare rendered the 5xx as "the origin web server returned an
+    invalid or incomplete response ... the origin is overloaded or
+    misconfigured", which sent the operator looking for a capacity problem that
+    did not exist.
+    """
+    from blueprints.flow import _execution_status_code
+
+    refused = {
+        "status": "error",
+        "errors": [
+            {
+                "node": "node_2",
+                "type": "optionsMultiOrder",
+                "message": "unresolved variable(s) in quantity='{{webhook.quantity}}'",
+            }
+        ],
+    }
+
+    assert _execution_status_code(refused) == 422
+
+
+def test_a_failure_with_no_reason_is_still_a_server_fault():
+    """An error result that cannot say what failed is a fault in this service,
+    not something the caller can act on."""
+    from blueprints.flow import _execution_status_code
+
+    assert _execution_status_code({"status": "error"}) == 500
+
+
+def test_a_second_concurrent_run_is_a_conflict():
+    from blueprints.flow import _execution_status_code
+
+    assert _execution_status_code({"already_running": True}) == 409
+
+
+def test_a_clean_run_is_success():
+    from blueprints.flow import _execution_status_code
+
+    assert _execution_status_code({"status": "success"}) == 200
+    assert _execution_status_code("not a dict") == 200

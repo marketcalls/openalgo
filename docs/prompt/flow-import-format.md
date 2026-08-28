@@ -318,6 +318,30 @@ because the day is resolved through the platform's own market calendar. Set
 `marketHoursExchange` to what you trade so MCX and CRYPTO inherit their real
 hours instead of equity ones.
 
+### What the HTTP response says
+
+Both the webhook endpoint and Run Now return the same codes:
+
+| Code | Meaning |
+|---|---|
+| `200` | The run completed and no node reported failure. |
+| `409` | Another run of this workflow was already in flight. Nothing was executed. |
+| `422` | The run happened and a node refused. The body's `errors` array names the node and why. |
+| `500` | The run reported failure without saying what failed, which is a fault in the service. |
+| `401` | The webhook secret was missing or wrong. |
+| `404` / `403` | Unknown token, webhook disabled, or workflow inactive. |
+
+**A refused run is 422, not a 5xx.** The call itself succeeded: the request was
+understood, the workflow ran, and the body says which node declined. Returning
+502 made every CDN, reverse proxy and uptime check in front of OpenAlgo report a
+working server as broken. Cloudflare in particular renders it as "the origin web
+server returned an invalid or incomplete response ... the origin is overloaded or
+misconfigured", which sends an operator hunting a capacity problem that does not
+exist while the real message sits in the JSON body.
+
+So a monitor should treat 422 as "this workflow needs attention", not "the server
+is down", and alert on 5xx only.
+
 ### What a node does when something fails
 
 A node that cannot get a trustworthy answer returns an error rather than a

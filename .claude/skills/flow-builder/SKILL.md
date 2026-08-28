@@ -151,6 +151,10 @@ so one node gives both bars a flip test needs.
 usual convention: **-1 is the uptrend**, +1 the downtrend. Verify an
 indicator's encoding before trading it.
 
+**A refused run answers 422, not a 5xx.** The workflow ran and a node declined;
+the `errors` array says which and why. Alert on 5xx only, or a workflow rejecting
+its own config will look like an outage.
+
 **Conditions need `sourceHandle`.** An edge leaving `priceCondition`,
 `timeCondition`, `timeWindow`, `positionCheck`, `fundCheck` or `varCondition`
 must say which branch it is.

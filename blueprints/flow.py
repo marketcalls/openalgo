@@ -186,13 +186,25 @@ def _execution_status_code(result: dict) -> int:
     Every outcome used to return 200, including a run that placed no orders
     because another was already in flight and a run whose broker calls were all
     rejected. A client checking response.ok saw success for both.
+
+    A failed run is 422, not 502. The call itself succeeded: the request was
+    understood, the workflow ran, and it reports which node refused and why. A
+    5xx says the server is broken, so every CDN, reverse proxy and uptime check
+    in front of OpenAlgo treated a workflow rejecting its own configuration as
+    an outage. Cloudflare renders it as "the origin web server returned an
+    invalid or incomplete response... the origin is overloaded or
+    misconfigured", which sends the operator hunting a capacity problem that
+    does not exist while the actual message sits in the JSON body.
+
+    500 is kept for the case with no `errors` list, because a result that
+    reports failure without saying what failed is a fault in this service.
     """
     if not isinstance(result, dict):
         return 200
     if result.get("already_running"):
         return 409
     if result.get("status") == "error":
-        return 502 if result.get("errors") else 500
+        return 422 if result.get("errors") else 500
     return 200
 
 
