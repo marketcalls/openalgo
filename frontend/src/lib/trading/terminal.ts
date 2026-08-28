@@ -2094,6 +2094,34 @@ export class TradingTerminal {
                 changed = true
               }
             }
+            // The forming bar's volume cannot come from the tick stream. A
+            // tradeable's only subscription is Depth, and a depth payload
+            // carries ltp but no last-traded-qty, so 'ltq-sum' has nothing to
+            // accumulate and the live bar reads 0 on a symbol visibly trading.
+            // History is the only source that has it, so take it from there --
+            // and take only it. OHLC stays with the ticks, which are fresher
+            // than a 30-second poll and must not jump backwards to it.
+            if (this.builder && this.liveBucket != null) {
+              const f = byTime.get(this.liveBucket)
+              const cur = this.builder.current()
+              if (f && cur && cur.time === this.liveBucket) {
+                // Volume inside a bar only ever grows, so the higher of the two
+                // is the later reading. It also keeps the histogram monotonic
+                // when a poll lands mid-print and briefly reports less.
+                const vol = Math.max(f.volume ?? 0, cur.volume ?? 0)
+                if (vol !== (cur.volume ?? 0)) {
+                  // Re-seed rather than patch rawBars alone: the builder folds
+                  // the next tick into its own copy of the bar, which would
+                  // write the stale volume straight back over this.
+                  this.builder.seed({ ...cur, volume: vol })
+                  const last = this.rawBars[this.rawBars.length - 1]
+                  if (last && last.time === this.liveBucket) {
+                    this.rawBars[this.rawBars.length - 1] = { ...last, volume: vol }
+                    changed = true
+                  }
+                }
+              }
+            }
             if (changed) this.setPriceData()
           }
         } catch {
