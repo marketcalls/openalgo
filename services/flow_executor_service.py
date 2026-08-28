@@ -36,6 +36,7 @@ from services.flow_node_contracts import (
     select_expiry,
 )
 from services.flow_openalgo_client import FlowOpenAlgoClient, get_flow_client
+from utils import real_threading as _real_threading
 from utils.constants import VALID_ACTIONS, VALID_EXCHANGES, VALID_PRICE_TYPES, VALID_PRODUCT_TYPES
 
 logger = logging.getLogger(__name__)
@@ -3716,7 +3717,12 @@ class NodeExecutor:
 
             # Thread-safe container for captured data
             captured_data = {"data": None}
-            data_event = threading.Event()
+            # Real, not green: on_market_data() sets this from the websocket
+            # client's asyncio loop thread while this greenlet waits on it.
+            # A green Event set from a real thread never wakes its waiter,
+            # so the node sat out its whole timeout. See
+            # utils/real_threading.
+            data_event = _real_threading.Event()
 
             def on_market_data(data):
                 """Callback to capture data with matching mode and symbol"""
@@ -3769,7 +3775,7 @@ class NodeExecutor:
                     return None
 
                 # Wait for data with the correct mode (using event instead of polling)
-                if data_event.wait(timeout=timeout):
+                if _real_threading.wait_for(data_event, timeout):
                     return captured_data["data"]
                 else:
                     return None  # Timeout

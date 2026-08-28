@@ -9,6 +9,45 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Optional
 
+from utils import real_threading as _real_threading
+
+
+def _create_real_lock(self) -> None:
+    """Give every logging handler a REAL lock instead of eventlet's green one.
+
+    ``logging.Handler`` serialises emit() with a lock it builds in __init__.
+    Under gunicorn+eventlet the app is imported after monkey-patching, so that
+    lock is a green semaphore owned by the hub, and it can only be handed
+    between greenlets.
+
+    Every real OS thread in this project logs: the websocket client's asyncio
+    loop, the Telegram bot thread and its Kaleido renderer, the broker snapshot
+    feed threads. The moment one of them logs while a greenlet holds the same
+    handler lock, the hub tries to resume a waiter belonging to another thread,
+    raises ``greenlet.error: Cannot switch to a different thread`` inside
+    ``fire_timers``, and leaves that thread blocked on the handler **forever**.
+    The give-away beforehand is ``AttributeError: 'StreamHandler' object has no
+    attribute 'lock'`` on unrelated requests. See issues #1569 and #1402.
+
+    A real lock is held only for the duration of one emit, and it is the same
+    lock the dev server has always used, where nothing is patched.
+
+    Patched on the class so it also covers handlers this project does not
+    create: gunicorn's, Flask's, and any third-party library's.
+    """
+    self.lock = _real_threading.RLock()
+
+
+logging.Handler.createLock = _create_real_lock
+
+# Handlers built before this module was imported still hold a green lock.
+# Re-lock whatever is already attached anywhere in the tree.
+for _logger in [logging.getLogger()] + [
+    logging.getLogger(_name) for _name in list(logging.root.manager.loggerDict)
+]:
+    for _handler in list(getattr(_logger, "handlers", ())):
+        _handler.createLock()
+
 # Load environment variables if .env file exists
 try:
     from dotenv import load_dotenv

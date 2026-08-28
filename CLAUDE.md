@@ -119,6 +119,65 @@ FD leak prevention rests on five session-cleanup layers: `app.py`
 `finally`; `security_middleware.py` for the banned-IP WSGI path; and teardown
 handlers in `blueprints/traffic.py` and `blueprints/security.py`.
 
+### Nothing may block or be blocked across the eventlet boundary
+
+Production is `gunicorn --worker-class eventlet -w 1`. Eventlet monkey-patches
+the stdlib **before the app is imported**, so `threading.Lock`, `RLock`,
+`Event`, `Condition` and `queue.Queue` are all **green**: they belong to the hub
+and can only pass a waiter from one greenlet to another. A plain
+`threading.Thread` is green too, and so is anything built on it, including
+`ThreadPoolExecutor` and APScheduler's workers.
+
+**A handful of threads are genuinely real**, and they are where this goes wrong:
+the asyncio loop in `services/websocket_client.py` (asyncio cannot run on a
+green thread), the Telegram bot thread and its Kaleido renderer, and the broker
+snapshot feed threads in `broker/hdfcsecurities|hdfcsky/api/data.py`. Every
+crossing that has ever bitten this project involved one of those.
+
+Two directions, both fatal, both invisible on the dev server:
+
+**A. A real thread touches a green primitive.** The hub tries to resume a waiter
+belonging to another OS thread and raises `greenlet.error: Cannot switch to a
+different thread` inside `fire_timers`, leaving that thread blocked **forever**.
+Measured: the real thread never acquires the lock, not once, not ever.
+
+**B. A greenlet blocks on a real primitive, or on any wait served by C code.**
+The entire worker stops until it returns, because there is only one.
+
+There is also a quieter third failure, which is the one that hides longest:
+**the waiter is simply never woken**, so it sits out its whole timeout and then
+succeeds or fails on data that was ready all along. A green `Event` set from a
+real thread does this. So does `concurrent.futures.Future.result()`, which is
+what `asyncio.run_coroutine_threadsafe` hands back: measured, an ack that
+arrived in 0.3s still cost the caller its full 10s timeout.
+
+**The rules:**
+
+- **Do not run subscriber callbacks on a real thread.** `websocket_client` marshals them onto a real `Queue` that a green thread drains, because those callbacks reach SocketIO, the event bus, the sandbox engine and the database, all of which are eventlet-managed. Any new callback registered there inherits that safety; do not add one that is called inline.
+- **Use `utils/real_threading` for anything both worlds touch.** It exports `Lock`, `RLock`, `Event`, `Condition`, `Queue`, `Empty`, `Thread`, plus `wait_for(event, timeout)` and `join(thread, timeout)`, which poll and yield instead of blocking. It resolves to the unpatched originals under eventlet and the stdlib otherwise.
+- **Keep a real lock's critical section to in-memory bookkeeping.** A greenlet waiting on one blocks the hub, so copy what you need out of the dict and do the database and network work after the release.
+- **Never wait on a C-served timeout.** `PRAGMA busy_timeout` was the worst case: SQLite waits inside C, so the greenlet holding the write lock could never be scheduled to commit, and the wait could only ever end in "database is locked". A holder needing 0.5s produced a 16s failure. `database/__init__.py` now waits 100ms in SQLite and retries from Python.
+- **Never hand a result across with `run_coroutine_threadsafe`.** Use `WebSocketClient._run_on_loop`: a real `Event` the loop thread sets, polled by the caller. One boolean is the only thing that crosses.
+- **Logging counts.** `logging.Handler` builds its lock in `__init__`, which happens after monkey-patching, so it is green, and every real thread in this project logs. `utils/logging.py` patches `Handler.createLock` on the class so ours and third-party handlers all get a real lock. The give-away that this has broken is `AttributeError: 'StreamHandler' object has no attribute 'lock'` appearing on unrelated requests, hours before the hard crash.
+
+**What is exempt.** Under eventlet `app.py` starts the websocket proxy as a
+**child process**, so everything in `websocket_proxy/` and `broker/*/streaming/`
+runs unpatched and its `threading.Lock` is already real. Do not "fix" those.
+
+**It cannot be caught locally.** `uv run app.py` never patches anything, so every
+one of these behaves correctly on the dev server whatever the primitive is made
+of. This is the same trap as `asyncio` above, and it is why
+`test/test_eventlet_cross_thread_locks.py` and
+`test/test_sqlite_lock_cooperative.py` run eventlet **in a subprocess**
+(`monkey_patch()` is global and cannot be undone) and assert on **elapsed time
+and hub liveness**, not just return values, which were always right. Each file's
+first test asserts the defect itself so it cannot pass vacuously. Add to them
+rather than starting a third.
+
+Reported as issues #1402, #1473 and #1569; the symptom users describe is the
+first order working and the next one hanging the app, with the order itself
+having taken milliseconds.
+
 ## Architecture
 
 Six isolated databases: `openalgo.db` (main), `logs.db`, `latency.db`,

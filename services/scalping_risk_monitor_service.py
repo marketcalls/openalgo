@@ -32,6 +32,7 @@ import atexit
 import threading
 import time
 
+from utils import real_threading as _real_threading
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -118,7 +119,10 @@ class ScalpingRiskMonitor:
             return cls._instance
 
     def _init_once(self) -> None:
-        self._lock = threading.RLock()
+        # Real, not green: _on_tick() and _on_auth() are invoked on the
+        # websocket client's asyncio loop thread, while sync() and
+        # _clear_state() take this from greenlets. See utils/real_threading.
+        self._lock = _real_threading.RLock()
         self._states: dict[str, dict] = {}  # slkey -> state (in-memory source of truth)
         self._subscribed: set[str] = set()  # symkey currently subscribed on the feed
         self._ws = None

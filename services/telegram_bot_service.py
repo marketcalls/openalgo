@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 
 import httpx
 
-from database.auth_db import get_username_by_apikey, get_broker_name
+from database.auth_db import get_broker_name, get_username_by_apikey
 
 # Database imports
 from database.telegram_db import (
@@ -37,6 +37,7 @@ from database.telegram_db import (
     log_command,
     update_bot_config,
 )
+from utils import real_threading
 from utils.constants import CRYPTO_BROKERS
 from utils.logging import get_logger
 
@@ -841,7 +842,10 @@ class TelegramBotService:
 
             # Wait for thread to finish
             if self.bot_thread and self.bot_thread.is_alive():
-                self.bot_thread.join(timeout=10.0)
+                # Cooperative: bot_thread is a real OS thread and stop_bot()
+                # is reached from the /telegram stop route, so a blocking
+                # join would freeze every other request for up to 10s.
+                real_threading.join(self.bot_thread, timeout=10.0)
                 if self.bot_thread.is_alive():
                     logger.warning("Bot thread did not stop cleanly")
                     self.is_running = False
@@ -2421,7 +2425,7 @@ class TelegramBotService:
         # Handle mode toggle
         if callback_data in ("mode_live", "mode_analyze"):
             try:
-                from database.settings_db import set_analyze_mode, get_analyze_mode
+                from database.settings_db import get_analyze_mode, set_analyze_mode
 
                 new_mode = callback_data == "mode_analyze"
                 loop = asyncio.get_event_loop()

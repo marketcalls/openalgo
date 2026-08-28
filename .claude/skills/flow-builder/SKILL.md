@@ -131,7 +131,9 @@ so anything longer belongs on a `start` schedule trigger.
 
 **A schedule is clock-aligned and market-hours gated.** `interval` fires on the
 clock (HH:MM:02, not activation time + 60s), and the `start` node carries
-`marketHoursOnly` (default on), `marketHoursStart` (09:15), `marketHoursEnd`
+`marketHoursOnly` (the editor writes `true`, but an imported JSON that omits
+the key defaults to **false** and runs around the clock, so set it explicitly),
+`marketHoursStart` (09:15), `marketHoursEnd`
 (15:15) and `marketHoursExchange` (NSE). The window narrows the exchange's
 session; it never reopens a holiday.
 
