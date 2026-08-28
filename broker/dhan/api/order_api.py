@@ -37,6 +37,8 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
     url = get_url(endpoint)
 
+    logger.debug(f"{method} {endpoint} request payload: {payload if payload else '<none>'}")
+
     try:
         if method == "GET":
             response = client.get(url, headers=headers)
@@ -50,6 +52,11 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
         # Parse the response JSON
         response_data = json.loads(response.text)
+
+        # Covers the orderbook, tradebook, positions and holdings readers,
+        # which all funnel through here and previously logged nothing at all
+        # on the success path.
+        logger.debug(f"{method} {endpoint} response ({response.status_code}): {response_data}")
 
         # Check for API errors in the response
         if isinstance(response_data, dict):
@@ -216,7 +223,12 @@ def place_order_api(data, auth):
     payload = json.dumps(newdata)
 
     logger.debug(f"Placing order with client_id: {client_id}")
-    logger.debug(f"Placing order with headers: {headers}")
+    # Never log the raw headers - they carry the broker access-token, and
+    # LOG_LEVEL=DEBUG would write it to log/*.log in plain text.
+    logger.debug(
+        "Placing order with headers: "
+        f"{ {k: ('[REDACTED]' if k == 'access-token' else v) for k, v in headers.items()} }"
+    )
     logger.debug(f"Placing order with payload: {payload}")
 
     # Get the shared httpx client with connection pooling

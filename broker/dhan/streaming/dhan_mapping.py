@@ -15,6 +15,7 @@ class DhanExchangeMapper:
         "NFO": "NSE_FNO",
         "BFO": "BSE_FNO",
         "MCX": "MCX_COMM",  # Corrected from MCX_COM to MCX_COMM
+        "NCO": "NSE_COMM",  # NSE Commodity (undocumented but API-accepted)
         "CDS": "NSE_CURRENCY",
         "BCD": "BSE_CURRENCY",  # Added BSE Currency
         "NSE_INDEX": "IDX_I",  # Added NSE Index
@@ -24,6 +25,17 @@ class DhanExchangeMapper:
     # Dhan exchange segment codes (numeric) to OpenAlgo exchange mapping
     # Based on official Dhan documentation
     # Note: Both NSE_INDEX and BSE_INDEX use segment 0 (IDX_I), defaulting to NSE_INDEX
+    #
+    # 6 (NCO) is INFERRED, not observed. Dhan's published annexure lists
+    # 0-5, 7 and 8, leaving exactly one gap at 6, and NSE_COMM is the only
+    # segment the API accepts that the annexure omits. It could not be
+    # confirmed from the feed because Dhan does not stream this segment at
+    # all: subscribing to NSE_COMM/143318 (the one leg in that chain carrying
+    # a price) yields no packets, while an MCX control on the same socket
+    # streams normally as segment 5. Quotes are equally unavailable over REST
+    # - /v2/marketfeed does not even echo the NSE_COMM key back. NCO orders
+    # and margin do work, so the entry is here for the day Dhan starts
+    # feeding it; replace it with the observed value if a packet ever arrives.
     SEGMENT_TO_EXCHANGE = {
         0: "NSE_INDEX",  # IDX_I (Index) - Both NSE_INDEX and BSE_INDEX use this
         1: "NSE",  # NSE_EQ (NSE Equity Cash)
@@ -31,6 +43,7 @@ class DhanExchangeMapper:
         3: "CDS",  # NSE_CURRENCY (NSE Currency)
         4: "BSE",  # BSE_EQ (BSE Equity Cash)
         5: "MCX",  # MCX_COMM (MCX Commodity)
+        6: "NCO",  # NSE_COMM (NSE Commodity) - inferred, see note above
         7: "BCD",  # BSE_CURRENCY (BSE Currency)
         8: "BFO",  # BSE_FNO (BSE Futures & Options)
     }

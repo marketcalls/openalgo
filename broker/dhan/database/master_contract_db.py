@@ -241,9 +241,13 @@ def assign_values(row):
         if exchange_id == "MCX":
             return "MCX", "MCX_COMM", derivative_type
         # NSE segment M is NSE's commodity derivatives book - OpenAlgo's NCO
-        # exchange. It is a security id space of its own (121601-171512), fully
-        # disjoint from MCX (471725-584158) and overlapping NSE segment D,
-        # which is exactly why it must never be folded into NFO.
+        # exchange, which Dhan addresses as NSE_COMM. That segment string is
+        # absent from Dhan's published annexure but is accepted by the API:
+        # /v2/margincalculator returns a real margin and the live account
+        # balance for NSE_COMM + securityId 153964, while NSE_COMMODITY and
+        # NSE_FNO are both rejected with DH-905. It must never be folded into
+        # NFO - its id space (121601-171512) overlaps NSE segment D, which is
+        # the #1929 collision.
         if exchange_id == "NSE":
             return "NCO", "NSE_COMM", derivative_type
 
@@ -287,12 +291,12 @@ def process_dhan_csv(path):
     )
 
     # Drop rows no OpenAlgo exchange covers. Every segment Dhan currently ships
-    # is mapped, so this is normally a no-op; it exists so that a segment or
-    # instrument Dhan adds later cannot silently reach the symbol table. Such a
-    # row would keep its raw SEM_CUSTOM_SYMBOL (reformat_symbol only normalizes
-    # known instrument types) and still surface in symbol search, which filters
-    # by exchange only when the caller passes one. Log the breakdown so the
-    # addition is visible and can be mapped properly.
+    # is mapped, so this is a no-op today; it exists so a segment or instrument
+    # Dhan adds later cannot silently reach the symbol table. Such a row would
+    # keep its raw SEM_CUSTOM_SYMBOL (reformat_symbol only normalizes known
+    # instrument types) and still surface in symbol search, which filters by
+    # exchange only when the caller passes one - so it would look tradable and
+    # then fail downstream. Log the breakdown so the addition is visible.
     unmapped = df["exchange"] == "Unknown"
     if unmapped.any():
         breakdown = (

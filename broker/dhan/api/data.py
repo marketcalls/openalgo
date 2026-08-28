@@ -235,6 +235,7 @@ class BrokerData:
             "NFO": "NSE_FNO",  # NSE F&O
             "BFO": "BSE_FNO",  # BSE F&O
             "MCX": "MCX_COMM",  # MCX Commodity
+            "NCO": "NSE_COMM",  # NSE Commodity
             "CDS": "NSE_CURRENCY",  # NSE Currency
             "BCD": "BSE_CURRENCY",  # BSE Currency
             "NSE_INDEX": "IDX_I",  # NSE Index
@@ -294,8 +295,7 @@ class BrokerData:
                 # For stock futures
                 return "FUTSTK"
 
-        # NSE commodity derivatives. Dhan lists these as OPTFUT, the same
-        # instrument name it uses for MCX commodity options.
+        # NSE commodity derivatives, listed by Dhan as OPTFUT like MCX.
         elif exchange == "NCO":
             if symbol.endswith("CE") or symbol.endswith("PE"):
                 return "OPTFUT"
