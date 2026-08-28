@@ -69,7 +69,14 @@ class WebSocketClient:
 
         # Subscription tracking
         self.active_subscriptions = {}
-        self.lock = threading.Lock()
+        # Real lock, not eventlet's. `_run_event_loop` below runs on a real OS
+        # thread (see `_original_threading.Thread`), while callers reach this
+        # client from greenlets, so a monkey-patched lock has two worlds
+        # contending on one green semaphore. The hub then tries to wake a
+        # waiter belonging to the other thread and raises
+        # "greenlet.error: Cannot switch to a different thread" out of
+        # fire_timers, taking the timer loop down with it.
+        self.lock = _original_threading.Lock()
 
         # Market data cache
         self.market_data_cache = {}
@@ -542,7 +549,9 @@ class WebSocketClient:
 
 # Singleton instance management
 _client_instances = {}
-_client_lock = threading.Lock()
+# Guards the process-wide client registry, reached from both the asyncio
+# thread and request greenlets, so it must be a real lock for the same reason.
+_client_lock = _original_threading.Lock()
 
 
 def get_websocket_client(
