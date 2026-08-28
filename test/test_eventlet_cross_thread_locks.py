@@ -313,3 +313,83 @@ def test_the_dispatch_queue_is_bounded():
         """
     )
     assert "OK" in result.stdout, result.stderr
+
+
+def test_a_result_from_the_loop_thread_wakes_its_caller_promptly():
+    """`concurrent.futures.Future.result()` cannot be woken across the boundary.
+
+    The future resolves correctly, but the waiting greenlet is never notified,
+    so it sleeps until its own timeout expires and only then reads the value
+    that was ready all along. That is why a subscribe took its full 12 seconds
+    whenever it had to wait at all. This asserts on the elapsed time, not the
+    value, because the value was always right.
+    """
+    result = run(
+        """
+        import asyncio
+        from services.websocket_client import WebSocketClient
+
+        client = WebSocketClient("test-key")
+        ready = _orig.Event()
+
+        def run_loop():
+            client.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(client.loop)
+            ready.set()
+            client.loop.run_forever()
+
+        _orig.Thread(target=run_loop, daemon=True).start()
+        ready.wait()
+
+        ticks = []
+
+        def hub_alive():
+            while True:
+                ticks.append(1)
+                eventlet.sleep(0.02)
+
+        g = eventlet.spawn(hub_alive)
+        eventlet.sleep(0.1)
+
+        ARRIVES_AT, TIMEOUT = 0.3, 10.0
+
+        async def ack():
+            await asyncio.sleep(ARRIVES_AT)
+            return {"status": "success"}
+
+        before, t0 = len(ticks), time.monotonic()
+        value = client._run_on_loop(ack(), timeout=TIMEOUT)
+        took, during = time.monotonic() - t0, len(ticks) - before
+        g.kill()
+
+        assert value == {"status": "success"}, value
+        assert took < ARRIVES_AT + 0.5, (
+            f"took {took:.2f}s for a result ready at {ARRIVES_AT}s; the caller "
+            f"is waiting out its timeout instead of being woken"
+        )
+        assert during > 5, f"hub was frozen: only {during} ticks"
+
+        # The timeout must still be real, and errors must still propagate.
+        async def slow():
+            await asyncio.sleep(30)
+
+        t0 = time.monotonic()
+        try:
+            client._run_on_loop(slow(), timeout=0.4)
+            raise AssertionError("expected TimeoutError")
+        except TimeoutError:
+            pass
+        assert time.monotonic() - t0 < 2, "timeout not honoured"
+
+        async def boom():
+            raise ValueError("propagated")
+
+        try:
+            client._run_on_loop(boom(), timeout=5)
+            raise AssertionError("expected ValueError")
+        except ValueError as exc:
+            assert "propagated" in str(exc)
+        print("OK")
+        """
+    )
+    assert "OK" in result.stdout, result.stderr

@@ -167,8 +167,11 @@ class WebSocketClient:
         self.running = False
 
         if self.loop and self.ws:
-            # Schedule the disconnect coroutine
-            asyncio.run_coroutine_threadsafe(self._disconnect(), self.loop)
+            # Scheduled, not awaited: the thread join below is what waits.
+            # call_soon_threadsafe avoids building a concurrent Future whose
+            # condition would belong to the wrong world.
+            coro = self._disconnect()
+            self.loop.call_soon_threadsafe(lambda: self.loop.create_task(coro))
 
         # Wait for thread to finish
         if self.thread and self.thread.is_alive():
@@ -180,6 +183,47 @@ class WebSocketClient:
         self.connected = False
         self.authenticated = False
         logger.info("Disconnected from WebSocket server")
+
+    def _run_on_loop(self, coro, timeout: float):
+        """Run a coroutine on the client's asyncio loop and wait for its result.
+
+        ``asyncio.run_coroutine_threadsafe`` hands back a
+        ``concurrent.futures.Future`` whose ``result()`` waits on a
+        ``threading.Condition``. Under eventlet that condition is green while
+        the loop thread resolving it is a real OS thread, and the two cannot
+        pass a waiter between them: the waiting greenlet is simply never woken.
+        Measured, an ack that arrived in 0.3s still cost the caller the whole
+        10s timeout, and when the hub does try to switch into that waiter it
+        raises ``greenlet.error: Cannot switch to a different thread`` instead.
+        That is why a subscribe used to take its full 12 seconds whenever it
+        had to wait at all.
+
+        So nothing is handed across the boundary except one plain boolean: a
+        real Event the loop thread sets, polled here with a sleep that eventlet
+        turns into a yield. ``call_soon_threadsafe`` is used rather than
+        ``run_coroutine_threadsafe`` so no concurrent Future is built at all.
+
+        Raises TimeoutError if the coroutine has not finished in ``timeout``,
+        and re-raises whatever the coroutine raised.
+        """
+        done = _original_threading.Event()
+        box: dict[str, Any] = {}
+
+        async def runner():
+            try:
+                box["value"] = await coro
+            except BaseException as exc:  # noqa: BLE001 - re-raised below
+                box["error"] = exc
+            finally:
+                done.set()
+
+        self.loop.call_soon_threadsafe(lambda: self.loop.create_task(runner()))
+
+        if not _original_threading.wait_for(done, timeout):
+            raise TimeoutError("timed out waiting for the websocket proxy")
+        if "error" in box:
+            raise box["error"]
+        return box.get("value")
 
     async def _send_and_await_ack(
         self, message: dict, request_id: str, timeout: float
@@ -231,13 +275,12 @@ class WebSocketClient:
                 "mode": mode,
                 "request_id": request_id,
             }
-            future = asyncio.run_coroutine_threadsafe(
-                self._send_and_await_ack(subscription_msg, request_id, timeout=10),
-                self.loop,
-            )
             # Outer timeout slightly longer than the inner ack timeout so the
             # asyncio.wait_for fires first and produces a clean error.
-            ack = future.result(timeout=12)
+            ack = self._run_on_loop(
+                self._send_and_await_ack(subscription_msg, request_id, timeout=10),
+                timeout=12,
+            )
         except (TimeoutError, asyncio.TimeoutError):
             logger.warning(
                 f"Subscribe timed out waiting for proxy ack (mode={mode}, "
@@ -301,11 +344,10 @@ class WebSocketClient:
                 "mode": mode,
                 "request_id": request_id,
             }
-            future = asyncio.run_coroutine_threadsafe(
+            ack = self._run_on_loop(
                 self._send_and_await_ack(unsubscription_msg, request_id, timeout=10),
-                self.loop,
+                timeout=12,
             )
-            ack = future.result(timeout=12)
         except (TimeoutError, asyncio.TimeoutError):
             logger.warning(
                 f"Unsubscribe timed out waiting for proxy ack (mode={mode}, "
@@ -353,10 +395,9 @@ class WebSocketClient:
 
             # Send unsubscription request
             if self.loop and self.ws:
-                future = asyncio.run_coroutine_threadsafe(
-                    self.ws.send(json.dumps(unsubscription_msg)), self.loop
+                self._run_on_loop(
+                    self.ws.send(json.dumps(unsubscription_msg)), timeout=5
                 )
-                future.result(timeout=5)
 
                 # Clear all subscriptions
                 with self.lock:
