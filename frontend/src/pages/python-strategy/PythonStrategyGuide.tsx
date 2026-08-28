@@ -9,6 +9,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { useStrategyExchanges } from '@/hooks/useStrategyExchanges'
 import { showToast } from '@/utils/toast'
 
 const sampleStrategy = `"""
@@ -288,6 +289,8 @@ const copyToClipboard = (text: string) => {
 }
 
 export default function PythonStrategyGuide() {
+  const { exchanges } = useStrategyExchanges()
+
   return (
     <div className="container mx-auto py-6 space-y-6 max-w-4xl">
       {/* Back Button */}
@@ -631,34 +634,20 @@ export default function PythonStrategyGuide() {
           <div>
             <p className="font-medium mb-2">Supported Exchanges</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-              <div className="bg-muted p-2 rounded">
-                <strong>NSE</strong> &mdash; Equity (09:15&ndash;15:30)
-              </div>
-              <div className="bg-muted p-2 rounded">
-                <strong>BSE</strong> &mdash; Equity (09:15&ndash;15:30)
-              </div>
-              <div className="bg-muted p-2 rounded">
-                <strong>NFO</strong> &mdash; NSE F&O (09:15&ndash;15:30)
-              </div>
-              <div className="bg-muted p-2 rounded">
-                <strong>BFO</strong> &mdash; BSE F&O (09:15&ndash;15:30)
-              </div>
-              <div className="bg-muted p-2 rounded">
-                <strong>CDS</strong> &mdash; NSE Currency (09:00&ndash;17:00)
-              </div>
-              <div className="bg-muted p-2 rounded">
-                <strong>BCD</strong> &mdash; BSE Currency (09:00&ndash;17:00)
-              </div>
-              <div className="bg-muted p-2 rounded">
-                <strong>MCX</strong> &mdash; Commodity (09:00&ndash;23:55)
-              </div>
-              <div className="bg-muted p-2 rounded">
-                <strong>CRYPTO</strong> &mdash; 24/7 (no holidays)
-              </div>
+              {exchanges.map((opt) => (
+                <div key={opt.value} className="bg-muted p-2 rounded">
+                  <strong>{opt.value}</strong>
+                  {opt.description ? ` — ${opt.description}` : ''}
+                  {opt.window ? ` (${opt.window})` : ''}
+                  {opt.is_24x7 ? ' (no holidays)' : ''}
+                </div>
+              ))}
             </div>
             <p className="text-xs text-muted-foreground mt-2">
-              Timings shown are defaults. Per-date overrides (partial holidays, special sessions)
-              come from the market calendar DB.
+              Windows are read live from the market calendar DB, so an exchange timing change (for
+              example the F&O close moving to 15:40) shows up here on its own. Per-date overrides
+              (partial holidays, special sessions) come from the same DB and are applied by the
+              scheduler.
             </p>
           </div>
 

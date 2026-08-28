@@ -1,12 +1,18 @@
 """Shared rate limiting and retry helpers for all TradeSmart (Noren) API calls.
 
-TradeSmart does not have one global budget. ``/GetQuotes`` is capped at 100
-requests **per second**, while the remaining data endpoints stay on the older
-per-user, per-minute allowance of 120 (the backend rejects the 121st with
-``stat=Not_Ok`` and an emsg like "Order Recieved 141 in a current minute exceeds
-Limit 120 for user"). Pacing both from a single gate would either throttle
-quotes to a fraction of what the broker now allows, or let history calls run
-60x over their ceiling, so each class gets its own gate.
+Two budgets, because quotes and everything else are metered differently.
+
+**Quotes** (``/GetQuotes``) are allowed 100 requests per second with no
+per-minute ceiling, so they get their own bucket and are paced on the
+per-second window alone.
+
+**Everything else** -- orders, funds, margin, history -- shares ONE per-user
+budget with two rolling windows: 10 requests per second and 120 requests per
+minute. The backend rejects the offender with ``stat=Not_Ok`` and an emsg
+naming the breached window, e.g.::
+
+    Invalid Input :  Order Recieved 11 in a current second exceeds Limit 10 for user
+    Invalid Input :  Order Recieved 121 in a current minute exceeds Limit 120 for user
 
 State is module level, exactly as in ``broker.fyers.api.rate_limiter`` and for
 the same reason: services construct a fresh ``BrokerData(auth_token)`` per
@@ -14,85 +20,112 @@ request (see ``services/option_chain_service.py``,
 ``services/oi_tracker_service.py``), so any pacing state kept on ``self`` is
 discarded on every call and paces nothing against concurrent requests.
 
-Each gate reserves its slot under the lock and sleeps outside it. Holding a
-lock across ``time.sleep`` would serialise every waiter behind the sleeper and
-turn a 100/sec allowance back into a queue.
+Each gate is burst-friendly, modelled on ``broker.flattrade.api.data``: it
+reserves the earliest slot that satisfies its rolling window(s) rather than
+spacing every call by a fixed interval, so a batch goes out at once and only
+the call past the ceiling waits. The slot is reserved under the lock and slept
+for outside it -- holding a lock across ``time.sleep`` would serialise every
+waiter behind the sleeper and turn the allowance back into a queue.
 """
 
 import threading
 import time
+from collections import deque
 
-# Documented quotes cap is 100 req/sec. Paced at ~90/sec, mirroring the ~20%
-# headroom Fyers uses, to absorb clock jitter and the fact that several
-# BrokerData instances can be issuing quote calls concurrently.
-QUOTES_MIN_INTERVAL = 1.0 / 90.0
+# Broker ceilings for the general budget are 10/sec and 120/min per user. We run
+# under both as margin for clock skew between our rolling windows and however
+# Noren measures theirs, and because order/fund/margin calls from other modules
+# share the same quota.
+TRADESMART_MAX_PER_SECOND = 8
+TRADESMART_MAX_PER_MINUTE = 110
 
-# Everything else - history (/EODChartData, /TPSeries) and any future endpoint
-# - stays on the per-minute allowance. 0.55s/req is ~109/min, under the 120/min
-# ceiling.
-DEFAULT_MIN_INTERVAL = 0.55
+# Quotes are metered separately at 100/sec with no per-minute ceiling. Same
+# clock-skew margin as above; ``None`` disables the per-minute window entirely.
+TRADESMART_QUOTE_MAX_PER_SECOND = 90
+TRADESMART_QUOTE_MAX_PER_MINUTE = None
 
-#: Endpoints that bill against the per-second quotes budget. get_depth is here
-#: too: TradeSmart has no separate depth endpoint, so it calls /GetQuotes and
-#: is charged at the same rate.
-QUOTES_ENDPOINTS = frozenset({"/GetQuotes"})
+# Endpoints billed against the quote budget rather than the general one.
+QUOTE_ENDPOINTS = frozenset({"/GetQuotes"})
 
 MAX_RETRIES = 3
 BASE_BACKOFF = 2.0  # seconds; exponential when the broker reports a limit hit
 
+_lock = threading.Lock()
+_reserved_call_times: deque = deque()
 
-class _Gate:
-    """One independent budget: its own lock, its own clock."""
-
-    def __init__(self, interval: float):
-        self.interval = interval
-        self._lock = threading.Lock()
-        self._last_call = 0.0
-
-    def wait(self) -> None:
-        sleep_time = 0.0
-        with self._lock:
-            now = time.time()
-            elapsed = now - self._last_call
-            if elapsed < self.interval:
-                sleep_time = self.interval - elapsed
-            # Reserve this caller's slot before releasing, so concurrent
-            # callers space out instead of all measuring against the same
-            # stale timestamp and firing together.
-            self._last_call = now + sleep_time
-        if sleep_time > 0:
-            time.sleep(sleep_time)
+_quote_lock = threading.Lock()
+_reserved_quote_times: deque = deque()
 
 
-_QUOTES_GATE = _Gate(QUOTES_MIN_INTERVAL)
-_DEFAULT_GATE = _Gate(DEFAULT_MIN_INTERVAL)
+def _reserve_slot(lock, reserved, max_per_second, max_per_minute) -> float:
+    """Reserve the earliest slot satisfying the bucket's rolling window(s).
 
+    Returns the seconds the caller must sleep before issuing its request.
 
-def gate_for(endpoint: str | None) -> _Gate:
-    """The budget ``endpoint`` bills against.
+    The deque holds reserved timestamps in non-decreasing order (each new
+    reservation is >= the previous by construction). The earliest permissible
+    slot is:
 
-    Anything unclassified, including ``None``, gets the slower per-minute gate,
-    so an endpoint added later is paced conservatively rather than being
-    silently granted the per-second allowance.
+      - now, if neither window is full at that instant;
+      - 1s after the Nth-most-recent reservation when the per-second window is
+        full (that entry must age out of the rolling second first);
+      - 60s after the Mth-most-recent reservation when the per-minute window is
+        full;
+
+    whichever is latest. ``max_per_minute=None`` means the bucket has no
+    per-minute ceiling, in which case only the per-second window constrains the
+    slot and entries older than a second are purged.
+
+    Args:
+        lock: the bucket's lock, held only while reserving (never across sleep).
+        reserved: the bucket's deque of reserved timestamps.
+        max_per_second: per-second ceiling.
+        max_per_minute: per-minute ceiling, or ``None`` for no such window.
     """
-    return _QUOTES_GATE if endpoint in QUOTES_ENDPOINTS else _DEFAULT_GATE
+    # Entries older than the widest window can no longer constrain any future
+    # slot, so that horizon is how far back the deque needs to reach.
+    horizon = 60.0 if max_per_minute is not None else 1.0
 
+    with lock:
+        now = time.time()
+        while reserved and reserved[0] <= now - horizon:
+            reserved.popleft()
 
-def interval_for(endpoint: str | None) -> float:
-    """Minimum spacing between two calls to ``endpoint``."""
-    return gate_for(endpoint).interval
+        slot = now
+        if len(reserved) >= max_per_second:
+            slot = max(slot, reserved[-max_per_second] + 1.0)
+        if max_per_minute is not None and len(reserved) >= max_per_minute:
+            slot = max(slot, reserved[-max_per_minute] + 60.0)
+
+        reserved.append(slot)
+        return slot - now
 
 
 def apply_rate_limit(endpoint: str | None = None) -> None:
-    """Block until it is safe to issue another call to ``endpoint``.
-
-    The two budgets are independent, so a burst of quotes must not delay a
-    history call and vice versa.
+    """Block until it is safe to issue another TradeSmart call.
 
     Args:
-        endpoint: Noren path, e.g. ``"/GetQuotes"``.
+        endpoint: Noren path, e.g. ``"/GetQuotes"``. Quote endpoints are paced
+            against their own 100/sec budget; every other endpoint bills
+            against the shared 10/sec + 120/min per-user budget.
     """
-    gate_for(endpoint).wait()
+    if endpoint in QUOTE_ENDPOINTS:
+        sleep_time = _reserve_slot(
+            _quote_lock,
+            _reserved_quote_times,
+            TRADESMART_QUOTE_MAX_PER_SECOND,
+            TRADESMART_QUOTE_MAX_PER_MINUTE,
+        )
+    else:
+        sleep_time = _reserve_slot(
+            _lock,
+            _reserved_call_times,
+            TRADESMART_MAX_PER_SECOND,
+            TRADESMART_MAX_PER_MINUTE,
+        )
+
+    if sleep_time > 0:
+        time.sleep(sleep_time)
 
 
 def is_rate_limit_error(response) -> bool:

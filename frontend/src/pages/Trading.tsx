@@ -1,6 +1,8 @@
-import { ChevronDown, LayoutGrid } from 'lucide-react'
+import { LayoutGrid, Link2 as LinkIcon } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Navbar } from '@/components/layout/Navbar'
+import { createLinkGroup, type LinkGroup } from 'openalgo-charts'
+import { TickBox } from '@/components/trading/TickBox'
 import { ChartPane } from '@/components/trading/ChartPane'
 import { DrawingRail } from '@/components/trading/DrawingRail'
 import { Button } from '@/components/ui/button'
@@ -90,6 +92,41 @@ const LAYOUTS: LayoutPreset[] = [
 ]
 
 const LAYOUT_KEY = 'oa-trading-layout'
+const SYNC_KEY = 'oa-trading-sync'
+
+/**
+ * What a linked grid agrees on. The engine keeps the three independent, so the
+ * control does too: a trader watching one instrument across four timeframes
+ * wants crosshair and time linked and the symbol emphatically not, while a
+ * sector grid wants the opposite.
+ *
+ * Crosshair and time default on and symbol defaults off, which is the reading
+ * that never surprises: linking the pointer costs nothing, and silently
+ * replacing the instrument in three panes because you changed one is a bad way
+ * to learn a feature exists. With a single pane a group of one does nothing, so
+ * the defaults are invisible until a grid makes them useful.
+ */
+interface SyncState {
+  crosshair: boolean
+  viewport: boolean
+  symbol: boolean
+}
+const SYNC_DEFAULT: SyncState = { crosshair: true, viewport: true, symbol: false }
+
+function readSync(): SyncState {
+  try {
+    const raw = localStorage.getItem(SYNC_KEY)
+    if (!raw) return SYNC_DEFAULT
+    const p = JSON.parse(raw) as Partial<SyncState>
+    return {
+      crosshair: p.crosshair ?? SYNC_DEFAULT.crosshair,
+      viewport: p.viewport ?? SYNC_DEFAULT.viewport,
+      symbol: p.symbol ?? SYNC_DEFAULT.symbol,
+    }
+  } catch {
+    return SYNC_DEFAULT
+  }
+}
 
 /** Mini glyph that previews a layout preset (renders the actual grid arrangement). */
 function LayoutIcon({ preset, className }: { preset: LayoutPreset; className?: string }) {
@@ -115,6 +152,16 @@ export default function Trading() {
     const saved = localStorage.getItem(LAYOUT_KEY)
     return LAYOUTS.some((l) => l.id === saved) ? (saved as string) : 'single'
   })
+  const [sync, setSync] = useState<SyncState>(readSync)
+  /**
+   * One group for the whole workspace, created once and kept for the life of
+   * the page. Panes join it as their charts are built and re-join after every
+   * rebuild, so changing a layout, theme or chart type does not quietly drop a
+   * pane out of the group it still thinks it belongs to.
+   */
+  const linkRef = useRef<LinkGroup | null>(null)
+  if (linkRef.current === null) linkRef.current = createLinkGroup(sync)
+
   const [apiKey, setApiKey] = useState<string | null>(null)
   const [wsUrl, setWsUrl] = useState<string | null>(null)
   const [noApiKey, setNoApiKey] = useState(false)
@@ -157,6 +204,19 @@ export default function Trading() {
     localStorage.setItem(LAYOUT_KEY, layoutId)
   }, [layoutId])
 
+  useEffect(() => {
+    localStorage.setItem(SYNC_KEY, JSON.stringify(sync))
+    // setOptions, not a rebuild: the engine clears the linked crosshairs when
+    // that switch goes off and converges the group on its agreed symbol when
+    // the symbol switch comes on, neither of which a fresh group would do.
+    linkRef.current?.setOptions(sync)
+  }, [sync])
+
+  useEffect(() => {
+    const group = linkRef.current
+    return () => group?.destroy()
+  }, [])
+
   // Fetch the API key + WS URL once; every pane shares them.
   useEffect(() => {
     let alive = true
@@ -184,44 +244,129 @@ export default function Trading() {
 
   const layout = LAYOUTS.find((l) => l.id === layoutId) ?? LAYOUTS[0]
 
+  /**
+   * The layout picker, rendered beside the first pane's Indicators button.
+   *
+   * It used to sit in a full-width row of its own carrying 134px of content
+   * across 1536px, so 91 per cent of that row was empty and it cost 45px of
+   * chart height plus a border. It is a page-level control, so only the first
+   * pane gets it: repeating it per pane would say the layout is per-pane.
+   *
+   * Icon-only, and with no label naming the current preset. The preset is
+   * already legible from the grid itself, and the panes on screen say it
+   * louder than the word "Single" ever did.
+   */
+  const layoutPicker = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="outline"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          title={`Layout: ${layout.label}`}
+          aria-label={`Chart layout: ${layout.label}`}
+        >
+          <LayoutGrid className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56">
+        <div className="grid grid-cols-4 gap-1 p-1">
+          {LAYOUTS.map((l) => (
+            <DropdownMenuItem
+              key={l.id}
+              onSelect={() => setLayoutId(l.id)}
+              title={l.label}
+              className={cn(
+                'flex aspect-square flex-col items-center justify-center gap-1 rounded border',
+                l.id === layoutId
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'text-muted-foreground'
+              )}
+            >
+              <LayoutIcon preset={l} />
+              <span className="text-[9px] font-medium">{l.cells.length}</span>
+            </DropdownMenuItem>
+          ))}
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+
+  /**
+   * Chart sync, beside the layout picker because the two describe the same
+   * thing: how the panes relate to each other. Page-level, so only pane zero
+   * carries it.
+   *
+   * The trigger lights up only while something is actually linked, and it is
+   * disabled outright on a single-pane layout. A group of one has nobody to
+   * sync with, so an inviting control there would promise something it cannot
+   * do; disabled with its state still readable is the honest version.
+   */
+  const syncOn = sync.crosshair || sync.viewport || sync.symbol
+  const syncPicker = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="outline"
+          size="icon"
+          disabled={layout.cells.length < 2}
+          className={cn('h-8 w-8 shrink-0', syncOn && layout.cells.length > 1 && 'text-primary')}
+          title={
+            layout.cells.length < 2
+              ? 'Chart sync needs more than one pane'
+              : syncOn
+                ? 'Chart sync is on'
+                : 'Chart sync is off'
+          }
+          aria-label="Chart sync"
+        >
+          <LinkIcon className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56">
+        <div className="px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+          Sync across panes
+        </div>
+        {(
+          [
+            ['crosshair', 'Crosshair', 'Mirror the hovered bar'],
+            ['viewport', 'Time range', 'Mirror pan and zoom'],
+            ['symbol', 'Symbol', 'Load the same instrument everywhere'],
+          ] as const
+        ).map(([key, label, hint]) => (
+          // A label, not a button, and the row carries no click handler of its
+          // own. A <button> wrapping a checkbox is invalid HTML and behaves
+          // exactly as badly as that suggests: the row handler and the input's
+          // own change both fire, the switch toggles twice, and it appears to
+          // do nothing at all. The label forwards a click on the text to the
+          // input, so every part of the row toggles it exactly once.
+          //
+          // Not a DropdownMenuItem either: these are three independent
+          // switches and the menu has to stay open while all three are set.
+          <label
+            key={key}
+            className="flex w-full cursor-pointer items-start gap-2.5 rounded px-2 py-1.5 text-left transition-colors hover:bg-accent"
+          >
+            <TickBox
+              checked={sync[key]}
+              onChange={(next) => setSync((p) => ({ ...p, [key]: next }))}
+              label={label}
+              className="mt-0.5"
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] leading-5">{label}</span>
+              <span className="block text-[11px] leading-4 text-muted-foreground">{hint}</span>
+            </span>
+          </label>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+
   return (
     <>
       <Navbar />
       <div className="flex flex-1 flex-col overflow-hidden">
-        {/* Layout selector (visual presets) */}
-        <div className="flex items-center gap-2 border-b bg-background/95 px-3 py-1.5">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="h-8 gap-1.5">
-                <LayoutGrid className="h-4 w-4" />
-                <span className="text-xs font-medium">Layout</span>
-                <ChevronDown className="h-3.5 w-3.5 opacity-60" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-56">
-              <div className="grid grid-cols-4 gap-1 p-1">
-                {LAYOUTS.map((l) => (
-                  <DropdownMenuItem
-                    key={l.id}
-                    onSelect={() => setLayoutId(l.id)}
-                    title={l.label}
-                    className={cn(
-                      'flex aspect-square flex-col items-center justify-center gap-1 rounded border',
-                      l.id === layoutId
-                        ? 'border-primary bg-primary/10 text-primary'
-                        : 'text-muted-foreground'
-                    )}
-                  >
-                    <LayoutIcon preset={l} />
-                    <span className="text-[9px] font-medium">{l.cells.length}</span>
-                  </DropdownMenuItem>
-                ))}
-              </div>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <span className="text-xs text-muted-foreground">{layout.label}</span>
-        </div>
-
         {/* Rail + grid */}
         <main className="flex min-h-0 flex-1">
           {showRail && apiKey && wsUrl && (
@@ -265,6 +410,15 @@ export default function Trading() {
                   onDrawStats={setStats}
                   onToggleRail={() => setShowRail((v) => !v)}
                   railVisible={showRail}
+                  linkGroup={linkRef.current}
+                  layoutPicker={
+                    i === 0 ? (
+                      <>
+                        {layoutPicker}
+                        {syncPicker}
+                      </>
+                    ) : undefined
+                  }
                 />
               ))}
             </div>

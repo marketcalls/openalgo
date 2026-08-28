@@ -5,7 +5,7 @@
 > rerun the script instead. The previous hand-maintained version drifted
 > to 29 brokers while the tree carried 35, and never gained a GTT column.
 >
-> **Brokers**: 35
+> **Brokers**: 36
 > **Capabilities checked**: 23
 
 Support is determined the way the application determines it at runtime: by whether the broker module and function exist.
@@ -32,6 +32,7 @@ The stub state matters most. A broker whose `get_history` returns an empty frame
 | flattrade | Y | Y | Y | Y | Y | Y |
 | fyers | Y | Y | Y | Y | Y | Y |
 | groww | Y | Y | Y | Y | Y | Y |
+| hdfcsecurities | Y | Y | Y | Y | Y | Y |
 | hdfcsky | Y | Y | Y | Y | Y | Y |
 | ibulls | Y | Y | Y | Y | Y | Y |
 | iifl | Y | Y | Y | Y | Y | Y |
@@ -59,7 +60,7 @@ The stub state matters most. A broker whose `get_history` returns an empty frame
 | Broker | Place GTT | Modify GTT | Cancel GTT | GTT Book |
 |---|---|---|---|---|
 | aliceblue | - | - | - | - |
-| angel | - | - | - | - |
+| angel | Y | Y | Y | Y |
 | arrow | - | - | - | - |
 | compositedge | - | - | - | - |
 | definedge | - | - | - | - |
@@ -70,8 +71,9 @@ The stub state matters most. A broker whose `get_history` returns an empty frame
 | fivepaisa | - | - | - | - |
 | fivepaisaxts | - | - | - | - |
 | flattrade | - | - | - | - |
-| fyers | - | - | - | - |
+| fyers | Y | Y | Y | Y |
 | groww | - | - | - | - |
+| hdfcsecurities | - | - | - | - |
 | hdfcsky | - | - | - | - |
 | ibulls | - | - | - | - |
 | iifl | - | - | - | - |
@@ -89,7 +91,7 @@ The stub state matters most. A broker whose `get_history` returns an empty frame
 | shoonya | - | - | - | - |
 | tradejini | - | - | - | - |
 | tradesmart | - | - | - | - |
-| upstox | - | - | - | - |
+| upstox | Y | Y | Y | Y |
 | wisdom | - | - | - | - |
 | zebu | - | - | - | - |
 | zerodha | Y | Y | Y | Y |
@@ -112,6 +114,7 @@ The stub state matters most. A broker whose `get_history` returns an empty frame
 | flattrade | Y | Y | Y | Y | Y | Y | Y |
 | fyers | Y | Y | Y | Y | Y | Y | Y |
 | groww | Y | Y | Y | Y | Y | Y | Y |
+| hdfcsecurities | Y | Y | Y | Y | Y | Y | - |
 | hdfcsky | Y | Y | Y | Y | Y | Y | Y |
 | ibulls | Y | Y | Y | Y | Y | Y | S |
 | iifl | Y | Y | Y | Y | Y | Y | S |
@@ -152,6 +155,7 @@ The stub state matters most. A broker whose `get_history` returns an empty frame
 | flattrade | Y | Y | Y | Y |
 | fyers | Y | Y | S | Y |
 | groww | Y | Y | Y | Y |
+| hdfcsecurities | Y | Y | Y | Y |
 | hdfcsky | Y | Y | Y | Y |
 | ibulls | Y | Y | Y | Y |
 | iifl | Y | Y | Y | Y |
@@ -159,7 +163,7 @@ The stub state matters most. A broker whose `get_history` returns an empty frame
 | indmoney | Y | Y | Y | Y |
 | jainamxts | Y | Y | Y | Y |
 | kotak | Y | Y | S | S |
-| motilal | Y | Y | S | S |
+| motilal | Y | Y | S | Y |
 | mstock | S | S | Y | Y |
 | nubra | Y | S | S | Y |
 | paytm | Y | Y | S | Y |
@@ -191,11 +195,12 @@ A `-` under Order/Trade Updates means not implemented **yet**. Coverage for the 
 | dhan | Y | Y |
 | dhan_sandbox | Y | - |
 | firstock | Y | - |
-| fivepaisa | Y | - |
+| fivepaisa | Y | Y |
 | fivepaisaxts | Y | - |
 | flattrade | Y | Y |
 | fyers | Y | Y |
 | groww | Y | - |
+| hdfcsecurities | Y | - |
 | hdfcsky | Y | - |
 | ibulls | Y | - |
 | iifl | Y | - |
@@ -203,7 +208,7 @@ A `-` under Order/Trade Updates means not implemented **yet**. Coverage for the 
 | indmoney | Y | Y |
 | jainamxts | Y | - |
 | kotak | Y | Y |
-| motilal | Y | - |
+| motilal | Y | Y |
 | mstock | Y | - |
 | nubra | Y | Y |
 | paytm | Y | - |
@@ -236,6 +241,7 @@ A `-` under Order/Trade Updates means not implemented **yet**. Coverage for the 
 | flattrade | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | fyers | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | groww | IN_stock | false | NSE, BSE, NFO, BFO, NSE_INDEX, BSE_INDEX |
+| hdfcsecurities | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | hdfcsky | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
 | ibulls | IN_stock | false | NSE, BSE, NFO, BFO, MCX, NSE_INDEX, BSE_INDEX |
 | iifl | IN_stock | false | NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX |
@@ -260,28 +266,28 @@ A `-` under Order/Trade Updates means not implemented **yet**. Coverage for the 
 
 ## Summary
 
-- **Place Order**: 35/35 brokers
-- **Smart Order**: 35/35 brokers
-- **Modify Order**: 35/35 brokers
-- **Cancel Order**: 35/35 brokers
-- **Cancel All**: 35/35 brokers
-- **Close Position**: 35/35 brokers
-- **Place GTT**: 2/35 brokers
-- **Modify GTT**: 2/35 brokers
-- **Cancel GTT**: 2/35 brokers
-- **GTT Book**: 2/35 brokers
-- **Orderbook**: 35/35 brokers
-- **Tradebook**: 35/35 brokers
-- **Positionbook**: 35/35 brokers
-- **Holdings**: 35/35 brokers
-- **Open Position**: 35/35 brokers
-- **Funds**: 35/35 brokers
-- **Margin**: 22/35 brokers, 13 stub
-- **Quotes**: 33/35 brokers, 2 stub
-- **Depth**: 33/35 brokers, 2 stub
-- **History**: 26/35 brokers, 9 stub
-- **Intervals**: 32/35 brokers, 3 stub
-- **Streaming: Market Data**: 34/35 brokers, 1 stub
-- **Streaming: Order/Trade Updates**: 16/35 brokers
+- **Place Order**: 36/36 brokers
+- **Smart Order**: 36/36 brokers
+- **Modify Order**: 36/36 brokers
+- **Cancel Order**: 36/36 brokers
+- **Cancel All**: 36/36 brokers
+- **Close Position**: 36/36 brokers
+- **Place GTT**: 5/36 brokers
+- **Modify GTT**: 5/36 brokers
+- **Cancel GTT**: 5/36 brokers
+- **GTT Book**: 5/36 brokers
+- **Orderbook**: 36/36 brokers
+- **Tradebook**: 36/36 brokers
+- **Positionbook**: 36/36 brokers
+- **Holdings**: 36/36 brokers
+- **Open Position**: 36/36 brokers
+- **Funds**: 36/36 brokers
+- **Margin**: 22/36 brokers, 13 stub
+- **Quotes**: 34/36 brokers, 2 stub
+- **Depth**: 34/36 brokers, 2 stub
+- **History**: 27/36 brokers, 9 stub
+- **Intervals**: 34/36 brokers, 2 stub
+- **Streaming: Market Data**: 35/36 brokers, 1 stub
+- **Streaming: Order/Trade Updates**: 18/36 brokers
 
-_Regenerated 05 August 2026._
+_Regenerated 27 August 2026._

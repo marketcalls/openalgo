@@ -22,23 +22,6 @@ logger = get_logger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
 
 
-def get_last_session_boundary():
-    """
-    Get the most recent session boundary time (SESSION_EXPIRY_TIME)
-    Returns datetime in IST
-    """
-    session_expiry_str = os.getenv("SESSION_EXPIRY_TIME", "03:00")
-    reset_hour, reset_minute = map(int, session_expiry_str.split(":"))
-
-    now = datetime.now(IST)
-    today_boundary = now.replace(hour=reset_hour, minute=reset_minute, second=0, microsecond=0)
-
-    if now >= today_boundary:
-        return today_boundary
-    else:
-        return today_boundary - timedelta(days=1)
-
-
 def catch_up_mis_squareoff():
     """
     Check and square-off any MIS positions from previous days
@@ -51,16 +34,36 @@ def catch_up_mis_squareoff():
     try:
         from database.sandbox_db import SandboxFunds, SandboxPositions, db_session
         from sandbox.fund_manager import FundManager
+        from sandbox.session_boundary import last_session_expiry_utc
 
-        # Get today's date at midnight IST
-        today = datetime.now(IST).date()
-        today_start = datetime.combine(today, datetime.min.time())
-        today_start = IST.localize(today_start)
+        session_expiry_str = os.getenv("SESSION_EXPIRY_TIME", "03:00")
+        last_session_expiry = last_session_expiry_utc(session_expiry_str, datetime.now(IST))
 
-        # Find MIS positions from previous days (created before today)
+        # Crypto / 24x7 brokers have no daily session boundary, so there is no
+        # scheduled square-off to catch up. Mirroring squareoff_manager, skip any
+        # exchange that has no configured square-off time.
+        from utils.session import is_session_expiry_disabled
+
+        if is_session_expiry_disabled():
+            logger.debug(
+                "Catch-up: skipping MIS square-off because session expiry is disabled (crypto/24x7)"
+            )
+            return
+
+        from sandbox.squareoff_manager import SquareOffManager
+
+        squareoff_manager = SquareOffManager()
+        configured_exchanges = set(squareoff_manager.square_off_times)
+
+        # Square off MIS positions that were not touched since the last session
+        # boundary. Use updated_at (database UTC clock), not created_at: reopened
+        # symbols reuse the same row and keep an old created_at (#1794).
         stale_mis_positions = (
             SandboxPositions.query.filter_by(product="MIS")
-            .filter(SandboxPositions.quantity != 0, SandboxPositions.created_at < today_start)
+            .filter(
+                SandboxPositions.quantity != 0,
+                SandboxPositions.updated_at < last_session_expiry,
+            )
             .all()
         )
 
@@ -75,6 +78,13 @@ def catch_up_mis_squareoff():
         # Process each stale MIS position manually (not through normal close flow)
         # This ensures we don't add to today_realized_pnl
         for position in stale_mis_positions:
+            if position.exchange not in configured_exchanges:
+                logger.debug(
+                    f"Catch-up: skipping {position.symbol} on {position.exchange} "
+                    "(no square-off time configured)"
+                )
+                continue
+
             try:
                 user_id = position.user_id
                 symbol = position.symbol
@@ -148,11 +158,15 @@ def catch_up_t1_settlement():
     try:
         from database.sandbox_db import SandboxPositions
         from sandbox.holdings_manager import process_all_t1_settlements
+        from sandbox.session_boundary import as_db_utc
 
-        # Check if there are any CNC positions that need settlement
-        ist = IST
-        today = datetime.now(ist).date()
-        settlement_cutoff = datetime.combine(today, datetime.min.time())
+        # Check if there are any CNC positions that need settlement.
+        # created_at is the database clock (UTC). Build IST midnight, then
+        # convert, or the comparison is read as UTC and lands 5.5h late.
+        today = datetime.now(IST).date()
+        settlement_cutoff = as_db_utc(
+            IST.localize(datetime.combine(today, datetime.min.time()))
+        )
 
         pending_positions = (
             SandboxPositions.query.filter_by(product="CNC")
@@ -178,21 +192,23 @@ def catch_up_daily_pnl_reset():
     """
     try:
         from database.sandbox_db import SandboxFunds, SandboxPositions, db_session
+        from sandbox.session_boundary import last_session_expiry_utc
 
-        last_session_boundary = get_last_session_boundary()
+        session_expiry_str = os.getenv("SESSION_EXPIRY_TIME", "03:00")
+        last_session_expiry = last_session_expiry_utc(session_expiry_str, datetime.now(IST))
 
         # Check if there are positions with non-zero today_realized_pnl
         # that were last updated before the session boundary
         positions_needing_reset = SandboxPositions.query.filter(
-            SandboxPositions.today_realized_pnl != None,
+            SandboxPositions.today_realized_pnl.is_not(None),
             SandboxPositions.today_realized_pnl != Decimal("0.00"),
-            SandboxPositions.updated_at < last_session_boundary,
+            SandboxPositions.updated_at < last_session_expiry,
         ).count()
 
         funds_needing_reset = SandboxFunds.query.filter(
-            SandboxFunds.today_realized_pnl != None,
+            SandboxFunds.today_realized_pnl.is_not(None),
             SandboxFunds.today_realized_pnl != Decimal("0.00"),
-            SandboxFunds.updated_at < last_session_boundary,
+            SandboxFunds.updated_at < last_session_expiry,
         ).count()
 
         if positions_needing_reset > 0 or funds_needing_reset > 0:
@@ -202,10 +218,10 @@ def catch_up_daily_pnl_reset():
 
             # Reset all today_realized_pnl that are from before session boundary
             SandboxPositions.query.filter(
-                SandboxPositions.updated_at < last_session_boundary
+                SandboxPositions.updated_at < last_session_expiry
             ).update({"today_realized_pnl": Decimal("0.00")})
 
-            SandboxFunds.query.filter(SandboxFunds.updated_at < last_session_boundary).update(
+            SandboxFunds.query.filter(SandboxFunds.updated_at < last_session_expiry).update(
                 {"today_realized_pnl": Decimal("0.00")}
             )
 

@@ -589,7 +589,7 @@ def cancel_order(orderid: str, auth: str) -> dict[str, Any]:
         # Make API request
         headers = {"Authorization": f"bearer {AUTH_TOKEN}", "Content-Type": "application/json"}
 
-        logger.debug(f"Cancel order request: {json.dumps(cancel_data)}")
+        logger.debug(f"Cancel order request body: {json.dumps(cancel_data['body'])}")
         response = client.post(
             f"{BASE_URL}/VendorsAPI/Service1.svc/V1/CancelOrderRequest",  # Official endpoint for cancel
             json=cancel_data,
@@ -663,7 +663,7 @@ def modify_order(data: dict[str, Any], auth: str) -> dict[str, Any]:
         # Prepare request data
         json_data = {"head": {"key": api_key}, "body": transformed_data}
 
-        logger.debug(f"Modify Order Request: {json_data}")
+        logger.debug(f"Modify Order Request body: {json_data['body']}")
 
         # Get the shared httpx client
         client = get_httpx_client()

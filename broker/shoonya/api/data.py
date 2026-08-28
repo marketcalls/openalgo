@@ -59,6 +59,126 @@ EOD_INDEX_SYMBOLS = {
 }
 
 
+# A GetQuotes reply that describes a different instrument is retried rather
+# than trusted. Measured 25-Aug-2026 against the live API, two NFO options
+# polled round-robin at 2 req/sec for 13 minutes: 119 of 1318 replies came
+# back wrong (9.03%), every one of them the NSE index. The failures are
+# independent - for a given scrip P(wrong) was 8.19% and 9.86% while
+# P(wrong | the previous reply for it was wrong) was 5.66% and 9.38% - so
+# retrying is effective rather than hitting the same bad state again. At the
+# measured rate three attempts leave roughly 0.07% unresolved, and those raise
+# instead of returning a price. Retries cost nothing on the 91% that are
+# right first time.
+def _quote_attempts() -> int:
+    """How many times a mismatched quote is re-requested before giving up.
+
+    Configurable because the right number depends on the leak rate, which is
+    Shoonya's to change and has already moved between 1.5% and 12% across
+    sessions. Three suits what has been measured; a quieter endpoint needs
+    fewer, and anything below 1 would disable the retry rather than the check,
+    so the floor is 1.
+    """
+    try:
+        return max(1, int(os.getenv("SHOONYA_QUOTE_ATTEMPTS", "3")))
+    except ValueError:
+        logger.warning("SHOONYA_QUOTE_ATTEMPTS is not an integer, using 3")
+        return 3
+
+
+QUOTE_ATTEMPTS = _quote_attempts()
+
+
+def quote_matches_request(response: dict, exch: str, token: str) -> bool:
+    """Check that a GetQuotes reply describes the instrument that was asked for.
+
+    Shoonya's quote backend intermittently answers with a snapshot of a
+    different instrument requested elsewhere on the same login. It is not a
+    transport or concurrency artefact: it reproduces on strictly sequential
+    calls over a single connection, and a process that never asks for the index
+    still receives it - a 13-minute run that requested only two NFO options was
+    answered with the NSE index 119 times.
+
+    The payload is complete and carries stat=Ok, so the only way to detect it
+    is to compare the echoed exch/token against the request. Nothing about the
+    price itself gives it away: a leaked index quote is internally consistent,
+    its LTP sits inside its own OHLC, which is why the stale-quote check in
+    sandbox/execution_engine.py cannot catch it. Unchecked, the foreign price
+    reaches order fills - a sandbox MARKET buy on NIFTY18AUG2624600CE filled at
+    24391.25, the NIFTY spot, instead of ~39.85.
+
+    The same session's WebSocket touchline feed carried 1719 ticks over that
+    window with zero wrong instruments, so this is specific to the REST
+    endpoint. Prefer the feed where one is available; this guard is for the
+    paths that have no feed to fall back on.
+
+    A reply with no token echo is accepted: there is nothing to check it
+    against, and every observed Ok response carries one.
+    """
+    got_token = str(response.get("token", "") or "")
+    if not got_token:
+        return True
+    if got_token != str(token):
+        return False
+    got_exch = str(response.get("exch", "") or "")
+    return not got_exch or got_exch == exch
+
+
+def log_wrong_instrument_response(
+    context: str, exch: str, token: str, response: dict, attempt: int
+) -> None:
+    """Record a wrong-instrument reply in full, so the behaviour stays visible.
+
+    Currently silent. Shoonya gets this wrong on roughly 9-12% of option quote
+    requests, so at any real polling rate the full-payload line below floods
+    log/errors.jsonl and buries everything else in it. The reply is still
+    detected and discarded either way - this only controls whether it is
+    reported. Uncomment to gather evidence for a broker ticket.
+
+    test/shoonya_guard_live_test.py does not depend on this: it captures raw
+    replies beneath the broker module rather than reading them out of the log.
+    """
+    # logger.error(
+    #     f"WRONG INSTRUMENT Shoonya was asked for {exch}|{token}{context} and "
+    #     f"answered with {response.get('exch')}|{response.get('token')} "
+    #     f"({response.get('tsym')}) lp={response.get('lp')} "
+    #     f"stat={response.get('stat')} - discarding "
+    #     f"(attempt {attempt}/{QUOTE_ATTEMPTS}). Full response: {json.dumps(response)}"
+    # )
+
+
+def get_quotes_response(auth_token, exch: str, token: str, context: str = "") -> dict:
+    """Call GetQuotes, verifying the reply belongs to the instrument requested.
+
+    Retries a mismatch up to QUOTE_ATTEMPTS times, then raises rather than
+    handing back another instrument's prices. See quote_matches_request() for
+    why this is necessary and why the check is an identity comparison rather
+    than anything to do with the price.
+
+    A broker error (stat != Ok) is returned untouched on the first attempt -
+    that is Shoonya answering the question, and the caller reports its emsg.
+    """
+    for attempt in range(1, QUOTE_ATTEMPTS + 1):
+        response = get_api_response(
+            "/NorenWClientAPI/GetQuotes",
+            auth_token,
+            payload={"exch": exch, "token": token},
+        )
+
+        if response.get("stat") != "Ok":
+            return response  # caller reports the broker's own error message
+
+        if quote_matches_request(response, exch, token):
+            return response
+
+        log_wrong_instrument_response(context, exch, token, response, attempt)
+
+    raise Exception(
+        f"Shoonya returned a quote for a different instrument "
+        f"({response.get('exch')}|{response.get('token')} {response.get('tsym')}) "
+        f"when asked for {exch}|{token}{context} on all {QUOTE_ATTEMPTS} attempts"
+    )
+
+
 def get_api_response(endpoint, auth, method="POST", payload=None):
     """
     Common function to make API calls to Shoonya using httpx with connection pooling
@@ -94,11 +214,13 @@ def get_api_response(endpoint, auth, method="POST", payload=None):
     logger.info(f"API Response [{endpoint}] status={response.status_code} body={data[:500]}")
 
     try:
-        return json.loads(data)
+        parsed = json.loads(data)
     except json.JSONDecodeError as e:
         logger.error(f"Error decoding JSON: {e}")
         logger.debug(f"Response data: {data}")
         raise
+
+    return parsed
 
 
 def get_chart_api_response(endpoint, auth, method="POST", payload=None):
@@ -183,10 +305,8 @@ class BrokerData:
             elif exchange == "BSE_INDEX":
                 exchange = "BSE"
 
-            payload = {"exch": exchange, "token": token}
-
-            response = get_api_response(
-                "/NorenWClientAPI/GetQuotes", self.auth_token, payload=payload
+            response = get_quotes_response(
+                self.auth_token, exchange, token, context=f" for {symbol}"
             )
 
             if response.get("stat") != "Ok":
@@ -262,22 +382,45 @@ class BrokerData:
         try:
             data = {"uid": api_key, "exch": api_exchange, "token": token}
 
-            payload_str = "jData=" + json.dumps(data)
+            payload_str = "jData=" + _encode_jdata(data)
             headers = {
                 "Content-Type": "text/plain",
                 "Authorization": f"Bearer {self.auth_token}",
             }
             url = "https://api.shoonya.com/NorenWClientAPI/GetQuotes"
 
-            # Use httpx.post for sync requests
-            http_response = httpx.post(url, content=payload_str, headers=headers, timeout=10.0)
-            response = http_response.json()
+            # This path does not go through get_quotes_response because it does
+            # not go through get_api_response either, but the rule is the same:
+            # never return a reply that describes another instrument. A row
+            # that cannot be resolved carries an error instead of a price, so
+            # one bad symbol does not fail the whole batch.
+            for attempt in range(1, QUOTE_ATTEMPTS + 1):
+                # Use httpx.post for sync requests
+                http_response = httpx.post(url, content=payload_str, headers=headers, timeout=10.0)
+                response = http_response.json()
 
-            if response.get("stat") != "Ok":
+                if response.get("stat") != "Ok":
+                    return {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "error": response.get("emsg", "Unknown error"),
+                    }
+
+                if quote_matches_request(response, api_exchange, token):
+                    break
+
+                log_wrong_instrument_response(
+                    f" for {symbol}", api_exchange, token, response, attempt
+                )
+            else:
                 return {
                     "symbol": symbol,
                     "exchange": exchange,
-                    "error": response.get("emsg", "Unknown error"),
+                    "error": (
+                        f"Broker returned a quote for a different instrument "
+                        f"({response.get('exch')}|{response.get('token')} "
+                        f"{response.get('tsym')}) on all {QUOTE_ATTEMPTS} attempts"
+                    ),
                 }
 
             return {
@@ -314,21 +457,40 @@ class BrokerData:
         try:
             data = {"uid": api_key, "exch": api_exchange, "token": token}
 
-            payload_str = "jData=" + json.dumps(data)
+            payload_str = "jData=" + _encode_jdata(data)
             headers = {
                 "Content-Type": "text/plain",
                 "Authorization": f"Bearer {self.auth_token}",
             }
             url = "https://api.shoonya.com/NorenWClientAPI/GetQuotes"
 
-            http_response = await client.post(url, content=payload_str, headers=headers)
-            response = http_response.json()
+            # Same rule as the sync path above - see _fetch_single_quote_sync.
+            for attempt in range(1, QUOTE_ATTEMPTS + 1):
+                http_response = await client.post(url, content=payload_str, headers=headers)
+                response = http_response.json()
 
-            if response.get("stat") != "Ok":
+                if response.get("stat") != "Ok":
+                    return {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "error": response.get("emsg", "Unknown error"),
+                    }
+
+                if quote_matches_request(response, api_exchange, token):
+                    break
+
+                log_wrong_instrument_response(
+                    f" for {symbol}", api_exchange, token, response, attempt
+                )
+            else:
                 return {
                     "symbol": symbol,
                     "exchange": exchange,
-                    "error": response.get("emsg", "Unknown error"),
+                    "error": (
+                        f"Broker returned a quote for a different instrument "
+                        f"({response.get('exch')}|{response.get('token')} "
+                        f"{response.get('tsym')}) on all {QUOTE_ATTEMPTS} attempts"
+                    ),
                 }
 
             return {
@@ -515,10 +677,8 @@ class BrokerData:
             elif exchange == "BSE_INDEX":
                 exchange = "BSE"
 
-            payload = {"exch": exchange, "token": token}
-
-            response = get_api_response(
-                "/NorenWClientAPI/GetQuotes", self.auth_token, payload=payload
+            response = get_quotes_response(
+                self.auth_token, exchange, token, context=f" for {symbol} depth"
             )
 
             if response.get("stat") != "Ok":
@@ -819,10 +979,15 @@ class BrokerData:
                 if today_ts >= start_ts and today_ts <= end_ts:
                     if df.empty or df["timestamp"].max() < today_ts:
                         try:
-                            # Get today's data from quotes
-                            payload = {"exch": exchange, "token": token}
-                            quotes_response = get_api_response(
-                                "/NorenWClientAPI/GetQuotes", self.auth_token, payload=payload
+                            # Get today's data from quotes. A wrong-instrument
+                            # reply raises here and is caught below, so today's
+                            # candle is left out rather than filled with
+                            # another instrument's open/high/low/close.
+                            quotes_response = get_quotes_response(
+                                self.auth_token,
+                                exchange,
+                                token,
+                                context=f" for {symbol} today-candle",
                             )
                             logger.debug(f"Quotes Response: {quotes_response}")  # Debug print
 

@@ -450,20 +450,26 @@ get_flow_client(api_key)
 get_flow_price_monitor()
 FlowPriceMonitor.add_alert(workflow_id, symbol, exchange, condition,
                            target_price, price_lower=None, price_upper=None,
-                           percentage=None, api_key=None)
+                           percentage=None, api_key=None, trigger="once",
+                           expiration="none")
 FlowPriceMonitor.remove_alert(workflow_id)
 FlowPriceMonitor.get_alert(workflow_id)
 FlowPriceMonitor.get_status()
 FlowPriceMonitor.shutdown()
+restore_price_alerts()          # re-arm active priceAlert workflows at startup
 
 init_flow_scheduler(db_url=None, api_key=None)
 get_flow_scheduler()
-execute_workflow_scheduled(workflow_id, api_key=None)
+execute_workflow_scheduled(workflow_id, api_key=None, market_hours_only=False)
+# api_key is only for jobs pickled by an older build; the current key is read
+# from the workflow row on every run, and is never stored in the jobstore.
 FlowScheduler.add_workflow_job(workflow_id, schedule_type, time_str="09:15",
                                days=None, execute_at=None,
                                interval_value=None, interval_unit=None,
-                               func=None)
-FlowScheduler.remove_workflow_job(workflow_id)
+                               func=None, market_hours_only=False)
+FlowScheduler.remove_workflow_job(workflow_id, strict=False)
+# strict=True raises on a jobstore failure instead of returning False, so a
+# caller cannot mark a workflow inactive while its job is still armed.
 FlowScheduler.pause_job(job_id)
 FlowScheduler.resume_job(job_id)
 FlowScheduler.shutdown()
@@ -480,7 +486,7 @@ Data:   get_quotes, get_multi_quotes, get_depth, get_history, get_order_status,
         orderbook, tradebook, positionbook, holdings, funds, get_open_position
 Lookup: symbol, search_symbols, get_expiry, get_intervals, optionchain,
         optionsymbol, syntheticfuture, get_option_greeks
-Other:  holidays, timings, margin, telegram
+Other:  holidays, timings, margin, telegram, whatsapp
 ```
 
 Node execution belongs in `NodeExecutor` and `execute_node_chain(...)`. New Flow

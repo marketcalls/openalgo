@@ -5,7 +5,6 @@ Based on Dhan V2 API documentation with proper binary packet parsing.
 
 import asyncio
 import json
-import logging
 import os
 import struct
 import sys
@@ -17,8 +16,10 @@ from typing import Any, Dict, List, Optional, Union
 
 import websockets
 
+from utils.logging import get_logger
+
 # Set up logging
-logger = logging.getLogger("dhan_websocket")
+logger = get_logger("dhan_websocket")
 
 # Issue #1344 (CRITICAL) — when running under gunicorn+eventlet (production
 # install path), eventlet monkey-patches threading.Thread into green threads.

@@ -59,6 +59,7 @@ from blueprints.broker_credentials import (
 from blueprints.chart_test import chart_test_bp  # Standalone chart test page (dev/testing only)
 from blueprints.chartink import chartink_bp  # Import the chartink blueprint
 from blueprints.core import core_bp
+from blueprints.custom_indicators import custom_indicators_bp  # User chart indicators
 from blueprints.custom_straddle import custom_straddle_bp  # Import custom straddle blueprint
 from blueprints.dashboard import dashboard_bp
 from blueprints.flow import flow_bp  # Import the flow blueprint
@@ -108,7 +109,7 @@ from blueprints.tv_json import tv_json_bp
 from blueprints.vol_surface import vol_surface_bp  # Import the vol surface blueprint
 from blueprints.websocket_example import websocket_bp  # Import the websocket example blueprint
 from blueprints.whatsapp import whatsapp_bp  # Import the WhatsApp blueprint
-from cors import cors  # Import the CORS instance
+from cors import init_cors
 from csp import apply_csp_middleware  # Import the CSP middleware
 from database.action_center_db import init_db as ensure_action_center_tables_exists
 from database.analyzer_db import init_db as ensure_analyzer_tables_exists
@@ -179,10 +180,8 @@ def create_app():
     # Initialize Flask-Limiter with the app object
     limiter.init_app(app)
 
-    # Initialize Flask-CORS with the app object using configuration from environment variables
-    from cors import get_cors_config
-
-    cors.init_app(app, **get_cors_config())
+    # Initialize Flask-CORS only when explicitly enabled.
+    init_cors(app)
 
     # Apply Content Security Policy middleware
     apply_csp_middleware(app)
@@ -311,6 +310,7 @@ def create_app():
     app.register_blueprint(master_contract_status_bp)
     app.register_blueprint(websocket_bp)  # Register WebSocket example blueprint
     app.register_blueprint(chart_test_bp)  # Register standalone chart test page (dev/testing only)
+    app.register_blueprint(custom_indicators_bp)  # Register user chart indicators blueprint
     app.register_blueprint(pnltracker_bp)  # Register PnL tracker blueprint
     app.register_blueprint(python_strategy_bp)  # Register Python strategy blueprint
     app.register_blueprint(telegram_bp)  # Register Telegram blueprint
@@ -570,7 +570,7 @@ def create_app():
 
     @app.errorhandler(404)
     def not_found_error(error):
-        from flask import request, session
+        from flask import jsonify, request, session
 
         from database.traffic_db import Error404Tracker
         from utils.ip_helper import get_real_ip
@@ -599,8 +599,22 @@ def create_app():
         if not is_authenticated and not path.startswith(safe_prefixes):
             Error404Tracker.track_404(client_ip, path)
 
-        # Serve React app (React Router handles 404)
-        return serve_react_app()
+        # Namespaces that must never answer with the React shell. serve_react_app
+        # returns a 200 Response, and a Flask error handler keeps the status of a
+        # Response it returns, so every unmatched path used to answer 200
+        # text/html: an API client that mistyped an endpoint saw response.ok pass
+        # with an unparseable body, and a request for a stale content-hashed
+        # chunk got HTML that the browser then tried to execute as JavaScript,
+        # white-screening the SPA with "Unexpected token '<'" instead of failing
+        # cleanly. React routes without a Flask endpoint still fall through to
+        # the shell, which is deliberate.
+        if path.startswith(("/api/", "/flow/api/", "/flow/webhook/")):
+            return jsonify({"status": "error", "message": "Not found", "path": path}), 404
+
+        if path.startswith(("/assets/", "/static/")) or "." in path.rsplit("/", 1)[-1]:
+            return "Not Found", 404
+
+        return serve_react_app(), 404
 
     @app.errorhandler(500)
     def internal_server_error(e):
@@ -658,6 +672,21 @@ def setup_environment(app):
         # load broker plugins (lazy - no actual imports until login)
         app.broker_auth_functions = load_broker_auth_functions()
         load_broker_capabilities()  # cache plugin.json data in memory
+
+    # Regenerate the gzip variants of the built frontend assets. These are no
+    # longer committed with frontend/dist/ (they bloated the repository history
+    # badly - see utils/precompress_assets), so they are rebuilt here from the
+    # tracked originals whenever a `git pull` brings a new build.
+    #
+    # Deliberately synchronous, ahead of the background DB thread. Under
+    # eventlet a threading.Thread is a green thread, so running ~3s of gzip
+    # there would stall the entire worker mid-request; run at boot, before the
+    # first request is served, it costs nothing anyone can observe. Subsequent
+    # boots find every variant current and finish in ~30ms.
+    from blueprints.react_app import FRONTEND_DIST
+    from utils.precompress_assets import ensure_precompressed_assets
+
+    ensure_precompressed_assets(FRONTEND_DIST)
 
     # Setup ngrok cleanup handlers (always register, regardless of ngrok being enabled)
     # This ensures proper cleanup on shutdown even if ngrok is enabled/disabled via UI
@@ -803,6 +832,20 @@ def setup_environment(app):
                 restore_order_update_watches()
             except Exception:
                 logger.exception("Failed to restore Flow order-update watches")
+
+            try:
+                from services.flow_price_monitor_service import restore_price_alerts
+
+                restore_price_alerts()
+            except Exception:
+                logger.exception("Failed to restore Flow price alerts")
+
+            try:
+                from services.flow_scheduler_service import reconcile_scheduler_jobs
+
+                reconcile_scheduler_jobs()
+            except Exception:
+                logger.exception("Failed to reconcile Flow scheduler jobs")
 
             try:
                 from services.historify_scheduler_service import init_historify_scheduler

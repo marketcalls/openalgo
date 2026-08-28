@@ -12,11 +12,42 @@ from flask import Blueprint, abort, request, send_file, send_from_directory
 react_bp = Blueprint("react", __name__)
 
 # Pre-compressed encodings to negotiate, in preference order (best ratio first).
-# The Vite build (vite-plugin-compression2) emits <asset>.br and <asset>.gz next
-# to each hashed asset; CI commits them with frontend/dist/. Serving these lets
-# no-nginx (laptop) installs ship compressed bytes with zero per-request CPU,
-# and nginx-fronted servers pass the Content-Encoding through untouched.
+# utils/precompress_assets.py writes <asset>.gz next to each hashed asset at
+# startup. They are deliberately NOT committed with frontend/dist/: compressed
+# output can be neither deflated nor delta-compressed by git, so re-committing
+# it on every CI rebuild grew to two thirds of the repository history.
+#
+# Serving these lets installs with no compressing proxy ship compressed bytes
+# at zero per-request CPU, and nginx or Cloudflare in front passes the
+# Content-Encoding through untouched rather than re-compressing.
+#
+# ".br" stays in the list although nothing in the repo produces it now: the
+# lookup is one stat that misses, and it means an operator whose own pipeline
+# emits brotli gets it served without a code change. Missing variants always
+# fall back to the raw asset.
 _PRECOMPRESSED_ENCODINGS = ((".br", "br"), (".gz", "gzip"))
+
+
+def _accepts_encoding(header: str, encoding: str) -> bool:
+    """Whether ``header`` actually accepts ``encoding``.
+
+    A substring test is not enough: ``Accept-Encoding: gzip, br;q=0`` contains
+    "br" while explicitly refusing it, and a client that refuses an encoding
+    cannot decode it if we send it anyway.
+    """
+    for part in header.split(","):
+        token, _, params = part.strip().partition(";")
+        if token.strip().lower() != encoding:
+            continue
+        for param in params.split(";"):
+            key, _, value = param.partition("=")
+            if key.strip().lower() == "q":
+                try:
+                    return float(value.strip()) > 0
+                except ValueError:
+                    return True
+        return True
+    return False
 
 # Path to the pre-built React frontend
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
@@ -743,6 +774,21 @@ def serve_assets(filename):
     ``Content-Encoding`` and the original file's ``Content-Type``. Otherwise
     fall back to the raw asset (i.e. worst case == previous behavior). All paths
     go through ``send_from_directory`` so traversal protection is preserved.
+
+    One URL therefore has up to three representations of very different lengths
+    (brotli, gzip, identity), so two things are non-negotiable:
+
+    * ``Vary: Accept-Encoding`` on **every** response, the identity fallback
+      included. A stored response with no ``Vary`` matches any later request for
+      the same URI (RFC 9111), and these are cached ``immutable`` for a year, so
+      omitting it on one branch lets a cache hand the raw 150 KB copy to a
+      client that negotiated brotli.
+    * No byte ranges on the compressed branches. A range is served from whichever
+      representation the *current* request negotiates, so a client resuming or
+      revalidating against a range it captured from a different representation
+      splices mismatched bytes together and the module fails to parse. That
+      surfaces as a chunk-load error and, before the guard in
+      ``utils/chunkReload.ts`` was fixed, an endless reload loop (issue #1807).
     """
     assets_dir = FRONTEND_DIST / "assets"
     if not assets_dir.exists():
@@ -751,16 +797,18 @@ def serve_assets(filename):
     accept_encoding = request.headers.get("Accept-Encoding", "")
     response = None
     for ext, encoding in _PRECOMPRESSED_ENCODINGS:
-        if encoding in accept_encoding and (assets_dir / (filename + ext)).is_file():
-            response = send_from_directory(assets_dir, filename + ext)
+        if _accepts_encoding(accept_encoding, encoding) and (
+            assets_dir / (filename + ext)
+        ).is_file():
+            # conditional=False disables Werkzeug's 206/Range handling, so the
+            # compressed representation is only ever served whole.
+            response = send_from_directory(assets_dir, filename + ext, conditional=False)
             response.headers["Content-Encoding"] = encoding
             # Type must reflect the ORIGINAL asset, not the .br/.gz wrapper.
             content_type = mimetypes.guess_type(filename)[0]
             if content_type:
                 response.headers["Content-Type"] = content_type
-            # Caches must key on encoding so a br copy is never sent to a
-            # client that only speaks gzip (or none).
-            response.headers["Vary"] = "Accept-Encoding"
+            response.headers["Accept-Ranges"] = "none"
             break
     if response is None:
         response = send_from_directory(assets_dir, filename)
@@ -768,6 +816,8 @@ def serve_assets(filename):
     # Cache assets for 1 year — safe because filenames are content-hashed, so a
     # new build produces new URLs and users never need to clear their cache.
     response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    # Set on every branch, not just the compressed ones — see the docstring.
+    response.headers["Vary"] = "Accept-Encoding"
     return response
 
 

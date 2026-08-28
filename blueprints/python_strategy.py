@@ -38,6 +38,7 @@ from werkzeug.utils import secure_filename
 
 from database.market_calendar_db import (
     SUPPORTED_EXCHANGES,
+    get_all_market_timings,
     get_effective_session_window,
     get_market_hours_status,
     get_special_session,
@@ -282,9 +283,9 @@ def check_master_contract_ready(skip_on_startup=False):
         if not broker:
             # During startup, we may not have a broker yet, so skip the check
             if skip_on_startup:
-                logger.info("No broker found during startup - skipping master contract check")
+                logger.debug("No broker found during startup - skipping master contract check")
                 return True, "Skipping check during startup"
-            logger.warning("No broker found for master contract check")
+            logger.debug("No broker found for master contract check")
             return False, "No broker session found"
 
         # Import here to avoid circular imports
@@ -2277,6 +2278,73 @@ def get_schedule_status(config):
     return "scheduled", f"Active window: {schedule_start} - {schedule_stop} IST"
 
 
+#: Display order and descriptive names for the /python exchange selector. Only
+#: the *name* lives here. The session window shown beside it is read from the
+#: market calendar DB, so a timing change (SEBI's F&O close moving to 15:40, an
+#: admin edit under /admin/timings) reaches this dropdown without a code change.
+STRATEGY_EXCHANGE_NAMES = [
+    ("NSE", "Equity"),
+    ("BSE", "Equity"),
+    ("NFO", "NSE F&O"),
+    ("BFO", "BSE F&O"),
+    ("CDS", "NSE Currency"),
+    ("BCD", "BSE Currency"),
+    ("MCX", "Commodity"),
+    ("NCO", "NSE Commodity"),
+    ("CRYPTO", None),
+]
+
+
+@python_strategy_bp.route("/api/exchanges")
+@check_session_validity
+def api_get_exchanges():
+    """API: Exchange options for the strategy selector, with live session windows.
+
+    The window is whatever the market calendar DB currently holds for that
+    exchange, not a hardcoded string. CRYPTO is reported as 24/7 because the
+    scheduler short-circuits it rather than consulting a window.
+    """
+    try:
+        timings = {t["exchange"]: t for t in get_all_market_timings()}
+    except Exception as e:
+        logger.exception(f"Error loading market timings for exchange list: {e}")
+        timings = {}
+
+    exchanges = []
+    for code, description in STRATEGY_EXCHANGE_NAMES:
+        if code not in SUPPORTED_EXCHANGES:
+            continue
+
+        is_crypto = code in CRYPTO_EXCHANGES
+        timing = timings.get(code)
+        start_time = None if is_crypto else (timing or {}).get("start_time")
+        end_time = None if is_crypto else (timing or {}).get("end_time")
+
+        if is_crypto:
+            window = "24/7"
+        elif start_time and end_time:
+            window = f"{start_time}-{end_time}"
+        else:
+            window = None
+
+        parts = [p for p in (description, f"({window})" if window and description else window) if p]
+        label = f"{code} — {' '.join(parts)}" if parts else code
+
+        exchanges.append(
+            {
+                "value": code,
+                "label": label,
+                "description": description,
+                "start_time": start_time,
+                "end_time": end_time,
+                "window": window,
+                "is_24x7": is_crypto,
+            }
+        )
+
+    return jsonify({"exchanges": exchanges, "default": DEFAULT_STRATEGY_EXCHANGE})
+
+
 @python_strategy_bp.route("/api/strategies")
 @check_session_validity
 def api_get_strategies():
@@ -2798,7 +2866,7 @@ def restore_strategy_states():
 
     # If we can't determine the broker (no active auth), delay strategy restoration
     if "No broker" in contract_message:
-        logger.info("No active broker found during startup - delaying strategy restoration")
+        logger.debug("No active broker found during startup - delaying strategy restoration")
         if restored_count:
             logger.info(f"Restored {restored_count} live strategies while broker is unavailable")
         return

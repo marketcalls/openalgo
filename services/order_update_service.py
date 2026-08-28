@@ -54,6 +54,10 @@ _BROKER_FACTORIES: dict[str, tuple[str, str]] = {
     "nubra": ("broker.nubra.streaming.nubra_order_adapter", "create_nubra_order_adapter"),
     "arrow": ("broker.arrow.streaming.arrow_order_adapter", "create_arrow_order_adapter"),
     "kotak": ("broker.kotak.streaming.kotak_order_adapter", "create_kotak_order_adapter"),
+    "motilal": (
+        "broker.motilal.streaming.motilal_order_adapter",
+        "create_motilal_order_adapter",
+    ),
     "iiflcapital": (
         "broker.iiflcapital.streaming.iiflcapital_order_adapter",
         "create_iiflcapital_order_adapter",
@@ -197,7 +201,7 @@ def start_order_update_adapters_on_boot(db_ready=None) -> None:
             know the schema exists.
     """
     if not _order_updates_enabled():
-        logger.info("Order-update adapters disabled via ORDER_UPDATES_ENABLED")
+        logger.debug("Order-update adapters disabled via ORDER_UPDATES_ENABLED")
         return
 
     def _boot():
