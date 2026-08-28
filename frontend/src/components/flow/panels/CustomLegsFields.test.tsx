@@ -54,7 +54,9 @@ let saved: unknown[] = []
 
 function Harness({ initial }: { initial?: unknown[] }) {
   const [legs, setLegs] = useState<unknown[]>(
-    initial ?? [{ strikeMode: 'OFFSET', offset: 'ATM', optionType: 'CE', action: 'BUY', quantity: 1 }]
+    initial ?? [
+      { strikeMode: 'OFFSET', offset: 'ATM', optionType: 'CE', action: 'BUY', quantity: 1 },
+    ]
   )
   return (
     <CustomLegsFields
@@ -108,11 +110,7 @@ describe('the expiry control', () => {
     await user.click(screen.getByLabelText('Expiry'))
     const options = await screen.findAllByRole('option')
 
-    expect(options.map((option) => option.textContent)).toEqual([
-      '25AUG26',
-      '01SEP26',
-      '29SEP26',
-    ])
+    expect(options.map((option) => option.textContent)).toEqual(['25AUG26', '01SEP26', '29SEP26'])
   })
 
   it('shows the node expiry for a leg that has none of its own', async () => {
@@ -132,9 +130,7 @@ describe('the expiry control', () => {
     await choose(user, 'Expiry', /^01SEP26$/)
 
     expect((saved[0] as { expiry?: string }).expiry).toBe('01SEP26')
-    await waitFor(() =>
-      expect(screen.getByLabelText('Expiry').textContent).toContain('01SEP26')
-    )
+    await waitFor(() => expect(screen.getByLabelText('Expiry').textContent).toContain('01SEP26'))
   })
 
   it('leaves an untouched leg following the node so a scheduled basket rolls', async () => {

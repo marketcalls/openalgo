@@ -1184,9 +1184,10 @@ export const DEFAULT_NODE_DATA = {
     trigger: 'once' as const,
   },
   webhookTrigger: {
+    // No symbol or exchange: the request carries them. Downstream nodes read
+    // `{{webhook.symbol}}` and friends, so a copy stored on the trigger would
+    // be a second source of truth that the executor never looks at.
     label: '',
-    symbol: '',
-    exchange: 'NSE',
   },
   placeOrder: {
     symbol: '',

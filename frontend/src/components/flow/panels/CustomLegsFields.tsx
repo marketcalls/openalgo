@@ -31,15 +31,15 @@ import {
   type CustomLeg,
   describeLeg,
   EMPTY_CUSTOM_LEG,
+  hasVariableReference,
   type LegProblems,
   MAX_CUSTOM_LEGS,
   NEEDS_PRICE,
   NEEDS_TRIGGER,
-  hasVariableReference,
   parseCustomLegs,
+  type StrikeMode,
   seedLegsFromStrategy,
   serializeCustomLegs,
-  type StrikeMode,
   validateCustomLeg,
   validateCustomLegs,
 } from '@/lib/flow/customLegs'
@@ -254,8 +254,7 @@ function LegRow({
   // side share one request through the query key.
   const listing = useQuery({
     queryKey: flowQueryKeys.optionStrikes(underlying, expiryKey ?? '', leg.optionType),
-    queryFn: () =>
-      getOptionStrikes({ underlying, ...expiryParams, optionType: leg.optionType }),
+    queryFn: () => getOptionStrikes({ underlying, ...expiryParams, optionType: leg.optionType }),
     enabled: open && Boolean(underlying),
     // The master contract changes on a contract revision, not within a session.
     staleTime: 1000 * 60 * 30,
@@ -273,8 +272,7 @@ function LegRow({
   // carry - or a workflow could not be edited at all.
   const [typeStrike, setTypeStrike] = useState(false)
   const [typeExpiry, setTypeExpiry] = useState(false)
-  const pickStrike =
-    !typeStrike && listedStrikes.length > 0 && !hasVariableReference(leg.strike)
+  const pickStrike = !typeStrike && listedStrikes.length > 0 && !hasVariableReference(leg.strike)
 
   // Expiry is a plain list of the dates the exchange lists, the way the
   // Strategy Builder's leg row reads. No mode step and no "same as node" entry:
@@ -377,9 +375,7 @@ function LegRow({
       </div>
 
       {!open && hasProblem && (
-        <p className="mt-1 pl-5 text-[10px] text-destructive">
-          {Object.values(problems)[0]}
-        </p>
+        <p className="mt-1 pl-5 text-[10px] text-destructive">{Object.values(problems)[0]}</p>
       )}
 
       {open && (
@@ -724,8 +720,8 @@ function ContractHint({
     // and this is the ordinary case when no broker session is live.
     return (
       <p className="text-[10px] text-muted-foreground">
-        Listed contracts unavailable, so strike and expiry are typed here. They are checked
-        when the workflow is saved.
+        Listed contracts unavailable, so strike and expiry are typed here. They are checked when the
+        workflow is saved.
       </p>
     )
   }

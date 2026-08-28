@@ -1,14 +1,24 @@
 import { useId } from 'react'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import type { PriceType } from '@/lib/flow/constants'
 
+import { TemplatableField } from './TemplatableField'
+
 interface OrderPriceFieldsProps {
+  /**
+   * Which of the two boxes is shown at all. A stop order needs a trigger, a
+   * limit order needs a price, and a market order needs neither.
+   */
   priceType: PriceType
-  price: number
-  triggerPrice: number
-  onPriceChange: (price: number) => void
-  onTriggerPriceChange: (triggerPrice: number) => void
+  /**
+   * Both are `unknown` rather than `number` because either may hold a
+   * {{reference}}. They are order-critical to the executor, so an unresolved
+   * one refuses the order instead of being sent as a zero.
+   */
+  price: unknown
+  triggerPrice: unknown
+  onPriceChange: (price: string | number) => void
+  onTriggerPriceChange: (triggerPrice: string | number) => void
 }
 
 interface OptionsMultiPricingState {
@@ -23,9 +33,7 @@ export function getOptionsMultiStrategyUpdate(
   const leavesCustomStrategy = current.strategy === 'custom' && strategy !== 'custom'
   const hasStopPriceType = current.priceType === 'SL' || current.priceType === 'SL-M'
 
-  return leavesCustomStrategy && hasStopPriceType
-    ? { strategy, priceType: 'MARKET' }
-    : { strategy }
+  return leavesCustomStrategy && hasStopPriceType ? { strategy, priceType: 'MARKET' } : { strategy }
 }
 
 function numericValue(value: string): number {
@@ -46,34 +54,42 @@ export function OrderPriceFields({
   return (
     <>
       {(priceType === 'LIMIT' || priceType === 'SL') && (
-        <div className="space-y-2">
-          <Label htmlFor={priceId} className="text-xs">
-            Price
-          </Label>
+        <TemplatableField
+          label="Price"
+          htmlFor={priceId}
+          value={price}
+          onChange={onPriceChange}
+          fallback={0}
+          placeholder="{{webhook.price}}"
+        >
           <Input
             id={priceId}
             type="number"
             step="0.05"
             className="h-8"
-            value={price}
+            value={price as number}
             onChange={(event) => onPriceChange(numericValue(event.target.value))}
           />
-        </div>
+        </TemplatableField>
       )}
       {(priceType === 'SL' || priceType === 'SL-M') && (
-        <div className="space-y-2">
-          <Label htmlFor={triggerPriceId} className="text-xs">
-            Trigger Price
-          </Label>
+        <TemplatableField
+          label="Trigger Price"
+          htmlFor={triggerPriceId}
+          value={triggerPrice}
+          onChange={onTriggerPriceChange}
+          fallback={0}
+          placeholder="{{webhook.triggerPrice}}"
+        >
           <Input
             id={triggerPriceId}
             type="number"
             step="0.05"
             className="h-8"
-            value={triggerPrice}
+            value={triggerPrice as number}
             onChange={(event) => onTriggerPriceChange(numericValue(event.target.value))}
           />
-        </div>
+        </TemplatableField>
       )}
     </>
   )

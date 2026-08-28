@@ -20,8 +20,10 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import type { PriceType } from '@/lib/flow/constants'
 import {
   DAYS_OF_WEEK,
+  defaultProductForExchange,
   EXCHANGES,
   EXPIRY_TYPES,
   INDEX_SYMBOLS,
@@ -32,13 +34,10 @@ import {
   OPTION_STRATEGIES,
   OPTION_TYPES,
   ORDER_ACTIONS,
-  PRICE_TYPES,
   PRODUCT_TYPES,
   SCHEDULE_TYPES,
   STRIKE_OFFSETS,
-  defaultProductForExchange,
 } from '@/lib/flow/constants'
-import type { PriceType } from '@/lib/flow/constants'
 import { cn } from '@/lib/utils'
 import { useFlowWorkflowStore } from '@/stores/flowWorkflowStore'
 import type { BasketOrderItem } from '@/types/flow'
@@ -49,10 +48,20 @@ import { showToast } from '@/utils/toast'
  * value, and the node stores the absence of a product rather than this string.
  */
 const BASKET_PRODUCT_AUTO = 'AUTO'
+
+import { CustomLegsFields } from './CustomLegsFields'
 import { IndicatorParamsFields } from './IndicatorParamsFields'
 import { MarginPositionsFields } from './MarginPositionsFields'
-import { CustomLegsFields } from './CustomLegsFields'
+import {
+  ActionField,
+  ExchangeField,
+  ExpiryField,
+  PriceTypeField,
+  ProductField,
+  QuantityField,
+} from './OrderFields'
 import { getOptionsMultiStrategyUpdate, OrderPriceFields } from './OrderPriceFields'
+import { TemplatableField } from './TemplatableField'
 
 // ===== LOCAL CONSTANTS =====
 
@@ -502,24 +511,10 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Condition</Label>
                   <Select
@@ -617,33 +612,6 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('label', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Symbol</Label>
-                  <Input
-                    className="h-8"
-                    placeholder="RELIANCE"
-                    value={(nodeData.symbol as string) || ''}
-                    onChange={(e) => handleDataChange('symbol', e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
                 <Separator />
                 {webhookQuery.isLoading ? (
                   <div className="flex justify-center py-4">
@@ -656,11 +624,7 @@ export function ConfigPanel() {
                       <div className="flex gap-1">
                         <Input
                           readOnly
-                          value={
-                            nodeData.symbol
-                              ? `${webhookQuery.data.webhook_url}/${nodeData.symbol}`
-                              : webhookQuery.data.webhook_url
-                          }
+                          value={webhookQuery.data.webhook_url}
                           className="font-mono text-[10px] h-8"
                         />
                         <Button
@@ -834,98 +798,30 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Action</Label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {ORDER_ACTIONS.map((a) => (
-                      <button
-                        key={a.value}
-                        type="button"
-                        onClick={() => handleDataChange('action', a.value)}
-                        className={cn(
-                          'rounded-lg border py-2 text-sm font-semibold',
-                          nodeData.action === a.value
-                            ? a.value === 'BUY'
-                              ? 'bg-green-500/20 border-green-500 text-green-600'
-                              : 'bg-red-500/20 border-red-500 text-red-600'
-                            : 'border-border bg-muted'
-                        )}
-                      >
-                        {a.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Quantity</Label>
-                  <Input
-                    type="number"
-                    min={1}
-                    className="h-8"
-                    value={(nodeData.quantity as number) || 1}
-                    onChange={(e) =>
-                      handleDataChange('quantity', parseInt(e.target.value, 10) || 1)
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Product</Label>
-                  <Select
-                    value={nodeProduct}
-                    onValueChange={(v) => handleDataChange('product', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PRODUCT_TYPES.map((t) => (
-                        <SelectItem key={t.value} value={t.value}>
-                          {t.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Price Type</Label>
-                  <Select
-                    value={(nodeData.priceType as string) || 'MARKET'}
-                    onValueChange={(v) => handleDataChange('priceType', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PRICE_TYPES.map((t) => (
-                        <SelectItem key={t.value} value={t.value}>
-                          {t.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                />
+                <ActionField
+                  value={nodeData.action}
+                  onChange={(v) => handleDataChange('action', v)}
+                />
+                <QuantityField
+                  value={(nodeData.quantity as number) || 1}
+                  onChange={(v) => handleDataChange('quantity', v)}
+                />
+                <ProductField
+                  value={nodeProduct}
+                  onChange={(v) => handleDataChange('product', v)}
+                />
+                <PriceTypeField
+                  value={(nodeData.priceType as string) || 'MARKET'}
+                  onChange={(v) => handleDataChange('priceType', v)}
+                />
                 <OrderPriceFields
                   priceType={orderPriceType}
-                  price={(nodeData.price as number) || 0}
-                  triggerPrice={(nodeData.triggerPrice as number) || 0}
+                  price={nodeData.price ?? 0}
+                  triggerPrice={nodeData.triggerPrice ?? 0}
                   onPriceChange={(value) => handleDataChange('price', value)}
                   onTriggerPriceChange={(value) => handleDataChange('triggerPrice', value)}
                 />
@@ -956,59 +852,19 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Action</Label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {ORDER_ACTIONS.map((a) => (
-                      <button
-                        key={a.value}
-                        type="button"
-                        onClick={() => handleDataChange('action', a.value)}
-                        className={cn(
-                          'rounded-lg border py-2 text-sm font-semibold',
-                          nodeData.action === a.value
-                            ? a.value === 'BUY'
-                              ? 'bg-green-500/20 border-green-500 text-green-600'
-                              : 'bg-red-500/20 border-red-500 text-red-600'
-                            : 'border-border bg-muted'
-                        )}
-                      >
-                        {a.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Quantity</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    className="h-8"
-                    value={(nodeData.quantity as number | undefined) ?? 1}
-                    onChange={(e) => {
-                      const value = parseInt(e.target.value, 10)
-                      handleDataChange('quantity', Number.isNaN(value) ? 0 : value)
-                    }}
-                  />
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                />
+                <ActionField
+                  value={nodeData.action}
+                  onChange={(v) => handleDataChange('action', v)}
+                />
+                <QuantityField
+                  value={(nodeData.quantity as number | undefined) ?? 1}
+                  onChange={(v) => handleDataChange('quantity', v)}
+                  min={0}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Position Size</Label>
                   <Input
@@ -1024,46 +880,18 @@ export function ConfigPanel() {
                     Target position (positive=long, negative=short, 0=use quantity)
                   </p>
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Product</Label>
-                  <Select
-                    value={nodeProduct}
-                    onValueChange={(v) => handleDataChange('product', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PRODUCT_TYPES.map((t) => (
-                        <SelectItem key={t.value} value={t.value}>
-                          {t.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Price Type</Label>
-                  <Select
-                    value={orderPriceType}
-                    onValueChange={(v) => handleDataChange('priceType', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PRICE_TYPES.map((type) => (
-                        <SelectItem key={type.value} value={type.value}>
-                          {type.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ProductField
+                  value={nodeProduct}
+                  onChange={(v) => handleDataChange('product', v)}
+                />
+                <PriceTypeField
+                  value={orderPriceType}
+                  onChange={(v) => handleDataChange('priceType', v)}
+                />
                 <OrderPriceFields
                   priceType={orderPriceType}
-                  price={(nodeData.price as number) || 0}
-                  triggerPrice={(nodeData.triggerPrice as number) || 0}
+                  price={nodeData.price ?? 0}
+                  triggerPrice={nodeData.triggerPrice ?? 0}
                   onPriceChange={(value) => handleDataChange('price', value)}
                   onTriggerPriceChange={(value) => handleDataChange('triggerPrice', value)}
                 />
@@ -1108,26 +936,19 @@ export function ConfigPanel() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Expiry</Label>
-                  <Select
-                    value={(nodeData.expiryType as string) || 'current_week'}
-                    onValueChange={(v) => handleDataChange('expiryType', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {expiryTypesFor((nodeData.underlying as string) || 'NIFTY').map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Strike Offset</Label>
+                <ExpiryField
+                  value={(nodeData.expiryType as string) || 'current_week'}
+                  onChange={(v) => handleDataChange('expiryType', v)}
+                  options={expiryTypesFor((nodeData.underlying as string) || 'NIFTY')}
+                />
+                <TemplatableField
+                  label="Strike Offset"
+                  value={(nodeData.offset as string) || 'ATM'}
+                  onChange={(v) => handleDataChange('offset', v)}
+                  fallback="ATM"
+                  placeholder="{{webhook.offset}}"
+                  hint="Must resolve to ATM, ITM1-ITM50 or OTM1-OTM50."
+                >
                   <Select
                     value={(nodeData.offset as string) || 'ATM'}
                     onValueChange={(v) => handleDataChange('offset', v)}
@@ -1143,9 +964,15 @@ export function ConfigPanel() {
                       ))}
                     </SelectContent>
                   </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Option Type</Label>
+                </TemplatableField>
+                <TemplatableField
+                  label="Option Type"
+                  value={nodeData.optionType}
+                  onChange={(v) => handleDataChange('optionType', v)}
+                  fallback="CE"
+                  placeholder="{{webhook.optionType}}"
+                  hint="Must resolve to CE or PE."
+                >
                   <div className="grid grid-cols-2 gap-2">
                     {OPTION_TYPES.map((o) => (
                       <button
@@ -1165,89 +992,42 @@ export function ConfigPanel() {
                       </button>
                     ))}
                   </div>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Action</Label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {ORDER_ACTIONS.map((a) => (
-                      <button
-                        key={a.value}
-                        type="button"
-                        onClick={() => handleDataChange('action', a.value)}
-                        className={cn(
-                          'rounded-lg border py-2 text-sm font-semibold',
-                          nodeData.action === a.value
-                            ? a.value === 'BUY'
-                              ? 'bg-green-500/20 border-green-500 text-green-600'
-                              : 'bg-red-500/20 border-red-500 text-red-600'
-                            : 'border-border bg-muted'
-                        )}
-                      >
-                        {a.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Quantity (Lots)</Label>
-                  <Input
-                    type="number"
-                    min={1}
-                    className="h-8"
-                    value={(nodeData.quantity as number) || 1}
-                    onChange={(e) =>
-                      handleDataChange('quantity', parseInt(e.target.value, 10) || 1)
-                    }
-                  />
-                  {(() => {
-                    const lotSize = getLotSizeFromDb((nodeData.underlying as string) || 'NIFTY')
-                    const lots = (nodeData.quantity as number) || 1
-                    if (!lotSize) return null
-                    return (
-                      <p className="text-[10px] text-muted-foreground">
-                        {lots} lot{lots === 1 ? '' : 's'} x {lotSize} ={' '}
-                        <span className="font-medium text-foreground">{lots * lotSize} units</span>
-                      </p>
-                    )
-                  })()}
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Product</Label>
-                  <Select
-                    value={nodeProduct}
-                    onValueChange={(v) => handleDataChange('product', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="MIS">MIS</SelectItem>
-                      <SelectItem value="NRML">NRML</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Price Type</Label>
-                  <Select
-                    value={(nodeData.priceType as string) || 'MARKET'}
-                    onValueChange={(v) => handleDataChange('priceType', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PRICE_TYPES.map((t) => (
-                        <SelectItem key={t.value} value={t.value}>
-                          {t.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                </TemplatableField>
+                <ActionField
+                  value={nodeData.action}
+                  onChange={(v) => handleDataChange('action', v)}
+                />
+                <QuantityField
+                  label="Quantity (Lots)"
+                  value={nodeData.quantity ?? 1}
+                  onChange={(v) => handleDataChange('quantity', v)}
+                />
+                {(() => {
+                  const lotSize = getLotSizeFromDb((nodeData.underlying as string) || 'NIFTY')
+                  const lots = nodeData.quantity ?? 1
+                  // A reference has no lot count to multiply out until it
+                  // resolves at run time, so the arithmetic is withheld rather
+                  // than printed against the token.
+                  if (!lotSize || typeof lots !== 'number') return null
+                  return (
+                    <p className="-mt-1 text-[10px] text-muted-foreground">
+                      {lots} lot{lots === 1 ? '' : 's'} x {lotSize} ={' '}
+                      <span className="font-medium text-foreground">{lots * lotSize} units</span>
+                    </p>
+                  )
+                })()}
+                <ProductField
+                  value={nodeProduct}
+                  onChange={(v) => handleDataChange('product', v)}
+                />
+                <PriceTypeField
+                  value={(nodeData.priceType as string) || 'MARKET'}
+                  onChange={(v) => handleDataChange('priceType', v)}
+                />
                 <OrderPriceFields
                   priceType={orderPriceType}
-                  price={(nodeData.price as number) || 0}
-                  triggerPrice={(nodeData.triggerPrice as number) || 0}
+                  price={nodeData.price ?? 0}
+                  triggerPrice={nodeData.triggerPrice ?? 0}
                   onPriceChange={(value) => handleDataChange('price', value)}
                   onTriggerPriceChange={(value) => handleDataChange('triggerPrice', value)}
                 />
@@ -1314,24 +1094,11 @@ export function ConfigPanel() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Expiry</Label>
-                  <Select
-                    value={(nodeData.expiryType as string) || 'current_week'}
-                    onValueChange={(v) => handleDataChange('expiryType', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {expiryTypesFor((nodeData.underlying as string) || 'NIFTY').map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExpiryField
+                  value={(nodeData.expiryType as string) || 'current_week'}
+                  onChange={(v) => handleDataChange('expiryType', v)}
+                  options={expiryTypesFor((nodeData.underlying as string) || 'NIFTY')}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Action</Label>
                   <div className="grid grid-cols-2 gap-2">
@@ -1357,60 +1124,23 @@ export function ConfigPanel() {
                     {nodeData.action === 'BUY' ? 'Long strategy' : 'Short strategy'}
                   </p>
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Quantity (Lots)</Label>
-                  <Input
-                    type="number"
-                    min={1}
-                    className="h-8"
-                    value={(nodeData.quantity as number) || 1}
-                    onChange={(e) =>
-                      handleDataChange('quantity', parseInt(e.target.value, 10) || 1)
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Product</Label>
-                  <Select
-                    value={nodeProduct}
-                    onValueChange={(v) => handleDataChange('product', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="MIS">MIS</SelectItem>
-                      <SelectItem value="NRML">NRML</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Price Type</Label>
-                  <Select
-                    value={orderPriceType}
-                    onValueChange={(v) => handleDataChange('priceType', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PRICE_TYPES.filter(
-                        (type) =>
-                          nodeData.strategy === 'custom' ||
-                          type.value === 'MARKET' ||
-                          type.value === 'LIMIT'
-                      ).map((type) => (
-                        <SelectItem key={type.value} value={type.value}>
-                          {type.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <QuantityField
+                  label="Quantity (Lots)"
+                  value={nodeData.quantity ?? 1}
+                  onChange={(v) => handleDataChange('quantity', v)}
+                />
+                <ProductField
+                  value={nodeProduct}
+                  onChange={(v) => handleDataChange('product', v)}
+                />
+                <PriceTypeField
+                  value={orderPriceType}
+                  onChange={(v) => handleDataChange('priceType', v)}
+                />
                 <OrderPriceFields
                   priceType={orderPriceType}
-                  price={(nodeData.price as number) || 0}
-                  triggerPrice={(nodeData.triggerPrice as number) || 0}
+                  price={nodeData.price ?? 0}
+                  triggerPrice={nodeData.triggerPrice ?? 0}
                   onPriceChange={(value) => handleDataChange('price', value)}
                   onTriggerPriceChange={(value) => handleDataChange('triggerPrice', value)}
                 />
@@ -1623,28 +1353,14 @@ export function ConfigPanel() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Price Type</Label>
-                  <Select
-                    value={(nodeData.priceType as string) || 'MARKET'}
-                    onValueChange={(v) => handleDataChange('priceType', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PRICE_TYPES.map((t) => (
-                        <SelectItem key={t.value} value={t.value}>
-                          {t.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <PriceTypeField
+                  value={(nodeData.priceType as string) || 'MARKET'}
+                  onChange={(v) => handleDataChange('priceType', v)}
+                />
                 <OrderPriceFields
                   priceType={orderPriceType}
-                  price={(nodeData.price as number) || 0}
-                  triggerPrice={(nodeData.triggerPrice as number) || 0}
+                  price={nodeData.price ?? 0}
+                  triggerPrice={nodeData.triggerPrice ?? 0}
                   onPriceChange={(value) => handleDataChange('price', value)}
                   onTriggerPriceChange={(value) => handleDataChange('triggerPrice', value)}
                 />
@@ -1675,46 +1391,14 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Action</Label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {ORDER_ACTIONS.map((a) => (
-                      <button
-                        key={a.value}
-                        type="button"
-                        onClick={() => handleDataChange('action', a.value)}
-                        className={cn(
-                          'rounded-lg border py-2 text-sm font-semibold',
-                          nodeData.action === a.value
-                            ? a.value === 'BUY'
-                              ? 'bg-green-500/20 border-green-500 text-green-600'
-                              : 'bg-red-500/20 border-red-500 text-red-600'
-                            : 'border-border bg-muted'
-                        )}
-                      >
-                        {a.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                />
+                <ActionField
+                  value={nodeData.action}
+                  onChange={(v) => handleDataChange('action', v)}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Total Quantity</Label>
                   <Input
@@ -1739,46 +1423,18 @@ export function ConfigPanel() {
                     }
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Product</Label>
-                  <Select
-                    value={nodeProduct}
-                    onValueChange={(v) => handleDataChange('product', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PRODUCT_TYPES.map((t) => (
-                        <SelectItem key={t.value} value={t.value}>
-                          {t.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Price Type</Label>
-                  <Select
-                    value={orderPriceType}
-                    onValueChange={(v) => handleDataChange('priceType', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PRICE_TYPES.map((type) => (
-                        <SelectItem key={type.value} value={type.value}>
-                          {type.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ProductField
+                  value={nodeProduct}
+                  onChange={(v) => handleDataChange('product', v)}
+                />
+                <PriceTypeField
+                  value={orderPriceType}
+                  onChange={(v) => handleDataChange('priceType', v)}
+                />
                 <OrderPriceFields
                   priceType={orderPriceType}
-                  price={(nodeData.price as number) || 0}
-                  triggerPrice={(nodeData.triggerPrice as number) || 0}
+                  price={nodeData.price ?? 0}
+                  triggerPrice={nodeData.triggerPrice ?? 0}
                   onPriceChange={(value) => handleDataChange('price', value)}
                   onTriggerPriceChange={(value) => handleDataChange('triggerPrice', value)}
                 />
@@ -1845,42 +1501,14 @@ export function ConfigPanel() {
                 </div>
                 {Boolean(nodeData.symbol) && (
                   <>
-                    <div className="space-y-2">
-                      <Label className="text-xs">Exchange</Label>
-                      <Select
-                        value={(nodeData.exchange as string) || 'NSE'}
-                        onValueChange={(v) => handleDataChange('exchange', v)}
-                      >
-                        <SelectTrigger className="h-8">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {EXCHANGES.map((ex) => (
-                            <SelectItem key={ex.value} value={ex.value}>
-                              {ex.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs">Product</Label>
-                      <Select
-                        value={nodeProduct}
-                        onValueChange={(v) => handleDataChange('product', v)}
-                      >
-                        <SelectTrigger className="h-8">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {PRODUCT_TYPES.map((pt) => (
-                            <SelectItem key={pt.value} value={pt.value}>
-                              {pt.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
+                    <ExchangeField
+                      value={(nodeData.exchange as string) || 'NSE'}
+                      onChange={(v) => handleDataChange('exchange', v)}
+                    />
+                    <ProductField
+                      value={nodeProduct}
+                      onChange={(v) => handleDataChange('product', v)}
+                    />
                   </>
                 )}
               </>
@@ -1941,24 +1569,10 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Output Variable</Label>
                   <Input
@@ -1983,24 +1597,10 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Output Variable</Label>
                   <Input
@@ -2057,42 +1657,14 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Product</Label>
-                  <Select
-                    value={nodeProduct}
-                    onValueChange={(v) => handleDataChange('product', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PRODUCT_TYPES.map((t) => (
-                        <SelectItem key={t.value} value={t.value}>
-                          {t.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                />
+                <ProductField
+                  value={nodeProduct}
+                  onChange={(v) => handleDataChange('product', v)}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Output Variable</Label>
                   <Input
@@ -2117,24 +1689,10 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Interval</Label>
                   <Select
@@ -2246,24 +1804,10 @@ export function ConfigPanel() {
                         onChange={(e) => handleDataChange('symbol', e.target.value)}
                       />
                     </div>
-                    <div className="space-y-2">
-                      <Label className="text-xs">Exchange</Label>
-                      <Select
-                        value={(nodeData.exchange as string) || 'NSE'}
-                        onValueChange={(v) => handleDataChange('exchange', v)}
-                      >
-                        <SelectTrigger className="h-8">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {EXCHANGES.map((e) => (
-                            <SelectItem key={e.value} value={e.value}>
-                              {e.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
+                    <ExchangeField
+                      value={(nodeData.exchange as string) || 'NSE'}
+                      onChange={(v) => handleDataChange('exchange', v)}
+                    />
                     <div className="space-y-2">
                       <Label className="text-xs">Interval</Label>
                       <Input
@@ -2410,24 +1954,10 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Period</Label>
                   <Select
@@ -2487,24 +2017,10 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Interval</Label>
                   <Input
@@ -2567,24 +2083,11 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NFO'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="NFO">NFO</SelectItem>
-                      <SelectItem value="BFO">BFO</SelectItem>
-                      <SelectItem value="MCX">MCX</SelectItem>
-                      <SelectItem value="NCO">NCO</SelectItem>
-                      <SelectItem value="CDS">CDS</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NFO'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                  fallback="NFO"
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Instrument Type</Label>
                   <Select
@@ -2627,24 +2130,10 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbols', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Output Variable</Label>
                   <Input
@@ -2671,24 +2160,11 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NFO'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NFO'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                  fallback="NFO"
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Output Variable</Label>
                   <Input
@@ -2715,21 +2191,11 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('underlying', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE_INDEX'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="NSE_INDEX">NSE Index</SelectItem>
-                      <SelectItem value="BSE_INDEX">BSE Index</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE_INDEX'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                  fallback="NSE_INDEX"
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Expiry Date</Label>
                   <Input
@@ -2739,8 +2205,14 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('expiryDate', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Strike Offset</Label>
+                <TemplatableField
+                  label="Strike Offset"
+                  value={(nodeData.offset as string) || 'ATM'}
+                  onChange={(v) => handleDataChange('offset', v)}
+                  fallback="ATM"
+                  placeholder="{{webhook.offset}}"
+                  hint="Must resolve to ATM, ITM1-ITM50 or OTM1-OTM50."
+                >
                   <Select
                     value={(nodeData.offset as string) || 'ATM'}
                     onValueChange={(v) => handleDataChange('offset', v)}
@@ -2757,7 +2229,7 @@ export function ConfigPanel() {
                       <SelectItem value="OTM3">OTM 3</SelectItem>
                     </SelectContent>
                   </Select>
-                </div>
+                </TemplatableField>
                 <div className="space-y-2">
                   <Label className="text-xs">Option Type</Label>
                   <div className="grid grid-cols-2 gap-2">
@@ -2883,21 +2355,11 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('underlying', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE_INDEX'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="NSE_INDEX">NSE Index</SelectItem>
-                      <SelectItem value="BSE_INDEX">BSE Index</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE_INDEX'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                  fallback="NSE_INDEX"
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Expiry Date</Label>
                   <Input
@@ -2933,21 +2395,11 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('underlying', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE_INDEX'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="NSE_INDEX">NSE Index</SelectItem>
-                      <SelectItem value="BSE_INDEX">BSE Index</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE_INDEX'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                  fallback="NSE_INDEX"
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Expiry Date</Label>
                   <Input
@@ -3092,24 +2544,10 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Output Variable</Label>
                   <Input
@@ -3134,24 +2572,10 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Output Variable</Label>
                   <Input
@@ -3178,24 +2602,10 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Output Variable</Label>
                   <Input
@@ -3239,24 +2649,10 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                />
               </>
             )}
 
@@ -3694,24 +3090,10 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Field</Label>
                   <Select
@@ -3820,42 +3202,14 @@ export function ConfigPanel() {
                     onChange={(e) => handleDataChange('symbol', e.target.value)}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Exchange</Label>
-                  <Select
-                    value={(nodeData.exchange as string) || 'NSE'}
-                    onValueChange={(v) => handleDataChange('exchange', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {EXCHANGES.map((e) => (
-                        <SelectItem key={e.value} value={e.value}>
-                          {e.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs">Product</Label>
-                  <Select
-                    value={nodeProduct}
-                    onValueChange={(v) => handleDataChange('product', v)}
-                  >
-                    <SelectTrigger className="h-8">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PRODUCT_TYPES.map((t) => (
-                        <SelectItem key={t.value} value={t.value}>
-                          {t.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <ExchangeField
+                  value={(nodeData.exchange as string) || 'NSE'}
+                  onChange={(v) => handleDataChange('exchange', v)}
+                />
+                <ProductField
+                  value={nodeProduct}
+                  onChange={(v) => handleDataChange('product', v)}
+                />
                 <div className="space-y-2">
                   <Label className="text-xs">Condition</Label>
                   <Select
