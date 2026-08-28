@@ -536,7 +536,7 @@ class _GuardClient:
         return {"status": "success", "data": {"availablecash": 50}}
 
     def get_open_position(self, **kwargs):
-        return {"quantity": 0, "pnl": 0}
+        return {"status": "success", "quantity": 0, "pnl": 0}
 
 
 def test_fund_check_without_a_minimum_fails_closed():
@@ -1261,7 +1261,11 @@ class _QuoteClient:
         return {"status": "success", "data": self.fields}
 
     def get_open_position(self, **kwargs):
-        return {"quantity": 5, "pnl": 100}
+        # Shaped like the real client, which carries `status` on every return
+        # path. Position Check refuses to answer without it, because a response
+        # it cannot vouch for used to read as a flat position and let the
+        # "no position -> BUY" guard fire on top of an open one.
+        return {"status": "success", "quantity": 5, "pnl": 100}
 
     def cancel_all_orders(self):
         self.cancelled = True

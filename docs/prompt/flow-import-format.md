@@ -240,6 +240,35 @@ Inside any string field of any node's `data`, you can reference variables that
 upstream nodes have produced or that the executor exposes as built-ins. The
 syntax is `{{path}}`.
 
+### Every order field takes a reference
+
+There is no field on an order node that must be a literal. The editor shows a
+picker by default and a `{ }` toggle swaps it for a text box, but the stored
+value is the same either way: a dropdown field holding `{{webhook.exchange}}` is
+just a string, and the executor interpolates it like any other.
+
+That includes the ones a form makes look fixed:
+
+| Field | Reference must resolve to |
+|---|---|
+| `exchange` | `NSE`, `BSE`, `NFO`, `BFO`, `CDS`, `BCD`, `MCX`, `NCDEX`, `NCO` |
+| `action` | `BUY` or `SELL` |
+| `quantity`, `splitSize`, `positionSize` | a whole number |
+| `product` | `CNC`, `NRML`, `MIS` |
+| `priceType` | `MARKET`, `LIMIT`, `SL`, `SL-M` |
+| `price`, `triggerPrice` | a number, and only read for the price types that use them |
+| `optionType` | `CE` or `PE` |
+| `offset` | `ATM`, `ITM1`-`ITM50`, `OTM1`-`OTM50` |
+| `expiryType` | a relative type or a `DDMMMYY` date |
+
+Matching is case-insensitive on every field in that list except the numeric ones,
+so a payload carrying `"action": "buy"` is accepted.
+
+A field holding **exactly one whole token** keeps its type, so
+`"quantity": "{{webhook.quantity}}"` against a payload of `{"quantity": 10}`
+arrives as the number `10`, not the string `"10"`. A field mixing a token with
+other text always resolves to a string.
+
 ### Unresolved references on order nodes
 
 Order-defining fields are checked before the node runs, and a `{{reference}}`
@@ -266,6 +295,50 @@ Label fields are deliberately exempt -- `strategy`, `strategyTag` and
 
 When a webhook may legitimately omit a value, give the node a literal instead of
 a variable, or branch on a condition node first.
+
+### What a node does when something fails
+
+A node that cannot get a trustworthy answer returns an error rather than a
+value. That matters most on the condition nodes, because a wrong answer there
+routes a branch and can place a trade.
+
+| Situation | What happens |
+|---|---|
+| `priceCondition`, `positionCheck` or `fundCheck` gets a failed broker read | the node errors and takes **neither** branch. It does not read the missing data as `0` |
+| A condition cannot be evaluated | it takes neither branch, and a gate wired to it stays **pending** rather than treating the failure as `False` |
+| A gate has fewer edges wired than its `inputCount` | it errors instead of evaluating on part of the condition |
+| An order field holds an unresolved `{{reference}}` | the node fails before the broker call |
+| Any node returns an error | the branch below it stops, and the run is marked `failed` |
+
+The failure message is the broker's or the service's own text - "insufficient
+funds", "RMS blocked", "symbol not found" - in the run record and in the webhook
+response.
+
+**A window that crosses midnight is expressed directly.** `timeWindow` with
+`startTime` after `endTime`, such as `22:00` to `02:00`, is treated as spanning
+midnight rather than as an empty window.
+
+**`unsubscribe` needs a symbol** unless `streamType` is `all`. A specific mode
+with no symbol is refused, because the underlying call clears every
+subscription on the instance, including the ones the Sandbox engine uses to
+trigger pending SL and LIMIT orders.
+
+**Subscriptions are released with the workflow.** A subscribe node opens a
+broker-side subscription against a process-wide client, so one left behind is
+held for the life of the worker and counts against the per-broker symbol
+ceiling that `/trading` and the Sandbox engine share. Deactivating or deleting
+a workflow now gives back everything it opened. You still do not need an
+`unsubscribe` node for cleanup; use one only to drop a stream mid-run.
+
+**A condition evaluates once per run.** A condition reachable by two paths used
+to evaluate once per path and follow its branch each time, so a diamond placed
+two orders from one trigger. Gates already behaved this way; conditions now
+match.
+
+**`waitUntil` is bounded.** The wait holds the workflow's lock and the request
+that triggered the run, so a target more than 30 minutes away is refused with a
+message pointing at a schedule trigger instead. Use `start` for a square-off
+hours later.
 
 ### Path grammar
 
@@ -330,10 +403,34 @@ not exposed.
 
 ### Webhook payload
 
-When the trigger is a `webhookTrigger`, the inbound JSON body is exposed as
-`{{webhook.<key>}}`. For example, a TradingView alert sending
+When the trigger is a `webhookTrigger`, the inbound body is exposed as
+`{{webhook.<key>}}`. A TradingView alert sending
 `{"symbol": "RELIANCE", "action": "BUY", "qty": 10}` exposes
 `{{webhook.symbol}}`, `{{webhook.action}}`, `{{webhook.qty}}`.
+
+**The body is parsed as JSON whatever the sender declared.** External platforms
+are the callers least able to set a `Content-Type`, so the header is treated as
+a hint rather than the truth. A body that is not JSON falls through to form
+fields, then to raw text:
+
+| Body | Becomes |
+|---|---|
+| JSON object, any declared type | its own keys |
+| Form-encoded | its own fields |
+| JSON that is not an object (a list, a bare number) | `{{webhook.message}}` plus `{{webhook.payload}}` |
+| Anything else | `{{webhook.message}}` holding the raw text |
+
+**A secret in the payload requires JSON.** With `payload` auth the secret is a
+field, and plain text has nowhere to put one, so such a request is refused with
+401 rather than reaching the workflow. Send JSON, or switch the webhook to URL
+auth and pass `?secret=...`. A body carrying no secret is refused the same way,
+so plain text only reaches a workflow that requires none.
+
+**Casing.** `action`, `product`, `priceType`, `exchange` and `optionType` are
+upper-cased before validation, so `"buy"` and `"BUY"` both work. `symbol` on the
+order nodes is upper-cased too, because the symbol lookup is exact and an alert
+does not control its own casing. The data nodes (`getQuote`, `history`, ...) do
+**not** normalise it yet, so send an upper-case symbol to those.
 
 ---
 
@@ -502,29 +599,30 @@ configured symbol on a 1-second tick.
 
 #### webhookTrigger — Webhook Trigger
 
-Fires when an external system POSTs JSON to the workflow's webhook URL. The
-URL and secret are minted by the server when the workflow is saved (you cannot
-hand-write them; you can only configure the symbol/exchange filter).
+Fires when an external system POSTs to the workflow's webhook URL. The URL and
+secret are minted by the server when the workflow is saved; you cannot
+hand-write them.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `label` | string | — | Display name (e.g. `"TradingView Alert"`). |
-| `symbol` | string | — | Optional. If set, only requests whose URL ends in `/{symbol}` or whose body has matching `symbol` are accepted. |
-| `exchange` | `"NSE"` \| `"BSE"` \| `"NFO"` \| `"CDS"` \| `"MCX"` | `"NSE"` | Default exchange to assume in the payload. |
 
-The inbound JSON body is exposed as `{{webhook.<key>}}` to all downstream
-nodes (e.g. `{{webhook.action}}`, `{{webhook.qty}}`, `{{webhook.strike}}`).
+**The trigger carries no instrument.** It used to accept `symbol` and
+`exchange`, and this document described `symbol` as a filter. It never was one:
+the executor read neither field, so they only ever labelled the node on the
+canvas. Both are gone. Everything the workflow acts on arrives in the request
+and is read downstream as `{{webhook.<field>}}`.
+
+The body is exposed as `{{webhook.<key>}}` to every downstream node, so
+`{"symbol": "RELIANCE", "action": "BUY", "qty": 10}` gives
+`{{webhook.symbol}}`, `{{webhook.action}}` and `{{webhook.qty}}`.
 
 ```json
 {
   "id": "node_1",
   "type": "webhookTrigger",
   "position": { "x": 100, "y": 100 },
-  "data": {
-    "label": "TradingView Long Entry",
-    "symbol": "NIFTY",
-    "exchange": "NFO"
-  }
+  "data": { "label": "TradingView Long Entry" }
 }
 ```
 
@@ -664,7 +762,8 @@ Single-leg options order resolved from underlying + offset + option type.
 |---|---|---|---|
 | `underlying` | NSE: `"NIFTY"` \| `"BANKNIFTY"` \| `"FINNIFTY"` \| `"MIDCPNIFTY"` \| `"NIFTYNXT50"`; BSE: `"SENSEX"` \| `"BANKEX"` \| `"SENSEX50"`; MCX: `"GOLD"` \| `"GOLDM"` \| `"SILVER"` \| `"SILVERM"` \| `"CRUDEOIL"` \| `"CRUDEOILM"` \| `"NATURALGAS"` \| `"NATGASMINI"` \| `"COPPER"` \| `"ZINC"` \| `"MCXBULLDEX"` | `"NIFTY"` | Decides the exchange on its own — see **Underlying and exchange** below. |
 | `exchange` | `"NSE_INDEX"` \| `"NFO"` \| `"BSE_INDEX"` \| `"BFO"` \| `"MCX"` \| `"CDS"` \| `"BCD"` \| `"NCDEX"` \| `"NCO"` | `"NSE_INDEX"` | **Only consulted for an `underlying` not listed above.** |
-| `expiryType` | `"current_week"` \| `"next_week"` \| `"current_month"` \| `"next_month"` | `"current_week"` | The Symbol service resolves to actual date. MCX contracts are monthly, so use `"current_month"`/`"next_month"` there. |
+| `expiryType` | relative type, **or** a `DDMMMYY` date, or a reference | `"current_week"` | A relative type (`"current_week"`, `"next_week"`, `"current_month"`, `"next_month"`) is resolved by the Symbol service. A `DDMMMYY` value such as `"28OCT25"` is used as given, which is how a far contract the four choices cannot reach is named. MCX contracts are monthly, so use `"current_month"`/`"next_month"` there. |
+| `expiryDate` | `"DDMMMYY"` or a reference | — | Optional. The same explicit date under its own key, for callers that prefer to send the two apart. Wins over `expiryType` when both are set. |
 | `offset` | `"ATM"` \| `"ITM1"`–`"ITM5"` \| `"OTM1"`–`"OTM10"` | `"ATM"` | |
 | `optionType` | `"CE"` \| `"PE"` | `"CE"` | |
 | `action` | `"BUY"` \| `"SELL"` | `"BUY"` | |
@@ -735,7 +834,8 @@ spreads / custom).
 |---|---|---|---|
 | `strategy` | `"straddle"` \| `"strangle"` \| `"iron_condor"` \| `"bull_call_spread"` \| `"bear_put_spread"` \| `"custom"` | `"straddle"` | |
 | `underlying` | (as `optionsOrder`) | `"NIFTY"` | |
-| `expiryType` | (as `optionsOrder`) | `"current_week"` | One common expiry is resolved for every generated or custom leg. |
+| `expiryType` | (as `optionsOrder`) | `"current_week"` | One common expiry for every generated or custom leg. Takes a relative type or a `DDMMMYY` date. |
+| `expiryDate` | `"DDMMMYY"` or a reference | — | Optional explicit date under its own key. Wins over `expiryType`. A leg may still override both. |
 | `action` | `"BUY"` \| `"SELL"` | — | Direction for the strategy (BUY=long volatility, SELL=short volatility). |
 | `quantity` | int | `1` | Lots per leg. |
 | `priceType` | `"MARKET"` \| `"LIMIT"` \| `"SL"` \| `"SL-M"` | `"MARKET"` | Common price type; generated legs do not support `SL`/`SL-M`, while custom legs may inherit all four types. |

@@ -4,6 +4,7 @@ Flow Blueprint - Visual Workflow Automation
 Provides routes for managing and executing workflows
 """
 
+import json
 import logging
 from datetime import datetime
 
@@ -328,6 +329,7 @@ def update_workflow(workflow_id):
 def delete_workflow(workflow_id):
     """Delete a workflow"""
     from database.flow_db import delete_workflow, get_workflow
+    from services.flow_executor_service import release_workflow_subscriptions
     from services.flow_order_update_monitor_service import get_flow_order_update_monitor
     from services.flow_price_monitor_service import get_flow_price_monitor
     from services.flow_scheduler_service import get_flow_scheduler
@@ -345,6 +347,11 @@ def delete_workflow(workflow_id):
         scheduler.remove_workflow_job(workflow_id)
         get_flow_price_monitor().remove_alert(workflow_id)
         get_flow_order_update_monitor().remove_watch(workflow_id)
+
+    # Unconditionally, not only when active: a workflow deactivated and then
+    # deleted has already been released, and this is a no-op, but one that
+    # subscribed while active and was never deactivated still holds them.
+    release_workflow_subscriptions(workflow_id)
 
     if delete_workflow(workflow_id):
         return jsonify({"status": "success", "message": "Workflow deleted"})
@@ -573,6 +580,7 @@ def deactivate_workflow(workflow_id):
     """Deactivate a workflow"""
     from database.flow_db import deactivate_workflow as db_deactivate
     from database.flow_db import get_workflow, set_schedule_job_id
+    from services.flow_executor_service import release_workflow_subscriptions
     from services.flow_order_update_monitor_service import get_flow_order_update_monitor
     from services.flow_price_monitor_service import get_flow_price_monitor
     from services.flow_scheduler_service import get_flow_scheduler
@@ -604,6 +612,12 @@ def deactivate_workflow(workflow_id):
         # Remove order-update watch if any
         order_monitor = get_flow_order_update_monitor()
         order_monitor.remove_watch(workflow_id)
+
+        # Give back any market-data subscription the workflow opened. The
+        # websocket client is a process-wide singleton, so a subscription left
+        # behind is held for the life of the worker and counts against the
+        # per-broker symbol ceiling that /trading and the sandbox engine share.
+        release_workflow_subscriptions(workflow_id)
 
         # Update workflow as inactive
         if not db_deactivate(workflow_id):
@@ -885,6 +899,44 @@ def set_webhook_auth(workflow_id):
 # === Webhook Trigger Routes (CSRF Exempt) ===
 
 
+def _read_webhook_payload():
+    """Read a webhook body whatever shape the sender used.
+
+    `request.get_json()` refuses anything not declared `application/json` and
+    Flask answers 415 before the handler runs. External platforms are exactly
+    the callers that cannot set a header: a TradingView alert left on its
+    default plain-text message never reached the workflow at all, and neither
+    did a form-encoded post.
+
+    Order matters. The body is parsed as JSON first regardless of what the
+    sender declared, because a sender that cannot set a Content-Type still
+    posts JSON far more often than not. Only a body that is not JSON falls
+    through to form fields, then to raw text under `message`.
+    """
+    raw = request.get_data(as_text=True) or ""
+    text = raw.strip()
+
+    if text:
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+        if parsed is not None:
+            # Valid JSON that is not an object: a list, a bare string or number.
+            # Keep the decoded value, and the raw text so a template can read
+            # either without the workflow having to know which arrived.
+            return {"message": text, "payload": parsed}
+
+    # Form-encoded (ChartInk and friends). `request.form` is empty for the
+    # content types handled above, so this cannot shadow a JSON body.
+    if request.form:
+        return dict(request.form)
+
+    return {"message": text} if text else {}
+
+
 def _execute_webhook(token, webhook_data=None, url_secret=None):
     """Internal function to execute webhook"""
     import hmac
@@ -919,9 +971,20 @@ def _execute_webhook(token, webhook_data=None, url_secret=None):
         else:
             # Secret expected in payload (default)
             provided_secret = data.pop("secret", "") or ""
+            # A secret carried in the payload requires a payload with fields,
+            # so plain text is not accepted on this path. It is not that the
+            # text could not be parsed: it is that an unauthenticated body must
+            # not reach the workflow, and text has nowhere to put the secret.
+            # Send JSON, or switch the workflow to URL auth.
             if not provided_secret:
                 return jsonify(
-                    {"error": "Missing webhook secret in payload. Add 'secret' field to JSON body"}
+                    {
+                        "error": (
+                            "Missing webhook secret in payload. Send JSON with a 'secret' "
+                            "field. Plain text cannot carry one: switch the webhook to URL "
+                            "auth to authenticate with ?secret=... instead."
+                        )
+                    }
                 ), 401
             if not hmac.compare_digest(provided_secret, workflow.webhook_secret):
                 return jsonify({"error": "Invalid webhook secret"}), 401
@@ -985,7 +1048,7 @@ def trigger_webhook(token):
     2. Payload field: {"secret": "your_secret", ...} (for TradingView, etc.)
     """
     url_secret = request.args.get("secret")
-    payload = request.get_json() or {}
+    payload = _read_webhook_payload()
     return _execute_webhook(token, webhook_data=payload, url_secret=url_secret)
 
 
@@ -997,7 +1060,7 @@ def trigger_webhook_with_symbol(token, symbol):
     The symbol is automatically injected into the webhook data.
     """
     url_secret = request.args.get("secret")
-    payload = request.get_json() or {}
+    payload = _read_webhook_payload()
     payload["symbol"] = symbol
     return _execute_webhook(token, webhook_data=payload, url_secret=url_secret)
 
