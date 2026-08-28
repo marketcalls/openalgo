@@ -183,3 +183,33 @@ def test_a_clean_run_is_success():
 
     assert _execution_status_code({"status": "success"}) == 200
     assert _execution_status_code("not a dict") == 200
+
+
+# --- locks that cross an OS thread boundary ---------------------------------
+
+
+def test_the_sandbox_feed_engine_uses_a_real_lock():
+    """Under eventlet a patched `threading.Lock` is a green semaphore, which
+    coordinates greenlets on one OS thread and nothing else.
+
+    This engine is reached from both sides: greenlets serving a request, and the
+    broker adapter's thread delivering ticks and fills. Waking a waiter that
+    belongs to the other thread raises `greenlet.error: Cannot switch to a
+    different thread` out of the hub's timer loop, and the second leg of a
+    multi-leg order hangs behind it.
+
+    Off eventlet `patcher.original` is not available and the module falls back
+    to plain threading, so this asserts the wiring rather than the type: the
+    locks must come from the module the engine chose, never from a `threading`
+    it imported directly.
+    """
+    import inspect
+
+    import sandbox.websocket_execution_engine as engine
+
+    source = inspect.getsource(engine)
+    assert "_real_threading = eventlet.patcher.original" in source
+    assert "_engine_lock = _real_threading.Lock()" in source
+    assert "self._lock = _real_threading.Lock()" in source
+    # No lock in this module may come straight from the patched module.
+    assert "threading.Lock()" not in source.replace("_real_threading.Lock()", "")

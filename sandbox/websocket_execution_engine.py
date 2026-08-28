@@ -27,6 +27,33 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Real locks, not eventlet's.
+#
+# Under gunicorn+eventlet `threading.Lock` is monkey-patched into a green
+# semaphore, which coordinates greenlets on one OS thread and nothing else.
+# This engine is reached from both sides: greenlets serving a request or a
+# scheduled run, and the broker adapter's own thread delivering ticks and
+# fills. When the hub then tries to wake a waiter that belongs to the other
+# thread it raises
+#
+#     greenlet.error: Cannot switch to a different thread
+#
+# out of `fire_timers`, which takes the hub's timer loop down with it. Observed
+# as the second leg of a multi-leg order hanging: the first leg placed, opening
+# a position subscribed the symbol for MTM from the adapter side, and the
+# second leg then stalled for tens of seconds while scheduled jobs were
+# "missed by 0:00:35".
+#
+# `patcher.original` hands back the pre-patch module, so these locks block a
+# real thread properly instead of trying to park a greenlet on it. Same pattern
+# as broker/arrow/streaming/arrow_websocket.py.
+if "eventlet" in sys.modules:
+    import eventlet.patcher
+
+    _real_threading = eventlet.patcher.original("threading")
+else:
+    _real_threading = threading
+
 
 class WebSocketExecutionEngine:
     """
@@ -38,7 +65,7 @@ class WebSocketExecutionEngine:
         self.market_data_service = get_market_data_service()
         self._subscriber_id: str | None = None
         self._running = False
-        self._lock = threading.Lock()
+        self._lock = _real_threading.Lock()
 
         # Index of pending orders by symbol key (exchange:symbol)
         # Maps symbol_key -> list of order IDs
@@ -724,7 +751,7 @@ class WebSocketExecutionEngine:
 
 # Global instance for singleton access
 _websocket_execution_engine: WebSocketExecutionEngine | None = None
-_engine_lock = threading.Lock()
+_engine_lock = _real_threading.Lock()
 
 
 def get_websocket_execution_engine() -> WebSocketExecutionEngine:
