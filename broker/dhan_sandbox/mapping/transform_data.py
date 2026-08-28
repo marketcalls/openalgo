@@ -171,7 +171,10 @@ def reverse_map_product_type(product):
     """
     Reverse maps the broker product type to the OpenAlgo product type, considering the exchange.
     """
-    # Exchange to OpenAlgo product type mapping for 'D'
-    product_mapping = {"CNC": "CNC", "MARGIN": "NRML", "MIS": "INTRADAY"}
+    # Keys are Dhan's productType values, values are OpenAlgo's. The INTRADAY
+    # pair used to be written the wrong way round as "MIS": "INTRADAY", so
+    # every intraday position reverse-mapped to None. See map_product_type
+    # above for the forward direction.
+    product_mapping = {"CNC": "CNC", "MARGIN": "NRML", "INTRADAY": "MIS"}
 
     return product_mapping.get(product)  # Removed default; will return None if not found
