@@ -34,6 +34,14 @@ export interface UseLivePriceOptions {
   multiQuotesRefreshInterval?: number
   /** Pause WebSocket and polling when tab is hidden (default: true) */
   pauseWhenHidden?: boolean
+  /**
+   * Recompute P&L from the live tick instead of using the source's value.
+   * Only correct when the caller's P&L model matches this hook's, i.e.
+   * unrealized = (ltp - avg) * qty * lot_size. A live broker's P&L comes
+   * from the exchange and may use entirely different accounting, so this
+   * defaults to false. See the note at the recomputation below.
+   */
+  recalculatePnl?: boolean
   /** Time in ms to wait before pausing when hidden (default: 5000) */
   pauseDelay?: number
 }
@@ -86,6 +94,7 @@ export function useLivePrice<T extends PriceableItem>(
     useMultiQuotesFallback = true,
     multiQuotesRefreshInterval = 30000,
     pauseWhenHidden = true,
+    recalculatePnl = false,
   } = options
 
   const { apiKey } = useAuthStore()
@@ -259,13 +268,34 @@ export function useLivePrice<T extends PriceableItem>(
       // For open positions: recalculate P&L and P&L% using live LTP
       // This ensures real-time updates as LTP changes
       let calculatedPnl = item.pnl || 0
-      let calculatedPnlPercent = item.pnlpercent || 0
+      // Left undefined when the source omits it. Synthesizing 0 makes a missing
+      // value look authoritative, so callers that would derive a percentage
+      // from the preserved P&L render +0.00% instead.
+      let calculatedPnlPercent = item.pnlpercent
 
       // Get today's realized P&L if available (from sandbox mode)
       // This ensures cumulative P&L (realized + unrealized) is shown correctly
       const todayRealizedPnl = item.today_realized_pnl || 0
 
-      if (currentLtp && avgPrice > 0) {
+      // Recompute only when the caller owns the same P&L model this hook does.
+      //
+      // The sandbox does: it reports today_realized + unrealized computed as
+      // (ltp - avg) * qty * contract_value, exactly what is recomputed below,
+      // so refreshing it per tick is faithful.
+      //
+      // A live broker does not. Its P&L comes from the exchange and can follow
+      // completely different accounting. Delta Exchange reports option
+      // unrealized P&L as the current buyback cost, tracking
+      // -(mark * contract_value) and ignoring entry price entirely, so no
+      // (ltp - avg) formula reproduces it in magnitude OR SIGN. Measured on a
+      // live account, contract_value 0.001: a BTC call bought at 1104.00 and
+      // marked at 1211.79 shows -1.21 on the exchange, while this formula
+      // gives +0.11 -- a loss rendered as a gain.
+      //
+      // Callers that pass recalculatePnl must either own the model (sandbox)
+      // or be reading a source that returns a placeholder (several holdings
+      // adapters hard-code pnl to 0 and rely on the browser to fill it in).
+      if (recalculatePnl && currentLtp && avgPrice > 0) {
         // Contract multiplier: e.g. 0.01 for Delta Exchange ETHUSD.P (1 lot = 0.01 ETH)
         // Defaults to 1 for all standard brokers where qty is already in underlying units
         const lotSize = item.lot_size ?? 1
@@ -288,15 +318,20 @@ export function useLivePrice<T extends PriceableItem>(
         calculatedPnlPercent = investment > 0 ? (calculatedPnl / investment) * 100 : 0
       }
 
-      return {
+      const enhancedItem = {
         ...item,
         ltp: currentLtp,
         pnl: calculatedPnl,
-        pnlpercent: calculatedPnlPercent,
         _dataSource: dataSource,
       } as T & { _dataSource: string }
+
+      if (calculatedPnlPercent !== undefined && calculatedPnlPercent !== null) {
+        enhancedItem.pnlpercent = calculatedPnlPercent
+      }
+
+      return enhancedItem
     })
-  }, [items, marketData, multiQuotes, isMarketOpen, staleThreshold])
+  }, [items, marketData, multiQuotes, isMarketOpen, staleThreshold, recalculatePnl])
 
   return {
     data: enhancedData,
