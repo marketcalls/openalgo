@@ -496,6 +496,54 @@ export function ConfigPanel() {
                     />
                   </div>
                 )}
+
+                <Separator />
+
+                {/* The scheduler has read these three since market-hours
+                    gating was added, but nothing rendered them, so the window
+                    could only be set by hand-editing the workflow JSON. */}
+                <div className="flex items-center justify-between gap-2">
+                  <Label className="text-xs">Only during market hours</Label>
+                  <Switch
+                    checked={nodeData.marketHoursOnly !== false}
+                    onCheckedChange={(v) => handleDataChange('marketHoursOnly', v)}
+                  />
+                </div>
+
+                {nodeData.marketHoursOnly !== false && (
+                  <>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-2">
+                        <Label className="text-xs">Start</Label>
+                        <Input
+                          type="time"
+                          className="h-8"
+                          value={(nodeData.marketHoursStart as string) || '09:15'}
+                          onChange={(e) => handleDataChange('marketHoursStart', e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-xs">End</Label>
+                        <Input
+                          type="time"
+                          className="h-8"
+                          value={(nodeData.marketHoursEnd as string) || '15:15'}
+                          onChange={(e) => handleDataChange('marketHoursEnd', e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <ExchangeField
+                      label="Calendar"
+                      value={(nodeData.marketHoursExchange as string) || 'NSE'}
+                      onChange={(v) => handleDataChange('marketHoursExchange', v)}
+                    />
+                    <p className="text-[10px] text-muted-foreground">
+                      The window narrows the exchange's own session; it never reopens a holiday or a
+                      weekend. Leave the calendar on the exchange you trade, so MCX and CRYPTO
+                      inherit their real hours.
+                    </p>
+                  </>
+                )}
               </>
             )}
 
