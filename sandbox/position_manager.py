@@ -26,6 +26,7 @@ from database.sandbox_db import SandboxPositions, SandboxTrades, db_session, get
 from database.token_db import get_symbol_info
 from sandbox.fund_manager import FundManager
 from sandbox.holdings_manager import HoldingsManager
+from sandbox.session_boundary import IST, last_session_expiry_utc
 from services.market_data_service import get_market_data_service
 from services.quotes_service import get_multiquotes, get_quotes
 from utils.logging import get_logger
@@ -34,40 +35,6 @@ logger = get_logger(__name__)
 
 # Maximum age (seconds) for WebSocket data to be considered fresh
 WEBSOCKET_DATA_MAX_AGE = 5
-
-
-def last_session_expiry_utc(session_expiry_str, now_local):
-    """Resolve the most recent session boundary as a naive UTC datetime.
-
-    ``sandbox_positions.updated_at`` is written by the database clock
-    (``func.now()``), which on the default SQLite database is UTC
-    (``CURRENT_TIMESTAMP``). ``SESSION_EXPIRY_TIME`` is a wall-clock time on
-    the host. Comparing the stored UTC value against a naive *local* boundary
-    mixes clocks: on any host whose timezone is not UTC, positions last
-    updated inside the UTC-offset window (for IST, before 08:30 local —
-    overnight crypto and international-market trades) are dropped from the
-    position book even though they belong to the current session.
-
-    The boundary is therefore converted into the database's clock. On a UTC
-    host the returned value is exactly what the old naive comparison used, so
-    only non-UTC hosts change behavior.
-
-    Args:
-        session_expiry_str: Wall-clock boundary from config (e.g. '03:00').
-        now_local: Timezone-aware current time in the host's timezone.
-
-    Returns:
-        Naive UTC datetime of the most recent session expiry.
-    """
-    expiry_hour, expiry_minute = map(int, session_expiry_str.split(":"))
-    boundary_today = now_local.replace(
-        hour=expiry_hour, minute=expiry_minute, second=0, microsecond=0
-    )
-    if now_local >= boundary_today:
-        boundary = boundary_today
-    else:
-        boundary = boundary_today - timedelta(days=1)
-    return boundary.astimezone(UTC).replace(tzinfo=None)
 
 
 def parse_expiry_from_symbol(symbol, exchange):
@@ -499,7 +466,7 @@ class PositionManager:
             # so the boundary must be resolved in UTC too — see
             # last_session_expiry_utc().
             last_session_expiry = last_session_expiry_utc(
-                session_expiry_str, datetime.now().astimezone()
+                session_expiry_str, datetime.now(IST)
             )
             today = datetime.now(UTC).date()
 

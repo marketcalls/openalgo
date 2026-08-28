@@ -22,7 +22,7 @@ import pytest
 # package rather than the real one.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from sandbox.position_manager import last_session_expiry_utc  # noqa: E402
+from sandbox.session_boundary import last_session_expiry_utc  # noqa: E402
 
 IST = ZoneInfo("Asia/Kolkata")
 NY = ZoneInfo("America/New_York")
