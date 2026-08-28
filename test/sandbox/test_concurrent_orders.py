@@ -55,6 +55,11 @@ PER_ORDER_MARGIN = Decimal("50000.00")
 # one; the silent lost-update only happens once a position already exists.
 SEED_QTY = 5
 
+#: Concurrent pairs fired per run. One pair reproduces the race only about
+#: two thirds of the time, so a single round would miss a reintroduced bug
+#: one run in three. See the test docstring for the measurement.
+ROUNDS = 6
+
 
 def _reset():
     """Wipe this test user's sandbox rows, reset funds, and seed a position.
@@ -126,61 +131,75 @@ def _position():
 
 
 def test_concurrent_same_symbol_buys_accumulate_position():
-    """Two concurrent same-symbol BUYs on top of a seeded long position.
+    """Concurrent same-symbol BUYs on top of a seeded long position.
 
-    Starting from `SEED_QTY` shares and adding two concurrent BUYs of
-    `PER_ORDER_QTY` each, the final quantity should be
-    `SEED_QTY + 2 * PER_ORDER_QTY`.
+    Starting from `SEED_QTY` shares, every round adds two concurrent BUYs of
+    `PER_ORDER_QTY` each, so after round N the quantity must be
+    `SEED_QTY + 2 * PER_ORDER_QTY * N`.
 
-    Pre-fix: one of the two increments is lost to the RMW race; final
-    quantity is `SEED_QTY + PER_ORDER_QTY` instead of
-    `SEED_QTY + 2 * PER_ORDER_QTY`.
+    Pre-fix, one of the two increments is lost to the read-modify-write race
+    and the quantity comes up one order short.
 
-    Post-fix: the class-level lock serializes the two calls; final quantity is
-    exactly `SEED_QTY + 2 * PER_ORDER_QTY`.
+    **Why it runs several rounds.** A single concurrent pair only actually
+    interleaves about two thirds of the time: the barrier releases both
+    threads together, but each then does a little database work before
+    reaching the SELECT, and that is often enough for one to finish before the
+    other starts. Measured on the unfixed engine, one round caught the bug in
+    10 of 15 attempts, so a single-round test would sign off on a reintroduced
+    race one time in three. Six rounds takes the odds of missing it from
+    roughly 1 in 3 to roughly 1 in 1000, and the assertion runs after every
+    round so it fails on the first lost update rather than at the end.
+
+    With the fix this is deterministic: 15 of 15 runs pass.
     """
     _reset()
 
-    # Block enough margin up front so both BUYs can proceed. Without this the
-    # second BUY could fail at the fund check rather than racing the position
-    # update, which would mask the bug under test.
+    # Block enough margin up front for every order this test places. Without
+    # this a later BUY could fail at the fund check rather than racing the
+    # position update, which would mask the bug under test.
     from sandbox.fund_manager import FundManager
 
-    FundManager(USER_ID).block_margin(2 * PER_ORDER_MARGIN, "concurrency test setup")
-
-    order_a = _order("CONC-A")
-    order_b = _order("CONC-B")
+    FundManager(USER_ID).block_margin(
+        2 * ROUNDS * PER_ORDER_MARGIN, "concurrency test setup"
+    )
 
     engine = ExecutionEngine()
 
-    # The barrier is shared by the two worker threads so they enter the
-    # critical section at (effectively) the same moment. Without it the GIL
-    # tends to serialize the two threads before they reach `_update_position`
-    # and the race never actually happens.
-    barrier = threading.Barrier(2)
+    for round_no in range(1, ROUNDS + 1):
+        # The barrier is shared by the two worker threads so they enter the
+        # critical section at (effectively) the same moment. Without it the GIL
+        # tends to serialize the two threads before they reach
+        # `_update_position` and the race never happens at all.
+        barrier = threading.Barrier(2)
 
-    def worker(order):
-        barrier.wait()
-        return engine._update_position(order, EXEC_PRICE)
+        def worker(order, _barrier=barrier):
+            _barrier.wait()
+            return engine._update_position(order, EXEC_PRICE)
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        f_a = pool.submit(worker, order_a)
-        f_b = pool.submit(worker, order_b)
-        wait([f_a, f_b])
-        # Surface any exception raised inside the worker rather than
-        # silently letting it pass the assertion below.
-        f_a.result()
-        f_b.result()
+        order_a = _order(f"CONC-{round_no}-A")
+        order_b = _order(f"CONC-{round_no}-B")
 
-    db_session.expire_all()
-    pos = _position()
-    assert pos is not None, "no position row was created by the concurrent fills"
-    assert pos.quantity == SEED_QTY + 2 * PER_ORDER_QTY, (
-        f"expected position.quantity == {SEED_QTY + 2 * PER_ORDER_QTY} after two "
-        f"concurrent same-symbol BUYs on top of a {SEED_QTY}-share seed (issue "
-        f"#1808), got {pos.quantity} -- one update was lost to the "
-        "read-modify-write race"
-    )
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_a = pool.submit(worker, order_a)
+            f_b = pool.submit(worker, order_b)
+            wait([f_a, f_b])
+            # Surface any exception raised inside a worker rather than
+            # silently letting it pass the assertion below. Path 1 of the
+            # issue, two INSERTs racing, surfaces here as an IntegrityError.
+            f_a.result()
+            f_b.result()
+
+        db_session.expire_all()
+        pos = _position()
+        expected = SEED_QTY + 2 * PER_ORDER_QTY * round_no
+
+        assert pos is not None, "no position row was created by the concurrent fills"
+        assert pos.quantity == expected, (
+            f"round {round_no} of {ROUNDS}: expected position.quantity == {expected} "
+            f"after {2 * round_no} concurrent same-symbol BUYs on top of a "
+            f"{SEED_QTY}-share seed (issue #1808), got {pos.quantity}. One "
+            f"read-modify-write was lost to the race."
+        )
 
 
 if __name__ == "__main__":
