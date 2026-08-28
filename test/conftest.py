@@ -12,6 +12,20 @@ import os
 os.environ.setdefault("API_KEY_PEPPER", "0" * 64)
 os.environ.setdefault("APP_KEY", "test-only-app-key")
 
+# Neutralise dotenv before anything can call it.
+#
+# utils/config.py runs load_dotenv(override=True) at import, which re-reads the
+# operator's .env and overwrites the assignments below. Whether that happens
+# depends purely on which module a given test imports first, so the suite wrote
+# to the isolated databases on some runs and to the real ones on others -- the
+# Flow QA tests putting seven workflows into the operator's Flow Editor, needing
+# manual deletion. Disabling the loader here is confined to the test harness and
+# makes the isolation below hold whatever the import order turns out to be.
+import dotenv
+
+dotenv.load_dotenv = lambda *args, **kwargs: False
+dotenv.main.load_dotenv = dotenv.load_dotenv
+
 # Assigned unconditionally: test isolation must not be overridable from the
 # environment.
 os.environ["DATABASE_URL"] = "sqlite:///db/openalgo-test.db"
