@@ -75,45 +75,50 @@ order_processor_lock = threading.Lock()
 # Rate limiting state for regular orders
 last_regular_orders = deque(maxlen=10)  # Track last 10 regular order timestamps
 
+# Rate limiting state for smart orders (1/sec, timestamp-gated rather than a
+# blocking sleep so a busy smart-order queue can never starve regular orders)
+last_smart_order_time = 0.0
+
 
 def process_orders():
     """Background task to process orders from both queues with rate limiting"""
-    global order_processor_running
+    global order_processor_running, last_smart_order_time
 
     while True:
         try:
-            # Process smart orders first (1 per second)
-            try:
-                smart_order = smart_order_queue.get_nowait()
-                if smart_order is None:  # Poison pill
-                    break
+            now = time()
 
+            # Process at most one smart order per second. This gate must not
+            # skip the regular-order block below when it fires (or doesn't) -
+            # a busy smart-order queue must never starve regular orders.
+            if now - last_smart_order_time >= 1:
                 try:
-                    response = requests.post(
-                        f"{BASE_URL}/api/v1/placesmartorder",
-                        json=smart_order["payload"],
-                        timeout=30,
-                    )
-                    if response.ok:
-                        logger.info(
-                            f"Smart order placed for {smart_order['payload']['symbol']} in strategy {smart_order['payload']['strategy']}"
-                        )
-                    else:
-                        logger.error(
-                            f"Error placing smart order for {smart_order['payload']['symbol']}: {response.text}"
-                        )
-                except Exception as e:
-                    logger.exception(f"Error placing smart order: {str(e)}")
+                    smart_order = smart_order_queue.get_nowait()
+                    if smart_order is None:  # Poison pill
+                        break
 
-                # Always wait 1 second after smart order
-                time_module.sleep(1)
-                continue  # Start next iteration
+                    try:
+                        response = requests.post(
+                            f"{BASE_URL}/api/v1/placesmartorder",
+                            json=smart_order["payload"],
+                            timeout=30,
+                        )
+                        if response.ok:
+                            logger.info(
+                                f"Smart order placed for {smart_order['payload']['symbol']} in strategy {smart_order['payload']['strategy']}"
+                            )
+                        else:
+                            logger.error(
+                                f"Error placing smart order for {smart_order['payload']['symbol']}: {response.text}"
+                            )
+                    except Exception as e:
+                        logger.exception(f"Error placing smart order: {str(e)}")
 
-            except queue.Empty:
-                pass  # No smart orders, continue to regular orders
+                    last_smart_order_time = now
+                except queue.Empty:
+                    pass  # No smart orders
 
             # Process regular orders (up to 10 per second)
-            now = time()
 
             # Clean up old timestamps
             while last_regular_orders and now - last_regular_orders[0] > 1:
