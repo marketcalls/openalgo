@@ -35,12 +35,27 @@ class DhanWebSocket:
         50: "DISCONNECT",
     }
 
-    # Request codes
+    # Request codes.
+    #
+    # Dhan does support explicit unsubscribe, contrary to a long-standing
+    # comment in this file. Verified on the live feed: subscribing to
+    # MCX_COMM/581725 with code 15 delivered ticks, and code 16 stopped them
+    # dead (issue #1924).
+    #
+    # UNSUBSCRIBE_20_DEPTH is the one code not confirmed here. Dhan's live
+    # annexure documents 24, but the vendored copy in broker-api-docs says 25,
+    # and it could not be settled on the wire because 20-depth returns no
+    # packets outside NSE market hours. 24 follows the live documentation;
+    # re-check against a live depth feed before relying on it.
     REQUEST_CODES = {
         "SUBSCRIBE_TICKER": 15,
+        "UNSUBSCRIBE_TICKER": 16,
         "SUBSCRIBE_QUOTE": 17,
+        "UNSUBSCRIBE_QUOTE": 18,
         "SUBSCRIBE_FULL": 21,
+        "UNSUBSCRIBE_FULL": 22,
         "SUBSCRIBE_20_DEPTH": 23,
+        "UNSUBSCRIBE_20_DEPTH": 24,
         "DISCONNECT": 12,
     }
 
@@ -338,16 +353,95 @@ class DhanWebSocket:
         return True
 
     def unsubscribe(self, instruments: list[dict[str, str]]):
-        """Unsubscribe from market data for instruments"""
-        # Dhan doesn't have explicit unsubscribe - just remove from tracking
+        """Unsubscribe from market data for instruments.
+
+        Sends the unsubscribe request Dhan actually supports, rather than only
+        forgetting the instrument locally. Without this a long-lived process
+        that rotates symbols accumulates subscriptions broker-side toward the
+        5,000-per-connection limit, invisibly - Dhan does not acknowledge
+        subscribes, so nothing on the wire reveals the leak, and only a
+        reconnect clears it (issue #1924).
+
+        The unsubscribe code depends on the mode the instrument was subscribed
+        in, so each one is grouped by its tracked mode. Local tracking is
+        cleared only after the request is sent, so a send failure leaves the
+        instrument tracked and it stays consistent with the broker.
+        """
+        if not instruments:
+            return True
+
+        # Not connected means there is no broker-side subscription left to
+        # cancel - the connection dropping already cleared it. Just drop local
+        # tracking, which also stops _resubscribe_all() restoring it later.
+        if not self.connected:
+            with self.lock:
+                for inst in instruments:
+                    self.subscriptions.pop(
+                        f"{inst['ExchangeSegment']}_{inst['SecurityId']}", None
+                    )
+            self.logger.debug(
+                f"Not connected; dropped {len(instruments)} instruments from tracking"
+            )
+            return True
+
+        # Group by the mode each instrument was actually subscribed in, and
+        # send the tracked instrument dict rather than the caller's, so the
+        # payload matches what was subscribed.
+        by_mode: dict[str, list[tuple[str, dict[str, str]]]] = {}
         with self.lock:
             for inst in instruments:
                 key = f"{inst['ExchangeSegment']}_{inst['SecurityId']}"
-                if key in self.subscriptions:
-                    del self.subscriptions[key]
+                tracked = self.subscriptions.get(key)
+                if tracked is None:
+                    continue
+                by_mode.setdefault(tracked["mode"], []).append((key, tracked["instrument"]))
 
-        self.logger.debug(f"Unsubscribed from {len(instruments)} instruments")
-        return True
+        if not by_mode:
+            self.logger.debug("No tracked subscriptions matched the unsubscribe request")
+            return True
+
+        # Same batch limits as subscribe().
+        max_batch_size = 50 if self.is_20_depth else 100
+        all_ok = True
+
+        for mode, entries in by_mode.items():
+            request_code = self.REQUEST_CODES.get(f"UNSUBSCRIBE_{mode}")
+            if request_code is None:
+                self.logger.error(f"No unsubscribe code for mode {mode}; leaving it subscribed")
+                all_ok = False
+                continue
+
+            for i in range(0, len(entries), max_batch_size):
+                batch = entries[i : i + max_batch_size]
+                unsubscribe_msg = {
+                    "RequestCode": request_code,
+                    "InstrumentCount": len(batch),
+                    "InstrumentList": [inst for _, inst in batch],
+                }
+
+                try:
+                    if not (self.ws and hasattr(self.ws, "send") and callable(self.ws.send)):
+                        self.logger.error("WebSocket not properly initialized for sending")
+                        return False
+
+                    self.ws.send(json.dumps(unsubscribe_msg))
+
+                    # Only now is it safe to forget them.
+                    with self.lock:
+                        for key, _ in batch:
+                            self.subscriptions.pop(key, None)
+
+                    self.logger.debug(
+                        f"Unsubscribed from {len(batch)} instruments in {mode} mode "
+                        f"(RequestCode {request_code})"
+                    )
+                except Exception as e:
+                    self.logger.error(
+                        f"Error unsubscribing from instruments: {e}", exc_info=True
+                    )
+                    all_ok = False
+
+        return all_ok
 
     def _on_open(self, ws):
         """Handle WebSocket connection open"""
