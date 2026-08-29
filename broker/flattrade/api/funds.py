@@ -79,7 +79,18 @@ def get_margin_data(auth_token):
             + float(margin_data.get("payin", 0))
             - float(margin_data.get("marginused", 0))
         )
-        total_collateral = float(margin_data.get("brkcollamt", 0))
+        # Pledged holdings arrive as "collateral" ("Collateral from uploaded
+        # holdings" in the Flattrade API docs), which is the figure the
+        # Flattrade app shows as "Holdings Collateral". "brkcollamt" is a
+        # different number, the pre-valued collateral amount, and reads 0.00 on
+        # an ordinary pledged account -- so reading only that reported a funded
+        # collateral position as no collateral at all (issue #1936).
+        #
+        # brkcollamt is kept as a fallback rather than added: the two overlap,
+        # and summing them would double count wherever both are populated.
+        total_collateral = float(margin_data.get("collateral") or 0)
+        if total_collateral == 0:
+            total_collateral = float(margin_data.get("brkcollamt") or 0)
         total_used_margin = float(margin_data.get("marginused", 0))
 
         # Construct and return the processed margin data
