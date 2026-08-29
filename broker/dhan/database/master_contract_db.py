@@ -282,7 +282,16 @@ def process_dhan_csv(path):
     df["expiry"] = df["SEM_EXPIRY_DATE"].str.upper()
     df["strike"] = df["SEM_STRIKE_PRICE"]
     df["lotsize"] = df["SEM_LOT_UNITS"]
-    df["tick_size"] = pd.to_numeric(df["SEM_TICK_SIZE"], errors="coerce") / 100
+    # SEM_TICK_SIZE is in paise for every tradeable instrument (EQUITY ships
+    # 1..500, OPTIDX 5, FUTCOM 5..1000), so rupees is that over 100.
+    #
+    # INDEX rows are the exception: Dhan ships those already in rupees (0.05 on
+    # NSE, 0.01 on BSE). Dividing them too produced 0.0005 and 0.0001, and a
+    # tick that fine drives four decimals of display precision, so NIFTY read
+    # 24175.6500 on the chart's price axis instead of 24175.65.
+    _tick = pd.to_numeric(df["SEM_TICK_SIZE"], errors="coerce")
+    _is_index = df["SEM_INSTRUMENT_NAME"].astype(str).str.upper().eq("INDEX")
+    df["tick_size"] = _tick.where(_is_index, _tick / 100)
     df["brsymbol"] = df["SEM_TRADING_SYMBOL"]
 
     # Apply the function
