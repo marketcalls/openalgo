@@ -97,6 +97,7 @@ const CustomPythonStrategyIndex = lazy(
   () => import('@/pages/python-custom/CustomPythonStrategyIndex')
 )
 const NewCustomPythonStrategy = lazy(() => import('@/pages/python-custom/NewCustomPythonStrategy'))
+const StrategyHubIndex = lazy(() => import('@/pages/strategy-hub/StrategyHubIndex'))
 
 // Chartink pages
 const ChartinkIndex = lazy(() => import('@/pages/chartink/ChartinkIndex'))
@@ -266,6 +267,7 @@ function App() {
                 <Route path="/python/guide" element={<PythonStrategyGuide />} />
                 <Route path="/python-custom" element={<CustomPythonStrategyIndex />} />
                 <Route path="/python-custom/new" element={<NewCustomPythonStrategy />} />
+                <Route path="/strategy-hub" element={<StrategyHubIndex />} />
                 {/* Phase 6: Chartink Strategies */}
                 <Route path="/chartink" element={<ChartinkIndex />} />
                 <Route path="/chartink/new" element={<NewChartinkStrategy />} />
