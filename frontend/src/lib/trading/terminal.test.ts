@@ -15,7 +15,8 @@
 import { CandleBuilder } from 'openalgo-charts'
 import { describe, expect, it } from 'vitest'
 
-import { productOptionsFor, usesLots } from './terminal'
+import { priceDp } from './format'
+import { dedupeIndicators, productOptionsFor, resolveTick, usesLots } from './terminal'
 
 /** Every segment whose contracts carry lotsize 1 in the master. */
 const LOTSIZE_ONE_SEGMENTS = ['MCX', 'NCO', 'CDS', 'BCD', 'NCDEX']
@@ -144,5 +145,73 @@ describe('forming-bar volume', () => {
     const u = b.onTick({ time: BUCKET * 2, price: 104 })
     expect(u?.isNew).toBe(true)
     expect(u?.bar.volume).toBe(0)
+  })
+})
+
+describe('resolveTick', () => {
+  // Values taken from the live master contract.
+  it.each([
+    ['NSE_INDEX', 0.0005],
+    ['BSE_INDEX', 0.0001],
+    ['MCX_INDEX', 0.0005],
+    ['GLOBAL_INDEX', 0.0001],
+  ])('pins %s to paise, whatever tick the feed supplies', (exchange, fed) => {
+    // A sub-paise tick put four decimals on the axis, so NIFTY read 24175.6500.
+    expect(resolveTick(exchange, fed)).toBe(0.05)
+    expect(priceDp(resolveTick(exchange, fed), 24175)).toBe(2)
+  })
+
+  it('leaves a tradeable instrument its real tick', () => {
+    expect(resolveTick('NSE', 0.1)).toBe(0.1)
+    expect(resolveTick('NFO', 0.05)).toBe(0.05)
+  })
+
+  it('keeps four decimals for a currency pair, which genuinely quotes in them', () => {
+    // The reason this is exchange-scoped rather than a blanket clamp on fine
+    // ticks: USDINR at 0.0025 must keep its precision.
+    expect(resolveTick('CDS', 0.0025)).toBe(0.0025)
+    expect(priceDp(resolveTick('CDS', 0.0025), 87)).toBe(4)
+  })
+
+  it('falls back when the master contract carries nothing usable', () => {
+    expect(resolveTick('NSE', 0)).toBe(0.05)
+    expect(resolveTick('NSE', undefined)).toBe(0.05)
+    expect(resolveTick('NSE', 'nonsense')).toBe(0.05)
+  })
+})
+
+describe('dedupeIndicators', () => {
+  const ema = (period: number) => ({ indicatorId: 'ema', settings: { period } })
+
+  it('collapses an exact repeat, which can only be an accident', () => {
+    // Two overlapping symbol loads re-applied the tracked list against one
+    // chart, and the doubled list was persisted and doubled again on every
+    // rebuild: thirty identical legend rows covering the chart.
+    const doubled = [ema(20), ema(20), ema(20)]
+    expect(dedupeIndicators(doubled)).toEqual([ema(20)])
+  })
+
+  it('keeps two instances that differ in their settings', () => {
+    // A 20 and a 50 EMA is a normal thing to want, and they are told apart on
+    // the chart, so neither is an accident.
+    const pair = [ema(20), ema(50)]
+    expect(dedupeIndicators(pair)).toEqual(pair)
+  })
+
+  it('keeps different indicators sharing settings', () => {
+    const mixed = [
+      { indicatorId: 'ema', settings: { period: 20 } },
+      { indicatorId: 'sma', settings: { period: 20 } },
+    ]
+    expect(dedupeIndicators(mixed)).toEqual(mixed)
+  })
+
+  it('preserves the order the first of each appeared in', () => {
+    const list = [ema(50), ema(20), ema(50), ema(20)]
+    expect(dedupeIndicators(list)).toEqual([ema(50), ema(20)])
+  })
+
+  it('leaves an empty list alone', () => {
+    expect(dedupeIndicators([])).toEqual([])
   })
 })

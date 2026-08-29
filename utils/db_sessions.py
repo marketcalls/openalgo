@@ -36,6 +36,7 @@ SCOPED_SESSION_MODULES = [
     ("database.chartink_db", "db_session"),
     ("database.flow_db", "db_session"),
     ("database.scalping_db", "db_session"),
+    ("database.watchlist_db", "db_session"),
     ("database.leverage_db", "db_session"),
     ("database.strategy_portfolio_db", "db_session"),
     ("database.market_calendar_db", "db_session"),

@@ -22,12 +22,18 @@ Object.defineProperty(window, 'matchMedia', {
   })),
 })
 
-// Mock ResizeObserver
-window.ResizeObserver = vi.fn().mockImplementation(() => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-}))
+// Mock ResizeObserver.
+//
+// A real class, not vi.fn().mockImplementation(). A vi.fn mock cannot be
+// called with `new` here, and @floating-ui constructs one directly, so any
+// test that opened a Radix dropdown, select or popover died on
+// "is not a constructor" from inside autoUpdate.
+class MockResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+window.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver
 
 // Mock IntersectionObserver
 window.IntersectionObserver = vi.fn().mockImplementation(() => ({

@@ -107,6 +107,7 @@ from blueprints.telegram import telegram_bp  # Import the telegram blueprint
 from blueprints.traffic import traffic_bp  # Import the traffic blueprint
 from blueprints.tv_json import tv_json_bp
 from blueprints.vol_surface import vol_surface_bp  # Import the vol surface blueprint
+from blueprints.watchlist import watchlist_bp  # Import the charting watchlist blueprint
 from blueprints.websocket_example import websocket_bp  # Import the websocket example blueprint
 from blueprints.whatsapp import whatsapp_bp  # Import the WhatsApp blueprint
 from cors import init_cors
@@ -129,6 +130,7 @@ from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.telegram_db import get_bot_config
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
 from database.user_db import init_db as ensure_user_tables_exists
+from database.watchlist_db import init_db as ensure_watchlist_tables_exists
 from database.whatsapp_db import (
     get_bot_config as get_whatsapp_bot_config,  # noqa: F401  (triggers module-level init_db)
 )
@@ -323,6 +325,7 @@ def create_app():
     app.register_blueprint(historify_bp)  # Register Historify blueprint
     app.register_blueprint(ivchart_bp)  # Register IV chart blueprint
     app.register_blueprint(scalping_bp)  # Register Scalping terminal blueprint
+    app.register_blueprint(watchlist_bp)  # Register charting watchlist blueprint
     app.register_blueprint(oitracker_bp)  # Register OI tracker blueprint
     app.register_blueprint(gamma_density_bp)  # Register Gamma Density blueprint
     app.register_blueprint(straddle_bp)  # Register straddle chart blueprint
@@ -737,6 +740,7 @@ def setup_environment(app):
                 ("Historify DB", ensure_historify_tables_exists),
                 ("Flow DB", ensure_flow_tables_exists),
                 ("Scalping DB", ensure_scalping_tables_exists),
+                ("Watchlist DB", ensure_watchlist_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),
                 ("Strategy Portfolio DB", ensure_strategy_portfolio_tables_exists),
                 # Created here, not left to APScheduler's own CREATE TABLE in

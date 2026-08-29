@@ -1,10 +1,13 @@
 import { LayoutGrid, Link2 as LinkIcon } from 'lucide-react'
+import { createLinkGroup, type LinkGroup } from 'openalgo-charts'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Navbar } from '@/components/layout/Navbar'
-import { createLinkGroup, type LinkGroup } from 'openalgo-charts'
-import { TickBox } from '@/components/trading/TickBox'
 import { ChartPane } from '@/components/trading/ChartPane'
 import { DrawingRail } from '@/components/trading/DrawingRail'
+import { OptionChainPanel } from '@/components/trading/OptionChainPanel'
+import { type PanelId, RightRail } from '@/components/trading/RightRail'
+import { TickBox } from '@/components/trading/TickBox'
+import { WatchlistPanel } from '@/components/trading/WatchlistPanel'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -12,7 +15,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import type { DrawStats, TradingTerminal } from '@/lib/trading/terminal'
+import type { DrawStats, SearchRow, TradingTerminal } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
 
 const NO_DRAW: DrawStats = {
@@ -93,6 +96,7 @@ const LAYOUTS: LayoutPreset[] = [
 
 const LAYOUT_KEY = 'oa-trading-layout'
 const SYNC_KEY = 'oa-trading-sync'
+const PANEL_KEY = 'oa-trading-panel'
 
 /**
  * What a linked grid agrees on. The engine keeps the three independent, so the
@@ -175,10 +179,73 @@ export default function Trading() {
   // so whichever pane you click next is the one that gets the shape.
   const activeRef = useRef<TradingTerminal | null>(null)
 
-  const focusPane = useCallback((t: TradingTerminal | null) => {
+  /* ── side panels ─────────────────────────────────────────────────────── */
+  const [panel, setPanel] = useState<PanelId | null>(() => {
+    const saved = localStorage.getItem(PANEL_KEY)
+    return saved === 'watchlist' || saved === 'options' ? saved : null
+  })
+  /**
+   * Which pane a panel click loads into, and whose instrument the watchlist
+   * highlights. The first pane until the user touches another, so a click in
+   * the panel does something sensible before any pane has been focused.
+   */
+  const [focusedPane, setFocusedPane] = useState('p0')
+  const [paneSymbols, setPaneSymbols] = useState<Record<string, string | null>>({})
+  /**
+   * Every live pane's terminal, keyed by pane id.
+   *
+   * activeRef alone is not enough: it is only set once the user has clicked
+   * into a pane, so on a fresh page load the panels had nothing to act on and
+   * their search returned no results at all. This is populated as each pane
+   * builds, so the panels work from the first paint.
+   */
+  const terminalsRef = useRef<Record<string, TradingTerminal | null>>({})
+
+  const noteTerminal = useCallback((paneId: string, terminal: TradingTerminal | null) => {
+    if (terminal) terminalsRef.current[paneId] = terminal
+    else delete terminalsRef.current[paneId]
+  }, [])
+
+  /** The pane a panel acts on: the focused one, else any pane that is up. */
+  const panelTarget = useCallback(
+    () =>
+      terminalsRef.current[focusedPane] ??
+      activeRef.current ??
+      Object.values(terminalsRef.current)[0] ??
+      null,
+    [focusedPane]
+  )
+
+  const focusPane = useCallback((t: TradingTerminal | null, paneId?: string) => {
     activeRef.current = t
+    if (paneId) setFocusedPane(paneId)
     if (t) setStats(t.drawStats())
   }, [])
+
+  const noteSymbol = useCallback((paneId: string, key: string | null) => {
+    setPaneSymbols((prev) => (prev[paneId] === key ? prev : { ...prev, [paneId]: key }))
+  }, [])
+
+  /**
+   * Load an instrument chosen in a side panel.
+   *
+   * Panels are page-level and panes are not, so the click has to be routed to
+   * one. It goes to the pane the user last touched -- the same pane the drawing
+   * rail acts on, so "the pane I am working in" means one thing everywhere.
+   */
+  const sendToFocusedPane = useCallback(
+    (row: SearchRow) => {
+      void panelTarget()?.loadSymbol(row)
+    },
+    [panelTarget]
+  )
+
+  /** Bound to the focused pane so panel search returns broker-supported rows. */
+  const searchFromFocusedPane = useCallback(
+    (query: string, exchange?: string, limit?: number) =>
+      panelTarget()?.search(query, exchange, limit) ?? Promise.resolve([]),
+    [panelTarget]
+  )
   const railStats: DrawStats = { ...stats, tool, magnet }
   /**
    * Hand a key event to the focused pane; it reports whether a tool claimed it.
@@ -203,6 +270,54 @@ export default function Trading() {
   useEffect(() => {
     localStorage.setItem(LAYOUT_KEY, layoutId)
   }, [layoutId])
+
+  useEffect(() => {
+    if (panel) localStorage.setItem(PANEL_KEY, panel)
+    else localStorage.removeItem(PANEL_KEY)
+  }, [panel])
+
+  /**
+   * Escape closes the open panel, the way it disarms a drawing tool. Without
+   * it the only way back to a full-width chart is a 32px target in the corner.
+   *
+   * Closing the panel is the LAST thing Escape should do, so this yields twice:
+   *
+   * - to any open Radix surface. Checking only the scroll lock and role=dialog
+   *   missed the non-modal ones: the option chain's underlying combobox is a
+   *   Popover, which sets neither, so dismissing the search closed the whole
+   *   panel underneath it.
+   * - to an armed drawing tool, which DrawingRail disarms on the same key
+   *   without stopping propagation. One Escape did both.
+   */
+  useEffect(() => {
+    if (!panel) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (tool) return
+      // Never steal Escape from a field, the way DrawingRail does not.
+      const target = e.target as HTMLElement | null
+      if (
+        target &&
+        (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))
+      ) {
+        return
+      }
+      if (document.body.hasAttribute('data-scroll-locked')) return
+      if (
+        document.querySelector(
+          '[data-state="open"][role="dialog"],' +
+            '[data-state="open"][data-slot="popover-content"],' +
+            '[data-state="open"][role="menu"],' +
+            '[data-state="open"][role="listbox"]'
+        )
+      ) {
+        return
+      }
+      setPanel(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [panel, tool])
 
   useEffect(() => {
     localStorage.setItem(SYNC_KEY, JSON.stringify(sync))
@@ -382,54 +497,77 @@ export default function Trading() {
               onShortcut={armByShortcut}
             />
           )}
-          <div className="min-h-0 flex-1">
-          {noApiKey ? (
-            <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-              <p className="text-sm text-muted-foreground">No API key found for charting.</p>
-              <a href="/apikey" className="text-sm font-medium text-primary underline">
-                Generate an API key
-              </a>
-            </div>
-          ) : apiKey && wsUrl ? (
-            <div
-              className="grid h-full min-h-0 gap-2 p-2"
-              style={{
-                gridTemplateColumns: layout.cols,
-                gridTemplateRows: layout.rows,
-                gridTemplateAreas: layout.areas,
-              }}
-            >
-              {layout.cells.map((cell, i) => (
-                <ChartPane
-                  key={`p${i}`}
-                  paneId={`p${i}`}
-                  apiKey={apiKey}
-                  wsUrl={wsUrl}
-                  style={{ gridArea: cell }}
-                  sharedTool={tool}
-                  sharedMagnet={magnet}
-                  onFocusPane={focusPane}
-                  onDrawStats={setStats}
-                  onToggleRail={() => setShowRail((v) => !v)}
-                  railVisible={showRail}
-                  linkGroup={linkRef.current}
-                  layoutPicker={
-                    i === 0 ? (
-                      <>
-                        {layoutPicker}
-                        {syncPicker}
-                      </>
-                    ) : undefined
-                  }
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-              Loading charting terminal…
-            </div>
-          )}
+          <div className="min-h-0 min-w-0 flex-1">
+            {noApiKey ? (
+              <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+                <p className="text-sm text-muted-foreground">No API key found for charting.</p>
+                <a href="/apikey" className="text-sm font-medium text-primary underline">
+                  Generate an API key
+                </a>
+              </div>
+            ) : apiKey && wsUrl ? (
+              <div
+                className="grid h-full min-h-0 gap-2 p-2"
+                style={{
+                  gridTemplateColumns: layout.cols,
+                  gridTemplateRows: layout.rows,
+                  gridTemplateAreas: layout.areas,
+                }}
+              >
+                {layout.cells.map((cell, i) => (
+                  <ChartPane
+                    key={`p${i}`}
+                    paneId={`p${i}`}
+                    apiKey={apiKey}
+                    wsUrl={wsUrl}
+                    style={{ gridArea: cell }}
+                    sharedTool={tool}
+                    sharedMagnet={magnet}
+                    onFocusPane={focusPane}
+                    onSymbolChange={noteSymbol}
+                    onTerminalChange={noteTerminal}
+                    onDrawStats={setStats}
+                    onToggleRail={() => setShowRail((v) => !v)}
+                    railVisible={showRail}
+                    linkGroup={linkRef.current}
+                    layoutPicker={
+                      i === 0 ? (
+                        <>
+                          {layoutPicker}
+                          {syncPicker}
+                        </>
+                      ) : undefined
+                    }
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                Loading charting terminal…
+              </div>
+            )}
           </div>
+
+          {/* Side panels, between the grid and the rail that toggles them.
+              Both are page-level: they act on the focused pane rather than
+              belonging to one, so repeating them per pane would be wrong. */}
+          {apiKey && wsUrl && panel === 'watchlist' && (
+            <WatchlistPanel
+              apiKey={apiKey}
+              onPick={sendToFocusedPane}
+              search={searchFromFocusedPane}
+              activeSymbol={paneSymbols[focusedPane] ?? null}
+            />
+          )}
+          {apiKey && wsUrl && panel === 'options' && (
+            <OptionChainPanel
+              apiKey={apiKey}
+              onPick={sendToFocusedPane}
+              activeSymbol={paneSymbols[focusedPane] ?? null}
+            />
+          )}
+
+          {apiKey && wsUrl && <RightRail active={panel} onSelect={setPanel} />}
         </main>
       </div>
     </>

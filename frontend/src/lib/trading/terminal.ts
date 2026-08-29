@@ -323,6 +323,50 @@ export function usesLots(exchange: string): boolean {
   return DERIVATIVE_EXCHANGES.has(exchange)
 }
 const QUOTE_ONLY = new Set(['NSE_INDEX', 'BSE_INDEX', 'MCX_INDEX', 'GLOBAL_INDEX'])
+
+/**
+ * The tick to format an instrument's prices with.
+ *
+ * An index has no real tick: nothing trades it, so whatever the master
+ * contract carries is just what the feed supplied. NIFTY and BANKNIFTY come
+ * through at 0.0005 and SENSEX at 0.0001, and precision derived from those put
+ * four decimals on the price axis, so NIFTY read 24175.6500. Quote-only
+ * exchanges are pinned to 0.05 instead, which is paise, the way every other
+ * instrument on screen reads.
+ *
+ * Deliberately not a blanket clamp on fine ticks: currency pairs on CDS quote
+ * in four decimals for real, and USDINR must keep them.
+ */
+export function resolveTick(exchange: string, tickSize: unknown): number {
+  if (QUOTE_ONLY.has(exchange)) return 0.05
+  return Number(tickSize) || 0.05
+}
+
+/**
+ * Drop indicators that repeat an earlier one exactly.
+ *
+ * Two overlapping symbol loads used to re-apply the tracked list against the
+ * same chart, doubling every indicator; the doubled list was then persisted,
+ * so it doubled again on each rebuild until a legend of thirty identical rows
+ * covered the chart. The load ticket stops that happening; this is what lets
+ * a layout already carrying duplicates heal instead of needing them removed
+ * by hand.
+ *
+ * Settings are part of the identity on purpose. Two EMAs at 20 and 50 are a
+ * normal thing to want, so only an exact repeat -- indistinguishable on the
+ * chart, and therefore an accident -- is collapsed.
+ */
+export function dedupeIndicators<T extends { indicatorId: string; settings: unknown }>(
+  records: T[]
+): T[] {
+  const seen = new Set<string>()
+  return records.filter((rec) => {
+    const key = `${rec.indicatorId}:${JSON.stringify(rec.settings)}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
 const STRATEGY = 'chart-trading'
 const VISIBLE_BARS = 120
 
@@ -1514,13 +1558,21 @@ export class TradingTerminal {
 
   /** Re-add the tracked indicators to a freshly built chart. */
   private async applyIndicators(): Promise<void> {
+    // Captured BEFORE the await. loadIndicators can take a moment on first
+    // use (it dynamically imports the custom tier), and a rebuild inside that
+    // window replaces this.chart -- so resuming here and reading the field
+    // would add this run's indicators to a chart another run has already
+    // populated, duplicating every one of them.
+    const chart = this.chart
     await this.loadIndicators()
-    if (this.destroyed || !this.chart) return
+    if (this.destroyed || !this.chart || this.chart !== chart) return
     // Re-adding walks the tracked list, so a sync mid-loop would read a
     // half-applied chart and truncate it.
     this.applyingIndicators = true
     try {
-      for (const rec of this.activeIndicators) {
+      // syncIndicators writes the result back, so a layout that already
+      // carries duplicates heals on the next load.
+      for (const rec of dedupeIndicators(this.activeIndicators)) {
         try {
           this.chart.addIndicator(rec.indicatorId, rec.settings)
         } catch {
@@ -2133,9 +2185,23 @@ export class TradingTerminal {
     )
   }
 
+  /** Monotonic id for the most recent loadSymbol; older loads abandon. */
+  private loadTicket = 0
+
   /* ── symbol selection ─────────────────────────────────────────────────── */
   async loadSymbol(pick: SearchRow, opts: { silent?: boolean } = {}): Promise<boolean> {
     if (!this.rest) return false
+    /**
+     * Claim this load. Two awaits follow -- the symbol lookup and the bars --
+     * and a second call arriving inside either of them used to run to
+     * completion alongside this one. Both then reached buildChart, and the
+     * indicator re-apply of the FIRST resumed against the chart the SECOND had
+     * just created, adding every tracked indicator twice. syncIndicators read
+     * that back as the tracked list, so the next rebuild doubled it again:
+     * clicking down an option chain left thirty copies of one indicator's
+     * legend covering the chart.
+     */
+    const ticket = ++this.loadTicket
     // Replay holds a snapshot of the bars it was started on, and stop() puts
     // that snapshot back. Carrying it across a symbol change would restore the
     // previous instrument's data onto the new one.
@@ -2169,6 +2235,8 @@ export class TradingTerminal {
     } catch {
       /* search row already carries the essentials */
     }
+    // A newer load claimed the pane while this one was waiting.
+    if (ticket !== this.loadTicket) return false
     const exchange = String(info.exchange)
     const lotsize = Number(info.lotsize) || 1
     // The segment decides this, never the lot size. Every MCX, NCO and CDS
@@ -2188,7 +2256,7 @@ export class TradingTerminal {
       name: String(info.name || ''),
       lotsize,
       lots,
-      tick: Number(info.tick_size) || 0.05,
+      tick: resolveTick(exchange, info.tick_size),
       freezeQty: Number(info.freeze_qty) || 1,
       quoteOnly: QUOTE_ONLY.has(exchange),
       productOptions,
@@ -2220,6 +2288,9 @@ export class TradingTerminal {
       if (!opts.silent) this.toast(`history error: ${this.cleanError(e)}`, 'err')
       return false // caller may fall back (e.g. to the default symbol)
     }
+    // The bars are in. If a newer load claimed the pane while they were in
+    // flight, stop here rather than building a chart it will build again.
+    if (ticket !== this.loadTicket) return false
     if (!this.rawBars.length) {
       if (!opts.silent)
         this.toast(`no history for ${this.sym.symbol} ${this.sym.exchange} ${this.interval}`, 'err')

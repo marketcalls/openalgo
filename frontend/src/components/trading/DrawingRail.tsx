@@ -16,6 +16,7 @@ import {
 import { DRAW_GROUPS, drawToolIcon } from '@/lib/trading/drawTools'
 import type { DrawStats } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
+import { RAIL_BTN, RAIL_BTN_ON, RailTip } from './railStyles'
 
 interface Props {
   stats: DrawStats
@@ -38,24 +39,6 @@ interface Props {
   onShortcut?(e: KeyboardEvent): boolean
 }
 
-/**
- * Hover label to the right of a rail button. The native `title` attribute waits
- * about a second and cannot be styled; a rail of eleven identical glyphs needs
- * its names to appear immediately. Rendered inside the rail rather than
- * portalled, so it still paints when the pane is in the Fullscreen top layer.
- */
-function RailTip({ text, chord }: { text: string; chord?: string }) {
-  return (
-    <span
-      role="tooltip"
-      className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 -translate-y-1/2 whitespace-nowrap rounded border bg-popover px-2 py-1 text-[12px] text-popover-foreground opacity-0 shadow-md transition-opacity duration-75 group-hover:opacity-100"
-    >
-      {text}
-      {chord && <span className="ml-2 text-muted-foreground">{chord}</span>}
-    </span>
-  )
-}
-
 /** Which group owns a tool id, so the rail can highlight the active button. */
 function groupOf(toolId: string | null): string | null {
   if (!toolId) return null
@@ -67,7 +50,16 @@ function groupOf(toolId: string | null): string | null {
   return null
 }
 
-export function DrawingRail({ stats, onPick, onUndo, onRedo, onRemove, onMagnet, portalHost, onShortcut }: Props) {
+export function DrawingRail({
+  stats,
+  onPick,
+  onUndo,
+  onRedo,
+  onRemove,
+  onMagnet,
+  portalHost,
+  onShortcut,
+}: Props) {
   // Last tool chosen per group, so the bare button re-arms it instead of
   // reopening the flyout every time.
   const lastRef = useRef<Record<string, string>>({})
@@ -94,9 +86,9 @@ export function DrawingRail({ stats, onPick, onUndo, onRedo, onRemove, onMagnet,
     return () => window.removeEventListener('keydown', onKey)
   }, [stats.tool, onPick, onShortcut])
 
-  const btn =
-    'flex h-8 w-8 items-center justify-center rounded-md border border-transparent text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30'
-  const on = 'border-primary/40 bg-primary/15 text-primary'
+  // Shared with RightRail so the two edges of the workspace cannot drift.
+  const btn = RAIL_BTN
+  const on = RAIL_BTN_ON
 
   return (
     // A flush column with a divider, not a floating card: the plot starts to
@@ -173,7 +165,12 @@ export function DrawingRail({ stats, onPick, onUndo, onRedo, onRemove, onMagnet,
               {open !== g.key && <RailTip text={g.label} />}
             </div>
 
-            <DropdownMenuContent container={portalHost} side="right" align="start" className="w-64 p-1">
+            <DropdownMenuContent
+              container={portalHost}
+              side="right"
+              align="start"
+              className="w-64 p-1"
+            >
               {g.sections.map((sec, si) => (
                 <div key={sec.head ?? `s${si}`}>
                   {sec.head && (
@@ -242,7 +239,16 @@ export function DrawingRail({ stats, onPick, onUndo, onRedo, onRemove, onMagnet,
           onClick={onUndo}
           className={btn}
         >
-          <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <svg
+            viewBox="0 0 24 24"
+            className="h-[18px] w-[18px]"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.6}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
             <path d="M4 10a7 7 0 1 1 2.5 5.3" />
             <path d="M3 5v5h5" />
           </svg>
@@ -257,7 +263,16 @@ export function DrawingRail({ stats, onPick, onUndo, onRedo, onRemove, onMagnet,
           onClick={onRedo}
           className={btn}
         >
-          <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <svg
+            viewBox="0 0 24 24"
+            className="h-[18px] w-[18px]"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.6}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
             <path d="M20 10a7 7 0 1 0-2.5 5.3" />
             <path d="M21 5v5h-5" />
           </svg>
@@ -265,20 +280,27 @@ export function DrawingRail({ stats, onPick, onUndo, onRedo, onRemove, onMagnet,
         <RailTip text="Redo" chord="Ctrl + Shift + Z" />
       </div>
       <div className="group relative">
-      <button
+        <button
           type="button"
           aria-label="Delete drawings"
           disabled={stats.count === 0}
           onClick={() => onRemove(!stats.hasSelection)}
           className={btn}
         >
-          <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <svg
+            viewBox="0 0 24 24"
+            className="h-[18px] w-[18px]"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.6}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
             <path d="M3.5 6.5h17M9.5 6.5v-3h5v3M6 6.5l1 14h10l1-14" />
           </svg>
         </button>
-        <RailTip
-          text={stats.hasSelection ? 'Delete selected' : `Remove all (${stats.count})`}
-        />
+        <RailTip text={stats.hasSelection ? 'Delete selected' : `Remove all (${stats.count})`} />
       </div>
     </div>
   )

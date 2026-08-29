@@ -3,6 +3,7 @@
 // weight when the whole row opens menus, and it reads as a dated form
 // control. Reserve the glyph for where it distinguishes something.
 import { ChevronDown, RefreshCw, Search, Settings } from 'lucide-react'
+import type { LinkGroup } from 'openalgo-charts'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
@@ -27,7 +28,6 @@ import {
   type TerminalCallbacks,
   TradingTerminal,
 } from '@/lib/trading/terminal'
-import type { LinkGroup } from 'openalgo-charts'
 import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
 import { showToast } from '@/utils/toast'
@@ -183,7 +183,22 @@ interface Props {
   sharedTool?: string | null
   sharedMagnet?: boolean
   /** This pane became the drawing target (pointer went down inside it). */
-  onFocusPane?(terminal: TradingTerminal | null): void
+  onFocusPane?(terminal: TradingTerminal | null, paneId?: string): void
+  /**
+   * Reports this pane's instrument as `EXCHANGE:SYMBOL`, so the page can show
+   * which watchlist row is charted here. Fires on every load, not only on
+   * focus: a pane can change symbol from its own toolbar, from a linked group
+   * or from a panel click, and the highlight has to follow all three.
+   */
+  onSymbolChange?(paneId: string, key: string | null): void
+  /**
+   * Announces this pane's terminal to the page as it is built, and passes null
+   * as it is torn down. The page-level side panels act on a pane rather than
+   * owning one, so without this they would have nothing to act on until the
+   * user had clicked a chart -- a watchlist whose search returned no results
+   * and whose rows charted nothing, on a page that looks perfectly ready.
+   */
+  onTerminalChange?(paneId: string, terminal: TradingTerminal | null): void
   /** Drawing state of this pane, for the shared rail's buttons. */
   onDrawStats?(stats: DrawStats): void
   /** Workspace link group this pane joins, if the page made one. */
@@ -213,6 +228,8 @@ export function ChartPane({
   sharedTool,
   sharedMagnet,
   onFocusPane,
+  onSymbolChange,
+  onTerminalChange,
   onDrawStats,
   linkGroup,
   onToggleRail,
@@ -231,6 +248,13 @@ export function ChartPane({
   const aliveRef = useRef(true)
   const statsCbRef = useRef(onDrawStats)
   statsCbRef.current = onDrawStats
+  // Held in a ref for the same reason as statsCbRef: the terminal's callbacks
+  // are captured once when it boots, so reading the prop directly would pin
+  // the first render's closure for the life of the pane.
+  const symbolCbRef = useRef(onSymbolChange)
+  symbolCbRef.current = onSymbolChange
+  const terminalCbRef = useRef(onTerminalChange)
+  terminalCbRef.current = onTerminalChange
   const { mode, appMode } = useThemeStore()
 
   const [ready, setReady] = useState(false)
@@ -304,6 +328,7 @@ export function ChartPane({
         if (!aliveRef.current) return
         setSym(view)
         setQty(1)
+        symbolCbRef.current?.(paneId, `${view.exchange}:${view.symbol}`)
       },
       onLtp: () => {}, // legend overlay + canvas render the live price
       onDrawChange: (s) => {
@@ -338,6 +363,7 @@ export function ChartPane({
         callbacks,
       })
       terminalRef.current = terminal
+      terminalCbRef.current?.(paneId, terminal)
       terminal.init()
       terminal.setLinkGroup(linkGroup ?? null)
       const stats0 = terminal.drawStats()
@@ -349,6 +375,7 @@ export function ChartPane({
 
     return () => {
       aliveRef.current = false
+      terminalCbRef.current?.(paneId, null)
       terminal?.destroy()
       terminalRef.current = null
     }
@@ -474,7 +501,6 @@ export function ChartPane({
 
   /** Portal target for menus: the pane itself in fullscreen, body otherwise. */
   const menuHost = fullscreen ? paneRef.current : null
-
 
   // The product the toggle switches to; with two options that is "the other".
   const nextProduct = sym
@@ -760,7 +786,7 @@ export function ChartPane({
           ref={chartRef}
           className="absolute inset-0"
           onContextMenu={onContextMenu}
-          onPointerDownCapture={() => onFocusPane?.(terminalRef.current)}
+          onPointerDownCapture={() => onFocusPane?.(terminalRef.current, paneId)}
         />
 
         {!ready && (
