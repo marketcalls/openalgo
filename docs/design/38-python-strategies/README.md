@@ -86,6 +86,17 @@ openalgo/
 
 ## Key Features
 
+### Script Sources and Runners
+
+- Upload and run strategy scripts with extensions: `.py`, `.sh`, `.bat`, `.cmd`
+- Register an existing script directly from a folder path on the server
+- Cross-platform runner selection:
+  - `.py` -> current Python executable (`sys.executable -u`)
+  - `.sh` -> `/bin/bash` (Linux/macOS)
+  - `.bat` / `.cmd` -> `cmd.exe /c` (Windows)
+- Path-based strategies are tracked by config and logs, but deleting the
+  strategy entry does not delete the original external source file.
+
 ### Process Isolation
 
 Each strategy runs in a separate subprocess:

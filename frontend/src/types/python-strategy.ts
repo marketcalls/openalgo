@@ -5,6 +5,8 @@ export interface PythonStrategy {
   name: string
   file_name: string
   exchange: string
+  runner_type?: 'python' | 'shell' | 'batch'
+  source_mode?: 'upload' | 'path'
   status: 'stopped' | 'running' | 'error' | 'scheduled' | 'paused' | 'manually_stopped'
   status_message?: string
   process_id: number | null

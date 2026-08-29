@@ -814,5 +814,49 @@ def test_strategy_without_schedule_days_field(ps_module, tmp_path):
         ps_module.CONFIG_FILE = original
 
 
+def test_strategy_file_extension_support_helpers(ps_module):
+    assert ps_module.is_supported_strategy_file("a.py") is True
+    assert ps_module.is_supported_strategy_file("a.sh") is True
+    assert ps_module.is_supported_strategy_file("a.bat") is True
+    assert ps_module.is_supported_strategy_file("a.cmd") is True
+    assert ps_module.is_supported_strategy_file("a.txt") is False
+
+
+def test_build_strategy_command_python(ps_module, tmp_path):
+    f = tmp_path / "x.py"
+    f.write_text("print('ok')", encoding="utf-8")
+    cmd, runner_type = ps_module.build_strategy_command(f)
+    assert runner_type == "python"
+    assert cmd[0] == ps_module.get_python_executable()
+    assert cmd[1] == "-u"
+    assert cmd[2].endswith("x.py")
+
+
+def test_build_strategy_command_shell_rejected_on_windows(ps_module, tmp_path, monkeypatch):
+    f = tmp_path / "x.sh"
+    f.write_text("echo ok", encoding="utf-8")
+    monkeypatch.setattr(ps_module, "IS_WINDOWS", True)
+    with pytest.raises(ValueError, match="not supported on Windows"):
+        ps_module.build_strategy_command(f)
+
+
+def test_build_strategy_command_batch_rejected_on_non_windows(ps_module, tmp_path, monkeypatch):
+    f = tmp_path / "x.bat"
+    f.write_text("echo ok", encoding="utf-8")
+    monkeypatch.setattr(ps_module, "IS_WINDOWS", False)
+    with pytest.raises(ValueError, match="supported only on Windows"):
+        ps_module.build_strategy_command(f)
+
+
+def test_build_strategy_command_batch_windows(ps_module, tmp_path, monkeypatch):
+    f = tmp_path / "x.cmd"
+    f.write_text("echo ok", encoding="utf-8")
+    monkeypatch.setattr(ps_module, "IS_WINDOWS", True)
+    cmd, runner_type = ps_module.build_strategy_command(f)
+    assert runner_type == "batch"
+    assert cmd[:2] == ["cmd.exe", "/c"]
+    assert cmd[2].endswith("x.cmd")
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
