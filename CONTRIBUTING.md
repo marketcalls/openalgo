@@ -144,19 +144,21 @@ cd ..
 ```bash
 # Copy the sample environment file
 cp .sample.env .env
-
-# Generate secure random keys for APP_KEY and API_KEY_PEPPER:
-uv run python -c "import secrets; print(secrets.token_hex(32))"
-
-# Edit .env and update:
-# 1. APP_KEY (paste generated key)
-# 2. API_KEY_PEPPER (paste another generated key)
-# 3. VALID_BROKERS (comma-separated list of brokers to enable)
-# 4. Broker API credentials
 ```
+
+OpenAlgo ships `.sample.env` with placeholder values for `APP_KEY` and `API_KEY_PEPPER`. On first run, the app detects those placeholders and automatically rotates them to fresh `secrets.token_hex(32)` values, writing the real secrets back into your `.env`. You will see a one-time `[OpenAlgo first-run setup]` message when this happens. This is also described in `.sample.env` and in `docs/devsprint/README.md#configuration`.
+
+If you are configuring a broker, edit `.env` to set `BROKER_API_KEY`, `BROKER_API_SECRET`, `REDIRECT_URL`, and `VALID_BROKERS` for the broker(s) you want to enable.
+
+> [!IMPORTANT]
+> `.env` is gitignored. Never commit it. After first run it contains real secrets.
 
 > [!NOTE]
 > **Static IP whitelisting:** Many Indian brokers require you to whitelist a static IP address when generating API keys and secrets. If you are developing locally, you may need to whitelist your public IP. For cloud/VPS deployments, use the server's static IP. Check your broker's API documentation for specific requirements.
+
+#### Recovery / manual rotation
+
+If you ever need to regenerate `APP_KEY` or `API_KEY_PEPPER` by hand (for example, after accidentally sharing an `.env` or rotating a compromised secret), follow the manual rotation steps in `docs/devsprint/README.md#configuration` or run `uv run python -c "import secrets; print(secrets.token_hex(32))"` and paste the output into `.env`.
 
 ---
 
