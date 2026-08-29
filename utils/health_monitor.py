@@ -17,6 +17,7 @@ ZERO LATENCY IMPACT:
 
 import logging
 import os
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -32,6 +33,15 @@ from database.health_db import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Eventlet replaces threading.Thread with green threads. Retention cleanup can
+# scan a large SQLite database, so it must run on a real OS thread.
+if "eventlet" in sys.modules:
+    import eventlet
+
+    _original_threading = eventlet.patcher.original("threading")
+else:
+    _original_threading = threading
 
 # Configuration from environment
 HEALTH_MONITOR_ENABLED = os.getenv("HEALTH_MONITOR_ENABLED", "true").lower() == "true"
@@ -684,14 +694,26 @@ def init_health_monitoring(app):
     Args:
         app: Flask application instance
     """
+    if not HEALTH_MONITOR_ENABLED:
+        logger.debug("Health monitoring is disabled (HEALTH_MONITOR_ENABLED=false)")
+        return
+
     try:
         # Initialize database
         init_health_db()
 
-        # Purge old metrics
-        purge_old_metrics(days=HEALTH_RETENTION_DAYS)
+        def _purge_then_start_collector():
+            """Keep potentially large retention cleanup off the app boot path."""
+            try:
+                purge_old_metrics(days=HEALTH_RETENTION_DAYS)
+            finally:
+                health_session.remove()
 
-        # Start collector (background daemon thread)
+        _original_threading.Thread(
+            target=_purge_then_start_collector,
+            name="HealthRetentionCleanup",
+            daemon=True,
+        ).start()
         start_health_collector()
 
         logger.debug("Health monitoring initialized successfully (background mode)")

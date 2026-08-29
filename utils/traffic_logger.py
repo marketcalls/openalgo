@@ -1,3 +1,4 @@
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -93,6 +94,10 @@ class TrafficLoggerMiddleware:
 
 def init_traffic_logging(app):
     """Initialize traffic logging middleware"""
+    if os.getenv("TRAFFIC_LOGGING_ENABLED", "TRUE").upper() == "FALSE":
+        logger.debug("Traffic logging is disabled via TRAFFIC_LOGGING_ENABLED")
+        return
+
     # Initialize the logs database
     from database.traffic_db import init_logs_db, purge_old_traffic_logs
 

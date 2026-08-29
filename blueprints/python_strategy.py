@@ -500,7 +500,8 @@ def start_strategy_process(strategy_id):
             subprocess_args = create_subprocess_args()
             subprocess_args["stdout"] = log_handle
             subprocess_args["stderr"] = subprocess.STDOUT
-            subprocess_args["cwd"] = str(Path.cwd())
+            working_dir = config.get("working_dir") or str(file_path.parent)
+            subprocess_args["cwd"] = str(Path(working_dir))
 
             # Inject documented strategy environment variables
             # (per strategies/README.md: STRATEGY_ID, STRATEGY_NAME, OPENALGO_API_KEY, OPENALGO_HOST)
@@ -523,8 +524,7 @@ def start_strategy_process(strategy_id):
             subprocess_args["env"] = strategy_env
 
             # Start the process
-            # Use Python unbuffered mode for real-time output
-            cmd = [get_python_executable(), "-u", str(file_path.absolute())]
+            cmd, runner_type = build_strategy_command(file_path)
 
             # Log the command being executed for debugging
             logger.info(f"Executing command: {' '.join(cmd)}")
@@ -572,6 +572,7 @@ def start_strategy_process(strategy_id):
                 "pid": process.pid,
                 "started_at": ist_now,
                 "log_file": str(log_file),
+                "runner_type": runner_type,
             }
 
             # Update config with IST time
@@ -943,6 +944,8 @@ def cleanup_dead_processes():
 
 
 DEFAULT_STRATEGY_EXCHANGE = "NSE"
+SUPPORTED_STRATEGY_EXTENSIONS = {".py", ".sh", ".bat", ".cmd"}
+SUPPORTED_STRATEGY_EXTENSION_LABEL = ", ".join(sorted(SUPPORTED_STRATEGY_EXTENSIONS))
 
 
 def normalize_exchange(exchange: str | None) -> str:
@@ -953,6 +956,41 @@ def normalize_exchange(exchange: str | None) -> str:
     if exch in SUPPORTED_EXCHANGES:
         return exch
     return DEFAULT_STRATEGY_EXCHANGE
+
+
+def is_supported_strategy_file(file_name: str | None) -> bool:
+    """Return True if the file extension is runnable by the strategy host."""
+    if not file_name:
+        return False
+    return Path(file_name).suffix.lower() in SUPPORTED_STRATEGY_EXTENSIONS
+
+
+def sanitize_strategy_stem(file_name: str) -> str:
+    """Return a safe strategy-id stem from a file name."""
+    safe_stem = "".join(c for c in Path(file_name).stem if c.isalnum() or c in "_-")
+    return safe_stem or "strategy"
+
+
+def build_strategy_command(file_path: Path) -> tuple[list[str], str]:
+    """Build platform-aware command to run a strategy script."""
+    ext = file_path.suffix.lower()
+
+    if ext == ".py":
+        return [get_python_executable(), "-u", str(file_path.absolute())], "python"
+
+    if ext == ".sh":
+        if IS_WINDOWS:
+            raise ValueError("Shell scripts (.sh) are not supported on Windows hosts")
+        return ["/bin/bash", str(file_path.absolute())], "shell"
+
+    if ext in {".bat", ".cmd"}:
+        if not IS_WINDOWS:
+            raise ValueError("Batch scripts (.bat/.cmd) are supported only on Windows hosts")
+        return ["cmd.exe", "/c", str(file_path.absolute())], "batch"
+
+    raise ValueError(
+        f"Unsupported strategy file extension '{ext}'. Supported: {SUPPORTED_STRATEGY_EXTENSION_LABEL}"
+    )
 
 
 def is_trading_day(exchange: str = DEFAULT_STRATEGY_EXCHANGE) -> bool:
@@ -1611,9 +1649,10 @@ def index():
 def new_strategy():
     """Upload a new strategy"""
     user_id = session.get("user")
-    is_ajax = request.headers.get(
-        "X-Requested-With"
-    ) == "XMLHttpRequest" or request.content_type.startswith("multipart/form-data")
+    content_type = request.content_type or ""
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest" or content_type.startswith(
+        "multipart/form-data"
+    )
 
     if not user_id:
         if is_ajax:
@@ -1635,10 +1674,10 @@ def new_strategy():
             flash("No file selected", "error")
             return redirect(request.url)
 
-        if file and file.filename.endswith(".py"):
+        if file and is_supported_strategy_file(file.filename):
             # Sanitize filename first to prevent path traversal and injection
             safe_filename = secure_filename(file.filename)
-            if not safe_filename or not safe_filename.endswith(".py"):
+            if not safe_filename or not is_supported_strategy_file(safe_filename):
                 if is_ajax:
                     return jsonify({"status": "error", "message": "Invalid filename"}), 400
                 flash("Invalid filename", "error")
@@ -1646,15 +1685,12 @@ def new_strategy():
 
             # Generate unique ID with IST timestamp from sanitized filename
             ist_now = get_ist_time()
-            safe_stem = Path(safe_filename).stem
-            # Further sanitize: only allow alphanumeric, underscore, and hyphen
-            safe_stem = "".join(c for c in safe_stem if c.isalnum() or c in "_-")
-            if not safe_stem:
-                safe_stem = "strategy"
+            safe_stem = sanitize_strategy_stem(safe_filename)
             strategy_id = f"{safe_stem}_{ist_now.strftime('%Y%m%d%H%M%S')}"
+            file_suffix = Path(safe_filename).suffix.lower()
 
             # Save file with sanitized path
-            file_path = STRATEGIES_DIR / f"{strategy_id}.py"
+            file_path = STRATEGIES_DIR / f"{strategy_id}{file_suffix}"
 
             # Verify the resolved path is within STRATEGIES_DIR (defense in depth)
             try:
@@ -1719,7 +1755,11 @@ def new_strategy():
             STRATEGY_CONFIGS[strategy_id] = {
                 "name": strategy_name,
                 "file_path": str(file_path),
-                "file_name": f"{strategy_id}.py",
+                "file_name": file_path.name,
+                "runner_type": "python" if file_suffix == ".py" else ("shell" if file_suffix == ".sh" else "batch"),
+                "working_dir": str(file_path.parent),
+                "source_mode": "upload",
+                "managed_file": True,
                 "exchange": exchange,
                 "is_running": False,
                 "is_scheduled": True,  # Always enabled by default
@@ -1750,11 +1790,117 @@ def new_strategy():
         else:
             if is_ajax:
                 return jsonify(
-                    {"status": "error", "message": "Please upload a Python (.py) file"}
+                    {
+                        "status": "error",
+                        "message": (
+                            "Unsupported file type. Use one of: "
+                            f"{SUPPORTED_STRATEGY_EXTENSION_LABEL}"
+                        ),
+                    }
                 ), 400
-            flash("Please upload a Python (.py) file", "error")
+            flash(
+                "Unsupported file type. Use one of: "
+                f"{SUPPORTED_STRATEGY_EXTENSION_LABEL}",
+                "error",
+            )
 
     return render_template("python_strategy/new.html")
+
+
+@python_strategy_bp.route("/new-path", methods=["POST"])
+@check_session_validity
+def new_strategy_from_path():
+    """Register a strategy directly from an existing file path."""
+    user_id = session.get("user")
+    if not user_id:
+        return jsonify({"status": "error", "message": "Session expired"}), 401
+
+    data = request.get_json(silent=True) or {}
+    strategy_name = str(data.get("strategy_name", "")).strip()
+    strategy_path_raw = str(data.get("strategy_path", "")).strip()
+    if not strategy_name:
+        return jsonify({"status": "error", "message": "Strategy name is required"}), 400
+    if not strategy_path_raw:
+        return jsonify({"status": "error", "message": "Strategy path is required"}), 400
+
+    file_path = Path(strategy_path_raw).expanduser()
+    try:
+        file_path = file_path.resolve()
+    except Exception:
+        return jsonify({"status": "error", "message": "Invalid strategy path"}), 400
+
+    if not file_path.exists():
+        return jsonify({"status": "error", "message": "Strategy file not found"}), 404
+    if not file_path.is_file():
+        return jsonify({"status": "error", "message": "Strategy path must point to a file"}), 400
+    if not is_supported_strategy_file(file_path.name):
+        return jsonify(
+            {
+                "status": "error",
+                "message": (
+                    "Unsupported file type. Use one of: "
+                    f"{SUPPORTED_STRATEGY_EXTENSION_LABEL}"
+                ),
+            }
+        ), 400
+
+    working_dir_raw = str(data.get("working_dir", "")).strip()
+    working_dir = Path(working_dir_raw).expanduser().resolve() if working_dir_raw else file_path.parent
+    if not working_dir.exists() or not working_dir.is_dir():
+        return jsonify({"status": "error", "message": "Working directory must be an existing folder"}), 400
+
+    # Schedule fields with exchange-aware defaults
+    exchange = normalize_exchange(data.get("exchange"))
+    is_crypto = exchange in CRYPTO_EXCHANGES
+    default_start = "00:00" if is_crypto else "09:00"
+    default_stop = "23:59" if is_crypto else "16:00"
+    default_days = (
+        ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        if is_crypto
+        else ["mon", "tue", "wed", "thu", "fri"]
+    )
+
+    schedule_start = data.get("schedule_start") or default_start
+    schedule_stop = data.get("schedule_stop") or default_stop
+    schedule_days = data.get("schedule_days", default_days)
+    if not isinstance(schedule_days, list) or not schedule_days:
+        schedule_days = default_days
+
+    ist_now = get_ist_time()
+    safe_stem = sanitize_strategy_stem(file_path.name)
+    strategy_id = f"{safe_stem}_{ist_now.strftime('%Y%m%d%H%M%S')}"
+    file_suffix = file_path.suffix.lower()
+
+    STRATEGY_CONFIGS[strategy_id] = {
+        "name": strategy_name[:100],
+        "file_path": str(file_path),
+        "file_name": file_path.name,
+        "runner_type": "python" if file_suffix == ".py" else ("shell" if file_suffix == ".sh" else "batch"),
+        "working_dir": str(working_dir),
+        "source_mode": "path",
+        "managed_file": False,
+        "exchange": exchange,
+        "is_running": False,
+        "is_scheduled": True,
+        "created_at": ist_now.isoformat(),
+        "user_id": user_id,
+        "schedule_start": schedule_start,
+        "schedule_stop": schedule_stop,
+        "schedule_days": schedule_days,
+    }
+    save_configs()
+
+    schedule_strategy(
+        strategy_id, start_time=schedule_start, stop_time=schedule_stop, days=schedule_days
+    )
+
+    return jsonify(
+        {
+            "status": "success",
+            "message": f'Strategy "{strategy_name}" added from path successfully',
+            "data": {"strategy_id": strategy_id},
+        }
+    )
 
 
 @python_strategy_bp.route("/start/<strategy_id>", methods=["POST"])
@@ -1989,8 +2135,18 @@ def delete_strategy(strategy_id):
 
         # Delete file
         if strategy_id in STRATEGY_CONFIGS:
-            file_path = Path(STRATEGY_CONFIGS[strategy_id].get("file_path", ""))
-            if file_path.exists():
+            strategy_cfg = STRATEGY_CONFIGS[strategy_id]
+            file_path = Path(strategy_cfg.get("file_path", ""))
+            managed_file = strategy_cfg.get("managed_file")
+            if managed_file is None:
+                # Backward compatibility: old entries are managed if they point
+                # inside the strategies/scripts directory.
+                try:
+                    managed_file = str(file_path.resolve()).startswith(str(STRATEGIES_DIR.resolve()))
+                except Exception:
+                    managed_file = False
+
+            if managed_file and file_path.exists():
                 try:
                     file_path.unlink()
                 except Exception as e:
@@ -2369,6 +2525,8 @@ def api_get_strategies():
                 "name": config.get("name", ""),
                 "file_name": config.get("file_name", ""),
                 "exchange": normalize_exchange(config.get("exchange")),
+                "runner_type": config.get("runner_type", "python"),
+                "source_mode": config.get("source_mode", "upload"),
                 "status": status,
                 "status_message": status_message,
                 "is_running": config.get("is_running", False),
@@ -2466,6 +2624,8 @@ def api_get_strategy(strategy_id):
                 "name": config.get("name", ""),
                 "file_name": config.get("file_name", ""),
                 "exchange": normalize_exchange(config.get("exchange")),
+                "runner_type": config.get("runner_type", "python"),
+                "source_mode": config.get("source_mode", "upload"),
                 "status": status,
                 "is_running": config.get("is_running", False),
                 "is_scheduled": config.get("is_scheduled", False),
@@ -2492,17 +2652,12 @@ def api_get_strategy_content(strategy_id):
         return jsonify({"status": "error", "message": "Strategy not found"}), 404
 
     config = STRATEGY_CONFIGS[strategy_id]
-    file_name = config.get("file_name")
     file_path = config.get("file_path")
-
-    # Try file_name first, fall back to file_path
-    if file_name:
-        strategy_path = STRATEGIES_DIR / file_name
-    elif file_path:
-        strategy_path = Path(file_path)
-        file_name = strategy_path.name
-    else:
+    if not file_path:
         return jsonify({"status": "error", "message": "Strategy file not found"}), 404
+
+    strategy_path = Path(file_path)
+    file_name = config.get("file_name") or strategy_path.name
 
     if not strategy_path.exists():
         return jsonify({"status": "error", "message": "Strategy file not found on disk"}), 404
@@ -2696,12 +2851,19 @@ def export_strategy(strategy_id):
         # Create response with file download
         from flask import Response
 
+        ext = file_path.suffix.lower()
+        content_type = "text/plain"
+        if ext == ".py":
+            content_type = "text/x-python"
+        elif ext in {".sh", ".bat", ".cmd"}:
+            content_type = "text/x-shellscript"
+
         response = Response(
             content,
-            mimetype="text/x-python",
+            mimetype=content_type,
             headers={
                 "Content-Disposition": f"attachment; filename={file_path.name}",
-                "Content-Type": "text/x-python; charset=utf-8",
+                "Content-Type": f"{content_type}; charset=utf-8",
             },
         )
 

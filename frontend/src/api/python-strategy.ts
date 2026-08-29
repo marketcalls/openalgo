@@ -86,6 +86,35 @@ export const pythonStrategyApi = {
   },
 
   /**
+   * Add a strategy from an existing file path on the server.
+   */
+  addStrategyFromPath: async (
+    name: string,
+    strategyPath: string,
+    schedule: {
+      start_time: string
+      stop_time: string
+      days: string[]
+      exchange?: string
+      working_dir?: string
+    }
+  ): Promise<ApiResponse<{ strategy_id: string }>> => {
+    const response = await webClient.post<ApiResponse<{ strategy_id: string }>>(
+      '/python/new-path',
+      {
+        strategy_name: name,
+        strategy_path: strategyPath,
+        exchange: schedule.exchange || 'NSE',
+        schedule_start: schedule.start_time,
+        schedule_stop: schedule.stop_time,
+        schedule_days: schedule.days,
+        working_dir: schedule.working_dir,
+      }
+    )
+    return response.data
+  },
+
+  /**
    * Save strategy content
    */
   saveStrategy: async (strategyId: string, content: string): Promise<ApiResponse<void>> => {
