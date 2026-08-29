@@ -1,0 +1,1 @@
+import{t as e}from"./client-CNMEkqNR.js";var t={getOptionChain:async(t,n,r,i,a,o={})=>(await e.post(`/optionchain`,{apikey:t,underlying:n,exchange:r,expiry_date:i,strike_count:a??20,...o.withGreeks?{with_greeks:!0}:{}})).data,getExpiries:async(t,n,r,i=`options`)=>(await e.post(`/expiry`,{apikey:t,symbol:n,exchange:r,instrumenttype:i})).data};export{t};
