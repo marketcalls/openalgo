@@ -6,16 +6,23 @@ Provides routes for managing and executing workflows
 
 import json
 import logging
+import os
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request, session
 
 from database.auth_db import get_api_key_for_tradingview
+from limiter import limiter
 from utils.session import check_session_validity
 
 logger = logging.getLogger(__name__)
 
 flow_bp = Blueprint("flow", __name__, url_prefix="/flow")
+
+# The same variable and default the /chartink webhook reads, and the legacy
+# /strategy webhook read before it was removed. Flow inherits the budget an
+# operator has already configured rather than introducing a second knob.
+WEBHOOK_RATE_LIMIT = os.getenv("WEBHOOK_RATE_LIMIT", "100 per minute")
 
 
 def get_current_api_key():
@@ -725,8 +732,6 @@ def get_workflow_executions(workflow_id):
 
 def get_webhook_base_url():
     """Get the base URL for webhooks based on server configuration"""
-    import os
-
     # Use HOST_SERVER from .env or default to localhost
     host = os.getenv("HOST_SERVER", "http://127.0.0.1:5000")
     # Ensure no trailing slash
@@ -899,6 +904,66 @@ def set_webhook_auth(workflow_id):
 # === Webhook Trigger Routes (CSRF Exempt) ===
 
 
+def _webhook_token_key():
+    """Rate-limit key naming the workflow instead of the caller."""
+    token = (request.view_args or {}).get("token") or ""
+    return f"flow-webhook:{token}"
+
+
+# Two limits at the same budget, because they bound different things and neither
+# subsumes the other.
+#
+# By caller address: the only key that can stop someone walking the token space.
+# Every guess carries a different token, so a token-keyed limit would score each
+# one against an empty bucket and never fire, while each miss still costs a
+# database lookup. This is also exactly what /chartink enforces, so Flow is not
+# weaker than the surface it replaces.
+#
+# By token: bounds what one leaked token can do to the broker account no matter
+# how many addresses replay it. The token is the credential here (the payload
+# secret is optional), so this is the limit that caps real order flow.
+#
+# Both are shared scopes so /webhook/<token> and /webhook/<token>/<symbol> draw
+# on one budget. Per-endpoint buckets would hand the same workflow twice the
+# configured rate simply for alternating between two spellings of itself.
+_webhook_caller_limit = limiter.shared_limit(WEBHOOK_RATE_LIMIT, scope="flow_webhook_caller")
+_webhook_workflow_limit = limiter.shared_limit(
+    WEBHOOK_RATE_LIMIT, scope="flow_webhook_workflow", key_func=_webhook_token_key
+)
+
+
+@flow_bp.errorhandler(429)
+def _rate_limited(error):
+    """Answer an over-limit caller with 429 JSON rather than the app-wide redirect.
+
+    app.py's 429 handler returns JSON only for paths under `/api/` and redirects
+    everything else to the React `/rate-limited` page. A browser reads that; an
+    automated caller does not. TradingView would follow the redirect, receive
+    HTML and 200, and record the alert as delivered, so a throttled workflow
+    would be indistinguishable from a working one and nothing would surface the
+    loss. A blueprint handler is consulted ahead of the application one, so this
+    corrects the answer for Flow without changing it for the rest of the product.
+    """
+    retry_after = 60
+    breached = getattr(error, "limit", None)
+    try:
+        retry_after = int(breached.limit.get_expiry())
+    except (AttributeError, TypeError, ValueError):
+        pass
+
+    response = jsonify(
+        {
+            "status": "error",
+            "message": "Rate limit exceeded. Please slow down your requests.",
+            "limit": getattr(error, "description", None),
+            "retry_after": retry_after,
+        }
+    )
+    response.status_code = 429
+    response.headers["Retry-After"] = str(retry_after)
+    return response
+
+
 def _read_webhook_payload():
     """Read a webhook body whatever shape the sender used.
 
@@ -940,7 +1005,6 @@ def _read_webhook_payload():
 def _execute_webhook(token, webhook_data=None, url_secret=None):
     """Internal function to execute webhook"""
     import hmac
-    import os
 
     from database.flow_db import get_workflow_by_webhook_token
     from services.flow_executor_service import execute_workflow
@@ -1039,6 +1103,8 @@ def _execute_webhook(token, webhook_data=None, url_secret=None):
 
 
 @flow_bp.route("/webhook/<token>", methods=["POST"])
+@_webhook_caller_limit
+@_webhook_workflow_limit
 def trigger_webhook(token):
     """
     Trigger a workflow via webhook (CSRF exempt)
@@ -1053,6 +1119,8 @@ def trigger_webhook(token):
 
 
 @flow_bp.route("/webhook/<token>/<symbol>", methods=["POST"])
+@_webhook_caller_limit
+@_webhook_workflow_limit
 def trigger_webhook_with_symbol(token, symbol):
     """
     Trigger a workflow via webhook with symbol in URL path (CSRF exempt)
