@@ -253,4 +253,54 @@ describe('WatchlistPanel', () => {
     expect(await screen.findByText('+0.37%')).toBeInTheDocument()
     expect(previousClose).not.toHaveBeenCalled()
   })
+
+  it('shows only the chosen columns, and keeps the header on the same grid', async () => {
+    localStorage.setItem(
+      'oa-trading-watchlist-display',
+      JSON.stringify({ columns: ['last', 'change', 'volume'], logo: true, exchange: true })
+    )
+    liveData = {
+      items: [{ symbol: 'RELIANCE', exchange: 'NSE', ltp: 1287 }],
+      quotes: new Map([['NSE:RELIANCE', { ltp: 1287, prev_close: 1282.2, volume: 6830228 }]]),
+    }
+    const { container } = renderPanel()
+    await screen.findByText('RELIANCE')
+
+    const grids = container.querySelectorAll('[style*="grid-template-columns"]')
+    // Header and row must resolve to the same template, or the labels sit over
+    // the wrong numbers.
+    const templates = new Set([...grids].map((g) => (g as HTMLElement).style.gridTemplateColumns))
+    expect(templates.size).toBe(1)
+
+    expect(screen.getByText('+4.80')).toBeInTheDocument()
+    expect(screen.getByText('68.30L')).toBeInTheDocument()
+    // Change % was not chosen.
+    expect(screen.queryByText('+0.37%')).not.toBeInTheDocument()
+  })
+
+  it('hides the symbol letter and the exchange when they are turned off', async () => {
+    localStorage.setItem(
+      'oa-trading-watchlist-display',
+      JSON.stringify({ columns: ['last'], logo: false, exchange: false })
+    )
+    renderPanel()
+    await screen.findByText('RELIANCE')
+
+    expect(screen.queryByText('NSE')).not.toBeInTheDocument()
+    expect(screen.queryByText('R')).not.toBeInTheDocument()
+  })
+
+  it('ignores a stored column id that no longer exists', async () => {
+    // A layout saved by an older build must not leave the header and the rows
+    // disagreeing about how many cells there are.
+    localStorage.setItem(
+      'oa-trading-watchlist-display',
+      JSON.stringify({ columns: ['last', 'gone', 'alsoGone'], logo: true, exchange: true })
+    )
+    const { container } = renderPanel()
+    await screen.findByText('RELIANCE')
+
+    const grids = container.querySelectorAll('[style*="grid-template-columns"]')
+    expect((grids[0] as HTMLElement).style.gridTemplateColumns).toBe('1fr 64px 16px')
+  })
 })

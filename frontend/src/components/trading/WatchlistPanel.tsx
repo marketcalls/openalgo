@@ -12,7 +12,15 @@
  * no second socket and no polling loop of its own.
  */
 
-import { ChevronDown, GripVertical, Plus, RefreshCw, Search, Trash2 } from 'lucide-react'
+import {
+  ChevronDown,
+  GripVertical,
+  MoreHorizontal,
+  Plus,
+  RefreshCw,
+  Search,
+  Trash2,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type Watchlist, type WatchlistItem, watchlistApi, watchlistError } from '@/api/watchlist'
 import { Button } from '@/components/ui/button'
@@ -26,8 +34,10 @@ import {
 } from '@/components/ui/dialog'
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
@@ -77,7 +87,98 @@ interface Quote {
    * pre-open or thinly quoted instrument, indistinguishable from a symbol
    * that genuinely had not moved.
    */
+  change: number | null
   changePercent: number | null
+  volume?: number
+  high?: number
+  low?: number
+  open?: number
+}
+
+/**
+ * Every column the panel can show, in the order they appear.
+ *
+ * Which of them are on is the user's choice, so the row and its header both
+ * build their grid from the same selection: a template computed in one place
+ * cannot fall out of register with the cells it sizes.
+ *
+ * `tone` marks a column that carries direction, which is the only reason a
+ * number here is ever coloured.
+ */
+interface Column {
+  id: string
+  label: string
+  width: number
+  /** Carries direction, which is the only reason a number here is coloured. */
+  tone?: boolean
+  get(quote: Quote): string
+}
+
+const COLUMNS: readonly Column[] = [
+  { id: 'last', label: 'Last', width: 64, get: (q: Quote) => fmt(q.ltp) },
+  {
+    id: 'change',
+    label: 'Chg',
+    width: 60,
+    tone: true,
+    get: (q: Quote) => (q.change == null ? '-' : `${q.change >= 0 ? '+' : ''}${fmt(q.change)}`),
+  },
+  {
+    id: 'changePercent',
+    label: 'Chg%',
+    width: 58,
+    tone: true,
+    get: (q: Quote) =>
+      q.changePercent == null
+        ? '-'
+        : `${q.changePercent >= 0 ? '+' : ''}${q.changePercent.toFixed(2)}%`,
+  },
+  { id: 'volume', label: 'Vol', width: 58, get: (q: Quote) => compact(q.volume) },
+  { id: 'high', label: 'High', width: 60, get: (q: Quote) => (q.high ? fmt(q.high) : '-') },
+  { id: 'low', label: 'Low', width: 60, get: (q: Quote) => (q.low ? fmt(q.low) : '-') },
+  { id: 'open', label: 'Open', width: 60, get: (q: Quote) => (q.open ? fmt(q.open) : '-') },
+] as const
+type ColumnId = string
+
+/** Lakhs and crores: raw volume does not fit a 58px column. */
+function compact(value: number | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value === 0) return '-'
+  if (value >= 1e7) return `${(value / 1e7).toFixed(2)}Cr`
+  if (value >= 1e5) return `${(value / 1e5).toFixed(2)}L`
+  if (value >= 1e3) return `${(value / 1e3).toFixed(1)}K`
+  return String(Math.round(value))
+}
+
+/** What the panel shows, per user. */
+interface Display {
+  columns: ColumnId[]
+  logo: boolean
+  exchange: boolean
+}
+
+const DISPLAY_KEY = 'oa-trading-watchlist-display'
+const DISPLAY_DEFAULT: Display = {
+  columns: ['last', 'changePercent'],
+  logo: true,
+  exchange: true,
+}
+
+function readDisplay(): Display {
+  try {
+    const saved = JSON.parse(localStorage.getItem(DISPLAY_KEY) || '{}')
+    const ids = COLUMNS.map((c) => c.id) as string[]
+    return {
+      // Filtered against the live column list, so a stored id from an older
+      // build cannot leave the header and the rows disagreeing.
+      columns: Array.isArray(saved.columns)
+        ? (saved.columns.filter((c: unknown) => ids.includes(c as string)) as ColumnId[])
+        : DISPLAY_DEFAULT.columns,
+      logo: typeof saved.logo === 'boolean' ? saved.logo : true,
+      exchange: typeof saved.exchange === 'boolean' ? saved.exchange : true,
+    }
+  } catch {
+    return DISPLAY_DEFAULT
+  }
 }
 
 /**
@@ -113,7 +214,12 @@ function symbolTint(symbol: string): string {
 }
 
 /** The row and its column header share this, so the two cannot drift apart. */
-const ROW_GRID = 'grid grid-cols-[1fr_64px_56px_16px] gap-x-1.5'
+/** The row and its header share this, so the two cannot drift apart. */
+function rowGrid(columns: typeof COLUMNS): string {
+  // 1fr for the symbol, each chosen column at its own width, 16px for the
+  // remove control.
+  return `1fr ${columns.map((c) => `${c.width}px`).join(' ')} 16px`
+}
 
 export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) {
   const [lists, setLists] = useState<Watchlist[]>([])
@@ -133,6 +239,47 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
 
   const fileRef = useRef<HTMLInputElement>(null)
   const { isMarketOpen } = useMarketStatus()
+
+  const [display, setDisplay] = useState<Display>(readDisplay)
+  useEffect(() => {
+    localStorage.setItem(DISPLAY_KEY, JSON.stringify(display))
+  }, [display])
+
+  /** The chosen columns, in the canonical order rather than click order. */
+  const shownColumns = useMemo(
+    () => COLUMNS.filter((c) => display.columns.includes(c.id)),
+    [display.columns]
+  )
+  /**
+   * The narrowest the panel can be drawn at with these columns chosen.
+   *
+   * 16px of padding, 16px for the remove control, 6px between each cell, the
+   * columns themselves, and 96px left for the symbol -- enough for a
+   * BANKNIFTY and its exchange tag. Without a floor the symbol column
+   * absorbed every column added and collapsed to two letters.
+   */
+  const minWidth = useMemo(
+    () =>
+      96 +
+      16 +
+      16 +
+      shownColumns.reduce((sum, c) => sum + c.width, 0) +
+      (shownColumns.length + 1) * 6,
+    [shownColumns]
+  )
+
+  const gridTemplate = useMemo(
+    () => rowGrid(shownColumns as unknown as typeof COLUMNS),
+    [shownColumns]
+  )
+
+  const toggleColumn = (id: ColumnId) =>
+    setDisplay((prev) => ({
+      ...prev,
+      columns: prev.columns.includes(id)
+        ? prev.columns.filter((c) => c !== id)
+        : [...prev.columns, id],
+    }))
 
   const active = useMemo(
     () => lists.find((l) => l.id === activeId) ?? lists[0] ?? null,
@@ -268,12 +415,15 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
       const prevClose = needsPreviousClose(snapshot?.prev_close, ltp)
         ? resolvedCloses[key]
         : snapshot?.prev_close
+      const known = typeof prevClose === 'number' && prevClose > 0
       next[key] = {
         ltp,
-        changePercent:
-          typeof prevClose === 'number' && prevClose > 0
-            ? ((ltp - prevClose) / prevClose) * 100
-            : null,
+        change: known ? ltp - (prevClose as number) : null,
+        changePercent: known ? ((ltp - (prevClose as number)) / (prevClose as number)) * 100 : null,
+        volume: snapshot?.volume,
+        high: snapshot?.high,
+        low: snapshot?.low,
+        open: snapshot?.open,
       }
     }
     return next
@@ -305,7 +455,7 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
     return () => {
       alive = false
     }
-  }, [priced, multiQuotes, resolvedCloses, apiKey])
+  }, [priced, multiQuotes, resolvedCloses, apiKey, isMarketOpen])
 
   /**
    * When the snapshot last actually arrived.
@@ -505,7 +655,12 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
         : 'New list'
 
   return (
-    <PanelShell id="oa-panel-watchlist" label="Watchlist" storageKey="oa-trading-watchlist-width">
+    <PanelShell
+      id="oa-panel-watchlist"
+      label="Watchlist"
+      storageKey="oa-trading-watchlist-width"
+      minWidth={minWidth}
+    >
       {/* Header: which list, and what can be done to it. Its height lands the
           rule on the same line as every pane toolbar's. */}
       <div className={PANEL_HEADER}>
@@ -594,18 +749,80 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
         >
           <Plus className="h-4 w-4" />
         </Button>
+
+        {/* What the rows show. Separate from the list menu beside it: that
+            one acts on the list, this one only changes how it is drawn. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              title="Customise columns"
+              aria-label="Customise columns"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-52">
+            <DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+              Columns
+            </DropdownMenuLabel>
+            {COLUMNS.map((column) => (
+              <DropdownMenuCheckboxItem
+                key={column.id}
+                checked={display.columns.includes(column.id)}
+                // The menu stays open: choosing columns is several decisions,
+                // and closing after each one would mean reopening every time.
+                onSelect={(e) => e.preventDefault()}
+                onCheckedChange={() => toggleColumn(column.id)}
+                className="text-[12px]"
+              >
+                {column.label === 'Chg'
+                  ? 'Change'
+                  : column.label === 'Chg%'
+                    ? 'Change %'
+                    : column.label === 'Vol'
+                      ? 'Volume'
+                      : column.label}
+              </DropdownMenuCheckboxItem>
+            ))}
+
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+              Symbol display
+            </DropdownMenuLabel>
+            <DropdownMenuCheckboxItem
+              checked={display.logo}
+              onSelect={(e) => e.preventDefault()}
+              onCheckedChange={(v) => setDisplay((prev) => ({ ...prev, logo: v }))}
+              className="text-[12px]"
+            >
+              Symbol letter
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              checked={display.exchange}
+              onSelect={(e) => e.preventDefault()}
+              onCheckedChange={(v) => setDisplay((prev) => ({ ...prev, exchange: v }))}
+              className="text-[12px]"
+            >
+              Exchange
+            </DropdownMenuCheckboxItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
-      {/* Column header, on the same grid as the rows below */}
+      {/* Column header, built from the same selection as the rows below */}
       <div
-        className={cn(
-          ROW_GRID,
-          'shrink-0 border-b px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70'
-        )}
+        className="grid shrink-0 gap-x-1.5 border-b px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70"
+        style={{ gridTemplateColumns: gridTemplate }}
       >
         <span>Symbol</span>
-        <span className="text-right">Last</span>
-        <span className="text-right">Chg%</span>
+        {shownColumns.map((column) => (
+          <span key={column.id} className="text-right">
+            {column.label}
+          </span>
+        ))}
         <span />
       </div>
 
@@ -667,8 +884,9 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
                   setDragId(null)
                   setOverId(null)
                 }}
+                style={{ gridTemplateColumns: gridTemplate }}
                 className={cn(
-                  ROW_GRID,
+                  'grid gap-x-1.5',
                   'group relative items-center px-2 py-1 text-[12px] transition-colors hover:bg-accent/50',
                   // The charted row carries a left marker as well as a wash.
                   // Hover alone was the same bg-accent, so pointing at any row
@@ -730,40 +948,43 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
                 <GripVertical className="pointer-events-none absolute left-0 top-1/2 h-3 w-3 -translate-y-1/2 text-transparent transition-colors group-hover:text-muted-foreground/50" />
 
                 <span className="pointer-events-none relative flex min-w-0 items-center gap-1.5">
-                  <span
-                    className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold text-white"
-                    style={{ backgroundColor: symbolTint(item.symbol) }}
-                    aria-hidden="true"
-                  >
-                    {item.symbol.charAt(0)}
-                  </span>
+                  {display.logo && (
+                    <span
+                      className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold text-white"
+                      style={{ backgroundColor: symbolTint(item.symbol) }}
+                      aria-hidden="true"
+                    >
+                      {item.symbol.charAt(0)}
+                    </span>
+                  )}
                   <span className="truncate font-medium" title={item.symbol}>
                     {item.symbol}
                   </span>
-                  <span className="shrink-0 text-[10px] text-muted-foreground">
-                    {item.exchange}
-                  </span>
-                </span>
-
-                <span className="pointer-events-none relative text-right tabular-nums">
-                  {quote ? fmt(quote.ltp) : '-'}
+                  {display.exchange && (
+                    <span className="shrink-0 text-[10px] text-muted-foreground">
+                      {item.exchange}
+                    </span>
+                  )}
                 </span>
 
                 {/* Always visible. Hiding the number the user hovered in order
                     to read it, so a control can borrow its cell, trades the
                     panel's whole purpose for one action used once per row. */}
-                <span
-                  className={cn(
-                    'pointer-events-none relative text-right tabular-nums',
-                    direction === 'up' && 'text-emerald-600 dark:text-emerald-400',
-                    direction === 'down' && 'text-rose-600 dark:text-rose-400',
-                    direction === 'flat' && 'text-muted-foreground'
-                  )}
-                >
-                  {quote?.changePercent == null
-                    ? '-'
-                    : `${quote.changePercent >= 0 ? '+' : ''}${quote.changePercent.toFixed(2)}%`}
-                </span>
+                {shownColumns.map((column) => (
+                  <span
+                    key={column.id}
+                    className={cn(
+                      'pointer-events-none relative text-right tabular-nums',
+                      // Only a column carrying direction is coloured.
+                      column.tone && direction === 'up' && 'text-emerald-600 dark:text-emerald-400',
+                      column.tone && direction === 'down' && 'text-rose-600 dark:text-rose-400',
+                      (!column.tone || direction === 'flat') && 'text-muted-foreground',
+                      !column.tone && quote && 'text-foreground'
+                    )}
+                  >
+                    {quote ? column.get(quote) : '-'}
+                  </span>
+                ))}
 
                 <button
                   type="button"

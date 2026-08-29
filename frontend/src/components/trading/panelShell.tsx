@@ -43,11 +43,35 @@ interface Props {
   /** Where this panel's width is remembered. */
   storageKey: string
   defaultWidth?: number
+  /**
+   * The narrowest this panel's own content can be drawn at.
+   *
+   * The watchlist raises it as columns are added: four numeric columns need
+   * about 240px between them, and without this the symbol column absorbed
+   * the whole cost and collapsed to two letters. Choosing more columns
+   * genuinely needs more room, so the panel grows to fit rather than
+   * silently ruining the one column every row is identified by.
+   */
+  minWidth?: number
   children: ReactNode
 }
 
-export function PanelShell({ id, label, storageKey, defaultWidth = 340, children }: Props) {
+export function PanelShell({
+  id,
+  label,
+  storageKey,
+  defaultWidth = 340,
+  minWidth,
+  children,
+}: Props) {
+  const floor = Math.max(MIN_WIDTH, minWidth ?? 0)
   const [width, setWidth] = useState(() => readWidth(storageKey, defaultWidth))
+
+  // Grow to the floor when it rises, but never shrink back: a user who
+  // widened the panel and then removed a column keeps the width they chose.
+  useEffect(() => {
+    setWidth((w) => (w < floor ? Math.min(MAX_WIDTH, floor) : w))
+  }, [floor])
   const [dragging, setDragging] = useState(false)
   const widthRef = useRef(width)
   widthRef.current = width
@@ -89,7 +113,7 @@ export function PanelShell({ id, label, storageKey, defaultWidth = 340, children
       const onMove = (e: PointerEvent) => {
         // The panel is on the right, so dragging left makes it wider.
         const next = startWidth + (startX - e.clientX)
-        setWidth(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, next)))
+        setWidth(Math.min(MAX_WIDTH, Math.max(floor, next)))
       }
       const onUp = () => {
         setDragging(false)
@@ -111,7 +135,9 @@ export function PanelShell({ id, label, storageKey, defaultWidth = 340, children
       window.addEventListener('pointercancel', onUp)
       releaseRef.current = onUp
     },
-    [persist]
+    // floor: a drag started before a column change must clamp to the new
+    // minimum, not the one that was live when the pointer went down.
+    [persist, floor]
   )
 
   return (
@@ -131,14 +157,14 @@ export function PanelShell({ id, label, storageKey, defaultWidth = 340, children
         aria-orientation="vertical"
         aria-label={`Resize ${label.toLowerCase()}`}
         aria-valuenow={width}
-        aria-valuemin={MIN_WIDTH}
+        aria-valuemin={floor}
         aria-valuemax={MAX_WIDTH}
         tabIndex={0}
         onPointerDown={startResize}
         onKeyDown={(e) => {
           const step = e.key === 'ArrowLeft' ? 16 : e.key === 'ArrowRight' ? -16 : 0
           if (!step) return
-          setWidth((w) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w + step)))
+          setWidth((w) => Math.min(MAX_WIDTH, Math.max(floor, w + step)))
           e.preventDefault()
         }}
         // Held-arrow auto-repeat fires about thirty times a second, so the
