@@ -474,28 +474,6 @@ def react_analyzer():
 # ============================================================
 
 
-# Webhook Strategies
-# Note: Using strict_slashes=False to handle both /strategy and /strategy/
-@react_bp.route("/strategy", strict_slashes=False)
-def react_strategy_index():
-    return serve_react_app()
-
-
-@react_bp.route("/strategy/new", strict_slashes=False)
-def react_strategy_new():
-    return serve_react_app()
-
-
-@react_bp.route("/strategy/<int:strategy_id>", strict_slashes=False)
-def react_strategy_view(strategy_id):
-    return serve_react_app()
-
-
-@react_bp.route("/strategy/<int:strategy_id>/configure", strict_slashes=False)
-def react_strategy_configure(strategy_id):
-    return serve_react_app()
-
-
 # Python Strategies
 # Note: Using strict_slashes=False to handle both /python and /python/
 @react_bp.route("/python", strict_slashes=False)

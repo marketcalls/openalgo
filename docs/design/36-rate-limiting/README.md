@@ -85,8 +85,8 @@ STRATEGY_RATE_LIMIT=200 per minute
 | **API** | 50/sec | `/api/v1/quotes`, `/api/v1/positionbook`, etc. | General data access |
 | **Order** | 10/sec | `/api/v1/placeorder`, `/api/v1/modifyorder`, `/api/v1/cancelorder` | Trading rate control |
 | **Smart Order** | 10/sec | `/api/v1/placesmartorder` | Automated order rate control |
-| **Webhook** | 100/min | `/chartink/webhook`, `/strategy/webhook` | External integrations |
-| **Strategy** | 200/min | Strategy-related operations | Strategy execution |
+| **Webhook** | 100/min | `/chartink/webhook` | External integrations |
+| **Strategy** | 200/min | Chartink strategy CRUD operations | Strategy management |
 
 ## Implementation
 
@@ -276,7 +276,7 @@ def place_order_with_retry(order_data, max_retries=3):
 | Endpoint | Rate Limit Variable | Default |
 |----------|---------------------|---------|
 | `/chartink/webhook` | WEBHOOK_RATE_LIMIT | 100/min |
-| `/strategy/webhook` | STRATEGY_RATE_LIMIT | 200/min |
+| `/chartink` CRUD routes | STRATEGY_RATE_LIMIT | 200/min |
 | `/flow/trigger/*` | WEBHOOK_RATE_LIMIT | 100/min |
 
 ## Moving Window Strategy
@@ -378,6 +378,5 @@ limiter = Limiter(
 | `utils/env_check.py` | Rate limit validation |
 | `restx_api/*.py` | API endpoint rate limits |
 | `blueprints/auth.py` | Login rate limits |
-| `blueprints/chartink.py` | Webhook rate limits |
-| `blueprints/strategy.py` | Strategy rate limits |
+| `blueprints/chartink.py` | Webhook and strategy rate limits |
 | `app.py` | 429 error handler |

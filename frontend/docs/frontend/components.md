@@ -61,7 +61,6 @@ import { MobileBottomNav } from '@/components/layout/MobileBottomNav'
 2. Orderbook
 3. Tradebook
 4. Positions
-5. Strategy
 
 **Accessibility:**
 - 44px minimum touch targets

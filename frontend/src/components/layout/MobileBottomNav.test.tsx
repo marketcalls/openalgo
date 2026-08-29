@@ -64,11 +64,11 @@ describe('MobileBottomNav', () => {
       expect(positionsLink).toHaveClass('text-primary')
     })
 
-    it('highlights Strategy when on strategy sub-routes', () => {
-      renderWithRouter('/strategy/new')
+    it('highlights Tradebook when on the tradebook route', () => {
+      renderWithRouter('/tradebook')
 
-      const strategyLink = screen.getByRole('link', { name: /strategy/i })
-      expect(strategyLink).toHaveClass('text-primary')
+      const tradebookLink = screen.getByRole('link', { name: /tradebook/i })
+      expect(tradebookLink).toHaveClass('text-primary')
     })
 
     it('non-active items have muted color', () => {

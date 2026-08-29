@@ -80,12 +80,6 @@ const Arbitrage = lazy(() => import('@/pages/Arbitrage'))
 const StrategyBuilder = lazy(() => import('@/pages/StrategyBuilder'))
 const StrategyPortfolio = lazy(() => import('@/pages/StrategyPortfolio'))
 
-// Strategy pages
-const StrategyIndex = lazy(() => import('@/pages/strategy/StrategyIndex'))
-const NewStrategy = lazy(() => import('@/pages/strategy/NewStrategy'))
-const ViewStrategy = lazy(() => import('@/pages/strategy/ViewStrategy'))
-const ConfigureSymbols = lazy(() => import('@/pages/strategy/ConfigureSymbols'))
-
 // Python Strategy pages
 const PythonStrategyIndex = lazy(() => import('@/pages/python-strategy/PythonStrategyIndex'))
 const NewPythonStrategy = lazy(() => import('@/pages/python-strategy/NewPythonStrategy'))
@@ -208,10 +202,7 @@ function App() {
                   element={<Navigate to="/portfolio-backtester" replace />}
                 />
                 <Route path="/sip-backtester" element={<SipBacktester />} />
-                <Route
-                  path="/sip-backtester/results"
-                  element={<SipBacktesterResults />}
-                />
+                <Route path="/sip-backtester/results" element={<SipBacktesterResults />} />
                 <Route path="/portfolio-analyzer" element={<PortfolioAnalyzer />} />
                 <Route path="/gocharting" element={<GoCharting />} />
                 <Route path="/pnl-tracker" element={<PnLTracker />} />
@@ -251,11 +242,6 @@ function App() {
                 <Route path="/websocket/test/20" element={<WebSocketTest depthLevel={20} />} />
                 <Route path="/websocket/test/30" element={<WebSocketTest depthLevel={30} />} />
                 <Route path="/websocket/test/50" element={<WebSocketTest depthLevel={50} />} />
-                {/* Phase 6: Webhook Strategies */}
-                <Route path="/strategy" element={<StrategyIndex />} />
-                <Route path="/strategy/new" element={<NewStrategy />} />
-                <Route path="/strategy/:strategyId" element={<ViewStrategy />} />
-                <Route path="/strategy/:strategyId/configure" element={<ConfigureSymbols />} />
                 {/* Phase 6: Python Strategies */}
                 <Route path="/python" element={<PythonStrategyIndex />} />
                 <Route path="/python/new" element={<NewPythonStrategy />} />

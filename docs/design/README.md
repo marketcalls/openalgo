@@ -56,7 +56,6 @@ The current plugin inventory contains 36 broker directories with `plugin.json`. 
 | [32 Master Contract](./32-master-contract/) | Broker instrument downloads and cache policy |
 | [33 Broker Folder](./33-broker-folder/) | Plugin module convention |
 | [38 Python Strategies](./38-python-strategies/) | Hosted-process model and logs |
-| [39 Strategy Module](./39-strategy-module/) | Webhook strategy management |
 | [42 Action Center](./42-action-center/) | Semi-auto order approval |
 | [54 Scalping Terminal](./54-scalping-terminal/) | Keyboard trading, charts, persisted stops, risk monitor |
 

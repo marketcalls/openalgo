@@ -43,6 +43,17 @@ PROJECT_ROOT = os.path.dirname(UPGRADE_DIR)
 # password reset for every user. That is operator-controlled work, not
 # something to run unattended on every update. Operators run it explicitly:
 #   cd upgrade && uv run rotate_pepper.py
+#
+# upgrade/migrate_drop_legacy_strategy.py is absent for the same reason. It
+# drops the retired `strategies` and `strategy_symbol_mappings` tables, whose
+# rows are user-authored trading configuration: which symbols a strategy
+# traded, at what quantity, with what product. It exports every row to JSON
+# before dropping and refuses to drop if that export fails, but an export is
+# not consent. Deleting a user's saved configuration during a routine upgrade
+# is exactly the class of surprise this list exists to prevent, so the operator
+# runs it when they have decided they no longer need the data:
+#   cd upgrade && uv run migrate_drop_legacy_strategy.py --status
+#   cd upgrade && uv run migrate_drop_legacy_strategy.py
 MIGRATIONS = [
     # Legacy migrations (for users upgrading from older versions)
     ("add_feed_token.py", "Feed Token Support"),

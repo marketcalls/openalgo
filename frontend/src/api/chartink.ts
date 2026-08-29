@@ -3,8 +3,8 @@ import type {
   ChartinkStrategy,
   ChartinkSymbolMapping,
   CreateChartinkStrategyRequest,
+  SymbolSearchResult,
 } from '@/types/chartink'
-import type { SymbolSearchResult } from '@/types/strategy'
 import type { ApiResponse } from '@/types/trading'
 import { webClient } from './client'
 

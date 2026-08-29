@@ -29,20 +29,20 @@ function currentLinks(container: HTMLElement) {
 }
 
 describe('Navbar', () => {
-  it('marks only the nested Strategy route as current in desktop navigation', () => {
-    renderNavbar('/strategy/builder')
+  it('marks only the active route as current in desktop navigation', () => {
+    renderNavbar('/positions')
 
-    const strategy = screen.getByRole('link', { name: 'Strategy' })
+    const positions = screen.getByRole('link', { name: 'Positions' })
     const dashboard = screen.getByRole('link', { name: 'Dashboard' })
 
-    expect(strategy).toHaveAttribute('aria-current', 'page')
+    expect(positions).toHaveAttribute('aria-current', 'page')
     expect(dashboard).not.toHaveAttribute('aria-current')
     const desktopNav = screen
       .getAllByRole('navigation')
       .find((nav) => nav.classList.contains('md:flex'))
 
     expect(desktopNav).toBeDefined()
-    expect(currentLinks(desktopNav!)).toEqual([strategy])
+    expect(currentLinks(desktopNav!)).toEqual([positions])
   })
 
   it('marks only the active sheet navigation link as current', async () => {

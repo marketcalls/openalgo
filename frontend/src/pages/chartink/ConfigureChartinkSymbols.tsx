@@ -42,9 +42,8 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import type { ChartinkStrategy, ChartinkSymbolMapping } from '@/types/chartink'
+import type { ChartinkStrategy, ChartinkSymbolMapping, SymbolSearchResult } from '@/types/chartink'
 import { CHARTINK_EXCHANGES, CHARTINK_PRODUCTS } from '@/types/chartink'
-import type { SymbolSearchResult } from '@/types/strategy'
 import { showToast } from '@/utils/toast'
 
 export default function ConfigureChartinkSymbols() {

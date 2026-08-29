@@ -140,7 +140,7 @@ def get_logger(name):
 | Auth | `blueprints.auth` | Login/logout events |
 | Orders | `restx_api.place_order` | Order placement |
 | WebSocket | `websocket_proxy` | WS connections |
-| Strategy | `blueprints.strategy` | Strategy execution |
+| Automation | `blueprints.chartink` | Scanner webhook execution |
 
 ### Example Log Output
 

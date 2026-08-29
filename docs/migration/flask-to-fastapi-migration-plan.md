@@ -227,7 +227,7 @@ The Sandbox finding generalizes — with the §1a caveat — to the **entire fea
 | Feature | Engine / logic (kept as-is) | Thin shell that ports | Config |
 | --- | --- | --- | --- |
 | **Flow (no-code builder)** | `services/flow_executor_service.py`, `flow_price_monitor_service.py`, `flow_scheduler_service.py` (APScheduler), `database/flow_db.py` — pure Python, JSON-stored graphs | `blueprints/flow.py` routes + webhook + `socketio.emit` | env/JSON, unchanged |
-| **Python Strategy Host** | subprocess-isolated strategy runners, `database/strategy_db.py`, shared APScheduler, market-calendar checks — all pure Python | `blueprints/python_strategy.py` (~21 routes); log streaming via **SSE** (`text/event-stream`) → FastAPI `StreamingResponse`/`sse-starlette` (already a dep); `request.files` upload → `UploadFile` | unchanged; **subprocess isolation preserved** |
+| **Python Strategy Host** | subprocess-isolated strategy runners, JSON-file strategy configs, shared APScheduler, market-calendar checks — all pure Python | `blueprints/python_strategy.py` (~21 routes); log streaming via **SSE** (`text/event-stream`) → FastAPI `StreamingResponse`/`sse-starlette` (already a dep); `request.files` upload → `UploadFile` | unchanged; **subprocess isolation preserved** |
 | **Historify (DuckDB)** | `services/historify_service.py` (~2,200 lines), `database/historify_db.py` (**pure DuckDB**, no SQLAlchemy/Flask), `historify_scheduler_service.py` (APScheduler) | `blueprints/historify.py` (59 routes) + `historify_progress`/`job_complete` emits | `HISTORIFY_DATABASE_URL`, unchanged |
 | **Playground (API tester)** | `parse_bru_file()` / `load_bruno_endpoints()` (pure parsers) | `blueprints/playground.py` 3 JSON routes; its `render_template("playground.html")` is a **dead path** (no templates dir) — drop it | — |
 | **ngrok** | `utils/ngrok_manager.py` — spawns tunnel via pyngrok, signal/atexit cleanup, **zero Flask coupling** | just the `start_ngrok_tunnel(port)` call moves into `lifespan` | `NGROK_ALLOW`, `NGROK_AUTH_TOKEN`, `HOST_SERVER` via `os.getenv` — unchanged |
@@ -239,7 +239,7 @@ The Sandbox finding generalizes — with the §1a caveat — to the **entire fea
 | **Master contract** | `database/master_contract_cache_hook.py` logic | `cache_loaded` / `master_contract_download` emits | unchanged |
 | **Options Tools (/tools, 12 tools)** | `services/iv_chart_service.py`, `oi_tracker_service.py`, `gex_service.py`, `vol_surface_service.py`, `iv_smile_service.py`, `oi_profile_service.py`, `option_chain_service.py`, `custom_straddle_service.py`, `strategy_chart_service.py` — all pure pandas/math | the matching `blueprints/*.py` JSON endpoints | unchanged |
 | **Latency / Health monitoring** | `database/latency_db.py`, `health_db.py`, `utils/health_monitor.py` | `blueprints/latency.py`, `health.py` (+ per-blueprint teardown handlers) | `LATENCY_/HEALTH_DATABASE_URL`, unchanged |
-| **Chartink / Strategy webhooks** | `database/chartink_db.py`, `strategy_db.py`; queue+APScheduler order processing | `blueprints/chartink.py`, `strategy.py` webhooks (CSRF-exempt) | unchanged |
+| **Chartink webhooks** | `database/chartink_db.py`; queue+APScheduler order processing | `blueprints/chartink.py` webhook (CSRF-exempt) | unchanged |
 | **Traffic / Security** | `database/traffic_db.py` (`TrafficLog`/`IPBan`/trackers) | `blueprints/traffic.py`, `security.py` + their teardown handlers; WSGI→ASGI middleware | unchanged |
 | **TradingView / GoCharting / ChartInk adapters** | service layer | `blueprints/tv_json.py`, `gc_json.py` (CSRF-exempt, API-key-in-body) | unchanged |
 
@@ -279,8 +279,7 @@ External platforms cannot adapt — the webhook surface must be preserved exactl
 
 | Webhook | Route | Auth model | Notes |
 | --- | --- | --- | --- |
-| Strategy (TradingView etc.) | `POST /strategy/webhook/<webhook_id>` (`blueprints/strategy.py:869`) | **UUID4 secret in URL path** (`uuid.uuid4()` at creation, `strategy.py:816`); invalid → 404 `{"error": "Invalid webhook ID"}`, inactive → 400 | Plus intraday **time-window enforcement** (IST entry/exit logic, LONG/SHORT exit detection) — product logic that must port byte-for-byte |
-| ChartInk | `POST /chartink/webhook/...` (`blueprints/chartink.py`) | Same UUID-in-path model | Queue + APScheduler order processing behind it |
+| ChartInk | `POST /chartink/webhook/<webhook_id>` (`blueprints/chartink.py:789`) | **UUID4 secret in URL path**; invalid → 404 `{"error": "Invalid webhook ID"}`, inactive → 400 | Plus intraday **time-window enforcement** (IST entry/exit logic) — product logic that must port byte-for-byte, behind a queue + APScheduler order processor |
 | Flow | `POST /flow/.../webhook` | **Richer:** per-workflow `webhook_token`, `webhook_secret`, `webhook_auth_type` (`blueprints/flow.py:88-91`) | Multiple auth types — enumerate and test each in P0-11 |
 | TradingView JSON / GoCharting | `blueprints/tv_json.py`, `gc_json.py` | `apikey` in JSON body (platforms cannot set headers) | — |
 

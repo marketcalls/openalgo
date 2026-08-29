@@ -55,9 +55,8 @@ The following categories are available for toast notifications:
 | `system` | System-wide notifications | Login, logout, password change, theme |
 | `actionCenter` | Semi-auto order approval | Pending order alerts |
 | `historify` | Historical data operations | Download jobs, schedules, uploads |
-| `strategy` | TradingView strategy management | Strategy CRUD, symbol mapping |
 | `positions` | Position operations | Close position, PnL tracker |
-| `chartink` | Chartink strategy operations | Chartink strategy CRUD |
+| `chartink` | Chartink strategy operations | Chartink strategy CRUD, symbol mapping |
 | `pythonStrategy` | Python strategy operations | Upload, start, stop, schedule |
 | `telegram` | Telegram bot operations | Bot config, user management |
 | `flow` | Workflow automation | Workflow CRUD, execution |
@@ -74,7 +73,7 @@ The following categories are available for toast notifications:
 import { showToast } from '@/utils/toast'
 
 showToast.success('Order placed successfully', 'orders')
-showToast.error('Failed to load data', 'strategy')
+showToast.error('Failed to load data', 'chartink')
 ```
 
 **DON'T:**
@@ -102,9 +101,9 @@ showToast.info(message: string, category: AlertCategory, options?: ToastOptions)
 showToast.success('Order placed', 'orders')
 showToast.error('Order rejected', 'orders')
 
-// Strategy operations
-showToast.success('Strategy created', 'strategy')
-showToast.error('Failed to load strategy', 'strategy')
+// Chartink strategy operations
+showToast.success('Strategy created', 'chartink')
+showToast.error('Failed to load strategy', 'chartink')
 
 // Copy to clipboard
 showToast.success('Copied to clipboard', 'clipboard')
@@ -120,7 +119,7 @@ showToast.error('Failed to update', 'admin')
 When adding a new feature, determine which category best fits:
 
 - **New trading feature** → `orders` or `positions`
-- **New strategy type** → `strategy`, `chartink`, or `pythonStrategy`
+- **New strategy type** → `chartink`, `pythonStrategy`, or `flow`
 - **New admin feature** → `admin`
 - **New monitoring feature** → `monitoring`
 - **Copy operations** → `clipboard`
@@ -275,12 +274,12 @@ const handleCreate = async () => {
   try {
     const response = await api.create(data)
     if (response.status === 'success') {
-      showToast.success('Item created successfully', 'strategy')
+      showToast.success('Item created successfully', 'chartink')
     } else {
-      showToast.error(response.message || 'Failed to create item', 'strategy')
+      showToast.error(response.message || 'Failed to create item', 'chartink')
     }
   } catch (error) {
-    showToast.error('Failed to create item', 'strategy')
+    showToast.error('Failed to create item', 'chartink')
   }
 }
 
@@ -289,12 +288,12 @@ const handleDelete = async () => {
   try {
     const response = await api.delete(id)
     if (response.status === 'success') {
-      showToast.success('Item deleted', 'strategy')
+      showToast.success('Item deleted', 'chartink')
     } else {
-      showToast.error(response.message || 'Failed to delete', 'strategy')
+      showToast.error(response.message || 'Failed to delete', 'chartink')
     }
   } catch (error) {
-    showToast.error('Failed to delete item', 'strategy')
+    showToast.error('Failed to delete item', 'chartink')
   }
 }
 ```
@@ -321,13 +320,13 @@ const handleToggle = async () => {
     if (response.status === 'success') {
       showToast.success(
         response.data?.is_active ? 'Activated' : 'Deactivated',
-        'strategy'
+        'chartink'
       )
     } else {
-      showToast.error(response.message || 'Failed to toggle', 'strategy')
+      showToast.error(response.message || 'Failed to toggle', 'chartink')
     }
   } catch {
-    showToast.error('Failed to toggle', 'strategy')
+    showToast.error('Failed to toggle', 'chartink')
   }
 }
 ```

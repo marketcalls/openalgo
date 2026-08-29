@@ -32,7 +32,6 @@ def test_auto_expiry_broadcasts_force_logout_to_all_devices(monkeypatch):
     )
     monkeypatch.setattr("database.master_contract_cache_hook.clear_cache_on_logout", lambda: None)
     monkeypatch.setattr("database.settings_db.clear_settings_cache", lambda: None)
-    monkeypatch.setattr("database.strategy_db.clear_strategy_cache", lambda: None)
     monkeypatch.setattr("database.telegram_db.clear_telegram_cache", lambda: None)
 
     with app.test_request_context("/"):

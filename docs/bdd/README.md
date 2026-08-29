@@ -17,7 +17,7 @@ These Gherkin files describe current OpenAlgo behavior for review, acceptance-te
 | `market_data.feature` | Quotes, history, option chain, instruments | 5 |
 | `websocket_streaming.feature` | Proxy protocol, subscriptions, ZMQ fan-in | 6 |
 | `sandbox_analyzer.feature` | Analyzer mode and sandbox state | 5 |
-| `automation_webhooks.feature` | Chartink, Strategy, JSON webhooks, Python host | 5 |
+| `automation_webhooks.feature` | Chartink, JSON webhooks, Python host | 4 |
 | `flow_workflows.feature` | Flow CRUD, execution, webhook, scheduler, monitor | 5 |
 | `scalping_and_tools.feature` | Scalping safety/risk plus current analytics tools | 8 |
 | `notifications_observability.feature` | Telegram, WhatsApp, EventBus, health, traffic | 8 |
@@ -27,10 +27,10 @@ These Gherkin files describe current OpenAlgo behavior for review, acceptance-te
 Current totals:
 
 - Feature files: 17
-- Scenario definitions: 86
+- Scenario definitions: 85
 - Scenario outlines: 6
 - Example rows across outlines: 104
-- Expanded scenario cases: 184 (`86 - 6 + 104`)
+- Expanded scenario cases: 183 (`85 - 6 + 104`)
 
 The REST inventory outline is contract coverage, not proof that every endpoint succeeds against every broker. The broker outline proves configuration inventory only; broker-specific behavioral verification remains in broker tests and adapter integration checks.
 

@@ -185,7 +185,6 @@ def _load_init_functions() -> list:
     from database.sandbox_db import init_db as sandbox
     from database.scalping_db import init_db as scalping
     from database.settings_db import init_db as settings
-    from database.strategy_db import init_db as strategy
     from database.strategy_portfolio_db import (
         ensure_strategy_portfolio_tables_exists as strategy_portfolio,
     )
@@ -203,7 +202,6 @@ def _load_init_functions() -> list:
         ("Chartink DB", chartink),
         ("Traffic Logs DB", traffic_logs),
         ("Latency DB", latency),
-        ("Strategy DB", strategy),
         ("Sandbox DB", sandbox),
         ("Action Center DB", action_center),
         ("Chart Prefs DB", chart_prefs),

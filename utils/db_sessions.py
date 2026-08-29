@@ -26,7 +26,6 @@ SCOPED_SESSION_MODULES = [
     ("database.latency_db", "latency_session"),
     ("database.health_db", "health_session"),
     ("database.settings_db", "db_session"),
-    ("database.strategy_db", "db_session"),
     ("database.user_db", "db_session"),
     ("database.action_center_db", "db_session"),
     ("database.qty_freeze_db", "db_session"),

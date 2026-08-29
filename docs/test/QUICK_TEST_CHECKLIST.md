@@ -96,7 +96,7 @@ uv run app.py
 
 | Feature | Works | Notes |
 |---------|-------|-------|
-| Webhook Strategy | [ ] | |
+| Flow Webhook | [ ] | |
 | Python Strategy | [ ] | |
 | ChartInk Strategy | [ ] | |
 | TradingView Webhook | [ ] | |

@@ -27,7 +27,7 @@ The sample environment currently names `HISTORIFY_DATABASE_URL`, while `database
 |---|---|
 | `auth_db.py`, `user_db.py` | Broker auth, API keys, active sessions, login audit, local user |
 | `settings_db.py`, `leverage_db.py` | Analyzer and application settings |
-| `strategy_db.py`, `chartink_db.py`, `flow_db.py` | Automation definitions and executions |
+| `chartink_db.py`, `flow_db.py` | Automation definitions and executions |
 | `action_center_db.py` | Pending semi-auto requests and approval outcome |
 | `market_calendar_db.py`, `qty_freeze_db.py` | Exchange calendar and freeze quantities |
 | `telegram_db.py`, `whatsapp_db.py` | Bot configuration, linked users, notification state |

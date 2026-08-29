@@ -49,8 +49,8 @@ frontend/
 │   │   ├── auth.ts       # Authentication API
 │   │   ├── broker.ts     # Broker operations
 │   │   ├── chartink.ts   # Chartink strategies
+│   │   ├── flow.ts       # Flow workflows
 │   │   ├── orders.ts     # Order management
-│   │   ├── strategy.ts   # Webhook strategies
 │   │   └── ...
 │   ├── app/
 │   │   └── providers.tsx # App-wide providers
@@ -72,7 +72,6 @@ frontend/
 │   │   ├── chartink/     # Chartink pages
 │   │   ├── monitoring/   # Monitoring pages
 │   │   ├── python-strategy/
-│   │   ├── strategy/     # Strategy pages
 │   │   ├── telegram/     # Telegram pages
 │   │   └── ...
 │   ├── stores/           # Zustand stores

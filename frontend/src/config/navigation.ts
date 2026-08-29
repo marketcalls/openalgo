@@ -42,7 +42,6 @@ export const navItems: NavItem[] = [
   { href: '/positions', label: 'Positions', icon: TrendingUp },
   { href: '/trading', label: 'Trading', icon: CandlestickChart },
   { href: '/platforms', label: 'Platforms', icon: Layers },
-  { href: '/strategy', label: 'Strategy', icon: Code2 },
   { href: '/logs', label: 'Logs', icon: FileBarChart },
   { href: '/tools', label: 'Tools', icon: Wrench },
 ]
@@ -53,7 +52,6 @@ export const bottomNavItems: NavItem[] = [
   { href: '/orderbook', label: 'Orderbook', icon: ClipboardList },
   { href: '/tradebook', label: 'Tradebook', icon: FileText },
   { href: '/positions', label: 'Positions', icon: TrendingUp },
-  { href: '/strategy', label: 'Strategy', icon: Code2 },
 ]
 
 // Paths in bottom nav (for filtering mobile sheet items)
@@ -87,15 +85,8 @@ export const externalLinks = {
   docs: { href: 'https://docs.openalgo.in', label: 'Docs', icon: BookOpen },
 }
 
-// Shared utility to check if a route is active
-// Uses startsWith for routes with nested pages (like /strategy/*)
+// Shared utility to check if a route is active.
+// Every nav item is a leaf route, so an exact match is all that is needed.
 export function isActiveRoute(pathname: string, href: string): boolean {
-  if (href === '/strategy') {
-    // Match on a path boundary, not a bare prefix. '/strategybuilder' starts
-    // with '/strategy', so a plain startsWith lit up the Strategy tab while
-    // the user was on a Tools page - the breadcrumb said TOOLS and the nav
-    // disagreed.
-    return pathname === '/strategy' || pathname.startsWith('/strategy/')
-  }
   return pathname === href
 }

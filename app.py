@@ -97,7 +97,6 @@ from blueprints.search import search_bp
 from blueprints.security import security_bp  # Import the security blueprint
 from blueprints.settings import settings_bp  # Import the settings blueprint
 from blueprints.straddle_chart import straddle_bp  # Import the straddle chart blueprint
-from blueprints.strategy import strategy_bp  # Import the strategy blueprint
 from blueprints.strategy_chart import strategy_chart_bp  # Import the strategy chart blueprint
 from blueprints.strategy_portfolio import strategy_portfolio_bp  # Strategy Builder portfolio
 from blueprints.system_permissions import (
@@ -125,7 +124,6 @@ from database.leverage_db import init_db as ensure_leverage_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.scalping_db import init_db as ensure_scalping_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
-from database.strategy_db import init_db as ensure_strategy_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.telegram_db import get_bot_config
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
@@ -308,7 +306,6 @@ def create_app():
     app.register_blueprint(latency_bp)
     app.register_blueprint(leverage_bp)  # Register Leverage blueprint
     app.register_blueprint(health_bp)  # Register Health monitoring blueprint
-    app.register_blueprint(strategy_bp)
     app.register_blueprint(master_contract_status_bp)
     app.register_blueprint(websocket_bp)  # Register WebSocket example blueprint
     app.register_blueprint(chart_test_bp)  # Register standalone chart test page (dev/testing only)
@@ -429,7 +426,6 @@ def create_app():
     with app.app_context():
         # Exempt webhook endpoints from CSRF protection
         csrf.exempt(app.view_functions["chartink_bp.webhook"])
-        csrf.exempt(app.view_functions["strategy_bp.webhook"])
         # Broker postbacks are machine-to-machine POSTs — brokers cannot carry
         # a CSRF token; validation is per-broker (active-session match +
         # Zerodha checksum) inside blueprints/postback.py.
@@ -731,7 +727,6 @@ def setup_environment(app):
                 ("Chartink DB", ensure_chartink_tables_exists),
                 ("Traffic Logs DB", ensure_traffic_logs_exists),
                 ("Latency DB", ensure_latency_tables_exists),
-                ("Strategy DB", ensure_strategy_tables_exists),
                 ("Sandbox DB", ensure_sandbox_tables_exists),
                 ("Action Center DB", ensure_action_center_tables_exists),
                 ("Chart Prefs DB", ensure_chart_prefs_tables_exists),
