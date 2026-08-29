@@ -526,10 +526,19 @@ class WebSocketProxy:
                 continue
             self._last_stale_warn[user_id] = current_time
             broker = self.user_broker_mapping.get(user_id, "unknown")
-            logger.warning(
+            # Debug, not warning. A subscribed feed is legitimately silent every
+            # night, every weekend and every trading holiday, and this check
+            # cannot tell that apart from a dead socket without an
+            # exchange-aware calendar. Logging it at warning meant hours of
+            # identical lines whenever the market was simply shut, which buries
+            # the entries that do need attention. The signal is still available
+            # when it is wanted: get_adapter_health() reports seconds since the
+            # last tick per user, and raising the log level surfaces this again.
+            logger.debug(
                 f"Stale feed: {broker} adapter for user {user_id} reports connected "
-                f"but no ticks for {silent_for:.0f}s while subscribed. If this persists, "
-                f"the broker WebSocket may be silently dead (reconnect/restart may be needed)."
+                f"but no ticks for {silent_for:.0f}s while subscribed. Expected "
+                f"outside market hours; if it persists during a session the "
+                f"broker WebSocket may be silently dead."
             )
 
     def get_adapter_health(self) -> dict:
