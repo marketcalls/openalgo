@@ -101,6 +101,7 @@ from blueprints.settings import settings_bp  # Import the settings blueprint
 from blueprints.straddle_chart import straddle_bp  # Import the straddle chart blueprint
 from blueprints.strategy import strategy_bp  # Import the strategy blueprint
 from blueprints.strategy_chart import strategy_chart_bp  # Import the strategy chart blueprint
+from blueprints.strategy_hub_bp import strategy_hub_bp  # Import the Strategy Hub blueprint
 from blueprints.strategy_portfolio import strategy_portfolio_bp  # Strategy Builder portfolio
 from blueprints.system_permissions import (
     system_permissions_bp,  # Import the system permissions blueprint
@@ -339,6 +340,7 @@ def create_app():
     app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
     app.register_blueprint(strategy_portfolio_bp)  # Register Strategy Portfolio blueprint
+    app.register_blueprint(strategy_hub_bp)  # Register Strategy Hub blueprint
     app.register_blueprint(postback_bp)  # Register broker postback (order-update webhook) blueprint
 
     # Remote MCP (HTTP + OAuth) — opt-in via MCP_HTTP_ENABLED. Off by default.
@@ -479,6 +481,16 @@ def create_app():
         from services.order_update_service import start_order_update_adapters_on_boot
 
         start_order_update_adapters_on_boot(db_ready=app.db_ready)
+
+        # Start the Strategy Hub ZMQ listener (PULL + periodic port-scan poll on
+        # real OS threads). No DB dependency — pure in-memory registry — so it
+        # can start immediately alongside the order-update adapters.
+        try:
+            from blueprints.strategy_zmq_listener import start_listener as start_strategy_hub
+
+            start_strategy_hub()
+        except Exception as e:
+            logger.error(f"Failed to start Strategy Hub listener: {e}")
 
         # NOTE: Python strategy scheduler is initialized in setup_environment()
         # AFTER database tables are created, to avoid "no such table" errors on fresh install

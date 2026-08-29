@@ -48,6 +48,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/python/guide': 'Python Strategy Guide',
   '/python-custom': 'Python Strategies Custom',
   '/python-custom/new': 'New Python Strategy (Custom)',
+  '/strategy-hub': 'Strategy Hub',
   '/chartink': 'Chartink Strategies',
   '/chartink/new': 'New Chartink Strategy',
   '/flow': 'Flow',
