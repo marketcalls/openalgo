@@ -109,6 +109,7 @@ Each object in `data`:
 | exchange | string | Exchange code |
 | action | string | `BUY` or `SELL` |
 | qty | integer | Quantity sent |
+| product | string or null | The product actually sent, which is not always the one the strategy carries: it is translated to the venue, so a CNC strategy sends NRML for an option leg. Null on orders placed before the column existed |
 | pricetype | string | `MARKET`. Neither the strategy nor a leg carries a price, so a LIMIT, SL or SL-M order would go out priced at zero; exits are MARKET on every path regardless |
 | price | number | Order price, `0` for a market order |
 | trigger_price | number | Trigger price, `0` when unused |

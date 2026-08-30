@@ -447,6 +447,9 @@ def _place_entries(
                 "exchange": leg["exchange"],
                 "action": action,
                 "qty": leg["quantity"],
+                # From the order, not from the strategy: build_order
+                # translates the product to the venue, so these can differ.
+                "product": order.get("product"),
                 "pricetype": strategy.get("pricetype", "MARKET"),
                 "broker_order_id": result.broker_order_id,
                 "status": "open" if result.ok else "rejected",
@@ -737,6 +740,7 @@ def _exit_legs(
                 "exchange": leg["exchange"],
                 "action": action,
                 "qty": leg["qty"],
+                "product": order.get("product"),
                 "pricetype": order_dispatch.EXIT_PRICETYPE,
                 "broker_order_id": result.broker_order_id,
                 "status": "open" if result.ok else "rejected",

@@ -1491,10 +1491,6 @@ def test_a_basket_mixing_cash_and_options_can_be_given_a_legal_product(market, b
         assert order["product"] in legal_products(order["exchange"]), order
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT F13: sm_strategy_order has no product column, so the audit row cannot say",
-)
 def test_the_order_row_records_the_product_that_was_sent(market, broker):
     """The orders table is described as audit grade and omits the product.
 
@@ -1560,13 +1556,15 @@ def test_an_exit_is_always_market_whatever_the_entry_price_type(market, broker):
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "DEFECT F7: pricetype LIMIT, SL and SL-M are accepted but no limit or "
-        "trigger price exists anywhere in the configuration, so the order is "
-        "sent as a limit order at a price of zero"
+        "NOT BUILT: a limit entry needs a price, and neither the strategy "
+        "configuration nor a leg carries one. PRICETYPES is now MARKET only, "
+        "so the defect this was written for, a limit order priced at zero, "
+        "cannot happen; the capability is what is missing. Adding a price to "
+        "the configuration is what turns this green"
     ),
 )
 def test_a_limit_strategy_carries_a_limit_price(market, broker):
-    """LIMIT is offered by the validator and there is nothing to fill it with.
+    """LIMIT was offered by the validator with nothing to fill it with.
 
     blueprints/strategy_module.py:781 accepts PRICETYPES =
     ("MARKET", "LIMIT", "SL", "SL-M"), but neither CONFIG_FIELDS nor LEG_FIELDS

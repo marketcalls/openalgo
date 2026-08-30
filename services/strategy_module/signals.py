@@ -522,6 +522,7 @@ def _place(
             "exchange": leg["exchange"],
             "action": action,
             "qty": leg.get("quantity") or leg.get("qty"),
+            "product": order.get("product"),
             "pricetype": order.get("pricetype", "MARKET"),
             "broker_order_id": result.broker_order_id,
             "status": "open" if result.ok else "rejected",

@@ -357,6 +357,11 @@ class SmStrategyOrder(Base):
     exchange = Column(String(20), nullable=False)
     action = Column(String(10), nullable=False)
     qty = Column(Integer, nullable=False)
+    # What was actually sent, which is not always what the strategy carries:
+    # build_order translates the product to the venue, so a CNC strategy with
+    # an option leg sends NRML for that leg. Without this column nothing
+    # records which, and an order cannot be reconciled against the broker's.
+    product = Column(String(10), nullable=True)
     pricetype = Column(String(10), nullable=False, default="MARKET")
     price = Column(Numeric(18, 4), nullable=False, default=0)
     trigger_price = Column(Numeric(18, 4), nullable=False, default=0)
@@ -602,6 +607,7 @@ def order_to_dict(row: SmStrategyOrder) -> dict:
         "exchange": row.exchange,
         "action": row.action,
         "qty": row.qty,
+        "product": row.product,
         "pricetype": row.pricetype,
         "price": _num(row.price),
         "trigger_price": _num(row.trigger_price),
@@ -1238,6 +1244,7 @@ def record_order(run_id: int, leg_id: int, kind: str, order: dict) -> SmStrategy
             exchange=order["exchange"],
             action=order["action"],
             qty=order["qty"],
+            product=order.get("product"),
             pricetype=order.get("pricetype", "MARKET"),
             price=order.get("price", 0) or 0,
             trigger_price=order.get("trigger_price", 0) or 0,

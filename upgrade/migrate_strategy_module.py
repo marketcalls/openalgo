@@ -59,6 +59,58 @@ TABLES = (
 )
 
 
+#: Columns added after the tables first shipped. An installation that ran this
+#: migration before they existed has the tables and not the columns, and
+#: create_all(checkfirst=True) skips a table that is already there, so it would
+#: never reach them. Each entry is (table, column, DDL type).
+ADDED_COLUMNS = (
+    (
+        "sm_strategy_order",
+        "product",
+        "VARCHAR(10)",
+    ),
+)
+
+
+def missing_columns(engine):
+    """Which of ADDED_COLUMNS are not on their table yet.
+
+    A table that does not exist at all is not reported here: create_all makes
+    it with the column already on it.
+    """
+    inspector = inspect(engine)
+    present_tables = set(inspector.get_table_names())
+    missing = []
+    for table, column, ddl in ADDED_COLUMNS:
+        if table not in present_tables:
+            continue
+        names = {col["name"] for col in inspector.get_columns(table)}
+        if column not in names:
+            missing.append((table, column, ddl))
+    return missing
+
+
+def add_missing_columns(engine):
+    """Add each missing column. Nullable, so existing rows need no backfill.
+
+    Nothing is derived for the rows already there: the product an old order was
+    sent with is not recorded anywhere else, and inventing one would make the
+    audit trail confidently wrong. NULL reads as "not recorded", which is true.
+    """
+    missing = missing_columns(engine)
+    if not missing:
+        return True
+    for table, column, ddl in missing:
+        try:
+            with engine.begin() as connection:
+                connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+            print(f"  [OK] Added {table}.{column}")
+        except Exception as exc:
+            print(f"  [FAIL] Could not add {table}.{column}: {exc}")
+            return False
+    return True
+
+
 def resolve_sqlite_path(db_url):
     """Make a relative sqlite:/// path absolute against the project root.
 
@@ -115,22 +167,34 @@ def status(engine):
     print("-" * 46)
 
     absent = [t for t in TABLES if t not in present]
-    if not absent:
+    columns = missing_columns(engine)
+    for table, column, _ddl in columns:
+        print(f"  {table}.{column:<19} MISSING")
+
+    if not absent and not columns:
         print("Up to date. Nothing to do.")
         return True
 
-    print(f"Migration needed. Would create {len(absent)} table(s):")
-    for table in absent:
-        print(f"  {table}")
+    if absent:
+        print(f"Migration needed. Would create {len(absent)} table(s):")
+        for table in absent:
+            print(f"  {table}")
+    if columns:
+        print(f"Migration needed. Would add {len(columns)} column(s):")
+        for table, column, _ddl in columns:
+            print(f"  {table}.{column}")
     return False
 
 
 def apply(engine):
-    """Create whatever is missing. Existing tables are left untouched."""
+    """Create whatever is missing. Existing tables keep their rows."""
     absent = missing_tables(engine)
     if not absent:
-        print("  All strategy-module tables already present. Nothing to do.")
-        return True
+        print("  All strategy-module tables already present.")
+        # Not "nothing to do": a table that exists is skipped by create_all,
+        # so a column added after the table first shipped only ever arrives
+        # through this path.
+        return add_missing_columns(engine)
 
     metadata = load_metadata()
     # checkfirst=True is what makes this safe to re-run: a table that already
@@ -145,7 +209,11 @@ def apply(engine):
 
     for table in absent:
         print(f"  [OK] Created {table}")
-    return True
+
+    # A partially applied migration can leave some tables present and some
+    # absent, so the columns still have to be checked on the ones that were
+    # already there.
+    return add_missing_columns(engine)
 
 
 def main():
