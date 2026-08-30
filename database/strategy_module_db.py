@@ -317,6 +317,8 @@ class SmStrategyRun(Base):
     )
     stopped_at = Column(DateTime, nullable=True)
     stop_reason = Column(String(30), nullable=True)
+    stop_requested_at = Column(DateTime, nullable=True)
+    stop_requested_reason = Column(String(30), nullable=True)
 
     # Final realized P&L, written on stop. While the run is live the authority
     # is in-process state plus the checkpoint rows, not this column.
@@ -349,6 +351,9 @@ class SmStrategyOrder(Base):
     )
     leg_id = Column(Integer, nullable=False)
     kind = Column(String(30), nullable=False)
+    # A leg can represent an outgoing and replacement position during a signal
+    # flip. This durable reference lets fills settle the position they belong to.
+    position_ref = Column(String(32), nullable=True)
 
     # Broker reference. Live runs carry the broker's own id; sandbox runs carry
     # the sandbox engine's, which is date-prefixed and numeric rather than
@@ -376,7 +381,10 @@ class SmStrategyOrder(Base):
     filled_qty = Column(Integer, nullable=True)
     reject_reason = Column(Text, nullable=True)
 
-    __table_args__ = (Index("ix_sm_order_run_placed", "run_id", "placed_at"),)
+    __table_args__ = (
+        Index("ix_sm_order_run_placed", "run_id", "placed_at"),
+        Index("ix_sm_order_run_leg_position", "run_id", "leg_id", "position_ref"),
+    )
 
 
 class SmStrategyCheckpoint(Base):
@@ -588,6 +596,8 @@ def run_to_dict(row: SmStrategyRun) -> dict:
         "started_at": _iso(row.started_at),
         "stopped_at": _iso(row.stopped_at),
         "stop_reason": row.stop_reason,
+        "stop_requested_at": _iso(row.stop_requested_at),
+        "stop_requested_reason": row.stop_requested_reason,
         "pnl_realized": _num(row.pnl_realized),
         "pnl_peak": _num(row.pnl_peak),
         "pnl_trough": _num(row.pnl_trough),
@@ -603,6 +613,7 @@ def order_to_dict(row: SmStrategyOrder) -> dict:
         "run_id": row.run_id,
         "leg_id": row.leg_id,
         "kind": row.kind,
+        "position_ref": row.position_ref,
         "broker_order_id": row.broker_order_id,
         "symbol": row.symbol,
         "exchange": row.exchange,
@@ -1063,6 +1074,8 @@ def finish_run(
             return False
         row.stopped_at = utcnow()
         row.stop_reason = stop_reason
+        row.stop_requested_at = None
+        row.stop_requested_reason = None
         row.pnl_realized = pnl_realized
         row.pnl_peak = pnl_peak
         row.pnl_trough = pnl_trough
@@ -1072,6 +1085,29 @@ def finish_run(
     except Exception:
         db_session.rollback()
         logger.exception("Could not finish run %s", run_id)
+        return False
+
+
+def request_run_stop(run_id: int, reason: str) -> bool:
+    """Persist a stop request while leaving the run active until it is flat."""
+    try:
+        updated = (
+            db_session.query(SmStrategyRun)
+            .filter(SmStrategyRun.id == run_id, SmStrategyRun.stopped_at.is_(None))
+            .update(
+                {
+                    "stop_requested_at": utcnow(),
+                    "stop_requested_reason": reason,
+                },
+                synchronize_session=False,
+            )
+        )
+        db_session.commit()
+        db_session.expire_all()
+        return updated == 1
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not request stop for run %s", run_id)
         return False
 
 
@@ -1240,6 +1276,7 @@ def record_order(run_id: int, leg_id: int, kind: str, order: dict) -> SmStrategy
             run_id=run_id,
             leg_id=leg_id,
             kind=kind,
+            position_ref=order.get("position_ref"),
             broker_order_id=order.get("broker_order_id"),
             symbol=order["symbol"],
             exchange=order["exchange"],

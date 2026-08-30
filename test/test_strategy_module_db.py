@@ -15,6 +15,12 @@ from database import strategy_module_db as sm
 
 USER = "sm_test_user"
 OTHER = "sm_other_user"
+ORDER = {
+    "symbol": "NIFTY28MAY2624000CE",
+    "exchange": "NFO",
+    "action": "SELL",
+    "qty": 75,
+}
 
 
 def _config(name="Iron condor weekly", **overrides):
@@ -41,6 +47,13 @@ def _config(name="Iron condor weekly", **overrides):
     }
     config.update(overrides)
     return config
+
+
+def _run():
+    """Create a minimal run for persistence-focused tests."""
+    strategy, error = sm.create_strategy(USER, _config())
+    assert error is None
+    return sm.create_run(strategy["id"], "sandbox", "zerodha")
 
 
 @pytest.fixture(autouse=True)
@@ -285,6 +298,31 @@ def test_the_kill_switch_can_be_engaged_while_running():
 # ---------------------------------------------------------------------------
 # Runs, orders and events
 # ---------------------------------------------------------------------------
+
+
+def test_order_round_trip_preserves_position_ref():
+    run = _run()
+
+    row = sm.record_order(run.id, 1, "entry", {**ORDER, "position_ref": "pos-a"})
+
+    assert sm.order_to_dict(row)["position_ref"] == "pos-a"
+
+
+def test_request_run_stop_is_pending_until_finish():
+    run = _run()
+
+    assert sm.request_run_stop(run.id, "manual")
+
+    pending = sm.run_to_dict(sm.get_run(run.id))
+    assert pending["stopped_at"] is None
+    assert pending["stop_requested_reason"] == "manual"
+    assert pending["stop_requested_at"] is not None
+
+    sm.finish_run(run.id, "manual")
+
+    complete = sm.run_to_dict(sm.get_run(run.id))
+    assert complete["stop_reason"] == "manual"
+    assert complete["stop_requested_reason"] is None
 
 
 def test_a_run_records_its_final_numbers_on_stop():
