@@ -1147,6 +1147,26 @@ def update_order(
         return False
 
 
+def get_order_by_broker_id(broker_order_id: str) -> SmStrategyOrder | None:
+    """The strategy order carrying this broker reference, if any.
+
+    Order updates arrive for every order the platform places, most of which
+    belong to other surfaces. This is the cheap "is it ours" test, and the
+    column is indexed for it.
+    """
+    if not broker_order_id:
+        return None
+    try:
+        return (
+            db_session.query(SmStrategyOrder)
+            .filter_by(broker_order_id=str(broker_order_id))
+            .first()
+        )
+    except Exception:
+        logger.exception("Could not look up strategy order %s", broker_order_id)
+        return None
+
+
 def list_orders(run_id: int) -> list[dict]:
     try:
         rows = (
