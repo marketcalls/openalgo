@@ -1404,6 +1404,229 @@ def test_unpriced_reference_fill_without_checkpoint_surfaces_partial_pnl_authori
     )
 
 
+@pytest.mark.parametrize("filled_qty", [25, 75], ids=["partial", "full"])
+@pytest.mark.parametrize("checkpoint_after_fill", [False, True], ids=["before", "after"])
+def test_unpriced_live_fill_trusts_checkpoint_pnl_only_when_owner_shape_observed_the_fill(
+    filled_qty,
+    checkpoint_after_fill,
+):
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref="live-owner",
+    )
+
+    def write_checkpoint(*, observed):
+        is_closed = observed and filled_qty == 75
+        remaining = 75 - filled_qty if observed and not is_closed else 75
+        _checkpoint(
+            run_id,
+            {
+                "1": _cp_leg(
+                    position="B",
+                    position_ref="live-owner",
+                    qty=remaining,
+                    status="closed" if is_closed else "open",
+                    realized_pnl=175.0,
+                )
+            },
+            pnl_realized=175.0,
+        )
+
+    if not checkpoint_after_fill:
+        write_checkpoint(observed=False)
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="cancelled",
+        avg=0.0,
+        filled_qty=filled_qty,
+        position_ref="live-owner",
+    )
+    if checkpoint_after_fill:
+        write_checkpoint(observed=True)
+
+    recovered = recovery.recover_run(run_id)
+
+    expected_pnl = 175.0 if checkpoint_after_fill else 0.0
+    if filled_qty == 75:
+        assert recovered.finalised is True
+        assert float(store.get_run(run_id).pnl_realized) == pytest.approx(expected_pnl)
+    else:
+        assert recovered.ok is True
+        live = state.get_run_state(run_id)
+        assert live["legs"]["1"]["qty"] == 50
+        assert live["pnl_realized"] == pytest.approx(expected_pnl)
+        assert live["pnl_realized_authoritative"] is checkpoint_after_fill
+
+    critical_pnl_events = [
+        event
+        for event in store.list_events(sid)
+        if event["severity"] == "critical"
+        and "p&l" in event["message"].lower()
+        and "manual" in event["message"].lower()
+    ]
+    assert bool(critical_pnl_events) is (not checkpoint_after_fill)
+
+
+@pytest.mark.parametrize("filled_qty", [25, 75], ids=["partial", "full"])
+@pytest.mark.parametrize("checkpoint_after_fill", [False, True], ids=["before", "after"])
+def test_unpriced_superseded_fill_trusts_checkpoint_pnl_only_when_owner_shape_observed_the_fill(
+    filled_qty,
+    checkpoint_after_fill,
+):
+    sid = _strategy()
+    run_id = _run(sid)
+    old_entry = _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref="outgoing-owner",
+    )
+    old_exit = _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="open",
+        avg=None,
+        position_ref="outgoing-owner",
+        broker_order_id="OUTGOING-EXIT",
+    )
+    new_entry = _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        qty=75,
+        status="complete",
+        avg=102.0,
+        position_ref="replacement-owner",
+    )
+
+    def write_checkpoint(*, observed):
+        superseded = None
+        if not observed or filled_qty < 75:
+            superseded = {
+                "position_ref": "outgoing-owner",
+                "position": "B",
+                "qty": 75 - filled_qty if observed else 75,
+                "entry_order_id": old_entry,
+                "entry_avg": 100.0,
+                "exit_order_id": None if observed else old_exit,
+                "exit_kind": None if observed else "exit_signal",
+            }
+        _checkpoint(
+            run_id,
+            {
+                "1": _cp_leg(
+                    position="S",
+                    position_ref="replacement-owner",
+                    entry_order_id=new_entry,
+                    entry_avg=102.0,
+                    qty=75,
+                    status="open",
+                    superseded=superseded,
+                    realized_pnl=275.0,
+                )
+            },
+            pnl_realized=275.0,
+        )
+
+    if not checkpoint_after_fill:
+        write_checkpoint(observed=False)
+    assert store.update_order(
+        old_exit,
+        status="cancelled",
+        avg_fill_price=0.0,
+        filled_qty=filled_qty,
+    )
+    if checkpoint_after_fill:
+        write_checkpoint(observed=True)
+
+    assert recovery.recover_run(run_id).ok is True
+
+    live = state.get_run_state(run_id)
+    leg = live["legs"]["1"]
+    assert leg["position_ref"] == "replacement-owner"
+    if filled_qty == 75:
+        assert leg["superseded"] is None
+    else:
+        assert leg["superseded"]["position_ref"] == "outgoing-owner"
+        assert leg["superseded"]["qty"] == 50
+    assert live["pnl_realized"] == pytest.approx(275.0 if checkpoint_after_fill else 0.0)
+    assert live["pnl_realized_authoritative"] is checkpoint_after_fill
+
+    critical_pnl_events = [
+        event
+        for event in store.list_events(sid)
+        if event["severity"] == "critical"
+        and "p&l" in event["message"].lower()
+        and "manual" in event["message"].lower()
+    ]
+    assert bool(critical_pnl_events) is (not checkpoint_after_fill)
+
+
+def test_unpriced_fill_never_trusts_a_different_owner_checkpoint_cumulative_pnl():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref="actual-owner",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="cancelled",
+        avg=0.0,
+        filled_qty=25,
+        position_ref="actual-owner",
+    )
+    _checkpoint(
+        run_id,
+        {
+            "1": _cp_leg(
+                position="B",
+                position_ref="different-owner",
+                qty=50,
+                status="open",
+                realized_pnl=999.0,
+            )
+        },
+        pnl_realized=999.0,
+    )
+
+    assert recovery.recover_run(run_id).ok is True
+
+    live = state.get_run_state(run_id)
+    assert live["pnl_realized"] == pytest.approx(0.0)
+    assert live["pnl_realized_authoritative"] is False
+    assert live["legs"]["1"]["qty"] == 50
+    assert any(
+        event["severity"] == "critical"
+        and "p&l" in event["message"].lower()
+        and "manual" in event["message"].lower()
+        for event in store.list_events(sid)
+    )
+
+
 def test_a_run_whose_every_leg_has_closed_is_finished_rather_than_left_running():
     # The process died between the last exit fill and the finalise it would
     # have triggered. Resuming it would leave a strategy reading as running

@@ -655,9 +655,7 @@ def _rebuild_leg(
 
     durable_realized = sum(float(position.leg.get("realized_pnl") or 0.0) for position in positions)
     coverage_complete = all(position.pnl_coverage_complete for position in positions)
-    checkpoint_present, checkpoint_realized = _checkpoint_realized_for_position(
-        cp_leg, live.get("position_ref")
-    )
+    checkpoint_present, checkpoint_realized = _checkpoint_realized_for_recovered_shape(cp_leg, live)
     if coverage_complete:
         live["realized_pnl"] = durable_realized
         live["realized_pnl_authoritative"] = True
@@ -810,17 +808,41 @@ def _checkpoint_for_position(cp_leg: dict[str, Any], position_ref: str | None) -
     return {}
 
 
-def _checkpoint_realized_for_position(
-    cp_leg: dict[str, Any], position_ref: str | None
+def _checkpoint_realized_for_recovered_shape(
+    cp_leg: dict[str, Any], recovered: dict[str, Any]
 ) -> tuple[bool, float]:
-    """A matching checkpoint's cumulative realized total, preserving zero."""
-    matching = _checkpoint_for_position(cp_leg, position_ref)
+    """A checkpoint total only when its owner shape proves it saw every fill."""
+    if not _checkpoint_observed_recovered_shape(cp_leg, recovered):
+        return False, 0.0
+    matching = _checkpoint_for_position(cp_leg, recovered.get("position_ref"))
     if "realized_pnl" not in matching:
         return False, 0.0
     realized = _float(matching.get("realized_pnl"))
     if realized is None:
         return False, 0.0
     return True, realized
+
+
+def _checkpoint_observed_recovered_shape(cp_leg: dict[str, Any], recovered: dict[str, Any]) -> bool:
+    """Whether a checkpoint describes the recovered live/outgoing owners exactly."""
+    if not cp_leg or cp_leg.get("position_ref") != recovered.get("position_ref"):
+        return False
+    if str(cp_leg.get("status") or "").lower() != str(recovered.get("status") or "").lower():
+        return False
+    if _positive_whole(cp_leg.get("qty")) != _positive_whole(recovered.get("qty")):
+        return False
+
+    checkpoint_outgoing = cp_leg.get("superseded") or None
+    recovered_outgoing = recovered.get("superseded") or None
+    if (checkpoint_outgoing is None) != (recovered_outgoing is None):
+        return False
+    if checkpoint_outgoing is None:
+        return True
+    return checkpoint_outgoing.get("position_ref") == recovered_outgoing.get(
+        "position_ref"
+    ) and _positive_whole(checkpoint_outgoing.get("qty")) == _positive_whole(
+        recovered_outgoing.get("qty")
+    )
 
 
 def _position_requires_management(leg: dict[str, Any]) -> bool:
