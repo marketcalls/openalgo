@@ -193,6 +193,13 @@ class WebSocketHandshakeFilter(logging.Filter):
         return True
 
 
+def redact_text(text: str) -> str:
+    """Apply every sensitive pattern to a piece of text."""
+    for pattern, replacement in SENSITIVE_PATTERNS:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text
+
+
 class SensitiveDataFilter(logging.Filter):
     """Redact sensitive information from log records.
 
@@ -228,8 +235,20 @@ class SensitiveDataFilter(logging.Filter):
                 # redacted, rather than being dropped.
                 text = str(record.msg)
 
-            for pattern, replacement in SENSITIVE_PATTERNS:
-                text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+            text = redact_text(text)
+
+            # The traceback too. A secret raised inside an exception message,
+            # or sitting in a frame's arguments, reaches every sink through
+            # exc_info rather than through the message, and the message was the
+            # only thing being redacted. Rendering it here and storing the
+            # redacted form in exc_text is what the standard Formatter reads in
+            # preference to formatting exc_info again.
+            if record.exc_info and record.exc_info[0] is not None:
+                record.exc_text = redact_text("".join(traceback.format_exception(*record.exc_info)))
+            elif record.exc_text:
+                record.exc_text = redact_text(record.exc_text)
+            if record.stack_info:
+                record.stack_info = redact_text(record.stack_info)
 
             record.msg = text
             # Rendered, so there is nothing left to substitute. getMessage()
@@ -370,7 +389,13 @@ class JSONErrorFormatter(logging.Formatter):
 
         # Capture full traceback if present
         if record.exc_info and record.exc_info[0] is not None:
-            entry["exception"] = traceback.format_exception(*record.exc_info)
+            # Redacted here as well as in the filter: this handler renders
+            # exc_info itself rather than reading the exc_text the filter
+            # prepared, and log/errors.jsonl is the first place CLAUDE.md tells
+            # anyone to look when debugging.
+            entry["exception"] = [
+                redact_text(line) for line in traceback.format_exception(*record.exc_info)
+            ]
 
         # Capture Flask request context if available
         try:

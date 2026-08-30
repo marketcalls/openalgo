@@ -279,6 +279,45 @@ describe('useStrategyLive transport', () => {
     }
   })
 
+  it('shows the REST answer once the socket has gone stale, not the old frame', async () => {
+    // Resuming the poll changes nothing an operator can see if the page still
+    // renders the frame it received before the silence. The socket frame wins
+    // only while the socket is live.
+    vi.useFakeTimers()
+    try {
+      const socket = new FakeSocket()
+      shared.socket = socket
+      rest.get.mockResolvedValue({
+        data: {
+          status: 'success',
+          run_id: 42,
+          data: [{ ts: '2026-04-12T15:00:00+05:30', pnl_total: 999, leg_state: {} }],
+        },
+      })
+
+      const { result } = renderHook(() => useStrategyLive(7, true), { wrapper })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      act(() => {
+        socket.deliver('strategy_snapshot', stateFrame('snapshot', [wireLeg({ leg_id: 1 })]))
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(result.current.checkpoint?.pnl_total).toBe(150)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SOCKET_STALE_MS + LIVE_POLL_MS * 2)
+      })
+
+      expect(result.current.status).toBe('polling')
+      expect(result.current.checkpoint?.pnl_total).toBe(999)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('goes live again when frames resume after a silence', async () => {
     vi.useFakeTimers()
     try {

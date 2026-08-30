@@ -735,7 +735,13 @@ export function useStrategyLive(strategyId: number | null, isRunning: boolean): 
 
   const page = query.data
   const restCheckpoint = page && page.data.length > 0 ? page.data[page.data.length - 1] : null
-  const checkpoint = frame ?? restCheckpoint
+  // The socket frame wins only while the socket is live. Once it has gone
+  // stale the REST fallback is the fresher of the two, and preferring the
+  // frame regardless meant resuming the poll changed nothing an operator could
+  // see: the page kept rendering the last frame it received before the silence
+  // while quietly fetching newer numbers it never showed. The frame is still
+  // the fallback's fallback, for the moment before the first REST answer.
+  const checkpoint = socketLive ? (frame ?? restCheckpoint) : (restCheckpoint ?? frame)
 
   let status: StrategyLiveStatus = 'idle'
   if (!enabled) {

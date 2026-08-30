@@ -140,6 +140,38 @@ def replay_for(order_id: str | None) -> None:
     _apply_update(str(order_id), event)
 
 
+def _report_stranded_exit(run_id: int, leg_id: Any, row: Any, ended: str) -> None:
+    """Record that an exit died after its run closed, so a held position is not silent.
+
+    A stop finalises as soon as the broker accepts its exits rather than
+    waiting for the fills, so a rejection arriving afterwards finds no run
+    state to put right. Nothing can be retried automatically from here: the
+    event log is the one place left that an operator reads.
+    """
+    try:
+        run = store.get_run(run_id)
+        if run is None:
+            return
+        strategy = store.get_strategy_unscoped(run.strategy_id)
+        if strategy is None:
+            return
+        store.record_event(
+            run.strategy_id,
+            strategy.user_id,
+            "run_stop_failed",
+            (
+                f"Exit order {row.broker_order_id} for leg {leg_id} was {ended} after the run "
+                f"had already closed. The {row.action} of {row.qty} {row.symbol} did not happen, "
+                "so that position is still held and nothing is managing it."
+            ),
+            run_id=run_id,
+            leg_id=leg_id,
+            severity="critical",
+        )
+    except Exception:
+        logger.exception("Could not record a stranded exit for run %s leg %s", run_id, leg_id)
+
+
 def _on_order_update(event: Any) -> None:
     """Bus callback. Returns immediately; the work happens on the pool.
 
@@ -256,6 +288,34 @@ def _apply_update(order_id: str, event: Any) -> None:
             ended = "cancelled" if status in _CANCELLED else "rejected"
             store.update_order(row.id, status=ended, reject_reason=rejection)
             logger.warning("Strategy order %s ended as %s", order_id, status)
+
+            # An order that dies after the dispatch returned has to undo what
+            # the dispatch claimed, or the leg is stranded. The synchronous
+            # refusal path already does this; nothing did it for a rejection or
+            # cancellation that arrived later.
+            from services.strategy_module import state
+
+            if is_entry:
+                # The entry will never fill, so the leg is not a position. Left
+                # as "open" it is exited by the next square-off, which sends a
+                # full-size order against nothing.
+                with state.run_state(run_id) as run:
+                    leg = run["legs"].get(str(leg_id)) if run else None
+                    if leg is not None and leg.get("entry_status") != "complete":
+                        leg["entry_status"] = ended
+                        leg["status"] = "rejected"
+            elif state.get_run_state(run_id) is not None:
+                # Release the exit claim so the position stays exitable. Held,
+                # its stop loss, its target, the scheduler's square-off and the
+                # operator's Close button all pass over a position the broker
+                # still holds, for the rest of the session.
+                state.release_leg_exit(run_id, leg_id)
+            else:
+                # The run has already finalised, which is what a stop does as
+                # soon as its exits are accepted. There is nothing left to
+                # release and nothing still managing this leg, so the position
+                # is real, uncovered, and invisible unless it is said out loud.
+                _report_stranded_exit(run_id, leg_id, row, ended)
             return
 
         # Anything else is still working. Recorded so the audit trail follows

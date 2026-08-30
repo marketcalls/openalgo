@@ -380,7 +380,11 @@ def test_a_complete_arriving_after_a_cancel_cannot_resurrect_the_order(broker):
     order_events._apply_update("QA-1", _event("QA-1", status="complete", avg=101.5))
 
     assert _live(run_id)["entry_avg"] == 0.0
-    assert _live(run_id)["entry_status"] == "open"
+    # A cancelled entry is not a working one. Left reading "open" it was a
+    # position as far as every exit path was concerned, so the next square-off
+    # sent the full configured size against nothing.
+    assert _live(run_id)["entry_status"] == "cancelled"
+    assert _live(run_id)["status"] == "rejected"
 
 
 def test_a_cancelled_order_is_recorded_as_cancelled_not_as_rejected(broker):
@@ -1698,3 +1702,76 @@ def test_an_entry_whose_row_cannot_be_written_is_never_placed(broker):
 def _run_of_strategy(sid):
     row = store.get_strategy(sid, USER)
     return row.current_run_id
+
+
+def test_an_exit_rejected_after_dispatch_can_be_retried(broker):
+    """The broker took the exit, then rejected it a moment later.
+
+    The synchronous refusal path releases the leg's claim so a later stop,
+    stop loss or square-off can reach it. Nothing did that for a rejection
+    arriving on the order stream afterwards, so the leg kept an exit that was
+    never going to fill, and every later attempt passed over a position the
+    broker still held. For the rest of the session.
+    """
+    # Two legs, so the run stays live after one of them is exited by its stop.
+    sid = _make(_config(legs=[_leg(leg_id=1, position="S"), _leg(leg_id=2, position="S")]))
+    run_id = _start(sid, resolved=[_resolved(symbol=CE), _resolved(symbol=PE)]).run_id
+    order_events._apply_update("QA-1", _event("QA-1", avg=100.0))
+    order_events._apply_update("QA-2", _event("QA-2", avg=100.0))
+    broker.clear()
+
+    # Leg 1's stop fires and its exit is accepted.
+    engine.process_tick(CE, "NFO", 500.0)
+    exit_order = [o for o in store.list_orders(run_id) if o["kind"] != "entry"][0]
+    assert broker.actions == ["BUY"]
+    broker.clear()
+
+    # The broker then rejects it.
+    order_events._apply_update(
+        exit_order["broker_order_id"], _event(exit_order["broker_order_id"], status="rejected")
+    )
+
+    # The position is still held, so the next tick must try again.
+    engine.process_tick(CE, "NFO", 500.0)
+    assert broker.actions == ["BUY"], "the leg was exitable again"
+
+
+def test_an_entry_rejected_after_dispatch_is_not_squared_off(broker):
+    """The mirror case: an entry that dies later is not a position.
+
+    Left marked open, the next square-off sends a full-size order against
+    nothing, which is a naked position in the other direction.
+    """
+    sid = _make()
+    run_id = _start(sid).run_id
+    broker.clear()
+
+    order_events._apply_update("QA-1", _event("QA-1", status="rejected"))
+
+    assert _live(run_id)["status"] == "rejected"
+    engine.stop_run(run_id, USER, reason="manual")
+    assert broker.orders == [], "nothing was sent for a leg that never traded"
+
+
+def test_an_exit_rejected_after_the_run_closed_is_reported(broker):
+    """A stop closes the run as soon as the broker accepts its exits.
+
+    A rejection arriving after that finds no run state to put right, so the
+    position is real, uncovered, and belongs to a run that reads as finished.
+    Nothing can retry it from there; the least this must do is say so where an
+    operator looks.
+    """
+    sid = _make()
+    run_id = _start(sid).run_id
+    order_events._apply_update("QA-1", _event("QA-1", avg=100.0))
+    engine.stop_run(run_id, USER, reason="manual")
+    exit_order = [o for o in store.list_orders(run_id) if o["kind"] != "entry"][0]
+
+    order_events._apply_update(
+        exit_order["broker_order_id"], _event(exit_order["broker_order_id"], status="rejected")
+    )
+
+    stranded = [e for e in store.list_events(sid) if e["kind"] == "run_stop_failed"]
+    assert stranded, "the held position was recorded"
+    assert stranded[0]["severity"] == "critical"
+    assert "still held" in stranded[0]["message"]
