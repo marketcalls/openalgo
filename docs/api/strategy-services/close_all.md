@@ -99,6 +99,7 @@ Each object in `exits`:
 
 ## Notes
 
+- **A close whose exits the broker refused leaves the run open.** Same rule as [`/stop`](./stop.md): the positions are still there, so finalising would stop evaluating their stops while they are held. Read the per-leg `ok` flags and retry rather than treating a 2xx envelope as flat.
 - **Same effect as [`/stop`](./stop.md), different audit trail.** Before the exits go out, a `close_all_manual` event is written with the message `Closed all legs from the API`. "The operator closed everything" reads differently from "the run was stopped" when reconstructing a session afterwards, which is why this is its own route rather than an alias.
 - The run id is resolved from the strategy, never supplied by the caller.
 - Everything else, including the exit mechanics and the 409 behaviour, is identical to `/stop`.

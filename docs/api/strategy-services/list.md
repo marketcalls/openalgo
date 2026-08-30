@@ -142,7 +142,7 @@ Each object in `data`:
 | strategy_type | string | `intraday` or `positional` |
 | entry_time | string or null | IST entry time as `HH:MM` |
 | exit_time | string or null | IST square-off time as `HH:MM` |
-| product | string | `CNC`, `NRML` or `MIS` |
+| product | string | `CNC`, `NRML` or `MIS`, as configured. It is read as the intent rather than the literal when an order goes out: `MIS` is intraday everywhere, anything else means carry, which is sent as `NRML` on a derivatives venue and `CNC` on cash. See the `product` field on [`/orders`](./orders.md) for what was actually sent |
 | pricetype | string | `MARKET`. Neither the strategy nor a leg carries a price, so a LIMIT, SL or SL-M order would go out priced at zero; exits are MARKET on every path regardless |
 | overall_sl_mtm | number or null | Strategy-level stop loss in rupees of MTM |
 | overall_target_mtm | number or null | Strategy-level target in rupees of MTM |

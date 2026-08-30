@@ -224,13 +224,29 @@ The kill switch outranks the allowlist, and the allowlist outranks the payload, 
 - **Duplicate suppression, batch only.** Two identical `(strategy, action, mode)` deliveries inside 60 seconds are one signal. This exists because senders retry a delivery they believe failed. A delivery whose engine call then failed releases its claim, so a genuine retry is not swallowed as a duplicate of something that never happened.
 - **Cooling off, batch `start` only.** A strategy that stopped within the last 30 seconds refuses a `start`, so a misconfigured pair of alerts firing against each other cannot oscillate and pay the spread each time. A stop is never blocked by the window, and a stop against an already-stopped strategy does not arm it.
 - **The IP allowlist is a closed set when it is non-empty.** An empty or absent allowlist allows every address, which is how a strategy is created. Entries are CIDR ranges, and a bare address is read as its own `/32` or `/128`. A request that arrives with no address at all fails a non-empty allowlist. One malformed entry is skipped rather than failing the whole list closed.
-- **Body size cap: 16384 bytes**, measured on the bytes as received. A TradingView alert is a few hundred bytes.
+- **Body size cap: 16384 bytes.** An oversized `Content-Length` is refused with a 413 **before the body is read**, so an unauthenticated caller does not get to decide how much the worker reads; the pipeline's own cap then applies to what actually arrived. A TradingView alert is a few hundred bytes.
+- **The caller is identified by the real client address.** The proxy headers are honoured through `get_real_ip()`, so the IP allowlist and the audit trail name the sender rather than the reverse proxy most installs run behind.
 - **`action` and `mode` are trimmed and lower-cased** before matching, so `" START "` and `"Sandbox"` are accepted. Nothing else about the payload is normalised.
+- **Audit rows for an unrecognised token are capped at the newest 1000.** They name no strategy, so nothing displays them and nothing deleted them: anyone who could reach the URL could otherwise grow the database without limit, invisibly. They are kept rather than dropped, because a run of them is the first sign of somebody walking the token space.
 - The endpoint never raises. An unexpected failure anywhere is logged with a traceback and reported as `rejected_engine_error`.
 
 ## Rate Limits
 
 The validation pipeline applies no rate limit of its own. The route in front of it does, and `rate_limited` is the result label that outcome carries, answering 429. The platform's webhook budget is `WEBHOOK_RATE_LIMIT` in `.env`, which `.sample.env` ships as `100 per minute` and which the other public webhook surfaces draw on. See [rate limiting](../rate-limiting.md).
+
+Two limits share that budget, because neither subsumes the other. **By caller address** is the only key that can stop someone walking the token space: every guess carries a different token, so a token-keyed limit would score each against an empty bucket and never fire. **By token** bounds what one leaked token can do to the broker account however many addresses replay it, which matters because the token is the whole credential.
+
+The token-keyed limit is keyed on the token's SHA-256 digest, not the token. The limiter's in-memory storage empties the event list of an expired window but never removes the key, so a raw token there would sit in process memory for the life of the worker, one entry per token ever presented including every guess.
+
+## Where The Token Must Not Appear
+
+The URL token is the entire credential, so anywhere it is written down is a second copy of it.
+
+- **It is masked in the traffic log.** `/traffic` keeps 30 days of requests and shows the path; the credential segment of `/strategy/webhook/`, `/flow/webhook/` and `/chartink/webhook/` paths is replaced with `<redacted>` before the row is written. Anyone who could read that log could otherwise replay the webhook and place orders.
+- **It never appears in an audit payload.** The stored `payload` is the body with anything token-shaped stripped, so a sender that echoes its own URL into the alert body does not persist it.
+- **No API response carries it.** Only the SHA-256 digest is stored; the plaintext is shown once, at creation and at rotation, in the browser.
+
+It will still be in your sender's own configuration and in any TLS-terminating proxy's access log. Rotate it (`/strategy/api/strategies/<id>/webhook/rotate`) if either is exposed; the old token stops working immediately.
 
 ## Use Cases
 

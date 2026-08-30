@@ -113,7 +113,7 @@ Each object in `exits`:
 | 400 | Schema validation failed, including a missing `leg_id` |
 | 403 | `Invalid openalgo apikey` |
 | 404 | `Strategy not found` |
-| 409 | `This strategy is not running`, or the engine refused the close, for example `Run is not active` or a leg that is not open |
+| 409 | `This strategy is not running`, the engine refused the close (for example `Run is not active` or a leg that is not open), or the broker refused the exit order and the leg is still held |
 | 429 | Rate limited |
 | 500 | `An unexpected error occurred` |
 
@@ -122,6 +122,8 @@ Each object in `exits`:
 - **Leg ids are the ids the wizard assigned within the strategy**, the same values that appear in `legs[].id` on [`/status`](./status.md). They are not order ids and not run ids.
 - **The run is resolved from the strategy**, so the caller never supplies a run id.
 - `run_stopped` tells you whether the run survived. Closing the last open leg finalises the run, so a caller looping over legs should stop when it sees `true`.
+- **A refused exit is reported as a failure, not as a close.** A non-empty `exits` array is not success on its own; the per-leg `ok` flags carry whether the broker took the order. Telling an operator a leg has closed while the position is still on the book is worse than telling them nothing.
+- **A refused exit stays retryable.** The leg is not marked as having an exit in flight, so its stop loss, its target and the scheduler's square-off can all still reach it.
 - **Closing a leg by hand does not trigger trail-to-entry.** That rule answers the market moving against the book; an operator closing a leg is an override, and treating it as a signal would tighten every other leg's stop without being asked.
 - A `leg_id` that names no open leg is a 409, not a 404. The strategy was found; the leg is simply not in a state that can be closed.
 - The exit uses the symbol recorded in the run's own state, not a fresh resolution of the configuration.
