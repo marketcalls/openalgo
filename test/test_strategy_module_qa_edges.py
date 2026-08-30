@@ -233,14 +233,6 @@ def _two_leg_run(broker, positions=("S", "B")):
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: order_events._apply_update guards the zero-price case with "
-        "`if avg_price:`, a truthiness test the string '0' passes, so a leg is marked "
-        "filled at a price of zero and can never derive a stop"
-    ),
-)
 def test_a_fill_priced_at_the_string_zero_seeds_no_leg(broker):
     """A broker that sends prices as strings must not disarm a stop loss.
 
@@ -264,13 +256,6 @@ def test_a_fill_priced_at_the_string_zero_seeds_no_leg(broker):
     assert store.get_strategy(sid, USER)  # keep the strategy referenced
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: the same `if avg_price:` guard, priced in money - a leg reported as "
-        "filled at a string zero is displayed as a managed position and has no stop"
-    ),
-)
 def test_a_leg_reported_as_filled_always_has_a_stop_to_be_managed_by(broker):
     """The consequence of the previous case.
 
@@ -293,13 +278,6 @@ def test_a_leg_reported_as_filled_always_has_a_stop_to_be_managed_by(broker):
     assert broker.orders == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: order_events._apply_update applies any truthy average price, so a "
-        "negative one is written to the leg as its entry price"
-    ),
-)
 def test_a_fill_priced_negative_is_not_applied(broker):
     """A negative average price is not a price on any exchange.
 
@@ -339,13 +317,6 @@ def test_a_fill_priced_as_unparseable_text_seeds_nothing(broker):
     assert leg["entry_status"] == "open"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: order_events._apply_update never reconciles filled_quantity against "
-        "the leg's ordered quantity, so a partially filled entry is exited at full size"
-    ),
-)
 def test_a_partially_filled_entry_is_exited_at_the_quantity_that_actually_filled(broker):
     """75 were ordered, 25 filled. The exit must be for 25.
 
@@ -406,13 +377,6 @@ def test_a_complete_arriving_after_a_cancel_cannot_resurrect_the_order(broker):
     assert _live(run_id)["entry_status"] == "open"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: order_events._apply_update writes status='rejected' for every dead "
-        "status, so a cancellation is recorded as a broker rejection"
-    ),
-)
 def test_a_cancelled_order_is_recorded_as_cancelled_not_as_rejected(broker):
     """``store.ORDER_STATUSES`` carries both. The audit trail should tell them apart."""
     sid = _make()
@@ -661,14 +625,6 @@ def test_a_stopped_run_records_the_pnl_its_exit_fills_actually_produced(broker):
     assert store.list_runs(sid)[0]["pnl_realized"] == pytest.approx(1500.0)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: engine.apply_fill computes realized_pnl from entry_avg without "
-        "checking it was ever set, so an exit fill on an unfilled leg books the "
-        "whole exit notional as profit or loss"
-    ),
-)
 def test_an_exit_fill_on_a_leg_whose_entry_never_filled_books_no_pnl(broker):
     """Leg 2's entry is still working. Its exit fills at 90.
 

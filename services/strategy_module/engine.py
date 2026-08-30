@@ -470,7 +470,13 @@ def _place_entries(
 # ---------------------------------------------------------------------------
 
 
-def apply_fill(run_id: int, leg_id: Any, avg_price: float, is_entry: bool) -> bool:
+def apply_fill(
+    run_id: int,
+    leg_id: Any,
+    avg_price: float,
+    is_entry: bool,
+    filled_qty: int | None = None,
+) -> bool:
     """Record a fill against a leg. Returns whether the run went flat.
 
     Entry fills set the price every stop and target is measured from, so a leg
@@ -497,6 +503,21 @@ def apply_fill(run_id: int, leg_id: Any, avg_price: float, is_entry: bool) -> bo
 
         if is_entry:
             leg["entry_avg"] = float(avg_price)
+            # Reconcile the size with what actually traded. A partial fill
+            # whose remainder was cancelled is ordinary on an illiquid strike,
+            # and the leg used to keep the size it asked for: every later exit
+            # was then for the full amount, so squaring off a 25 that filled
+            # out of a 75 requested sent a 75 the other way and left the
+            # account holding 50 of a contract nobody chose, with no stop.
+            if filled_qty is not None and filled_qty != leg.get("qty"):
+                logger.warning(
+                    "Leg %s on run %s filled %s of %s; managing the filled size",
+                    leg_id,
+                    run_id,
+                    filled_qty,
+                    leg.get("qty"),
+                )
+                leg["qty"] = filled_qty
             leg["entry_status"] = "complete"
             leg["status"] = "open"
             return False
@@ -505,7 +526,20 @@ def apply_fill(run_id: int, leg_id: Any, avg_price: float, is_entry: bool) -> bo
         entry = float(leg.get("entry_avg") or 0.0)
         qty = float(leg.get("qty") or 0.0)
         sign = 1.0 if leg.get("position") == "B" else -1.0
-        leg["realized_pnl"] = (float(avg_price) - entry) * qty * sign
+        if entry > 0.0:
+            leg["realized_pnl"] = (float(avg_price) - entry) * qty * sign
+        else:
+            # An entry price of zero means the leg never traded, so there is no
+            # round trip to book. Deriving from it books the entire notional as
+            # profit or loss: an exit at 90 on 75 units used to record 6750 the
+            # account never made, and that figure is what the combined stop,
+            # the combined target and the lock-profit floor are judged against.
+            logger.warning(
+                "Leg %s on run %s exited with no entry price; booking no realized P&L",
+                leg_id,
+                run_id,
+            )
+            leg["realized_pnl"] = 0.0
         leg["status"] = "closed"
         leg["mtm"] = 0.0
 

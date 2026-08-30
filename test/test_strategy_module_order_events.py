@@ -102,7 +102,9 @@ def test_a_fill_updates_the_row_and_seeds_the_leg(order):
     assert row["filled_qty"] == 75
     assert row["filled_at"] is not None
 
-    apply_fill.assert_called_once_with(order.run_id, 1, 101.5, is_entry=True)
+    # filled_qty rides along so the engine manages the size that actually
+    # traded rather than the size that was asked for.
+    apply_fill.assert_called_once_with(order.run_id, 1, 101.5, is_entry=True, filled_qty=75)
 
 
 def test_the_same_fill_arriving_twice_is_applied_once(order):
@@ -137,7 +139,7 @@ def test_an_exit_fill_is_applied_as_an_exit_not_an_entry(order):
     with patch("services.strategy_module.engine.apply_fill") as apply_fill:
         order_events._apply_update("BRK-2", _event("BRK-2", avg=80.0))
 
-    apply_fill.assert_called_once_with(order.run_id, 1, 80.0, is_entry=False)
+    apply_fill.assert_called_once_with(order.run_id, 1, 80.0, is_entry=False, filled_qty=75)
 
 
 def test_a_rejection_marks_the_row_and_seeds_nothing(order):

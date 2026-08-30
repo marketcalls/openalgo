@@ -53,6 +53,39 @@ _POOL = ThreadPoolExecutor(
 # done and it traded", normalised the same way recovery normalises them.
 _FILLED = frozenset({"complete", "completed", "filled", "executed", "traded"})
 _DEAD = frozenset({"rejected", "cancelled", "canceled"})
+_CANCELLED = frozenset({"cancelled", "canceled"})
+
+
+def _usable_price(value: Any) -> float | None:
+    """A strictly positive finite price, or None.
+
+    The guard here used to be a truthiness test, which several brokers defeat
+    simply by sending numerics as strings: "0" is truthy, so a fill at no price
+    was applied as a fill at zero, and the leg was marked complete with an
+    entry of 0.0. stop_from_points refuses a non-positive entry, so that leg
+    then had no stop at all while the UI, the audit trail and the operator all
+    read it as a filled, managed position. A negative was written straight on.
+
+    services.risk.models.is_price is the same predicate the risk core applies
+    to a tick, used here so a fill cannot enter by a door a tick could not.
+    """
+    from services.risk.models import is_price
+
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return None
+    return price if is_price(price) else None
+
+
+def _whole_qty(value: Any) -> int | None:
+    """A positive whole quantity, or None when the broker did not say."""
+    try:
+        qty = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return qty if qty > 0 else None
+
 
 _lock = threading.Lock()
 _started = False
@@ -145,16 +178,20 @@ def _apply_update(order_id: str, event: Any) -> None:
                 avg_fill_price=avg_price,
                 filled_qty=filled_qty,
             )
-            if avg_price:
+            price = _usable_price(avg_price)
+            if price is not None:
                 from services.strategy_module import engine
 
-                engine.apply_fill(run_id, leg_id, float(avg_price), is_entry=is_entry)
+                engine.apply_fill(
+                    run_id, leg_id, price, is_entry=is_entry, filled_qty=_whole_qty(filled_qty)
+                )
             else:
-                # A fill with no price cannot seed a stop or a realized figure.
-                # Recorded, but deliberately not applied to the run.
+                # A fill with no usable price cannot seed a stop or a realized
+                # figure. Recorded, but deliberately not applied to the run.
                 logger.warning(
-                    "Order %s reported filled with no average price; leg %s not marked",
+                    "Order %s reported filled with an unusable average price %r; leg %s not marked",
                     order_id,
+                    avg_price,
                     leg_id,
                 )
 
@@ -167,7 +204,11 @@ def _apply_update(order_id: str, event: Any) -> None:
         if status in _DEAD:
             if already_terminal:
                 return
-            store.update_order(row.id, status="rejected", reject_reason=rejection)
+            # A cancel is not a rejection. store.ORDER_STATUSES carries both
+            # and recovery.normalise_order_status already distinguishes them,
+            # so collapsing them here only loses audit accuracy.
+            ended = "cancelled" if status in _CANCELLED else "rejected"
+            store.update_order(row.id, status=ended, reject_reason=rejection)
             logger.warning("Strategy order %s ended as %s", order_id, status)
             return
 
