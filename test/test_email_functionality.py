@@ -14,11 +14,43 @@ import argparse
 import os
 import sys
 
+import pytest
+from sqlalchemy.orm import scoped_session, sessionmaker
+
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from database import settings_db
+from database.engine_factory import create_db_engine
 from database.settings_db import get_smtp_settings, init_db, set_smtp_settings
 from utils.email_utils import send_test_email, validate_smtp_settings
+
+
+@pytest.fixture(autouse=True)
+def isolated_settings_database(tmp_path, monkeypatch):
+    """Bind every collected test to a disposable settings database."""
+    test_engine = create_db_engine(f"sqlite:///{(tmp_path / 'settings.db').as_posix()}")
+    original_query = settings_db.Base.__dict__["query"]
+    test_session = None
+    try:
+        test_session = scoped_session(
+            sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+        )
+        monkeypatch.setattr(settings_db, "engine", test_engine)
+        monkeypatch.setattr(settings_db, "db_session", test_session)
+        settings_db.Base.query = test_session.query_property()
+        settings_db.init_db()
+        yield
+    finally:
+        try:
+            if test_session is not None:
+                test_session.remove()
+                assert not test_session.registry.has()
+        finally:
+            try:
+                test_engine.dispose()
+            finally:
+                settings_db.Base.query = original_query
 
 
 def setup_test_smtp():
@@ -61,7 +93,7 @@ def setup_test_smtp():
         return False
 
 
-def test_smtp_connection():
+def check_smtp_connection():
     """Test SMTP connection without sending email"""
     print("\n Testing SMTP Connection...")
 
@@ -122,6 +154,41 @@ def send_test_email_interactive(test_email):
         return False
 
 
+def test_smtp_connection(monkeypatch):
+    """The collected diagnostic reads synthetic settings without opening SMTP."""
+    settings_db.set_smtp_settings(
+        smtp_server="smtp.invalid",
+        smtp_port=2525,
+        smtp_username="fixture-user",
+        smtp_password="fixture-password",
+        smtp_use_tls=True,
+        smtp_from_email="sender@example.invalid",
+        smtp_helo_hostname="client.example.invalid",
+    )
+    observed = []
+
+    def fake_validate_smtp_settings(smtp_settings):
+        observed.append(smtp_settings.copy())
+        return {"success": True, "message": "synthetic validation"}
+
+    monkeypatch.setattr(
+        sys.modules[__name__], "validate_smtp_settings", fake_validate_smtp_settings
+    )
+
+    assert check_smtp_connection() is True
+    assert observed == [
+        {
+            "smtp_server": "smtp.invalid",
+            "smtp_port": 2525,
+            "smtp_username": "fixture-user",
+            "smtp_password": "fixture-password",
+            "smtp_use_tls": True,
+            "smtp_from_email": "sender@example.invalid",
+            "smtp_helo_hostname": "client.example.invalid",
+        }
+    ]
+
+
 def main():
     parser = argparse.ArgumentParser(description="Test SMTP email functionality")
     parser.add_argument("--email", "-e", required=True, help="Email address to send test email to")
@@ -166,7 +233,7 @@ def main():
 
     # Test connection if requested
     if args.test_connection:
-        success = test_smtp_connection()
+        success = check_smtp_connection()
         if not success:
             return 1
 
