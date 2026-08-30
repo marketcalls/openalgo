@@ -248,9 +248,154 @@ def test_outgoing_claim_is_released_when_retry_fails_before_its_row(
     )
     strategy = store.get_strategy(strategy_id, qa.USER)
     monkeypatch.setattr(signals, "_api_key_for", lambda _user_id: None)
+    before_events = sum(
+        event["kind"] == "flip_outgoing_exit_rejected" for event in store.list_events(strategy_id)
+    )
 
     result = signals.handle_signal(strategy, "long_exit", leg_id=1)
 
     assert result.ok is False
     leg = state.get_run_state(run_id)["legs"]["1"]
     assert leg["superseded"]["exit_order_id"] is None
+    events = [
+        event
+        for event in store.list_events(strategy_id)
+        if event["kind"] == "flip_outgoing_exit_rejected"
+    ]
+    assert len(events) == before_events + 1
+    event = events[0]
+    assert all(word in event["message"].lower() for word in ("held", "managed", "retry"))
+
+
+def _rejected_flip(broker: qa.Broker):
+    """A live short plus an outgoing long whose first exit was rejected."""
+    strategy = qa._signal_strategy()
+    strategy_id = strategy.id
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = qa._run_of(strategy)
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    signals.handle_signal(strategy, "short_entry", leg_id=1)
+    engine.apply_fill(run_id, 1, 95.0, is_entry=True)
+    first_exit = next(row for row in store.list_orders(run_id) if row["kind"] == "exit_signal")
+    order_events._apply_update(
+        first_exit["broker_order_id"],
+        qa._event(first_exit["broker_order_id"], status="rejected"),
+    )
+    broker.clear()
+    return strategy_id, run_id
+
+
+def _live_identity(run_id: int) -> dict:
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    return {
+        "entry_order_id": leg["entry_order_id"],
+        "entry_status": leg["entry_status"],
+        "status": leg["status"],
+        "position_ref": leg["position_ref"],
+        "entry_avg": leg["entry_avg"],
+        "exit_avg": leg["exit_avg"],
+    }
+
+
+def _assert_live_short_is_exitable(strategy_id: int, broker: qa.Broker) -> None:
+    broker.clear()
+    result = signals.handle_signal(store.get_strategy(strategy_id, qa.USER), "short_exit", leg_id=1)
+    assert result.acted
+    assert broker.actions == ["BUY"]
+
+
+def test_accepted_outgoing_retry_does_not_rewrite_live_entry_bookkeeping(
+    broker: qa.Broker,
+) -> None:
+    strategy_id, run_id = _rejected_flip(broker)
+    before = _live_identity(run_id)
+
+    result = signals.handle_signal(store.get_strategy(strategy_id, qa.USER), "long_exit", leg_id=1)
+
+    assert result.acted
+    assert _live_identity(run_id) == before
+    _assert_live_short_is_exitable(strategy_id, broker)
+
+
+def test_refused_outgoing_retry_preserves_live_entry_and_emits_retryable_event(
+    broker: qa.Broker,
+) -> None:
+    strategy_id, run_id = _rejected_flip(broker)
+    before = _live_identity(run_id)
+    broker.refuse = True
+
+    result = signals.handle_signal(store.get_strategy(strategy_id, qa.USER), "long_exit", leg_id=1)
+
+    broker.refuse = False
+    assert result.ok is False
+    assert _live_identity(run_id) == before
+    event = next(
+        event
+        for event in store.list_events(strategy_id)
+        if event["kind"] == "flip_outgoing_exit_rejected"
+    )
+    assert all(word in event["message"].lower() for word in ("held", "managed", "retry"))
+    _assert_live_short_is_exitable(strategy_id, broker)
+
+
+def test_rowless_outgoing_retry_does_not_rewrite_live_entry_bookkeeping(
+    broker: qa.Broker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    strategy_id, run_id = _rejected_flip(broker)
+    before = _live_identity(run_id)
+    record_order = store.record_order
+    monkeypatch.setattr(store, "record_order", lambda *_args, **_kwargs: None)
+
+    result = signals.handle_signal(store.get_strategy(strategy_id, qa.USER), "long_exit", leg_id=1)
+
+    monkeypatch.setattr(store, "record_order", record_order)
+    assert result.acted
+    assert _live_identity(run_id) == before
+    _assert_live_short_is_exitable(strategy_id, broker)
+
+
+def test_second_flip_is_retry_neutral_while_the_first_outgoing_side_is_unsettled(
+    broker: qa.Broker,
+) -> None:
+    strategy = qa._signal_strategy()
+    strategy_id = strategy.id
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = qa._run_of(strategy)
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    signals.handle_signal(strategy, "short_entry", leg_id=1)
+    engine.apply_fill(run_id, 1, 95.0, is_entry=True)
+    superseded = state.get_run_state(run_id)["legs"]["1"]["superseded"]
+    broker.clear()
+
+    result = signals.handle_signal(store.get_strategy(strategy_id, qa.USER), "long_entry", leg_id=1)
+
+    assert result.ok is True
+    assert result.note == "flip_pending"
+    assert broker.orders == []
+    assert state.get_run_state(run_id)["legs"]["1"]["superseded"] == superseded
+
+
+def test_position_mismatch_warning_runs_after_the_run_lock_is_released(
+    broker: qa.Broker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    strategy = qa._signal_strategy()
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = qa._run_of(strategy)
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    lock_states = []
+
+    def observe_warning(*_args, **_kwargs):
+        lock_states.append(state.get_state_lock(run_id).locked())
+
+    monkeypatch.setattr(engine.logger, "warning", observe_warning)
+
+    engine.apply_fill(
+        run_id,
+        1,
+        101.0,
+        is_entry=False,
+        order_row_id=99999,
+        position_ref="not-the-live-position",
+    )
+
+    assert lock_states == [False]

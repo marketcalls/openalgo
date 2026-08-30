@@ -1331,6 +1331,47 @@ def update_order(
         return False
 
 
+def transition_order_terminal(
+    order_id: int,
+    status: str,
+    avg_fill_price: float | None = None,
+    filled_qty: int | None = None,
+    reject_reason: str | None = None,
+) -> bool:
+    """Atomically move one non-terminal order into a terminal status.
+
+    Returns True only to the worker whose conditional UPDATE won. Duplicate
+    terminal frames return False and must not mutate run state.
+    """
+    if status not in {"complete", "cancelled", "rejected"}:
+        return False
+    fields: dict[str, Any] = {"status": status}
+    if status == "complete":
+        fields["filled_at"] = utcnow()
+    if avg_fill_price is not None:
+        fields["avg_fill_price"] = avg_fill_price
+    if filled_qty is not None:
+        fields["filled_qty"] = filled_qty
+    if reject_reason is not None:
+        fields["reject_reason"] = reject_reason
+    try:
+        updated = (
+            db_session.query(SmStrategyOrder)
+            .filter(
+                SmStrategyOrder.id == order_id,
+                SmStrategyOrder.status.notin_(("complete", "cancelled", "rejected")),
+            )
+            .update(fields, synchronize_session=False)
+        )
+        db_session.commit()
+        db_session.expire_all()
+        return updated == 1
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not transition order %s to %s", order_id, status)
+        return False
+
+
 def get_order_by_broker_id(broker_order_id: str) -> SmStrategyOrder | None:
     """The strategy order carrying this broker reference, if any.
 

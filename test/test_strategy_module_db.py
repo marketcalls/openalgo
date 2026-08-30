@@ -378,6 +378,16 @@ def test_orders_are_recorded_at_placement_and_updated_on_fill():
     assert rows[0]["filled_at"] is not None
 
 
+def test_terminal_order_transition_has_one_winner():
+    run = _run()
+    order = sm.record_order(run.id, 1, "exit_signal", ORDER)
+    transition = getattr(sm, "transition_order_terminal", None)
+
+    assert callable(transition)
+    assert transition(order.id, "rejected", reject_reason="broker refused") is True
+    assert transition(order.id, "rejected", reject_reason="duplicate frame") is False
+
+
 def test_events_are_listed_newest_first_and_filter_by_kind():
     created, _ = sm.create_strategy(USER, _config())
     run = sm.create_run(created["id"], "sandbox", "zerodha")

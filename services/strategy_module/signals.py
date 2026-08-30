@@ -357,7 +357,8 @@ def _held_side(run_id: int, leg_id: Any) -> str | None:
 def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
     """Open a leg on the requested side, flipping it if it is on the other."""
     leg_id = _leg_id_of(leg)
-    held = _held_side(run_id, leg_id)
+    held_position, flip_pending = state.signal_entry_state(run_id, leg_id)
+    held = _LONG if held_position == "B" else _SHORT if held_position == "S" else None
     flipped = False
 
     if held == side:
@@ -366,6 +367,13 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
         return SignalResult(ok=True, note=f"already_{side}", leg_id=leg_id, run_id=run_id)
 
     if held is not None:
+        if flip_pending:
+            return SignalResult(
+                ok=True,
+                note="flip_pending",
+                leg_id=leg_id,
+                run_id=run_id,
+            )
         # Opposite side: square first, then open. Reversing without closing
         # would leave both positions on the book.
         closed = _exit(strategy, run_id, leg, held)
@@ -468,7 +476,11 @@ def _exit(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
                 exit_owner="superseded",
             )
             if not placed.ok:
-                state.release_superseded_exit(run_id, leg_id, placed.exit_claim_id)
+                released = state.release_superseded_exit(run_id, leg_id, placed.exit_claim_id)
+                if released:
+                    from services.strategy_module import order_events
+
+                    order_events.report_flip_outgoing_exit_rejected(run_id, leg_id, "refused")
                 return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error=placed.error)
             return SignalResult(ok=True, leg_id=leg_id, run_id=run_id)
 
@@ -638,13 +650,13 @@ def _place(
     with state.run_state(run_id) as state_run:
         live = state_run["legs"].get(str(leg["leg_id"])) if state_run else None
         if live is not None:
-            if exiting and exit_owner == "live":
-                if result.ok:
+            if exiting:
+                if exit_owner == "live" and result.ok:
                     live["exit_order_id"] = row_id
                     live["exit_kind"] = kind
-                # A refused exit writes nothing. Arming the markers here would
-                # disarm the leg's stop loss, its target and the square-off for
-                # the rest of the session; the caller releases the claim.
+                # A superseded exit owns only live["superseded"], which was
+                # bound before dispatch. It must never touch the replacement
+                # position's entry or exit bookkeeping.
             else:
                 live["entry_order_id"] = row_id
                 live["entry_status"] = "open" if result.ok else "rejected"

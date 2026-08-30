@@ -37,6 +37,10 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+class _PositionRefMismatch(Exception):
+    """Carry ignored-fill details beyond the run lock."""
+
+
 # Which exit reasons make a leg's own stop the cause. Only these trigger the
 # trail-to-entry rule, because that rule is a response to the market having
 # moved against the book. A manual close is an operator override, not a signal,
@@ -628,6 +632,34 @@ def apply_fill(
     order_row_id: int | None = None,
     position_ref: str | None = None,
 ) -> bool:
+    """Record a fill, logging position mismatches after the run lock releases."""
+    try:
+        return _apply_fill(
+            run_id,
+            leg_id,
+            avg_price,
+            is_entry,
+            filled_qty,
+            order_row_id,
+            position_ref,
+        )
+    except _PositionRefMismatch as mismatch:
+        logger.warning(
+            "Ignoring a fill for position %s on leg %s: the live position is %s",
+            *mismatch.args,
+        )
+        return False
+
+
+def _apply_fill(
+    run_id: int,
+    leg_id: Any,
+    avg_price: float,
+    is_entry: bool,
+    filled_qty: int | None = None,
+    order_row_id: int | None = None,
+    position_ref: str | None = None,
+) -> bool:
     """Record a fill against a leg. Returns whether the run went flat.
 
     Entry fills set the price every stop and target is measured from, so a leg
@@ -697,13 +729,7 @@ def apply_fill(
             return False
 
         if position_ref is not None and leg.get("position_ref") != position_ref:
-            logger.warning(
-                "Ignoring a fill for position %s on leg %s: the live position is %s",
-                position_ref,
-                leg_id,
-                leg.get("position_ref"),
-            )
-            return False
+            raise _PositionRefMismatch(position_ref, leg_id, leg.get("position_ref"))
 
         # A fill that names an order this leg is not waiting on belongs to an
         # incarnation that has already been replaced. Applying it would close

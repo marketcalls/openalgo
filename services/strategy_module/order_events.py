@@ -172,7 +172,12 @@ def _report_stranded_exit(run_id: int, leg_id: Any, row: Any, ended: str) -> Non
         logger.exception("Could not record a stranded exit for run %s leg %s", run_id, leg_id)
 
 
-def _report_flip_outgoing_exit_rejected(run_id: int, leg_id: Any, row: Any, ended: str) -> None:
+def report_flip_outgoing_exit_rejected(
+    run_id: int,
+    leg_id: Any,
+    ended: str,
+    broker_order_id: str | None = None,
+) -> None:
     """Record that an active flip still manages its retryable outgoing side."""
     try:
         run = store.get_run(run_id)
@@ -186,8 +191,9 @@ def _report_flip_outgoing_exit_rejected(run_id: int, leg_id: Any, row: Any, ende
             strategy.user_id,
             "flip_outgoing_exit_rejected",
             (
-                f"Exit order {row.broker_order_id} for the outgoing side of leg {leg_id} "
-                f"was {ended}. The old side is still held, remains managed, and can be retried."
+                f"Outgoing exit{f' order {broker_order_id}' if broker_order_id else ''} for "
+                f"leg {leg_id} was {ended}. The old side is still held, remains managed, "
+                "and is retryable."
             ),
             run_id=run_id,
             leg_id=leg_id,
@@ -269,12 +275,13 @@ def _apply_update(order_id: str, event: Any) -> None:
             if already_terminal:
                 logger.debug("Ignoring a repeat fill for order %s", order_id)
                 return
-            store.update_order(
+            if not store.transition_order_terminal(
                 row.id,
                 status="complete",
                 avg_fill_price=avg_price,
                 filled_qty=filled_qty,
-            )
+            ):
+                return
             price = _usable_price(avg_price)
             if price is not None:
                 from services.strategy_module import engine
@@ -314,7 +321,8 @@ def _apply_update(order_id: str, event: Any) -> None:
             # and recovery.normalise_order_status already distinguishes them,
             # so collapsing them here only loses audit accuracy.
             ended = "cancelled" if status in _CANCELLED else "rejected"
-            store.update_order(row.id, status=ended, reject_reason=rejection)
+            if not store.transition_order_terminal(row.id, status=ended, reject_reason=rejection):
+                return
             logger.warning("Strategy order %s ended as %s", order_id, status)
 
             # An order that dies after the dispatch returned has to undo what
@@ -332,31 +340,25 @@ def _apply_update(order_id: str, event: Any) -> None:
                     if leg is not None and leg.get("entry_status") != "complete":
                         leg["entry_status"] = ended
                         leg["status"] = "rejected"
-            elif state.release_superseded_exit(run_id, leg_id, row.id):
-                # This closed the outgoing side of a flip, and it was refused.
-                # Both sides are on the book now: the leg describes the new
-                # one, and the old one is held with its exit dead. Cleared so
-                # it can be closed again, and said out loud because nothing
-                # else will notice.
-                logger.warning(
-                    "The exit for the outgoing side of a flip on leg %s was %s; that position "
-                    "is still held",
-                    leg_id,
-                    ended,
-                )
-                _report_flip_outgoing_exit_rejected(run_id, leg_id, row, ended)
-            elif state.get_run_state(run_id) is not None:
-                # Release the exit claim so the position stays exitable. Held,
-                # its stop loss, its target, the scheduler's square-off and the
-                # operator's Close button all pass over a position the broker
-                # still holds, for the rest of the session.
-                state.release_leg_exit(run_id, leg_id)
             else:
-                # The run has already finalised, which is what a stop does as
-                # soon as its exits are accepted. There is nothing left to
-                # release and nothing still managing this leg, so the position
-                # is real, uncovered, and invisible unless it is said out loud.
-                _report_stranded_exit(run_id, leg_id, row, ended)
+                exit_owner = state.release_order_exit(run_id, leg_id, row.id, row.position_ref)
+                if exit_owner == "superseded":
+                    # This closed the outgoing side of a flip, and it was
+                    # refused. Both sides are on the book now: the leg
+                    # describes the new one, and the old one is held with its
+                    # exit dead. Cleared so it can be retried and said out loud.
+                    logger.warning(
+                        "The exit for the outgoing side of a flip on leg %s was %s; that "
+                        "position is still held",
+                        leg_id,
+                        ended,
+                    )
+                    report_flip_outgoing_exit_rejected(run_id, leg_id, ended, row.broker_order_id)
+                elif exit_owner is None and state.get_run_state(run_id) is None:
+                    # The run has already finalised. There is nothing left to
+                    # release and nothing still managing this leg, so the
+                    # position is real and invisible unless said out loud.
+                    _report_stranded_exit(run_id, leg_id, row, ended)
             return
 
         # Anything else is still working. Recorded so the audit trail follows

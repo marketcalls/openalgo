@@ -9,6 +9,8 @@ The pool is bypassed throughout: `_apply_update` is called directly so the
 assertions are deterministic rather than racing a worker.
 """
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -221,6 +223,161 @@ def test_live_flip_rejection_is_retryable_not_reported_as_closed(order):
     events = store.list_events(order.strategy_id)
     assert any(event["kind"] == "flip_outgoing_exit_rejected" for event in events)
     assert not any(event["kind"] == "run_stop_failed" for event in events)
+
+
+def _apply_two_updates_after_both_read(
+    monkeypatch: pytest.MonkeyPatch, broker_order_id: str, event
+) -> None:
+    """Hold two update workers after their identical pre-terminal read."""
+    real_lookup = store.get_order_by_broker_id
+    both_read = Barrier(2)
+
+    def synchronized_lookup(candidate_order_id):
+        row = real_lookup(candidate_order_id)
+        both_read.wait(timeout=5)
+        return row
+
+    monkeypatch.setattr(store, "get_order_by_broker_id", synchronized_lookup)
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        futures = [
+            workers.submit(order_events._apply_update, broker_order_id, event) for _ in range(2)
+        ]
+        for future in futures:
+            future.result(timeout=10)
+
+
+def test_concurrent_terminal_fills_have_exactly_one_state_winner(order, monkeypatch):
+    with patch("services.strategy_module.engine.apply_fill") as apply_fill:
+        _apply_two_updates_after_both_read(monkeypatch, "BRK-1", _event("BRK-1"))
+
+    assert apply_fill.call_count == 1
+
+
+def test_duplicate_outgoing_rejection_does_not_clear_an_unrelated_live_exit(order, monkeypatch):
+    state.init_run_state(
+        order.run_id,
+        order.strategy_id,
+        [
+            {
+                "leg_id": 1,
+                "position": "S",
+                "position_ref": "live-short",
+                "symbol": "NIFTY28MAY2624000CE",
+                "exchange": "NFO",
+                "quantity": 75,
+            }
+        ],
+    )
+    live_exit = store.record_order(
+        order.run_id,
+        1,
+        "exit_signal",
+        {
+            "position_ref": "live-short",
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "BUY",
+            "qty": 75,
+            "broker_order_id": "BRK-LIVE",
+            "status": "open",
+        },
+    )
+    live_exit_id = live_exit.id
+    outgoing_exit = store.record_order(
+        order.run_id,
+        1,
+        "exit_signal",
+        {
+            "position_ref": "outgoing-long",
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "SELL",
+            "qty": 75,
+            "broker_order_id": "BRK-OUTGOING",
+            "status": "open",
+        },
+    )
+    with state.run_state(order.run_id) as run:
+        leg = run["legs"]["1"]
+        leg["status"] = "open"
+        leg["entry_status"] = "complete"
+        leg["exit_order_id"] = live_exit_id
+        leg["exit_kind"] = "exit_signal"
+        leg["superseded"] = {
+            "position_ref": "outgoing-long",
+            "entry_order_id": order.order_id,
+            "exit_order_id": outgoing_exit.id,
+            "position": "B",
+            "entry_avg": 100.0,
+            "qty": 75,
+        }
+
+    _apply_two_updates_after_both_read(
+        monkeypatch,
+        "BRK-OUTGOING",
+        _event("BRK-OUTGOING", status="rejected", avg=0),
+    )
+
+    leg = state.get_run_state(order.run_id)["legs"]["1"]
+    assert leg["exit_order_id"] == live_exit_id
+    assert leg["exit_kind"] == "exit_signal"
+
+
+def test_legacy_rejection_releases_only_its_exact_live_exit_row(order):
+    state.init_run_state(
+        order.run_id,
+        order.strategy_id,
+        [
+            {
+                "leg_id": 1,
+                "position": "S",
+                "symbol": "NIFTY28MAY2624000CE",
+                "exchange": "NFO",
+                "quantity": 75,
+            }
+        ],
+    )
+    live_exit = store.record_order(
+        order.run_id,
+        1,
+        "exit_signal",
+        {
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "BUY",
+            "qty": 75,
+            "broker_order_id": "BRK-LIVE-LEGACY",
+            "status": "open",
+        },
+    )
+    live_exit_id = live_exit.id
+    store.record_order(
+        order.run_id,
+        1,
+        "exit_signal",
+        {
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "BUY",
+            "qty": 75,
+            "broker_order_id": "BRK-OTHER-LEGACY",
+            "status": "open",
+        },
+    )
+    with state.run_state(order.run_id) as run:
+        leg = run["legs"]["1"]
+        leg["status"] = "open"
+        leg["entry_status"] = "complete"
+        leg["exit_order_id"] = live_exit_id
+        leg["exit_kind"] = "exit_signal"
+
+    order_events._apply_update(
+        "BRK-OTHER-LEGACY", _event("BRK-OTHER-LEGACY", status="rejected", avg=0)
+    )
+
+    leg = state.get_run_state(order.run_id)["legs"]["1"]
+    assert leg["exit_order_id"] == live_exit_id
+    assert leg["exit_kind"] == "exit_signal"
 
 
 def test_a_working_status_is_recorded_but_changes_nothing_the_engine_acts_on(order):

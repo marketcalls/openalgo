@@ -246,6 +246,19 @@ def claim_leg_exit(run_id: int, leg_id: Any, kind: str) -> dict[str, Any] | None
         return dict(leg)
 
 
+def signal_entry_state(run_id: int, leg_id: Any) -> tuple[str | None, bool]:
+    """Return the live B/S side and whether an earlier flip is still unsettled."""
+    lock = _lock_for(run_id, create=False)
+    if lock is None:
+        return None, False
+    with lock:
+        run = _run_state.get(run_id)
+        leg = run["legs"].get(str(leg_id)) if run else None
+        if leg is None or leg.get("status") != "open":
+            return None, False
+        return leg.get("position"), leg.get("superseded") is not None
+
+
 def claim_legs_for_exit(
     run_id: int, leg_ids: Iterable[Any], kind: str
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -308,6 +321,38 @@ def release_superseded_exit(run_id: int, leg_id: Any, exit_order_id: Any) -> boo
             return False
         superseded["exit_order_id"] = None
         return True
+
+
+def release_order_exit(
+    run_id: int,
+    leg_id: Any,
+    exit_order_id: Any,
+    position_ref: str | None,
+) -> str | None:
+    """Release the exact live or superseded owner of one terminal order row."""
+    lock = _lock_for(run_id, create=False)
+    if lock is None:
+        return None
+    with lock:
+        run = _run_state.get(run_id)
+        leg = run["legs"].get(str(leg_id)) if run else None
+        if leg is None:
+            return None
+        superseded = leg.get("superseded")
+        if (
+            superseded
+            and superseded.get("exit_order_id") == exit_order_id
+            and (position_ref is None or superseded.get("position_ref") == position_ref)
+        ):
+            superseded["exit_order_id"] = None
+            return "superseded"
+        if leg.get("exit_order_id") == exit_order_id and (
+            position_ref is None or leg.get("position_ref") == position_ref
+        ):
+            leg["exit_order_id"] = None
+            leg["exit_kind"] = None
+            return "live"
+        return None
 
 
 def bind_superseded_exit(run_id: int, leg_id: Any, claim_token: Any, order_row_id: int) -> bool:
