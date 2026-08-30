@@ -318,6 +318,44 @@ describe('useStrategyLive transport', () => {
     }
   })
 
+  it('does not label freshly polled state with a stale run id', async () => {
+    // A run ends and the next one starts. The socket's last frame still names
+    // the old run, and preferring it unconditionally attributed one run's
+    // numbers to another on the page.
+    vi.useFakeTimers()
+    try {
+      const socket = new FakeSocket()
+      shared.socket = socket
+      rest.get.mockResolvedValue({
+        data: {
+          status: 'success',
+          run_id: 99,
+          data: [{ ts: '2026-04-12T15:00:00+05:30', pnl_total: 12, leg_state: {} }],
+        },
+      })
+
+      const { result } = renderHook(() => useStrategyLive(7, true), { wrapper })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      act(() => {
+        socket.deliver('strategy_snapshot', stateFrame('snapshot', [wireLeg({ leg_id: 1 })]))
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(result.current.runId).toBe(42)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SOCKET_STALE_MS + LIVE_POLL_MS * 2)
+      })
+
+      expect(result.current.runId).toBe(99)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('goes live again when frames resume after a silence', async () => {
     vi.useFakeTimers()
     try {

@@ -452,6 +452,17 @@ def _exit(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
     leg_id = _leg_id_of(leg)
     held = _held_side(run_id, leg_id)
     if held != side:
+        # Before calling this flat: a flip whose closing order was refused
+        # leaves the outgoing position held while the leg describes the new
+        # one, so an exit for the old side is real and has nowhere else to go.
+        outgoing = state.claim_superseded_exit(run_id, leg_id, _POSITION_OF_SIDE[side])
+        if outgoing is not None:
+            placed = _place(strategy, run_id, outgoing, "exit_signal", outgoing["position"], True)
+            if not placed.ok:
+                state.release_superseded_exit(run_id, leg_id, state._SUPERSEDED_EXIT_PENDING)
+                return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error=placed.error)
+            return SignalResult(ok=True, leg_id=leg_id, run_id=run_id)
+
         # Flat, or held the other way. An exit for something not held is not a
         # failure; the alert simply arrived after the position had gone.
         return SignalResult(ok=True, note="no_matching_position", leg_id=leg_id, run_id=run_id)
@@ -530,8 +541,11 @@ def _place(
         if exiting
         else getattr(strategy, "pricetype", "MARKET"),
     )
-    result = order_dispatch.dispatch_order(mode=mode, api_key=api_key, order=order)
-
+    # Durable intent before the broker is called, exactly as the batch path
+    # does. Recording afterwards meant a crash or a database failure between
+    # broker acceptance and the insert left a real position that no row
+    # described: invisible to the operator, to recovery and to every later
+    # exit. The row carries no broker id yet, because there is not one yet.
     row = store.record_order(
         run_id,
         leg["leg_id"],
@@ -543,29 +557,68 @@ def _place(
             "qty": leg.get("quantity") or leg.get("qty"),
             "product": order.get("product"),
             "pricetype": order.get("pricetype", "MARKET"),
-            "broker_order_id": result.broker_order_id,
-            "status": "open" if result.ok else "rejected",
+            "status": "pending",
         },
     )
-    if row and not result.ok:
-        store.update_order(row.id, reject_reason=result.error)
+    if row is None and not exiting:
+        # An entry that cannot be recorded is one that cannot be managed, so it
+        # is not placed. Exits take the opposite decision below, deliberately.
+        store.record_event(
+            strategy.id,
+            strategy.user_id,
+            "leg_entry_rejected",
+            f"Signal entry for leg {leg['leg_id']} not placed: its order row could not be written",
+            run_id=run_id,
+            leg_id=leg["leg_id"],
+            severity="critical",
+        )
+        return _Placement(ok=False, error="Could not record the order before placing it")
+
+    # The id, not the instance: dispatch runs arbitrary code in between, and
+    # the sandbox publishes its fill from inside the call.
+    row_id = row.id if row is not None else None
+    if row is None:
+        # An exit that cannot be recorded is placed anyway. Refusing would
+        # leave the position open with a database outage between it and every
+        # attempt to close it; getting flat wins, and the audit row is lost.
+        store.record_event(
+            strategy.id,
+            strategy.user_id,
+            "leg_exit_placed",
+            (
+                f"Signal exit for leg {leg['leg_id']} is being placed without an order row: "
+                "it could not be written"
+            ),
+            run_id=run_id,
+            leg_id=leg["leg_id"],
+            severity="critical",
+        )
+
+    result = order_dispatch.dispatch_order(mode=mode, api_key=api_key, order=order)
+
+    if row_id is not None:
+        from services.strategy_module.engine import _record_acknowledgement
+
+        _record_acknowledgement(
+            row_id, result, strategy.id, strategy.user_id, run_id, leg["leg_id"]
+        )
 
     with state.run_state(run_id) as state_run:
         live = state_run["legs"].get(str(leg["leg_id"])) if state_run else None
         if live is not None:
             if exiting:
                 if result.ok:
-                    live["exit_order_id"] = row.id if row else None
+                    live["exit_order_id"] = row_id
                     live["exit_kind"] = kind
                 # A refused exit writes nothing. Arming the markers here would
                 # disarm the leg's stop loss, its target and the square-off for
                 # the rest of the session; the caller releases the claim.
             else:
-                live["entry_order_id"] = row.id if row else None
+                live["entry_order_id"] = row_id
                 live["entry_status"] = "open" if result.ok else "rejected"
                 live["status"] = "open" if result.ok else "rejected"
 
-    if row and result.ok:
+    if row_id is not None and result.ok:
         # After the leg bookkeeping above, never before it. See
         # engine._replay_order_update: the sandbox publishes this order's fill
         # from inside the dispatch, before the row existed, and replaying it

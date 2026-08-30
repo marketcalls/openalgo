@@ -35,7 +35,7 @@ do the slow work.
 from __future__ import annotations
 
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from copy import deepcopy
 from typing import Any
@@ -129,6 +129,12 @@ def init_run_state(run_id: int, strategy_id: int, legs: list[dict]) -> dict[str,
     with get_state_lock(run_id):
         _run_state[run_id] = state
     return state
+
+
+#: Placeholder written into a superseded record while its replacement exit is
+#: being dispatched, so a second alert cannot claim the same outgoing position
+#: before the real order id is known.
+_SUPERSEDED_EXIT_PENDING = "pending"
 
 
 def _new_leg_state(leg: dict) -> dict[str, Any]:
@@ -237,6 +243,102 @@ def claim_leg_exit(run_id: int, leg_id: Any, kind: str) -> dict[str, Any] | None
             return None
         leg["exit_kind"] = kind
         return dict(leg)
+
+
+def claim_legs_for_exit(
+    run_id: int, leg_ids: Iterable[Any], kind: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Claim every exitable leg and name the ones that cannot be, in one hold.
+
+    Returns ``(claimed, unfilled)``. A leg is claimed when it is open, has a
+    confirmed entry fill, and has no exit already in flight; it is reported as
+    unfilled when it is open but its entry has only been accepted.
+
+    One lock hold for both, deliberately. Claiming under one and classifying
+    under another leaves a window the width of a database round trip: a fill
+    landing inside it makes the leg exitable after the claim pass has skipped
+    it and no longer unfilled when the classify pass looks, so it appears in
+    neither list. The caller then finalises the run believing there was
+    nothing to exit, while the position is open at the broker with nothing
+    watching it.
+    """
+    claimed: list[dict[str, Any]] = []
+    unfilled: list[dict[str, Any]] = []
+
+    lock = _lock_for(run_id, create=False)
+    if lock is None:
+        return claimed, unfilled
+    with lock:
+        state = _run_state.get(run_id)
+        if state is None:
+            return claimed, unfilled
+        for leg_id in leg_ids:
+            leg = state["legs"].get(str(leg_id))
+            if leg is None or leg.get("status") != "open":
+                continue
+            if leg.get("exit_kind") is not None or leg.get("exit_order_id") is not None:
+                continue
+            if leg.get("entry_status") != "complete":
+                unfilled.append(dict(leg))
+                continue
+            leg["exit_kind"] = kind
+            claimed.append(dict(leg))
+    return claimed, unfilled
+
+
+def release_superseded_exit(run_id: int, leg_id: Any, exit_order_id: Any) -> bool:
+    """Mark a flip's outgoing exit as no longer in flight. Says whether it matched.
+
+    A flip squares the held side and opens the other immediately, so until the
+    closing order fills the leg keeps the outgoing position under
+    ``superseded``. If that closing order is then rejected, the outgoing
+    position is still held: both sides are on the book, and the leg itself
+    describes only the new one. Clearing the dead order id is what lets the old
+    side be closed again.
+    """
+    lock = _lock_for(run_id, create=False)
+    if lock is None:
+        return False
+    with lock:
+        state = _run_state.get(run_id)
+        leg = state["legs"].get(str(leg_id)) if state else None
+        superseded = leg.get("superseded") if leg else None
+        if not superseded or superseded.get("exit_order_id") != exit_order_id:
+            return False
+        superseded["exit_order_id"] = None
+        return True
+
+
+def claim_superseded_exit(run_id: int, leg_id: Any, position: str) -> dict[str, Any] | None:
+    """Claim a flip's outgoing position for a fresh exit, if it is still held.
+
+    Returns a snapshot to dispatch from, carrying the outgoing side and size,
+    or None when there is no such position or an exit for it is already in
+    flight. The symbol comes from the leg, because a flip is a reversal on the
+    same contract.
+    """
+    lock = _lock_for(run_id, create=False)
+    if lock is None:
+        return None
+    with lock:
+        state = _run_state.get(run_id)
+        leg = state["legs"].get(str(leg_id)) if state else None
+        superseded = leg.get("superseded") if leg else None
+        if not superseded or superseded.get("exit_order_id") is not None:
+            return None
+        if str(superseded.get("position") or "").upper() != str(position or "").upper():
+            return None
+        # Marked in flight straight away, under the same hold, so two alerts
+        # cannot each send a covering order for the one outgoing position.
+        superseded["exit_order_id"] = _SUPERSEDED_EXIT_PENDING
+        return {
+            "leg_id": leg["leg_id"],
+            "position": superseded["position"],
+            "symbol": leg["symbol"],
+            "exchange": leg["exchange"],
+            "quantity": superseded.get("qty"),
+            "entry_avg": superseded.get("entry_avg"),
+        }
 
 
 def release_leg_exit(run_id: int, leg_id: Any) -> None:

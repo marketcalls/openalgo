@@ -828,37 +828,30 @@ def _exit_legs(
     # Claim each leg under the state lock before anything is dispatched. The
     # guard used to test exit_order_id, which is not written until the order
     # comes back, so two rules firing on one leg both got through.
-    targets = [
-        claimed
-        for leg_id in leg_ids
-        if (claimed := state.claim_leg_exit(run_id, leg_id, kind)) is not None
+    # Claimed and classified in one hold of the run lock. Legs the broker
+    # accepted but has not filled cannot be squared off: there is no confirmed
+    # quantity to close, and sending the configured size the other way would be
+    # a naked position if that entry later cancels. They are reported as
+    # refusals rather than silently skipped, so stop_run keeps the run open and
+    # managed and the stop can be retried once the fill arrives.
+    #
+    # Doing this in two passes left a window a fill could land in, and a leg
+    # that filled inside it appeared in neither list: the run then finalised
+    # with the position still open.
+    targets, unfilled_legs = state.claim_legs_for_exit(run_id, leg_ids, kind)
+    unfilled = [
+        {
+            "leg_id": leg["leg_id"],
+            "ok": False,
+            "symbol": leg.get("symbol"),
+            "broker_order_id": None,
+            "error": (
+                "The entry for this leg has been accepted but not filled, so there "
+                "is no confirmed quantity to exit. Retry once it fills."
+            ),
+        }
+        for leg in unfilled_legs
     ]
-
-    # Legs the broker accepted but has not filled cannot be squared off: there
-    # is no confirmed quantity to close, and sending the configured size the
-    # other way would be a naked position if the entry later cancels. Reported
-    # as refusals rather than silently skipped, so stop_run keeps the run open
-    # and managed and the stop can be retried once the fill arrives.
-    unfilled: list[dict[str, Any]] = []
-    claimed_ids = {str(leg["leg_id"]) for leg in targets}
-    with state.run_state(run_id) as run:
-        for leg_id in leg_ids:
-            if str(leg_id) in claimed_ids:
-                continue
-            leg = run["legs"].get(str(leg_id)) if run else None
-            if leg and leg.get("status") == "open" and leg.get("entry_status") != "complete":
-                unfilled.append(
-                    {
-                        "leg_id": leg_id,
-                        "ok": False,
-                        "symbol": leg.get("symbol"),
-                        "broker_order_id": None,
-                        "error": (
-                            "The entry for this leg has been accepted but not filled, so there "
-                            "is no confirmed quantity to exit. Retry once it fills."
-                        ),
-                    }
-                )
 
     # Dispatch outside the lock. See the module docstring.
     outcomes: list[dict[str, Any]] = []

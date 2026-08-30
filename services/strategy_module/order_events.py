@@ -304,6 +304,19 @@ def _apply_update(order_id: str, event: Any) -> None:
                     if leg is not None and leg.get("entry_status") != "complete":
                         leg["entry_status"] = ended
                         leg["status"] = "rejected"
+            elif state.release_superseded_exit(run_id, leg_id, row.id):
+                # This closed the outgoing side of a flip, and it was refused.
+                # Both sides are on the book now: the leg describes the new
+                # one, and the old one is held with its exit dead. Cleared so
+                # it can be closed again, and said out loud because nothing
+                # else will notice.
+                logger.warning(
+                    "The exit for the outgoing side of a flip on leg %s was %s; that position "
+                    "is still held",
+                    leg_id,
+                    ended,
+                )
+                _report_stranded_exit(run_id, leg_id, row, ended)
             elif state.get_run_state(run_id) is not None:
                 # Release the exit claim so the position stays exitable. Held,
                 # its stop loss, its target, the scheduler's square-off and the

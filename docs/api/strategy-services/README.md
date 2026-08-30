@@ -148,6 +148,10 @@ be acted on:
 - **`run_stop_failed`** (`critical`) - the broker refused the exit orders of a
   stop. The run is still open and **still holding those positions**. It is the
   one lifecycle event that means the opposite of what a stop usually means.
+- **`order_ack_unrecorded`** (`critical`) - the broker accepted an order but
+  its acknowledgement could not be written, so the position exists and is not
+  attributable from the database. The message carries the broker order id;
+  reconcile by hand.
 - **`leg_expiry_fallback`** (`warn`) - the chain did not list the expiry rank
   the leg asked for, so a nearer one was used. A `next_week` leg trading the
   current week is a different trade from the one that was configured.

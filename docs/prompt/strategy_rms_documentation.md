@@ -356,7 +356,41 @@ Load-bearing orderings:
   recorded is placed anyway.** Opposite decisions, on purpose. Refusing an
   entry costs one leg not opened. Refusing an exit costs a position that stays
   open with a database outage standing between it and every attempt to close
-  it, so getting flat wins and the audit row is what is lost, loudly.
+  it, so getting flat wins and the audit row is what is lost, loudly. The
+  signal path applies the same two rules as the batch path.
+- **The broker's acknowledgement is written back, and that write is checked.**
+  `update_order` swallows its own failure and returns False. Ignoring it left
+  the row `pending` with no broker order id, so no fill could ever be matched
+  to it: the leg was never seeded and nothing evaluated a stop for a position
+  that existed. The replay buffer cannot cover this, because the id it would
+  match on is what was lost. Retried once, and if it still will not persist the
+  broker order id goes to the event log as `order_ack_unrecorded` at critical
+  severity, which is the last durable place to say a real position needs
+  reconciling by hand.
+- **A leg whose entry has been accepted but not filled is never exited.** A leg
+  is `open` from broker acceptance, so squaring off would send the configured
+  size the other way against a position that may be nothing at all, and if that
+  entry were then cancelled the square-off is itself a naked position in the
+  reverse direction. `state.claim_legs_for_exit` refuses it and names it, in
+  **one** hold of the run lock: claiming and classifying separately left a
+  window in which an arriving fill made a leg appear in neither list, and the
+  run then finalised with the position still open. The stop is reported as
+  refused so the run stays open and managed, and it succeeds once the fill
+  lands.
+- **A rejected exit is undone wherever the rejection arrives.** The
+  synchronous path releases the claim; a rejection or cancellation arriving
+  later on the order stream does the same, so the leg stays exitable. An entry
+  that dies asynchronously is marked rejected rather than left reading `open`,
+  or the next square-off sends the full size against nothing. When the run has
+  already finalised, which is what a stop does as soon as its exits are
+  accepted, there is nothing left to release: the held position is recorded at
+  critical severity instead.
+- **A flip whose closing order is refused leaves both sides on the book.** The
+  outgoing position is kept under `superseded`, and if its exit dies that
+  record is cleared so the old side can be closed again: an exit signal naming
+  a side the live leg does not hold is matched against it before being called
+  a no-op. Both positions are real, and one leg id can only describe one of
+  them.
 - **A leg is closed by its fill arriving**, not by its exit being placed.
   `apply_fill` finalises a run that has gone flat.
 - **A leg is claimed for exit under the state lock**, by

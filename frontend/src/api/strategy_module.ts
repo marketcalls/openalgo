@@ -767,7 +767,13 @@ export function useStrategyLive(strategyId: number | null, isRunning: boolean): 
 
   return {
     status,
-    runId: frame?.run_id ?? page?.run_id ?? null,
+    // Follows the same precedence as `checkpoint` above, and for the same
+    // reason. Preferring the frame's run id unconditionally meant a stale
+    // socket could label freshly polled state with the run that had already
+    // ended, so the page attributed one run's numbers to another.
+    runId: socketLive
+      ? (frame?.run_id ?? page?.run_id ?? null)
+      : (page?.run_id ?? frame?.run_id ?? null),
     checkpoint,
     legs: checkpoint ? sortLegStates(checkpoint.leg_state) : [],
     updatedAt: checkpoint?.ts ?? null,
