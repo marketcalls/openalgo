@@ -1,0 +1,288 @@
+"""The /strategy lifecycle routes: the ones that move money.
+
+The engine is mocked throughout. What is asserted here is the layer above it:
+what the API refuses, what status code it refuses with, what it records, and
+that a route which is not yours is invisible rather than forbidden.
+
+Shares the isolated-store fixtures from test_strategy_module_api.py's approach
+so a failing test cannot leave rows behind for the next one.
+"""
+
+import sys
+from datetime import datetime
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+import pytz
+from flask import Flask
+
+sys.path.insert(0, str(Path(__file__).parents[1]))
+
+from blueprints import strategy_module  # noqa: E402
+from database import strategy_module_db as store  # noqa: E402
+from database.engine_factory import create_db_engine  # noqa: E402
+from limiter import limiter  # noqa: E402
+from services.strategy_module.engine import StartResult  # noqa: E402
+
+USER = "lifecycle-tester"
+OTHER = "somebody-else"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def isolated_store(tmp_path_factory):
+    path = tmp_path_factory.mktemp("strategy-lifecycle") / "lifecycle-test.db"
+    engine = create_db_engine(f"sqlite:///{path.as_posix()}")
+    store.db_session.remove()
+    store.db_session.configure(bind=engine)
+    store.engine = engine
+    store.Base.metadata.create_all(bind=engine)
+    yield engine
+    store.db_session.remove()
+    engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def empty_tables(isolated_store):
+    store.db_session.remove()
+    with isolated_store.begin() as connection:
+        for table in reversed(store.Base.metadata.sorted_tables):
+            connection.execute(table.delete())
+    yield
+    store.db_session.remove()
+
+
+@pytest.fixture
+def client(monkeypatch):
+    monkeypatch.setattr(limiter, "enabled", False)
+    application = Flask(__name__)
+    application.config.update(TESTING=True, SECRET_KEY="k", PROPAGATE_EXCEPTIONS=True)
+    application.register_blueprint(strategy_module.strategy_module_bp)
+    test_client = application.test_client()
+    with test_client.session_transaction() as flask_session:
+        flask_session["logged_in"] = True
+        flask_session["user"] = USER
+        flask_session["login_time"] = datetime.now(pytz.timezone("Asia/Kolkata")).isoformat()
+    return test_client
+
+
+def _make(user=USER, name="Lifecycle", running_run_id=None):
+    created, error = store.create_strategy(
+        user,
+        {
+            "name": name,
+            "underlying": "NIFTY",
+            "underlying_exchange": "NSE_INDEX",
+            "universe_tab": "weekly_monthly",
+            "legs": [{"id": 1, "segment": "options", "position": "S", "lots": 1}],
+        },
+    )
+    assert error is None, error
+    if running_run_id is not None:
+        store.set_strategy_status(created["id"], "running", running_run_id)
+    return created["id"]
+
+
+# ---------------------------------------------------------------------------
+# Start
+# ---------------------------------------------------------------------------
+
+
+def test_start_requires_a_mode_and_never_defaults_one(client):
+    # Defaulting would mean a caller that forgot the field placing real orders
+    # on a strategy the operator believed was on paper.
+    sid = _make()
+
+    assert client.post(f"/strategy/api/strategies/{sid}/start", json={}).status_code == 400
+    assert (
+        client.post(f"/strategy/api/strategies/{sid}/start", json={"mode": "real"}).status_code
+        == 400
+    )
+
+
+def test_start_hands_the_mode_through_and_returns_the_run(client):
+    sid = _make()
+
+    with patch(
+        "services.strategy_module.engine.start_run",
+        return_value=StartResult(ok=True, run_id=42, legs=[{"leg_id": 1, "ok": True}]),
+    ) as start:
+        response = client.post(
+            f"/strategy/api/strategies/{sid}/start", json={"mode": "sandbox"}
+        )
+
+    assert response.status_code == 200
+    assert response.get_json()["run_id"] == 42
+    assert start.call_args[0][2] == "sandbox"
+    assert start.call_args[1]["trigger_source"] == "manual"
+
+
+def test_starting_something_already_running_is_a_conflict_not_a_bad_request(client):
+    # The UI shows these differently: a 409 means "somebody beat you to it",
+    # a 400 means "your configuration is wrong".
+    sid = _make()
+
+    with patch(
+        "services.strategy_module.engine.start_run",
+        return_value=StartResult(ok=False, error="This strategy is already running"),
+    ):
+        response = client.post(
+            f"/strategy/api/strategies/{sid}/start", json={"mode": "sandbox"}
+        )
+
+    assert response.status_code == 409
+
+
+def test_a_refused_start_reports_which_leg_failed(client):
+    sid = _make()
+
+    with patch(
+        "services.strategy_module.engine.start_run",
+        return_value=StartResult(
+            ok=False,
+            error="Leg 1: No option contract found",
+            legs=[{"leg_id": 1, "ok": False, "error": "Leg 1: No option contract found"}],
+        ),
+    ):
+        response = client.post(
+            f"/strategy/api/strategies/{sid}/start", json={"mode": "sandbox"}
+        )
+
+    assert response.status_code == 400
+    assert "No option contract found" in response.get_json()["message"]
+
+
+# ---------------------------------------------------------------------------
+# Stop and close
+# ---------------------------------------------------------------------------
+
+
+def test_stopping_a_strategy_that_is_not_running_is_a_conflict(client):
+    sid = _make()
+
+    response = client.post(f"/strategy/api/strategies/{sid}/stop", json={})
+
+    assert response.status_code == 409
+    assert "not running" in response.get_json()["message"]
+
+
+def test_stop_exits_the_current_run(client):
+    sid = _make(running_run_id=7)
+
+    with patch(
+        "services.strategy_module.engine.stop_run", return_value={"ok": True, "exits": []}
+    ) as stop:
+        response = client.post(f"/strategy/api/strategies/{sid}/stop", json={})
+
+    assert response.status_code == 200
+    assert stop.call_args[0][0] == 7
+    assert stop.call_args[1]["reason"] == "manual"
+
+
+def test_close_all_records_the_operator_intent_separately_from_the_stop(client):
+    # "The operator closed everything" reads differently from "the run stopped"
+    # when you are reconstructing a session afterwards.
+    sid = _make(running_run_id=7)
+
+    with patch(
+        "services.strategy_module.engine.stop_run", return_value={"ok": True, "exits": []}
+    ):
+        response = client.post(f"/strategy/api/strategies/{sid}/close_all", json={})
+
+    assert response.status_code == 200
+    kinds = [event["kind"] for event in store.list_events(sid)]
+    assert "close_all_manual" in kinds
+
+
+def test_closing_one_leg_reports_whether_the_run_is_now_flat(client):
+    sid = _make(running_run_id=7)
+
+    with patch(
+        "services.strategy_module.engine.close_leg",
+        return_value={"ok": True, "exits": [], "run_stopped": False},
+    ) as close:
+        response = client.post(f"/strategy/api/strategies/{sid}/legs/1/close", json={})
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["run_stopped"] is False
+    assert body["leg_id"] == "1"
+    assert close.call_args[0][1] == "1"
+
+
+def test_closing_a_leg_on_a_stopped_strategy_is_a_conflict(client):
+    sid = _make()
+
+    response = client.post(f"/strategy/api/strategies/{sid}/legs/1/close", json={})
+
+    assert response.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Kill switch
+# ---------------------------------------------------------------------------
+
+
+def test_the_kill_switch_flattens_an_active_run_not_just_the_webhook(client):
+    # A lock that leaves a live position open is not a kill switch.
+    sid = _make(running_run_id=7)
+
+    with patch(
+        "services.strategy_module.engine.stop_run", return_value={"ok": True, "exits": []}
+    ) as stop:
+        response = client.post(f"/strategy/api/strategies/{sid}/kill_switch", json={})
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["webhook_locked"] is True
+    assert body["run_stopped"] is True
+    assert stop.call_count == 1
+    assert store.get_strategy(sid, USER).webhook_locked is True
+
+
+def test_the_kill_switch_locks_even_when_there_is_nothing_to_flatten(client):
+    sid = _make()
+
+    with patch("services.strategy_module.engine.stop_run") as stop:
+        response = client.post(f"/strategy/api/strategies/{sid}/kill_switch", json={})
+
+    assert response.status_code == 200
+    assert response.get_json()["run_stopped"] is False
+    assert stop.call_count == 0
+    assert store.get_strategy(sid, USER).webhook_locked is True
+
+
+def test_the_kill_switch_still_locks_when_flattening_fails(client):
+    # If the broker is unreachable the position stays open, but the webhook must
+    # still be shut so nothing new can be added on top of it.
+    sid = _make(running_run_id=7)
+
+    with patch(
+        "services.strategy_module.engine.stop_run",
+        return_value={"ok": False, "error": "Broker unreachable"},
+    ):
+        response = client.post(f"/strategy/api/strategies/{sid}/kill_switch", json={})
+
+    assert response.status_code == 200
+    assert response.get_json()["run_stopped"] is False
+    assert store.get_strategy(sid, USER).webhook_locked is True
+
+
+# ---------------------------------------------------------------------------
+# Ownership
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["start", "stop", "close_all", "kill_switch", "unlock_webhook", "legs/1/close"],
+)
+def test_somebody_elses_strategy_is_invisible_on_every_lifecycle_route(client, path):
+    # 404, never 403: a 403 confirms the id is real and lets the space be probed.
+    sid = _make(user=OTHER, name="Not yours", running_run_id=7)
+
+    response = client.post(
+        f"/strategy/api/strategies/{sid}/{path}", json={"mode": "sandbox"}
+    )
+
+    assert response.status_code == 404

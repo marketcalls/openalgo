@@ -925,8 +925,8 @@ def set_live(sid):
 @check_session_validity
 @_api_limit
 def engage_kill_switch(sid):
-    """Lock the webhook: every inbound signal is refused and audited."""
-    username, _row, error = _resolve(sid)
+    """Lock the webhook and flatten: every inbound signal is refused and audited."""
+    username, row, error = _resolve(sid)
     if error:
         return error
 
@@ -934,8 +934,162 @@ def engage_kill_switch(sid):
     if not locked:
         return _store_error(message)
 
+    # Locking the webhook alone would stop new signals and leave whatever is
+    # already open still exposed. A kill switch that does not flatten is not a
+    # kill switch, so an active run is stopped too. The lock goes on first, so
+    # a signal arriving mid-flatten cannot re-enter behind it.
+    run_id = row.current_run_id
+    stopped = False
+    if run_id:
+        from services.strategy_module import engine
+
+        result = engine.stop_run(run_id, username, reason="manual")
+        stopped = bool(result.get("ok"))
+        if not stopped:
+            logger.error(
+                "Kill switch on strategy %s locked the webhook but could not flatten run %s: %s",
+                sid,
+                run_id,
+                result.get("error"),
+            )
+
+    store.record_event(
+        sid,
+        username,
+        "webhook_locked",
+        "Kill switch engaged" + (" and open legs closed" if stopped else ""),
+        run_id=run_id,
+        severity="critical",
+    )
     logger.warning("Kill switch engaged on strategy %s by %s", sid, username)
-    return _ok({"webhook_locked": True, "message": "Webhook locked"})
+    return _ok(
+        {
+            "webhook_locked": True,
+            "run_stopped": stopped,
+            "message": "Webhook locked" + (" and open legs closed" if stopped else ""),
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle
+#
+# These are the routes that move money. The engine is imported inside each
+# handler rather than at module scope: it pulls in the order path, which
+# imports restx_api, which imports back into the order path, and making this
+# blueprint the entry point of that cycle fails with a partially initialised
+# module. app.py never hits it because restx_api loads first.
+# ---------------------------------------------------------------------------
+
+
+@strategy_module_bp.route("/api/strategies/<int:sid>/start", methods=["POST"])
+@check_session_validity
+@_api_limit
+def start_strategy(sid):
+    """Start a run, in the mode the caller asks for.
+
+    Mode is required and never defaulted. Defaulting it would mean a caller
+    that forgot the field placing real orders on a strategy the operator
+    believed was on paper.
+    """
+    username, _row, error = _resolve(sid)
+    if error:
+        return error
+
+    body, body_error = _json_body()
+    if body_error:
+        return body_error
+
+    mode = body.get("mode")
+    if mode not in store.RUN_MODES:
+        return _error(f"mode must be one of: {', '.join(sorted(store.RUN_MODES))}", 400)
+
+    from services.strategy_module import engine
+
+    result = engine.start_run(sid, username, mode, trigger_source="manual")
+    if not result.ok:
+        # A refusal here is a conflict or a bad configuration, not a server
+        # fault; 409 lets the UI tell the two apart from a 400.
+        code = 409 if "already running" in (result.error or "") else 400
+        return _error(result.error or "Could not start the strategy", code)
+
+    return _ok({"run_id": result.run_id, "mode": mode, "legs": result.legs})
+
+
+@strategy_module_bp.route("/api/strategies/<int:sid>/stop", methods=["POST"])
+@check_session_validity
+@_api_limit
+def stop_strategy(sid):
+    """Exit every open leg at market and stop the run."""
+    return _stop_run_for(sid, reason="manual")
+
+
+@strategy_module_bp.route("/api/strategies/<int:sid>/close_all", methods=["POST"])
+@check_session_validity
+@_api_limit
+def close_all(sid):
+    """Same effect as stop, named for what the operator is doing.
+
+    Kept as its own route rather than an alias so the audit trail records the
+    intent: "the operator closed everything" reads differently from "the run
+    was stopped" when you are reconstructing a session afterwards.
+    """
+    return _stop_run_for(sid, reason="manual", event="close_all_manual")
+
+
+def _stop_run_for(sid: int, reason: str, event: str | None = None):
+    username, row, error = _resolve(sid)
+    if error:
+        return error
+
+    run_id = row.current_run_id
+    if not run_id:
+        return _error("This strategy is not running", 409)
+
+    from services.strategy_module import engine
+
+    if event:
+        store.record_event(sid, username, event, "Operator closed all legs", run_id=run_id)
+
+    result = engine.stop_run(run_id, username, reason=reason)
+    if not result.get("ok"):
+        return _error(result.get("error") or "Could not stop the run", 409)
+
+    return _ok({"run_id": run_id, "exits": result.get("exits", [])})
+
+
+@strategy_module_bp.route("/api/strategies/<int:sid>/legs/<leg_id>/close", methods=["POST"])
+@check_session_validity
+@_api_limit
+def close_one_leg(sid, leg_id):
+    """Exit a single leg. The run continues with the rest.
+
+    Deliberately does not trigger trail-to-entry: that rule answers the market
+    moving against the book, and an operator closing one leg by hand is an
+    override rather than a signal.
+    """
+    username, row, error = _resolve(sid)
+    if error:
+        return error
+
+    run_id = row.current_run_id
+    if not run_id:
+        return _error("This strategy is not running", 409)
+
+    from services.strategy_module import engine
+
+    result = engine.close_leg(run_id, leg_id, username)
+    if not result.get("ok"):
+        return _error(result.get("error") or "Could not close that leg", 409)
+
+    return _ok(
+        {
+            "run_id": run_id,
+            "leg_id": leg_id,
+            "run_stopped": result.get("run_stopped", False),
+            "exits": result.get("exits", []),
+        }
+    )
 
 
 @strategy_module_bp.route("/api/strategies/<int:sid>/unlock_webhook", methods=["POST"])
