@@ -223,6 +223,16 @@ def claim_leg_exit(run_id: int, leg_id: Any, kind: str) -> dict[str, Any] | None
         leg = state["legs"].get(str(leg_id))
         if leg is None or leg.get("status") != "open":
             return None
+        if leg.get("entry_status") != "complete":
+            # Accepted by the broker but not yet filled. A leg is "open" from
+            # the moment its entry is accepted, so exiting here sends the full
+            # quantity the other way against a position that may be nothing at
+            # all: if the entry then cancels or rejects, that square-off is
+            # itself a naked position in the reverse direction. Nothing is
+            # confirmed to close, so nothing is closed. The caller reports it
+            # rather than treating it as flat, so the run stays managed and the
+            # stop can be retried once the fill lands.
+            return None
         if leg.get("exit_kind") is not None or leg.get("exit_order_id") is not None:
             return None
         leg["exit_kind"] = kind

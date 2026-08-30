@@ -91,6 +91,21 @@ def placed():
         yield seen
 
 
+def _fill(strategy, *leg_ids, price=100.0):
+    """Confirm the entry fills for these legs.
+
+    An exit closes a confirmed quantity. A leg whose entry the broker accepted
+    but has not filled has nothing to close, and sending the configured size
+    the other way would be a naked position if that entry later cancels, so the
+    module refuses. Every test that goes on to exit something has to say the
+    entry filled, which is what happens in life.
+    """
+    run_id = store.get_strategy(strategy.id, USER).current_run_id
+    for leg_id in leg_ids:
+        engine.apply_fill(run_id, leg_id, price, is_entry=True)
+    return run_id
+
+
 def _make(**overrides):
     config = {
         "name": "Signal test",
@@ -225,6 +240,10 @@ def test_a_long_signal_opens_a_long(placed):
 def test_an_exit_covers_the_side_actually_held(placed):
     strategy = _make()
     signals.handle_signal(strategy, "short_entry", leg_id=1)
+    # Filled, because an exit closes a confirmed quantity. A leg whose entry
+    # the broker has accepted but not filled has nothing to close, and sending
+    # the configured size the other way would be a naked position.
+    _fill(strategy, 1)
 
     result = signals.handle_signal(strategy, "short_exit", leg_id=1)
 
@@ -279,6 +298,7 @@ def test_an_opposite_entry_squares_first_then_opens(placed):
     # Reversing without closing would leave both positions on the book.
     strategy = _make()
     signals.handle_signal(strategy, "long_entry", leg_id=1)
+    _fill(strategy, 1)
     placed.clear()
 
     result = signals.handle_signal(strategy, "short_entry", leg_id=1)
@@ -389,6 +409,7 @@ def test_squaring_off_closes_every_open_leg_on_the_side_it_is_held(placed):
     strategy = _make()
     signals.handle_signal(strategy, "short_entry", leg_id=1)
     signals.handle_signal(strategy, "long_entry", leg_id=2)
+    _fill(strategy, 1, 2)
     placed.clear()
 
     run_id = store.get_strategy(strategy.id, USER).current_run_id

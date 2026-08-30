@@ -389,6 +389,59 @@ def _resolve_all_legs(
     return resolved, failures
 
 
+def _record_acknowledgement(
+    row_id: int,
+    result: Any,
+    strategy_id: int,
+    user_id: str,
+    run_id: int,
+    leg_id: Any,
+) -> bool:
+    """Write what the broker answered onto the order row. Says whether it stuck.
+
+    update_order swallows its own failure and returns False, and ignoring that
+    is how a position ends up unattributable: the row stays "pending" with no
+    broker order id, so no fill can ever be matched to it, the leg is never
+    seeded, and nothing evaluates a stop for a position that exists. The
+    in-memory replay buffer does not cover this, because the id it would match
+    on is exactly what was lost.
+
+    Retried once, since the common failure is a transient write lock rather
+    than a broken statement. If it still will not persist, the broker order id
+    is put somewhere durable the operator can find, which is the event log, at
+    critical severity: the position is real and now has to be reconciled by
+    hand.
+    """
+    fields = {
+        "status": "open" if result.ok else "rejected",
+        "broker_order_id": result.broker_order_id,
+        "reject_reason": None if result.ok else result.error,
+    }
+    if store.update_order(row_id, **fields) or store.update_order(row_id, **fields):
+        return True
+
+    logger.error(
+        "Could not record the broker acknowledgement for order row %s (broker id %s)",
+        row_id,
+        result.broker_order_id,
+    )
+    if result.ok:
+        _emit(
+            strategy_id,
+            user_id,
+            "order_ack_unrecorded",
+            (
+                f"Broker order {result.broker_order_id} was accepted for leg {leg_id} but its "
+                f"acknowledgement could not be written to order row {row_id}. The position "
+                "exists and is not attributable from the database; reconcile it by hand."
+            ),
+            run_id=run_id,
+            leg_id=leg_id,
+            severity="critical",
+        )
+    return False
+
+
 def _replay_order_update(broker_order_id: str | None) -> None:
     """Let the fill that arrived before this row existed be applied now.
 
@@ -506,11 +559,8 @@ def _place_entries(
 
         result = order_dispatch.dispatch_order(mode=mode, api_key=api_key, order=order)
 
-        store.update_order(
-            row_id,
-            status="open" if result.ok else "rejected",
-            broker_order_id=result.broker_order_id,
-            reject_reason=None if result.ok else result.error,
+        acknowledged = _record_acknowledgement(
+            row_id, result, strategy["id"], user_id, run_id, leg["leg_id"]
         )
 
         with state.run_state(run_id) as run:
@@ -550,6 +600,11 @@ def _place_entries(
                 "symbol": leg["symbol"],
                 "broker_order_id": result.broker_order_id,
                 "error": result.error,
+                # False when the broker accepted the order but its
+                # acknowledgement could not be persisted, so the caller can see
+                # that this leg is live without being attributable from the
+                # database. The position is real either way.
+                "acknowledged": acknowledged,
             }
         )
 
@@ -779,6 +834,32 @@ def _exit_legs(
         if (claimed := state.claim_leg_exit(run_id, leg_id, kind)) is not None
     ]
 
+    # Legs the broker accepted but has not filled cannot be squared off: there
+    # is no confirmed quantity to close, and sending the configured size the
+    # other way would be a naked position if the entry later cancels. Reported
+    # as refusals rather than silently skipped, so stop_run keeps the run open
+    # and managed and the stop can be retried once the fill arrives.
+    unfilled: list[dict[str, Any]] = []
+    claimed_ids = {str(leg["leg_id"]) for leg in targets}
+    with state.run_state(run_id) as run:
+        for leg_id in leg_ids:
+            if str(leg_id) in claimed_ids:
+                continue
+            leg = run["legs"].get(str(leg_id)) if run else None
+            if leg and leg.get("status") == "open" and leg.get("entry_status") != "complete":
+                unfilled.append(
+                    {
+                        "leg_id": leg_id,
+                        "ok": False,
+                        "symbol": leg.get("symbol"),
+                        "broker_order_id": None,
+                        "error": (
+                            "The entry for this leg has been accepted but not filled, so there "
+                            "is no confirmed quantity to exit. Retry once it fills."
+                        ),
+                    }
+                )
+
     # Dispatch outside the lock. See the module docstring.
     outcomes: list[dict[str, Any]] = []
     for leg in targets:
@@ -835,12 +916,7 @@ def _exit_legs(
         result = order_dispatch.dispatch_order(mode=mode, api_key=api_key, order=order)
 
         if row_id is not None:
-            store.update_order(
-                row_id,
-                status="open" if result.ok else "rejected",
-                broker_order_id=result.broker_order_id,
-                reject_reason=None if result.ok else result.error,
-            )
+            _record_acknowledgement(row_id, result, strategy["id"], user_id, run_id, leg["leg_id"])
 
         if result.ok:
             with state.run_state(run_id) as run:
@@ -871,7 +947,7 @@ def _exit_legs(
 
         outcomes.append({"leg_id": leg["leg_id"], "ok": result.ok, "error": result.error})
 
-    return outcomes
+    return outcomes + unfilled
 
 
 def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any]:

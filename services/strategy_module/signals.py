@@ -463,6 +463,25 @@ def _exit(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
     # mode is precisely the mode driven by an alert engine that repeats itself.
     snapshot = state.claim_leg_exit(run_id, leg_id, "exit_signal")
     if snapshot is None:
+        # Two very different reasons the claim can fail, and they must not be
+        # answered the same way. An exit already in flight, or a leg that is no
+        # longer held, is a no-op: reporting it as a failure would invite the
+        # retry that turns one alert into two positions. An entry the broker
+        # has accepted but not filled is neither, and answering "nothing held"
+        # there lets a flip open the opposite side while the original entry is
+        # still working, leaving both on the book.
+        run_state = state.get_run_state(run_id) or {}
+        live = (run_state.get("legs") or {}).get(str(leg_id)) or {}
+        if live.get("status") == "open" and live.get("entry_status") != "complete":
+            return SignalResult(
+                ok=False,
+                leg_id=leg_id,
+                run_id=run_id,
+                error=(
+                    "The entry for this leg has been accepted but not filled, so there is no "
+                    "confirmed quantity to exit. Retry once it fills."
+                ),
+            )
         return SignalResult(ok=True, note="no_matching_position", leg_id=leg_id, run_id=run_id)
 
     outcome = _place(strategy, run_id, snapshot, "exit_signal", snapshot["position"], exiting=True)

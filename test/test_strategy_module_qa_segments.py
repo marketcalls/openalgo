@@ -1814,6 +1814,8 @@ def test_a_signal_exit_covers_the_side_actually_held_on_a_derivative(market, bro
         ]
     )
     signals.handle_signal(strategy, "short_entry", leg_id=1)
+    # An exit closes a confirmed quantity, so the entry has to have filled.
+    engine.apply_fill(store.get_strategy(strategy.id, USER).current_run_id, 1, 100.0, is_entry=True)
 
     result = signals.handle_signal(strategy, "short_exit", leg_id=1)
 

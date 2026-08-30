@@ -493,6 +493,9 @@ def test_the_daily_loss_limit_counts_what_earlier_runs_already_lost(broker):
     # Two runs that are already over, together down 1100: the budget is spent.
     for _ in range(2):
         done = _start(sid).run_id
+        # Filled, or the stop is refused: there is no confirmed quantity to
+        # square off and the run stays open by design.
+        engine.apply_fill(done, 1, 100.0, is_entry=True)
         engine.stop_run(done, USER, "manual")
         store.finish_run(done, stop_reason="manual", pnl_realized=-550.0)
     broker.clear()
@@ -500,7 +503,7 @@ def test_the_daily_loss_limit_counts_what_earlier_runs_already_lost(broker):
     # A third opens anyway, and is squared off on its first tick even though
     # this run itself has lost nothing.
     run_id = _start(sid).run_id
-    order_events._apply_update("QA-3", _event("QA-3", avg=100.0))
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
     broker.clear()
 
     engine.process_tick(CE, "NFO", 100.0)
@@ -513,6 +516,7 @@ def test_a_session_still_inside_the_daily_limit_keeps_trading(broker):
     """The other half: the limit must not fire early."""
     sid = _make(_config(daily_loss_limit_inr=1000))
     first = _start(sid).run_id
+    engine.apply_fill(first, 1, 100.0, is_entry=True)
     engine.stop_run(first, USER, "manual")
     store.finish_run(first, stop_reason="manual", pnl_realized=-700.0)
     broker.clear()
@@ -530,6 +534,7 @@ def test_a_session_still_inside_the_daily_limit_keeps_trading(broker):
 def test_a_strategy_with_no_daily_limit_is_never_stopped_by_one(broker):
     sid = _make()
     first = _start(sid).run_id
+    engine.apply_fill(first, 1, 100.0, is_entry=True)
     engine.stop_run(first, USER, "manual")
     store.finish_run(first, stop_reason="manual", pnl_realized=-99999.0)
     broker.clear()
@@ -723,14 +728,19 @@ def test_an_exit_fill_on_a_leg_whose_entry_never_filled_books_no_pnl(broker):
     assert risk_adapter.run_pnl(state.get_run_state(run_id))[0] == 0.0
 
 
-def test_a_stop_while_an_entry_is_unfilled_still_sends_a_full_size_market_order(broker):
-    """Characterisation, not approval.
+def test_a_stop_while_an_entry_is_unfilled_places_nothing_and_keeps_the_run(broker):
+    """A leg is open from broker acceptance, not from its fill.
 
-    A leg is marked ``open`` the moment its entry reaches the broker, not when
-    it fills, so a square-off sends a full-size opposite market order against a
-    position that may not exist yet. If the entry is then refused or cancelled,
-    that order is a naked position in the other direction. Cancelling the
-    working entry would be the safe move; nothing here does that.
+    Squaring off here used to send a full-size opposite market order against a
+    position that may not exist yet: if the entry were then cancelled or
+    rejected, that order is itself a naked position in the other direction.
+    There is no confirmed quantity to close, so nothing is closed.
+
+    Refusing is not the same as ignoring. The run stays open and managed and
+    the caller is told why, so the stop can be retried once the fill lands,
+    rather than the run being finalised while a working entry is still out
+    there. Cancelling the working entry would be better still, and the module
+    has no cancel path to do it with.
     """
     sid = _make()
     run_id = _start(sid).run_id
@@ -738,8 +748,16 @@ def test_a_stop_while_an_entry_is_unfilled_still_sends_a_full_size_market_order(
     assert _live(run_id)["status"] == "open"
     broker.clear()
 
-    engine.stop_run(run_id, USER, reason="manual")
+    result = engine.stop_run(run_id, USER, reason="manual")
 
+    assert broker.orders == [], "nothing was sent against an unconfirmed position"
+    assert result["ok"] is False
+    assert any("not filled" in str(exit_["error"]).lower() for exit_ in result["exits"])
+    assert store.get_run(run_id).stopped_at is None, "the run is still open and still managed"
+
+    # Once the entry fills, the same stop works.
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    engine.stop_run(run_id, USER, reason="manual")
     assert broker.actions == ["BUY"]
     assert broker.quantities == [75]
 
@@ -910,6 +928,7 @@ def test_a_repeated_exit_alert_before_the_first_fills_does_not_reverse_the_posit
     """
     strategy = _signal_strategy()
     signals.handle_signal(strategy, "long_entry", leg_id=1)
+    engine.apply_fill(_run_of_strategy(strategy.id), 1, 100.0, is_entry=True)
     broker.clear()
 
     signals.handle_signal(strategy, "long_exit", leg_id=1)
@@ -960,6 +979,8 @@ def test_a_flip_whose_closing_order_is_refused_does_not_open_the_other_side(brok
     strategy = _signal_strategy()
     signals.handle_signal(strategy, "long_entry", leg_id=1)
     run_id = _run_of(strategy)
+    # Filled, so there is a confirmed position for the flip to try to close.
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
     broker.clear()
     broker.refuse = True
 
