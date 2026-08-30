@@ -119,6 +119,29 @@ LEG_FIELDS = (
     "target_pts",
     "trail",
 )
+#: A signal leg is a different shape from a batch leg, not a superset of it.
+#: It names its own instrument and its own absolute quantity, and it carries no
+#: option fields at all: multi-leg option spreads stay in batch mode.
+SIGNAL_LEG_FIELDS = (
+    "id",
+    "symbol",
+    "exchange",
+    "side",
+    "qty",
+    "segment",
+    "expiry",
+    "sl_pts",
+    "target_pts",
+    "trail",
+)
+
+#: Which signals a leg accepts. Not the side it is currently held - that is
+#: decided by whichever signal opened it and lives in run state.
+LEG_SIDES = ("long", "short", "both")
+
+#: Signal legs trade raw quantity rather than lots, so the cap is on shares.
+MAX_SIGNAL_QTY = 1_000_000
+
 TRAIL_FIELDS = ("x", "y")
 LOCK_PROFIT_FIELDS = ("mode", "if_profit_reaches", "lock_profit", "trail_step")
 SCHEDULER_FIELDS = ("enabled", "days", "start_time", "auto_stop_time", "default_mode")
@@ -335,6 +358,48 @@ def _validate_trail(raw: Any, label: str) -> dict | None:
     }
 
 
+def _validate_signal_leg(raw: Any, index: int) -> dict:
+    """One signal-mode leg: its own instrument, side and absolute quantity."""
+    label = f"legs[{index}]"
+    leg = _mapping(raw, label)
+    _reject_unknown(leg, SIGNAL_LEG_FIELDS, label)
+
+    segment = _choice(leg.get("segment") or "cash", ("cash", "futures"), f"{label}.segment")
+    clean: dict[str, Any] = {
+        "id": (
+            _integer(leg["id"], f"{label}.id", minimum=1, maximum=MAX_LEGS)
+            if leg.get("id") is not None
+            else index + 1
+        ),
+        "symbol": _text(_required(leg, "symbol", label), f"{label}.symbol", max_length=100).upper(),
+        "exchange": _text(
+            _required(leg, "exchange", label), f"{label}.exchange", max_length=20
+        ).upper(),
+        # Which signals this leg accepts. "both" is the usual intraday case.
+        "side": _choice(leg.get("side") or "both", LEG_SIDES, f"{label}.side"),
+        "qty": _integer(
+            _required(leg, "qty", label), f"{label}.qty", minimum=1, maximum=MAX_SIGNAL_QTY
+        ),
+        "segment": segment,
+    }
+
+    if segment == "futures":
+        clean["expiry"] = _choice(leg.get("expiry") or "current", LEG_EXPIRIES, f"{label}.expiry")
+    elif leg.get("expiry") is not None:
+        raise ValidationError(f"{label}.expiry does not apply to a cash leg")
+
+    # Optional per-leg risk, in the same shape and with the same helper the
+    # batch leg uses, so a signal leg is evaluated by exactly the same rules.
+    if leg.get("sl_pts") is not None:
+        clean["sl_pts"] = _number(leg["sl_pts"], f"{label}.sl_pts", minimum=0)
+    if leg.get("target_pts") is not None:
+        clean["target_pts"] = _number(leg["target_pts"], f"{label}.target_pts", minimum=0)
+    trail = _validate_trail(leg.get("trail"), label)
+    if trail is not None:
+        clean["trail"] = trail
+    return clean
+
+
 def _validate_leg(raw: Any, index: int) -> dict:
     label = f"legs[{index}]"
     leg = _mapping(raw, label)
@@ -411,14 +476,15 @@ def _validate_leg(raw: Any, index: int) -> dict:
     return clean
 
 
-def _validate_legs(raw: Any) -> list[dict]:
+def _validate_legs(raw: Any, kind: str = "batch") -> list[dict]:
     if not isinstance(raw, list):
         raise ValidationError("legs must be a list")
     if len(raw) < MIN_LEGS:
         raise ValidationError(f"A strategy needs at least {MIN_LEGS} leg")
     if len(raw) > MAX_LEGS:
         raise ValidationError(f"A strategy takes at most {MAX_LEGS} legs, got {len(raw)}")
-    legs = [_validate_leg(leg, index) for index, leg in enumerate(raw)]
+    validate = _validate_signal_leg if kind == "signal" else _validate_leg
+    legs = [validate(leg, index) for index, leg in enumerate(raw)]
 
     ids = [leg["id"] for leg in legs]
     if len(set(ids)) != len(ids):
@@ -596,7 +662,10 @@ def _validate_strategy_config(payload: Any) -> dict:
         ),
         "product": _choice(raw.get("product") or "NRML", PRODUCTS, "product"),
         "pricetype": _choice(raw.get("pricetype") or "MARKET", PRICETYPES, "pricetype"),
-        "legs": _validate_legs(_required(raw, "legs")),
+        "legs": _validate_legs(
+            _required(raw, "legs"),
+            _choice(raw.get("strategy_kind") or "batch", store.STRATEGY_KINDS, "strategy_kind"),
+        ),
         "overall_sl_mtm": _loss_amount(raw.get("overall_sl_mtm"), "overall_sl_mtm"),
         "overall_target_mtm": _gain_amount(raw.get("overall_target_mtm"), "overall_target_mtm"),
         "lock_profit": _validate_lock_profit(raw.get("lock_profit")),

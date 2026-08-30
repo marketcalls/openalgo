@@ -1,0 +1,253 @@
+"""Signal-mode configuration and webhook routing.
+
+A signal leg is a different shape from a batch leg, not a superset of it: it
+names its own instrument and an absolute quantity, and it carries no option
+fields at all, because multi-leg option spreads stay in batch mode.
+
+The webhook router is shared between the two kinds, so the action vocabulary
+has to be checked against the strategy rather than globally. Sending one kind's
+actions to the other is a configuration mistake and is refused rather than
+half-handled.
+"""
+
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import pytest
+
+# restx_api first: see the note in test_strategy_module_order_dispatch.py.
+import restx_api  # noqa: F401
+from blueprints.strategy_module import validate_strategy_config
+from services.strategy_module import webhook
+
+
+def _signal(**overrides):
+    body = {
+        "name": "Signal",
+        "strategy_kind": "signal",
+        "direction": "both",
+        "universe_tab": "stocks_fno",
+        "underlying": "MULTI",
+        "underlying_exchange": "NSE",
+        "strategy_type": "positional",
+        "legs": [
+            {
+                "id": 1,
+                "symbol": "RELIANCE",
+                "exchange": "NSE",
+                "side": "both",
+                "qty": 100,
+                "segment": "cash",
+            }
+        ],
+    }
+    body.update(overrides)
+    return body
+
+
+def _leg(**overrides):
+    leg = {"id": 1, "symbol": "RELIANCE", "exchange": "NSE", "side": "both", "qty": 100,
+           "segment": "cash"}
+    leg.update(overrides)
+    return leg
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+
+def test_a_signal_strategy_is_accepted_and_normalised():
+    config, error = validate_strategy_config(_signal(legs=[_leg(symbol="reliance", exchange="nse")]))
+
+    assert error is None
+    leg = config["legs"][0]
+    assert leg["symbol"] == "RELIANCE"
+    assert leg["exchange"] == "NSE"
+    assert leg["qty"] == 100
+    assert leg["side"] == "both"
+
+
+def test_option_fields_are_refused_on_a_signal_leg():
+    # Accepting them and then ignoring them is how a strategy ends up looking
+    # like it does something it does not.
+    for field, value in (
+        ("option_type", "CE"),
+        ("strike_mode", "atm"),
+        ("atm_offset", "ATM"),
+        ("strike", 24000),
+    ):
+        _, error = validate_strategy_config(_signal(legs=[_leg(**{field: value})]))
+        assert error is not None and field in error
+
+
+def test_batch_leg_fields_are_refused_on_a_signal_leg():
+    for field, value in (("position", "S"), ("lots", 1)):
+        _, error = validate_strategy_config(_signal(legs=[_leg(**{field: value})]))
+        assert error is not None and field in error
+
+
+def test_a_signal_leg_must_name_its_own_instrument_and_quantity():
+    for missing in ("symbol", "exchange", "qty"):
+        leg = _leg()
+        del leg[missing]
+        _, error = validate_strategy_config(_signal(legs=[leg]))
+        assert error is not None and missing in error
+
+
+def test_quantity_is_a_positive_whole_number_of_shares():
+    for bad in (0, -1, 1.5, "many", True):
+        _, error = validate_strategy_config(_signal(legs=[_leg(qty=bad)]))
+        assert error is not None, f"qty={bad!r} should be refused"
+
+
+def test_a_leg_declares_which_signals_it_accepts():
+    for side in ("long", "short", "both"):
+        config, error = validate_strategy_config(_signal(legs=[_leg(side=side)]))
+        assert error is None
+        assert config["legs"][0]["side"] == side
+
+    _, error = validate_strategy_config(_signal(legs=[_leg(side="buy")]))
+    assert error is not None
+
+
+def test_expiry_belongs_to_a_futures_leg_and_not_a_cash_one():
+    _, error = validate_strategy_config(_signal(legs=[_leg(segment="cash", expiry="current")]))
+    assert error is not None and "cash" in error
+
+    config, error = validate_strategy_config(
+        _signal(legs=[_leg(segment="futures", expiry="current")])
+    )
+    assert error is None
+    assert config["legs"][0]["expiry"] == "current"
+
+
+def test_a_batch_strategy_still_takes_batch_legs():
+    # The widening must not have changed the other kind.
+    config, error = validate_strategy_config(
+        {
+            "name": "Batch",
+            "strategy_kind": "batch",
+            "universe_tab": "weekly_monthly",
+            "underlying": "NIFTY",
+            "underlying_exchange": "NSE_INDEX",
+            "strategy_type": "positional",
+            "legs": [
+                {
+                    "segment": "options",
+                    "position": "S",
+                    "lots": 1,
+                    "option_type": "CE",
+                    "strike_mode": "atm",
+                    "atm_offset": "ATM",
+                    "expiry": "weekly",
+                }
+            ],
+        }
+    )
+
+    assert error is None
+    assert config["legs"][0]["position"] == "S"
+
+
+# ---------------------------------------------------------------------------
+# Webhook routing
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def clean_webhook_state():
+    webhook.reset_state()
+    yield
+    webhook.reset_state()
+
+
+def _strategy(kind, **overrides):
+    row = SimpleNamespace(
+        id=1,
+        user_id="tester",
+        strategy_kind=kind,
+        direction="both",
+        webhook_locked=False,
+        webhook_ip_allowlist=None,
+        live_enabled=False,
+        status="stopped",
+        current_run_id=None,
+        strategy_type="positional",
+        entry_time=None,
+        exit_time=None,
+        product="MIS",
+        pricetype="MARKET",
+        name="S",
+        legs=[{"id": 1, "symbol": "RELIANCE", "exchange": "NSE", "side": "both", "qty": 1}],
+    )
+    for key, value in overrides.items():
+        setattr(row, key, value)
+    return row
+
+
+def _call(strategy, body):
+    token = "oaws_" + "A" * 43
+    with (
+        patch("database.strategy_module_db.get_strategy_by_webhook_token", return_value=strategy),
+        patch("database.strategy_module_db.record_webhook_event", return_value=SimpleNamespace(id=1)),
+    ):
+        return webhook.handle_webhook(token, body, ip="1.2.3.4", user_agent="TradingView")
+
+
+def test_a_batch_strategy_refuses_a_directional_signal():
+    outcome = _call(_strategy("batch"), {"action": "long_entry", "leg_id": 1})
+
+    assert outcome.ok is False
+    assert outcome.result == "rejected_invalid_action"
+    assert "start" in outcome.message
+
+
+def test_a_signal_strategy_refuses_start_and_stop():
+    for action in ("start", "stop"):
+        outcome = _call(_strategy("signal"), {"action": action, "mode": "sandbox"})
+        assert outcome.ok is False
+        assert outcome.result == "rejected_invalid_action"
+        assert "long_entry" in outcome.message
+
+
+def test_a_directional_signal_reaches_the_signal_engine():
+    strategy = _strategy("signal")
+    with patch(
+        "services.strategy_module.signals.handle_signal",
+        return_value=SimpleNamespace(ok=True, note=None, error=None, run_id=7, leg_id=1),
+    ) as handler:
+        outcome = _call(strategy, {"action": "long_entry", "leg_id": 1})
+
+    assert outcome.ok is True
+    assert outcome.result == "ok"
+    assert handler.call_args[0][1] == "long_entry"
+
+
+def test_a_no_op_signal_is_reported_as_a_success():
+    # A repeat alert did nothing, and saying so as a failure would invite the
+    # retry that turns one alert into two positions.
+    with patch(
+        "services.strategy_module.signals.handle_signal",
+        return_value=SimpleNamespace(
+            ok=True, note="already_long", error=None, run_id=7, leg_id=1
+        ),
+    ):
+        outcome = _call(_strategy("signal"), {"action": "long_entry", "leg_id": 1})
+
+    assert outcome.ok is True
+    assert outcome.status == 200
+    assert "already_long" in outcome.message
+
+
+def test_a_signal_refused_by_configuration_is_reported_as_a_refusal():
+    with patch(
+        "services.strategy_module.signals.handle_signal",
+        return_value=SimpleNamespace(
+            ok=False, note=None, error="This strategy is long_only", run_id=None, leg_id=1
+        ),
+    ):
+        outcome = _call(_strategy("signal"), {"action": "short_entry", "leg_id": 1})
+
+    assert outcome.ok is False
+    assert "long_only" in outcome.message

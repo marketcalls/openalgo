@@ -728,10 +728,17 @@ def _handle(
 
     safe_payload = _redact(payload, token)
 
-    # 5. Action.
+    # 5. Action. Which actions are valid depends on the strategy's kind: a
+    #    batch strategy takes start and stop, a signal strategy takes the four
+    #    directional actions. Sending one kind's vocabulary to the other is a
+    #    configuration mistake, not a half-understood request, so it is refused
+    #    rather than partly handled.
+    from services.strategy_module import signals as signal_mode  # noqa: PLC0415
+
+    allowed_actions = signal_mode.actions_for(getattr(strategy, "strategy_kind", "batch"))
     raw_action = payload.get("action")
     action = raw_action.strip().lower() if isinstance(raw_action, str) else None
-    if action not in ACTIONS:
+    if action not in allowed_actions:
         event_id = _audit(
             "rejected_invalid_action",
             strategy_id=strategy_id,
@@ -743,9 +750,34 @@ def _handle(
         )
         return _outcome(
             "rejected_invalid_action",
-            f"'action' must be one of {', '.join(ACTIONS)}",
+            f"'action' must be one of {', '.join(allowed_actions)}",
             strategy_id=strategy_id,
             webhook_event_id=event_id,
+        )
+
+    # 5b. Signal-mode strategies branch out here, before the batch-only stages
+    #     that follow.
+    #
+    #     Mode is not in a signal payload: the run takes it from the strategy's
+    #     own live opt-in, so there is nothing to validate and no separate live
+    #     gate to apply.
+    #
+    #     They also skip the dedupe and cooling-off windows deliberately.
+    #     Those exist because a repeated start would open a second position;
+    #     signal mode is already idempotent by meaning - a second long_entry on
+    #     a leg already long is a no-op, and an exit for a position that is not
+    #     held is a no-op. A 60 second window here would do harm rather than
+    #     good: a genuine long, short, long sequence inside a minute is a real
+    #     thing a strategy does, and suppressing the third leaves the position
+    #     backwards.
+    if action in signal_mode.SIGNAL_ACTIONS:
+        return _dispatch_signal(
+            strategy=strategy,
+            action=action,
+            payload=payload,
+            safe_payload=safe_payload,
+            ip=ip,
+            user_agent=user_agent,
         )
 
     # 6. Mode, required by start and ignored by stop. A stop that carries one
@@ -870,6 +902,93 @@ def _handle(
         ip=ip,
         user_agent=user_agent,
         engine=engine,
+    )
+
+
+def _dispatch_signal(
+    *,
+    strategy: Any,
+    action: str,
+    payload: dict[str, Any],
+    safe_payload: dict[str, Any],
+    ip: str | None,
+    user_agent: str | None,
+) -> WebhookOutcome:
+    """Hand one directional signal to the signal engine and audit the outcome.
+
+    Three outcomes, and the difference between them is the point:
+
+    accepted        an order was placed
+    accepted no-op  the signal was understood and correctly did nothing
+    refused         the signal contradicts how the strategy is configured
+
+    A no-op is audited as ``ok`` and answered 200, because the sender did
+    nothing wrong and a failure would invite a retry it must not make.
+    """
+    from services.strategy_module import signals as signal_mode  # noqa: PLC0415
+
+    leg_id = payload.get("leg_id")
+    symbol = payload.get("symbol")
+    exchange = payload.get("exchange")
+
+    try:
+        result = signal_mode.handle_signal(
+            strategy, action, leg_id=leg_id, symbol=symbol, exchange=exchange
+        )
+    except Exception as exc:
+        logger.exception("Signal engine failed on %s for strategy %s", action, strategy.id)
+        event_id = _audit(
+            "rejected_engine_error",
+            strategy_id=strategy.id,
+            action=action,
+            payload=safe_payload,
+            ip=ip,
+            user_agent=user_agent,
+            error=str(exc) or exc.__class__.__name__,
+        )
+        return _outcome(
+            "rejected_engine_error",
+            "The engine could not act on the signal",
+            strategy_id=strategy.id,
+            webhook_event_id=event_id,
+        )
+
+    if not result.ok:
+        # A configuration mismatch: the wrong direction for this strategy, the
+        # wrong side for this leg, or a leg the signal does not name.
+        event_id = _audit(
+            "rejected_invalid_action",
+            strategy_id=strategy.id,
+            action=action,
+            payload=safe_payload,
+            ip=ip,
+            user_agent=user_agent,
+            error=result.error,
+        )
+        return _outcome(
+            "rejected_invalid_action",
+            result.error or "The signal was refused",
+            strategy_id=strategy.id,
+            webhook_event_id=event_id,
+        )
+
+    event_id = _audit(
+        "ok",
+        strategy_id=strategy.id,
+        action=action,
+        payload=safe_payload,
+        ip=ip,
+        user_agent=user_agent,
+        error=None,
+    )
+    message = f"Signal accepted ({result.note})" if result.note else "Signal accepted"
+    return _outcome(
+        "ok",
+        message,
+        ok=True,
+        strategy_id=strategy.id,
+        run_id=result.run_id,
+        webhook_event_id=event_id,
     )
 
 
