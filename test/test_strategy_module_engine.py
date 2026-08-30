@@ -71,6 +71,11 @@ def _resolved(leg_id=1, symbol="NIFTY28MAY2624000CE", qty=75):
 
 @pytest.fixture(autouse=True)
 def clean_slate():
+    # Start from a clean session. This scoped_session is shared with every
+    # other suite in the run, and a sibling that left rows deleted underneath
+    # it leaves stale objects in the identity map here, which surface as
+    # ObjectDeletedError on rows this file never touched.
+    store.db_session.remove()
     store.init_db()
 
     def purge():

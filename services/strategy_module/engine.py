@@ -614,6 +614,17 @@ def _finalise(run_id: int, strategy_id: int, user_id: str, reason: str, message:
     _emit(strategy_id, user_id, "run_stopped", message, run_id=run_id)
     state.clear_run_state(run_id)
 
+    # Arm the webhook cooling-off window for every stop, not just the ones a
+    # webhook asked for. A strategy stopped by its own risk rules, by the
+    # scheduler or by the kill switch would otherwise accept a stale alert a
+    # second later and re-enter the position it just closed.
+    try:
+        from services.strategy_module.webhook import note_run_stopped
+
+        note_run_stopped(strategy_id)
+    except Exception:
+        logger.exception("Could not arm the webhook cooling-off for strategy %s", strategy_id)
+
 
 # ---------------------------------------------------------------------------
 # Tick path

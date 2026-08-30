@@ -45,6 +45,9 @@ def _config(name="Iron condor weekly", **overrides):
 
 @pytest.fixture(autouse=True)
 def clean_slate():
+    # Start from a clean session; see the note in
+    # test_strategy_module_engine.py about the shared identity map.
+    sm.db_session.remove()
     sm.init_db()
 
     def purge():
