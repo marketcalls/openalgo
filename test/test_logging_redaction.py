@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.logging import SENSITIVE_PATTERNS  # noqa: E402
+from utils.logging import SENSITIVE_PATTERNS, SensitiveDataFilter  # noqa: E402
 
 SECRET = "SEKRETVALUE"
 
@@ -66,3 +66,60 @@ def test_non_secret_text_is_left_alone():
     message = "Placed order 250826000123456 for SBIN-EQ on NSE, qty 100"
 
     assert redact(message) == message
+
+
+# ---------------------------------------------------------------------------
+# The filter itself, not just the patterns.
+#
+# Redaction used to run over the template and each argument separately, which
+# broke formatting in three distinct ways while still redacting. These pin the
+# rendered output, which is what an operator actually reads.
+# ---------------------------------------------------------------------------
+
+
+def _emit(msg, args):
+    """One record through the filter, returning what a handler would print."""
+    import logging
+
+    record = logging.LogRecord("t", logging.INFO, __file__, 1, msg, args, None)
+    assert SensitiveDataFilter().filter(record) is True
+    return record.getMessage()
+
+
+def test_a_numeric_argument_survives_redaction():
+    """Every argument used to be str()'d, so %d could not format.
+
+    The record then reached the operator with the placeholder still in it:
+    "Strategy module recovered %d run(s)" could not say whether it had
+    recovered none or twelve, which is the one thing that line exists to say.
+    """
+    assert _emit("Strategy module recovered %d run(s)", (12,)) == (
+        "Strategy module recovered 12 run(s)"
+    )
+    assert _emit("Pruned %d rows in %.2f s", (5, 1.5)) == "Pruned 5 rows in 1.50 s"
+
+
+def test_a_mapping_argument_survives_redaction():
+    """%(key)s logging: iterating the mapping yielded its keys."""
+    assert _emit("mapping %(n)d and %(k)s", {"n": 3, "k": "plain"}) == "mapping 3 and plain"
+
+
+def test_a_secret_in_an_argument_is_still_redacted():
+    out = _emit("api_key=%s and a number %d", (SECRET, 7))
+
+    assert SECRET not in out
+    assert out.endswith("and a number 7"), "the number formatted alongside the redaction"
+
+
+def test_a_secret_written_into_the_template_is_still_redacted():
+    out = _emit(f"a literal api_key={SECRET} in the text", ())
+
+    assert SECRET not in out
+
+
+def test_a_record_whose_arguments_do_not_match_is_still_emitted():
+    """A developer mistake must not cost the line, or the redaction."""
+    out = _emit(f"api_key={SECRET} with a stray %s and no argument", ())
+
+    assert SECRET not in out
+    assert "stray" in out

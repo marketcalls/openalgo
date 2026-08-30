@@ -194,34 +194,48 @@ class WebSocketHandshakeFilter(logging.Filter):
 
 
 class SensitiveDataFilter(logging.Filter):
-    """Filter to redact sensitive information from log messages."""
+    """Redact sensitive information from log records.
+
+    The record is rendered first and redacted afterwards, which is the only
+    order that is both correct and safe.
+
+    Redacting the template and the arguments separately, as this used to, went
+    wrong in three ways at once. Every argument was passed through ``str()``,
+    so an argument feeding a ``%d`` or ``%.2f`` became text and the record
+    could no longer be formatted: the operator was shown "Strategy module
+    recovered %d run(s)", with no way to tell whether it recovered none or
+    twelve. A mapping argument, the ``%(key)s`` form, was iterated as keys and
+    replaced by a tuple of key names. And redacting the template could delete a
+    placeholder along with the secret beside it, leaving more arguments than
+    specifiers.
+
+    Rendering first fixes all three: the arguments are still their own types
+    when the message is built, so numbers format; the mapping form formats
+    normally; and the redaction then runs over the finished text, which is
+    where a secret ends up regardless of whether it arrived in the template or
+    in an argument. Clearing ``args`` afterwards is what keeps the two in step,
+    and is the same thing the JSON handler below already does.
+    """
 
     def filter(self, record) -> bool:
-        """
-        Redact sensitive data from the log message.
-
-        Args:
-            record (logging.LogRecord): The log record to modify.
-
-        Returns:
-            bool: Always True, as this filter modifies the record in-place rather than filtering it out.
-        """
+        """Redact the record in place. Always returns True."""
         try:
-            # Filter the main message
-            for pattern, replacement in SENSITIVE_PATTERNS:
-                record.msg = re.sub(pattern, replacement, str(record.msg), flags=re.IGNORECASE)
+            try:
+                text = record.getMessage()
+            except Exception:
+                # Malformed format string or mismatched arguments. Fall back to
+                # the raw template so the line is still emitted and still
+                # redacted, rather than being dropped.
+                text = str(record.msg)
 
-            # Filter args if present
-            if hasattr(record, "args") and record.args:
-                filtered_args = []
-                for arg in record.args:
-                    filtered_arg = str(arg)
-                    for pattern, replacement in SENSITIVE_PATTERNS:
-                        filtered_arg = re.sub(
-                            pattern, replacement, filtered_arg, flags=re.IGNORECASE
-                        )
-                    filtered_args.append(filtered_arg)
-                record.args = tuple(filtered_args)
+            for pattern, replacement in SENSITIVE_PATTERNS:
+                text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+
+            record.msg = text
+            # Rendered, so there is nothing left to substitute. getMessage()
+            # skips formatting entirely when args is falsy, which also means a
+            # stray "%" surviving in the text cannot raise later.
+            record.args = ()
         except Exception:
             # If filtering fails, don't block the log message
             pass
@@ -361,6 +375,7 @@ class JSONErrorFormatter(logging.Formatter):
         # Capture Flask request context if available
         try:
             from flask import has_request_context, request
+
             if has_request_context():
                 entry["request"] = {
                     "method": request.method,
@@ -453,9 +468,7 @@ def setup_logging():
         if errors_file.exists() and errors_file.stat().st_size > 0:
             lines = errors_file.read_text(encoding="utf-8").splitlines()
             if len(lines) > 1000:
-                errors_file.write_text(
-                    "\n".join(lines[-1000:]) + "\n", encoding="utf-8"
-                )
+                errors_file.write_text("\n".join(lines[-1000:]) + "\n", encoding="utf-8")
     except Exception:
         pass
     json_handler = logging.FileHandler(
