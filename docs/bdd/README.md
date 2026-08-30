@@ -23,6 +23,7 @@ These Gherkin files describe current OpenAlgo behavior for review, acceptance-te
 | `notifications_observability.feature` | Telegram, WhatsApp, EventBus, health, traffic | 8 |
 | `admin_and_security.feature` | Admin, IP security, CSP, Remote MCP controls | 4 |
 | `historify_and_tools.feature` | Historify jobs/schedules and option tools | 4 |
+| `strategy_module_rms.feature` | Multi-leg baskets, signal legs, order path, risk, recovery, streaming | 21 |
 
 Current totals:
 

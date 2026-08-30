@@ -34,6 +34,7 @@ The files below are module-level historical PRDs. Treat them as secondary refere
 - [Sandbox Architecture](./sandbox-architecture.md)
 - [Sandbox Execution Engine](./sandbox-execution-engine.md)
 - [Sandbox Margin System](./sandbox-margin-system.md)
+- [Strategy Module and RMS](./strategy-module-rms.md)
 - [Python Strategies](./python-strategies.md)
 - [Python Strategies API Reference](./python-strategies-api-reference.md)
 - [Python Strategies Process Management](./python-strategies-process-management.md)
