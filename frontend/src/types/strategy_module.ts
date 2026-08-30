@@ -248,6 +248,7 @@ export interface Order {
   leg_id: number
   kind: string
   broker_order_id: string | null
+  position_ref: string | null
   symbol: string
   exchange: string
   action: string
@@ -262,6 +263,58 @@ export interface Order {
   filled_qty: number | null
   reject_reason: string | null
 }
+
+// ---------------------------------------------------------------------------
+// Broker-backed books
+// ---------------------------------------------------------------------------
+
+/** A normalized row from the broker's order book. */
+export interface BrokerOrder {
+  orderid: string
+  symbol: string
+  exchange: string
+  action: string
+  quantity: number
+  price: number
+  trigger_price: number
+  pricetype: string
+  product: string
+  order_status: string
+  timestamp: string | null
+  [field: string]: unknown
+}
+
+/** A normalized fill row from the broker's trade book. */
+export interface BrokerTrade {
+  orderid: string
+  symbol: string
+  exchange: string
+  product: string
+  action: string
+  quantity: number
+  average_price: number
+  trade_value: number
+  timestamp: string | null
+  [field: string]: unknown
+}
+
+export type BrokerReconciliation = 'matched' | 'disagrees' | 'unmatched' | 'ambiguous'
+
+/** Strategy-only context attached only when one exact local identifier matches. */
+export interface BrokerStrategyContext {
+  run_id: number | null
+  leg_id: number | null
+  kind: string | null
+  local_status: OrderStatus | null
+  position_ref: string | null
+  reject_reason: string | null
+  reconciliation: BrokerReconciliation
+  disagreements: string[]
+}
+
+export interface ReconciledBrokerOrder extends BrokerOrder, BrokerStrategyContext {}
+
+export interface ReconciledBrokerTrade extends BrokerTrade, BrokerStrategyContext {}
 
 export interface StrategyEvent {
   id: number
