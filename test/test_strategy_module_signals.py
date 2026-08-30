@@ -475,3 +475,136 @@ def test_units_mode_on_cash_places_the_quantity_as_written(placed):
 
     assert result.ok is True
     assert placed[0]["quantity"] == "100"
+
+
+# ---------------------------------------------------------------------------
+# The trading-day boundary
+#
+# A signal run IS a trading day: its P&L, peak, trough and audit trail describe
+# that day. Reusing one across days merges them, and a strategy left alone over
+# a long weekend would report a single run spanning four sessions.
+# ---------------------------------------------------------------------------
+
+
+from datetime import UTC, datetime, timedelta  # noqa: E402
+
+
+def _age_run(run_id, days):
+    """Backdate a run's start, as if it had been opened on an earlier day."""
+    run = store.get_run(run_id)
+    run.started_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days)
+    store.db_session.commit()
+
+
+def test_a_flat_run_from_an_earlier_day_is_rolled(placed):
+    strategy = _make()
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+    first_run = store.get_strategy(strategy.id, USER).current_run_id
+
+    # Close the leg so nothing is held. An exit ORDER is not a closed leg: the
+    # leg closes when the fill arrives, which is what apply_fill delivers.
+    from services.strategy_module import engine
+
+    engine.apply_fill(first_run, 1, 100.0, is_entry=True)
+    signals.handle_signal(store.get_strategy(strategy.id, USER), "long_exit", leg_id=1)
+    engine.apply_fill(first_run, 1, 105.0, is_entry=False)
+    _age_run(first_run, days=3)
+
+    signals.handle_signal(store.get_strategy(strategy.id, USER), "long_entry", leg_id=1)
+
+    second_run = store.get_strategy(strategy.id, USER).current_run_id
+    assert second_run != first_run
+
+    closed = store.get_run(first_run)
+    assert closed.stopped_at is not None
+    assert closed.stop_reason == "eod"
+
+
+def test_a_run_still_holding_a_position_is_never_rolled(placed):
+    # An open leg is a live position. Finalising the run that owns it would
+    # leave it with no run managing it, which is far worse than a merged P&L.
+    strategy = _make()
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = store.get_strategy(strategy.id, USER).current_run_id
+    _age_run(run_id, days=3)
+
+    signals.handle_signal(store.get_strategy(strategy.id, USER), "long_entry", leg_id=2)
+
+    assert store.get_strategy(strategy.id, USER).current_run_id == run_id
+    assert store.get_run(run_id).stopped_at is None
+
+
+def test_a_run_from_today_is_reused(placed):
+    strategy = _make()
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = store.get_strategy(strategy.id, USER).current_run_id
+
+    signals.handle_signal(store.get_strategy(strategy.id, USER), "long_entry", leg_id=2)
+
+    assert store.get_strategy(strategy.id, USER).current_run_id == run_id
+    assert len(store.list_runs(strategy.id)) == 1
+
+
+def test_the_day_boundary_is_ist_not_utc(placed):
+    # A run opened at 23:00 UTC is 04:30 IST the NEXT day. Comparing UTC dates
+    # would roll the day in the middle of the night rather than between
+    # sessions, and would treat that run as belonging to the previous day.
+    strategy = _make()
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = store.get_strategy(strategy.id, USER).current_run_id
+    run = store.get_run(run_id)
+
+    # 23:00 UTC today is 04:30 IST tomorrow, so in IST terms this run has not
+    # started before today and must not be rolled.
+    run.started_at = datetime.now(UTC).replace(hour=23, minute=0, tzinfo=None)
+    store.db_session.commit()
+
+    assert signals._started_before_today(store.get_run(run_id)) is False
+
+
+def test_a_signal_run_survives_a_round_trip_and_stays_open_for_the_session(placed):
+    # A batch run ends when it goes flat, because a basket is entered and
+    # exited as a unit. A signal run is a trading day: a leg exiting is an
+    # ordinary mid-session event and the next alert reopens it. Ending the run
+    # here would give five round trips five separate runs, fragmenting the
+    # P&L, the peak and trough, and the audit trail meant to describe the day.
+    from services.strategy_module import engine
+
+    strategy = _make()
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = store.get_strategy(strategy.id, USER).current_run_id
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+
+    signals.handle_signal(store.get_strategy(strategy.id, USER), "long_exit", leg_id=1)
+    went_flat = engine.apply_fill(run_id, 1, 105.0, is_entry=False)
+
+    assert went_flat is True
+    # Flat, but still the session's run.
+    assert store.get_run(run_id).stopped_at is None
+    assert store.get_strategy(strategy.id, USER).current_run_id == run_id
+
+    # And the next alert reuses it rather than opening a second.
+    signals.handle_signal(store.get_strategy(strategy.id, USER), "long_entry", leg_id=1)
+    assert store.get_strategy(strategy.id, USER).current_run_id == run_id
+    assert len(store.list_runs(strategy.id)) == 1
+
+
+def test_a_batch_run_still_ends_when_it_goes_flat(placed):
+    # The other half of the same rule: a basket with nothing held is finished.
+    from services.strategy_module import engine
+
+    strategy = _make(strategy_kind="batch", underlying="NIFTY", underlying_exchange="NSE_INDEX")
+    run = store.create_run(strategy.id, "sandbox", "sandbox")
+    store.set_strategy_status(strategy.id, "running", run.id)
+    state.init_run_state(
+        run.id,
+        strategy.id,
+        [{"leg_id": 1, "position": "S", "symbol": "X", "exchange": "NFO", "quantity": 75}],
+    )
+    engine.apply_fill(run.id, 1, 100.0, is_entry=True)
+
+    went_flat = engine.apply_fill(run.id, 1, 80.0, is_entry=False)
+
+    assert went_flat is True
+    assert store.get_run(run.id).stopped_at is not None
+    assert store.get_strategy(strategy.id, USER).status == "stopped"

@@ -33,8 +33,10 @@ from closed ones.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, date, datetime, timedelta
+from datetime import time as dt_time
 from typing import Any
 
 import pytz
@@ -170,7 +172,34 @@ def _day_run(strategy: Any) -> tuple[int | None, str | None]:
     if run_id:
         run = store.get_run(run_id)
         if run and run.stopped_at is None:
-            return run_id, None
+            if not _started_before_today(run):
+                return run_id, None
+
+            # An open run from an earlier day. It should have been squared off
+            # at its exit time; that it was not means the scheduler was down,
+            # the process was restarted past the auto-stop, or the strategy is
+            # positional and has none.
+            #
+            # Rolling it matters because a signal run IS a trading day: its
+            # P&L, peak, trough and audit trail describe that day. Reusing it
+            # merges every following day into the first, and a strategy left
+            # alone over a long weekend silently reports one run spanning four
+            # sessions.
+            #
+            # Only rolled when nothing is held. An open leg is a live position,
+            # and finalising the run that owns it would leave it with no run to
+            # be managed by, which is far worse than a merged P&L figure.
+            with state.run_state(run_id) as live:
+                still_open = bool(state.open_legs(live)) if live else False
+            if still_open:
+                logger.info(
+                    "Run %s is from an earlier day but still holds positions; keeping it",
+                    run_id,
+                )
+                return run_id, None
+
+            logger.info("Rolling signal run %s to a new trading day", run_id)
+            _finalise_stale_run(strategy, run_id)
 
     mode = "live" if getattr(strategy, "live_enabled", False) else "sandbox"
     api_key = _api_key_for(strategy.user_id)
@@ -210,6 +239,73 @@ def _day_run(strategy: Any) -> tuple[int | None, str | None]:
         run_id=run.id,
     )
     return run.id, None
+
+
+def _session_reset_time() -> dt_time:
+    """The hour the platform ends a trading session and revokes broker tokens.
+
+    OpenAlgo logs the user out at ``SESSION_EXPIRY_TIME``, 03:00 IST by
+    default, because Indian broker tokens expire daily around then.
+    """
+    raw = os.getenv("SESSION_EXPIRY_TIME", "03:00")
+    try:
+        hour, minute = (int(part) for part in raw.split(":", 1))
+        return dt_time(hour=hour, minute=minute)
+    except (TypeError, ValueError):
+        logger.warning("SESSION_EXPIRY_TIME is not HH:MM (%r); using 03:00", raw)
+        return dt_time(hour=3)
+
+
+def _session_day(moment: datetime) -> date:
+    """Which trading session an IST moment belongs to.
+
+    Not the calendar date. A session runs until the platform's own reset, so
+    anything before that hour still belongs to the previous day's session:
+    01:00 on Tuesday is Monday's session, and Monday 22:00 and Tuesday 01:00
+    are the same one.
+
+    Using midnight instead would split a session in half and merge across the
+    real boundary, which is exactly backwards.
+    """
+    if moment.time() < _session_reset_time():
+        return (moment - timedelta(days=1)).date()
+    return moment.date()
+
+
+def _started_before_today(run: Any) -> bool:
+    """Whether a run began in an earlier trading session.
+
+    Timestamps are stored naive UTC, so the value is converted to IST before
+    the session is worked out. Comparing a UTC date against an IST one would
+    move the boundary by five and a half hours.
+    """
+    started = getattr(run, "started_at", None)
+    if started is None:
+        return False
+    started_ist = started.replace(tzinfo=UTC).astimezone(IST)
+    return _session_day(started_ist) < _session_day(_now_ist())
+
+
+def _finalise_stale_run(strategy: Any, run_id: int) -> None:
+    """Close out a flat run left open from an earlier day."""
+    snapshot = state.get_run_state(run_id) or {}
+    store.finish_run(
+        run_id,
+        stop_reason="eod",
+        pnl_realized=snapshot.get("pnl_realized", 0.0) or 0.0,
+        pnl_peak=snapshot.get("pnl_peak", 0.0) or 0.0,
+        pnl_trough=snapshot.get("pnl_trough", 0.0) or 0.0,
+    )
+    store.release_strategy(strategy.id)
+    state.clear_run_state(run_id)
+    store.record_event(
+        strategy.id,
+        strategy.user_id,
+        "eod_squareoff",
+        "Previous day's run closed on the first signal of a new day",
+        run_id=run_id,
+        severity="warn",
+    )
 
 
 def _api_key_for(user_id: str) -> str | None:

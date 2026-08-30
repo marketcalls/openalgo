@@ -452,6 +452,21 @@ def apply_fill(run_id: int, leg_id: Any, avg_price: float, is_entry: bool) -> bo
         return True
     strategy_row = store.get_strategy_unscoped(strategy_id)
     user_id = strategy_row.user_id if strategy_row else ""
+
+    # Only a batch run ends when it goes flat. A batch is a basket entered and
+    # exited as a unit, so nothing held means it is finished.
+    #
+    # A signal run is a trading day, not a basket. A leg exiting is an ordinary
+    # mid-session event and the next alert reopens it, so finalising here would
+    # end the run on the first round trip: five round trips in a day would
+    # produce five runs, fragmenting the P&L, the peak and trough, and the
+    # audit trail that is supposed to describe the day. A signal run is closed
+    # by the scheduler's square-off, by an explicit stop, or by the session
+    # boundary when the next day's first signal arrives.
+    if strategy_row is not None and strategy_row.strategy_kind == "signal":
+        logger.debug("Run %s is flat but signal-mode; leaving it open for the session", run_id)
+        return True
+
     _finalise(run_id, strategy_id, user_id, "manual", "All legs closed")
     return True
 
