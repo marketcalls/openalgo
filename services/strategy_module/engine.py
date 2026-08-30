@@ -989,18 +989,8 @@ def process_tick(symbol: str, exchange: str, ltp: float) -> None:
             logger.exception("Tick processing failed for run %s", run_id)
 
 
-def _daily_loss_breached(strategy: dict[str, Any], run_id: int, run: dict[str, Any]) -> str | None:
-    """Whether this session's loss has reached the strategy's daily limit.
-
-    The session is the one that began at SESSION_EXPIRY_TIME, not at midnight,
-    so a limit resets when the platform's own day rolls over. Runs that have
-    already finished contribute the figure on their row; the live run
-    contributes what it is worth right now, marked, because a limit that only
-    counted closed runs would let an open one exceed it without noticing.
-
-    Called with the run lock held, and reads only what is already in memory
-    plus one indexed sum.
-    """
+def _daily_loss_limit(strategy: dict[str, Any]) -> float | None:
+    """The strategy's daily loss limit as a positive number, or None."""
     limit = strategy.get("daily_loss_limit_inr")
     if not limit:
         return None
@@ -1008,12 +998,46 @@ def _daily_loss_breached(strategy: dict[str, Any], run_id: int, run: dict[str, A
         limit_value = abs(float(limit))
     except (TypeError, ValueError):
         return None
-    if limit_value <= 0:
-        return None
+    return limit_value if limit_value > 0 else None
 
-    banked = store.realized_pnl_since(
+
+def _session_banked_pnl(strategy: dict[str, Any], run_id: int) -> float | None:
+    """What earlier runs banked this session, read outside the run lock.
+
+    This is the only part of the daily-loss check that can touch the database,
+    and a cache miss is a real connection under NullPool. Held inside the run
+    lock it would stall the hub for the length of that query, and a greenlet
+    waiting on the lock cannot yield, so exits and socket work for every other
+    run would wait behind it. The module's own rule is that a critical section
+    holds in-memory bookkeeping only; this is how that rule is kept here.
+
+    None when the strategy has no limit, which is also the signal to skip the
+    read entirely rather than pay for it on every tick.
+    """
+    if _daily_loss_limit(strategy) is None:
+        return None
+    return store.realized_pnl_since(
         strategy["id"], session.session_started_at(), exclude_run_id=run_id
     )
+
+
+def _daily_loss_breached(
+    strategy: dict[str, Any], banked: float | None, run: dict[str, Any]
+) -> str | None:
+    """Whether this session's loss has reached the strategy's daily limit.
+
+    The session is the one that began at SESSION_EXPIRY_TIME, not at midnight,
+    so a limit resets when the platform's own day rolls over. Runs that have
+    already finished contribute ``banked``, read before the lock was taken; the
+    live run contributes what it is worth right now, marked, because a limit
+    that only counted closed runs would let an open one exceed it unnoticed.
+
+    Pure arithmetic on values already in memory. Safe to call under the lock.
+    """
+    limit_value = _daily_loss_limit(strategy)
+    if limit_value is None or banked is None:
+        return None
+
     live = float(run.get("pnl_total") or 0.0)
     day_total = banked + live
     if day_total > -limit_value:
@@ -1041,8 +1065,15 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
     stop_reason: str | None = None
     events: list[tuple[str, str, dict]] = []
 
+    # Read before the lock is taken, never inside it. This is the one input to
+    # the tick evaluation that can reach the database, and only on a cache
+    # miss; a query held under the run lock stalls the hub, and a greenlet
+    # waiting on that lock cannot yield. None when the strategy has no daily
+    # limit, in which case no read happens at all.
+    banked_pnl = _session_banked_pnl(strategy, run_id)
+
     # Everything inside this block is in-memory arithmetic. No order is placed,
-    # no broker is called, nothing is emitted.
+    # no broker is called, nothing is emitted, and nothing reaches the database.
     with state.run_state(run_id) as run:
         if run is None:
             return
@@ -1107,7 +1138,7 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
         # started a fourth. overall_sl_mtm cannot express it: that one is reset
         # every time a run opens, which for a signal or scheduled strategy is
         # several times a day.
-        day_loss_reason = _daily_loss_breached(strategy, run_id, run)
+        day_loss_reason = _daily_loss_breached(strategy, banked_pnl, run)
         if day_loss_reason is not None:
             stop_reason = "daily_loss_limit"
             events.append(
