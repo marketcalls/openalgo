@@ -54,7 +54,15 @@ def isolated_store(tmp_path_factory):
 
 @pytest.fixture(autouse=True)
 def clean(isolated_store):
+    # Re-assert the binding on every test rather than only at session setup.
+    # Sibling suites rebind this same global scoped_session to their own
+    # throwaway database, and with two session-scoped fixtures doing that,
+    # whichever set up last wins and a teardown can dispose an engine another
+    # file is still using. Rebinding per test makes this file independent of
+    # what else ran first.
     store.db_session.remove()
+    store.db_session.configure(bind=isolated_store)
+    store.engine = isolated_store
     with isolated_store.begin() as connection:
         for table in reversed(store.Base.metadata.sorted_tables):
             connection.execute(table.delete())
@@ -88,8 +96,11 @@ def broker():
     with (
         patch("services.strategy_module.order_dispatch.dispatch_order", side_effect=record),
         patch("database.auth_db.get_api_key_for_tradingview", return_value="test-key"),
+        # engine imports resolve_leg by name at module scope, so the engine's
+        # own reference is what has to be replaced. Patching it on
+        # symbol_resolver leaves engine.resolve_leg bound to the original.
         patch(
-            "services.strategy_module.symbol_resolver.resolve_leg",
+            "services.strategy_module.engine.resolve_leg",
             return_value=ResolvedLeg(
                 ok=True,
                 symbol="NIFTY28MAY2624000CE",
@@ -118,9 +129,16 @@ def _batch_strategy():
             "universe_tab": "weekly_monthly",
             "strategy_kind": "batch",
             "legs": [
-                {"id": 1, "segment": "options", "position": "S", "lots": 1,
-                 "option_type": "CE", "strike_mode": "atm", "atm_offset": "ATM",
-                 "expiry": "weekly"}
+                {
+                    "id": 1,
+                    "segment": "options",
+                    "position": "S",
+                    "lots": 1,
+                    "option_type": "CE",
+                    "strike_mode": "atm",
+                    "atm_offset": "ATM",
+                    "expiry": "weekly",
+                }
             ],
         },
     )
@@ -140,8 +158,14 @@ def _signal_strategy():
             "direction": "both",
             "strategy_type": "positional",
             "legs": [
-                {"id": 1, "symbol": "RELIANCE", "exchange": "NSE", "side": "both",
-                 "qty": 100, "segment": "cash"}
+                {
+                    "id": 1,
+                    "symbol": "RELIANCE",
+                    "exchange": "NSE",
+                    "side": "both",
+                    "qty": 100,
+                    "segment": "cash",
+                }
             ],
         },
     )
