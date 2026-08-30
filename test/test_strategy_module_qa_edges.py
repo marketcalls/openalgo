@@ -20,6 +20,7 @@ it has, so fixing the defect turns the marker into a failure that says so.
 """
 
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -1580,8 +1581,11 @@ def test_a_broker_that_fills_inside_the_dispatch_call_still_seeds_the_leg():
         broker_id = f"SBX-{len(filled) + 1}"
         filled.append(broker_id)
         # The sandbox executes and publishes from inside place_order, so the
-        # update is delivered here, before dispatch_order has even returned.
-        order_events._apply_update(broker_id, _event(broker_id, avg=101.5, filled=75))
+        # update is dispatched here, before dispatch_order has even returned.
+        # Through _on_order_update rather than _apply_update, because that is
+        # what the bus calls: it hands the work to the pool, so the update runs
+        # on another thread exactly as it does in production.
+        order_events._on_order_update(_event(broker_id, avg=101.5, filled=75))
         return DispatchResult(ok=True, broker_order_id=broker_id, response={})
 
     with (
@@ -1590,6 +1594,11 @@ def test_a_broker_that_fills_inside_the_dispatch_call_still_seeds_the_leg():
         patch.object(engine.order_dispatch, "dispatch_order", side_effect=fills_immediately),
     ):
         run_id = engine.start_run(sid, USER, "sandbox").run_id
+
+    # The pool thread may still be working; the fill is asynchronous by design.
+    deadline = time.time() + 10
+    while time.time() < deadline and _live(run_id)["entry_avg"] != 101.5:
+        time.sleep(0.02)
 
     leg = _live(run_id)
     assert leg["entry_avg"] == 101.5, "the fill published during dispatch was applied"
@@ -1602,3 +1611,69 @@ def test_a_broker_that_fills_inside_the_dispatch_call_still_seeds_the_leg():
     # And the consequence that matters: the leg is now managed.
     engine.process_tick(CE, "NFO", 101.5)
     assert _live(run_id)["effective_sl"] is not None, "a seeded leg has a stop"
+
+
+def test_the_order_row_exists_before_the_broker_is_called():
+    """Durable intent first, dispatch second.
+
+    The row used to be written from the dispatch result, so the window between
+    broker acceptance and the insert held a real position that nothing
+    recorded: invisible to the operator, to restart recovery, and to every
+    later exit. A crash or a database failure in that window loses the
+    position entirely. The in-memory replay cache added for fast fills does not
+    help here, because it is in memory.
+    """
+    sid = _make()
+    seen_at_dispatch = []
+
+    def records_what_exists(**kwargs):
+        order = kwargs["order"]
+        rows = [
+            o for o in store.list_orders(_run_of_strategy(sid)) if o["symbol"] == order["symbol"]
+        ]
+        seen_at_dispatch.append([(o["status"], o["broker_order_id"]) for o in rows])
+        return DispatchResult(ok=True, broker_order_id="BRK-AFTER", response={})
+
+    with (
+        patch.object(engine, "resolve_leg", side_effect=[_resolved()] * 6),
+        patch.object(engine, "_broker_for", return_value="sandbox"),
+        patch.object(engine.order_dispatch, "dispatch_order", side_effect=records_what_exists),
+    ):
+        run_id = engine.start_run(sid, USER, "sandbox").run_id
+
+    assert seen_at_dispatch == [[("pending", None)]], (
+        "the intent was durable, and carried no broker id yet, when the broker was called"
+    )
+
+    final = store.list_orders(run_id)[0]
+    assert final["status"] == "open"
+    assert final["broker_order_id"] == "BRK-AFTER"
+
+
+def test_an_entry_whose_row_cannot_be_written_is_never_placed(broker):
+    """Refusing costs one leg. Placing it blind costs an unmanaged position.
+
+    An order the module cannot record is one it cannot manage: no stop is
+    evaluated for it, no square-off finds it, and no operator can see it. The
+    exit path takes the opposite decision on purpose.
+    """
+    sid = _make()
+
+    with (
+        patch.object(engine, "resolve_leg", side_effect=[_resolved()] * 6),
+        patch.object(engine, "_broker_for", return_value="sandbox"),
+        patch.object(store, "record_order", return_value=None),
+    ):
+        result = engine.start_run(sid, USER, "sandbox")
+
+    assert broker.orders == [], "nothing reached the broker"
+    assert result.ok is False or all(not o["ok"] for o in (result.legs or [])), (
+        "the leg reports the refusal rather than a placed order"
+    )
+    kinds = [e["kind"] for e in store.list_events(sid)]
+    assert "leg_entry_rejected" in kinds
+
+
+def _run_of_strategy(sid):
+    row = store.get_strategy(sid, USER)
+    return row.current_run_id

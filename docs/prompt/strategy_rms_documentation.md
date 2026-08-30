@@ -346,6 +346,17 @@ Load-bearing orderings:
 - **An exit uses the symbol the run holds**, read from its own state, never a
   re-resolved one. An ATM offset resolved again hours later names a different
   strike, and exiting that opens a new position rather than closing one.
+- **The order row is written before the broker is called**, not from the
+  dispatch result. The window between broker acceptance and the insert used to
+  hold a real position that nothing recorded: invisible to the operator, to
+  restart recovery and to every later exit, and unrecoverable if the process
+  died there. The row goes in as `pending` with no broker id, and the broker id
+  and status are written onto it once dispatch returns.
+- **An entry that cannot be recorded is not placed; an exit that cannot be
+  recorded is placed anyway.** Opposite decisions, on purpose. Refusing an
+  entry costs one leg not opened. Refusing an exit costs a position that stays
+  open with a database outage standing between it and every attempt to close
+  it, so getting flat wins and the audit row is what is lost, loudly.
 - **A leg is closed by its fill arriving**, not by its exit being placed.
   `apply_fill` finalises a run that has gone flat.
 - **A leg is claimed for exit under the state lock**, by
