@@ -238,10 +238,10 @@ def _report_unpriced_fill(
     *,
     is_entry: bool,
 ) -> None:
-    """Record exposure whose exact quantity is known but valuation is not."""
+    """Record a durable broker quantity whose valuation cannot be verified."""
     try:
         run = store.get_run(run_id)
-        if run is None or run.stopped_at is not None:
+        if run is None:
             return
         strategy = store.get_strategy_unscoped(run.strategy_id)
         if strategy is None:
@@ -252,9 +252,9 @@ def _report_unpriced_fill(
             "leg_entry_placed" if is_entry else "leg_exit_placed",
             (
                 f"Broker order {broker_order_id} reports {filled_qty} filled on leg {leg_id} "
-                "without a usable average price. The exact remaining exposure is still "
-                "managed, but risk valuation and realized P&L are unavailable; reconcile "
-                "the broker fill price."
+                "without a usable average price. The broker-reported quantity is durable "
+                "and must be managed as authoritative, but valuation and realized P&L for "
+                "this fill are unverifiable; reconcile the broker fill price."
             ),
             run_id=run_id,
             leg_id=leg_id,
@@ -286,6 +286,35 @@ def _exit_owner_for_row(
     ):
         return "live"
     return None
+
+
+def _exit_owner_still_held(
+    run_id: int,
+    leg_id: Any,
+    exit_owner: str | None,
+    position_ref: str | None,
+) -> bool:
+    """Whether the exact pre-fill owner still has a positive managed quantity."""
+    if exit_owner not in {"live", "superseded"}:
+        return False
+
+    from services.strategy_module import state
+
+    snapshot = state.get_run_state(run_id)
+    leg = (snapshot.get("legs") or {}).get(str(leg_id)) if snapshot else None
+    if leg is None:
+        return False
+    owner = leg if exit_owner == "live" else leg.get("superseded")
+    if owner is None:
+        return False
+    if position_ref is not None and owner.get("position_ref") != position_ref:
+        return False
+    if exit_owner == "live" and owner.get("status") != "open":
+        return False
+    try:
+        return int(float(owner.get("qty") or 0)) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _on_order_update(event: Any) -> None:
@@ -515,7 +544,13 @@ def _apply_update(order_id: str, event: Any) -> None:
                         row.id,
                         row.position_ref,
                     )
-                if exit_owner == "superseded":
+                owner_still_held = _exit_owner_still_held(
+                    run_id,
+                    leg_id,
+                    exit_owner,
+                    row.position_ref,
+                )
+                if exit_owner == "superseded" and owner_still_held:
                     # This closed the outgoing side of a flip, and it was
                     # refused. Both sides are on the book now: the leg
                     # describes the new one, and the old one is held with its
@@ -527,8 +562,13 @@ def _apply_update(order_id: str, event: Any) -> None:
                         ended,
                     )
                     report_flip_outgoing_exit_rejected(run_id, leg_id, ended, row.broker_order_id)
-                report_pending_stop_exit_failed(run_id, leg_id, ended, row.broker_order_id)
-                if exit_owner is None and state.get_run_state(run_id) is None:
+                if owner_still_held:
+                    report_pending_stop_exit_failed(run_id, leg_id, ended, row.broker_order_id)
+                if (
+                    terminal_qty is None
+                    and exit_owner is None
+                    and state.get_run_state(run_id) is None
+                ):
                     # The run has already finalised. There is nothing left to
                     # release and nothing still managing this leg, so the
                     # position is real and invisible unless said out loud.

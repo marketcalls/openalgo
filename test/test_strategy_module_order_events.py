@@ -25,7 +25,9 @@ from services.strategy_module.order_dispatch import DispatchResult
 USER = "order_events_user"
 
 
-def _event(orderid, status="complete", avg=100.0, filled=75, rejection=""):
+def _event(orderid, status="complete", avg=100.0, filled=None, rejection=""):
+    if filled is None:
+        filled = 0 if str(status).strip().lower() in {"rejected", "cancelled", "canceled"} else 75
     return SimpleNamespace(
         orderid=orderid,
         order_status=status,
@@ -636,6 +638,193 @@ def test_terminal_partial_exit_without_price_still_reduces_the_exact_live_owner(
     assert leg["realized_pnl"] == 0.0
     assert leg["exit_order_id"] is None
     assert leg["exit_kind"] is None
+
+
+def test_full_unpriced_exit_records_unverifiable_pnl_before_pending_stop_finalises(order):
+    position_ref = "full-unpriced-short"
+    assert store.set_strategy_status(order.strategy_id, "running", order.run_id)
+    state.init_run_state(
+        order.run_id,
+        order.strategy_id,
+        [
+            {
+                "leg_id": 1,
+                "position": "S",
+                "position_ref": position_ref,
+                "symbol": "NIFTY28MAY2624000CE",
+                "exchange": "NFO",
+                "quantity": 10,
+            }
+        ],
+    )
+    exit_row = store.record_order(
+        order.run_id,
+        1,
+        "exit_close_all",
+        {
+            "position_ref": position_ref,
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "BUY",
+            "qty": 10,
+            "broker_order_id": "BRK-FULL-UNPRICED",
+            "status": "open",
+        },
+    )
+    with state.run_state(order.run_id) as run:
+        leg = run["legs"]["1"]
+        leg["entry_order_id"] = order.order_id
+        leg["entry_status"] = "complete"
+        leg["entry_avg"] = 100.0
+        leg["status"] = "open"
+        leg["exit_order_id"] = exit_row.id
+        leg["exit_kind"] = "exit_close_all"
+    assert store.request_run_stop(order.run_id, "manual") is True
+    assert state.mark_stopping(order.run_id) is True
+
+    with patch.object(engine, "_unsubscribe_run"):
+        order_events._apply_update(
+            "BRK-FULL-UNPRICED",
+            _event("BRK-FULL-UNPRICED", status="complete", avg=0, filled=10),
+        )
+
+    durable_run = store.get_run(order.run_id)
+    assert durable_run.stopped_at is not None
+    assert durable_run.pnl_realized == 0.0
+    assert state.get_run_state(order.run_id) is None
+    valuation_events = [
+        event
+        for event in store.list_events(order.strategy_id)
+        if event["severity"] == "critical" and "BRK-FULL-UNPRICED" in event["message"]
+    ]
+    assert len(valuation_events) == 1
+    message = valuation_events[0]["message"].lower()
+    assert "p&l" in message and "unverifiable" in message
+    assert "remaining exposure" not in message
+    assert not any(
+        event["kind"] == "run_stop_failed" for event in store.list_events(order.strategy_id)
+    )
+
+
+def test_full_dead_superseded_exit_emits_no_retry_or_pending_stop_failure(order):
+    state.init_run_state(
+        order.run_id,
+        order.strategy_id,
+        [
+            {
+                "leg_id": 1,
+                "position": "S",
+                "position_ref": "live-short",
+                "symbol": "NIFTY28MAY2624000CE",
+                "exchange": "NFO",
+                "quantity": 10,
+            }
+        ],
+    )
+    exit_row = store.record_order(
+        order.run_id,
+        1,
+        "exit_signal",
+        {
+            "position_ref": "old-long",
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "SELL",
+            "qty": 10,
+            "broker_order_id": "BRK-FULL-DEAD-OLD",
+            "status": "open",
+        },
+    )
+    with state.run_state(order.run_id) as run:
+        leg = run["legs"]["1"]
+        leg["status"] = "open"
+        leg["entry_status"] = "complete"
+        leg["entry_avg"] = 120.0
+        leg["superseded"] = {
+            "position_ref": "old-long",
+            "entry_order_id": order.order_id,
+            "exit_order_id": exit_row.id,
+            "exit_claim_token": None,
+            "position": "B",
+            "entry_avg": 100.0,
+            "qty": 10,
+        }
+    assert store.request_run_stop(order.run_id, "manual") is True
+
+    order_events._apply_update(
+        "BRK-FULL-DEAD-OLD",
+        _event("BRK-FULL-DEAD-OLD", status="rejected", avg=110.0, filled=10),
+    )
+
+    leg = state.get_run_state(order.run_id)["legs"]["1"]
+    assert leg["status"] == "open"
+    assert leg["superseded"] is None
+    kinds = [event["kind"] for event in store.list_events(order.strategy_id)]
+    assert "flip_outgoing_exit_rejected" not in kinds
+    assert "run_stop_failed" not in kinds
+
+
+def test_state_gone_stranding_event_is_reserved_for_a_genuine_zero_fill(order):
+    exit_row = store.record_order(
+        order.run_id,
+        1,
+        "exit_close_all",
+        {
+            "position_ref": "closed-owner",
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "BUY",
+            "qty": 10,
+            "broker_order_id": "BRK-FULL-DEAD-NO-STATE",
+            "status": "open",
+        },
+    )
+    assert exit_row is not None
+    exit_row_id = exit_row.id
+    assert store.finish_run(order.run_id, "manual") is True
+    assert state.get_run_state(order.run_id) is None
+
+    order_events._apply_update(
+        "BRK-FULL-DEAD-NO-STATE",
+        _event("BRK-FULL-DEAD-NO-STATE", status="cancelled", avg=110.0, filled=10),
+    )
+
+    durable = next(row for row in store.list_orders(order.run_id) if row["id"] == exit_row_id)
+    assert durable["status"] == "cancelled"
+    assert durable["filled_qty"] == 10
+    assert not any(
+        event["kind"] == "run_stop_failed" for event in store.list_events(order.strategy_id)
+    )
+
+    zero_fill = store.record_order(
+        order.run_id,
+        1,
+        "exit_close_all",
+        {
+            "position_ref": "closed-owner",
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "BUY",
+            "qty": 10,
+            "broker_order_id": "BRK-ZERO-DEAD-NO-STATE",
+            "status": "open",
+        },
+    )
+    assert zero_fill is not None
+
+    order_events._apply_update(
+        "BRK-ZERO-DEAD-NO-STATE",
+        _event("BRK-ZERO-DEAD-NO-STATE", status="cancelled", avg=0, filled=0),
+    )
+
+    failures = [
+        event
+        for event in store.list_events(order.strategy_id)
+        if event["kind"] == "run_stop_failed"
+    ]
+    assert len(failures) == 1
+    assert "BRK-ZERO-DEAD-NO-STATE" in failures[0]["message"]
+    assert "did not happen" in failures[0]["message"].lower()
 
 
 def _apply_two_updates_after_both_read(
