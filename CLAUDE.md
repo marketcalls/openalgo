@@ -16,6 +16,7 @@ single broker session and WebSocket feed:
 | Unified Broker API | `/api/v1/` | External platforms (TradingView, Amibroker, ChartInk, Excel, Python, MCP) |
 | Python Strategy Host | `/python` | In-browser editor; scripts scheduled on IST times, run as isolated subprocesses with live logs |
 | Flow (No-Code Builder) | `/flow` | Node graph: market data to indicators to conditions to order execution |
+| Strategy Module & RMS | `/strategy` | Multi-leg options strategies with end-to-end risk management, plus a signal-driven mode for per-alert TradingView trading. Two kinds share one engine: `batch` enters and exits every leg together, `signal` moves one leg per alert. Risk rules come from the shared `services/risk/` core. See [`docs/prompt/strategy_rms_documentation.md`](docs/prompt/strategy_rms_documentation.md). |
 | Options & Portfolio Suite | `/tools` | 18 tools. Options analytics (Option Chain, Greeks, OI Tracker, Max Pain, Vol Surface, GEX, IV Smile, Straddle, Arbitrage, ...) plus portfolio and investment tools (Portfolio Backtester, SIP Backtester, Portfolio Analyzer, Strategy Builder). The registry is `frontend/src/lib/tools.ts` — the home page derives its count from it, so add a tool there and both pages update. |
 | Charting Terminal | `/trading` | Line-based chart trading, powered by the `openalgo-charts` package |
 | Scalping Terminal | `/scalping` | Keyboard-driven options scalping (`blueprints/scalping.py` resolves underlying/expiry/strike; index options only — NRML/MIS, never CNC) |
@@ -30,8 +31,8 @@ Documentation: https://docs.openalgo.in
 
 All project documentation lives under `docs/` as markdown (the single source of
 truth). **Start from [`docs/INDEX.md`](docs/INDEX.md)** — it maps every area
-(REST API, Python SDK, indicators, user guide, BDD specs, PRDs, design, scalping,
-installation, audits) to its entry file.
+(REST API, Python SDK, indicators, strategy module and RMS, user guide, BDD
+specs, PRDs, design, scalping, installation, audits) to its entry file.
 
 Read `docs/INDEX.md` first, then open only the specific doc you need instead of
 scanning the tree. Do **not** copy or restate docs into a second location — edit
@@ -105,6 +106,35 @@ changed** (real login, ~3 AM rollover, logout/revoke).
 
 - **Gate the teardown on a real token change.** `upsert_auth` compares the new token / feed-token / broker / revoke flag against the stored row using **decrypted plaintext** — Fernet ciphertext is non-deterministic, so never compare encrypted blobs. If nothing material changed, clear the cheap in-process caches and return early, leaving the live feed up. Only a genuine change (or `revoke=True`) runs the ZMQ-publish + `cleanup_pools_for_user` path.
 - **Why:** without the gate, a same-day 2nd-device login kills the 1st device's stream until it refreshes (Shoonya), and on single-active-session Finvasia/Noren brokers the disconnect churn drops the broker token entirely (Flattrade "broker session expired"). See issue #1591. The teardown itself is the #1394/#765/#851 fix — keep it, just keep it gated. Broker-agnostic.
+
+### Risk rules live in services/risk/ and are never reimplemented
+
+One place decides whether a position has hit its stop, taken its target, earned
+a tighter trailing stop, or whether a set of positions has run past its combined
+limits. The scalping terminal, the `/strategy` engine, Flow and a REST endpoint
+all sit on it.
+
+- **`services/risk/` performs no I/O of any kind.** No database, no broker, no
+  market data, no clock, no logging. Every input arrives as an argument and every
+  decision leaves as a return value. That is what makes it testable without a
+  running platform, identical across consumers, safe to call from a green thread
+  and from a real one, and exposable over HTTP without a service layer.
+- **Consumers translate, they do not decide.**
+  `services/strategy_module/risk_adapter.py` is the pattern: it maps a leg onto
+  `PositionRisk`, calls the core, and writes the decision back. Adding a rule
+  means changing the core, not adding a second evaluator beside it.
+- **`test/risk/vectors.json` is the contract** between the Python core and the
+  TypeScript copy in `frontend/src/hooks/useTrailingSL.ts`. Add a case whenever a
+  rule changes, or the two drift.
+- **Why this is an invariant and not a preference:** the module `/strategy` was
+  ported from had its own evaluator, and four defects lived in it undetected -
+  a leg with no recorded side evaluated as a short so its stop fired on a
+  favourable move; an exit derived from configuration that doubled a short
+  instead of covering it; an aggregate summed from a stale per-leg field; and a
+  peak and trough persisted as zero on most stop paths. Each is pinned by a test
+  marked `PORTED DEFECT`.
+
+Full reference: [`docs/prompt/strategy_rms_documentation.md`](docs/prompt/strategy_rms_documentation.md).
 
 ### SQLite uses NullPool, never StaticPool
 

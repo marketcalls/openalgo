@@ -20,6 +20,7 @@ need → drill into the specific file. Don't load everything at once.
 | Contract lot sizes | [prompt/LotSize.md](prompt/LotSize.md) |
 | WebSocket subscription & message format | [prompt/websockets-format.md](prompt/websockets-format.md) · [prompt/websockets-verbose-control.md](prompt/websockets-verbose-control.md) |
 | Service-layer functions & Flow JSON import | [prompt/services_documentation.md](prompt/services_documentation.md) · [prompt/flow-import-format.md](prompt/flow-import-format.md) |
+| Strategy module & risk engine (multi-leg options, signal mode, RMS) | [prompt/strategy_rms_documentation.md](prompt/strategy_rms_documentation.md) · [api/strategy-services/](api/strategy-services/) |
 | Technical indicators (`ta` library) | [<prompt/indicators/openalgo indicators - introduction.md>](<prompt/indicators/openalgo indicators - introduction.md>) |
 | Writing your own chart indicators for `/trading` | [custom-indicators.md](custom-indicators.md) |
 | Step-by-step user guide (setup → first order → integrations) | [userguide/README.md](userguide/README.md) |

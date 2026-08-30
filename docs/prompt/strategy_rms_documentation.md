@@ -1,0 +1,678 @@
+# OpenAlgo Strategy Module and Risk Engine Reference
+
+## Purpose and scope
+
+This document describes the `/strategy` module: multi-leg options strategies
+with end-to-end risk management, and the signal-driven mode that reacts to
+individual TradingView alerts.
+
+It is deliberately separate from
+[`services_documentation.md`](services_documentation.md), which covers the
+platform's general service layer. Read that one for order placement, market
+data and account services; read this one for anything under
+`services/strategy_module/`, `database/strategy_module_db.py`,
+`blueprints/strategy_module.py`, `restx_api/strategy.py` and `services/risk/`.
+
+Scope of this file:
+
+- the shared risk core and why it is shared
+- the two strategy kinds and how they differ
+- the data model
+- every module's public surface, with exact signatures
+- the lifecycle of a run, from start through ticks to square-off and recovery
+- the invariants that must not be broken, and why each one exists
+- what is deliberately not built yet
+
+## Sources of truth
+
+Code always wins over this document. When they disagree, the code is right and
+this file is stale.
+
+| Concern | File |
+|---|---|
+| Schema, store, vocabularies | `database/strategy_module_db.py` |
+| Risk rules (shared) | `services/risk/` |
+| Rule translation | `services/strategy_module/risk_adapter.py` |
+| Run lifecycle, tick decisions | `services/strategy_module/engine.py` |
+| Signal-mode protocol | `services/strategy_module/signals.py` |
+| Live run state | `services/strategy_module/state.py` |
+| Order placement | `services/strategy_module/order_dispatch.py` |
+| Prices | `services/strategy_module/tick_feed.py` |
+| Fills | `services/strategy_module/order_events.py` |
+| Durability | `services/strategy_module/checkpoint.py`, `recovery.py` |
+| Cron | `services/strategy_module/scheduler.py` |
+| Public webhook | `services/strategy_module/webhook.py`, `webhook_bridge.py` |
+| Broker-backed books | `services/strategy_module/views.py` |
+| Contract resolution | `services/strategy_module/symbol_resolver.py` |
+| Startup | `services/strategy_module/runtime.py` |
+| Session API and validation | `blueprints/strategy_module.py` |
+| API-key surface | `restx_api/strategy.py`, `restx_api/strategy_schema.py` |
+| Public API reference | `docs/api/strategy-services/` |
+
+Tests are the second source of truth, and several encode defects that were
+deliberately not carried over. They are named in the code with a `PORTED
+DEFECT` comment.
+
+## Architecture
+
+```
+                     browser                TradingView / SDK / Excel
+                        |                              |
+        blueprints/strategy_module.py        restx_api/strategy.py
+             (session cookie)                    (API key)
+                        |                              |
+                        +---------------+--------------+
+                                        |
+                         services/strategy_module/engine.py
+                         services/strategy_module/signals.py
+                                        |
+        +----------------+--------------+--------------+----------------+
+        |                |              |              |                |
+   risk_adapter    order_dispatch   tick_feed    order_events      state
+        |                |              |              |                |
+   services/risk/   place_order /   websocket +    EventBus        in-process
+   (SHARED)         sandbox         REST fallback  order.update    run state
+                                        |
+                              checkpoint.py / recovery.py
+                                        |
+                              database/strategy_module_db.py
+```
+
+The public webhook enters at `services/strategy_module/webhook.py`, which
+validates and then hands off through `webhook_bridge.py` to the same engine.
+
+## The shared risk core
+
+`services/risk/` is the one place OpenAlgo decides whether a position has hit
+its stop, taken its target, earned a tighter trailing stop, or whether a set of
+positions has run past its combined limits.
+
+**It performs no I/O of any kind.** No database, no broker, no market data, no
+clock, no logging. Every input arrives as an argument and every decision leaves
+as a return value. That is what lets the scalping terminal, Flow, this strategy
+engine and a REST endpoint all sit on the same rules without a service layer in
+between, and what makes the rules testable without a running platform.
+
+```python
+from services.risk import (
+    PositionRisk, PositionDecision, evaluate_position,
+    AggregateRisk, AggregateDecision, evaluate_aggregate,
+    aggregate_pnl, trail_stops_to_entry,
+    stop_from_points, target_from_points, Side, TrailMode, BreachReason,
+)
+```
+
+The strategy module never calls these directly. `risk_adapter.py` translates in
+both directions and is the only file that knows both vocabularies:
+
+```
+leg state  -> PositionRisk   -> evaluate_position  -> PositionDecision  -> leg state
+run state  -> AggregateRisk  -> evaluate_aggregate -> AggregateDecision -> run state
+```
+
+Golden vectors in `test/risk/vectors.json` bind the Python core to the
+TypeScript copy in `frontend/src/hooks/useTrailingSL.ts`. Add a case there
+whenever a rule changes, so the two cannot drift.
+
+### risk_adapter public surface
+
+```python
+leg_to_position_risk(leg: dict) -> PositionRisk
+evaluate_leg(leg: dict, last_price: Any) -> PositionDecision      # writes back into leg
+apply_leg_decision(leg: dict, decision: PositionDecision) -> None
+run_pnl(state: dict) -> tuple[float, float]                       # (realized, unrealized)
+run_to_aggregate_risk(state: dict, strategy: dict) -> AggregateRisk
+evaluate_run(state: dict, strategy: dict) -> AggregateDecision    # writes back into state
+apply_run_decision(state: dict, decision: AggregateDecision) -> None
+trail_open_legs_to_entry(state: dict, triggering_leg_id: Any) -> list[str]
+```
+
+Two mappings in here are easy to get wrong:
+
+- **A trailing stop's gap is `trail_step`, not `trail_trigger`.** An X-only
+  configuration (fixed-distance trail) passes X for both. Passing 0 disables
+  trailing entirely, because the core requires a positive step before it will
+  move a stop at all.
+- **`overall_sl_mtm` is stored positive and applied as a negative threshold.**
+  It passes through unchanged; the core takes it the same way.
+
+## The two strategy kinds
+
+`sm_strategy.strategy_kind` is `batch` (default) or `signal`. They share every
+table and all the machinery for state, orders, risk and recovery. What differs
+is the protocol, the leg shape and the run lifecycle.
+
+| | batch | signal |
+|---|---|---|
+| Trigger | `start` enters every leg, `stop` exits every leg | one alert moves one leg |
+| Leg shape | segment, position, lots, option type, strike mode, offset, expiry | symbol, exchange, side, qty, segment, expiry |
+| Options | yes, this is what it is for | no, spreads stay in batch mode |
+| Quantity | lots multiplied by `lotsize` from `SymToken` | absolute shares or units |
+| Run | one per start-to-stop cycle | one per trading day, opened by the first signal |
+| Webhook actions | `start`, `stop` | `long_entry`, `long_exit`, `short_entry`, `short_exit` |
+| Legs at run start | all entered together | inactive until a signal opens one |
+| Order kinds | `entry`, `exit_sl`, `exit_target`, ... | adds `exit_signal` |
+
+Each kind refuses the other's action vocabulary. `signals.actions_for(kind)`
+returns the accepted set and the webhook validates against it.
+
+### Signal mode semantics
+
+Three outcomes, and the difference between them is the design:
+
+| Outcome | Answer | Example |
+|---|---|---|
+| Acted | 200, an order was placed | `long_entry` on a flat leg |
+| No-op | 200 with a note | `long_entry` on a leg already long |
+| Refused | 4xx | `short_entry` on a `long_only` strategy |
+
+The no-op notes are `already_long`, `already_short`, `no_matching_position`,
+`outside_entry_window` and `outside_trading_window`.
+
+A no-op is answered as a success on purpose. An alert engine repeats itself, and
+reporting a repeat as a failure invites a retry; a retry on an order path is how
+one alert becomes two positions. A refusal is different: it means the signal
+contradicts how the strategy is configured, which the operator should see.
+
+Other signal-mode rules:
+
+- **The side a leg is held comes from the signal that opened it**, never from
+  configuration. A leg's configured `side` says which signals it *accepts*.
+- **An opposite entry squares first, then opens.** Reversing without closing
+  leaves both positions on the book.
+- **A leg returns to `configured` after an exit**, not `closed`, so the same
+  symbol can be signalled again the same day. Its realized P&L accumulates on
+  the leg, and `run_pnl` counts realized from any leg that has it.
+- **Signal actions skip the webhook dedupe and cooling-off windows.** They exist
+  because a repeated `start` would open a second position; signal mode is
+  already idempotent by meaning, and a 60 second window would suppress a genuine
+  long, short, long sequence and leave the position backwards.
+
+## Data model
+
+Six tables, all `sm_` prefixed. The prefix matters: this codebase already has
+`strategy_portfolio`, `strategy_book`, `strategy_order_tags`,
+`strategy_pending_fills` and the `/python` strategy host, none of which are
+related to each other or to this module.
+
+| Table | Purpose |
+|---|---|
+| `sm_strategy` | config: legs (JSON), risk parameters, scheduler, webhook token hash |
+| `sm_strategy_run` | one activation, start to stop |
+| `sm_strategy_order` | every order the engine places, audit grade |
+| `sm_strategy_checkpoint` | periodic runtime snapshot, for crash recovery |
+| `sm_webhook_event` | every inbound webhook, accepted or rejected |
+| `sm_strategy_event` | risk-event audit trail |
+
+Conventions:
+
+- **Timestamps are naive UTC**, rendered with an explicit offset at the
+  boundary. SQLite does not preserve a timezone on a `DateTime` column whatever
+  you pass it, so storing aware values hands back naive ones on the next read.
+- **Money is `Numeric(18, 2)`**, converted to float by the `*_to_dict` helpers
+  so `Decimal` never reaches `jsonify`.
+- **`ondelete="CASCADE"` is decorative.** SQLite enforces foreign keys only
+  under `PRAGMA foreign_keys=ON`, which this project never sets.
+  `delete_strategy` removes children explicitly. This is correctness, not
+  tidiness: SQLite reuses rowids, so an orphaned audit trail re-attaches itself
+  to whichever strategy is created next and inherits the id.
+- **Checkpoints are pruned.** They are written every few seconds for a whole
+  session in a worker that never restarts. Recovery only reads the newest row.
+
+Vocabularies live as tuples in `strategy_module_db.py` rather than SQL CHECK
+constraints, because SQLite cannot alter a CHECK in place: `STRATEGY_KINDS`,
+`DIRECTIONS`, `STRATEGY_TYPES`, `RUN_MODES`, `STRATEGY_STATUSES`,
+`TRIGGER_SOURCES`, `STOP_REASONS`, `ORDER_KINDS`, `ORDER_STATUSES`,
+`EVENT_KINDS`, `EVENT_SEVERITIES`, `WEBHOOK_RESULTS`.
+
+### Store surface
+
+```python
+# strategies
+create_strategy(user_id, config) -> (payload_with_webhook_token, error)
+list_strategies(user_id, status=None, q=None) -> list[dict]
+get_strategy(strategy_id, user_id) -> SmStrategy | None      # owner scoped
+get_strategy_unscoped(strategy_id) -> SmStrategy | None      # engine only
+update_strategy(strategy_id, user_id, changes) -> (dict, error)
+delete_strategy(strategy_id, user_id) -> (bool, error)
+set_strategy_status(strategy_id, status, run_id=None) -> bool
+claim_strategy_for_run(strategy_id) -> bool                  # atomic start guard
+release_strategy(strategy_id) -> bool
+rotate_webhook_token(strategy_id, user_id) -> (token, error)
+set_live_enabled(strategy_id, user_id, enabled) -> (bool, error)
+set_webhook_locked(strategy_id, user_id, locked) -> (bool, error)
+get_strategy_by_webhook_token(token) -> SmStrategy | None
+clear_strategy_module_cache() -> None
+
+# runs, orders, events, checkpoints, webhook audit
+create_run(...) / finish_run(...) / get_run(run_id) / list_runs(...) / list_open_runs()
+record_order(run_id, leg_id, kind, order) / update_order(...) / list_orders(run_id)
+list_orders_for_strategy(strategy_id, run_id=None)
+get_order_by_broker_id(broker_order_id)
+record_event(...) / list_events(...)
+write_checkpoint(run_id, snapshot) / latest_checkpoint(run_id)
+list_checkpoints(run_id, limit=1000, strategy_id=None) / prune_checkpoints(run_id, keep=200)
+record_webhook_event(...) / list_webhook_events(strategy_id, limit=200)
+```
+
+`claim_strategy_for_run` is a single conditional UPDATE, not a read then a
+write. Three triggers can start the same strategy at once (UI, scheduler,
+webhook) and a check-then-set lets two of them both see `stopped` and both place
+a full set of entries. The original this was ported from uses
+`SELECT ... FOR UPDATE`, which SQLite parses and does not honour, so that guard
+would have been silently absent.
+
+## Run state
+
+`services/strategy_module/state.py` holds live run state as a plain in-process
+dict. That is an upgrade over the Redis original, not a compromise: `-w 1` is
+hardcoded in `start.sh` and `install/install.sh` with no variable to raise it,
+so exactly one process can own a run, and the network hop bought only latency on
+the hottest path. Durability lives in `sm_strategy_checkpoint` plus `recovery`.
+
+The stored shape is identical to the checkpoint's `leg_state` JSON, so a
+snapshot round-trips without translation.
+
+```python
+get_state_lock(run_id) -> threading.Lock
+run_state(run_id)                       # context manager, yields the live dict or None
+init_run_state(run_id, strategy_id, legs) -> dict
+add_leg(run_id, leg) -> dict | None     # signal mode: a leg appears when a signal opens it
+get_run_state(run_id) -> dict | None    # deep copy, safe to read outside the lock
+hydrate_run_state(run_id, state) -> None
+clear_run_state(run_id) -> None         # drops the state AND its lock
+active_run_ids() -> list[int]
+open_legs(state) / legs_for_symbol(state, symbol, exchange) / subscribed_symbols(state)
+snapshot_for_checkpoint(state) -> dict
+favorable_peak_points(leg) -> float
+```
+
+Two rules:
+
+- **A leg must always carry a `position`.** `_new_leg_state` raises rather than
+  defaulting. The original omits it on signal legs, and because the evaluator
+  treats anything that is not `"B"` as a short, those legs were evaluated with
+  an inverted sign and their stop fired on a favourable move.
+- **A critical section holds in-memory bookkeeping only.** No database, no
+  broker, no emit. A greenlet waiting on a lock cannot yield, so I/O inside one
+  stalls the entire worker.
+
+## Engine
+
+```python
+start_run(strategy_id, user_id, mode, trigger_source="manual",
+          webhook_event_id=None) -> StartResult(ok, run_id, error, legs)
+stop_run(run_id, user_id, reason="manual") -> dict
+close_leg(run_id, leg_id, user_id) -> dict
+apply_fill(run_id, leg_id, avg_price, is_entry) -> bool     # True when the run went flat
+process_tick(symbol, exchange, ltp) -> None
+```
+
+Load-bearing orderings:
+
+- **Locks are released before orders are placed.** The tick path evaluates under
+  the lock, collects what it decided, releases, then dispatches.
+- **Entries go BUY before SELL.** A spread whose short leg is placed first can
+  be refused for margin the account would have had once the long leg existed.
+- **Every leg is resolved before anything is claimed.** A leg that cannot be
+  resolved leaves no run row, no claimed strategy and no orders.
+- **An exit uses the symbol the run holds**, read from its own state, never a
+  re-resolved one. An ATM offset resolved again hours later names a different
+  strike, and exiting that opens a new position rather than closing one.
+- **A leg is closed by its fill arriving**, not by its exit being placed.
+  `apply_fill` finalises a run that has gone flat.
+- **A rejected exit clears its own marker**, so a failed attempt is not mistaken
+  for a duplicate and the position stranded.
+- **Trail-to-entry fires only on a stop-driven exit**, never on a manual close.
+  That rule answers the market moving against the book; an operator closing a
+  leg by hand is an override.
+
+## Order dispatch
+
+```python
+build_order(*, symbol, exchange, action, quantity, product, strategy_name,
+            pricetype="MARKET", price=0, trigger_price=0) -> dict
+exit_action(position) -> str            # "B" -> SELL, "S" -> BUY; raises otherwise
+resolve_live_auth(api_key) -> (auth_token, broker, error)
+dispatch_order(*, mode, api_key, order) -> DispatchResult(ok, broker_order_id, response, error)
+```
+
+Three departures from how the rest of the product places orders:
+
+- **Mode is per run, not global.** The analyzer setting is one platform-wide
+  switch and `place_order` consults it, but two runs may disagree. This module
+  branches on the run's own mode and calls each pipe directly. It neither reads
+  nor writes the global toggle.
+- **Action Center is bypassed.** `place_order` routes API-key orders into the
+  semi-automatic approval queue when enabled. A stop-loss exit that waits for a
+  human to approve it is not a stop loss, so dispatch calls
+  `place_order_with_auth`, the same path without the queue.
+- **Broker authorisation is resolved per order and never cached in run state.**
+  Indian broker tokens expire daily around 3 AM IST and a run can be open across
+  that boundary. When authorisation cannot be resolved, the order is refused and
+  reported rather than attempted.
+
+`exit_action` derives from the side the leg *actually holds*. The original reads
+the configured side, which defaults to `"B"` for every leg including short ones,
+so a rule-driven exit on a short placed another SELL and doubled the position.
+
+## Tick feed
+
+```python
+feed = get_risk_tick_feed()             # module singleton
+feed.set_on_price(cb)                   # cb(symbol, exchange, ltp) - drives risk evaluation
+feed.set_notify(cb)                     # cb(TickSourceEvent) - source transitions, display only
+feed.add_run_subscriptions(run_id, symbols) -> list[str]
+feed.remove_run_subscriptions(run_id) -> list[str]
+feed.get_ltp(symbol, exchange) -> float | None
+feed.get_source(symbol, exchange) / feed.is_stale(...) / feed.degraded / feed.health()
+feed.on_tick(payload)                   # producer entry point
+feed.stop()
+```
+
+Subscriptions are refcounted per run. Per symbol the source runs a state
+machine: `WS_LIVE` until no tick arrives for the stale threshold, then
+`POLLING` over batched multi-quotes, back to `WS_LIVE` on the first websocket
+tick, and `STALE` only when both sources have failed long enough that the price
+should not be trusted. A 429 backs off 2, 5, 10, 30 seconds and marks the feed
+degraded.
+
+**Both the websocket and the REST fallback drive `set_on_price`.** A leg that
+has fallen back to polling has to be risk-evaluated on polled prices too, or the
+fallback would keep the price fresh on screen while protecting nothing.
+
+Environment: `STRATEGY_TICK_STALE_THRESHOLD_SEC` (10),
+`STRATEGY_TICK_STALE_FATAL_SEC` (60), `STRATEGY_TICK_POLL_INTERVAL_SEC` (2),
+`STRATEGY_TICK_POLL_BATCH_MAX` (50).
+
+### The threading boundary
+
+This is the part of the module most likely to be broken by a well-meaning
+change. Read the eventlet section of `CLAUDE.md` before touching it.
+
+- The **producer** (`on_tick`) is treated as a real OS thread. It does one
+  `frozenset` membership test and a `put_nowait` on a real queue from
+  `utils/real_threading`, and takes no lock. A green lock touched from a real
+  thread raises inside the hub and wedges that thread permanently.
+- The **consumers** are green threads and never block on that real queue: they
+  drain with `get_nowait` and sleep, because a greenlet blocking on a real
+  primitive stalls the single worker.
+- The state lock holds in-memory bookkeeping only. The subscribe call, the REST
+  fetch, the price hook and even the transition log lines happen after release.
+
+## Fills
+
+`services/strategy_module/order_events.py` subscribes once to the in-process
+EventBus topic `order.update`, which the platform already publishes for every
+asynchronous status change, live or sandbox. Nothing polls `getOrderStatus`.
+
+```python
+start() -> bool                          # idempotent; called by runtime
+```
+
+- Deciding an update is not ours costs one indexed lookup on `broker_order_id`.
+- **A fill is applied exactly once.** The same fill can arrive from a broker
+  postback and from the order-update stream, and applying it twice would add the
+  leg's realized profit to the run a second time. The order row's own status is
+  the guard.
+- **A rejection is final.** A late, out-of-order "complete" cannot resurrect it
+  into a position the account never held.
+- A fill reporting no average price is recorded but not applied: seeding a leg
+  from zero would give it a stop derived from nothing.
+
+## Durability
+
+```python
+# checkpoint.py
+write_once(*, prune=None) -> int         # one pass; what tests drive
+start() -> bool  /  stop() -> None  /  is_running() -> bool
+
+# recovery.py
+recover_all() -> dict[int, set[tuple[str, str]]]    # {run_id: symbols to resubscribe}
+recover_run(run_id) -> RecoveredRun
+normalise_order_status(raw) -> str
+order_is_filled(raw) / order_is_dead(raw) / order_is_working(raw)
+```
+
+Recovery merges two sources with a deliberate precedence. Identity and
+disposition come from the **order rows**, which are authoritative about what was
+placed and filled. Volatile risk state (last price, effective stop and target,
+trail flags, favourable extremes) comes from the **checkpoint**, because no
+order row carries it. A leg's side is derived from its entry order's action, so
+a recovered leg can never come back with a side it did not trade.
+
+Two asymmetries matter:
+
+- A **dead** order is never upgraded by a checkpoint. A rejection is a fact.
+- A **working** order may be upgraded, because the checkpoint is written from
+  the same fill the engine applies and the row can lag it.
+
+Order status is normalised in exactly one place. An unrecognised status is
+treated as *working*, because reading an unknown exit as dead would let a second
+exit be placed, and a second exit opens the opposite position.
+
+A run that cannot be recovered is finalised with `stop_reason="recovery_failed"`
+so one bad run cannot wedge every future boot.
+
+## Scheduler
+
+APScheduler `BackgroundScheduler` on `Asia/Kolkata`.
+
+```python
+start(paused=False) -> BackgroundScheduler
+shutdown() -> None  /  get_scheduler()
+sync_all_jobs() -> dict         # rebuild every job from the database
+sync_strategy_jobs(strategy_id) -> list[str]
+remove_strategy_jobs(strategy_id) -> int
+list_jobs() -> list[dict]
+run_scheduled_start(strategy_id) / run_scheduled_stop(strategy_id)
+```
+
+Four traps present in the platform's other schedulers, avoided here:
+
+1. **Timezone on every trigger**, not just the scheduler. Flow's and Historify's
+   cron jobs carry none, so they run in server-local time.
+2. **Job defaults set.** APScheduler's default `misfire_grace_time` is one
+   second; `blueprints/python_strategy.py` inherits it, so a 09:15 job that
+   slips silently vanishes. This module uses 60, with `coalesce` and
+   `max_instances=1`.
+3. **A module-level callable with args**, not a lambda, so jobs stay picklable.
+4. **`remove_all_scoped_sessions()` in a `finally`.** A scheduler worker has no
+   Flask app context, so `teardown_appcontext` never fires (issue #1738).
+
+Nothing starts at import. The job store is in memory, so the database stays the
+single source of truth, which only holds because every CRUD write calls
+`sync_strategy_jobs`.
+
+It also closes a hole in the original: there, the square-off job comes only from
+`scheduler.auto_stop_time`, so an intraday strategy with `exit_time` set and
+`auto_stop_time` blank was never squared off at all. Here `exit_time` installs
+that job when no `auto_stop_time` is given.
+
+## Public webhook
+
+`POST /strategy/webhook/<token>`. The URL token identifies the strategy; there
+is no body secret and no API key. It is stored only as a SHA-256 digest and
+shown once at creation or rotation.
+
+```python
+handle_webhook(token, body=None, *, ip=None, user_agent=None, engine=None) -> WebhookOutcome
+unknown_token_outcome(*, ip=None, user_agent=None, audit=True) -> WebhookOutcome
+note_run_stopped(strategy_id) -> None    # arms the cooling-off window
+ip_allowed(ip, allowlist) -> bool
+reset_state() -> None
+```
+
+Validation pipeline, in order, with every stage audited to `sm_webhook_event`:
+
+| Stage | Result label | Status |
+|---|---|---|
+| Token resolves | `rejected_token` | 404 |
+| Kill switch off | `rejected_locked` | 403 |
+| IP in allowlist | `rejected_ip` | 403 |
+| Payload parses and fits | `rejected_payload` | 400 |
+| Action valid **for this kind** | `rejected_invalid_action` | 400 |
+| Start names a mode | `rejected_invalid_action` | 400 |
+| Live opt-in | `rejected_live_disabled` | 403 |
+| Not a duplicate (batch only) | `rejected_dedupe` | 200, ok |
+| Not cooling off (batch only) | `rejected_cooling_off` | 409 |
+| Engine acted | `rejected_engine_error` | 500 |
+
+An unknown token answers 404 **from the view**, not by falling through to the
+app's handler. Unauthenticated 404s feed `Error404Tracker` and count toward an
+IP ban, so a scanner walking the token space could otherwise get the owner's own
+address banned. A malformed token is refused on shape before any lookup and is
+indistinguishable from an unregistered one in body, status and timing.
+
+`note_run_stopped` is called by the engine on **every** stop, not just
+webhook-initiated ones. Without it a strategy stopped by its own risk rules, by
+the scheduler or by the kill switch would accept a stale alert a second later
+and re-enter the position it had just closed.
+
+`webhook_bridge.py` adapts the handler (which holds a strategy row) to the
+engine (which takes ids, because the UI and scheduler drive it too). It also
+decides that a webhook `stop` applies to the strategy's current run, and that
+stopping an already-flat strategy is a success rather than an error worth
+retrying.
+
+## Broker-backed books
+
+```python
+strategy_orderbook(strategy_id, api_key, run_id=None) -> dict
+strategy_tradebook(strategy_id, api_key, run_id=None) -> dict
+strategy_positions(strategy_id, api_key, run_id=None) -> dict
+```
+
+These call the platform's own global services and filter the response to this
+strategy, so the envelope, field names and formatting are identical to
+`/orderbook`, `/tradebook` and `/positionbook` and the existing tables render
+them unchanged. Statistics are recounted over the filtered rows, because a
+global statistic on a filtered list is wrong.
+
+Sandbox runs read the sandbox books. Live reads pass `original_data=None`, the
+internal-call form, so the platform-wide analyzer toggle cannot divert a live
+run into the sandbox or a sandbox run into the real broker.
+
+**Positions carry a weaker guarantee than the orderbook, and the code says so.**
+A position row is per contract, so if the same contract is also held from a
+manual order or another strategy, the row is shared and cannot be divided. A
+strategy's reported P&L therefore comes from its own fills, never from these
+rows.
+
+## Contract resolution
+
+```python
+resolve_expiry_rank(underlying, exchange, instrument_type, rank, api_key=None) -> ExpiryResult
+resolve_underlying_ltp(underlying, exchange, api_key=None) -> UnderlyingQuote
+resolve_leg(leg, underlying, underlying_exchange, strategy_type=None, *,
+            api_key=None, underlying_ltp=None) -> ResolvedLeg
+derivatives_exchange(exchange) -> str
+```
+
+Delegates every piece of market knowledge it can to
+`services/option_symbol_service.py`, including the rule that an MCX commodity
+option has no spot and takes its nearest futures contract as the underlying.
+
+Three things it refuses to guess:
+
+- A **lotsize of zero or less** is a hard failure, never a silent 1.
+- A **strike stays a float**. `VEDL25APR24292.5CE` is a real contract and
+  `int()` would round it into a different one.
+- The **monthly rank is read off the data** as the last expiry within its
+  calendar month, not off a weekday. NFO moved monthlies from Thursday to
+  Tuesday and MCX never had a weekday rule.
+
+Failures are values carrying a machine-readable `code`, not exceptions, so the
+engine can report which leg failed and why.
+
+**Pass `underlying_ltp` when resolving a basket**, or two legs of one spread can
+settle around different ATM strikes because the underlying moved between the two
+quotes. `start_run` already does this.
+
+## Startup
+
+```python
+from services.strategy_module.runtime import start_strategy_module, stop_strategy_module
+```
+
+One call from `app.py`. Nothing starts at import. The order closes a window at
+each step:
+
+1. **Order updates subscribe first**, so a fill arriving while recovery
+   reconciles order rows is applied rather than falling between the two.
+2. **Recovery**, before any price arrives.
+3. **The risk hook is registered, then subscriptions**, so there is no window in
+   which prices arrive and nothing judges them.
+4. **Checkpointing**, once there is state worth snapshotting.
+5. **The scheduler last**, because it can start new runs and must not do that
+   until recovery has decided what is already running.
+
+Every step is guarded independently. A platform that will not boot because its
+strategy scheduler failed is worse than one that boots without it.
+
+## HTTP surfaces
+
+**Session API** (`blueprints/strategy_module.py`, `url_prefix="/strategy"`):
+`/strategy/api/strategies` CRUD, lifecycle (`start`, `stop`, `close_all`,
+`legs/<leg_id>/close`), `webhook/rotate`, `live`, `kill_switch`,
+`unlock_webhook`, and the read-only views (`runs`, `orders`, `events`,
+`webhook_events`, `checkpoints`, `orderbook`, `tradebook`, `positions`).
+
+**API-key surface** (`restx_api/strategy.py`, nine POST routes under
+`/api/v1/strategy/`): `list`, `status`, `start`, `stop`, `close_all`,
+`close_leg`, `runs`, `orders`, `events`. Documented in
+`docs/api/strategy-services/`.
+
+Both enforce the same properties:
+
+- `mode` is required on start and has no default anywhere in the chain.
+- Live is opt-in per strategy.
+- A strategy that is not yours answers **404, never 403**, identical to one that
+  does not exist, so the id space cannot be probed.
+- No response carries a webhook token.
+- A PATCH re-validates the whole merged configuration, not just the changed
+  fields, so a two-field invariant cannot be broken one request at a time.
+
+## Defects deliberately not carried over
+
+Each is pinned by a test that says so.
+
+1. **Signal legs evaluated with an inverted sign.** The source never records a
+   side on a signal leg, and its evaluator treats anything that is not `"B"` as
+   a short, so those legs had their P&L, stop and target pointing the wrong way
+   and the stop fired on a favourable move.
+2. **A rule-driven exit on a short doubling the position.** The exit action came
+   from configuration that defaults to `"B"`, so it placed another SELL.
+3. **Run P&L summed from a stale per-leg field.** A leg whose `mtm` was never
+   refreshed poisoned the total every strategy-level rule is judged against.
+4. **Peak and trough persisted as zero** for any run closed by an overall stop,
+   a target, a lock-profit floor, the scheduler or the kill switch.
+5. **An intraday strategy with `exit_time` but no `auto_stop_time` never squared
+   off**, because no job was ever installed for it.
+6. **Checkpoints never pruned**, growing without bound in a worker that never
+   restarts.
+7. **Two disagreeing order-status normalisers.**
+
+## Not built yet
+
+- **SocketIO streaming.** The Live tab polls `/checkpoints` at 5 seconds while a
+  run is active. The seam is one hook, `useStrategyLive` in
+  `frontend/src/api/strategy_module.ts`, whose body can be swapped without
+  touching a page. It must go through `useSocketContext()`, never `io(...)`
+  directly: each Socket.IO connection holds an HTTP connection against the
+  browser's per-host limit, shared across tabs.
+- **The wizard's signal leg builder.** Signal mode can be driven over the
+  webhook and the API but not yet configured in the UI.
+- **`trigger_source` for API starts.** An API-key start records `manual`,
+  because the store's vocabulary has no `api` value, so the audit trail cannot
+  distinguish a browser start from an API one.
+- **Account-level RMS caps** across strategies, and a Flow `riskGuard` node on
+  the shared core.
+
+## Related documents
+
+- [`services_documentation.md`](services_documentation.md) - the general service layer
+- [`order-constants.md`](order-constants.md) - exchange, product, price-type and action codes
+- [`symbol-format.md`](symbol-format.md) - the symbol format every leg resolves to
+- [`websockets-format.md`](websockets-format.md) - the tick and order-update protocols
+- [`../api/strategy-services/`](../api/strategy-services/) - the public endpoint reference
