@@ -11,12 +11,13 @@ on the loop would test the sleep, not the write.
 """
 
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
 from database import strategy_module_db as store
-from services.strategy_module import checkpoint, recovery, state
+from services.strategy_module import checkpoint, order_events, recovery, state
 
 USER = "recovery_test_user"
 CE = "NIFTY28MAY2624000CE"
@@ -104,6 +105,7 @@ def _order(
     avg=None,
     filled_qty=None,
     position_ref=None,
+    broker_order_id=None,
 ):
     row = store.record_order(
         run_id,
@@ -120,8 +122,24 @@ def _order(
         },
     )
     assert row is not None
-    store.update_order(row.id, status=status, avg_fill_price=avg, filled_qty=filled_qty)
+    store.update_order(
+        row.id,
+        status=status,
+        broker_order_id=broker_order_id,
+        avg_fill_price=avg,
+        filled_qty=filled_qty,
+    )
     return row.id
+
+
+def _event(order_id, status="complete", avg=100.0, filled=None, rejection=""):
+    return SimpleNamespace(
+        orderid=order_id,
+        order_status=status,
+        average_price=avg,
+        filled_quantity=filled,
+        rejection_reason=rejection,
+    )
 
 
 def _cp_leg(leg_id=1, **overrides):
@@ -537,6 +555,496 @@ def test_an_exit_in_flight_comes_back_marked_so_it_is_not_sent_twice():
     assert leg["status"] == "open"
     assert leg["exit_order_id"] == exit_id
     assert leg["exit_kind"] == "exit_sl"
+
+
+@pytest.mark.parametrize("outgoing_status", ["open", "rejected"])
+def test_recovery_restores_live_and_superseded_flip_positions(outgoing_status):
+    sid = _strategy()
+    run_id = _run(sid)
+    old_entry = _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        status="complete",
+        avg=100.0,
+        position_ref="old-position",
+    )
+    old_exit = _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        status=outgoing_status,
+        position_ref="old-position",
+    )
+    new_entry = _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        status="complete",
+        avg=102.0,
+        position_ref="new-position",
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["position_ref"] == "new-position"
+    assert leg["position"] == "S"
+    assert leg["entry_order_id"] == new_entry
+    assert leg["entry_avg"] == pytest.approx(102.0)
+    assert leg["qty"] == 75
+    outgoing = leg["superseded"]
+    assert outgoing["position_ref"] == "old-position"
+    assert outgoing["position"] == "B"
+    assert outgoing["entry_order_id"] == old_entry
+    assert outgoing["entry_avg"] == pytest.approx(100.0)
+    assert outgoing["qty"] == 75
+    assert outgoing["exit_order_id"] == (old_exit if outgoing_status == "open" else None)
+    assert outgoing["exit_kind"] == ("exit_signal" if outgoing_status == "open" else None)
+
+
+def test_recovery_folds_every_exit_attempt_before_arming_the_newest_retry():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        filled_qty=75,
+        position_ref="old-position",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="cancelled",
+        avg=120.0,
+        filled_qty=25,
+        position_ref="old-position",
+    )
+    new_entry = _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        qty=75,
+        status="complete",
+        avg=102.0,
+        position_ref="new-position",
+    )
+    retry = _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=50,
+        status="open",
+        position_ref="old-position",
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["position_ref"] == "new-position"
+    assert leg["entry_order_id"] == new_entry
+    assert leg["realized_pnl"] == pytest.approx(500.0)
+    assert leg["superseded"]["qty"] == 50
+    assert leg["superseded"]["exit_order_id"] == retry
+    assert leg["superseded"]["exit_kind"] == "exit_signal"
+
+
+def test_recovery_applies_checkpoint_fields_only_to_the_matching_position_reference():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        status="complete",
+        avg=100.0,
+        position_ref="old-position",
+    )
+    old_exit = _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        status="open",
+        position_ref="old-position",
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        status="complete",
+        avg=102.0,
+        position_ref="new-position",
+    )
+    _checkpoint(
+        run_id,
+        {
+            "1": _cp_leg(
+                position="S",
+                position_ref="new-position",
+                entry_avg=999.0,
+                qty=1,
+                ltp=91.0,
+                effective_sl=122.0,
+                realized_pnl=321.0,
+                superseded={
+                    "position_ref": "old-position",
+                    "position": "B",
+                    "entry_order_id": -1,
+                    "entry_avg": 777.0,
+                    "qty": 1,
+                    "exit_order_id": old_exit,
+                    "exit_claim_token": "stale-claim",
+                    "exit_kind": "exit_signal",
+                },
+            )
+        },
+    )
+
+    assert recovery.recover_run(run_id).ok is True
+
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["entry_avg"] == pytest.approx(102.0)
+    assert leg["qty"] == 75
+    assert leg["ltp"] == pytest.approx(91.0)
+    assert leg["effective_sl"] == pytest.approx(122.0)
+    assert leg["realized_pnl"] == pytest.approx(321.0)
+    assert leg["superseded"]["entry_avg"] == pytest.approx(100.0)
+    assert leg["superseded"]["qty"] == 75
+    assert leg["superseded"]["exit_order_id"] == old_exit
+    assert leg["superseded"]["exit_claim_token"] is None
+
+
+def test_recovery_refuses_to_drop_a_third_held_position_reference():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        status="complete",
+        avg=100.0,
+        position_ref="one",
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        status="complete",
+        avg=101.0,
+        position_ref="two",
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        status="complete",
+        avg=102.0,
+        position_ref="three",
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is False
+    assert recovered.finalised is False
+    assert "more than two" in (recovered.error or "").lower()
+    assert store.get_run(run_id).stopped_at is None
+    strategy = store.get_strategy(sid, USER)
+    assert strategy.status == "running"
+    assert strategy.current_run_id == run_id
+    assert state.get_run_state(run_id) is None
+    failures = [event for event in store.list_events(sid) if event["kind"] == "recovery_failed"]
+    assert failures
+    assert failures[0]["severity"] == "critical"
+    assert "manual" in failures[0]["message"].lower()
+
+
+def test_mixed_legacy_and_referenced_positions_recover_without_cross_pairing():
+    sid = _strategy()
+    run_id = _run(sid)
+    old_entry = _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        status="complete",
+        avg=100.0,
+        position_ref=None,
+    )
+    new_entry = _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        status="complete",
+        avg=102.0,
+        position_ref="new-position",
+    )
+
+    assert recovery.recover_run(run_id).ok is True
+
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["position_ref"] == "new-position"
+    assert leg["entry_order_id"] == new_entry
+    assert leg["superseded"]["position_ref"] is None
+    assert leg["superseded"]["entry_order_id"] == old_entry
+    assert leg["superseded"]["position"] == "B"
+
+
+def test_mixed_legacy_exit_without_a_legacy_entry_remains_managed_for_reconciliation():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        status="complete",
+        avg=100.0,
+        position_ref="referenced-position",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        status="rejected",
+        position_ref=None,
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is False
+    assert recovered.finalised is False
+    assert "ambiguous" in (recovered.error or "").lower()
+    assert store.get_run(run_id).stopped_at is None
+    assert store.get_strategy(sid, USER).current_run_id == run_id
+    assert state.get_run_state(run_id) is None
+
+
+def test_overlapping_referenced_positions_on_different_instruments_are_not_cross_managed():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        symbol=CE,
+        status="complete",
+        avg=100.0,
+        position_ref="old-position",
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        symbol=PE,
+        status="complete",
+        avg=102.0,
+        position_ref="new-position",
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is False
+    assert recovered.finalised is False
+    assert "different instruments" in (recovered.error or "").lower()
+    assert store.get_run(run_id).stopped_at is None
+    assert state.get_run_state(run_id) is None
+
+
+def test_rejected_replacement_entry_restores_the_outgoing_owner_as_live_with_risk_config():
+    sid = _strategy()
+    run_id = _run(sid)
+    old_entry = _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        status="complete",
+        avg=100.0,
+        position_ref="old-position",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        status="rejected",
+        position_ref="old-position",
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        status="rejected",
+        filled_qty=0,
+        position_ref="new-position",
+    )
+    _checkpoint(
+        run_id,
+        {
+            "1": _cp_leg(
+                position="S",
+                position_ref="new-position",
+                status="rejected",
+                superseded={
+                    "position_ref": "old-position",
+                    "position": "B",
+                    "entry_order_id": old_entry,
+                    "entry_avg": 100.0,
+                    "qty": 75,
+                    "exit_order_id": None,
+                    "exit_claim_token": None,
+                },
+            )
+        },
+    )
+
+    assert recovery.recover_run(run_id).ok is True
+
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["position_ref"] == "old-position"
+    assert leg["entry_order_id"] == old_entry
+    assert leg["position"] == "B"
+    assert leg["status"] == "open"
+    assert leg["superseded"] is None
+    assert leg["sl_pts"] == pytest.approx(20.0)
+
+
+def test_post_recovery_fill_settles_only_the_exact_superseded_owner():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=25,
+        status="complete",
+        avg=100.0,
+        position_ref="old-position",
+    )
+    old_exit = _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=25,
+        status="open",
+        position_ref="old-position",
+        broker_order_id="OLD-EXIT",
+    )
+    new_entry = _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        qty=25,
+        status="complete",
+        avg=102.0,
+        position_ref="new-position",
+    )
+    assert recovery.recover_run(run_id).ok is True
+
+    order_events._apply_update(
+        "OLD-EXIT",
+        _event("OLD-EXIT", status="complete", avg=110.0, filled=25),
+    )
+
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["position_ref"] == "new-position"
+    assert leg["entry_order_id"] == new_entry
+    assert leg["status"] == "open"
+    assert leg["qty"] == 25
+    assert leg["superseded"] is None
+    assert leg["realized_pnl"] == pytest.approx(250.0)
+    persisted_exit = next(row for row in store.list_orders(run_id) if row["id"] == old_exit)
+    assert persisted_exit["status"] == "complete"
+
+
+def test_post_recovery_rejection_releases_the_exact_superseded_owner_for_retry():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        status="complete",
+        avg=100.0,
+        position_ref="old-position",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        status="open",
+        position_ref="old-position",
+        broker_order_id="OLD-EXIT",
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        status="complete",
+        avg=102.0,
+        position_ref="new-position",
+    )
+    assert recovery.recover_run(run_id).ok is True
+
+    order_events._apply_update(
+        "OLD-EXIT",
+        _event("OLD-EXIT", status="rejected", avg=0.0, filled=0, rejection="no"),
+    )
+
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["position_ref"] == "new-position"
+    assert leg["exit_order_id"] is None
+    assert leg["superseded"]["exit_order_id"] is None
+    assert leg["superseded"]["exit_kind"] is None
+    retry = state.claim_superseded_exit(run_id, 1, "B")
+    assert retry is not None
+    assert retry["position_ref"] == "old-position"
+    assert retry["quantity"] == 75
+
+
+def test_reference_group_pnl_overrides_a_stale_nonzero_checkpoint_when_recovery_is_flat():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref="settled-position",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="complete",
+        avg=110.0,
+        position_ref="settled-position",
+    )
+    _checkpoint(
+        run_id,
+        {
+            "1": _cp_leg(
+                position="B",
+                position_ref="settled-position",
+                status="closed",
+                exit_avg=110.0,
+                realized_pnl=25.0,
+            )
+        },
+        pnl_realized=25.0,
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.finalised is True
+    assert float(store.get_run(run_id).pnl_realized) == pytest.approx(750.0)
 
 
 def test_a_run_whose_every_leg_has_closed_is_finished_rather_than_left_running():

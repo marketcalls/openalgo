@@ -441,6 +441,7 @@ def test_reentrant_opposite_entries_share_one_atomic_flip_claim(
     assert len(entries) == 2
     assert live["position_ref"] == entries[-1]["position_ref"]
     assert live["superseded"]["position_ref"] == original_entry["position_ref"]
+    assert live["superseded"]["exit_kind"] == "exit_signal"
 
 
 def test_rejected_replacement_cannot_hide_and_duplicate_the_superseded_position(

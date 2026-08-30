@@ -41,11 +41,13 @@ the risk core, which silently inverts its P&L, its stop and its target. A leg
 whose side cannot be established from either source fails the run rather than
 being guessed at.
 
-**One bad run cannot wedge the boot.** A run that cannot be rebuilt is closed
-with ``stop_reason="recovery_failed"`` and a critical event, so the operator is
-told and the next start is not blocked. That deliberately abandons a position
-that may still be open at the broker: saying so loudly is recoverable, and
-refusing to boot is not.
+**One bad run cannot wedge the boot.** A run whose rows are malformed beyond
+reconstruction is closed with ``stop_reason="recovery_failed"`` and a critical
+event, so the operator is told and the next start is not blocked. A run whose
+rows prove exposure but cannot fit the live-plus-superseded state is different:
+it stays open and reserved, emits a critical reconciliation event, and is not
+installed in memory. Closing that run would falsely assert that the broker is
+flat and make the strategy reusable over unmanaged exposure.
 
 Nothing here imports the tick feed. :func:`recover_all` returns the
 ``(symbol, exchange)`` pairs each recovered run still needs prices for, and the
@@ -239,6 +241,10 @@ class RecoveredRun:
     error: str | None = None
 
 
+class _ManagedRecoveryError(RuntimeError):
+    """Persisted exposure exists but cannot be represented safely in memory."""
+
+
 # ---------------------------------------------------------------------------
 # Entry points
 # ---------------------------------------------------------------------------
@@ -301,6 +307,23 @@ def recover_run(run_id: int) -> RecoveredRun:
     """
     try:
         return _recover_run(run_id)
+    except _ManagedRecoveryError as exc:
+        logger.exception("Run %s needs manual recovery reconciliation", run_id)
+        strategy_id = _strategy_id_for(run_id)
+        _record_event(
+            strategy_id,
+            "recovery_failed",
+            f"Run {run_id} remains open for manual reconciliation: {exc}",
+            run_id=run_id,
+            severity="critical",
+        )
+        return RecoveredRun(
+            run_id=run_id,
+            strategy_id=strategy_id,
+            ok=False,
+            finalised=False,
+            error=str(exc),
+        )
     except Exception as exc:
         logger.exception("Could not recover run %s", run_id)
         strategy_id = _strategy_id_for(run_id)
@@ -467,12 +490,24 @@ def _rebuild_state(
         legs[str(leg["leg_id"])] = leg
 
     lock_floor = _float(checkpoint.get("lock_floor"))
+    checkpoint_realized = _float(checkpoint.get("pnl_realized"), 0.0) or 0.0
+    has_referenced_orders = any(order.get("position_ref") is not None for order in orders)
+    pnl_realized = (
+        sum(_float(leg.get("realized_pnl"), 0.0) or 0.0 for leg in legs.values())
+        if has_referenced_orders
+        else checkpoint_realized
+    )
+    pnl_unrealized = _float(checkpoint.get("pnl_unrealized"), 0.0) or 0.0
     return {
         "run_id": run_id,
         "strategy_id": strategy_id,
-        "pnl_realized": _float(checkpoint.get("pnl_realized"), 0.0) or 0.0,
-        "pnl_unrealized": _float(checkpoint.get("pnl_unrealized"), 0.0) or 0.0,
-        "pnl_total": _float(checkpoint.get("pnl_total"), 0.0) or 0.0,
+        "pnl_realized": pnl_realized,
+        "pnl_unrealized": pnl_unrealized,
+        "pnl_total": (
+            pnl_realized + pnl_unrealized
+            if has_referenced_orders
+            else (_float(checkpoint.get("pnl_total"), 0.0) or 0.0)
+        ),
         "pnl_peak": _float(checkpoint.get("pnl_peak"), 0.0) or 0.0,
         "pnl_trough": _float(checkpoint.get("pnl_trough"), 0.0) or 0.0,
         # The checkpoint table has no lock_armed column, so it is inferred: a
@@ -490,6 +525,15 @@ def _rebuild_state(
     }
 
 
+@dataclass(slots=True)
+class _PositionRecovery:
+    """One position incarnation folded from its exact durable order group."""
+
+    rank: int
+    leg: dict[str, Any]
+    has_durable_realized: bool = False
+
+
 def _rebuild_leg(
     key: str,
     entries: list[dict[str, Any]],
@@ -497,7 +541,270 @@ def _rebuild_leg(
     cp_leg: dict[str, Any],
     config_leg: dict[str, Any],
 ) -> dict[str, Any]:
-    """One leg's state, from its orders, its checkpoint and its configuration."""
+    """One leg, using exact position groups when durable references exist."""
+    all_orders = sorted([*entries, *exits], key=_order_rank)
+    referenced = [order for order in all_orders if order.get("position_ref") is not None]
+    if not referenced:
+        return _rebuild_legacy_leg(key, entries, exits, cp_leg, config_leg)
+
+    by_ref: dict[str, list[dict[str, Any]]] = {}
+    for order in referenced:
+        ref = str(order.get("position_ref"))
+        if not ref:
+            raise _ManagedRecoveryError(
+                f"Leg {key} has an empty position reference and needs manual reconciliation"
+            )
+        by_ref.setdefault(ref, []).append(order)
+
+    positions: list[_PositionRecovery] = []
+    for position_ref, group in by_ref.items():
+        group_entries = [order for order in group if order.get("kind") == "entry"]
+        if not group_entries:
+            raise _ManagedRecoveryError(
+                f"Leg {key} has referenced exits for {position_ref} without its exact entry; "
+                "ownership is ambiguous"
+            )
+        group_exits = [order for order in group if order.get("kind") != "entry"]
+        positions.append(
+            _rebuild_referenced_position(
+                key,
+                position_ref,
+                group_entries,
+                group_exits,
+                _checkpoint_for_position(cp_leg, position_ref),
+                config_leg,
+            )
+        )
+
+    legacy_entries = [order for order in entries if order.get("position_ref") is None]
+    legacy_exits = [order for order in exits if order.get("position_ref") is None]
+    if legacy_exits and not legacy_entries:
+        raise _ManagedRecoveryError(
+            f"Leg {key} mixes referenced entries with legacy exits that have no legacy entry; "
+            "exit ownership is ambiguous"
+        )
+    if legacy_entries:
+        legacy_leg = _rebuild_legacy_leg(
+            key,
+            legacy_entries,
+            legacy_exits,
+            _checkpoint_for_position(cp_leg, None),
+            config_leg,
+        )
+        positions.append(
+            _PositionRecovery(
+                rank=max(_order_rank(order) for order in legacy_entries),
+                leg=legacy_leg,
+                has_durable_realized=bool(legacy_leg.get("realized_pnl")),
+            )
+        )
+
+    positions.sort(key=lambda recovered: recovered.rank)
+    managed = [recovered for recovered in positions if _position_requires_management(recovered.leg)]
+    if len(managed) > 2:
+        raise _ManagedRecoveryError(
+            f"Leg {key} has more than two held position references; "
+            "the run cannot be represented safely"
+        )
+
+    if managed:
+        live = managed[-1].leg
+        if len(managed) == 2:
+            outgoing = managed[-2].leg
+            if outgoing.get("status") != "open":
+                raise _ManagedRecoveryError(
+                    f"Leg {key} has an ambiguous older working entry that cannot be represented "
+                    "as a held superseded position"
+                )
+            if (outgoing.get("symbol"), outgoing.get("exchange")) != (
+                live.get("symbol"),
+                live.get("exchange"),
+            ):
+                raise _ManagedRecoveryError(
+                    f"Leg {key} has overlapping positions on different instruments; "
+                    "one superseded leg cannot manage both safely"
+                )
+            live["superseded"] = _as_superseded(outgoing)
+    else:
+        # Retain the newest terminal incarnation so ordinary flat-run recovery
+        # can finalise with its exact position and realized result.
+        live = positions[-1].leg
+
+    durable_realized = sum(float(position.leg.get("realized_pnl") or 0.0) for position in positions)
+    if any(position.has_durable_realized for position in positions):
+        live["realized_pnl"] = durable_realized
+    else:
+        checkpoint_realized = _float(cp_leg.get("realized_pnl"), 0.0) or 0.0
+        live["realized_pnl"] = checkpoint_realized
+    return live
+
+
+def _rebuild_referenced_position(
+    key: str,
+    position_ref: str,
+    entries: list[dict[str, Any]],
+    exits: list[dict[str, Any]],
+    cp_leg: dict[str, Any],
+    config_leg: dict[str, Any],
+) -> _PositionRecovery:
+    """Fold every entry/exit attempt belonging to one exact position owner."""
+    entry = _decisive(entries)
+    if entry is None:
+        raise _ManagedRecoveryError(
+            f"Leg {key} position {position_ref} has no entry to establish ownership"
+        )
+
+    # Reuse the established identity/risk reconstruction, then replace its
+    # single-decisive-exit disposition with the cumulative owner-local fold.
+    leg = _rebuild_legacy_leg(key, entries, exits, cp_leg, config_leg)
+    entry_status = normalise_order_status(entry.get("status"))
+    reported_entry_qty = _positive_whole(entry.get("filled_qty"))
+    entry_filled = bool(
+        reported_entry_qty is not None
+        or order_is_filled(entry.get("status"))
+        or (not order_is_dead(entry.get("status")) and _checkpoint_says_entry_filled(cp_leg))
+    )
+    entry_qty = int(entry.get("qty") or 0)
+    if reported_entry_qty is not None:
+        entry_qty = min(entry_qty or reported_entry_qty, reported_entry_qty)
+    entry_qty = max(0, entry_qty)
+
+    entry_avg = 0.0
+    if entry_filled:
+        entry_avg = (
+            _float(entry.get("avg_fill_price"))
+            or _float(cp_leg.get("entry_avg"))
+            or _float(entry.get("price"), 0.0)
+            or 0.0
+        )
+
+    remaining = entry_qty if entry_filled else 0
+    realized = 0.0
+    has_durable_realized = False
+    last_exit_avg: float | None = None
+    working: list[dict[str, Any]] = []
+    for exit_order in sorted(exits, key=_order_rank):
+        status = exit_order.get("status")
+        reported = _positive_whole(exit_order.get("filled_qty"))
+        if reported is not None:
+            applied = min(remaining, reported)
+        elif order_is_filled(status):
+            requested = _positive_whole(exit_order.get("qty")) or remaining
+            applied = min(remaining, requested)
+        elif order_is_working(status) and _checkpoint_says_exit_filled(cp_leg):
+            requested = _positive_whole(exit_order.get("qty")) or remaining
+            applied = min(remaining, requested)
+        else:
+            applied = 0
+
+        exit_price = _usable_fill_price(exit_order.get("avg_fill_price"))
+        if exit_price is None and applied:
+            exit_price = _usable_fill_price(exit_order.get("price"))
+        if applied:
+            remaining -= applied
+            last_exit_avg = exit_price or last_exit_avg
+            if entry_avg > 0.0 and exit_price is not None:
+                sign = 1.0 if leg.get("position") == "B" else -1.0
+                realized += (exit_price - entry_avg) * applied * sign
+                has_durable_realized = True
+
+        if order_is_working(status) and remaining > 0:
+            working.append(exit_order)
+
+    if len(working) > 1:
+        raise _ManagedRecoveryError(
+            f"Leg {key} position {position_ref} has multiple working exits; ownership is ambiguous"
+        )
+
+    if entry_filled and remaining > 0:
+        status = "open"
+        leg["qty"] = remaining
+        leg["entry_status"] = "complete"
+    elif entry_filled:
+        status = "closed"
+        leg["qty"] = entry_qty
+        leg["entry_status"] = "complete"
+    elif order_is_dead(entry_status):
+        status = "rejected"
+        leg["entry_status"] = entry_status
+    else:
+        status = "configured"
+        leg["entry_status"] = entry_status
+
+    active_exit = working[-1] if working else None
+    leg.update(
+        {
+            "position_ref": position_ref,
+            "entry_order_id": entry["id"],
+            "entry_avg": entry_avg,
+            "exit_order_id": active_exit["id"] if active_exit else None,
+            "exit_claim_token": None,
+            "exit_kind": active_exit.get("kind") if active_exit else None,
+            "exit_avg": last_exit_avg,
+            "realized_pnl": realized,
+            "status": status,
+            "mtm": 0.0 if status == "closed" else (_float(cp_leg.get("mtm"), 0.0) or 0.0),
+            "superseded": None,
+        }
+    )
+    return _PositionRecovery(
+        # Position chronology is the entry chronology. A retry exit for the
+        # outgoing side is expected to be newer than the replacement entry;
+        # letting that retry rank the owner would swap live and superseded on
+        # every restart even though the broker positions did not change.
+        rank=max(_order_rank(order) for order in entries),
+        leg=leg,
+        has_durable_realized=has_durable_realized,
+    )
+
+
+def _checkpoint_for_position(cp_leg: dict[str, Any], position_ref: str | None) -> dict[str, Any]:
+    """Checkpoint fields only when they name the exact position incarnation."""
+    if not cp_leg:
+        return {}
+    if cp_leg.get("position_ref") == position_ref:
+        return cp_leg
+    superseded = cp_leg.get("superseded") or {}
+    if superseded.get("position_ref") == position_ref:
+        return superseded
+    return {}
+
+
+def _position_requires_management(leg: dict[str, Any]) -> bool:
+    """Whether one recovered incarnation is held or may still become held."""
+    return leg.get("status") == "open" or leg.get("entry_status") in ("pending", "open")
+
+
+def _as_superseded(leg: dict[str, Any]) -> dict[str, Any]:
+    """Reduce one held recovered incarnation to the runtime outgoing shape."""
+    return {
+        "exit_order_id": leg.get("exit_order_id"),
+        "exit_claim_token": None,
+        "exit_kind": leg.get("exit_kind"),
+        "entry_order_id": leg.get("entry_order_id"),
+        "position_ref": leg.get("position_ref"),
+        "position": leg.get("position"),
+        "entry_avg": leg.get("entry_avg"),
+        "qty": leg.get("qty"),
+    }
+
+
+def _order_rank(order: dict[str, Any]) -> int:
+    """Stable durable order chronology for selecting position incarnations."""
+    try:
+        return int(order.get("id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _rebuild_legacy_leg(
+    key: str,
+    entries: list[dict[str, Any]],
+    exits: list[dict[str, Any]],
+    cp_leg: dict[str, Any],
+    config_leg: dict[str, Any],
+) -> dict[str, Any]:
+    """One legacy NULL-reference leg using the established decisive heuristic."""
     entry = _decisive(entries)
     exit_order = _decisive(exits)
     identity = entry or exit_order
@@ -741,21 +1048,18 @@ def _risk_params(
     first checkpoint has to fall back on. Without these a recovered leg has no
     stop to re-derive on the next tick.
     """
-    if cp_leg:
-        return (
-            _float(cp_leg.get("sl_pts")),
-            _float(cp_leg.get("target_pts")),
-            _float(cp_leg.get("trail_x"), 0.0) or 0.0,
-            _float(cp_leg.get("trail_y"), 0.0) or 0.0,
-            int(_float(cp_leg.get("lots"), 1.0) or 1),
-        )
     trail = config_leg.get("trail") or {}
+    config_sl = _float(config_leg.get("sl_pts"))
+    config_target = _float(config_leg.get("target_pts"))
+    config_trail_x = _float(trail.get("x"), 0.0) or 0.0
+    config_trail_y = _float(trail.get("y"), 0.0) or 0.0
+    config_lots = int(_float(config_leg.get("lots"), 1.0) or 1)
     return (
-        _float(config_leg.get("sl_pts")),
-        _float(config_leg.get("target_pts")),
-        _float(trail.get("x"), 0.0) or 0.0,
-        _float(trail.get("y"), 0.0) or 0.0,
-        int(_float(config_leg.get("lots"), 1.0) or 1),
+        _float(cp_leg.get("sl_pts"), config_sl),
+        _float(cp_leg.get("target_pts"), config_target),
+        _float(cp_leg.get("trail_x"), config_trail_x) or 0.0,
+        _float(cp_leg.get("trail_y"), config_trail_y) or 0.0,
+        int(_float(cp_leg.get("lots"), float(config_lots)) or config_lots),
     )
 
 
@@ -795,7 +1099,10 @@ def _final_pnl(checkpoint: dict[str, Any], rebuilt: dict[str, Any]) -> dict[str,
     checkpointing, so a zero there is re-derived from the legs themselves.
     """
     final = dict(checkpoint)
-    if not _float(final.get("pnl_realized"), 0.0):
+    rebuilt_realized = _float(rebuilt.get("pnl_realized"), 0.0) or 0.0
+    if rebuilt_realized:
+        final["pnl_realized"] = rebuilt_realized
+    elif not _float(final.get("pnl_realized"), 0.0):
         final["pnl_realized"] = sum(
             _float(leg.get("realized_pnl"), 0.0) or 0.0 for leg in rebuilt["legs"].values()
         )

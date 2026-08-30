@@ -394,6 +394,7 @@ def release_superseded_exit(run_id: int, leg_id: Any, exit_order_id: Any) -> boo
             return False
         superseded["exit_order_id"] = None
         superseded["exit_claim_token"] = None
+        superseded["exit_kind"] = None
         return True
 
 
@@ -420,6 +421,7 @@ def release_order_exit(
         ):
             superseded["exit_order_id"] = None
             superseded["exit_claim_token"] = None
+            superseded["exit_kind"] = None
             return "superseded"
         if leg.get("exit_order_id") == exit_order_id and (
             position_ref is None or leg.get("position_ref") == position_ref
@@ -636,6 +638,7 @@ def add_leg(
                 leg_state["superseded"] = {
                     "exit_order_id": previous.get("exit_order_id"),
                     "exit_claim_token": previous.get("exit_claim_token"),
+                    "exit_kind": previous.get("exit_kind"),
                     "entry_order_id": previous.get("entry_order_id"),
                     "position_ref": previous.get("position_ref"),
                     "position": previous.get("position"),
