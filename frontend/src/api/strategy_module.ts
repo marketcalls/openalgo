@@ -12,6 +12,8 @@
 // repeats the envelope.
 
 import { useQueries, useQuery } from '@tanstack/react-query'
+import { normalizeExpiryCode } from '@/lib/strategyContracts'
+import { useAuthStore } from '@/stores/authStore'
 import type {
   Checkpoint,
   LegState,
@@ -26,7 +28,9 @@ import type {
   StrategyUpdatePayload,
   WebhookEvent,
 } from '@/types/strategy_module'
-import { webClient } from './client'
+import { derivativeExchangeFor, type ExpiryRank, resolveExpiryRank } from '@/types/strategy_module'
+import { apiClient, webClient } from './client'
+import { optionChainApi } from './option-chain'
 
 const BASE = '/strategy/api'
 
@@ -604,4 +608,267 @@ export function deriveTrades(orders: Order[]): DerivedTrade[] {
       }
     })
     .sort((a, b) => b.filled_at.localeCompare(a.filled_at))
+}
+
+// ---------------------------------------------------------------------------
+// Contract resolution
+//
+// A leg stores an expiry rank, and when its strike is named directly it stores
+// a number. Neither can be checked without asking the platform what is actually
+// listed, so the wizard resolves both against the endpoints the option chain
+// and the strategy builder already use: POST /api/v1/expiry for the dates and
+// POST /api/v1/optionchain for the strikes. Both are /api/v1 routes carrying
+// the user's API key in the body, which is why they go through `apiClient` and
+// `optionChainApi` rather than the session-cookie `webClient` above.
+//
+// The two endpoints disagree about which exchange they are keyed on, and both
+// are right: expiries live on the derivative exchange (NIFTY's options are in
+// NFO), while the chain is keyed on the underlying's own exchange (NSE_INDEX).
+// `derivativeExchangeFor` is the only place that difference is spelled out.
+//
+// Every hook here reports a failure instead of an empty list. "Nothing is
+// listed" and "the master contract was never downloaded" look identical in an
+// empty dropdown, and only one of them is something the user can fix.
+// ---------------------------------------------------------------------------
+
+/**
+ * Strikes either side of ATM to request.
+ *
+ * 100 is the endpoint's maximum and yields around 201 strikes, which covers
+ * every offset the wizard can name with room to spare. Omitting the field
+ * returns the entire chain, which on a liquid index is far more than a picker
+ * needs to show.
+ */
+const STRIKE_COUNT = 100
+
+const SEARCH_MIN_LENGTH = 2
+const SEARCH_RESULT_LIMIT = 25
+
+export const contractQueryKeys = {
+  all: ['strategy-module', 'contracts'] as const,
+  expiries: (symbol: string, exchange: string, instrument: string) =>
+    [...contractQueryKeys.all, 'expiries', symbol, exchange, instrument] as const,
+  strikes: (underlying: string, exchange: string, expiry: string) =>
+    [...contractQueryKeys.all, 'strikes', underlying, exchange, expiry] as const,
+  search: (query: string, exchange: string) =>
+    [...contractQueryKeys.all, 'search', exchange, query] as const,
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  const message = (error as { message?: string } | null)?.message
+  return message?.trim() ? message : fallback
+}
+
+export interface ExpiryResolution {
+  /** Listed expiries as the platform returned them: `DD-MMM-YY`, ascending. */
+  expiries: string[]
+  /** The contract a rank names, or null when the list cannot answer. */
+  resolve: (rank: ExpiryRank) => string | null
+  isLoading: boolean
+  error: string | null
+}
+
+/**
+ * The listed expiries for an underlying, and a resolver from rank to date.
+ *
+ * Cached for five minutes: the expiry list changes when the master contract is
+ * refreshed, which is a daily event, not a per-keystroke one.
+ */
+export function useExpiryResolution(
+  symbol: string,
+  underlyingExchange: string,
+  instrument: 'options' | 'futures',
+  enabled = true
+): ExpiryResolution {
+  const { apiKey } = useAuthStore()
+  const exchange = derivativeExchangeFor(underlyingExchange)
+  const active = enabled && Boolean(apiKey) && Boolean(symbol)
+
+  const query = useQuery({
+    queryKey: contractQueryKeys.expiries(symbol, exchange, instrument),
+    queryFn: async () => {
+      const response = await optionChainApi.getExpiries(
+        apiKey as string,
+        symbol,
+        exchange,
+        instrument
+      )
+      if (response.status !== 'success') {
+        throw new Error(
+          response.message || `No ${instrument} expiries are listed for ${symbol} on ${exchange}.`
+        )
+      }
+      return response.data ?? []
+    },
+    enabled: active,
+    staleTime: 5 * 60_000,
+    retry: false,
+  })
+
+  const expiries = query.data ?? []
+  return {
+    expiries,
+    resolve: (rank: ExpiryRank) => resolveExpiryRank(rank, expiries),
+    isLoading: active && query.isLoading,
+    error: query.isError
+      ? errorMessage(
+          query.error,
+          'Could not load expiries. The master contract may not be downloaded.'
+        )
+      : null,
+  }
+}
+
+export interface OptionStrikes {
+  /** Listed strikes for the expiry, ascending. */
+  strikes: number[]
+  atmStrike: number | null
+  /** The expiry the platform resolved the request to. */
+  resolvedExpiry: string | null
+  exchange: string
+  isLoading: boolean
+  error: string | null
+}
+
+/**
+ * The strikes listed for one underlying and expiry.
+ *
+ * `expiryDate` is a `DD-MMM-YY` date, already resolved from the leg's rank.
+ * The chain endpoint wants it without separators, and `normalizeExpiryCode` is
+ * the conversion the rest of the app already uses.
+ */
+export function useOptionStrikes(
+  underlying: string,
+  underlyingExchange: string,
+  expiryDate: string | null,
+  enabled = true
+): OptionStrikes {
+  const { apiKey } = useAuthStore()
+  const active = enabled && Boolean(apiKey) && Boolean(underlying) && Boolean(expiryDate)
+
+  const query = useQuery({
+    queryKey: contractQueryKeys.strikes(underlying, underlyingExchange, expiryDate ?? ''),
+    queryFn: async () => {
+      const response = await optionChainApi.getOptionChain(
+        apiKey as string,
+        underlying,
+        underlyingExchange,
+        normalizeExpiryCode(expiryDate as string),
+        STRIKE_COUNT
+      )
+      if (response.status !== 'success') {
+        throw new Error(response.message || 'The option chain came back empty.')
+      }
+      return response
+    },
+    enabled: active,
+    staleTime: 60_000,
+    retry: false,
+  })
+
+  const chain = query.data?.chain ?? []
+  return {
+    strikes: Array.from(new Set(chain.map((row) => row.strike)))
+      .filter((strike) => Number.isFinite(strike))
+      .sort((a, b) => a - b),
+    atmStrike: query.data?.atm_strike ?? null,
+    resolvedExpiry: query.data?.expiry_date ?? null,
+    exchange: query.data?.underlying_exchange || underlyingExchange,
+    isLoading: active && query.isLoading,
+    error: query.isError
+      ? errorMessage(query.error, 'Failed to load strikes. Master contract may not be downloaded.')
+      : null,
+  }
+}
+
+interface SearchRow {
+  symbol: string
+  name: string
+  exchange: string
+  instrumenttype: string
+}
+
+export interface UnderlyingSearchResult {
+  /** The base an underlying is named by: RELIANCE, CRUDEOIL. */
+  symbol: string
+  /** Which instrument types the search saw for it, e.g. "CE, FUT, PE". */
+  instruments: string
+}
+
+export interface UnderlyingSearch {
+  results: UnderlyingSearchResult[]
+  isLoading: boolean
+  error: string | null
+}
+
+/**
+ * Underlyings matching a typed query.
+ *
+ * Searched on the derivative exchange rather than the cash one, so what comes
+ * back is underlyings that actually have contracts to trade: a stock with no
+ * F&O cannot carry an options leg, and offering it would only produce a
+ * strategy that fails to resolve when it starts.
+ *
+ * Search rows are contracts, so they are collapsed onto their `name` - one row
+ * per underlying, carrying the instrument types seen for it.
+ */
+export function useUnderlyingSearch(
+  term: string,
+  searchExchange: string,
+  enabled = true
+): UnderlyingSearch {
+  const { apiKey } = useAuthStore()
+  const trimmed = term.trim()
+  const active = enabled && Boolean(apiKey) && trimmed.length >= SEARCH_MIN_LENGTH
+
+  const query = useQuery({
+    queryKey: contractQueryKeys.search(trimmed.toUpperCase(), searchExchange),
+    queryFn: async () => {
+      const response = await apiClient.post<{
+        status: 'success' | 'error'
+        message?: string
+        data?: SearchRow[]
+      }>('/search', { apikey: apiKey, query: trimmed, exchange: searchExchange })
+      if (response.data.status !== 'success') {
+        throw new Error(response.data.message || 'Search failed.')
+      }
+      return response.data.data ?? []
+    },
+    enabled: active,
+    staleTime: 5 * 60_000,
+    retry: false,
+  })
+
+  return {
+    results: collapseToUnderlyings(query.data ?? [], trimmed),
+    isLoading: active && query.isLoading,
+    error: query.isError
+      ? errorMessage(query.error, 'Search failed. The master contract may not be downloaded.')
+      : null,
+  }
+}
+
+/** Contract rows reduced to the underlyings behind them, best match first. */
+export function collapseToUnderlyings(rows: SearchRow[], term: string): UnderlyingSearchResult[] {
+  const byName = new Map<string, Set<string>>()
+  for (const row of rows) {
+    const base = (row.name || row.symbol || '').trim().toUpperCase()
+    if (!base) continue
+    const kinds = byName.get(base) ?? new Set<string>()
+    if (row.instrumenttype) kinds.add(row.instrumenttype.toUpperCase())
+    byName.set(base, kinds)
+  }
+
+  const needle = term.trim().toUpperCase()
+  const rank = (symbol: string) => (symbol === needle ? 0 : symbol.startsWith(needle) ? 1 : 2)
+
+  return Array.from(byName.entries())
+    .map(([symbol, kinds]) => ({ symbol, instruments: Array.from(kinds).sort().join(', ') }))
+    .sort((a, b) => {
+      // Exact match, then prefix match, then alphabetical. Typing RELIANCE
+      // should not put RELIANCEPP above RELIANCE.
+      const byRank = rank(a.symbol) - rank(b.symbol)
+      return byRank !== 0 ? byRank : a.symbol.localeCompare(b.symbol)
+    })
+    .slice(0, SEARCH_RESULT_LIMIT)
 }

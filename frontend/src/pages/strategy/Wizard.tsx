@@ -6,7 +6,14 @@
 import { useMutation } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { createStrategy, updateStrategy } from '@/api/strategy_module'
+import {
+  createStrategy,
+  type ExpiryResolution,
+  updateStrategy,
+  useExpiryResolution,
+  useOptionStrikes,
+  useUnderlyingSearch,
+} from '@/api/strategy_module'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -26,9 +33,11 @@ import {
   ATM_OFFSETS,
   allowedProductsForLegs,
   defaultProductForLegs,
+  derivativeExchangeFor,
   EXPIRY_RANK_LABELS,
   type ExpiryRank,
   expiriesFor,
+  filterStrikes,
   type Leg,
   type LegPosition,
   type LockProfitMode,
@@ -65,6 +74,16 @@ const SELECT_CLASS_MD = 'flex h-10 w-full rounded-md border border-input bg-back
 /** A tab the wizard knows, or the default when a stored value is unfamiliar. */
 function asTab(value: string | undefined): UniverseTab {
   return UNIVERSE_TABS.includes(value as UniverseTab) ? (value as UniverseTab) : 'weekly_monthly'
+}
+
+/** A value that settles before it is used, so typing does not fan out a request per keystroke. */
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [settled, setSettled] = useState(value)
+  useEffect(() => {
+    const handle = setTimeout(() => setSettled(value), delayMs)
+    return () => clearTimeout(handle)
+  }, [value, delayMs])
+  return settled
 }
 
 function freshLeg(id: number, tab: UniverseTab): Leg {
@@ -114,19 +133,154 @@ function legToPayload(leg: Leg): Leg {
 }
 
 // ---------------------------------------------------------------------------
+// Strike picker
+// ---------------------------------------------------------------------------
+
+interface StrikePickerProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  underlying: string
+  underlyingExchange: string
+  expiryRank: ExpiryRank
+  /** The date the rank resolved to, or null when it could not be resolved. */
+  resolvedExpiry: string | null
+  optionType: OptionType
+  selectedStrike: number | null
+  onPick: (strike: number) => void
+}
+
+/**
+ * Pick a strike from what is actually listed.
+ *
+ * A typed strike is a strike that may not exist: the leg saves, and the failure
+ * surfaces at start when the engine cannot resolve a contract. Choosing from
+ * the chain means the number in the field is one the exchange lists for that
+ * expiry, and the header says which expiry that is.
+ */
+function StrikePickerDialog({
+  open,
+  onOpenChange,
+  underlying,
+  underlyingExchange,
+  expiryRank,
+  resolvedExpiry,
+  optionType,
+  selectedStrike,
+  onPick,
+}: StrikePickerProps) {
+  const [filter, setFilter] = useState('')
+  const {
+    strikes,
+    resolvedExpiry: chainExpiry,
+    exchange,
+    isLoading,
+    error,
+  } = useOptionStrikes(underlying, underlyingExchange, resolvedExpiry, open)
+
+  const filtered = filterStrikes(strikes, filter)
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            Pick strike — {underlying} {expiryRank} {optionType}
+          </DialogTitle>
+          {strikes.length > 0 ? (
+            <DialogDescription className="text-xs">
+              {strikes.length} strikes available · resolved expiry:{' '}
+              <span className="font-mono">{chainExpiry ?? resolvedExpiry}</span> on {exchange}
+            </DialogDescription>
+          ) : (
+            <DialogDescription className="text-xs">
+              {underlying} {optionType} options for the {expiryRank} contract.
+            </DialogDescription>
+          )}
+        </DialogHeader>
+        <div className="space-y-3">
+          <Input
+            placeholder="Filter (e.g. 24000)…"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            autoFocus
+          />
+          <div className="max-h-72 overflow-y-auto rounded-md border">
+            {resolvedExpiry === null ? (
+              <p className="p-3 text-center text-sm text-destructive">
+                Could not resolve the {expiryRank} expiry for {underlying}. The master contract may
+                not be downloaded.
+              </p>
+            ) : isLoading ? (
+              <p className="p-3 text-center text-sm text-muted-foreground">Loading…</p>
+            ) : error ? (
+              <p className="p-3 text-center text-sm text-destructive">{error}</p>
+            ) : filtered.length === 0 ? (
+              <p className="p-3 text-center text-sm text-muted-foreground">No matches</p>
+            ) : (
+              <ul className="divide-y">
+                {filtered.map((strike) => (
+                  <li key={strike}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onPick(strike)
+                        onOpenChange(false)
+                      }}
+                      className={cn(
+                        'flex w-full items-center justify-between px-3 py-2 text-sm hover:bg-muted',
+                        selectedStrike === strike && 'bg-primary/10 font-semibold'
+                      )}
+                    >
+                      <span className="font-mono">{strike}</span>
+                      {selectedStrike === strike && (
+                        <Badge variant="secondary" className="text-[10px]">
+                          selected
+                        </Badge>
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Leg card
 // ---------------------------------------------------------------------------
+
+/** What a leg's expiry rank resolved to, for the line under the rank picker. */
+interface LegExpiryState {
+  date: string | null
+  isLoading: boolean
+  error: string | null
+}
 
 interface LegCardProps {
   leg: Leg
   tab: UniverseTab
   index: number
+  expiry: LegExpiryState
   onChange: (next: Leg) => void
   onRemove: () => void
+  onOpenStrikePicker: () => void
   removable: boolean
 }
 
-function LegCard({ leg, tab, index, onChange, onRemove, removable }: LegCardProps) {
+function LegCard({
+  leg,
+  tab,
+  index,
+  expiry,
+  onChange,
+  onRemove,
+  onOpenStrikePicker,
+  removable,
+}: LegCardProps) {
   const segments = TAB_SEGMENTS[tab]
   const expiries = expiriesFor(tab, leg.segment)
 
@@ -185,12 +339,25 @@ function LegCard({ leg, tab, index, onChange, onRemove, removable }: LegCardProp
                 onChange={(event) => update('expiry', event.target.value as ExpiryRank)}
                 className={SELECT_CLASS_SM}
               >
-                {expiries.map((expiry) => (
-                  <option key={expiry} value={expiry}>
-                    {EXPIRY_RANK_LABELS[expiry]}
+                {expiries.map((rank) => (
+                  <option key={rank} value={rank}>
+                    {EXPIRY_RANK_LABELS[rank]}
                   </option>
                 ))}
               </select>
+              {/* The rank is what is stored, because that is what survives a
+                  roll. The date is what the operator can check. */}
+              {expiry.isLoading ? (
+                <p className="text-[10px] text-muted-foreground">resolving…</p>
+              ) : expiry.error ? (
+                <p className="text-[10px] text-destructive" title={expiry.error}>
+                  could not resolve
+                </p>
+              ) : expiry.date ? (
+                <p className="font-mono text-[10px] text-muted-foreground">{expiry.date}</p>
+              ) : (
+                <p className="text-[10px] text-amber-600">not listed</p>
+              )}
             </div>
           )}
 
@@ -299,19 +466,21 @@ function LegCard({ leg, tab, index, onChange, onRemove, removable }: LegCardProp
             ) : (
               <div className="space-y-1.5 sm:col-span-2">
                 <Label className="text-xs uppercase">Strike value</Label>
-                <Input
-                  type="number"
-                  step={0.01}
-                  value={leg.strike ?? ''}
-                  placeholder="e.g. 25000"
-                  onChange={(event) =>
-                    update('strike', event.target.value === '' ? null : Number(event.target.value))
-                  }
-                  className="h-9 font-mono"
-                />
+                <div className="flex gap-2">
+                  <Input
+                    type="number"
+                    step={0.01}
+                    value={leg.strike ?? ''}
+                    placeholder="Pick from list →"
+                    readOnly
+                    className="h-9 font-mono"
+                  />
+                  <Button type="button" variant="outline" size="sm" onClick={onOpenStrikePicker}>
+                    Pick strike
+                  </Button>
+                </div>
                 <p className="text-xs text-muted-foreground">
-                  Resolved against the underlying and the leg's expiry rank ({leg.expiry}) when the
-                  run starts.
+                  Filtered by underlying + resolved expiry rank ({leg.expiry}).
                 </p>
               </div>
             )}
@@ -389,6 +558,91 @@ function LegCard({ leg, tab, index, onChange, onRemove, removable }: LegCardProp
 }
 
 // ---------------------------------------------------------------------------
+// Underlying picker for the open-universe tabs
+// ---------------------------------------------------------------------------
+
+/**
+ * Search for an underlying instead of choosing from a seeded handful.
+ *
+ * Stock F&O and MCX are open universes: a fixed list can only ever be wrong.
+ * The lookup runs against the derivative exchange, so what comes back is
+ * underlyings that actually have contracts listed.
+ */
+function UnderlyingSearchField({
+  value,
+  onChange,
+  searchExchange,
+  placeholder,
+}: {
+  value: string
+  onChange: (symbol: string) => void
+  searchExchange: string
+  placeholder: string
+}) {
+  const [open, setOpen] = useState(false)
+  const debounced = useDebouncedValue(value, 300)
+  const { results, isLoading, error } = useUnderlyingSearch(debounced, searchExchange, open)
+
+  return (
+    <div className="relative">
+      <Input
+        id="underlying"
+        value={value}
+        onChange={(event) => {
+          onChange(event.target.value.toUpperCase())
+          setOpen(true)
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') setOpen(false)
+        }}
+        placeholder={placeholder}
+        className="font-mono"
+        autoComplete="off"
+      />
+      {open && value.trim().length >= 2 && (
+        <div className="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-md border bg-popover shadow-md">
+          {isLoading ? (
+            <p className="p-3 text-center text-xs text-muted-foreground">Searching…</p>
+          ) : error ? (
+            <p className="p-3 text-center text-xs text-destructive">{error}</p>
+          ) : results.length === 0 ? (
+            <p className="p-3 text-center text-xs text-muted-foreground">
+              No underlying matches “{value}” on {searchExchange}.
+            </p>
+          ) : (
+            <ul className="divide-y">
+              {results.map((result) => (
+                <li key={result.symbol}>
+                  <button
+                    type="button"
+                    // mousedown, not click: the input's blur would close the
+                    // list before a click ever landed on it.
+                    onMouseDown={(event) => {
+                      event.preventDefault()
+                      onChange(result.symbol)
+                      setOpen(false)
+                    }}
+                    className={cn(
+                      'flex w-full items-center justify-between px-3 py-2 text-sm hover:bg-muted',
+                      result.symbol === value.toUpperCase() && 'bg-primary/10 font-semibold'
+                    )}
+                  >
+                    <span className="font-mono">{result.symbol}</span>
+                    <span className="text-[10px] text-muted-foreground">{result.instruments}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Wizard
 // ---------------------------------------------------------------------------
 
@@ -458,13 +712,49 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
   const [schedulerStart, setSchedulerStart] = useState(editing?.scheduler?.start_time ?? '09:15')
   const [schedulerStop, setSchedulerStop] = useState(editing?.scheduler?.auto_stop_time ?? '15:20')
 
-  const underlyings = TAB_DEFAULT_UNDERLYINGS[tab]
+  const [strikePickerLegIndex, setStrikePickerLegIndex] = useState<number | null>(null)
+
+  const closedUniverse = TAB_UNDERLYING_IS_CLOSED_SET[tab]
+  const seededUnderlyings = TAB_DEFAULT_UNDERLYINGS[tab]
+
+  // On a closed-universe tab the exchange comes from the seed entry; on an open
+  // one every underlying on the tab is listed on the same exchange.
   const underlyingExchange = useMemo(
     () =>
-      underlyings.find((choice) => choice.symbol === underlying)?.exchange ??
+      seededUnderlyings.find((choice) => choice.symbol === underlying)?.exchange ??
       TAB_DEFAULT_EXCHANGE[tab],
-    [underlying, underlyings, tab]
+    [underlying, seededUnderlyings, tab]
   )
+
+  // Expiry lists are per (underlying, instrument), not per leg: ten legs on one
+  // underlying ask the platform once. Only fetched for the instrument types the
+  // legs actually use.
+  const hasOptionsLeg = useMemo(() => legs.some((leg) => leg.segment === 'options'), [legs])
+  const hasFuturesLeg = useMemo(() => legs.some((leg) => leg.segment === 'futures'), [legs])
+  const optionExpiries = useExpiryResolution(
+    underlying,
+    underlyingExchange,
+    'options',
+    hasOptionsLeg
+  )
+  const futureExpiries = useExpiryResolution(
+    underlying,
+    underlyingExchange,
+    'futures',
+    hasFuturesLeg
+  )
+
+  const expiryStateFor = (leg: Leg): LegExpiryState => {
+    if (leg.segment === 'cash' || !leg.expiry) {
+      return { date: null, isLoading: false, error: null }
+    }
+    const source: ExpiryResolution = leg.segment === 'futures' ? futureExpiries : optionExpiries
+    return {
+      date: source.resolve(leg.expiry),
+      isLoading: source.isLoading,
+      error: source.error,
+    }
+  }
 
   const allowedProducts = useMemo(() => allowedProductsForLegs(legs), [legs])
   useEffect(() => {
@@ -536,7 +826,7 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
     for (const leg of legs) {
       if (leg.segment === 'options' && leg.strike_mode === 'strike') {
         if (leg.strike == null || leg.strike <= 0) {
-          return `Leg ${leg.id}: a direct strike is required`
+          return `Leg ${leg.id}: pick a strike, or switch the leg to ATM-relative`
         }
       }
     }
@@ -618,7 +908,7 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
   }
 
   const submitting = isEdit ? updateMutation.isPending : createMutation.isPending
-  const closedUniverse = TAB_UNDERLYING_IS_CLOSED_SET[tab]
+  const pickerLeg = strikePickerLegIndex !== null ? legs[strikePickerLegIndex] : null
 
   return (
     <div className="space-y-6">
@@ -753,30 +1043,19 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
                   onChange={(event) => setUnderlying(event.target.value)}
                   className={SELECT_CLASS_MD}
                 >
-                  {underlyings.map((choice) => (
+                  {seededUnderlyings.map((choice) => (
                     <option key={choice.symbol} value={choice.symbol}>
                       {choice.symbol} — {choice.name}
                     </option>
                   ))}
                 </select>
               ) : (
-                <>
-                  <Input
-                    id="underlying"
-                    list="strategy-underlyings"
-                    value={underlying}
-                    onChange={(event) => setUnderlying(event.target.value.toUpperCase())}
-                    placeholder={underlyings[0]?.symbol}
-                    className="font-mono"
-                  />
-                  <datalist id="strategy-underlyings">
-                    {underlyings.map((choice) => (
-                      <option key={choice.symbol} value={choice.symbol}>
-                        {choice.name}
-                      </option>
-                    ))}
-                  </datalist>
-                </>
+                <UnderlyingSearchField
+                  value={underlying}
+                  onChange={setUnderlying}
+                  searchExchange={derivativeExchangeFor(underlyingExchange)}
+                  placeholder={`Search ${seededUnderlyings[0]?.symbol ?? 'symbol'}…`}
+                />
               )}
               <p className="text-xs text-muted-foreground">
                 Exchange: <span className="font-mono">{underlyingExchange}</span>
@@ -893,8 +1172,10 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
               leg={leg}
               tab={tab}
               index={index}
+              expiry={expiryStateFor(leg)}
               onChange={(next) => updateLeg(index, next)}
               onRemove={() => removeLeg(index)}
+              onOpenStrikePicker={() => setStrikePickerLegIndex(index)}
               removable={legs.length > 1}
             />
           ))}
@@ -1095,6 +1376,24 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
           {submitting ? 'Saving…' : isEdit ? 'Save changes' : 'Save and Continue'}
         </Button>
       </div>
+
+      {pickerLeg && strikePickerLegIndex !== null && (
+        <StrikePickerDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setStrikePickerLegIndex(null)
+          }}
+          underlying={underlying}
+          underlyingExchange={underlyingExchange}
+          expiryRank={pickerLeg.expiry ?? 'monthly'}
+          resolvedExpiry={expiryStateFor(pickerLeg).date}
+          optionType={pickerLeg.option_type ?? 'CE'}
+          selectedStrike={pickerLeg.strike ?? null}
+          onPick={(strike) => {
+            updateLeg(strikePickerLegIndex, { ...pickerLeg, strike })
+          }}
+        />
+      )}
 
       <Dialog
         open={revealedToken !== null}

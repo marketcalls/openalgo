@@ -1,11 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { buildRoundTrips, derivePositions, deriveTrades } from '@/api/strategy_module'
 import {
+  buildRoundTrips,
+  collapseToUnderlyings,
+  derivePositions,
+  deriveTrades,
+} from '@/api/strategy_module'
+import {
+  derivativeExchangeFor,
   favorablePeakPoints,
+  filterStrikes,
   formatIst,
   formatListPnl,
   formatPnl,
+  monthlyExpiries,
   type Order,
+  parseExpiryDate,
+  resolveExpiryRank,
+  sortExpiries,
 } from '@/types/strategy_module'
 
 function order(partial: Partial<Order> & Pick<Order, 'id'>): Order {
@@ -304,5 +315,172 @@ describe('favorablePeakPoints', () => {
         lowest_price: null,
       })
     ).toBe(0)
+  })
+})
+
+// An index chain as the platform returns it: weeklies for the near month, then
+// one contract per month further out. Ascending, DD-MMM-YY.
+const NIFTY_OPTION_EXPIRIES = [
+  '10-JUL-25',
+  '17-JUL-25',
+  '24-JUL-25',
+  '31-JUL-25',
+  '07-AUG-25',
+  '28-AUG-25',
+  '25-SEP-25',
+  '24-DEC-25',
+]
+
+// Futures are monthly on every Indian exchange, index included.
+const NIFTY_FUTURE_EXPIRIES = ['31-JUL-25', '28-AUG-25', '25-SEP-25']
+
+describe('parseExpiryDate', () => {
+  it('reads a DD-MMM-YY date as a UTC calendar date', () => {
+    const date = parseExpiryDate('10-JUL-25')
+    expect(date?.getUTCFullYear()).toBe(2025)
+    expect(date?.getUTCMonth()).toBe(6)
+    expect(date?.getUTCDate()).toBe(10)
+  })
+
+  it('accepts a lowercase month and a single-digit day', () => {
+    expect(parseExpiryDate('7-aug-25')?.getUTCDate()).toBe(7)
+  })
+
+  it('refuses a date that is not one rather than rolling it forward', () => {
+    expect(parseExpiryDate('31-FEB-25')).toBeNull()
+    expect(parseExpiryDate('10-XXX-25')).toBeNull()
+    expect(parseExpiryDate('2025-07-10')).toBeNull()
+    expect(parseExpiryDate('')).toBeNull()
+  })
+})
+
+describe('sortExpiries', () => {
+  it('orders by date, not by string, and drops what it cannot parse', () => {
+    expect(sortExpiries(['28-AUG-25', 'garbage', '10-JUL-25', '24-DEC-25'])).toEqual([
+      '10-JUL-25',
+      '28-AUG-25',
+      '24-DEC-25',
+    ])
+  })
+})
+
+describe('monthlyExpiries', () => {
+  it('keeps the last contract of each calendar month', () => {
+    expect(monthlyExpiries(NIFTY_OPTION_EXPIRIES)).toEqual([
+      '31-JUL-25',
+      '28-AUG-25',
+      '25-SEP-25',
+      '24-DEC-25',
+    ])
+  })
+
+  it('leaves a monthly-only list alone', () => {
+    expect(monthlyExpiries(NIFTY_FUTURE_EXPIRIES)).toEqual(NIFTY_FUTURE_EXPIRIES)
+  })
+})
+
+describe('resolveExpiryRank', () => {
+  it('resolves the weekly ranks to the two nearest contracts', () => {
+    expect(resolveExpiryRank('weekly', NIFTY_OPTION_EXPIRIES)).toBe('10-JUL-25')
+    expect(resolveExpiryRank('next_week', NIFTY_OPTION_EXPIRIES)).toBe('17-JUL-25')
+  })
+
+  it('resolves the monthly ranks to the last contract of the month, not the nearest', () => {
+    expect(resolveExpiryRank('monthly', NIFTY_OPTION_EXPIRIES)).toBe('31-JUL-25')
+    expect(resolveExpiryRank('next_month', NIFTY_OPTION_EXPIRIES)).toBe('28-AUG-25')
+  })
+
+  it('treats the legacy spellings as the monthly pair', () => {
+    expect(resolveExpiryRank('current', NIFTY_OPTION_EXPIRIES)).toBe(
+      resolveExpiryRank('monthly', NIFTY_OPTION_EXPIRIES)
+    )
+    expect(resolveExpiryRank('next', NIFTY_OPTION_EXPIRIES)).toBe(
+      resolveExpiryRank('next_month', NIFTY_OPTION_EXPIRIES)
+    )
+  })
+
+  it('resolves against a monthly-only futures list', () => {
+    expect(resolveExpiryRank('monthly', NIFTY_FUTURE_EXPIRIES)).toBe('31-JUL-25')
+    expect(resolveExpiryRank('next_month', NIFTY_FUTURE_EXPIRIES)).toBe('28-AUG-25')
+  })
+
+  it('does not care what order the platform returned them in', () => {
+    const shuffled = ['24-DEC-25', '17-JUL-25', '31-JUL-25', '10-JUL-25', '28-AUG-25']
+    expect(resolveExpiryRank('weekly', shuffled)).toBe('10-JUL-25')
+    expect(resolveExpiryRank('monthly', shuffled)).toBe('31-JUL-25')
+  })
+
+  // Null rather than the nearest expiry: quietly substituting a different
+  // contract is how a leg ends up on an expiry nobody chose.
+  it('returns null rather than substituting when the list cannot answer', () => {
+    expect(resolveExpiryRank('weekly', [])).toBeNull()
+    expect(resolveExpiryRank('next_week', ['10-JUL-25'])).toBeNull()
+    expect(resolveExpiryRank('next_month', ['31-JUL-25'])).toBeNull()
+  })
+})
+
+describe('derivativeExchangeFor', () => {
+  it('sends an NSE underlying to NFO and a BSE one to BFO', () => {
+    expect(derivativeExchangeFor('NSE_INDEX')).toBe('NFO')
+    expect(derivativeExchangeFor('NSE')).toBe('NFO')
+    expect(derivativeExchangeFor('BSE_INDEX')).toBe('BFO')
+    expect(derivativeExchangeFor('BSE')).toBe('BFO')
+  })
+
+  it('leaves an exchange that is already its own derivative venue alone', () => {
+    expect(derivativeExchangeFor('MCX')).toBe('MCX')
+    expect(derivativeExchangeFor('CDS')).toBe('CDS')
+  })
+})
+
+describe('filterStrikes', () => {
+  const strikes = [23900, 24000, 24050, 24400, 25000]
+
+  it('returns everything when nothing is typed', () => {
+    expect(filterStrikes(strikes, '')).toEqual(strikes)
+    expect(filterStrikes(strikes, '   ')).toEqual(strikes)
+  })
+
+  it('matches a substring, not just a prefix', () => {
+    // 24000 matches too: it contains "400" in the middle, which is the whole
+    // point of a substring match on a chain that does not start at zero.
+    expect(filterStrikes(strikes, '400')).toEqual([24000, 24400])
+    expect(filterStrikes(strikes, '2400')).toEqual([24000])
+    expect(filterStrikes(strikes, '405')).toEqual([24050])
+  })
+
+  it('narrows to one strike when the whole number is typed', () => {
+    expect(filterStrikes(strikes, '24050')).toEqual([24050])
+  })
+
+  it('returns nothing when the filter matches nothing', () => {
+    expect(filterStrikes(strikes, '999')).toEqual([])
+  })
+})
+
+describe('collapseToUnderlyings', () => {
+  const rows = [
+    { symbol: 'RELIANCE25AUG1500CE', name: 'RELIANCE', exchange: 'NFO', instrumenttype: 'CE' },
+    { symbol: 'RELIANCE25AUG1500PE', name: 'RELIANCE', exchange: 'NFO', instrumenttype: 'PE' },
+    { symbol: 'RELIANCE25AUGFUT', name: 'RELIANCE', exchange: 'NFO', instrumenttype: 'FUT' },
+    { symbol: 'RELIANCEPP25AUGFUT', name: 'RELIANCEPP', exchange: 'NFO', instrumenttype: 'FUT' },
+  ]
+
+  it('collapses contracts onto the underlying behind them', () => {
+    const results = collapseToUnderlyings(rows, 'RELIANCE')
+    expect(results).toHaveLength(2)
+    expect(results[0].symbol).toBe('RELIANCE')
+    expect(results[0].instruments).toBe('CE, FUT, PE')
+  })
+
+  it('puts the exact match above a longer name that merely starts the same', () => {
+    const results = collapseToUnderlyings(rows, 'RELIANCE')
+    expect(results.map((result) => result.symbol)).toEqual(['RELIANCE', 'RELIANCEPP'])
+  })
+
+  it('ignores a row with no name to collapse onto', () => {
+    expect(
+      collapseToUnderlyings([{ symbol: '', name: '', exchange: 'NFO', instrumenttype: '' }], 'X')
+    ).toEqual([])
   })
 })

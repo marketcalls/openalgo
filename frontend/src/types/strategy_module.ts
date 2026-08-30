@@ -493,6 +493,146 @@ export function expiriesFor(tab: UniverseTab, segment: Segment): ExpiryRank[] {
   return TAB_EXPIRIES[tab]
 }
 
+// ---------------------------------------------------------------------------
+// Expiry ranks against the listed contracts
+//
+// A leg stores a rank, not a date, because that is what makes it survive a
+// roll: "the current week" still means something next Thursday, and a stored
+// date does not. But a rank is not something an operator can check, so the
+// wizard resolves it against the real expiry list and shows the date it lands
+// on. The rank stays the stored value; the date is display, and the strike
+// query needs it too.
+// ---------------------------------------------------------------------------
+
+const MONTH_CODES = [
+  'JAN',
+  'FEB',
+  'MAR',
+  'APR',
+  'MAY',
+  'JUN',
+  'JUL',
+  'AUG',
+  'SEP',
+  'OCT',
+  'NOV',
+  'DEC',
+]
+
+/**
+ * A `DD-MMM-YY` expiry as a UTC date, or null when it is not one.
+ *
+ * UTC throughout: these are calendar dates, and building them in local time
+ * moves an Indian expiry across a day boundary for anyone west of London.
+ */
+export function parseExpiryDate(text: string): Date | null {
+  const match = /^(\d{1,2})-([A-Za-z]{3})-(\d{2,4})$/.exec((text ?? '').trim())
+  if (!match) return null
+  const day = Number(match[1])
+  const month = MONTH_CODES.indexOf(match[2].toUpperCase())
+  if (month < 0) return null
+  const rawYear = Number(match[3])
+  const year = rawYear < 100 ? 2000 + rawYear : rawYear
+  const date = new Date(Date.UTC(year, month, day))
+  // Rejects 31-FEB-25 and friends, which JS would otherwise roll forward.
+  if (date.getUTCMonth() !== month || date.getUTCDate() !== day) return null
+  return date
+}
+
+/** The parseable expiries, oldest first. */
+export function sortExpiries(expiries: string[]): string[] {
+  return expiries
+    .map((text) => ({ text, date: parseExpiryDate(text) }))
+    .filter((entry): entry is { text: string; date: Date } => entry.date !== null)
+    .sort((a, b) => a.date.getTime() - b.date.getTime())
+    .map((entry) => entry.text)
+}
+
+/**
+ * The monthly expiries in a list: the last contract of each calendar month.
+ *
+ * Derived rather than assumed. An index has weeklies and monthlies in one
+ * list and only the last of a month is the monthly; a stock or a commodity has
+ * one expiry per month, which this rule also gets right without a special case.
+ */
+export function monthlyExpiries(expiries: string[]): string[] {
+  const lastOfMonth = new Map<string, { text: string; date: Date }>()
+  for (const text of expiries) {
+    const date = parseExpiryDate(text)
+    if (!date) continue
+    const key = `${date.getUTCFullYear()}-${date.getUTCMonth()}`
+    const existing = lastOfMonth.get(key)
+    if (!existing || date.getTime() > existing.date.getTime()) lastOfMonth.set(key, { text, date })
+  }
+  return Array.from(lastOfMonth.values())
+    .sort((a, b) => a.date.getTime() - b.date.getTime())
+    .map((entry) => entry.text)
+}
+
+/**
+ * The contract a rank names, given the exchange's list of expiries.
+ *
+ * Returns null when the list cannot answer: an empty list, or a rank asking
+ * for a contract further out than the exchange has listed. Null is rendered as
+ * "unresolved" rather than silently as the nearest expiry, because quietly
+ * substituting a different contract is how a leg ends up on an expiry nobody
+ * chose.
+ */
+export function resolveExpiryRank(rank: ExpiryRank, expiries: string[]): string | null {
+  const sorted = sortExpiries(expiries)
+  if (sorted.length === 0) return null
+  switch (rank) {
+    case 'weekly':
+      return sorted[0] ?? null
+    case 'next_week':
+      return sorted[1] ?? null
+    case 'monthly':
+    case 'current':
+      return monthlyExpiries(sorted)[0] ?? null
+    case 'next_month':
+    case 'next':
+      return monthlyExpiries(sorted)[1] ?? null
+    default:
+      return null
+  }
+}
+
+/**
+ * Strikes matching what was typed into the picker's filter box.
+ *
+ * Substring, not prefix. On a chain running 18000 to 30000 an operator hunting
+ * 24000 is as likely to type "400" as "24", and a prefix match would hide every
+ * strike that contains what they typed.
+ */
+export function filterStrikes(strikes: number[], filter: string): number[] {
+  const needle = filter.trim()
+  if (!needle) return strikes
+  return strikes.filter((strike) => String(strike).includes(needle))
+}
+
+/**
+ * Where a given underlying's derivatives are listed.
+ *
+ * The expiry lookup is keyed on the derivative exchange (NIFTY's options are
+ * in NFO, not NSE_INDEX), while the option chain is keyed on the underlying's
+ * own exchange. Two different answers for the same instrument, so both live
+ * here rather than being guessed at each call site.
+ */
+export function derivativeExchangeFor(underlyingExchange: string): string {
+  switch (underlyingExchange) {
+    case 'NSE':
+    case 'NSE_INDEX':
+    case 'NFO':
+      return 'NFO'
+    case 'BSE':
+    case 'BSE_INDEX':
+    case 'BFO':
+      return 'BFO'
+    default:
+      return underlyingExchange
+  }
+}
+
 /**
  * How far a leg has moved in its favour, in points.
  *
