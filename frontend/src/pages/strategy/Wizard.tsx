@@ -11,6 +11,7 @@ import {
   type ExpiryResolution,
   updateStrategy,
   useExpiryResolution,
+  useLotSize,
   useOptionStrikes,
   useUnderlyingSearch,
 } from '@/api/strategy_module'
@@ -34,6 +35,7 @@ import {
   allowedProductsForLegs,
   convertLegKind,
   defaultProductForLegs,
+  defaultQtyMode,
   derivativeExchangeFor,
   EXPIRY_RANK_LABELS,
   type ExpiryRank,
@@ -41,6 +43,8 @@ import {
   filterStrikes,
   freshBatchLeg,
   freshSignalLeg,
+  isDerivativeExchange,
+  isWholeLots,
   LEG_SIDE_LABELS,
   type Leg,
   type LegPosition,
@@ -50,9 +54,13 @@ import {
   MAX_LEGS,
   MAX_LOTS,
   MAX_NAME_LENGTH,
+  MAX_SIGNAL_LOTS,
   MAX_SIGNAL_QTY,
+  maxQtyFor,
   type OptionType,
   type Product,
+  type QtyMode,
+  resolvedQuantity,
   type Segment,
   SIGNAL_LEG_SEGMENTS,
   SIGNAL_MODE_TABS,
@@ -74,6 +82,7 @@ import {
   UNIVERSE_TAB_LABELS,
   UNIVERSE_TABS,
   type UniverseTab,
+  withQtyMode,
 } from '@/types/strategy_module'
 import { showToast } from '@/utils/toast'
 
@@ -562,7 +571,23 @@ function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: Signa
     onChange({ ...leg, [key]: value })
   }
 
-  const quantityLabel = leg.segment === 'cash' ? 'Quantity (shares)' : 'Quantity (units)'
+  // The leg's own exchange decides whether it is counted in lots, because that
+  // is what the validator checks - not the segment, and not the tab.
+  const venue = leg.exchange || venueFor(leg.segment)
+  const derivative = isDerivativeExchange(venue)
+  const qtyMode: QtyMode = derivative ? (leg.qty_mode ?? defaultQtyMode(venue)) : 'units'
+  const qty = leg.qty ?? 1
+
+  const lot = useLotSize(leg.symbol, venue, derivative && Boolean(leg.symbol?.trim()))
+  const sent = resolvedQuantity(qty, qtyMode, lot.lotSize)
+  const partLot = qtyMode === 'units' && derivative && !isWholeLots(qty, lot.lotSize)
+
+  const quantityLabel =
+    qtyMode === 'lots' ? 'Lots' : leg.segment === 'cash' ? 'Quantity (shares)' : 'Quantity (units)'
+
+  const setQtyMode = (mode: QtyMode) => {
+    if (mode !== qtyMode) onChange(withQtyMode(leg, mode))
+  }
 
   return (
     <Card className="border-dashed bg-muted/30">
@@ -580,15 +605,17 @@ function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: Signa
             <Label className="text-xs uppercase">Symbol</Label>
             <UnderlyingSearchField
               value={leg.symbol ?? ''}
-              onChange={(symbol) =>
+              onChange={(symbol) => {
+                // Picking a symbol fills the venue in, but never overwrites
+                // one the user has already set by hand.
+                const nextVenue = leg.exchange || venueFor(leg.segment)
                 onChange({
                   ...leg,
                   symbol,
-                  // Picking a symbol fills the venue in, but never overwrites
-                  // one the user has already set by hand.
-                  exchange: leg.exchange || venueFor(leg.segment),
+                  exchange: nextVenue,
+                  qty_mode: leg.qty_mode ?? defaultQtyMode(nextVenue),
                 })
-              }
+              }}
               searchExchange={leg.segment === 'futures' ? derivativeVenue : cashVenue}
               placeholder={leg.segment === 'cash' ? 'e.g. RELIANCE' : 'e.g. CRUDEOIL'}
             />
@@ -598,7 +625,16 @@ function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: Signa
             <Label className="text-xs uppercase">Exchange</Label>
             <Input
               value={leg.exchange ?? ''}
-              onChange={(event) => update('exchange', event.target.value.toUpperCase())}
+              onChange={(event) => {
+                const nextVenue = event.target.value.toUpperCase()
+                onChange({
+                  ...leg,
+                  exchange: nextVenue,
+                  // Lots on a cash venue is refused outright, so typing one in
+                  // moves the leg to units rather than leaving it unsavable.
+                  qty_mode: isDerivativeExchange(nextVenue) ? (leg.qty_mode ?? 'lots') : 'units',
+                })
+              }}
               placeholder={venueFor(leg.segment)}
               className="font-mono"
               maxLength={20}
@@ -614,13 +650,15 @@ function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: Signa
               onChange={(event) => {
                 const segment = event.target.value as Segment
                 const wasDefaultVenue = !leg.exchange || leg.exchange === venueFor(leg.segment)
+                const nextVenue = wasDefaultVenue ? venueFor(segment) : (leg.exchange as string)
                 onChange({
                   ...leg,
                   segment,
                   // Refused outright on a cash leg, so it is cleared here
                   // rather than left for the payload to strip.
                   expiry: segment === 'futures' ? (leg.expiry ?? 'monthly') : null,
-                  exchange: wasDefaultVenue ? venueFor(segment) : leg.exchange,
+                  exchange: nextVenue,
+                  qty_mode: isDerivativeExchange(nextVenue) ? (leg.qty_mode ?? 'lots') : 'units',
                 })
               }}
               className={SELECT_CLASS_SM}
@@ -684,29 +722,85 @@ function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: Signa
           </div>
 
           <div className="space-y-1.5">
-            <Label className="text-xs uppercase">{quantityLabel}</Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label className="text-xs uppercase">{quantityLabel}</Label>
+              <div className="flex h-5 overflow-hidden rounded border border-input">
+                {(['lots', 'units'] as QtyMode[]).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    disabled={mode === 'lots' && !derivative}
+                    onClick={() => setQtyMode(mode)}
+                    title={
+                      mode === 'lots' && !derivative
+                        ? `${venue} has no lot size to multiply by, so cash is counted in units.`
+                        : undefined
+                    }
+                    className={cn(
+                      'px-1.5 text-[10px] font-medium uppercase transition-colors',
+                      qtyMode === mode
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-background hover:bg-muted',
+                      mode === 'lots' && !derivative && 'cursor-not-allowed opacity-40'
+                    )}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
+            </div>
             <Input
               type="number"
               min={1}
-              max={MAX_SIGNAL_QTY}
+              max={qtyMode === 'lots' ? MAX_SIGNAL_LOTS : MAX_SIGNAL_QTY}
               step={1}
-              value={leg.qty ?? 1}
+              value={qty}
               onChange={(event) =>
                 update(
                   'qty',
                   Math.min(
-                    MAX_SIGNAL_QTY,
+                    maxQtyFor(qtyMode),
                     Math.max(1, Number.parseInt(event.target.value || '1', 10) || 1)
                   )
                 )
               }
-              className="h-9"
+              className={cn('h-9', partLot && 'border-amber-500')}
             />
-            <p className="text-[10px] text-muted-foreground">
-              {leg.segment === 'cash'
-                ? 'Shares, sent as-is.'
-                : 'Units, not lots: enter a whole multiple of the contract lot size.'}
-            </p>
+            {qtyMode === 'lots' ? (
+              lot.isLoading ? (
+                <p className="text-[10px] text-muted-foreground">reading lot size…</p>
+              ) : sent != null ? (
+                <p className="text-[10px] text-muted-foreground">
+                  <span className="font-mono">
+                    {qty} {qty === 1 ? 'lot' : 'lots'} = {sent}
+                  </span>{' '}
+                  (lot size {lot.lotSize}). The lot count is what is stored - lot sizes get revised,
+                  and a saved quantity would silently become a different number of lots.
+                </p>
+              ) : (
+                <p className="text-[10px] text-amber-600">
+                  {leg.symbol?.trim()
+                    ? 'Lot size unknown, so the quantity cannot be shown. The master contract may not be downloaded; the engine resolves it at entry.'
+                    : 'Pick a symbol to see what this sends.'}
+                </p>
+              )
+            ) : partLot ? (
+              <p className="text-[10px] text-amber-600">
+                <span className="font-mono">{qty}</span> is not a whole number of lots
+                {lot.lotSize ? ` (lot size ${lot.lotSize})` : ''}. The broker refuses a part lot.
+              </p>
+            ) : derivative && sent != null && lot.lotSize ? (
+              <p className="text-[10px] text-muted-foreground">
+                <span className="font-mono">
+                  {sent} = {sent / lot.lotSize} {sent / lot.lotSize === 1 ? 'lot' : 'lots'}
+                </span>{' '}
+                (lot size {lot.lotSize}), sent as-is.
+              </p>
+            ) : (
+              <p className="text-[10px] text-muted-foreground">
+                {leg.segment === 'cash' ? 'Shares, sent as-is.' : 'Units, sent as-is.'}
+              </p>
+            )}
           </div>
         </div>
 
@@ -1107,8 +1201,14 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
         if (!Number.isInteger(qty) || qty < 1) {
           return `Leg ${leg.id}: quantity must be a whole number of at least 1`
         }
-        if (qty > MAX_SIGNAL_QTY) {
-          return `Leg ${leg.id}: quantity cannot be more than ${MAX_SIGNAL_QTY.toLocaleString('en-IN')}`
+        // Lots and units have different caps, because a lot count is a much
+        // smaller number than the quantity it stands for.
+        const mode = isDerivativeExchange(leg.exchange)
+          ? (leg.qty_mode ?? defaultQtyMode(leg.exchange))
+          : 'units'
+        const cap = maxQtyFor(mode)
+        if (qty > cap) {
+          return `Leg ${leg.id}: ${mode === 'lots' ? 'lots' : 'quantity'} cannot be more than ${cap.toLocaleString('en-IN')}`
         }
         continue
       }

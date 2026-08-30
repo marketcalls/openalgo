@@ -4,9 +4,11 @@ import {
   collapseToUnderlyings,
   derivePositions,
   deriveTrades,
+  lotSizeFromRows,
 } from '@/api/strategy_module'
 import {
   convertLegKind,
+  defaultQtyMode,
   derivativeExchangeFor,
   favorablePeakPoints,
   filterStrikes,
@@ -14,17 +16,23 @@ import {
   formatListPnl,
   formatPnl,
   freshSignalLeg,
+  isDerivativeExchange,
+  isWholeLots,
   type Leg,
   legToPayload,
+  MAX_SIGNAL_LOTS,
   MAX_SIGNAL_QTY,
   monthlyExpiries,
   type Order,
   parseExpiryDate,
+  type QtyMode,
+  resolvedQuantity,
   resolveExpiryRank,
   SIGNAL_LEG_SEGMENTS,
   SIGNAL_MODE_TABS,
   sortExpiries,
   TAB_SEGMENTS,
+  withQtyMode,
 } from '@/types/strategy_module'
 
 function order(partial: Partial<Order> & Pick<Order, 'id'>): Order {
@@ -594,6 +602,7 @@ describe('legToPayload, signal', () => {
       exchange: 'NSE',
       side: 'long',
       qty: 500,
+      qty_mode: 'units',
     })
   })
 
@@ -755,6 +764,7 @@ describe('freshSignalLeg', () => {
       'expiry',
       'id',
       'qty',
+      'qty_mode',
       'segment',
       'side',
       'symbol',
@@ -772,5 +782,222 @@ describe('signal mode universe', () => {
   it('offers no options segment, because a signal leg carries no option fields', () => {
     expect(SIGNAL_LEG_SEGMENTS).toEqual(['cash', 'futures'])
     expect(SIGNAL_LEG_SEGMENTS).not.toContain('options')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Quantity modes
+//
+// The stored number means one of two things and the mode is what says which,
+// so the tests are about what reaches the wire, not about arithmetic.
+// ---------------------------------------------------------------------------
+
+const NIFTY_FUT_LEG: Leg = {
+  id: 1,
+  segment: 'futures',
+  symbol: 'NIFTY',
+  exchange: 'NFO',
+  side: 'both',
+  qty: 5,
+  qty_mode: 'lots',
+  expiry: 'monthly',
+}
+
+const RELIANCE_CASH_LEG: Leg = {
+  id: 1,
+  segment: 'cash',
+  symbol: 'RELIANCE',
+  exchange: 'NSE',
+  side: 'both',
+  qty: 500,
+  qty_mode: 'units',
+}
+
+describe('quantity mode defaults', () => {
+  it('counts a derivative venue in lots and a cash one in units', () => {
+    expect(defaultQtyMode('NFO')).toBe('lots')
+    expect(defaultQtyMode('BFO')).toBe('lots')
+    expect(defaultQtyMode('MCX')).toBe('lots')
+    expect(defaultQtyMode('NSE')).toBe('units')
+    expect(defaultQtyMode('BSE')).toBe('units')
+  })
+
+  it('classifies exchanges the way the validator does', () => {
+    for (const venue of ['NFO', 'BFO', 'MCX', 'CDS', 'NCO', 'BCD', 'NCDEX', 'CRYPTO']) {
+      expect(isDerivativeExchange(venue)).toBe(true)
+    }
+    for (const venue of ['NSE', 'BSE', 'NSE_INDEX', '', null, undefined]) {
+      expect(isDerivativeExchange(venue)).toBe(false)
+    }
+  })
+
+  it('is case and whitespace insensitive, since the field is typed by hand', () => {
+    expect(defaultQtyMode(' nfo ')).toBe('lots')
+  })
+
+  it('seeds a new leg with the mode its venue implies', () => {
+    expect(freshSignalLeg(1, 'stocks_fno').qty_mode).toBe('units')
+    expect(freshSignalLeg(1, 'mcx').qty_mode).toBe('lots')
+    expect(freshSignalLeg(1, 'mcx').exchange).toBe('MCX')
+  })
+})
+
+describe('legToPayload, quantity mode', () => {
+  // The whole point of the mode: five lots of NIFTY is stored as 5, not 325.
+  it('sends the lot count, never the product', () => {
+    const payload = legToPayload(NIFTY_FUT_LEG, 'signal')
+    expect(payload.qty).toBe(5)
+    expect(payload.qty_mode).toBe('lots')
+    expect(payload.qty).not.toBe(325)
+  })
+
+  it('sends the quantity itself in units mode', () => {
+    const payload = legToPayload(RELIANCE_CASH_LEG, 'signal')
+    expect(payload.qty).toBe(500)
+    expect(payload.qty_mode).toBe('units')
+  })
+
+  it('falls back to the venue default when the leg has no mode of its own', () => {
+    const noMode = { ...NIFTY_FUT_LEG, qty_mode: null }
+    expect(legToPayload(noMode, 'signal').qty_mode).toBe('lots')
+    expect(legToPayload({ ...RELIANCE_CASH_LEG, qty_mode: null }, 'signal').qty_mode).toBe('units')
+  })
+
+  // Refused outright by the validator, so it never leaves the browser.
+  it('forces units on a cash leg however the mode got set', () => {
+    const wrong = { ...RELIANCE_CASH_LEG, qty_mode: 'lots' as QtyMode }
+    expect(legToPayload(wrong, 'signal').qty_mode).toBe('units')
+  })
+
+  it('clamps to the cap that belongs to the mode', () => {
+    expect(legToPayload({ ...NIFTY_FUT_LEG, qty: 99_999 }, 'signal').qty).toBe(MAX_SIGNAL_LOTS)
+    expect(legToPayload({ ...RELIANCE_CASH_LEG, qty: 9_999_999 }, 'signal').qty).toBe(
+      MAX_SIGNAL_QTY
+    )
+  })
+
+  it('still sends a whole number', () => {
+    expect(legToPayload({ ...NIFTY_FUT_LEG, qty: 5.9 }, 'signal').qty).toBe(5)
+  })
+
+  // Batch legs count lots in their own field and the batch validator rejects
+  // qty_mode outright.
+  it('never puts qty_mode on a batch leg', () => {
+    const payload = legToPayload(
+      { id: 1, segment: 'options', position: 'S', lots: 2, expiry: 'weekly', qty_mode: 'lots' },
+      'batch'
+    )
+    expect(payload).not.toHaveProperty('qty_mode')
+    expect(payload.lots).toBe(2)
+  })
+})
+
+describe('withQtyMode', () => {
+  // Decided: the number is kept and reinterpreted, never converted. Converting
+  // would silently rewrite what the user typed, and could only work one way.
+  it('keeps the number the user typed rather than converting it', () => {
+    const asUnits = withQtyMode(NIFTY_FUT_LEG, 'units')
+    expect(asUnits.qty).toBe(5)
+    expect(asUnits.qty_mode).toBe('units')
+
+    const backToLots = withQtyMode(asUnits, 'lots')
+    expect(backToLots.qty).toBe(5)
+    expect(backToLots.qty_mode).toBe('lots')
+  })
+
+  it('leaves a round trip through the toggle exactly where it started', () => {
+    expect(withQtyMode(withQtyMode(NIFTY_FUT_LEG, 'units'), 'lots')).toEqual(NIFTY_FUT_LEG)
+  })
+
+  it('clamps only when the new cap is smaller', () => {
+    const big = { ...NIFTY_FUT_LEG, qty_mode: 'units' as QtyMode, qty: 500_000 }
+    expect(withQtyMode(big, 'lots').qty).toBe(MAX_SIGNAL_LOTS)
+    expect(withQtyMode({ ...NIFTY_FUT_LEG, qty: 200 }, 'units').qty).toBe(200)
+  })
+
+  it('refuses lots on a cash venue, leaving the leg untouched', () => {
+    expect(withQtyMode(RELIANCE_CASH_LEG, 'lots')).toBe(RELIANCE_CASH_LEG)
+  })
+})
+
+describe('resolvedQuantity', () => {
+  it('multiplies a lot count by the lot size', () => {
+    expect(resolvedQuantity(5, 'lots', 65)).toBe(325)
+    expect(resolvedQuantity(1, 'lots', 65)).toBe(65)
+  })
+
+  it('leaves a units quantity alone, lot size or not', () => {
+    expect(resolvedQuantity(325, 'units', 65)).toBe(325)
+    expect(resolvedQuantity(500, 'units', null)).toBe(500)
+  })
+
+  it('cannot answer for lots without a lot size, and says so with null', () => {
+    expect(resolvedQuantity(5, 'lots', null)).toBeNull()
+    expect(resolvedQuantity(5, 'lots', 0)).toBeNull()
+    expect(resolvedQuantity(null, 'lots', 65)).toBeNull()
+  })
+
+  // The reason the lot count is what gets stored: the same leg follows a
+  // revised lot size instead of silently becoming a different number of lots.
+  it('follows a revised lot size, which a stored product could not', () => {
+    expect(resolvedQuantity(5, 'lots', 75)).toBe(375)
+    expect(resolvedQuantity(5, 'lots', 65)).toBe(325)
+  })
+})
+
+describe('isWholeLots', () => {
+  it('accepts a whole multiple and rejects a part lot', () => {
+    expect(isWholeLots(325, 65)).toBe(true)
+    expect(isWholeLots(300, 65)).toBe(false)
+  })
+
+  it('accepts anything when there is no lot size to check against', () => {
+    expect(isWholeLots(7, null)).toBe(true)
+    expect(isWholeLots(7, 0)).toBe(true)
+  })
+})
+
+describe('lotSizeFromRows', () => {
+  const rows = [
+    {
+      symbol: 'NIFTY25AUG2625000CE',
+      name: 'NIFTY',
+      exchange: 'NFO',
+      instrumenttype: 'CE',
+      lotsize: 65,
+    },
+    {
+      symbol: 'NIFTY25AUG26FUT',
+      name: 'NIFTY',
+      exchange: 'NFO',
+      instrumenttype: 'FUT',
+      lotsize: 65,
+    },
+    {
+      symbol: 'NIFTYNXT50FUT',
+      name: 'NIFTYNXT50',
+      exchange: 'NFO',
+      instrumenttype: 'FUT',
+      lotsize: 25,
+    },
+  ]
+
+  it('reads the lot size for the root that was asked for', () => {
+    expect(lotSizeFromRows(rows, 'NIFTY')).toBe(65)
+    expect(lotSizeFromRows(rows, 'NIFTYNXT50')).toBe(25)
+  })
+
+  it('does not answer with a different underlying that merely matched the search', () => {
+    expect(lotSizeFromRows(rows, 'BANKNIFTY')).toBeNull()
+  })
+
+  it('returns null rather than a guess when no row carries a usable lot size', () => {
+    expect(
+      lotSizeFromRows(
+        [{ symbol: 'X', name: 'X', exchange: 'NFO', instrumenttype: 'FUT', lotsize: 0 }],
+        'X'
+      )
+    ).toBeNull()
+    expect(lotSizeFromRows([], 'NIFTY')).toBeNull()
   })
 })

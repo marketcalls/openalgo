@@ -55,16 +55,19 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 import {
+  defaultQtyMode,
   favorablePeakPoints,
   formatDuration,
   formatIst,
   formatLivePnl,
   formatPnl,
   formatPrice,
+  isDerivativeExchange,
   type Leg,
   type LegState,
   type Order,
   pnlToneClass,
+  type QtyMode,
   type Run,
   type RunMode,
   type Strategy,
@@ -503,6 +506,17 @@ function LiveTab({
 // Setup tab
 // ---------------------------------------------------------------------------
 
+/**
+ * Which unit a signal leg's stored quantity is in.
+ *
+ * Mirrors the validator's venue default, so a leg saved before the mode
+ * existed still reads correctly rather than defaulting everything to units.
+ */
+function qtyModeFor(leg: Leg): QtyMode {
+  if (!isDerivativeExchange(leg.exchange)) return 'units'
+  return leg.qty_mode ?? defaultQtyMode(leg.exchange)
+}
+
 function SetupTab({ strategy }: { strategy: Strategy }) {
   const navigate = useNavigate()
   const isStopped = strategy.status !== 'running'
@@ -591,7 +605,22 @@ function SetupTab({ strategy }: { strategy: Strategy }) {
                           {leg.side ?? 'both'}
                         </Badge>
                       </td>
-                      <td className="px-2 py-1.5 text-right font-mono">{leg.qty ?? '—'}</td>
+                      {/* A bare 5 reads as five shares. It is five lots on a
+                          derivative, so the unit travels with the number. */}
+                      <td className="px-2 py-1.5 text-right font-mono">
+                        {leg.qty ?? '—'}
+                        {leg.qty != null && (
+                          <span className="ml-1 text-[10px] text-muted-foreground">
+                            {qtyModeFor(leg) === 'lots'
+                              ? leg.qty === 1
+                                ? 'lot'
+                                : 'lots'
+                              : leg.segment === 'cash'
+                                ? 'shares'
+                                : 'units'}
+                          </span>
+                        )}
+                      </td>
                       <td className="px-2 py-1.5">
                         {leg.segment === 'futures' ? (leg.expiry ?? '—') : '—'}
                       </td>

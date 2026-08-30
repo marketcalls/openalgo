@@ -652,6 +652,8 @@ export const contractQueryKeys = {
     [...contractQueryKeys.all, 'strikes', underlying, exchange, expiry] as const,
   search: (query: string, exchange: string) =>
     [...contractQueryKeys.all, 'search', exchange, query] as const,
+  lotSize: (symbol: string, exchange: string) =>
+    [...contractQueryKeys.all, 'lot-size', exchange, symbol] as const,
 }
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -786,6 +788,7 @@ interface SearchRow {
   name: string
   exchange: string
   instrumenttype: string
+  lotsize?: number
 }
 
 export interface UnderlyingSearchResult {
@@ -812,6 +815,18 @@ export interface UnderlyingSearch {
  * Search rows are contracts, so they are collapsed onto their `name` - one row
  * per underlying, carrying the instrument types seen for it.
  */
+async function searchSymbols(apiKey: string, term: string, exchange: string): Promise<SearchRow[]> {
+  const response = await apiClient.post<{
+    status: 'success' | 'error'
+    message?: string
+    data?: SearchRow[]
+  }>('/search', { apikey: apiKey, query: term, exchange })
+  if (response.data.status !== 'success') {
+    throw new Error(response.data.message || 'Search failed.')
+  }
+  return response.data.data ?? []
+}
+
 export function useUnderlyingSearch(
   term: string,
   searchExchange: string,
@@ -823,17 +838,7 @@ export function useUnderlyingSearch(
 
   const query = useQuery({
     queryKey: contractQueryKeys.search(trimmed.toUpperCase(), searchExchange),
-    queryFn: async () => {
-      const response = await apiClient.post<{
-        status: 'success' | 'error'
-        message?: string
-        data?: SearchRow[]
-      }>('/search', { apikey: apiKey, query: trimmed, exchange: searchExchange })
-      if (response.data.status !== 'success') {
-        throw new Error(response.data.message || 'Search failed.')
-      }
-      return response.data.data ?? []
-    },
+    queryFn: () => searchSymbols(apiKey as string, trimmed, searchExchange),
     enabled: active,
     staleTime: 5 * 60_000,
     retry: false,
@@ -871,4 +876,70 @@ export function collapseToUnderlyings(rows: SearchRow[], term: string): Underlyi
       return byRank !== 0 ? byRank : a.symbol.localeCompare(b.symbol)
     })
     .slice(0, SEARCH_RESULT_LIMIT)
+}
+
+/**
+ * The lot size for a contract family, for display beside a lots-mode quantity.
+ *
+ * Read off `POST /api/v1/search`, which already carries `lotsize` on every row
+ * and is the client this module uses for the symbol picker, so the lookup adds
+ * no new endpoint and no second HTTP client.
+ *
+ * The obvious candidate, `/api/v1/optionsymbol`, is option-shaped: it wants an
+ * expiry and an option type in order to resolve a strike, neither of which a
+ * cash or futures signal leg has. `/api/v1/symbol` wants a fully-resolved
+ * contract name (`NIFTY25AUG26FUT`), which would mean constructing broker
+ * symbols in the browser. Searching by root symbol asks for what the leg
+ * actually stores.
+ *
+ * This is display only. The server checks the lot boundary itself at save, and
+ * the engine checks again at entry against the real contract.
+ */
+export function useLotSize(
+  symbol: string | null | undefined,
+  exchange: string | null | undefined,
+  enabled = true
+): { lotSize: number | null; isLoading: boolean; error: string | null } {
+  const { apiKey } = useAuthStore()
+  const root = (symbol ?? '').trim().toUpperCase()
+  const venue = (exchange ?? '').trim().toUpperCase()
+  const active = enabled && Boolean(apiKey) && root.length > 0 && venue.length > 0
+
+  const query = useQuery({
+    queryKey: contractQueryKeys.lotSize(root, venue),
+    queryFn: () => searchSymbols(apiKey as string, root, venue),
+    enabled: active,
+    staleTime: 30 * 60_000,
+    retry: false,
+  })
+
+  return {
+    lotSize: lotSizeFromRows(query.data ?? [], root),
+    isLoading: active && query.isLoading,
+    error: query.isError
+      ? errorMessage(
+          query.error,
+          'Could not read the lot size. The master contract may not be downloaded.'
+        )
+      : null,
+  }
+}
+
+/**
+ * The lot size for a root symbol, out of a page of search rows.
+ *
+ * Futures rows are preferred because a futures leg is what asks: every expiry
+ * of one underlying carries the same lot size, so any FUT row answers for the
+ * family. Anything else with a usable lot size is the fallback.
+ */
+export function lotSizeFromRows(rows: SearchRow[], root: string): number | null {
+  const needle = root.trim().toUpperCase()
+  const mine = rows.filter((row) => (row.name || '').trim().toUpperCase() === needle)
+  const usable = (row: SearchRow) => typeof row.lotsize === 'number' && row.lotsize > 0
+  const futures = mine.find(
+    (row) => (row.instrumenttype || '').toUpperCase() === 'FUT' && usable(row)
+  )
+  if (futures) return futures.lotsize as number
+  const any = mine.find(usable)
+  return any ? (any.lotsize as number) : null
 }

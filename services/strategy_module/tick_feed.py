@@ -158,6 +158,11 @@ DRAIN_BATCH_MAX = 500
 #: only bounds latency when there is nothing to do.
 DRAIN_POLL_SEC = 0.005
 
+#: Used only when nothing is subscribed, so no tick can arrive. Long enough
+#: that an idle worker is not waking constantly, short enough that the first
+#: subscription of the day is picked up without anyone noticing.
+DRAIN_DORMANT_SEC = 0.25
+
 #: Hard ceiling on tracked symbols. Subscriptions are bounded by the operator's
 #: own runs, but a runaway caller must not be able to grow a module-level
 #: registry without bound in a worker that never restarts.
@@ -785,14 +790,31 @@ class RiskTickFeed:
             self._poll_thread.start()
 
     def _run_drain_loop(self) -> None:
-        """Apply ticks on the hub. Never a blocking get() on the real queue."""
+        """Apply ticks on the hub. Never a blocking get() on the real queue.
+
+        The idle wait depends on whether anything could arrive at all, not on
+        how recently something did. While any symbol is subscribed the loop
+        stays at the short interval, because this is the risk path and a tick
+        waited on is a stop evaluated late. When nothing is subscribed no tick
+        can arrive by definition, so the loop waits far longer.
+
+        That distinction matters because these threads are never stopped when
+        the last run ends: they are process-lifetime singletons, and a flat
+        short sleep meant a worker that had run one strategy in the morning was
+        still waking two hundred times a second at midnight, for a queue that
+        could not receive anything.
+        """
         while self._running:
             try:
-                if self._drain_ticks_once() == 0:
-                    time.sleep(DRAIN_POLL_SEC)
+                drained = self._drain_ticks_once()
             except Exception:
                 logger.exception("Strategy tick drain loop error")
                 time.sleep(DRAIN_POLL_SEC)
+                continue
+            if drained:
+                # More may be waiting; come straight back for it.
+                continue
+            time.sleep(DRAIN_POLL_SEC if self._wanted else DRAIN_DORMANT_SEC)
 
     def _run_poll_loop(self) -> None:
         while self._running:

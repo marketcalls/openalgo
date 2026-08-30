@@ -41,6 +41,15 @@ export type StrikeMode = 'atm' | 'strike'
 export type LegSide = 'long' | 'short' | 'both'
 
 /**
+ * How a signal leg's quantity is counted.
+ *
+ * In `lots` the stored number is a lot count and the engine multiplies by the
+ * contract's lot size when it enters. In `units` the number is the quantity
+ * itself. Mirrors `QTY_MODES` in the validator.
+ */
+export type QtyMode = 'lots' | 'units'
+
+/**
  * Expiry ranks the validator accepts (`LEG_EXPIRIES`).
  *
  * `weekly` and `monthly` are the nearest weekly and nearest monthly contract;
@@ -123,8 +132,9 @@ export interface Leg {
   symbol?: string | null
   exchange?: string | null
   side?: LegSide | null
-  /** Raw shares or units, never lots. */
+  /** Counted in lots or in units, per `qty_mode`. */
   qty?: number | null
+  qty_mode?: QtyMode | null
 
   // --- Shared by both kinds. ---
   expiry?: ExpiryRank | null
@@ -497,8 +507,101 @@ export const TAB_INTRADAY_DEFAULTS: Record<UniverseTab, { entry: string; exit: s
 export const MAX_LEGS = 10
 export const MAX_LOTS = 50
 export const MAX_NAME_LENGTH = 200
-/** A signal leg trades raw quantity, so its cap is on shares, not lots. */
+/** Cap on a signal leg's quantity when it is counted in units. */
 export const MAX_SIGNAL_QTY = 1_000_000
+/** Cap on a signal leg's quantity when it is counted in lots. */
+export const MAX_SIGNAL_LOTS = 10_000
+
+/**
+ * Exchanges that trade in lots. Mirrors `DERIVATIVE_EXCHANGES` in
+ * `services/strategy_module/symbol_resolver.py`, which is what the validator
+ * checks the leg's exchange against.
+ */
+export const DERIVATIVE_EXCHANGES = new Set([
+  'NFO',
+  'BFO',
+  'MCX',
+  'CDS',
+  'NCO',
+  'BCD',
+  'NCDEX',
+  'CRYPTO',
+])
+
+/** Whether an exchange has a lot size to multiply by. */
+export function isDerivativeExchange(exchange: string | null | undefined): boolean {
+  return DERIVATIVE_EXCHANGES.has((exchange ?? '').trim().toUpperCase())
+}
+
+/**
+ * The mode a venue implies.
+ *
+ * A derivative is naturally counted in lots and cash in units, so the leg picks
+ * that up from its exchange rather than making the user state it. An explicit
+ * choice always wins - except on cash, where lots is refused outright because
+ * there is no lot size to multiply by.
+ */
+export function defaultQtyMode(exchange: string | null | undefined): QtyMode {
+  return isDerivativeExchange(exchange) ? 'lots' : 'units'
+}
+
+/** The cap that applies to a quantity in the given mode. */
+export function maxQtyFor(mode: QtyMode): number {
+  return mode === 'lots' ? MAX_SIGNAL_LOTS : MAX_SIGNAL_QTY
+}
+
+/**
+ * What a leg's stored quantity actually sends, once the lot size is known.
+ *
+ * Null when it cannot be worked out - an unknown lot size, or a units-mode
+ * quantity, which is already the number that goes to the broker.
+ */
+export function resolvedQuantity(
+  qty: number | null | undefined,
+  mode: QtyMode,
+  lotSize: number | null | undefined
+): number | null {
+  if (qty == null || !Number.isFinite(qty)) return null
+  if (mode === 'units') return qty
+  if (!lotSize || lotSize <= 0) return null
+  return qty * lotSize
+}
+
+/**
+ * The leg that results from switching to another quantity mode.
+ *
+ * The number is kept and reinterpreted, never converted. Rewriting 5 lots into
+ * 325 units would silently edit what the user typed, and the reverse only
+ * works when the lot size is known and divides exactly - so a converting
+ * toggle would sometimes convert and sometimes not, which is harder to trust
+ * than one that never does. A number that is wrong in the new mode fails
+ * visibly: the card says so, and the server refuses a part lot by name.
+ *
+ * Lots on a cash venue is refused outright by the validator, so the switch is
+ * a no-op there rather than something to be undone on save.
+ */
+export function withQtyMode(leg: Leg, mode: QtyMode): Leg {
+  if (mode === 'lots' && !isDerivativeExchange(leg.exchange)) return leg
+  return {
+    ...leg,
+    qty_mode: mode,
+    // Only the cap changes with the mode: 10,000 lots against 1,000,000 units.
+    qty: Math.min(maxQtyFor(mode), leg.qty ?? 1),
+  }
+}
+
+/**
+ * Whether a units-mode quantity lands on a lot boundary.
+ *
+ * True when there is nothing to check against: an unknown lot size is not a
+ * failure the user can act on from this form, and the engine checks again at
+ * entry where the real contract is known. Mirrors `quantity_is_whole_lots`.
+ */
+export function isWholeLots(qty: number | null | undefined, lotSize: number | null): boolean {
+  if (!lotSize || lotSize <= 0) return true
+  if (qty == null || !Number.isFinite(qty)) return true
+  return qty > 0 && qty % lotSize === 0
+}
 
 // ---------------------------------------------------------------------------
 // Pure configuration helpers
@@ -576,13 +679,18 @@ export function freshBatchLeg(id: number, tab: UniverseTab): Leg {
  */
 export function freshSignalLeg(id: number, tab: UniverseTab): Leg {
   const segment: Segment = tab === 'mcx' ? 'futures' : 'cash'
+  const exchange =
+    segment === 'futures'
+      ? derivativeExchangeFor(TAB_DEFAULT_EXCHANGE[tab])
+      : TAB_DEFAULT_EXCHANGE[tab]
   return {
     id,
     segment,
     symbol: '',
-    exchange: TAB_DEFAULT_EXCHANGE[tab],
+    exchange,
     side: 'both',
     qty: 1,
+    qty_mode: defaultQtyMode(exchange),
     expiry: segment === 'futures' ? 'monthly' : null,
     sl_pts: null,
     target_pts: null,
@@ -606,13 +714,19 @@ export function convertLegKind(leg: Leg, kind: StrategyKind, tab: UniverseTab): 
 
   if (kind === 'signal') {
     const segment: Segment = leg.segment === 'futures' ? 'futures' : 'cash'
+    const exchange =
+      leg.exchange ||
+      (segment === 'futures'
+        ? derivativeExchangeFor(TAB_DEFAULT_EXCHANGE[tab])
+        : TAB_DEFAULT_EXCHANGE[tab])
     return {
       id: leg.id,
       segment,
       symbol: leg.symbol ?? '',
-      exchange: leg.exchange || TAB_DEFAULT_EXCHANGE[tab],
+      exchange,
       side: leg.side ?? 'both',
       qty: leg.qty ?? 1,
+      qty_mode: leg.qty_mode ?? defaultQtyMode(exchange),
       expiry: segment === 'futures' ? (leg.expiry ?? 'monthly') : null,
       ...risk,
     }
@@ -652,7 +766,13 @@ export function legToPayload(leg: Leg, kind: StrategyKind = 'batch'): Leg {
     clean.symbol = (leg.symbol ?? '').trim().toUpperCase()
     clean.exchange = (leg.exchange ?? '').trim().toUpperCase()
     clean.side = leg.side ?? 'both'
-    clean.qty = Math.trunc(leg.qty ?? 1)
+    // The mode decides what the number means, so it is sent explicitly rather
+    // than left to the server's venue default: a leg whose exchange the user
+    // has typed by hand should still send the mode the form was showing.
+    const mode: QtyMode = leg.qty_mode ?? defaultQtyMode(clean.exchange)
+    // Lots is refused outright on cash - there is no lot size to multiply by.
+    clean.qty_mode = isDerivativeExchange(clean.exchange) ? mode : 'units'
+    clean.qty = Math.min(maxQtyFor(clean.qty_mode), Math.max(1, Math.trunc(leg.qty ?? 1)))
     // Refused outright on a cash leg, so it is omitted rather than nulled.
     if (leg.segment === 'futures') clean.expiry = leg.expiry ?? 'monthly'
   } else {
