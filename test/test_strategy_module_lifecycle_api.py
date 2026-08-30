@@ -445,3 +445,86 @@ def test_somebody_elses_book_is_invisible(client, path):
     response = client.get(f"/strategy/api/strategies/{sid}/{path}")
 
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Public webhook route
+#
+# Unauthenticated and CSRF exempt by design: the URL token is the credential.
+# Every decision lives in the pipeline; this route only reads the request and
+# turns the outcome into a response.
+# ---------------------------------------------------------------------------
+
+
+def _webhook_client():
+    """A client with no session at all: the webhook must not need one."""
+    application = Flask(__name__)
+    application.config.update(TESTING=True, SECRET_KEY="k", PROPAGATE_EXCEPTIONS=True)
+    application.register_blueprint(strategy_module.strategy_module_bp)
+    return application.test_client()
+
+
+def test_the_webhook_needs_no_session(monkeypatch):
+    monkeypatch.setattr(limiter, "enabled", False)
+    client = _webhook_client()
+
+    with patch("services.strategy_module.webhook.handle_webhook") as handle:
+        handle.return_value.as_response.return_value = ({"status": "success"}, 200)
+        response = client.post("/strategy/webhook/oaws_token", json={"action": "stop"})
+
+    assert response.status_code == 200
+    assert handle.call_count == 1
+
+
+def test_an_unknown_token_answers_json_rather_than_reaching_the_404_handler(monkeypatch):
+    # An unauthenticated 404 feeds Error404Tracker and counts toward an IP ban.
+    # A scanner walking the token space must not be able to get the owner's own
+    # address banned, so this is answered by the view, not by aborting.
+    monkeypatch.setattr(limiter, "enabled", False)
+    client = _webhook_client()
+
+    with patch("services.strategy_module.webhook.handle_webhook") as handle:
+        handle.return_value.as_response.return_value = (
+            {"status": "error", "result": "rejected_token", "message": "Not found"},
+            404,
+        )
+        response = client.post("/strategy/webhook/oaws_nope", json={"action": "stop"})
+
+    assert response.status_code == 404
+    assert response.is_json
+    assert response.get_json()["result"] == "rejected_token"
+
+
+def test_the_raw_body_is_handed_over_rather_than_a_parsed_dict(monkeypatch):
+    # The pipeline enforces its own size cap and accepts several shapes, so it
+    # needs what actually arrived rather than Flask's interpretation of it.
+    monkeypatch.setattr(limiter, "enabled", False)
+    client = _webhook_client()
+
+    with patch("services.strategy_module.webhook.handle_webhook") as handle:
+        handle.return_value.as_response.return_value = ({"status": "success"}, 200)
+        client.post(
+            "/strategy/webhook/oaws_token",
+            data=b'{"action":"start","mode":"sandbox"}',
+            content_type="application/json",
+        )
+
+    body = handle.call_args[0][1]
+    assert isinstance(body, bytes)
+    assert b"sandbox" in body
+
+
+def test_the_caller_address_and_agent_are_passed_for_the_audit_row(monkeypatch):
+    monkeypatch.setattr(limiter, "enabled", False)
+    client = _webhook_client()
+
+    with patch("services.strategy_module.webhook.handle_webhook") as handle:
+        handle.return_value.as_response.return_value = ({"status": "success"}, 200)
+        client.post(
+            "/strategy/webhook/oaws_token",
+            json={"action": "stop"},
+            headers={"User-Agent": "TradingView"},
+        )
+
+    assert handle.call_args[1]["user_agent"] == "TradingView"
+    assert handle.call_args[1]["ip"] is not None

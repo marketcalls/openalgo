@@ -120,6 +120,10 @@ ORDER_KINDS = (
     "exit_close_all",
     "exit_leg_manual",
     "exit_recovery",
+    # Signal mode: an exit driven by a long_exit / short_exit alert rather than
+    # by a rule. Its own kind, so the audit trail can tell an operator-driven
+    # exit from a rule-driven one from a signal-driven one.
+    "exit_signal",
 )
 
 ORDER_STATUSES = ("pending", "open", "complete", "cancelled", "rejected")
@@ -330,7 +334,9 @@ class SmStrategyOrder(Base):
     leg_id = Column(Integer, nullable=False)
     kind = Column(String(30), nullable=False)
 
-    # Broker reference for live runs; a synthetic 'SANDBOX-<n>' for sandbox.
+    # Broker reference. Live runs carry the broker's own id; sandbox runs carry
+    # the sandbox engine's, which is date-prefixed and numeric rather than
+    # prefixed with a word. Both are opaque here.
     broker_order_id = Column(String(100), nullable=True, index=True)
     symbol = Column(String(100), nullable=False)
     exchange = Column(String(20), nullable=False)

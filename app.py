@@ -429,6 +429,10 @@ def create_app():
     with app.app_context():
         # Exempt webhook endpoints from CSRF protection
         csrf.exempt(app.view_functions["chartink_bp.webhook"])
+        # The strategy module's inbound alert path. Unauthenticated by
+        # design: the URL token is the credential, and TradingView cannot
+        # carry a CSRF token.
+        csrf.exempt(app.view_functions["strategy_module_bp.webhook"])
         # Broker postbacks are machine-to-machine POSTs — brokers cannot carry
         # a CSRF token; validation is per-broker (active-session match +
         # Zerodha checksum) inside blueprints/postback.py.

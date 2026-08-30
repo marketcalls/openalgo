@@ -1,9 +1,9 @@
 # blueprints/strategy_module.py
 """HTTP surface for the /strategy module: multi-leg options strategies.
 
-This phase is configuration and read-only history. Lifecycle (start, stop,
-pause, close-all) and the inbound webhook belong to the engine and are not
-routed here yet, so nothing in this file can reach a broker.
+Three surfaces live here: strategy configuration, read-only history, and the
+lifecycle and webhook routes that reach the engine and therefore a broker. The
+validation below is what stands between an inbound payload and an order.
 
 The store in ``database/strategy_module_db.py`` deliberately does no
 validation: its enums are plain tuples rather than SQL CHECK constraints, since
@@ -55,6 +55,61 @@ STRATEGY_RATE_LIMIT = os.getenv("STRATEGY_RATE_LIMIT", "200 per minute")
 # One shared scope across the module, so a client cannot draw a fresh budget per
 # endpoint simply by alternating between them.
 _api_limit = limiter.shared_limit(STRATEGY_RATE_LIMIT, scope="strategy_module_api")
+
+# The same variable and default /chartink and /flow read, so an operator who has
+# already tuned the webhook budget gets it applied here too.
+WEBHOOK_RATE_LIMIT = os.getenv("WEBHOOK_RATE_LIMIT", "100 per minute")
+
+
+def _webhook_token_key():
+    """Rate-limit key naming the strategy instead of the caller."""
+    token = (request.view_args or {}).get("token") or ""
+    return f"strategy-webhook:{token}"
+
+
+# Two limits at one budget, because neither subsumes the other.
+#
+# By caller address: the only key that can stop someone walking the token space.
+# Every guess carries a different token, so a token-keyed limit would score each
+# against an empty bucket and never fire, while each miss still costs a lookup.
+#
+# By token: bounds what one leaked token can do to the broker account however
+# many addresses replay it. The token is the whole credential here, so this is
+# the limit that caps real order flow.
+_webhook_caller_limit = limiter.shared_limit(WEBHOOK_RATE_LIMIT, scope="strategy_webhook_caller")
+_webhook_token_limit = limiter.shared_limit(
+    WEBHOOK_RATE_LIMIT, scope="strategy_webhook_token", key_func=_webhook_token_key
+)
+
+
+@strategy_module_bp.errorhandler(429)
+def _rate_limited(error):
+    """Answer an over-limit caller with 429 JSON rather than the app-wide redirect.
+
+    app.py's handler returns JSON only for paths under /api/, and redirects
+    everything else to the React rate-limited page. A browser reads that page;
+    TradingView does not. A throttled alert would follow the redirect, receive
+    200 and HTML, and be recorded as delivered, so a strategy silently dropping
+    signals would look exactly like a healthy one.
+    """
+    retry_after = 60
+    breached = getattr(error, "limit", None)
+    try:
+        retry_after = int(breached.limit.get_expiry())
+    except (AttributeError, TypeError, ValueError):
+        pass
+
+    response = jsonify(
+        {
+            "status": "error",
+            "result": "rate_limited",
+            "message": "Rate limit exceeded. Please slow down your requests.",
+            "retry_after": retry_after,
+        }
+    )
+    response.status_code = 429
+    response.headers["Retry-After"] = str(retry_after)
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -1396,3 +1451,39 @@ def list_checkpoints(sid):
     # strategy_id narrows the query itself so the store cannot answer for
     # another strategy's run even if that check were ever removed.
     return _ok({"data": store.list_checkpoints(run_id, strategy_id=sid), "run_id": run_id})
+
+
+# ---------------------------------------------------------------------------
+# Public webhook
+#
+# CSRF exempt and unauthenticated by design: the URL token is the credential.
+# Exempted in app.py, beside the /chartink and /flow webhooks.
+# ---------------------------------------------------------------------------
+
+
+@strategy_module_bp.route("/webhook/<token>", methods=["POST"])
+@_webhook_caller_limit
+@_webhook_token_limit
+def webhook(token):
+    """Take one inbound alert and hand it to the validation pipeline.
+
+    Every decision lives in services/strategy_module/webhook.py, which audits
+    each outcome and never raises. This route only reads the request and turns
+    the outcome into a response.
+
+    An unknown token is answered here rather than by aborting, because an
+    unauthenticated 404 feeds Error404Tracker and counts toward an IP ban. A
+    scanner walking the token space must not be able to get the owner's own
+    address banned, and a legitimate alert carrying a rotated token deserves a
+    clear answer rather than a redirect.
+    """
+    from services.strategy_module.webhook import handle_webhook
+
+    outcome = handle_webhook(
+        token,
+        request.get_data(cache=False),
+        ip=request.remote_addr,
+        user_agent=request.headers.get("User-Agent"),
+    )
+    body, status = outcome.as_response()
+    return jsonify(body), status
