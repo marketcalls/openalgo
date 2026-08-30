@@ -162,15 +162,28 @@ To inspect the API when authenticated:
 
 - http://127.0.0.1:5000/strategy-hub/api/strategies
 
+## Continuation status
+
+The weekly momentum plugin has now been implemented in the Lean strategies
+worktree. It uses a configurable spot lookback and momentum threshold, buys a
+near-weekly ATM call or put, enforces one entry per day, exits on target/stop
+or force-exit time, and persists its entry/history state. The isolated engine
+test suite passes 15 tests.
+
+The market adapter is still intentionally deployment-specific. No production
+adapter was added because the deployed NIFTY data/broker API and its LEAN
+subscription contract have not been identified. Keep live execution disabled
+until that interface is supplied and paper-traded.
+
 ## Remaining work / next step recommendations
 
 1. Push both branches when ready:
    - OpenAlgo: `feat/additive-python-strategy-module`
    - Lean strategies: `feature/lean-trading-engine`
 2. Validate `/strategy-hub` in a browser with a real strategy runner or a local simulated publisher
-3. Implement the real strategy logic in `live-nifty-weekly-momentum/strategy.py`
-4. Replace the placeholder `AdapterTemplate` in the market adapter with a real data source before live trading
-5. Confirm each strategy's unit/service name, ZMQ port, and systemd integration in the actual deployment environment
+3. Replace the placeholder `AdapterTemplate` in the market adapter with a real data source before live trading
+4. Confirm each strategy's unit/service name, ZMQ port, and systemd integration in the actual deployment environment
+5. Paper-trade the weekly momentum strategy with the production adapter before enabling live execution
 
 ## Quick summary for the next agent
 
