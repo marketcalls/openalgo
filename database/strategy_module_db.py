@@ -166,6 +166,7 @@ EVENT_KINDS = (
     "leg_exit_filled",
     "leg_exit_rejected",
     "leg_close_manual",
+    "leg_expiry_fallback",
     # Per-leg risk
     "leg_sl_hit",
     "leg_target_hit",

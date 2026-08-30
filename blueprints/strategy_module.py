@@ -241,6 +241,10 @@ SCHEDULER_FIELDS = ("enabled", "days", "start_time", "auto_stop_time", "default_
 MIN_LEGS = 1
 MAX_LEGS = 10
 MAX_LOTS = 50
+# A cash leg's "lots" is a share count, because a cash contract's lot size is 1.
+# Matched to the signal path's own cash ceiling so the same instrument is not
+# capped differently by which kind of strategy holds it.
+MAX_CASH_QUANTITY = 1_000_000
 MAX_NAME_LENGTH = 200
 MAX_UNIVERSE_TAB_LENGTH = 30
 MAX_UNDERLYING_LENGTH = 50
@@ -564,8 +568,17 @@ def _validate_leg(raw: Any, index: int) -> dict:
         ),
         "segment": segment,
         "position": _choice(_required(leg, "position", label), LEG_POSITIONS, f"{label}.position"),
+        # A cash contract's lot size is 1, so on a cash leg this number is the
+        # share count and the derivative cap of 50 made 50 shares the largest
+        # cash order a batch strategy could place. Signal mode counts the same
+        # instrument in units up to a million. The cap that matters on a
+        # derivative is lots; on cash it is shares, and they are not the same
+        # number.
         "lots": _integer(
-            _required(leg, "lots", label), f"{label}.lots", minimum=1, maximum=MAX_LOTS
+            _required(leg, "lots", label),
+            f"{label}.lots",
+            minimum=1,
+            maximum=MAX_CASH_QUANTITY if segment == "cash" else MAX_LOTS,
         ),
     }
 

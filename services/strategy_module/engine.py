@@ -373,6 +373,13 @@ def _resolve_all_legs(
                 "lots": outcome.lots,
                 "quantity": outcome.quantity,
                 "expiry": outcome.expiry,
+                # The chain did not list the rank that was asked for, so a
+                # nearer expiry was used. Carried out of the resolver so the
+                # run can say so: next_week silently becoming the current week
+                # is a different trade from the one that was configured, and
+                # nothing recorded it anywhere.
+                "expiry_fallback": bool((outcome.detail or {}).get("expiry_fallback")),
+                "expiry_rank": (outcome.detail or {}).get("expiry_rank"),
                 "sl_pts": leg.get("sl_pts"),
                 "target_pts": leg.get("target_pts"),
                 "trail": leg.get("trail") or {},
@@ -399,6 +406,24 @@ def _place_entries(
     outcomes: list[dict[str, Any]] = []
 
     for leg in ordered:
+        if leg.get("expiry_fallback"):
+            # Said out loud, on the run, before the order goes out. The
+            # resolver computes this and the engine used to drop it, so a
+            # next_week leg quietly trading the current week left no record at
+            # all: not an event, not a run row, not the leg state.
+            _emit(
+                strategy["id"],
+                user_id,
+                "leg_expiry_fallback",
+                (
+                    f"Leg {leg['leg_id']} asked for the {leg.get('expiry_rank')} expiry; "
+                    f"the chain lists only {leg.get('expiry')}, which was used"
+                ),
+                run_id=run_id,
+                leg_id=leg["leg_id"],
+                severity="warn",
+            )
+
         action = _position_to_action(leg["position"])
         order = order_dispatch.build_order(
             symbol=leg["symbol"],

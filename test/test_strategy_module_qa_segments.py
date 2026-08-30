@@ -769,13 +769,6 @@ def test_a_cash_leg_refuses_an_expiry(market):
     assert "expiry is not valid on a cash leg" in message
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT F8: a batch cash leg is counted in lots and lots is capped at "
-        "MAX_LOTS = 50, so a cash strategy cannot order more than 50 shares"
-    ),
-)
 def test_a_cash_leg_can_express_an_ordinary_equity_quantity(market):
     """100 shares of SBIN is an ordinary order and the module cannot express it.
 
@@ -1349,13 +1342,6 @@ def test_the_resolver_reports_that_a_rank_fell_back_to_the_only_expiry(market):
     assert leg.detail["expiry_fallback"] is True
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT F12: the engine drops ResolvedLeg.detail, so the expiry "
-        "fallback the resolver reports reaches no run row, event or leg state"
-    ),
-)
 def test_a_run_records_that_an_expiry_rank_fell_back(market, broker):
     """next_week silently becomes the current week and nothing says so.
 
