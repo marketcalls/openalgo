@@ -25,6 +25,8 @@ vi.mock('@/api/client', () => ({
 
 import {
   foldStrategyFrame,
+  LIVE_POLL_MS,
+  SOCKET_STALE_MS,
   type StrategyStateFrame,
   type StrategyWireLeg,
   useStrategyLive,
@@ -239,6 +241,76 @@ describe('useStrategyLive transport', () => {
     expect(result.current.checkpoint?.pnl_total).toBe(150)
     expect(result.current.legs).toHaveLength(1)
     expect(result.current.runId).toBe(42)
+  })
+
+  it('resumes polling when a joined socket falls silent after its first frame', async () => {
+    // The failure this guards: liveness used to be "a frame arrived once",
+    // which is sticky. A socket that connected, delivered one snapshot and
+    // then stopped left the poll disabled for the life of the page, so the
+    // operator watched indefinitely stale P&L, legs and run state while the
+    // badge said live. Nothing about a silent socket announces itself, which
+    // is exactly why the fallback has to notice on its own.
+    vi.useFakeTimers()
+    try {
+      const socket = new FakeSocket()
+      shared.socket = socket
+
+      const { result } = renderHook(() => useStrategyLive(7, true), { wrapper })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+
+      act(() => {
+        socket.deliver('strategy_snapshot', stateFrame('snapshot', [wireLeg({ leg_id: 1 })]))
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(result.current.status).toBe('live')
+
+      // Silence, past the staleness bound.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SOCKET_STALE_MS + LIVE_POLL_MS)
+      })
+
+      expect(result.current.status).toBe('polling')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('goes live again when frames resume after a silence', async () => {
+    vi.useFakeTimers()
+    try {
+      const socket = new FakeSocket()
+      shared.socket = socket
+
+      const { result } = renderHook(() => useStrategyLive(7, true), { wrapper })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      act(() => {
+        socket.deliver('strategy_snapshot', stateFrame('snapshot', [wireLeg({ leg_id: 1 })]))
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SOCKET_STALE_MS + LIVE_POLL_MS)
+      })
+      expect(result.current.status).toBe('polling')
+
+      act(() => {
+        socket.deliver(
+          'strategy_delta',
+          stateFrame('delta', [wireLeg({ leg_id: 1 })], { ts_ms: 1_776_000_000_001 })
+        )
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+
+      expect(result.current.status).toBe('live')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('reports an error when the join is refused', async () => {

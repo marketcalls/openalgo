@@ -61,6 +61,16 @@ export const strategyQueryKeys = {
  * its numbers cannot change until someone starts it.
  */
 export const LIVE_POLL_MS = 5_000
+/**
+ * How long a joined socket may stay silent before the REST fallback resumes.
+ *
+ * The engine pushes a delta on every tick it evaluates and a checkpoint every
+ * few seconds, so a run that is alive has no reason to be quiet for this long.
+ * A socket that is connected and silent is the failure this whole fallback
+ * exists for, and treating the first frame as proof of life forever is how the
+ * page ends up showing a stopped clock while claiming to be live.
+ */
+export const SOCKET_STALE_MS = 20_000
 
 /**
  * How often the supporting tables refresh while a run is active. Slower than
@@ -443,6 +453,11 @@ export function useStrategyLive(strategyId: number | null, isRunning: boolean): 
   const [joined, setJoined] = useState(false)
   const [joinError, setJoinError] = useState<string | null>(null)
   const [frame, setFrame] = useState<Checkpoint | null>(null)
+  // When the last accepted frame arrived, and a clock that advances so the
+  // staleness check is re-evaluated rather than only recomputed on a render
+  // that happens to occur.
+  const [lastFrameAt, setLastFrameAt] = useState<number | null>(null)
+  const [clock, setClock] = useState(() => Date.now())
   // Frames are ordered by the server clock, so a delivery that arrives out of
   // order is dropped rather than winding the numbers backwards.
   const lastTsRef = useRef(0)
@@ -480,6 +495,7 @@ export function useStrategyLive(strategyId: number | null, isRunning: boolean): 
     setJoined(false)
     setJoinError(null)
     setFrame(null)
+    setLastFrameAt(null)
     lastTsRef.current = 0
 
     const mine = (payload: { strategy_id?: number } | null | undefined) =>
@@ -505,6 +521,7 @@ export function useStrategyLive(strategyId: number | null, isRunning: boolean): 
       const ts = Number(payload.ts_ms ?? 0)
       if (ts && ts < lastTsRef.current) return
       lastTsRef.current = ts
+      setLastFrameAt(Date.now())
       setFrame((previous) => foldStrategyFrame(previous, payload))
     }
 
@@ -550,6 +567,7 @@ export function useStrategyLive(strategyId: number | null, isRunning: boolean): 
       // The run is over. Drop the live frame so the page stops presenting it as
       // current, and refetch the rows that now carry the finalised numbers.
       setFrame(null)
+      setLastFrameAt(null)
       lastTsRef.current = 0
       queryClient.invalidateQueries({ queryKey: strategyQueryKeys.strategy(strategyId) })
       queryClient.invalidateQueries({ queryKey: strategyQueryKeys.runs(strategyId) })
@@ -584,7 +602,26 @@ export function useStrategyLive(strategyId: number | null, isRunning: boolean): 
     }
   }, [wantSocket, socket, strategyId, queryClient])
 
-  const socketLive = wantSocket && connected && joined && frame !== null
+  // Advance the clock only while a socket is in play, so a page with no
+  // subscription does no timer work at all.
+  useEffect(() => {
+    if (!wantSocket) return
+    const id = window.setInterval(() => setClock(Date.now()), LIVE_POLL_MS)
+    return () => window.clearInterval(id)
+  }, [wantSocket])
+
+  // Live means frames are arriving, not that one arrived once. Without the
+  // recency test this stayed true for the life of the page after the first
+  // frame, so a socket that fell silent left the poll disabled and the page
+  // showed indefinitely stale P&L, legs and run state while reporting itself
+  // live.
+  const socketLive =
+    wantSocket &&
+    connected &&
+    joined &&
+    frame !== null &&
+    lastFrameAt !== null &&
+    clock - lastFrameAt < SOCKET_STALE_MS
 
   const query = useQuery({
     queryKey: strategyQueryKeys.checkpoints(strategyId ?? 0),
@@ -606,7 +643,10 @@ export function useStrategyLive(strategyId: number | null, isRunning: boolean): 
     status = 'error'
   } else if (socketLive) {
     status = 'live'
-  } else if (wantSocket && connected) {
+  } else if (wantSocket && connected && frame === null) {
+    // Connected and waiting for the first frame. Once one has arrived and then
+    // gone stale this must not read as "connecting" again: the connection is
+    // fine, it is the delivery that stopped, and the page is on the fallback.
     status = 'connecting'
   } else if (isRunning) {
     status = query.isError ? 'error' : 'polling'
