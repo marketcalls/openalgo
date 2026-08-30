@@ -38,8 +38,10 @@ from datetime import time as dt_time
 from typing import Any
 
 from flask import Blueprint, jsonify, request, session
+from flask_socketio import join_room, leave_room
 
 from database import strategy_module_db as store
+from extensions import socketio
 from limiter import limiter
 from utils.logging import get_logger
 from utils.session import check_session_validity
@@ -1583,3 +1585,61 @@ def webhook(token):
     )
     body, status = outcome.as_response()
     return jsonify(body), status
+
+
+# ---------------------------------------------------------------------------
+# Live updates
+#
+# A page watching one strategy joins that strategy's room and is pushed to,
+# instead of polling. Rooms are per strategy rather than per user: a page open
+# on strategy 4 must not be woken by strategy 9's ticks.
+#
+# The default Socket.IO namespace has no connect-time authentication in this
+# codebase, so ownership is checked here, on the join. Without that a connected
+# client could name any id and receive another strategy's live P&L and
+# positions. Answering the same way for a strategy that is not yours and one
+# that does not exist keeps the id space unprobeable, as the REST routes do.
+# ---------------------------------------------------------------------------
+
+
+@socketio.on("strategy_subscribe")
+def _strategy_subscribe(data):
+    """Join a strategy's live room, if the caller owns it."""
+    username = _current_user()
+    if not username:
+        return {"status": "error", "message": "Not authenticated"}
+
+    try:
+        sid = int((data or {}).get("strategy_id"))
+    except (TypeError, ValueError):
+        return {"status": "error", "message": "strategy_id is required"}
+
+    if not store.get_strategy(sid, username):
+        return {"status": "error", "message": NOT_FOUND}
+
+    from services.strategy_module import broadcast
+
+    join_room(broadcast.room_for(sid))
+    logger.debug("Socket joined strategy room %s for %s", sid, username)
+
+    # Send the current picture immediately rather than leaving the page blank
+    # until the next tick. A stopped strategy has no run state, and the client
+    # falls back to its REST read for that case.
+    row = store.get_strategy(sid, username)
+    if row and row.current_run_id:
+        broadcast.push_snapshot(row.current_run_id)
+    return {"status": "success", "strategy_id": sid}
+
+
+@socketio.on("strategy_unsubscribe")
+def _strategy_unsubscribe(data):
+    """Leave a strategy's live room."""
+    try:
+        sid = int((data or {}).get("strategy_id"))
+    except (TypeError, ValueError):
+        return {"status": "error", "message": "strategy_id is required"}
+
+    from services.strategy_module import broadcast
+
+    leave_room(broadcast.room_for(sid))
+    return {"status": "success", "strategy_id": sid}

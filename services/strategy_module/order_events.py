@@ -99,6 +99,21 @@ def _on_order_update(event: Any) -> None:
         logger.exception("Could not queue an order update")
 
 
+def _push_fill(run_id: int, order: dict[str, Any] | None) -> None:
+    """Push an order row and the figures it changed. Never raises."""
+    try:
+        from services.strategy_module import broadcast
+
+        run = store.get_run(run_id)
+        if run is None:
+            return
+        if order:
+            broadcast.push_order_update(run.strategy_id, order)
+        broadcast.push_delta(run_id, force=True)
+    except Exception:
+        logger.exception("Could not push a fill for run %s", run_id)
+
+
 def _apply_update(order_id: str, event: Any) -> None:
     """Match the update to a strategy order and apply it."""
     try:
@@ -142,6 +157,11 @@ def _apply_update(order_id: str, event: Any) -> None:
                     order_id,
                     leg_id,
                 )
+
+            # A fill is a one-off: no later frame carries it, so both go out
+            # regardless of the delta throttle. Sent for a priceless fill too,
+            # because the order row still changed and the page should show it.
+            _push_fill(run_id, store.order_to_dict(store.get_order_by_broker_id(order_id)))
             return
 
         if status in _DEAD:

@@ -94,9 +94,20 @@ def _emit(strategy_id: int, user_id: str, kind: str, message: str, **fields: Any
     a bookkeeping problem into an open position.
     """
     try:
-        store.record_event(strategy_id, user_id, kind, message, **fields)
+        row = store.record_event(strategy_id, user_id, kind, message, **fields)
     except Exception:
         logger.exception("Could not record event %s for strategy %s", kind, strategy_id)
+        return
+
+    # Push the row that was actually stored, so the live feed and the Events
+    # tab show the same thing with the same id rather than two near-copies.
+    try:
+        from services.strategy_module import broadcast
+
+        if row is not None:
+            broadcast.push_event(strategy_id, store.event_to_dict(row))
+    except Exception:
+        logger.exception("Could not push event %s for strategy %s", kind, strategy_id)
 
 
 #: Runs whose risk has fired while no broker authorisation was available.
@@ -154,6 +165,16 @@ def _note_actionable_again(strategy_id: int, user_id: str, run_id: int) -> None:
         run_id=run_id,
         severity="warn",
     )
+
+
+def _push_delta(run_id: int, force: bool = False) -> None:
+    """Send the run's live figures to any page watching it. Never raises."""
+    try:
+        from services.strategy_module import broadcast
+
+        broadcast.push_delta(run_id, force=force)
+    except Exception:
+        logger.exception("Could not push a delta for run %s", run_id)
 
 
 def _position_to_action(position: str) -> str:
@@ -719,6 +740,19 @@ def _finalise(run_id: int, strategy_id: int, user_id: str, reason: str, message:
         store.release_strategy(strategy_id)
         _emit(strategy_id, user_id, "run_stopped", message, run_id=run_id)
     finally:
+        # The final figures, forced past the throttle: without it the page is
+        # left frozen one tick short of the truth for the rest of the day.
+        # Both happen before clear_run_state, which is what the payloads read.
+        _push_delta(run_id, force=True)
+        try:
+            from services.strategy_module import broadcast
+
+            broadcast.push_terminal(
+                strategy_id, run_id, reason, snapshot.get("pnl_realized", 0.0) or 0.0
+            )
+        except Exception:
+            logger.exception("Could not push the terminal frame for run %s", run_id)
+
         _unactionable_runs.discard(run_id)
         # Unconditional. If anything above threw, the run's state and its lock
         # would otherwise stay in the registries for the life of the worker,
@@ -852,6 +886,8 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
             )
 
     # Lock released. Everything below reaches the database or the broker.
+    _push_delta(run_id)
+
     for kind, message, extra in events:
         severity = extra.pop("severity", "info")
         _emit(strategy["id"], user_id, kind, message, run_id=run_id, severity=severity, **extra)
