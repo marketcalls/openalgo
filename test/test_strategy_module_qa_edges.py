@@ -680,13 +680,6 @@ def test_closing_a_leg_whose_exit_was_refused_reports_the_failure(broker):
     assert result["ok"] is False
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: engine.stop_run finalises before its exit fills arrive, so the run "
-        "row records pnl_realized=0 and the fills that follow find no state to land in"
-    ),
-)
 def test_a_stopped_run_records_the_pnl_its_exit_fills_actually_produced(broker):
     """Short 75 at 100, bought back at 80: the run made 1500.
 

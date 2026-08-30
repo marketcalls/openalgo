@@ -1096,6 +1096,71 @@ def realized_pnl_since(
         return 0.0
 
 
+def reconcile_run_pnl(run_id: int) -> float | None:
+    """Recompute a run's realized P&L from its own order rows, and store it.
+
+    stop_run places the exits and finalises in the next statement rather than
+    waiting for the fills, because the position is on its way out and nothing
+    should be blocked on the broker. That left pnl_realized at whatever live
+    state held at that instant, which is zero because no leg had closed yet,
+    and clearing the state meant the fill arriving a moment later had nothing
+    to be applied to. The figure was then computed nowhere: a run that made
+    1500 recorded 0, unrecoverably.
+
+    The order rows carry everything needed, so the fill that arrives after
+    finalisation reconciles the row instead of being dropped. Returns the
+    figure written, or None when there is nothing to say.
+    """
+    try:
+        row = db_session.query(SmStrategyRun).filter_by(id=run_id).first()
+        if row is None:
+            return None
+
+        per_leg: dict[Any, dict[str, Any]] = {}
+        for order in db_session.query(SmStrategyOrder).filter_by(run_id=run_id).all():
+            if order.status != "complete" or order.avg_fill_price is None:
+                continue
+            price = float(order.avg_fill_price)
+            if price <= 0:
+                # An entry of zero means the leg never traded, so nothing can
+                # be derived from it. Same rule the engine applies live.
+                continue
+            quantity = int(order.filled_qty or order.qty or 0)
+            leg = per_leg.setdefault(order.leg_id, {"entry": None, "action": None, "exits": []})
+            if order.kind == "entry":
+                leg["entry"] = price
+                leg["action"] = (order.action or "").upper()
+                leg["qty"] = quantity
+            else:
+                leg["exits"].append((price, quantity))
+
+        realized = 0.0
+        settled = 0
+        for leg in per_leg.values():
+            entry = leg.get("entry")
+            if not entry:
+                continue
+            sign = 1.0 if leg.get("action") == "BUY" else -1.0
+            for price, quantity in leg["exits"]:
+                realized += (price - entry) * quantity * sign
+                settled += 1
+
+        if not settled:
+            # No round trip is recorded on any order row, so this cannot speak
+            # to what the run made. Writing the zero it would otherwise compute
+            # would overwrite a figure the engine had already got right from
+            # live state, which is exactly backwards.
+            return None
+
+        row.pnl_realized = realized
+        db_session.commit()
+        return realized
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not reconcile the P&L of run %s", run_id)
+        return None
+
+
 def list_runs(strategy_id: int, limit: int = 100) -> list[dict]:
     try:
         rows = (

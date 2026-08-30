@@ -497,6 +497,14 @@ def apply_fill(
     went_flat = False
     with state.run_state(run_id) as run:
         if run is None:
+            # The run has already finalised, which is the ordinary case for
+            # the exit fills of a stop: stop_run places them and closes the run
+            # without waiting, because the position is on its way out. The
+            # figure it wrote was whatever live state held at that instant,
+            # which is zero. Reconcile it from the order rows so the fill that
+            # arrives afterwards is not simply dropped.
+            if not is_entry:
+                store.reconcile_run_pnl(run_id)
             return False
         leg = run["legs"].get(str(leg_id))
         if leg is None:
