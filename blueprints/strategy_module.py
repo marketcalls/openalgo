@@ -185,6 +185,10 @@ LEG_FIELDS = (
 #: A signal leg is a different shape from a batch leg, not a superset of it.
 #: It names its own instrument and its own absolute quantity, and it carries no
 #: option fields at all: multi-leg option spreads stay in batch mode.
+# Where a signal leg may trade. Cash plus the derivative venues; an index
+# pseudo-exchange is not orderable and is deliberately absent.
+SIGNAL_LEG_EXCHANGES = ("NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "NCO")
+
 SIGNAL_LEG_FIELDS = (
     "id",
     "symbol",
@@ -450,9 +454,14 @@ def _validate_signal_leg(raw: Any, index: int) -> dict:
             else index + 1
         ),
         "symbol": _text(_required(leg, "symbol", label), f"{label}.symbol", max_length=100).upper(),
-        "exchange": _text(
-            _required(leg, "exchange", label), f"{label}.exchange", max_length=20
-        ).upper(),
+        # Checked against the known venues, not taken as free text. Nothing
+        # downstream catches a typo: a signal leg is never resolved against an
+        # underlying, so "NSEE" simply became the exchange on a real order.
+        "exchange": _choice(
+            _text(_required(leg, "exchange", label), f"{label}.exchange", max_length=20).upper(),
+            SIGNAL_LEG_EXCHANGES,
+            f"{label}.exchange",
+        ),
         # Which signals this leg accepts. "both" is the usual intraday case.
         "side": _choice(leg.get("side") or "both", LEG_SIDES, f"{label}.side"),
         "segment": segment,
@@ -482,6 +491,12 @@ def _validate_signal_leg(raw: Any, index: int) -> dict:
         maximum=MAX_SIGNAL_LOTS if qty_mode == "lots" else MAX_SIGNAL_QTY,
     )
 
+    # A signal leg names its own contract, so this rank is descriptive only:
+    # nothing resolves against it. What used to happen is that "NIFTY" on NFO
+    # with expiry "current" placed an order for the literal string NIFTY, with
+    # a quantity that looked entirely plausible because the lot size is read
+    # from the root. _resolve_signal_leg now refuses a symbol the master
+    # contract does not list, which is what actually stops that.
     if segment == "futures":
         clean["expiry"] = _choice(leg.get("expiry") or "current", LEG_EXPIRIES, f"{label}.expiry")
     elif leg.get("expiry") is not None:

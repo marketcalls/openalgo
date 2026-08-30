@@ -1641,14 +1641,6 @@ def test_cash_exchanges_have_no_lot_size_to_report(exchange):
     assert lot_size_for("RELIANCE", exchange) is None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT F11: lot_size_for's fallback is an unanchored prefix match, so "
-        "a base with no contract of its own is answered with a sibling "
-        "product's lot size"
-    ),
-)
 def test_an_unlisted_base_cannot_borrow_a_sibling_products_lot_size():
     """ZZGOLD has no contract. The answer must be None, not ZZGOLDM's 10.
 
@@ -1875,24 +1867,19 @@ def test_signal_mode_has_no_options_segment_to_declare():
     assert "segment must be one of: cash, futures" in message
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT F9: a signal leg is never resolved against the master "
-        "contract, and the expiry the validator accepted on a futures leg is "
-        "never read, so the leg trades whatever string was typed"
-    ),
-)
-def test_a_signal_futures_leg_trades_a_contract_rather_than_a_base_symbol(market, broker):
+def test_a_signal_futures_leg_named_as_a_base_symbol_places_nothing(market, broker):
     """NIFTY on NFO is not a tradable contract; NIFTY31JAN30FUT is.
 
-    blueprints/strategy_module.py:477-480 validates and stores an expiry rank
-    for a signal futures leg. signals._resolve_signal_leg reads only symbol,
-    exchange, qty and qty_mode, so the rank is never resolved and the symbol is
-    passed to the broker verbatim. Batch mode refuses the same leg with
-    contract_not_found; signal mode places it. The quantity is still computed,
-    because lot_size_for matches the base against the NIFTY contracts, so the
-    order looks entirely plausible on the way out.
+    A signal leg names its own instrument, so nothing resolves it from an
+    underlying and a rank. That used to mean the symbol went to the broker
+    verbatim, with a quantity that looked entirely plausible because
+    lot_size_for matches the base against the NIFTY contracts. Batch mode
+    refused the same leg with contract_not_found; signal mode placed it.
+
+    The refusal is now the answer, and it names what to do instead. Resolving
+    the rank into a contract would be a nicer answer and is not what this
+    guards: what it guards is that no order is ever placed for a symbol the
+    master contract does not list.
     """
     strategy = _signal_strategy(
         [
@@ -1910,18 +1897,11 @@ def test_a_signal_futures_leg_trades_a_contract_rather_than_a_base_symbol(market
 
     result = signals.handle_signal(strategy, "long_entry", leg_id=1)
 
-    assert result.ok is True, result.error
-    assert broker[0]["quantity"] == str(5 * NIFTY_LOT)
-    assert broker[0]["symbol"] == "NIFTY31JAN30FUT"
+    assert result.ok is False
+    assert "not a contract on NFO" in result.error
+    assert broker == [], "nothing reached the broker"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT F10: a signal leg's exchange is free text, so a typo is stored "
-        "and sent to the broker"
-    ),
-)
 def test_a_signal_leg_exchange_is_checked_against_the_known_exchanges():
     """A batch strategy's exchange is checked against a list; a signal leg's is not.
 

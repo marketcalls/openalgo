@@ -427,7 +427,11 @@ def _resolve_signal_leg(leg: dict, side: str) -> tuple[dict | None, str | None]:
     of 65 becomes 325. Storing the lot count rather than the product is what
     lets a leg survive an exchange revising its lot size.
     """
-    from services.strategy_module.symbol_resolver import resolve_quantity
+    from services.strategy_module.symbol_resolver import (
+        DERIVATIVE_EXCHANGES,
+        contract_exists,
+        resolve_quantity,
+    )
 
     symbol = leg.get("symbol")
     exchange = leg.get("exchange")
@@ -437,6 +441,14 @@ def _resolve_signal_leg(leg: dict, side: str) -> tuple[dict | None, str | None]:
 
     symbol = str(symbol).upper()
     exchange = str(exchange).upper()
+
+    # A signal leg names its instrument outright, so this is the only place
+    # that can tell whether it names a real one. A futures leg configured as
+    # the base symbol produced an entirely plausible quantity, because the lot
+    # size is read from the root, and then sent the literal base to the broker
+    # as an order. Batch mode refuses the same leg with contract_not_found.
+    if exchange in DERIVATIVE_EXCHANGES and not contract_exists(symbol, exchange):
+        return None, f"{symbol} is not a contract on {exchange}"
     quantity, lot_size, error = resolve_quantity(
         raw_qty, leg.get("qty_mode") or "units", symbol, exchange
     )

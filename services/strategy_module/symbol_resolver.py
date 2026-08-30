@@ -269,22 +269,65 @@ def lot_size_for(symbol: str, exchange: str) -> int | None:
             return int(record[0])
 
         # Fall back to the normalised symbol, which reads the same on every
-        # broker. Anchored with a prefix match and confirmed by lot size.
-        record = (
-            db_session.query(SymToken.lotsize)
+        # broker. A LIKE prefix is not an anchor: GOLD% matches GOLDM and
+        # GOLDPETAL, so a base with no contract of its own used to be handed a
+        # neighbour's lot size, and the user's lot count was then multiplied by
+        # it. Every OpenAlgo derivative symbol is the base followed
+        # immediately by the expiry day, so the character after the root must
+        # be a digit for the row to belong to this base.
+        # find_near_month_futures anchors the same lookup for the same reason.
+        rows = (
+            db_session.query(SymToken.symbol, SymToken.lotsize)
             .filter(
                 SymToken.symbol.like(f"{root}%"),
                 SymToken.exchange == venue,
                 SymToken.lotsize.isnot(None),
                 SymToken.lotsize > 0,
             )
-            .first()
+            .limit(200)
+            .all()
         )
-        if record and record[0]:
-            return int(record[0])
+        for candidate, lotsize in rows:
+            tail = str(candidate)[len(root) :]
+            # Either the row is this contract exactly, which is what a signal
+            # leg names, or the root is followed by the expiry day. "GOLDM..."
+            # is neither, so GOLD cannot borrow GOLDM's lot size.
+            if (tail == "" or tail[:1].isdigit()) and lotsize:
+                return int(lotsize)
     except Exception:
         logger.exception("Could not read a lot size for %s on %s", root, venue)
     return None
+
+
+def contract_exists(symbol: str, exchange: str) -> bool:
+    """Whether the master contract lists this exact symbol on this exchange.
+
+    A signal leg names its instrument outright rather than being resolved from
+    an underlying and an expiry rank, so nothing else checks that the name is
+    tradable. A futures leg configured as the base symbol ("NIFTY" on NFO)
+    still produced a plausible quantity, because the lot size is looked up on
+    the root, and the literal base then went to the broker as an order.
+
+    Answers False only when the master contract is present and has no such
+    row: with no rows at all for that exchange there is nothing to check
+    against, and refusing every order because the contract has not been
+    downloaded yet would be worse than the defect.
+    """
+    if not symbol or not exchange:
+        return False
+    name = str(symbol).upper()
+    venue = str(exchange).upper()
+    try:
+        from database.symbol import SymToken, db_session
+
+        if db_session.query(SymToken.id).filter_by(symbol=name, exchange=venue).first():
+            return True
+        # No rows for this venue at all: the master contract has not been
+        # downloaded, so this cannot be called a bad symbol.
+        return db_session.query(SymToken.id).filter_by(exchange=venue).first() is None
+    except Exception:
+        logger.exception("Could not check the master contract for %s on %s", name, venue)
+        return True
 
 
 def resolve_quantity(
