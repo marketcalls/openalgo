@@ -118,10 +118,31 @@ function liveStatusBadge(status: StrategyLiveStatus): {
       return { label: 'live', variant: 'default' }
     case 'connecting':
       return { label: 'connecting', variant: 'secondary' }
+    // Named for what it is. The numbers are still correct, just slower, and
+    // saying "live" while the socket is down is the failure this badge exists
+    // to make visible.
+    case 'polling':
+      return { label: 'polling', variant: 'secondary' }
     case 'error':
       return { label: 'error', variant: 'destructive' }
     default:
       return { label: 'idle', variant: 'outline' }
+  }
+}
+
+/** What the badge means, spelled out for the tooltip. */
+function liveStatusHint(status: StrategyLiveStatus): string {
+  switch (status) {
+    case 'live':
+      return 'Streaming from the strategy room on the shared connection.'
+    case 'connecting':
+      return 'Connected, waiting for the first snapshot.'
+    case 'polling':
+      return `Socket unavailable, so the checkpoint is being read every ${LIVE_POLL_MS / 1000}s instead. The numbers are current, just slower.`
+    case 'error':
+      return 'Could not subscribe to this strategy. The figures below may be stale.'
+    default:
+      return 'Not streaming: the strategy is not running.'
   }
 }
 
@@ -325,14 +346,14 @@ function LiveTab({
             <CardTitle>Live P&amp;L</CardTitle>
             <CardDescription>
               {isRunning
-                ? 'Realized + Unrealized = Total, from the engine’s latest checkpoint.'
+                ? 'Realized + Unrealized = Total, streamed from the engine while the run is active.'
                 : 'Last run — realized P&L from the most recent run; resets on the next Start.'}
             </CardDescription>
           </div>
           <Badge
             variant={badge.variant}
             className="text-[10px]"
-            title={`Polling every ${LIVE_POLL_MS / 1000}s while a run is active. This slot becomes the push-channel indicator when the strategy socket lands.`}
+            title={liveStatusHint(live.status)}
           >
             {badge.label}
           </Badge>

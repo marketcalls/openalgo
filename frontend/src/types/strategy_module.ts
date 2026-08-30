@@ -319,6 +319,13 @@ export interface LegState {
   trail_active: boolean
   highest_price: number | null
   lowest_price: number | null
+  /**
+   * The favourable excursion in points, when the source measured it already.
+   *
+   * The socket sends this instead of the price ratchet it came from; a
+   * checkpoint row sends the ratchet and leaves this undefined.
+   */
+  favorable_points?: number | null
 }
 
 /** A runtime snapshot of a run: one point on its P&L curve. */
@@ -941,8 +948,16 @@ export function derivativeExchangeFor(underlyingExchange: string): string {
  * `favorable_peak_points` in `services/strategy_module/state.py`.
  */
 export function favorablePeakPoints(
-  leg: Pick<LegState, 'position' | 'entry_avg' | 'highest_price' | 'lowest_price'>
+  leg: Pick<
+    LegState,
+    'position' | 'entry_avg' | 'highest_price' | 'lowest_price' | 'favorable_points'
+  >
 ): number {
+  // Already measured by the sender, which is the socket's shape. Preferred
+  // over re-deriving it so the two transports cannot disagree by a tick.
+  if (leg.favorable_points != null && Number.isFinite(leg.favorable_points)) {
+    return Math.max(0, leg.favorable_points)
+  }
   const entry = leg.entry_avg || 0
   if (!entry) return 0
   if (leg.position === 'B') {
