@@ -143,7 +143,7 @@ Each object in `data`:
 | entry_time | string or null | IST entry time as `HH:MM` |
 | exit_time | string or null | IST square-off time as `HH:MM` |
 | product | string | `CNC`, `NRML` or `MIS` |
-| pricetype | string | `MARKET`, `LIMIT`, `SL` or `SL-M` |
+| pricetype | string | `MARKET`. Neither the strategy nor a leg carries a price, so a LIMIT, SL or SL-M order would go out priced at zero; exits are MARKET on every path regardless |
 | overall_sl_mtm | number or null | Strategy-level stop loss in rupees of MTM |
 | overall_target_mtm | number or null | Strategy-level target in rupees of MTM |
 | lock_profit | object or null | `{mode, if_profit_reaches, lock_profit, trail_step}` |

@@ -114,6 +114,13 @@ Golden vectors in `test/risk/vectors.json` bind the Python core to the
 TypeScript copy in `frontend/src/hooks/useTrailingSL.ts`. Add a case there
 whenever a rule changes, so the two cannot drift.
 
+`aggregate_pnl` counts a position's realized P&L whether or not it is currently
+open. A signal leg re-entered after a completed round trip carries that round
+trip's result and is open again; counting realized only while closed made the
+figure vanish the moment the next entry was placed, so a daily loss limit reset
+on every flat moment and could never be reached. A position that never closed
+carries zero there, so nothing else changes.
+
 ### risk_adapter public surface
 
 ```python
@@ -135,6 +142,25 @@ Two mappings in here are easy to get wrong:
   move a stop at all.
 - **`overall_sl_mtm` is stored positive and applied as a negative threshold.**
   It passes through unchanged; the core takes it the same way.
+
+## The daily loss limit
+
+`daily_loss_limit_inr` is a limit on the **session**, not on a run.
+`overall_sl_mtm` cannot express it: that one is reset every time a run opens,
+which for a signal or scheduled strategy is several times a day, so a strategy
+could lose its whole budget three times over and open a fourth run.
+
+The session is the one that began at `SESSION_EXPIRY_TIME` (03:00 IST by
+default), not at midnight, because that is when OpenAlgo revokes broker tokens
+and ends its own day. `services/strategy_module/session.py` holds that boundary;
+the engine and the signal path both need it and neither may import the other.
+
+Runs that have finished since the boundary contribute the figure on their row,
+and the live run contributes what it is marked at. Crossing the limit squares
+off and stops with `stop_reason="daily_loss_limit"`. The banked half is cached
+and invalidated by `finish_run` and `reconcile_run_pnl`, because the reader is
+the per-tick risk evaluation and under `NullPool` an uncached read is a real
+database connection per tick.
 
 ## The two strategy kinds
 
@@ -304,7 +330,8 @@ start_run(strategy_id, user_id, mode, trigger_source="manual",
           webhook_event_id=None) -> StartResult(ok, run_id, error, legs)
 stop_run(run_id, user_id, reason="manual") -> dict
 close_leg(run_id, leg_id, user_id) -> dict
-apply_fill(run_id, leg_id, avg_price, is_entry) -> bool     # True when the run went flat
+apply_fill(run_id, leg_id, avg_price, is_entry,
+           filled_qty=None, order_row_id=None) -> bool       # True when the run went flat
 process_tick(symbol, exchange, ltp) -> None
 ```
 
@@ -321,8 +348,22 @@ Load-bearing orderings:
   strike, and exiting that opens a new position rather than closing one.
 - **A leg is closed by its fill arriving**, not by its exit being placed.
   `apply_fill` finalises a run that has gone flat.
-- **A rejected exit clears its own marker**, so a failed attempt is not mistaken
-  for a duplicate and the position stranded.
+- **A leg is claimed for exit under the state lock**, by
+  `state.claim_leg_exit`, which does the claim and the duplicate check in one
+  hold. The marker is `exit_kind`, written before any dispatch, because
+  `exit_order_id` is not written until the order comes back: testing that let
+  two rules firing on one leg send a covering order each, and left the guard
+  unarmed whenever the audit row could not be written. The batch path and the
+  signal path use the same claim.
+- **A rejected exit releases its claim**, so a failed attempt is not mistaken
+  for a duplicate. Without that the leg is skipped for the rest of the session:
+  its stop loss, its target, the square-off and the operator's Close button all
+  pass over a position still held at the broker.
+- **A stop whose exits were all refused does not close the run.** Finalising
+  would release the strategy, drop the live state and unsubscribe the prices
+  while the positions are still at the broker. It stays open, emits
+  `run_stop_failed` at critical severity, and reports what was refused.
+  `close_leg` likewise reports a refusal rather than answering ok.
 - **Trail-to-entry fires only on a stop-driven exit**, never on a manual close.
   That rule answers the market moving against the book; an operator closing a
   leg by hand is an override.
@@ -341,8 +382,20 @@ Three departures from how the rest of the product places orders:
 
 - **Mode is per run, not global.** The analyzer setting is one platform-wide
   switch and `place_order` consults it, but two runs may disagree. This module
-  branches on the run's own mode and calls each pipe directly. It neither reads
-  nor writes the global toggle.
+  branches on the run's own mode and calls each pipe directly, and a live run
+  passes `force_live=True` to `place_order_with_auth` so the platform-wide
+  toggle cannot divert it. Without that, an operator switching to analyze mode
+  while a live run held real positions sent every exit to the sandbox, which
+  reports success: the engine booked the exit, closed the leg and finalised the
+  run, leaving a real position open with nothing evaluating its stop.
+- **The product is translated to the venue.** A strategy carries one product for
+  every leg. `build_order` reads it as the intent rather than the literal: MIS
+  is intraday everywhere, anything else means carry, which is NRML on a
+  derivatives venue and CNC on cash. A basket mixing a cash leg and an option
+  leg therefore works, and no leg is ever sent a product its venue refuses.
+- **Entries are MARKET.** Neither the strategy nor a leg carries a price, so a
+  LIMIT, SL or SL-M entry would go out priced at zero. Exits are MARKET on every
+  path regardless: a stop that cannot fill is not a stop.
 - **Action Center is bypassed.** `place_order` routes API-key orders into the
   semi-automatic approval queue when enabled. A stop-loss exit that waits for a
   human to approve it is not a stop loss, so dispatch calls
@@ -417,8 +470,29 @@ start() -> bool                          # idempotent; called by runtime
   the guard.
 - **A rejection is final.** A late, out-of-order "complete" cannot resurrect it
   into a position the account never held.
-- A fill reporting no average price is recorded but not applied: seeding a leg
-  from zero would give it a stop derived from nothing.
+- **A fill is applied only to the order the leg is waiting on.** Fills from
+  the stream carry the order row id. A signal flip squares the held side and
+  opens the other immediately, so until the closing order fills one leg id names
+  two positions; the outgoing one is kept under `superseded` and settles from
+  its own entry and size. Without that, the old long's exit fill closed the new
+  short, which then vanished from `open_legs`: no stop evaluated, no square-off
+  reaching it, and the broker still holding it.
+- **A price must be strictly positive and finite**, checked with the same
+  `services.risk.models.is_price` a tick has to satisfy. A truthiness test let
+  the string `"0"` through, and several brokers send numerics as strings: the
+  leg was then marked complete with an entry of 0.0, which `stop_from_points`
+  refuses, so it had no stop while everything displayed it as managed.
+- **The leg is resized to what actually filled.** A partial fill whose remainder
+  was cancelled is ordinary on an illiquid strike, and exiting the size that was
+  asked for rather than the size that traded reverses the position.
+- **An exit on a leg whose entry never filled books nothing.** Deriving from an
+  entry of zero booked the whole notional as realized, and that figure is what
+  the combined stop, the combined target and the lock-profit floor are judged
+  against.
+- **A cancel is recorded as cancelled**, not as a rejection.
+- **A fill arriving after the run finalised reconciles the run row** from its
+  own order rows. `stop_run` does not wait for fills, so the figure it writes at
+  that instant is zero; the fill that follows is what makes the row right.
 
 ## Durability
 
@@ -487,7 +561,11 @@ single source of truth, which only holds because every CRUD write calls
 It also closes a hole in the original: there, the square-off job comes only from
 `scheduler.auto_stop_time`, so an intraday strategy with `exit_time` set and
 `auto_stop_time` blank was never squared off at all. Here `exit_time` installs
-that job when no `auto_stop_time` is given.
+that job when no `auto_stop_time` is given, **and when the scheduler is switched
+off entirely**, on weekdays. That last case is the default intraday
+configuration, started by an alert and squared off by the clock, and it is the
+one the fallback originally could not reach because it sat below the early
+return for a scheduler that is not enabled.
 
 ## Public webhook
 
@@ -502,6 +580,28 @@ note_run_stopped(strategy_id) -> None    # arms the cooling-off window
 ip_allowed(ip, allowlist) -> bool
 reset_state() -> None
 ```
+
+Five properties the token being the whole credential makes necessary:
+
+- **The token never reaches `logs.db`.** `utils/traffic_logger.py` masks the
+  credential segment of `/strategy/webhook/`, `/flow/webhook/` and
+  `/chartink/webhook/` paths. The traffic log keeps 30 days and is readable at
+  `/traffic`, so a token logged verbatim there is a second, longer-lived copy of
+  the credential.
+- **The caller is `get_real_ip()`, not `remote_addr`.** Behind a reverse proxy,
+  which is how most installs run, `remote_addr` is the proxy: the IP allowlist
+  would be either useless or total, and the audit trail would name the proxy.
+- **An oversized body is refused from `Content-Length`, before it is read.**
+  The cap inside the pipeline is measured on bytes already in memory.
+- **The rate limiter is keyed on the token's digest.** Its in-memory storage
+  empties the event list of an expired window but never removes the key, so a
+  raw token there would persist for the life of the worker, one entry per token
+  ever presented including every guess.
+- **Audit rows for an unrecognised token are capped** at the newest 1000. They
+  name no strategy, so nothing displays them and nothing deleted them: anyone
+  who could reach the URL could grow the database without limit, invisibly. They
+  are kept rather than dropped because a run of them is the first sign of
+  somebody walking the token space.
 
 Validation pipeline, in order, with every stage audited to `sm_webhook_event`:
 
@@ -567,7 +667,30 @@ resolve_underlying_ltp(underlying, exchange, api_key=None) -> UnderlyingQuote
 resolve_leg(leg, underlying, underlying_exchange, strategy_type=None, *,
             api_key=None, underlying_ltp=None) -> ResolvedLeg
 derivatives_exchange(exchange) -> str
+lot_size_for(symbol, exchange) -> int | None
+quantity_is_whole_lots(quantity, lot_size) -> bool
+resolve_quantity(value, qty_mode, symbol, exchange) -> (quantity, lot_size, error)
+contract_exists(symbol, exchange) -> bool
 ```
+
+`resolve_quantity` is what makes lots mode mean lots: 5 lots of NIFTY is
+5 x 65 from the master contract, and the lot **count** is what is stored, so a
+strategy survives an exchange revising the lot size. An unknown lot size in
+lots mode is an error rather than a guess, because the quantity would otherwise
+be fabricated.
+
+`lot_size_for` matches on `name` first and falls back to the symbol, anchored:
+the row must be the contract exactly or the base followed by the expiry day. An
+unanchored prefix let `GOLD` match `GOLDM` and `GOLDPETAL`, so a base with no
+contract of its own was handed a neighbour's lot size and the user's lot count
+was multiplied by it.
+
+`contract_exists` is what a **signal** leg is checked against. A signal leg
+names its own instrument, so nothing resolves it from an underlying and a rank,
+and a futures leg configured as the base symbol went to the broker verbatim
+with a quantity that looked entirely plausible. It answers True when the master
+contract has no rows for that venue at all, so a strategy is not blocked merely
+because the contract has not been downloaded yet.
 
 Delegates every piece of market knowledge it can to
 `services/option_symbol_service.py`, including the rule that an MCX commodity
@@ -633,6 +756,26 @@ Both enforce the same properties:
 - A PATCH re-validates the whole merged configuration, not just the changed
   fields, so a two-field invariant cannot be broken one request at a time.
 
+## Live updates
+
+A page watching one strategy joins the SocketIO room `strategy:{id}` through the
+shared connection and is pushed six frame kinds: `strategy_snapshot`,
+`strategy_delta`, `strategy_event`, `strategy_order_update`,
+`strategy_run_update` and `strategy_terminal`. Deltas are throttled to 100ms;
+one-off frames (a fill, a terminal) are exempt.
+
+- **Ownership is checked on the join**, because the default namespace has no
+  connect-time authentication. A strategy that is not yours and one that does
+  not exist are refused identically.
+- **Frames are ordered by `ts_ms`**, so a late delivery is dropped rather than
+  winding the numbers backwards.
+- **The 5s checkpoint poll remains as a fallback**, and its interval is gated on
+  the socket actually *delivering*. Connected is not enough: a healthy-looking
+  connection that delivers nothing is the failure being guarded against.
+- The frontend must go through `useSocketContext()`, never `io(...)` directly:
+  each Socket.IO connection holds an HTTP connection against the browser's
+  per-host limit, shared across tabs.
+
 ## Defects deliberately not carried over
 
 Each is pinned by a test that says so.
@@ -652,17 +795,21 @@ Each is pinned by a test that says so.
 6. **Checkpoints never pruned**, growing without bound in a worker that never
    restarts.
 7. **Two disagreeing order-status normalisers.**
+8. **A repeated exit alert reversing a signal position.** A leg stays open until
+   its exit fill arrives, so the second alert found the position still held and
+   sent a second closing order.
+9. **A refused exit disarming its own leg permanently**, so its stop loss, its
+   target and every square-off passed over a position still held.
 
 ## Not built yet
 
-- **SocketIO streaming.** The Live tab polls `/checkpoints` at 5 seconds while a
-  run is active. The seam is one hook, `useStrategyLive` in
-  `frontend/src/api/strategy_module.ts`, whose body can be swapped without
-  touching a page. It must go through `useSocketContext()`, never `io(...)`
-  directly: each Socket.IO connection holds an HTTP connection against the
-  browser's per-host limit, shared across tabs.
-- **The wizard's signal leg builder.** Signal mode can be driven over the
-  webhook and the API but not yet configured in the UI.
+- **Resolving an expiry rank on a signal leg.** A signal leg must name the
+  contract itself; a base symbol with an expiry rank is refused rather than
+  resolved. The refusal is safe, but resolving would be the better answer.
+- **A joined SocketIO room outliving the session that joined it.** Ownership is
+  checked on the join and nothing re-checks it, so a socket connected before a
+  logout keeps receiving that strategy's frames until it disconnects. Low, on a
+  single-user deployment where the only owner is the person logging out.
 - **`trigger_source` for API starts.** An API-key start records `manual`,
   because the store's vocabulary has no `api` value, so the audit trail cannot
   distinguish a browser start from an API one.

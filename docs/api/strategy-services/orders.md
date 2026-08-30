@@ -109,7 +109,7 @@ Each object in `data`:
 | exchange | string | Exchange code |
 | action | string | `BUY` or `SELL` |
 | qty | integer | Quantity sent |
-| pricetype | string | `MARKET`, `LIMIT`, `SL` or `SL-M` |
+| pricetype | string | `MARKET`. Neither the strategy nor a leg carries a price, so a LIMIT, SL or SL-M order would go out priced at zero; exits are MARKET on every path regardless |
 | price | number | Order price, `0` for a market order |
 | trigger_price | number | Trigger price, `0` when unused |
 | status | string | `pending`, `open`, `complete`, `cancelled` or `rejected` |

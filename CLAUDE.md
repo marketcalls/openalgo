@@ -136,6 +136,36 @@ all sit on it.
 
 Full reference: [`docs/prompt/strategy_rms_documentation.md`](docs/prompt/strategy_rms_documentation.md).
 
+### An order path decides once, under the lock, and never on a global switch
+
+Every place that can send an order for a position somebody already holds is a
+place where two decisions can become two orders. Three rules, each learned from
+a defect that reversed a real position:
+
+- **Claim under the same lock that checks.** `state.claim_leg_exit` does the
+  duplicate check and writes the marker in one hold. The marker is `exit_kind`,
+  written *before* the dispatch, never `exit_order_id`, which is not written
+  until the order comes back: testing the latter let two rules firing on one leg
+  send a covering order each, and left the guard unarmed whenever the audit row
+  failed to write. A refused dispatch **releases** the claim, or that leg is
+  skipped by its stop loss, its target and every square-off for the rest of the
+  session while the broker still holds it.
+- **Match a fill to the order it belongs to, not to the leg.** A signal flip
+  squares one side and opens the other immediately, so one leg id names two
+  positions until the closing order fills. Applying an exit fill by leg alone
+  closed the position that had just been opened, and it then vanished from
+  `open_legs` entirely: no stop, no square-off, still held.
+- **A caller that has already decided the pipe says so.** `place_order_with_auth`
+  reads the platform-wide analyzer toggle before anything else, so an operator
+  switching to analyze mode while a live run held real positions sent every exit
+  to the sandbox, which reports success. `force_live=True` opts out. Anything
+  executing a position it opened must pass it.
+
+The same shape applies wherever a stop is finalised: a stop whose exit orders
+were refused must leave the run **open and managed**, because the position is
+still there. Reporting success and clearing the state is how a position ends up
+with nothing watching it.
+
 ### SQLite uses NullPool, never StaticPool
 
 All SQLite engines are created via `database.engine_factory.create_db_engine()`,

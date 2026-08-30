@@ -26,12 +26,14 @@ Every `/api/v1/strategy/` route is a POST with the identifier in the JSON body. 
 
 The public webhook is **not** under `/api/v1` and takes no `apikey`. The URL token identifies the strategy.
 
-## Four Rules That Cost Money If You Get Them Wrong
+## Six Rules That Cost Money If You Get Them Wrong
 
 1. **`mode` is required on `/start` and is never defaulted.** Omitting it is a 400, not a live order. The schema declares it `required=True` with no `load_default`, and no layer supplies a fallback.
 2. **Live is opt-in per strategy.** A strategy is created sandbox-only. `mode: "live"` is refused with a 409 until the operator enables live trading on the strategy page.
 3. **A strategy that is not yours returns 404, never 403.** The response is byte-identical to one for a strategy that does not exist, so the id space cannot be probed.
 4. **No endpoint returns a webhook token.** Only its SHA-256 digest is stored. The plaintext is shown once, at creation and at rotation, in the browser.
+5. **A `/stop` can answer `ok: false` with the run still open.** When the broker refuses the exit orders, the positions are still there, so the run stays live and managed rather than being closed on paper. Read the per-leg `ok` flags and retry; treating a 2xx envelope as "flat" is how a position ends up unmanaged.
+6. **`pnl_realized` on a just-stopped run is not final.** A stop does not wait for its fills. The figure is reconciled from the order rows as they arrive, so read it from [`/runs`](./runs.md) after the fills rather than in the same breath as the stop.
 
 ## Authentication
 
@@ -136,7 +138,25 @@ A run started through this API records `manual`: an API-key start is a person as
 
 `entry`, `exit_sl`, `exit_target`, `exit_trail`, `exit_overall_sl`, `exit_overall_target`, `exit_lock_profit`, `exit_eod`, `exit_expiry`, `exit_daily_loss_limit`, `exit_close_all`, `exit_leg_manual`, `exit_recovery`
 
-Signal-mode exits are recorded as `exit_signal`, which the tuple does not currently list.
+Signal-mode exits are recorded as `exit_signal`, which the tuple now lists.
+
+### Quantity modes
+
+`lots`, `units`
+
+`lots` multiplies the value by the contract's lot size from the master contract, so 5 lots of NIFTY is 5 x 65. The lot **count** is what is stored, so a strategy survives the exchange revising the lot size, as NIFTY did from 75 to 65. `units` is the number of shares or contracts outright. A derivative venue defaults to `lots` and a cash venue to `units`; an explicit value always wins. An unknown lot size in `lots` mode is an error, never a guess.
+
+### Products
+
+`CNC`, `NRML`, `MIS`
+
+A strategy carries one product for every leg, and it is read as the **intent** rather than the literal: `MIS` is intraday everywhere, and anything else means carry the position, which is sent as `NRML` on a derivatives venue and `CNC` on cash. A basket mixing a cash leg and an option leg therefore works, and no leg is ever sent a product its venue refuses.
+
+### Price types
+
+`MARKET`
+
+Only. Neither a strategy nor a leg carries a price, so a `LIMIT`, `SL` or `SL-M` entry would go out priced at zero. Exits are `MARKET` on every path regardless: a stop that cannot fill is not a stop.
 
 ### Order statuses
 

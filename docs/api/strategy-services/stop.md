@@ -93,7 +93,7 @@ Each object in `exits`:
 | 400 | Schema validation failed |
 | 403 | `Invalid openalgo apikey` |
 | 404 | `Strategy not found` |
-| 409 | `This strategy is not running`, or the engine refused the stop, for example `Run is not active` |
+| 409 | `This strategy is not running`, the engine refused the stop (for example `Run is not active`), or the broker refused the exit orders and the run is still holding the positions |
 | 429 | Rate limited |
 | 500 | `An unexpected error occurred` |
 
@@ -102,10 +102,12 @@ Each object in `exits`:
 - **The caller never supplies a run id.** The run is resolved from the strategy's `current_run_id`. A caller-supplied run id would be a second thing to authorise, and getting it wrong would mean stopping a run that is not the live one.
 - **409, not 400, when nothing is running.** The payload is fine; the state is not. The caller's fix is to start the strategy, not to correct the request.
 - Exits go out at market. The symbol comes from each leg's own recorded state, never from re-resolving the configuration: an ATM offset resolved again hours later can name a different strike, and exiting a contract the run does not hold would open a new position instead of closing one.
-- A leg that already has an exit on its way out is not sent a second one.
+- A leg that already has an exit on its way out is not sent a second one. The claim and the duplicate check happen in one hold of the run's lock, so two rules firing on the same leg cannot each send a covering order.
+- **A stop whose exit orders were all refused does not close the run.** The positions are still at the broker, so finalising would release the strategy and stop evaluating their stops while they are open. The response reports which legs were refused and the run stays live and managed; retry the stop.
+- A refused exit leaves the leg exitable rather than marking it as having an exit in flight, so a later stop, a stop loss, a target or the scheduler's square-off can still reach it.
 - `run_stopped` is not part of this response. A successful stop always ends the run; see [`/close_leg`](./close_leg.md) for the partial case.
 - Finalising a run arms the [webhook](./webhook.md) cooling-off window, so an inbound `start` alert is refused for the next 30 seconds. That holds for every stop, not only the ones a webhook asked for, so a stale alert cannot re-enter the position that was just closed.
-- The run's final `pnl_realized`, `pnl_peak` and `pnl_trough` are written on stop and readable from [`/runs`](./runs.md).
+- The run's `pnl_peak` and `pnl_trough` are written on stop. `pnl_realized` is written on stop and then **reconciled from the order rows when the exit fills arrive**, because a stop does not wait for them: read it from [`/runs`](./runs.md) after the fills, not in the same breath as the stop.
 
 ## Use Cases
 
