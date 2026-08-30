@@ -5,6 +5,7 @@ authorisation is missing, and that a rule-driven exit closes a position rather
 than adding to it.
 """
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -188,3 +189,65 @@ def test_the_payload_matches_what_the_rest_of_the_order_path_sends():
     assert order["trigger_price"] == "0"
     assert order["strategy"] == "Test"
     assert order["pricetype"] == "MARKET"
+
+
+# ---------------------------------------------------------------------------
+# The analyzer toggle must not decide a run's pipe
+# ---------------------------------------------------------------------------
+
+
+def test_a_live_order_is_not_diverted_by_the_platform_analyzer_toggle():
+    # The one control this module is built around, exercised against the real
+    # place_order_with_auth rather than a mock of it. That distinction matters:
+    # every other test here mocks that function, so the diversion it is meant
+    # to prevent was invisible.
+    #
+    # place_order_with_auth consults the global toggle BEFORE it looks at the
+    # broker arguments. Without force_live, an operator turning the analyzer on
+    # to try something elsewhere would send a live run's exits to the sandbox,
+    # which reports success, so the engine would close the leg and finalise the
+    # run while the real broker position stayed open with nothing managing it.
+    with (
+        patch("database.auth_db.get_auth_token_broker", return_value=("tok", "zerodha")),
+        patch("services.place_order_service.get_analyze_mode", return_value=True),
+        patch("services.sandbox_service.sandbox_place_order") as sandbox,
+        patch("services.place_order_service.import_broker_module") as import_broker,
+        # The symbol is not in this suite's throwaway master contract, and an
+        # order that fails validation never reaches the branch under test.
+        patch(
+            "services.place_order_service.validate_order_data",
+            return_value=(True, {}, None),
+        ),
+    ):
+        broker_module = import_broker.return_value
+        broker_module.place_order_api.return_value = (
+            SimpleNamespace(status=200),
+            {},
+            "BROKER-1",
+        )
+
+        result = od.dispatch_order(mode="live", api_key="k", order=_order())
+
+    # The broker was called and the sandbox was not, despite the toggle.
+    assert sandbox.call_count == 0, "a live run must not be diverted into the sandbox"
+    assert result.ok is True, f"dispatch failed: {result}"
+    assert broker_module.place_order_api.call_count == 1
+    assert result.ok is True
+    assert result.broker_order_id == "BROKER-1"
+
+
+def test_a_sandbox_order_still_goes_to_the_sandbox_with_the_toggle_off():
+    # The other direction: a sandbox run must never reach a real broker,
+    # whatever the platform toggle says.
+    with (
+        patch("services.place_order_service.get_analyze_mode", return_value=False),
+        patch("services.sandbox_service.sandbox_place_order") as sandbox,
+        patch("services.place_order_service.place_order_with_auth") as live,
+    ):
+        sandbox.return_value = (True, {"status": "success", "orderid": "SB-1"}, 200)
+
+        result = od.dispatch_order(mode="sandbox", api_key="k", order=_order())
+
+    assert sandbox.call_count == 1
+    assert live.call_count == 0
+    assert result.broker_order_id == "SB-1"
