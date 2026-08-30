@@ -468,14 +468,20 @@ def _exit(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
         # failure; the alert simply arrived after the position had gone.
         return SignalResult(ok=True, note="no_matching_position", leg_id=leg_id, run_id=run_id)
 
-    with state.run_state(run_id) as run:
-        live = run["legs"].get(str(leg_id)) if run else None
-        if live is None:
-            return SignalResult(ok=True, note="no_matching_position", leg_id=leg_id)
-        snapshot = dict(live)
+    # Claim the leg before dispatching. A leg stays "open" until its exit fill
+    # arrives, so a repeated exit alert, or a late one after the scheduler had
+    # already squared off, found _held_side still answering and sent a second
+    # closing order: the account ended up positioned the opposite way. Signal
+    # mode is precisely the mode driven by an alert engine that repeats itself.
+    snapshot = state.claim_leg_exit(run_id, leg_id, "exit_signal")
+    if snapshot is None:
+        return SignalResult(ok=True, note="no_matching_position", leg_id=leg_id, run_id=run_id)
 
     outcome = _place(strategy, run_id, snapshot, "exit_signal", snapshot["position"], exiting=True)
     if not outcome.ok:
+        # Leave the leg exitable: its stop loss, its target and the square-off
+        # all skip a leg that still looks like it has an exit in flight.
+        state.release_leg_exit(run_id, leg_id)
         return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error=outcome.error)
 
     return SignalResult(ok=True, leg_id=leg_id, run_id=run_id)
@@ -540,8 +546,12 @@ def _place(
         live = state_run["legs"].get(str(leg["leg_id"])) if state_run else None
         if live is not None:
             if exiting:
-                live["exit_order_id"] = row.id if row else None
-                live["exit_kind"] = kind
+                if result.ok:
+                    live["exit_order_id"] = row.id if row else None
+                    live["exit_kind"] = kind
+                # A refused exit writes nothing. Arming the markers here would
+                # disarm the leg's stop loss, its target and the square-off for
+                # the rest of the session; the caller releases the claim.
             else:
                 live["entry_order_id"] = row.id if row else None
                 live["entry_status"] = "open" if result.ok else "rejected"

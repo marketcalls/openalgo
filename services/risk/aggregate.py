@@ -78,8 +78,14 @@ def aggregate_pnl(positions: Iterable[PositionPnL | Mapping[str, Any]]) -> PnLSu
     unpriced = 0
     for item in positions:
         entry = item if isinstance(item, PositionPnL) else PositionPnL.from_state(item)
+        # Realized is realized whether or not the position happens to be open
+        # right now. A position re-entered after a completed round trip carries
+        # that round trip's result and is open again; counting it only while
+        # closed made the figure vanish the moment the next entry was placed,
+        # so a daily loss limit reset on every flat moment and could never be
+        # reached. An always-open position simply carries zero here.
+        realized += entry.realized_pnl
         if entry.closed:
-            realized += entry.realized_pnl
             continue
         if not is_price(entry.last_price) or not is_price(entry.entry_price):
             unpriced += 1

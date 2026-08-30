@@ -188,6 +188,55 @@ def _new_leg_state(leg: dict) -> dict[str, Any]:
     }
 
 
+def claim_leg_exit(run_id: int, leg_id: Any, kind: str) -> dict[str, Any] | None:
+    """Claim a leg for exit, or return None if it must not be exited again.
+
+    The claim and the check happen under one lock hold, which is the whole
+    point. Both callers used to set ``exit_kind`` at claim time and then test
+    ``exit_order_id``, which is only written after the dispatch returns: two
+    rules firing on the same leg before the first order came back both passed
+    the guard and sent a covering order each, leaving the account positioned
+    the opposite way. The same test also failed open when ``record_order``
+    could not write its row, because ``exit_order_id`` was then set to None.
+
+    ``exit_kind`` is the marker instead: written here, under the lock, before
+    any dispatch, and cleared only by ``release_leg_exit`` when the broker
+    refused. It cannot be defeated by timing or by a database failure.
+
+    Returns a copy of the leg to dispatch from, so the caller does its order
+    building and its network call outside the lock.
+    """
+    with get_state_lock(run_id):
+        state = _run_state.get(run_id)
+        if state is None:
+            return None
+        leg = state["legs"].get(str(leg_id))
+        if leg is None or leg.get("status") != "open":
+            return None
+        if leg.get("exit_kind") is not None or leg.get("exit_order_id") is not None:
+            return None
+        leg["exit_kind"] = kind
+        return dict(leg)
+
+
+def release_leg_exit(run_id: int, leg_id: Any) -> None:
+    """Undo a claim whose order the broker refused, so the exit stays possible.
+
+    Without this the leg is skipped by every later exit attempt for the rest of
+    the session: its stop loss, its target, the scheduler square-off and the
+    operator's own Close button all pass over it while the position is still
+    held at the broker.
+    """
+    with get_state_lock(run_id):
+        state = _run_state.get(run_id)
+        if state is None:
+            return
+        leg = state["legs"].get(str(leg_id))
+        if leg is not None:
+            leg["exit_kind"] = None
+            leg["exit_order_id"] = None
+
+
 def favorable_peak_points(leg: dict[str, Any]) -> float:
     """How far the leg has moved in its favour, in points, for display.
 
@@ -217,8 +266,18 @@ def add_leg(run_id: int, leg: dict) -> dict[str, Any] | None:
         state = _run_state.get(run_id)
         if state is None:
             return None
+        key = str(leg["leg_id"])
         leg_state = _new_leg_state(leg)
-        state["legs"][str(leg["leg_id"])] = leg_state
+        previous = state["legs"].get(key)
+        if previous is not None:
+            # A signal leg is re-entered on the same id after it has been
+            # closed, and a fresh state would reset realized_pnl to zero. That
+            # figure is what overall_sl_mtm, overall_target_mtm and the
+            # lock-profit floor are judged against, so zeroing it turns a daily
+            # loss limit into a per-round-trip one: a strategy that loses 1000
+            # five times never reaches a 5000 limit. Carry it forward.
+            leg_state["realized_pnl"] = float(previous.get("realized_pnl") or 0.0)
+        state["legs"][key] = leg_state
         return leg_state
 
 

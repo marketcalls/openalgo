@@ -570,20 +570,14 @@ def _exit_legs(
     different strike, and exiting a contract the run does not hold would open a
     new position instead of closing one.
     """
-    with state.run_state(run_id) as run:
-        if run is None:
-            return []
-        targets = []
-        for leg_id in leg_ids:
-            leg = run["legs"].get(str(leg_id))
-            if leg is None or leg.get("status") != "open":
-                continue
-            # Duplicate-exit guard: a leg already on its way out must not be
-            # sent a second exit by another rule firing on the same tick.
-            if leg.get("exit_order_id") is not None:
-                continue
-            leg["exit_kind"] = kind
-            targets.append(dict(leg))
+    # Claim each leg under the state lock before anything is dispatched. The
+    # guard used to test exit_order_id, which is not written until the order
+    # comes back, so two rules firing on one leg both got through.
+    targets = [
+        claimed
+        for leg_id in leg_ids
+        if (claimed := state.claim_leg_exit(run_id, leg_id, kind)) is not None
+    ]
 
     # Dispatch outside the lock. See the module docstring.
     outcomes: list[dict[str, Any]] = []
@@ -617,16 +611,15 @@ def _exit_legs(
         if row and not result.ok:
             store.update_order(row.id, reject_reason=result.error)
 
-        with state.run_state(run_id) as run:
-            if run is not None:
-                live = run["legs"].get(str(leg["leg_id"]))
+        if result.ok:
+            with state.run_state(run_id) as run:
+                live = run["legs"].get(str(leg["leg_id"])) if run else None
                 if live is not None:
-                    if result.ok:
-                        live["exit_order_id"] = row.id if row else None
-                    else:
-                        # Clear the marker so a later attempt is not mistaken
-                        # for a duplicate and skipped forever.
-                        live["exit_kind"] = None
+                    live["exit_order_id"] = row.id if row else None
+        else:
+            # Release the claim so a later attempt is not mistaken for a
+            # duplicate and skipped for the rest of the session.
+            state.release_leg_exit(run_id, leg["leg_id"])
 
         _emit(
             strategy["id"],

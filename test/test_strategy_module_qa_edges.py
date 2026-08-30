@@ -795,14 +795,6 @@ def test_a_leg_already_on_its_way_out_is_not_sent_a_second_exit(broker):
     assert len(broker.orders) == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: engine._exit_legs arms its duplicate-exit guard from the order row id, "
-        "so a dispatched exit whose row failed to write leaves the guard unarmed and a "
-        "second exit reverses the position"
-    ),
-)
 def test_an_exit_whose_audit_row_could_not_be_written_still_blocks_a_second_one(broker):
     """The order reached the broker. Whether the row was written is our problem.
 
@@ -889,14 +881,6 @@ def _run_of(strategy):
     return store.get_strategy(strategy.id, USER).current_run_id
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: signals._exit has no duplicate-exit guard, so a repeated exit alert "
-        "arriving before the first exit fills places a second closing order and "
-        "reverses the position"
-    ),
-)
 def test_a_repeated_exit_alert_before_the_first_fills_does_not_reverse_the_position(broker):
     """TradingView repeats. Held long 100, two long_exit alerts a second apart.
 
@@ -916,13 +900,6 @@ def test_a_repeated_exit_alert_before_the_first_fills_does_not_reverse_the_posit
     assert broker.quantities == [100]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: signals._exit has no duplicate-exit guard, so an exit alert arriving "
-        "after the scheduler's square-off places a second closing order"
-    ),
-)
 def test_an_exit_alert_after_the_scheduler_squared_off_places_nothing(broker):
     """The end-of-day job already sent the exit. The alert arrives after it."""
     strategy = _signal_strategy()
@@ -935,14 +912,6 @@ def test_an_exit_alert_after_the_scheduler_squared_off_places_nothing(broker):
     assert broker.orders == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: signals._place writes exit_order_id even when the dispatch was "
-        "refused, which arms the engine's duplicate-exit guard permanently and makes "
-        "the leg's stop loss unable to fire"
-    ),
-)
 def test_a_refused_exit_alert_does_not_disarm_the_legs_stop_loss(broker):
     """The signal exit was refused, so the position is still held.
 
@@ -1025,14 +994,6 @@ def test_a_repeated_entry_alert_before_the_first_fills_does_not_double_the_posit
     assert broker.orders == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: signals._enter calls state.add_leg, which replaces the whole leg "
-        "state, so re-entering a leg the same day erases the realized P&L of its "
-        "earlier round trip from the run total"
-    ),
-)
 def test_re_entering_a_signal_leg_keeps_the_pnl_of_its_earlier_round_trip(broker):
     """Long 100 at 100, out at 90: the day is down 1000.
 
