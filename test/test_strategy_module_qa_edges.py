@@ -596,14 +596,6 @@ def test_every_entry_rejected_places_no_exit_at_all(broker):
     assert len(broker.orders) == 2
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: engine.stop_run calls _finalise unconditionally, so a run whose every "
-        "exit the broker refused is closed, unsubscribed and its state dropped while "
-        "the position is still open"
-    ),
-)
 def test_a_stop_whose_exits_were_all_refused_does_not_close_the_run(broker):
     """The broker said no. The position is still there.
 
@@ -624,13 +616,6 @@ def test_a_stop_whose_exits_were_all_refused_does_not_close_the_run(broker):
     assert state.get_run_state(run_id) is not None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT: engine.close_leg answers ok=True whenever _exit_legs produced any "
-        "outcome, including one whose every exit the broker refused"
-    ),
-)
 def test_closing_a_leg_whose_exit_was_refused_reports_the_failure(broker):
     """The operator pressed close and the broker refused. Saying "ok" is a lie.
 

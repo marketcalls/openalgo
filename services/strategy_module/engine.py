@@ -663,6 +663,35 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
         kind = "exit_close_all"
 
     exits = _exit_legs(run_id, strategy, open_ids, kind, run_row.mode, api_key, user_id)
+
+    # A run whose exits the broker refused is still holding those positions.
+    # Finalising here would write stopped_at, release the strategy, drop the
+    # live state and unsubscribe the prices, so the position would sit open for
+    # the rest of the session with nothing evaluating its stop while the
+    # dashboard read "stopped". A broker rate limit or a momentary auth failure
+    # at 15:20 is enough to reach this, so it stays open and says why.
+    refused = [outcome for outcome in exits if not outcome.get("ok")]
+    if refused:
+        with state.run_state(run_id) as run:
+            still_held = bool(state.open_legs(run)) if run else False
+        if still_held:
+            _emit(
+                run_row.strategy_id,
+                user_id,
+                "run_stop_failed",
+                f"Stop refused for {len(refused)} leg(s); the run is still holding them",
+                run_id=run_id,
+                severity="critical",
+            )
+            return {
+                "ok": False,
+                "error": (
+                    f"{len(refused)} of {len(exits)} exit order(s) were refused. "
+                    "The run is still open and still managed; retry the stop."
+                ),
+                "exits": exits,
+            }
+
     _finalise(run_id, run_row.strategy_id, user_id, reason, f"Run stopped ({reason})")
     return {"ok": True, "exits": exits}
 
@@ -693,6 +722,13 @@ def close_leg(run_id: int, leg_id: Any, user_id: str) -> dict[str, Any]:
     )
     if not exits:
         return {"ok": False, "error": "That leg is not open"}
+
+    # Non-empty is not success: the per-leg flags carry whether the broker took
+    # the order. Reporting a refused exit as closed tells an operator a
+    # position is gone when it is still on the book.
+    if not all(outcome.get("ok") for outcome in exits):
+        errors = "; ".join(o.get("error") or "refused" for o in exits if not o.get("ok"))
+        return {"ok": False, "error": f"Exit refused: {errors}", "exits": exits}
 
     _emit(
         run_row.strategy_id,
