@@ -39,3 +39,17 @@ os.environ["LATENCY_DATABASE_URL"] = "sqlite:///db/latency-test.db"
 # the first place to look when debugging. Worse, setup_logging truncates that
 # file to its last 1000 lines on startup, so a test run could evict real errors.
 os.environ["LOG_DIR"] = "log/test"
+
+
+# test_bot_web.py is a manual diagnostic script, not a test: it defines no test
+# function, and its module body prints, sleeps and starts the Telegram bot as a
+# side effect of being imported. It has been uncollectable for a while because
+# the four names it imports (get_telegram_bot, init_bot_sync, start_bot_sync,
+# stop_bot_sync) no longer exist on services.telegram_bot_service, and that
+# ImportError is the only reason a full `uv run pytest test/` has not been
+# starting a bot during collection.
+#
+# Skipped rather than repaired, deliberately. Repairing the import would make
+# the script run, which is worse than not collecting it; and it is documentation
+# of an API that is gone, so there is nothing left for it to test.
+collect_ignore = ["test_bot_web.py"]
