@@ -389,6 +389,18 @@ def _recover_run(run_id: int) -> RecoveredRun:
         config_legs,
         stopping=run_row.stop_requested_reason is not None,
     )
+    if not rebuilt.get("pnl_realized_authoritative", True):
+        _record_event(
+            strategy_id,
+            "recovery_succeeded",
+            (
+                f"Run {run_id} recovered with only partially valued realized P&L; "
+                "one or more durable fills have no usable price and no matching checkpoint "
+                "total. The known portion is retained, but manual P&L reconciliation is required."
+            ),
+            run_id=run_id,
+            severity="critical",
+        )
     symbols = state.subscribed_symbols(rebuilt)
     open_count = len(state.open_legs(rebuilt))
 
@@ -490,22 +502,32 @@ def _rebuild_state(
         legs[str(leg["leg_id"])] = leg
 
     lock_floor = _float(checkpoint.get("lock_floor"))
+    checkpoint_realized_present = (
+        bool(checkpoint) and _float(checkpoint.get("pnl_realized")) is not None
+    )
     checkpoint_realized = _float(checkpoint.get("pnl_realized"), 0.0) or 0.0
     has_referenced_orders = any(order.get("position_ref") is not None for order in orders)
+    derive_realized_from_legs = has_referenced_orders or not checkpoint_realized_present
     pnl_realized = (
         sum(_float(leg.get("realized_pnl"), 0.0) or 0.0 for leg in legs.values())
-        if has_referenced_orders
+        if derive_realized_from_legs
         else checkpoint_realized
+    )
+    pnl_realized_authoritative = (
+        all(leg.get("realized_pnl_authoritative", True) for leg in legs.values())
+        if derive_realized_from_legs
+        else True
     )
     pnl_unrealized = _float(checkpoint.get("pnl_unrealized"), 0.0) or 0.0
     return {
         "run_id": run_id,
         "strategy_id": strategy_id,
         "pnl_realized": pnl_realized,
+        "pnl_realized_authoritative": pnl_realized_authoritative,
         "pnl_unrealized": pnl_unrealized,
         "pnl_total": (
             pnl_realized + pnl_unrealized
-            if has_referenced_orders
+            if derive_realized_from_legs
             else (_float(checkpoint.get("pnl_total"), 0.0) or 0.0)
         ),
         "pnl_peak": _float(checkpoint.get("pnl_peak"), 0.0) or 0.0,
@@ -531,7 +553,7 @@ class _PositionRecovery:
 
     rank: int
     leg: dict[str, Any]
-    has_durable_realized: bool = False
+    pnl_coverage_complete: bool = True
 
 
 def _rebuild_leg(
@@ -583,19 +605,20 @@ def _rebuild_leg(
             f"Leg {key} mixes referenced entries with legacy exits that have no legacy entry; "
             "exit ownership is ambiguous"
         )
-    if legacy_entries:
-        legacy_leg = _rebuild_legacy_leg(
-            key,
-            legacy_entries,
-            legacy_exits,
-            _checkpoint_for_position(cp_leg, None),
-            config_leg,
+    if len(legacy_entries) > 1:
+        raise _ManagedRecoveryError(
+            f"Leg {key} mixes referenced history with multiple legacy entry incarnations; "
+            "their exits cannot be partitioned safely"
         )
+    if legacy_entries:
         positions.append(
-            _PositionRecovery(
-                rank=max(_order_rank(order) for order in legacy_entries),
-                leg=legacy_leg,
-                has_durable_realized=bool(legacy_leg.get("realized_pnl")),
+            _rebuild_referenced_position(
+                key,
+                None,
+                legacy_entries,
+                legacy_exits,
+                _checkpoint_for_position(cp_leg, None),
+                config_leg,
             )
         )
 
@@ -631,17 +654,25 @@ def _rebuild_leg(
         live = positions[-1].leg
 
     durable_realized = sum(float(position.leg.get("realized_pnl") or 0.0) for position in positions)
-    if any(position.has_durable_realized for position in positions):
+    coverage_complete = all(position.pnl_coverage_complete for position in positions)
+    checkpoint_present, checkpoint_realized = _checkpoint_realized_for_position(
+        cp_leg, live.get("position_ref")
+    )
+    if coverage_complete:
         live["realized_pnl"] = durable_realized
-    else:
-        checkpoint_realized = _float(cp_leg.get("realized_pnl"), 0.0) or 0.0
+        live["realized_pnl_authoritative"] = True
+    elif checkpoint_present:
         live["realized_pnl"] = checkpoint_realized
+        live["realized_pnl_authoritative"] = True
+    else:
+        live["realized_pnl"] = durable_realized
+        live["realized_pnl_authoritative"] = False
     return live
 
 
 def _rebuild_referenced_position(
     key: str,
-    position_ref: str,
+    position_ref: str | None,
     entries: list[dict[str, Any]],
     exits: list[dict[str, Any]],
     cp_leg: dict[str, Any],
@@ -652,6 +683,12 @@ def _rebuild_referenced_position(
     if entry is None:
         raise _ManagedRecoveryError(
             f"Leg {key} position {position_ref} has no entry to establish ownership"
+        )
+
+    working = [order for order in exits if order_is_working(order.get("status"))]
+    if len(working) > 1:
+        raise _ManagedRecoveryError(
+            f"Leg {key} position {position_ref} has multiple working exits; ownership is ambiguous"
         )
 
     # Reuse the established identity/risk reconstruction, then replace its
@@ -680,18 +717,21 @@ def _rebuild_referenced_position(
 
     remaining = entry_qty if entry_filled else 0
     realized = 0.0
-    has_durable_realized = False
+    pnl_coverage_complete = True
     last_exit_avg: float | None = None
-    working: list[dict[str, Any]] = []
     for exit_order in sorted(exits, key=_order_rank):
         status = exit_order.get("status")
+        if order_is_working(status):
+            # A working row's filled_qty is cumulative for that still-active
+            # attempt. Restoring it as settled quantity makes its later
+            # terminal cumulative frame apply the same fill twice. Prior
+            # terminal attempts reduce the owner; the active attempt remains
+            # armed against the pre-attempt remainder and settles once.
+            continue
         reported = _positive_whole(exit_order.get("filled_qty"))
         if reported is not None:
             applied = min(remaining, reported)
         elif order_is_filled(status):
-            requested = _positive_whole(exit_order.get("qty")) or remaining
-            applied = min(remaining, requested)
-        elif order_is_working(status) and _checkpoint_says_exit_filled(cp_leg):
             requested = _positive_whole(exit_order.get("qty")) or remaining
             applied = min(remaining, requested)
         else:
@@ -706,14 +746,13 @@ def _rebuild_referenced_position(
             if entry_avg > 0.0 and exit_price is not None:
                 sign = 1.0 if leg.get("position") == "B" else -1.0
                 realized += (exit_price - entry_avg) * applied * sign
-                has_durable_realized = True
+            else:
+                pnl_coverage_complete = False
 
-        if order_is_working(status) and remaining > 0:
-            working.append(exit_order)
-
-    if len(working) > 1:
+    if working and (not entry_filled or remaining <= 0):
         raise _ManagedRecoveryError(
-            f"Leg {key} position {position_ref} has multiple working exits; ownership is ambiguous"
+            f"Leg {key} position {position_ref} has a working exit without a remaining "
+            "confirmed owner; broker exposure is ambiguous"
         )
 
     if entry_filled and remaining > 0:
@@ -742,6 +781,7 @@ def _rebuild_referenced_position(
             "exit_kind": active_exit.get("kind") if active_exit else None,
             "exit_avg": last_exit_avg,
             "realized_pnl": realized,
+            "realized_pnl_authoritative": pnl_coverage_complete,
             "status": status,
             "mtm": 0.0 if status == "closed" else (_float(cp_leg.get("mtm"), 0.0) or 0.0),
             "superseded": None,
@@ -754,7 +794,7 @@ def _rebuild_referenced_position(
         # every restart even though the broker positions did not change.
         rank=max(_order_rank(order) for order in entries),
         leg=leg,
-        has_durable_realized=has_durable_realized,
+        pnl_coverage_complete=pnl_coverage_complete,
     )
 
 
@@ -768,6 +808,19 @@ def _checkpoint_for_position(cp_leg: dict[str, Any], position_ref: str | None) -
     if superseded.get("position_ref") == position_ref:
         return superseded
     return {}
+
+
+def _checkpoint_realized_for_position(
+    cp_leg: dict[str, Any], position_ref: str | None
+) -> tuple[bool, float]:
+    """A matching checkpoint's cumulative realized total, preserving zero."""
+    matching = _checkpoint_for_position(cp_leg, position_ref)
+    if "realized_pnl" not in matching:
+        return False, 0.0
+    realized = _float(matching.get("realized_pnl"))
+    if realized is None:
+        return False, 0.0
+    return True, realized
 
 
 def _position_requires_management(leg: dict[str, Any]) -> bool:
@@ -961,6 +1014,12 @@ def _rebuild_legacy_leg(
         "ltp": _float(cp_leg.get("ltp")),
         "mtm": 0.0 if status == "closed" else (_float(cp_leg.get("mtm"), 0.0) or 0.0),
         "realized_pnl": realized,
+        "realized_pnl_authoritative": bool(
+            "realized_pnl" in cp_leg
+            and _float(cp_leg.get("realized_pnl")) is not None
+            or not exit_applied
+            or (entry_avg > 0.0 and exit_avg is not None)
+        ),
         "status": status,
         "tick_source": "ws",
         # Risk levels
@@ -1099,10 +1158,9 @@ def _final_pnl(checkpoint: dict[str, Any], rebuilt: dict[str, Any]) -> dict[str,
     checkpointing, so a zero there is re-derived from the legs themselves.
     """
     final = dict(checkpoint)
-    rebuilt_realized = _float(rebuilt.get("pnl_realized"), 0.0) or 0.0
-    if rebuilt_realized:
-        final["pnl_realized"] = rebuilt_realized
-    elif not _float(final.get("pnl_realized"), 0.0):
+    if "pnl_realized" in rebuilt:
+        final["pnl_realized"] = _float(rebuilt.get("pnl_realized"), 0.0) or 0.0
+    else:
         final["pnl_realized"] = sum(
             _float(leg.get("realized_pnl"), 0.0) or 0.0 for leg in rebuilt["legs"].values()
         )

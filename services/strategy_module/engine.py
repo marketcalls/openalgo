@@ -804,6 +804,7 @@ def _apply_fill(
                 superseded["qty"] = remaining_qty
                 superseded["exit_order_id"] = None
                 superseded["exit_claim_token"] = None
+                superseded["exit_kind"] = None
             else:
                 leg["superseded"] = None
         else:

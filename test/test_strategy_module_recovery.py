@@ -657,6 +657,116 @@ def test_recovery_folds_every_exit_attempt_before_arming_the_newest_retry():
     assert leg["superseded"]["exit_kind"] == "exit_signal"
 
 
+def test_recovery_rejects_multiple_working_exits_before_any_cumulative_fill_fold():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref="one-owner",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="open",
+        avg=110.0,
+        filled_qty=25,
+        position_ref="one-owner",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=50,
+        status="open",
+        avg=111.0,
+        filled_qty=50,
+        position_ref="one-owner",
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is False
+    assert recovered.finalised is False
+    assert "multiple working exits" in (recovered.error or "").lower()
+    assert store.get_run(run_id).stopped_at is None
+    assert store.get_strategy(sid, USER).current_run_id == run_id
+    assert state.get_run_state(run_id) is None
+    event = next(event for event in store.list_events(sid) if event["kind"] == "recovery_failed")
+    assert event["severity"] == "critical"
+    assert "manual" in event["message"].lower()
+
+
+@pytest.mark.parametrize("with_replacement", [False, True])
+def test_recovered_working_partial_is_applied_once_when_its_terminal_cumulative_arrives(
+    with_replacement,
+):
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref="working-owner",
+    )
+    active_exit = _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="open",
+        avg=110.0,
+        filled_qty=25,
+        position_ref="working-owner",
+        broker_order_id="WORKING-EXIT",
+    )
+    replacement_entry = None
+    if with_replacement:
+        replacement_entry = _order(
+            run_id,
+            kind="entry",
+            action="SELL",
+            qty=75,
+            status="complete",
+            avg=102.0,
+            position_ref="replacement-owner",
+        )
+
+    assert recovery.recover_run(run_id).ok is True
+    before = state.get_run_state(run_id)["legs"]["1"]
+    owner_before = before["superseded"] if with_replacement else before
+    assert owner_before["qty"] == 75
+    assert owner_before["exit_order_id"] == active_exit
+    assert before["realized_pnl"] == pytest.approx(0.0)
+
+    order_events._apply_update(
+        "WORKING-EXIT",
+        _event("WORKING-EXIT", status="cancelled", avg=110.0, filled=50),
+    )
+
+    assert store.get_run(run_id).stopped_at is None
+    after = state.get_run_state(run_id)["legs"]["1"]
+    owner_after = after["superseded"] if with_replacement else after
+    assert owner_after is not None
+    assert owner_after["position_ref"] == "working-owner"
+    assert owner_after["qty"] == 25
+    assert owner_after["exit_order_id"] is None
+    assert owner_after["exit_kind"] is None
+    assert after["realized_pnl"] == pytest.approx(500.0)
+    if with_replacement:
+        assert after["position_ref"] == "replacement-owner"
+        assert after["entry_order_id"] == replacement_entry
+
+
 def test_recovery_applies_checkpoint_fields_only_to_the_matching_position_reference():
     sid = _strategy()
     run_id = _run(sid)
@@ -715,7 +825,10 @@ def test_recovery_applies_checkpoint_fields_only_to_the_matching_position_refere
     assert leg["qty"] == 75
     assert leg["ltp"] == pytest.approx(91.0)
     assert leg["effective_sl"] == pytest.approx(122.0)
-    assert leg["realized_pnl"] == pytest.approx(321.0)
+    # Identity-matched checkpoint risk fields overlay, but a stale cumulative
+    # P&L cannot override complete durable coverage. Neither owner has a
+    # settled exit, so the exact realized result is break-even.
+    assert leg["realized_pnl"] == pytest.approx(0.0)
     assert leg["superseded"]["entry_avg"] == pytest.approx(100.0)
     assert leg["superseded"]["qty"] == 75
     assert leg["superseded"]["exit_order_id"] == old_exit
@@ -785,6 +898,13 @@ def test_mixed_legacy_and_referenced_positions_recover_without_cross_pairing():
         avg=102.0,
         position_ref="new-position",
     )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        status="rejected",
+        position_ref=None,
+    )
 
     assert recovery.recover_run(run_id).ok is True
 
@@ -794,6 +914,56 @@ def test_mixed_legacy_and_referenced_positions_recover_without_cross_pairing():
     assert leg["superseded"]["position_ref"] is None
     assert leg["superseded"]["entry_order_id"] == old_entry
     assert leg["superseded"]["position"] == "B"
+
+
+def test_mixed_referenced_history_refuses_multiple_legacy_entry_incarnations():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref=None,
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="complete",
+        avg=110.0,
+        position_ref=None,
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        qty=75,
+        status="complete",
+        avg=102.0,
+        position_ref=None,
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=104.0,
+        position_ref="referenced-owner",
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is False
+    assert recovered.finalised is False
+    assert "multiple legacy entry" in (recovered.error or "").lower()
+    assert store.get_run(run_id).stopped_at is None
+    assert store.get_strategy(sid, USER).current_run_id == run_id
+    assert state.get_run_state(run_id) is None
 
 
 def test_mixed_legacy_exit_without_a_legacy_entry_remains_managed_for_reconciliation():
@@ -1045,6 +1215,193 @@ def test_reference_group_pnl_overrides_a_stale_nonzero_checkpoint_when_recovery_
 
     assert recovered.finalised is True
     assert float(store.get_run(run_id).pnl_realized) == pytest.approx(750.0)
+
+
+def test_mixed_priced_and_unpriced_reference_groups_use_matching_checkpoint_cumulative_pnl():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=10,
+        status="complete",
+        avg=100.0,
+        position_ref="priced-owner",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=10,
+        status="complete",
+        avg=110.0,
+        position_ref="priced-owner",
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=10,
+        status="complete",
+        avg=100.0,
+        position_ref="unpriced-owner",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=10,
+        status="complete",
+        avg=0.0,
+        filled_qty=10,
+        position_ref="unpriced-owner",
+    )
+    _checkpoint(
+        run_id,
+        {
+            "1": _cp_leg(
+                position="B",
+                position_ref="unpriced-owner",
+                qty=10,
+                status="closed",
+                exit_avg=0.0,
+                realized_pnl=150.0,
+            )
+        },
+        pnl_realized=150.0,
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.finalised is True
+    assert float(store.get_run(run_id).pnl_realized) == pytest.approx(150.0)
+
+
+def test_exact_durable_break_even_overrides_stale_nonzero_checkpoint():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=10,
+        status="complete",
+        avg=100.0,
+        position_ref="break-even-owner",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=10,
+        status="complete",
+        avg=100.0,
+        position_ref="break-even-owner",
+    )
+    _checkpoint(
+        run_id,
+        {
+            "1": _cp_leg(
+                position="B",
+                position_ref="break-even-owner",
+                qty=10,
+                status="closed",
+                exit_avg=100.0,
+                realized_pnl=25.0,
+            )
+        },
+        pnl_realized=25.0,
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.finalised is True
+    assert float(store.get_run(run_id).pnl_realized) == pytest.approx(0.0)
+
+
+def test_mixed_legacy_closed_and_referenced_open_legs_have_authoritative_run_pnl():
+    sid = _strategy(legs=[_leg(1, "S"), _leg(2, "B")])
+    run_id = _run(sid)
+    _order(
+        run_id,
+        leg_id=1,
+        kind="entry",
+        action="SELL",
+        symbol=CE,
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref=None,
+    )
+    _order(
+        run_id,
+        leg_id=1,
+        kind="exit_signal",
+        action="BUY",
+        symbol=CE,
+        qty=75,
+        status="complete",
+        avg=80.0,
+        position_ref=None,
+    )
+    _order(
+        run_id,
+        leg_id=2,
+        kind="entry",
+        action="BUY",
+        symbol=PE,
+        qty=75,
+        status="complete",
+        avg=50.0,
+        position_ref="open-owner",
+    )
+
+    assert recovery.recover_run(run_id).ok is True
+
+    live = state.get_run_state(run_id)
+    assert live["legs"]["1"]["status"] == "closed"
+    assert live["legs"]["2"]["status"] == "open"
+    assert live["pnl_realized"] == pytest.approx(1500.0)
+    assert live["pnl_realized_authoritative"] is True
+
+
+def test_unpriced_reference_fill_without_checkpoint_surfaces_partial_pnl_authority():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref="unpriced-open-owner",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="cancelled",
+        avg=0.0,
+        filled_qty=25,
+        position_ref="unpriced-open-owner",
+    )
+
+    assert recovery.recover_run(run_id).ok is True
+
+    live = state.get_run_state(run_id)
+    assert live["pnl_realized"] == pytest.approx(0.0)
+    assert live["pnl_realized_authoritative"] is False
+    assert live["legs"]["1"]["qty"] == 50
+    events = [event for event in store.list_events(sid) if event["run_id"] == run_id]
+    assert any(
+        event["severity"] == "critical"
+        and "p&l" in event["message"].lower()
+        and "manual" in event["message"].lower()
+        for event in events
+    )
 
 
 def test_a_run_whose_every_leg_has_closed_is_finished_rather_than_left_running():
