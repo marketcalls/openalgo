@@ -1061,6 +1061,41 @@ def get_run(run_id: int) -> SmStrategyRun | None:
         return None
 
 
+def realized_pnl_since(
+    strategy_id: int, since: datetime, exclude_run_id: int | None = None
+) -> float:
+    """What this strategy has already banked this session, as a signed figure.
+
+    Summed over the runs that have finished since the session began, so a
+    strategy that starts and stops repeatedly, which is every signal strategy
+    and every scheduler-driven one, is judged on the day rather than on
+    whichever run happens to be open. A loss is negative.
+
+    ``exclude_run_id`` leaves the live run out, because its own figure is read
+    from run state where it is current rather than from the row where it is
+    only written at finalisation.
+    """
+    # started_at is stored as naive UTC, so an aware boundary has to be
+    # converted rather than compared: SQLite would otherwise compare the
+    # strings and quietly answer with the wrong set of runs.
+    if since.tzinfo is not None:
+        since = since.astimezone(UTC).replace(tzinfo=None)
+    try:
+        query = db_session.query(SmStrategyRun.pnl_realized).filter(
+            SmStrategyRun.strategy_id == strategy_id,
+            SmStrategyRun.started_at >= since,
+        )
+        if exclude_run_id is not None:
+            query = query.filter(SmStrategyRun.id != exclude_run_id)
+        return float(sum(float(row[0] or 0.0) for row in query.all()))
+    except Exception:
+        logger.exception("Could not total realized P&L for strategy %s", strategy_id)
+        # Zero, not a guess. A caller uses this to decide whether a limit has
+        # been reached, and inventing a loss would stop a strategy that has
+        # not lost anything.
+        return 0.0
+
+
 def list_runs(strategy_id: int, limit: int = 100) -> list[dict]:
     try:
         rows = (

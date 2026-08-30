@@ -247,6 +247,10 @@ def _cron_days(raw: Any, label: str) -> str | None:
     return ",".join(sorted(days, key=_CRON_WEEK_ORDER.index))
 
 
+# Monday to Friday, in APScheduler's cron vocabulary.
+_WEEKDAYS = "mon,tue,wed,thu,fri"
+
+
 def _planned_jobs(row: store.SmStrategy) -> list[dict[str, Any]]:
     """What should be installed for one strategy, as ``{job_id, func, ...}``.
 
@@ -254,15 +258,38 @@ def _planned_jobs(row: store.SmStrategy) -> list[dict[str, Any]]:
     the answer for a config too broken to build a trigger from.
     """
     config = row.scheduler if isinstance(row.scheduler, dict) else None
-    if not config or not config.get("enabled"):
-        return []
-
     label = f"strategy {row.id} scheduler"
-    day_of_week = _cron_days(config.get("days"), f"{label}.days")
-    if not day_of_week:
-        return []
+    scheduled = bool(config and config.get("enabled"))
+
+    day_of_week = _cron_days(config.get("days"), f"{label}.days") if scheduled else None
 
     planned: list[dict[str, Any]] = []
+
+    # The square-off from exit_time has to survive both of the early returns
+    # this function used to take. An intraday strategy that sets exit_time and
+    # leaves the scheduler switched off is the default configuration, and it
+    # got no stop job at all: nothing squared the position off and it stayed
+    # open past the exit the user configured, until a manual stop or the EOD
+    # path caught it. exit_time is the strategy's own statement of when it must
+    # be flat, so it is honoured whether or not anything else is scheduled.
+    if not scheduled or not day_of_week:
+        if row.exit_time is None:
+            return []
+        exit_at = _parse_hhmm(row.exit_time, f"strategy {row.id} exit_time")
+        if exit_at is None:
+            return []
+        return [
+            {
+                "job_id": stop_job_id(row.id),
+                "name": f"Strategy {row.id} scheduled square-off (exit_time)",
+                "func": run_scheduled_stop,
+                # No scheduler config to take days from, so every trading day.
+                # A holiday costs one no-op on a strategy that is not running.
+                "day_of_week": _WEEKDAYS,
+                "hour": exit_at[0],
+                "minute": exit_at[1],
+            }
+        ]
 
     start_at = _parse_hhmm(config.get("start_time"), f"{label}.start_time")
     if start_at is None:
@@ -282,14 +309,11 @@ def _planned_jobs(row: store.SmStrategy) -> list[dict[str, Any]]:
     stop_at = _parse_hhmm(config.get("auto_stop_time"), f"{label}.auto_stop_time")
     stop_source = "scheduler.auto_stop_time"
 
-    # THE GAP THIS CLOSES. In the module this is ported from, the auto-stop job
-    # is installed only from scheduler.auto_stop_time. An intraday strategy that
-    # sets exit_time and leaves auto_stop_time blank therefore gets NO stop job
-    # at all: nothing squares the position off, and it stays open past the exit
-    # the user configured, until a manual stop or the EOD path catches it.
-    # exit_time is the strategy's own statement of when it must be flat, so it
-    # is honoured as the auto-stop whenever the scheduler config does not give
-    # one. An intraday strategy always ends up with a square-off.
+    # The auto-stop job is installed only from scheduler.auto_stop_time in the
+    # module this is ported from, so an intraday strategy that sets exit_time
+    # and leaves auto_stop_time blank got no square-off. exit_time fills in
+    # whenever the scheduler config does not give one; see the block above for
+    # the case where the scheduler is off entirely.
     if stop_at is None and row.exit_time is not None:
         stop_at = _parse_hhmm(row.exit_time, f"strategy {row.id} exit_time")
         stop_source = "exit_time"

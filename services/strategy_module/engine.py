@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from database import strategy_module_db as store
-from services.strategy_module import order_dispatch, risk_adapter, state
+from services.strategy_module import order_dispatch, risk_adapter, session, state
 from services.strategy_module.symbol_resolver import resolve_leg
 from utils.logging import get_logger
 
@@ -924,6 +924,41 @@ def process_tick(symbol: str, exchange: str, ltp: float) -> None:
             logger.exception("Tick processing failed for run %s", run_id)
 
 
+def _daily_loss_breached(strategy: dict[str, Any], run_id: int, run: dict[str, Any]) -> str | None:
+    """Whether this session's loss has reached the strategy's daily limit.
+
+    The session is the one that began at SESSION_EXPIRY_TIME, not at midnight,
+    so a limit resets when the platform's own day rolls over. Runs that have
+    already finished contribute the figure on their row; the live run
+    contributes what it is worth right now, marked, because a limit that only
+    counted closed runs would let an open one exceed it without noticing.
+
+    Called with the run lock held, and reads only what is already in memory
+    plus one indexed sum.
+    """
+    limit = strategy.get("daily_loss_limit_inr")
+    if not limit:
+        return None
+    try:
+        limit_value = abs(float(limit))
+    except (TypeError, ValueError):
+        return None
+    if limit_value <= 0:
+        return None
+
+    banked = store.realized_pnl_since(
+        strategy["id"], session.session_started_at(), exclude_run_id=run_id
+    )
+    live = float(run.get("pnl_total") or 0.0)
+    day_total = banked + live
+    if day_total > -limit_value:
+        return None
+    return (
+        f"Daily loss limit reached: the session is down {abs(day_total):.2f} "
+        f"against a limit of {limit_value:.2f}"
+    )
+
+
 def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -> None:
     run_row = store.get_run(run_id)
     if not run_row or run_row.stopped_at is not None:
@@ -1001,7 +1036,23 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
                 )
             )
 
-        if aggregate.breached and aggregate.reason in _STOP_REASON_FOR_REASON:
+        # The daily loss limit, which is a limit on the session rather than on
+        # this run. It was validated, stored and displayed and then read by
+        # nothing, so a strategy that lost its whole budget in three runs
+        # started a fourth. overall_sl_mtm cannot express it: that one is reset
+        # every time a run opens, which for a signal or scheduled strategy is
+        # several times a day.
+        day_loss_reason = _daily_loss_breached(strategy, run_id, run)
+        if day_loss_reason is not None:
+            stop_reason = "daily_loss_limit"
+            events.append(
+                (
+                    "overall_sl_hit",
+                    day_loss_reason,
+                    {"severity": "critical"},
+                )
+            )
+        elif aggregate.breached and aggregate.reason in _STOP_REASON_FOR_REASON:
             stop_reason = _STOP_REASON_FOR_REASON[aggregate.reason]
             events.append(
                 (

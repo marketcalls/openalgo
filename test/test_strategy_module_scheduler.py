@@ -266,6 +266,50 @@ def test_an_intraday_exit_time_installs_the_square_off_the_original_never_schedu
     assert (fields["hour"], fields["minute"]) == ("15", "20")
 
 
+def test_an_intraday_exit_time_is_squared_off_with_the_scheduler_switched_off():
+    """The default intraday configuration, and the one that was unreachable.
+
+    The exit_time fallback sat below two early returns: one for a scheduler
+    that is not enabled and one for a config with no usable days. Switching the
+    scheduler off is exactly what an operator does when they want the strategy
+    started by an alert and squared off by the clock, and that combination got
+    no stop job at all.
+    """
+    sid = _make(
+        _config(
+            strategy_type="intraday",
+            entry_time=dt_time(9, 20),
+            exit_time=dt_time(15, 20),
+            scheduler=_scheduler_config(enabled=False),
+        )
+    )
+
+    installed = sched.sync_strategy_jobs(sid)
+
+    assert installed == [sched.stop_job_id(sid)], "the square-off, and only it"
+    assert _job(sched.start_job_id(sid)) is None, "nothing was asked to start it"
+    fields = _cron_fields(_job(sched.stop_job_id(sid)))
+    assert (fields["hour"], fields["minute"]) == ("15", "20")
+    assert fields["day_of_week"] == "mon,tue,wed,thu,fri"
+
+
+def test_an_intraday_exit_time_is_squared_off_with_no_scheduler_config_at_all():
+    sid = _make(
+        _config(
+            strategy_type="intraday",
+            entry_time=dt_time(9, 20),
+            exit_time=dt_time(15, 15),
+            scheduler=None,
+        )
+    )
+
+    installed = sched.sync_strategy_jobs(sid)
+
+    assert installed == [sched.stop_job_id(sid)]
+    fields = _cron_fields(_job(sched.stop_job_id(sid)))
+    assert (fields["hour"], fields["minute"]) == ("15", "15")
+
+
 def test_the_scheduler_auto_stop_time_wins_over_exit_time_when_both_are_set():
     sid = _make(
         _config(

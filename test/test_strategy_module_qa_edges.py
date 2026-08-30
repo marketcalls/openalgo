@@ -475,6 +475,75 @@ def test_a_broker_order_id_shared_by_two_legs_seeds_only_the_first_row(broker):
 
 
 # ===========================================================================
+# The daily loss limit
+# ===========================================================================
+
+
+def test_the_daily_loss_limit_counts_what_earlier_runs_already_lost(broker):
+    """The limit is on the session, not on whichever run happens to be open.
+
+    It was validated, stored, shown in the UI and read by nothing, so a
+    strategy that lost its whole budget across three runs opened a fourth.
+    overall_sl_mtm cannot express this: that one resets every time a run opens,
+    which for a signal or scheduled strategy is several times a day.
+    """
+    sid = _make(_config(daily_loss_limit_inr=1000))
+
+    # Two runs that are already over, together down 1100: the budget is spent.
+    for _ in range(2):
+        done = _start(sid).run_id
+        engine.stop_run(done, USER, "manual")
+        store.finish_run(done, stop_reason="manual", pnl_realized=-550.0)
+    broker.clear()
+
+    # A third opens anyway, and is squared off on its first tick even though
+    # this run itself has lost nothing.
+    run_id = _start(sid).run_id
+    order_events._apply_update("QA-3", _event("QA-3", avg=100.0))
+    broker.clear()
+
+    engine.process_tick(CE, "NFO", 100.0)
+
+    assert store.get_run(run_id).stop_reason == "daily_loss_limit"
+    assert broker.actions == ["BUY"], "the open position was squared off"
+
+
+def test_a_session_still_inside_the_daily_limit_keeps_trading(broker):
+    """The other half: the limit must not fire early."""
+    sid = _make(_config(daily_loss_limit_inr=1000))
+    first = _start(sid).run_id
+    engine.stop_run(first, USER, "manual")
+    store.finish_run(first, stop_reason="manual", pnl_realized=-700.0)
+    broker.clear()
+
+    run_id = _start(sid).run_id
+    order_events._apply_update("QA-3", _event("QA-3", avg=100.0))
+    broker.clear()
+
+    engine.process_tick(CE, "NFO", 100.0)
+
+    assert store.get_run(run_id).stopped_at is None, "700 down against a limit of 1000"
+    assert broker.orders == []
+
+
+def test_a_strategy_with_no_daily_limit_is_never_stopped_by_one(broker):
+    sid = _make()
+    first = _start(sid).run_id
+    engine.stop_run(first, USER, "manual")
+    store.finish_run(first, stop_reason="manual", pnl_realized=-99999.0)
+    broker.clear()
+
+    run_id = _start(sid).run_id
+    order_events._apply_update("QA-3", _event("QA-3", avg=100.0))
+    broker.clear()
+
+    engine.process_tick(CE, "NFO", 100.0)
+
+    assert store.get_run(run_id).stopped_at is None
+    assert broker.orders == []
+
+
+# ===========================================================================
 # Run lifecycle
 # ===========================================================================
 

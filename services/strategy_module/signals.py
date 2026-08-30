@@ -42,7 +42,7 @@ from typing import Any
 import pytz
 
 from database import strategy_module_db as store
-from services.strategy_module import order_dispatch, state
+from services.strategy_module import order_dispatch, session, state
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -241,35 +241,11 @@ def _day_run(strategy: Any) -> tuple[int | None, str | None]:
     return run.id, None
 
 
-def _session_reset_time() -> dt_time:
-    """The hour the platform ends a trading session and revokes broker tokens.
-
-    OpenAlgo logs the user out at ``SESSION_EXPIRY_TIME``, 03:00 IST by
-    default, because Indian broker tokens expire daily around then.
-    """
-    raw = os.getenv("SESSION_EXPIRY_TIME", "03:00")
-    try:
-        hour, minute = (int(part) for part in raw.split(":", 1))
-        return dt_time(hour=hour, minute=minute)
-    except (TypeError, ValueError):
-        logger.warning("SESSION_EXPIRY_TIME is not HH:MM (%r); using 03:00", raw)
-        return dt_time(hour=3)
-
-
-def _session_day(moment: datetime) -> date:
-    """Which trading session an IST moment belongs to.
-
-    Not the calendar date. A session runs until the platform's own reset, so
-    anything before that hour still belongs to the previous day's session:
-    01:00 on Tuesday is Monday's session, and Monday 22:00 and Tuesday 01:00
-    are the same one.
-
-    Using midnight instead would split a session in half and merge across the
-    real boundary, which is exactly backwards.
-    """
-    if moment.time() < _session_reset_time():
-        return (moment - timedelta(days=1)).date()
-    return moment.date()
+# Both live in services/strategy_module/session.py now: the engine needs the
+# same boundary for the daily loss limit and neither module may import the
+# other. Re-exported under their old names so this file reads as it did.
+_session_reset_time = session.session_reset_time
+_session_day = session.session_day
 
 
 def _started_before_today(run: Any) -> bool:
