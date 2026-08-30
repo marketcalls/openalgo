@@ -150,7 +150,13 @@ def _stop_current_run(row, user_id: str, *, event: str | None = None):
     if not result.get("ok"):
         return _failure(result.get("error") or "Could not stop the run", 409)
 
-    return _success({"run_id": run_id, "exits": result.get("exits", [])})
+    return _success(
+        {
+            "run_id": run_id,
+            "stop_pending": result.get("stop_pending", False),
+            "exits": result.get("exits", []),
+        }
+    )
 
 
 @api.route("/list", strict_slashes=False)

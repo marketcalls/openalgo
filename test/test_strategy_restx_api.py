@@ -86,7 +86,11 @@ class FakeEngine:
         self.start_result = StartResult(
             ok=True, run_id=RUN_ID, legs=[{"leg_id": 1, "ok": True, "error": None}]
         )
-        self.stop_result = {"ok": True, "exits": [{"leg_id": 1, "ok": True, "error": None}]}
+        self.stop_result = {
+            "ok": True,
+            "stop_pending": True,
+            "exits": [{"leg_id": 1, "ok": True, "error": None}],
+        }
         self.close_leg_result = {
             "ok": True,
             "exits": [{"leg_id": 1, "ok": True, "error": None}],
@@ -386,6 +390,7 @@ def test_stop_resolves_the_run_from_the_strategy(client, engine):
     assert response.get_json() == {
         "status": "success",
         "run_id": RUN_ID,
+        "stop_pending": True,
         "exits": [{"leg_id": 1, "ok": True, "error": None}],
     }
     assert engine.calls == [("stop_run", RUN_ID, USER, "manual")]
@@ -395,7 +400,9 @@ def test_close_all_records_the_intent_before_stopping(client, engine):
     """Kept distinct from stop so the audit trail says what happened."""
     sid, _token = _make(running=True)
 
-    assert post(client, "close_all", strategy_id=sid).status_code == 200
+    response = post(client, "close_all", strategy_id=sid)
+    assert response.status_code == 200
+    assert response.get_json()["stop_pending"] is True
 
     kinds = [event["kind"] for event in store.list_events(sid)]
     assert "close_all_manual" in kinds

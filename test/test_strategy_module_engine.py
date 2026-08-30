@@ -496,6 +496,13 @@ def test_an_overall_stop_closes_the_whole_run(api_key):
         # Short 75 at 100. At 110 the loss is 750, past the 500 combined stop.
         engine.process_tick("NIFTY28MAY2624000CE", "NFO", 110.0)
 
+    pending = store.get_run(run_id)
+    assert pending.stop_requested_reason == "overall_sl"
+    assert pending.stopped_at is None
+    assert state.get_run_state(run_id) is not None
+
+    engine.apply_fill(run_id, 1, 110.0, is_entry=False)
+
     runs = store.list_runs(sid)
     assert runs[0]["stop_reason"] == "overall_sl"
     assert store.get_strategy(sid, USER).status == "stopped"
@@ -528,6 +535,11 @@ def test_peak_and_trough_reach_the_run_row_on_a_rule_driven_stop(api_key):
         engine.process_tick("NIFTY28MAY2624000CE", "NFO", 95.0)  # +375, sets the peak
         engine.process_tick("NIFTY28MAY2624000CE", "NFO", 110.0)  # -750, breaches
 
+    pending = store.get_run(run_id)
+    assert pending.stop_requested_reason == "overall_sl"
+    assert pending.stopped_at is None
+    engine.apply_fill(run_id, 1, 110.0, is_entry=False)
+
     run = store.list_runs(sid)[0]
     assert run["pnl_peak"] == pytest.approx(375.0)
     assert run["pnl_trough"] == pytest.approx(-750.0)
@@ -543,7 +555,12 @@ def test_a_finished_run_leaves_no_live_state_behind(api_key):
         "dispatch_order",
         return_value=DispatchResult(ok=True, broker_order_id="X", response={}),
     ):
-        engine.stop_run(run_id, USER, reason="manual")
+        result = engine.stop_run(run_id, USER, reason="manual")
+
+    assert result["stop_pending"] is True
+    assert state.get_run_state(run_id) is not None
+
+    engine.apply_fill(run_id, 1, 100.0, is_entry=False)
 
     assert state.get_run_state(run_id) is None
     assert run_id not in state.active_run_ids()

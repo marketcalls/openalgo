@@ -225,6 +225,66 @@ def test_live_flip_rejection_is_retryable_not_reported_as_closed(order):
     assert not any(event["kind"] == "run_stop_failed" for event in events)
 
 
+@pytest.mark.parametrize("ended", ["rejected", "cancelled"])
+def test_pending_stop_dead_exit_releases_exact_owner_and_reports_managed_retry(order, ended):
+    """A dead stop exit leaves its position active, owned, and retryable."""
+    state.init_run_state(
+        order.run_id,
+        order.strategy_id,
+        [
+            {
+                "leg_id": 1,
+                "position": "S",
+                "position_ref": "pending-stop-position",
+                "symbol": "NIFTY28MAY2624000CE",
+                "exchange": "NFO",
+                "quantity": 75,
+            }
+        ],
+    )
+    exit_row = store.record_order(
+        order.run_id,
+        leg_id=1,
+        kind="exit_close_all",
+        order={
+            "position_ref": "pending-stop-position",
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "BUY",
+            "qty": 75,
+            "broker_order_id": "BRK-STOP",
+            "status": "open",
+        },
+    )
+    with state.run_state(order.run_id) as run:
+        leg = run["legs"]["1"]
+        leg["status"] = "open"
+        leg["entry_status"] = "complete"
+        leg["entry_avg"] = 100.0
+        leg["exit_order_id"] = exit_row.id
+        leg["exit_kind"] = "exit_close_all"
+    assert store.request_run_stop(order.run_id, "manual") is True
+
+    order_events._apply_update("BRK-STOP", _event("BRK-STOP", status=ended, avg=0))
+
+    run = store.get_run(order.run_id)
+    leg = state.get_run_state(order.run_id)["legs"]["1"]
+    assert run.stopped_at is None
+    assert run.stop_requested_reason == "manual"
+    assert leg["position_ref"] == "pending-stop-position"
+    assert leg["exit_order_id"] is None
+    assert leg["exit_kind"] is None
+    failures = [
+        event
+        for event in store.list_events(order.strategy_id)
+        if event["kind"] == "run_stop_failed"
+    ]
+    assert len(failures) == 1
+    assert "managed" in failures[0]["message"].lower()
+    assert "retry" in failures[0]["message"].lower()
+    assert not any(event["kind"] == "run_stopped" for event in store.list_events(order.strategy_id))
+
+
 def _apply_two_updates_after_both_read(
     monkeypatch: pytest.MonkeyPatch, broker_order_id: str, event
 ) -> None:

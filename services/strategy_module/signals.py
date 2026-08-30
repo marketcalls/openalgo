@@ -339,6 +339,14 @@ def handle_signal(
         return SignalResult(ok=False, leg_id=resolved_leg_id, error=error or "No run")
 
     if action in _IS_ENTRY:
+        run_row = store.get_run(run_id)
+        if run_row is not None and run_row.stop_requested_reason is not None:
+            return SignalResult(
+                ok=False,
+                note="run_stopping",
+                leg_id=resolved_leg_id,
+                run_id=run_id,
+            )
         return _enter(strategy, run_id, leg, side)
     return _exit(strategy, run_id, leg, side)
 

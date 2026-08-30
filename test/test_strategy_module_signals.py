@@ -19,7 +19,7 @@ import pytest
 # restx_api first: see the note in test_strategy_module_order_dispatch.py.
 import restx_api  # noqa: F401
 from database import strategy_module_db as store
-from services.strategy_module import engine, signals, state
+from services.strategy_module import engine, order_events, signals, state
 from services.strategy_module.order_dispatch import DispatchResult
 
 USER = "signal_test_user"
@@ -401,6 +401,43 @@ def test_later_signals_reuse_the_same_run(placed):
 
     assert store.get_strategy(strategy.id, USER).current_run_id == first
     assert len(store.list_runs(strategy.id)) == 1
+
+
+def test_signal_entry_is_refused_while_stop_pending_but_exit_retry_is_allowed(placed):
+    strategy = _make()
+    strategy_id = strategy.id
+    assert signals.handle_signal(strategy, "long_entry", leg_id=1).ok is True
+    run_id = _fill(strategy, 1)
+    assert store.request_run_stop(run_id, "manual") is True
+
+    blocked = signals.handle_signal(strategy, "long_entry", leg_id=2)
+
+    assert blocked.ok is False
+    assert blocked.note == "run_stopping"
+    assert blocked.run_id == run_id
+    assert len(placed) == 1
+
+    first_exit = signals.handle_signal(strategy, "long_exit", leg_id=1)
+    assert first_exit.ok is True
+    exit_row = max(store.list_orders(run_id), key=lambda row: row["id"])
+    order_events._apply_update(
+        exit_row["broker_order_id"],
+        SimpleNamespace(
+            orderid=exit_row["broker_order_id"],
+            order_status="rejected",
+            average_price=0,
+            filled_quantity=0,
+            rejection_reason="venue refused",
+        ),
+    )
+    strategy = store.get_strategy(strategy_id, USER)
+    orders_before_retry = len(placed)
+
+    retry = signals.handle_signal(strategy, "long_exit", leg_id=1)
+    assert retry.ok is True
+    assert len(placed) == orders_before_retry + 1
+    assert placed[-1]["action"] == "SELL"
+    assert placed[-1]["quantity"] == "100"
 
 
 def test_a_run_is_sandbox_unless_the_strategy_opted_into_live(placed):

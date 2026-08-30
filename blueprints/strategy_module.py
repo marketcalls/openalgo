@@ -1234,12 +1234,15 @@ def engage_kill_switch(sid):
     # a signal arriving mid-flatten cannot re-enter behind it.
     run_id = row.current_run_id
     stopped = False
+    stop_pending = False
     if run_id:
         from services.strategy_module import engine
 
         result = engine.stop_run(run_id, username, reason="manual")
-        stopped = bool(result.get("ok"))
-        if not stopped:
+        accepted = bool(result.get("ok"))
+        stop_pending = bool(result.get("stop_pending", False))
+        stopped = accepted and not stop_pending
+        if not accepted:
             logger.error(
                 "Kill switch on strategy %s locked the webhook but could not flatten run %s: %s",
                 sid,
@@ -1247,11 +1250,14 @@ def engage_kill_switch(sid):
                 result.get("error"),
             )
 
+    flatten_message = (
+        " and open legs closed" if stopped else "; exit fills pending" if stop_pending else ""
+    )
     store.record_event(
         sid,
         username,
         "webhook_locked",
-        "Kill switch engaged" + (" and open legs closed" if stopped else ""),
+        "Kill switch engaged" + flatten_message,
         run_id=run_id,
         severity="critical",
     )
@@ -1260,7 +1266,8 @@ def engage_kill_switch(sid):
         {
             "webhook_locked": True,
             "run_stopped": stopped,
-            "message": "Webhook locked" + (" and open legs closed" if stopped else ""),
+            "stop_pending": stop_pending,
+            "message": "Webhook locked" + flatten_message,
         }
     )
 
@@ -1349,7 +1356,13 @@ def _stop_run_for(sid: int, reason: str, event: str | None = None):
     if not result.get("ok"):
         return _error(result.get("error") or "Could not stop the run", 409)
 
-    return _ok({"run_id": run_id, "exits": result.get("exits", [])})
+    return _ok(
+        {
+            "run_id": run_id,
+            "stop_pending": result.get("stop_pending", False),
+            "exits": result.get("exits", []),
+        }
+    )
 
 
 @strategy_module_bp.route("/api/strategies/<int:sid>/legs/<leg_id>/close", methods=["POST"])

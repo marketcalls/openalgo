@@ -101,6 +101,7 @@ def _order(
     qty=75,
     status="complete",
     avg=None,
+    position_ref=None,
 ):
     row = store.record_order(
         run_id,
@@ -113,6 +114,7 @@ def _order(
             "qty": qty,
             "pricetype": "MARKET",
             "status": "open",
+            "position_ref": position_ref,
         },
     )
     assert row is not None
@@ -353,6 +355,43 @@ def test_a_rejected_exit_leaves_the_leg_open_and_the_exit_retryable():
     leg = state.get_run_state(run_id)["legs"]["1"]
     assert leg["status"] == "open"
     assert leg["exit_order_id"] is None
+    assert leg["exit_kind"] is None
+
+
+def test_recovery_preserves_pending_stop_and_exact_rejected_exit_owner():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        1,
+        "entry",
+        action="SELL",
+        status="complete",
+        avg=100.0,
+        position_ref="recover-pending-position",
+    )
+    _order(
+        run_id,
+        1,
+        "exit_close_all",
+        action="BUY",
+        status="rejected",
+        position_ref="recover-pending-position",
+    )
+    assert store.request_run_stop(run_id, "manual") is True
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    persisted = store.get_run(run_id)
+    assert persisted.stop_requested_reason == "manual"
+    assert persisted.stop_requested_at is not None
+    live = state.get_run_state(run_id)
+    assert live["signal_entry_claims"] == {}
+    leg = live["legs"]["1"]
+    assert leg["position_ref"] == "recover-pending-position"
+    assert leg["exit_order_id"] is None
+    assert leg["exit_claim_token"] is None
     assert leg["exit_kind"] is None
 
 

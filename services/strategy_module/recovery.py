@@ -464,6 +464,7 @@ def _rebuild_state(
         # Re-derived by the tick feed, which knows nothing about what the feed
         # was doing before the restart.
         "tick_source_degraded": False,
+        "signal_entry_claims": {},
         "legs": legs,
     }
 
@@ -583,6 +584,12 @@ def _rebuild_leg(
         exit_order_id = cp_leg.get("exit_order_id")
         exit_kind = cp_leg.get("exit_kind")
 
+    position_ref = None
+    for source in (entry, exit_order, cp_leg):
+        if source and source.get("position_ref") is not None:
+            position_ref = source.get("position_ref")
+            break
+
     return {
         "leg_id": leg_id,
         "position": position,
@@ -591,10 +598,12 @@ def _rebuild_leg(
         "lots": lots,
         "qty": qty,
         # Order plumbing
+        "position_ref": position_ref,
         "entry_order_id": entry["id"] if entry else cp_leg.get("entry_order_id"),
         "entry_status": _entry_status(entry_status, entry_filled, cp_leg),
         "entry_avg": entry_avg,
         "exit_order_id": exit_order_id,
+        "exit_claim_token": None,
         "exit_kind": exit_kind,
         "exit_avg": exit_avg,
         # Live figures
@@ -613,6 +622,10 @@ def _rebuild_leg(
         "trail_active": bool(cp_leg.get("trail_active", False)),
         "highest_price": _float(cp_leg.get("highest_price")),
         "lowest_price": _float(cp_leg.get("lowest_price")),
+        # Overlapping position groups need separate reconstruction from order
+        # history. A single-position recovery still carries the complete live
+        # shape so exact-owner helpers have no ambiguous missing key.
+        "superseded": None,
     }
 
 

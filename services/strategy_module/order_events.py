@@ -141,13 +141,7 @@ def replay_for(order_id: str | None) -> None:
 
 
 def _report_stranded_exit(run_id: int, leg_id: Any, row: Any, ended: str) -> None:
-    """Record that an exit died after its run closed, so a held position is not silent.
-
-    A stop finalises as soon as the broker accepts its exits rather than
-    waiting for the fills, so a rejection arriving afterwards finds no run
-    state to put right. Nothing can be retried automatically from here: the
-    event log is the one place left that an operator reads.
-    """
+    """Legacy guard for an exit that dies after its run has already closed."""
     try:
         run = store.get_run(run_id)
         if run is None:
@@ -203,6 +197,37 @@ def report_flip_outgoing_exit_rejected(
         logger.exception(
             "Could not record an outgoing flip rejection for run %s leg %s", run_id, leg_id
         )
+
+
+def report_pending_stop_exit_failed(
+    run_id: int,
+    leg_id: Any,
+    ended: str,
+    broker_order_id: str | None = None,
+) -> None:
+    """Record that a pending stop still owns a retryable held position."""
+    try:
+        run = store.get_run(run_id)
+        if run is None or run.stopped_at is not None or run.stop_requested_reason is None:
+            return
+        strategy = store.get_strategy_unscoped(run.strategy_id)
+        if strategy is None:
+            return
+        store.record_event(
+            run.strategy_id,
+            strategy.user_id,
+            "run_stop_failed",
+            (
+                f"Stop exit{f' order {broker_order_id}' if broker_order_id else ''} for leg "
+                f"{leg_id} was {ended}. The position remains open and managed, and the stop "
+                "is retryable."
+            ),
+            run_id=run_id,
+            leg_id=leg_id,
+            severity="critical",
+        )
+    except Exception:
+        logger.exception("Could not record a pending-stop exit failure for run %s", run_id)
 
 
 def _on_order_update(event: Any) -> None:
@@ -357,7 +382,8 @@ def _apply_update(order_id: str, event: Any) -> None:
                         ended,
                     )
                     report_flip_outgoing_exit_rejected(run_id, leg_id, ended, row.broker_order_id)
-                elif exit_owner is None and state.get_run_state(run_id) is None:
+                report_pending_stop_exit_failed(run_id, leg_id, ended, row.broker_order_id)
+                if exit_owner is None and state.get_run_state(run_id) is None:
                     # The run has already finalised. There is nothing left to
                     # release and nothing still managing this leg, so the
                     # position is real and invisible unless said out loud.

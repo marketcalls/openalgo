@@ -239,6 +239,58 @@ def _two_leg_run(broker, positions=("S", "B")):
 # ===========================================================================
 
 
+@pytest.mark.parametrize(
+    "case",
+    ["stale_order_id", "no_exit_in_flight", "partial_entry", "zero_entry_price"],
+)
+def test_apply_fill_warnings_run_after_the_run_lock_is_released(case):
+    """Logging may acquire handler locks, so no warning may run under a run lock."""
+    run_id = 991_000
+    state.init_run_state(
+        run_id,
+        strategy_id=1,
+        legs=[
+            {
+                "leg_id": 1,
+                "position": "B",
+                "position_ref": "warning-position",
+                "symbol": CE,
+                "exchange": "NFO",
+                "quantity": 75,
+            }
+        ],
+    )
+    with state.run_state(run_id) as run:
+        leg = run["legs"]["1"]
+        leg["status"] = "open"
+        leg["entry_status"] = "complete"
+
+    if case == "stale_order_id":
+        with state.run_state(run_id) as run:
+            run["legs"]["1"]["entry_order_id"] = 10
+        fill = {"avg_price": 100.0, "is_entry": True, "order_row_id": 11}
+    elif case == "no_exit_in_flight":
+        fill = {"avg_price": 99.0, "is_entry": False, "order_row_id": 11}
+    elif case == "partial_entry":
+        fill = {"avg_price": 100.0, "is_entry": True, "filled_qty": 25}
+    else:
+        fill = {"avg_price": 99.0, "is_entry": False}
+
+    run_lock = state.get_state_lock(run_id)
+    warning_lock_states = []
+
+    def observe_warning(*_args, **_kwargs):
+        acquired = run_lock.acquire(blocking=False)
+        warning_lock_states.append(acquired)
+        if acquired:
+            run_lock.release()
+
+    with patch.object(engine.logger, "warning", side_effect=observe_warning):
+        engine.apply_fill(run_id, 1, position_ref="warning-position", **fill)
+
+    assert warning_lock_states == [True], "logger.warning ran while state.run_state was held"
+
+
 def test_a_fill_priced_at_the_string_zero_seeds_no_leg(broker):
     """A broker that sends prices as strings must not disarm a stop loss.
 
@@ -501,7 +553,11 @@ def test_the_daily_loss_limit_counts_what_earlier_runs_already_lost(broker):
         # square off and the run stays open by design.
         engine.apply_fill(done, 1, 100.0, is_entry=True)
         engine.stop_run(done, USER, "manual")
-        store.finish_run(done, stop_reason="manual", pnl_realized=-550.0)
+        exit_row = max(store.list_orders(done), key=lambda row: row["id"])
+        order_events._apply_update(
+            exit_row["broker_order_id"],
+            _event(exit_row["broker_order_id"], avg=100.0 + (550.0 / 75.0)),
+        )
     broker.clear()
 
     # A third opens anyway, and is squared off on its first tick even though
@@ -512,8 +568,21 @@ def test_the_daily_loss_limit_counts_what_earlier_runs_already_lost(broker):
 
     engine.process_tick(CE, "NFO", 100.0)
 
-    assert store.get_run(run_id).stop_reason == "daily_loss_limit"
+    pending_run = store.get_run(run_id)
+    assert pending_run.stop_reason is None
+    assert pending_run.stop_requested_reason == "daily_loss_limit"
+    assert pending_run.stopped_at is None
     assert broker.actions == ["BUY"], "the open position was squared off"
+
+    exit_row = max(store.list_orders(run_id), key=lambda row: row["id"])
+    order_events._apply_update(
+        exit_row["broker_order_id"],
+        _event(exit_row["broker_order_id"], avg=100.0),
+    )
+
+    stopped_run = store.get_run(run_id)
+    assert stopped_run.stop_reason == "daily_loss_limit"
+    assert stopped_run.stopped_at is not None
 
 
 def test_a_session_still_inside_the_daily_limit_keeps_trading(broker):
@@ -522,7 +591,11 @@ def test_a_session_still_inside_the_daily_limit_keeps_trading(broker):
     first = _start(sid).run_id
     engine.apply_fill(first, 1, 100.0, is_entry=True)
     engine.stop_run(first, USER, "manual")
-    store.finish_run(first, stop_reason="manual", pnl_realized=-700.0)
+    exit_row = max(store.list_orders(first), key=lambda row: row["id"])
+    order_events._apply_update(
+        exit_row["broker_order_id"],
+        _event(exit_row["broker_order_id"], avg=100.0 + (700.0 / 75.0)),
+    )
     broker.clear()
 
     run_id = _start(sid).run_id
@@ -540,7 +613,11 @@ def test_a_strategy_with_no_daily_limit_is_never_stopped_by_one(broker):
     first = _start(sid).run_id
     engine.apply_fill(first, 1, 100.0, is_entry=True)
     engine.stop_run(first, USER, "manual")
-    store.finish_run(first, stop_reason="manual", pnl_realized=-99999.0)
+    exit_row = max(store.list_orders(first), key=lambda row: row["id"])
+    order_events._apply_update(
+        exit_row["broker_order_id"],
+        _event(exit_row["broker_order_id"], avg=100.0 + (99999.0 / 75.0)),
+    )
     broker.clear()
 
     run_id = _start(sid).run_id
@@ -654,6 +731,197 @@ def test_every_entry_rejected_places_no_exit_at_all(broker):
     assert len(broker.orders) == 2
 
 
+def _filled_batch_run(broker):
+    strategy_id = _make()
+    run_id = _start(strategy_id).run_id
+    entry = store.list_orders(run_id)[0]
+    order_events._apply_update(
+        entry["broker_order_id"],
+        _event(entry["broker_order_id"], status="complete", avg=100.0),
+    )
+    broker.clear()
+    return strategy_id, run_id
+
+
+def test_stop_pending_is_durable_before_exit_dispatch_and_waits_for_the_fill(broker):
+    strategy_id, run_id = _filled_batch_run(broker)
+    at_dispatch = []
+
+    def inspect_stop_intent(**kwargs):
+        run = store.get_run(run_id)
+        kinds = [event["kind"] for event in store.list_events(strategy_id)]
+        at_dispatch.append((run.stop_requested_reason, "run_stop_requested" in kinds))
+        return broker(**kwargs)
+
+    with patch.object(engine.order_dispatch, "dispatch_order", side_effect=inspect_stop_intent):
+        result = engine.stop_run(run_id, USER, reason="manual")
+
+    assert at_dispatch == [("manual", True)]
+    assert result["ok"] is True
+    assert result["stop_pending"] is True
+    assert store.get_run(run_id).stopped_at is None
+    assert state.get_run_state(run_id) is not None
+    kinds = [event["kind"] for event in store.list_events(strategy_id)]
+    assert kinds.count("run_stop_requested") == 1
+    assert "run_stopped" not in kinds
+
+
+def test_stop_is_not_dispatched_when_its_durable_request_cannot_be_written(broker):
+    _strategy_id, run_id = _filled_batch_run(broker)
+
+    with patch.object(store, "request_run_stop", return_value=False):
+        result = engine.stop_run(run_id, USER, reason="manual")
+
+    assert result["ok"] is False
+    assert broker.orders == []
+    assert [order for order in store.list_orders(run_id) if order["kind"] != "entry"] == []
+    assert state.get_run_state(run_id) is not None
+
+
+def test_immediate_exit_fill_finishes_the_stop_once_and_returns_not_pending(broker):
+    strategy_id, run_id = _filled_batch_run(broker)
+
+    def fill_before_ack(**_kwargs):
+        broker_order_id = "QA-INLINE-EXIT"
+        order_events._apply_update(
+            broker_order_id,
+            _event(broker_order_id, status="complete", avg=90.0),
+        )
+        return DispatchResult(ok=True, broker_order_id=broker_order_id, response={})
+
+    with patch.object(engine.order_dispatch, "dispatch_order", side_effect=fill_before_ack):
+        result = engine.stop_run(run_id, USER, reason="manual")
+
+    assert result["ok"] is True
+    assert result["stop_pending"] is False
+    assert store.get_run(run_id).stopped_at is not None
+    assert state.get_run_state(run_id) is None
+    kinds = [event["kind"] for event in store.list_events(strategy_id)]
+    assert kinds.count("run_stop_requested") == 1
+    assert kinds.count("run_stopped") == 1
+
+
+def test_final_exit_fill_completes_a_pending_stop(broker):
+    strategy_id, run_id = _filled_batch_run(broker)
+    pending = engine.stop_run(run_id, USER, reason="scheduler")
+    exit_row = max(store.list_orders(run_id), key=lambda row: row["id"])
+
+    order_events._apply_update(
+        exit_row["broker_order_id"],
+        _event(exit_row["broker_order_id"], status="complete", avg=101.0),
+    )
+
+    assert pending["stop_pending"] is True
+    stopped = store.get_run(run_id)
+    assert stopped.stopped_at is not None
+    assert stopped.stop_reason == "scheduler"
+    assert stopped.stop_requested_reason is None
+    assert state.get_run_state(run_id) is None
+    kinds = [event["kind"] for event in store.list_events(strategy_id)]
+    assert kinds.count("run_stopped") == 1
+
+
+def test_async_rejected_stop_exit_stays_managed_and_retryable(broker):
+    strategy_id, run_id = _filled_batch_run(broker)
+    first = engine.stop_run(run_id, USER, reason="manual")
+    exit_row = max(store.list_orders(run_id), key=lambda row: row["id"])
+
+    order_events._apply_update(
+        exit_row["broker_order_id"],
+        _event(exit_row["broker_order_id"], status="rejected", avg=0),
+    )
+
+    assert first["stop_pending"] is True
+    assert store.get_run(run_id).stopped_at is None
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["exit_order_id"] is None
+    assert leg["exit_kind"] is None
+    failures = [
+        event for event in store.list_events(strategy_id) if event["kind"] == "run_stop_failed"
+    ]
+    assert len(failures) == 1
+    assert "managed" in failures[0]["message"].lower()
+    assert "retry" in failures[0]["message"].lower()
+
+    broker.clear()
+    retry = engine.stop_run(run_id, USER, reason="manual")
+    assert retry["ok"] is True
+    assert retry["stop_pending"] is True
+    assert broker.actions == ["BUY"]
+
+
+def test_pending_stop_waits_for_both_live_and_superseded_position_fills(broker):
+    strategy = _signal_strategy()
+    strategy_id = strategy.id
+    assert signals.handle_signal(strategy, "long_entry", leg_id=1).ok is True
+    run_id = _run_of(strategy)
+    first_entry = store.list_orders(run_id)[0]
+    order_events._apply_update(
+        first_entry["broker_order_id"],
+        _event(first_entry["broker_order_id"], status="complete", avg=100.0, filled=100),
+    )
+    broker.clear()
+    strategy = store.get_strategy(strategy_id, USER)
+
+    # The old long's SELL is accepted but not filled, and the replacement
+    # short opens immediately. One leg id now owns two actual positions.
+    flipped = signals.handle_signal(strategy, "short_entry", leg_id=1)
+    assert flipped.ok is True
+    assert flipped.flipped is True
+    rows = store.list_orders(run_id)
+    replacement_entry = [row for row in rows if row["kind"] == "entry"][-1]
+    outgoing_exit = [row for row in rows if row["kind"] == "exit_signal"][-1]
+    order_events._apply_update(
+        replacement_entry["broker_order_id"],
+        _event(
+            replacement_entry["broker_order_id"],
+            status="complete",
+            avg=95.0,
+            filled=100,
+        ),
+    )
+    broker.clear()
+
+    pending = engine.stop_run(run_id, USER, reason="manual")
+    assert pending["stop_pending"] is True
+    live_exit = [row for row in store.list_orders(run_id) if row["kind"] == "exit_close_all"][-1]
+    assert live_exit["position_ref"] == replacement_entry["position_ref"]
+
+    # The old long's first exit dies after acceptance. Retrying the stop must
+    # cover that exact old reference without duplicating the live short exit.
+    order_events._apply_update(
+        outgoing_exit["broker_order_id"],
+        _event(outgoing_exit["broker_order_id"], status="rejected", avg=0, filled=0),
+    )
+    broker.clear()
+    retried = engine.stop_run(run_id, USER, reason="manual")
+    assert retried["stop_pending"] is True
+    assert broker.actions == ["SELL"]
+    outgoing_retry = max(store.list_orders(run_id), key=lambda row: row["id"])
+    assert outgoing_retry["position_ref"] == first_entry["position_ref"]
+    assert outgoing_retry["position_ref"] != live_exit["position_ref"]
+
+    # The replacement short is flat, but the outgoing long is still held.
+    order_events._apply_update(
+        live_exit["broker_order_id"],
+        _event(live_exit["broker_order_id"], status="complete", avg=90.0, filled=100),
+    )
+    assert store.get_run(run_id).stopped_at is None
+    remaining = state.get_run_state(run_id)["legs"]["1"]
+    assert remaining["status"] == "closed"
+    assert remaining["superseded"]["position_ref"] == first_entry["position_ref"]
+
+    # Only the old long's exact exit can now make the run genuinely flat.
+    order_events._apply_update(
+        outgoing_retry["broker_order_id"],
+        _event(outgoing_retry["broker_order_id"], status="complete", avg=98.0, filled=100),
+    )
+    assert store.get_run(run_id).stopped_at is not None
+    assert state.get_run_state(run_id) is None
+    stops = [event for event in store.list_events(strategy_id) if event["kind"] == "run_stopped"]
+    assert len(stops) == 1
+
+
 def test_a_stop_whose_exits_were_all_refused_does_not_close_the_run(broker):
     """The broker said no. The position is still there.
 
@@ -670,8 +938,14 @@ def test_a_stop_whose_exits_were_all_refused_does_not_close_the_run(broker):
     result = engine.stop_run(run_id, USER, reason="manual")
 
     assert result["ok"] is False
+    assert result["stop_pending"] is True
+    assert store.get_run(run_id).stop_requested_reason == "manual"
     assert store.get_run(run_id).stopped_at is None
     assert state.get_run_state(run_id) is not None
+    kinds = [event["kind"] for event in store.list_events(sid)]
+    assert "run_stop_requested" in kinds
+    assert "run_stop_failed" in kinds
+    assert "run_stopped" not in kinds
 
 
 def test_closing_a_leg_whose_exit_was_refused_reports_the_failure(broker):
@@ -693,10 +967,9 @@ def test_closing_a_leg_whose_exit_was_refused_reports_the_failure(broker):
 def test_a_stopped_run_records_the_pnl_its_exit_fills_actually_produced(broker):
     """Short 75 at 100, bought back at 80: the run made 1500.
 
-    ``close_leg`` waits for the fill before finalising, as the module documents.
-    ``stop_run`` does not, so every run closed by a manual stop, by an overall
-    stop, by a target or by the scheduler reports a realized P&L of zero and
-    the real figure is discarded with the state.
+    A run must stay active until this fill arrives. Finalising on broker
+    acceptance writes zero before the real figure exists and discards the
+    state that could have calculated it.
     """
     sid = _make()
     run_id = _start(sid).run_id
@@ -756,7 +1029,9 @@ def test_a_stop_while_an_entry_is_unfilled_places_nothing_and_keeps_the_run(brok
 
     assert broker.orders == [], "nothing was sent against an unconfirmed position"
     assert result["ok"] is False
+    assert result["stop_pending"] is True
     assert any("not filled" in str(exit_["error"]).lower() for exit_ in result["exits"])
+    assert store.get_run(run_id).stop_requested_reason == "manual"
     assert store.get_run(run_id).stopped_at is None, "the run is still open and still managed"
 
     # Once the entry fills, the same stop works.
@@ -790,6 +1065,11 @@ def test_a_tick_for_a_just_finalised_run_places_nothing(broker):
     run_id = _start(sid).run_id
     engine.apply_fill(run_id, 1, 100.0, is_entry=True)
     engine.stop_run(run_id, USER, reason="manual")
+    exit_row = max(store.list_orders(run_id), key=lambda row: row["id"])
+    order_events._apply_update(
+        exit_row["broker_order_id"],
+        _event(exit_row["broker_order_id"], avg=90.0),
+    )
     broker.clear()
 
     engine.process_tick(CE, "NFO", 500.0)
@@ -1753,14 +2033,8 @@ def test_an_entry_rejected_after_dispatch_is_not_squared_off(broker):
     assert broker.orders == [], "nothing was sent for a leg that never traded"
 
 
-def test_an_exit_rejected_after_the_run_closed_is_reported(broker):
-    """A stop closes the run as soon as the broker accepts its exits.
-
-    A rejection arriving after that finds no run state to put right, so the
-    position is real, uncovered, and belongs to a run that reads as finished.
-    Nothing can retry it from there; the least this must do is say so where an
-    operator looks.
-    """
+def test_an_exit_rejected_after_stop_acceptance_is_reported_as_managed(broker):
+    """A delayed rejection keeps the pending stop open and retryable."""
     sid = _make()
     run_id = _start(sid).run_id
     order_events._apply_update("QA-1", _event("QA-1", avg=100.0))
@@ -1774,4 +2048,7 @@ def test_an_exit_rejected_after_the_run_closed_is_reported(broker):
     stranded = [e for e in store.list_events(sid) if e["kind"] == "run_stop_failed"]
     assert stranded, "the held position was recorded"
     assert stranded[0]["severity"] == "critical"
-    assert "still held" in stranded[0]["message"]
+    assert "managed" in stranded[0]["message"]
+    assert "retryable" in stranded[0]["message"]
+    assert store.get_run(run_id).stopped_at is None
+    assert state.get_run_state(run_id) is not None

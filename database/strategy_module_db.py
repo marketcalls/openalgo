@@ -155,6 +155,7 @@ EVENT_KINDS = (
     "run_started",
     "run_paused",
     "run_resumed",
+    "run_stop_requested",
     "run_stopped",
     "run_stop_failed",
     "flip_outgoing_exit_rejected",
@@ -1068,21 +1069,38 @@ def finish_run(
     pnl_peak: float = 0.0,
     pnl_trough: float = 0.0,
 ) -> bool:
-    """Close a run and write its final numbers."""
+    """Close an active run exactly once and write its final numbers."""
     try:
-        row = db_session.query(SmStrategyRun).filter_by(id=run_id).first()
-        if not row:
+        strategy_id = (
+            db_session.query(SmStrategyRun.strategy_id).filter(SmStrategyRun.id == run_id).scalar()
+        )
+        if strategy_id is None:
             return False
-        row.stopped_at = utcnow()
-        row.stop_reason = stop_reason
-        row.stop_requested_at = None
-        row.stop_requested_reason = None
-        row.pnl_realized = pnl_realized
-        row.pnl_peak = pnl_peak
-        row.pnl_trough = pnl_trough
+        updated = (
+            db_session.query(SmStrategyRun)
+            .filter(
+                SmStrategyRun.id == run_id,
+                SmStrategyRun.stopped_at.is_(None),
+            )
+            .update(
+                {
+                    "stopped_at": utcnow(),
+                    "stop_reason": stop_reason,
+                    "stop_requested_at": None,
+                    "stop_requested_reason": None,
+                    "pnl_realized": pnl_realized,
+                    "pnl_peak": pnl_peak,
+                    "pnl_trough": pnl_trough,
+                },
+                synchronize_session=False,
+            )
+        )
         db_session.commit()
-        _forget_session_pnl(row.strategy_id)
-        return True
+        db_session.expire_all()
+        if updated == 1:
+            _forget_session_pnl(strategy_id)
+            return True
+        return False
     except Exception:
         db_session.rollback()
         logger.exception("Could not finish run %s", run_id)
