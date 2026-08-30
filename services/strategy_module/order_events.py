@@ -183,7 +183,15 @@ def _apply_update(order_id: str, event: Any) -> None:
                 from services.strategy_module import engine
 
                 engine.apply_fill(
-                    run_id, leg_id, price, is_entry=is_entry, filled_qty=_whole_qty(filled_qty)
+                    run_id,
+                    leg_id,
+                    price,
+                    is_entry=is_entry,
+                    filled_qty=_whole_qty(filled_qty),
+                    # Which order this fill is for. A signal flip leaves one
+                    # leg id naming two positions for as long as the closing
+                    # order is unfilled, and only the order id separates them.
+                    order_row_id=row.id,
                 )
             else:
                 # A fill with no usable price cannot seed a stop or a realized

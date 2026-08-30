@@ -1962,23 +1962,19 @@ def test_a_signal_leg_exchange_is_checked_against_the_known_exchanges():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT F1: signals._enter calls state.add_leg after placing the "
-        "squaring exit, and add_leg replaces the whole leg state, so the "
-        "pending exit's order id is discarded"
-    ),
-)
 def test_a_flip_keeps_track_of_the_exit_it_just_placed(market, broker):
     """The exit of the old position is still working when the new one opens.
 
     signals._enter squares the held side with _exit(), which claims the leg and
     records exit_kind and exit_order_id on it, and then calls state.add_leg with
-    the new side. add_leg assigns a fresh leg state over the old one, carrying
-    forward only realized_pnl, so the markers for the exit that is still in
-    flight are lost. Nothing else tracks it: order_events matches a fill by run
-    id and leg id alone.
+    the new side. add_leg used to assign a fresh leg state over the old one,
+    carrying forward only realized_pnl, so the markers for the exit still in
+    flight were lost and order_events, which matches a fill by run id and leg
+    id, applied that fill to the position the flip had just opened.
+
+    The outgoing position is now kept under "superseded" until its own fill
+    settles it, which is what separates the two positions this one leg id names
+    for as long as the squaring order is unfilled.
     """
     strategy = _signal_strategy(
         [{"id": 1, "symbol": "RELIANCE", "exchange": "NSE", "qty": 100, "segment": "cash"}]
@@ -1991,17 +1987,13 @@ def test_a_flip_keeps_track_of_the_exit_it_just_placed(market, broker):
 
     assert flip.ok is True and flip.flipped is True
     assert [o["action"] for o in broker] == ["BUY", "SELL", "SELL"]
-    assert _leg_state(run_id)["exit_order_id"] is not None
+    outgoing = _leg_state(run_id)["superseded"]
+    assert outgoing is not None, "the exit placed to square the long is still tracked"
+    assert outgoing["exit_order_id"] is not None
+    assert outgoing["position"] == "B", "the position being squared was the long"
+    assert outgoing["entry_avg"] == 1400.0, "and it is settled against its own entry"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT F1: after a flip the squaring exit's fill is applied to the "
-        "opposite position that replaced it, closing a position the account "
-        "still holds"
-    ),
-)
 def test_the_exit_fill_of_a_flip_does_not_close_the_position_it_opened(market, broker):
     """The worst outcome in the module: a live position with nothing managing it.
 

@@ -476,6 +476,7 @@ def apply_fill(
     avg_price: float,
     is_entry: bool,
     filled_qty: int | None = None,
+    order_row_id: int | None = None,
 ) -> bool:
     """Record a fill against a leg. Returns whether the run went flat.
 
@@ -499,6 +500,72 @@ def apply_fill(
             return False
         leg = run["legs"].get(str(leg_id))
         if leg is None:
+            return False
+
+        # A signal leg is flipped by squaring the held side and opening the
+        # other immediately, so until the closing order fills this leg id names
+        # two positions. Settle the outgoing one from what add_leg kept, and
+        # leave the position that is now live untouched.
+        superseded = leg.get("superseded")
+        settles_superseded = bool(
+            not is_entry
+            and superseded
+            and (
+                superseded.get("exit_order_id") == order_row_id
+                # No order id to match on: this is an internal caller rather
+                # than the order stream. An exit fill can only belong to the
+                # outgoing position when the live one has no exit in flight.
+                or (order_row_id is None and leg.get("exit_order_id") is None)
+            )
+        )
+        if settles_superseded:
+            entry = float(superseded.get("entry_avg") or 0.0)
+            qty = float(superseded.get("qty") or 0.0)
+            sign = 1.0 if superseded.get("position") == "B" else -1.0
+            if entry > 0.0:
+                leg["realized_pnl"] = float(leg.get("realized_pnl") or 0.0) + (
+                    (float(avg_price) - entry) * qty * sign
+                )
+            leg["superseded"] = None
+            realized, unrealized = risk_adapter.run_pnl(run)
+            run["pnl_realized"] = realized
+            run["pnl_unrealized"] = unrealized
+            run["pnl_total"] = realized + unrealized
+            return False
+
+        # A fill that names an order this leg is not waiting on belongs to an
+        # incarnation that has already been replaced. Applying it would close
+        # or re-price the position that is live now.
+        if order_row_id is not None:
+            expected = leg.get("entry_order_id") if is_entry else leg.get("exit_order_id")
+            if expected is not None and expected != order_row_id:
+                logger.warning(
+                    "Ignoring a fill for order %s on leg %s: the leg is waiting on %s",
+                    order_row_id,
+                    leg_id,
+                    expected,
+                )
+                return False
+
+        if (
+            not is_entry
+            and order_row_id is not None
+            and leg.get("exit_kind") is None
+            and leg.get("exit_order_id") is None
+        ):
+            # A fill from the order stream naming an exit this leg never placed
+            # cannot be closing the position that is live now. Closing anyway
+            # is how a flip's squaring order used to close the position it had
+            # just opened, leaving a live short invisible to open_legs: no stop
+            # evaluated, no square-off reaching it, and the broker still
+            # holding it. exit_kind rather than exit_order_id, because a
+            # successful exit whose audit row could not be written has the
+            # first and not the second.
+            logger.warning(
+                "Ignoring exit fill for order %s on leg %s: it has no exit in flight",
+                order_row_id,
+                leg_id,
+            )
             return False
 
         if is_entry:

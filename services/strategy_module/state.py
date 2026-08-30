@@ -185,6 +185,9 @@ def _new_leg_state(leg: dict) -> dict[str, Any]:
         # value, computed by favorable_peak_points() when the UI wants them.
         "highest_price": None,
         "lowest_price": None,
+        # Set only while a flip's outgoing position is still unfilled. See
+        # add_leg for why this leg id can name two positions at once.
+        "superseded": None,
     }
 
 
@@ -269,6 +272,21 @@ def add_leg(run_id: int, leg: dict) -> dict[str, Any] | None:
         key = str(leg["leg_id"])
         leg_state = _new_leg_state(leg)
         previous = state["legs"].get(key)
+        if previous is not None and previous.get("exit_order_id") is not None:
+            # A flip squares the held side and opens the other one straight
+            # away, so for as long as the closing order is unfilled this leg id
+            # names two positions. Overwriting wholesale lost the outgoing
+            # one's order id, and because a fill is matched on (run, leg) the
+            # old long's exit fill then closed the new short: it vanished from
+            # open_legs, no stop was evaluated for it, no square-off would
+            # reach it, and the broker still held it. Keep what is needed to
+            # settle the outgoing position when its fill arrives.
+            leg_state["superseded"] = {
+                "exit_order_id": previous.get("exit_order_id"),
+                "position": previous.get("position"),
+                "entry_avg": previous.get("entry_avg"),
+                "qty": previous.get("qty"),
+            }
         if previous is not None:
             # A signal leg is re-entered on the same id after it has been
             # closed, and a fresh state would reset realized_pnl to zero. That
