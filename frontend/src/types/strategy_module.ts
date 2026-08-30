@@ -1,0 +1,589 @@
+// types/strategy_module.ts
+// Strategy module vocabulary, wire types and pure helpers.
+//
+// The types mirror the `*_to_dict` functions in `database/strategy_module_db.py`
+// and the enum tuples that file exports; the leg shape mirrors `LEG_FIELDS` and
+// `_validate_leg` in `blueprints/strategy_module.py`, which is the only place a
+// payload is refused. Where the two disagree the validator wins, because it is
+// what a request actually has to satisfy.
+//
+// Pure helpers live here too rather than in a fourth file: they are functions of
+// these types alone (no React, no network), and keeping them beside the
+// vocabulary they read is what stops a second copy of "which products are legal"
+// from appearing next to the form that asks the question.
+
+// ---------------------------------------------------------------------------
+// Enumerations - each one is the store's tuple of the same name
+// ---------------------------------------------------------------------------
+
+export type StrategyKind = 'batch' | 'signal'
+export type StrategyDirection = 'both' | 'long_only' | 'short_only'
+export type StrategyType = 'intraday' | 'positional'
+export type StrategyStatus = 'stopped' | 'running' | 'paused' | 'errored'
+export type RunMode = 'live' | 'sandbox'
+export type TriggerSource = 'manual' | 'webhook' | 'scheduler'
+
+export type Product = 'CNC' | 'NRML' | 'MIS'
+export type PriceType = 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
+
+export type Segment = 'options' | 'futures' | 'cash'
+export type LegPosition = 'B' | 'S'
+export type OptionType = 'CE' | 'PE'
+export type StrikeMode = 'atm' | 'strike'
+
+/**
+ * Expiry ranks the validator accepts (`LEG_EXPIRIES`).
+ *
+ * `weekly` and `monthly` are the nearest weekly and nearest monthly contract;
+ * `current` and `next` are the older spellings of the monthly pair and are still
+ * accepted, so a strategy saved before the rename keeps working.
+ */
+export type ExpiryRank = 'weekly' | 'next_week' | 'monthly' | 'next_month' | 'current' | 'next'
+
+export type Weekday = 'MON' | 'TUE' | 'WED' | 'THU' | 'FRI' | 'SAT' | 'SUN'
+export type LockProfitMode = 'lock' | 'lock_and_trail'
+
+export type OrderStatus = 'pending' | 'open' | 'complete' | 'cancelled' | 'rejected'
+export type EventSeverity = 'info' | 'warn' | 'critical'
+
+export type StopReason =
+  | 'manual'
+  | 'scheduler'
+  | 'overall_sl'
+  | 'overall_target'
+  | 'lock_profit'
+  | 'eod'
+  | 'expiry'
+  | 'daily_loss_limit'
+  | 'tick_stale'
+  | 'recovery_failed'
+  | 'error'
+
+export type WebhookResult =
+  | 'ok'
+  | 'rejected_token'
+  | 'rejected_ip'
+  | 'rate_limited'
+  | 'rejected_dedupe'
+  | 'rejected_cooling_off'
+  | 'rejected_invalid_action'
+  | 'rejected_live_disabled'
+  | 'rejected_locked'
+  | 'rejected_payload'
+  | 'rejected_engine_error'
+
+/**
+ * Which universe the wizard was pointed at. The column is free text on the
+ * server (30 chars), so this union is the set the UI offers rather than a
+ * constraint the API enforces.
+ */
+export type UniverseTab = 'weekly_monthly' | 'monthly_only' | 'stocks_fno' | 'mcx'
+
+// ---------------------------------------------------------------------------
+// Configuration
+// ---------------------------------------------------------------------------
+
+export interface TrailConfig {
+  x: number
+  y: number
+}
+
+/**
+ * One leg of a strategy.
+ *
+ * The optional fields are conditionally *forbidden*, not merely optional: the
+ * validator rejects `option_type` on a futures leg, `expiry` on a cash leg,
+ * `strike` while `strike_mode` is `atm`, and `atm_offset` while it is `strike`.
+ * `legToPayload` below is the one place that pruning happens.
+ */
+export interface Leg {
+  id: number
+  segment: Segment
+  position: LegPosition
+  lots: number
+  option_type?: OptionType | null
+  strike_mode?: StrikeMode | null
+  atm_offset?: string | null
+  strike?: number | null
+  expiry?: ExpiryRank | null
+  sl_pts?: number | null
+  target_pts?: number | null
+  trail?: TrailConfig | null
+}
+
+export interface LockProfitConfig {
+  mode: LockProfitMode
+  if_profit_reaches: number
+  lock_profit: number
+  trail_step?: number | null
+}
+
+export interface SchedulerConfig {
+  enabled: boolean
+  days: Weekday[]
+  start_time: string | null
+  auto_stop_time: string | null
+  default_mode: RunMode
+}
+
+/** A strategy as the list endpoint returns it: everything but the legs. */
+export interface StrategySummary {
+  id: number
+  name: string
+  strategy_kind: StrategyKind
+  direction: StrategyDirection
+  universe_tab: string
+  underlying: string
+  underlying_exchange: string
+  strategy_type: StrategyType
+  entry_time: string | null
+  exit_time: string | null
+  product: Product
+  pricetype: PriceType
+  overall_sl_mtm: number | null
+  overall_target_mtm: number | null
+  lock_profit: LockProfitConfig | null
+  trail_sl_to_entry: boolean
+  scheduler: SchedulerConfig | null
+  live_enabled: boolean
+  webhook_locked: boolean
+  webhook_ip_allowlist: string[] | null
+  daily_loss_limit_inr: number | null
+  status: StrategyStatus
+  current_run_id: number | null
+  created_at: string
+  updated_at: string
+}
+
+/** A strategy as the detail endpoint returns it. */
+export interface Strategy extends StrategySummary {
+  legs: Leg[]
+}
+
+/**
+ * The create body, and (as a Partial) the update body.
+ *
+ * A PATCH is merged onto the stored configuration and re-validated whole, so a
+ * partial update still has to leave the strategy in a valid state.
+ */
+export interface StrategyConfigPayload {
+  name: string
+  strategy_kind?: StrategyKind
+  direction?: StrategyDirection
+  universe_tab?: string
+  underlying: string
+  underlying_exchange: string
+  strategy_type?: StrategyType
+  entry_time?: string | null
+  exit_time?: string | null
+  product?: Product
+  pricetype?: PriceType
+  legs: Leg[]
+  overall_sl_mtm?: number | null
+  overall_target_mtm?: number | null
+  lock_profit?: LockProfitConfig | null
+  trail_sl_to_entry?: boolean
+  scheduler?: SchedulerConfig | null
+  daily_loss_limit_inr?: number | null
+  webhook_ip_allowlist?: string[] | null
+}
+
+export type StrategyUpdatePayload = Partial<StrategyConfigPayload>
+
+// ---------------------------------------------------------------------------
+// History
+// ---------------------------------------------------------------------------
+
+export interface Run {
+  id: number
+  strategy_id: number
+  mode: RunMode
+  broker: string | null
+  started_at: string | null
+  stopped_at: string | null
+  stop_reason: StopReason | null
+  pnl_realized: number
+  pnl_peak: number
+  pnl_trough: number
+  trigger_source: TriggerSource
+  webhook_event_id: number | null
+  resolved_expiries: Record<string, string> | null
+}
+
+export interface Order {
+  id: number
+  run_id: number
+  leg_id: number
+  kind: string
+  broker_order_id: string | null
+  symbol: string
+  exchange: string
+  action: string
+  qty: number
+  pricetype: string
+  price: number
+  trigger_price: number
+  status: OrderStatus
+  placed_at: string | null
+  filled_at: string | null
+  avg_fill_price: number | null
+  filled_qty: number | null
+  reject_reason: string | null
+}
+
+export interface StrategyEvent {
+  id: number
+  run_id: number | null
+  strategy_id: number
+  ts: string
+  kind: string
+  severity: EventSeverity
+  leg_id: number | null
+  message: string
+  payload: Record<string, unknown> | null
+}
+
+export interface WebhookEvent {
+  id: number
+  strategy_id: number
+  action: string | null
+  mode: string | null
+  payload: Record<string, unknown> | null
+  ip: string | null
+  user_agent: string | null
+  received_at: string | null
+  result: WebhookResult
+  error: string | null
+}
+
+/**
+ * One leg's runtime state, as the engine stores it in a checkpoint's
+ * `leg_state` map. Mirrors `_new_leg_state` in `services/strategy_module/state.py`.
+ */
+export interface LegState {
+  leg_id: number
+  position: LegPosition
+  symbol: string
+  exchange: string
+  lots: number
+  qty: number
+  entry_order_id: number | null
+  entry_status: string
+  entry_avg: number
+  exit_order_id: number | null
+  exit_kind: string | null
+  exit_avg: number | null
+  ltp: number | null
+  mtm: number
+  realized_pnl: number
+  status: string
+  tick_source: string
+  sl_pts: number | null
+  target_pts: number | null
+  trail_x: number
+  trail_y: number
+  effective_sl: number | null
+  effective_target: number | null
+  trail_active: boolean
+  highest_price: number | null
+  lowest_price: number | null
+}
+
+/** A runtime snapshot of a run: one point on its P&L curve. */
+export interface Checkpoint {
+  id: number
+  run_id: number
+  ts: string
+  pnl_realized: number
+  pnl_unrealized: number
+  pnl_total: number
+  pnl_peak: number
+  pnl_trough: number
+  lock_floor: number | null
+  trail_to_entry_active: boolean
+  leg_state: Record<string, LegState>
+}
+
+// ---------------------------------------------------------------------------
+// Wizard vocabulary
+// ---------------------------------------------------------------------------
+
+export const UNIVERSE_TABS: UniverseTab[] = ['weekly_monthly', 'monthly_only', 'stocks_fno', 'mcx']
+
+export const UNIVERSE_TAB_LABELS: Record<UniverseTab, string> = {
+  weekly_monthly: 'Weekly & Monthly Expiries',
+  monthly_only: 'Monthly Only Expiry',
+  stocks_fno: 'Stocks – Cash / F&O',
+  mcx: 'Commodities (MCX)',
+}
+
+export const UNIVERSE_TAB_HINT: Record<UniverseTab, string> = {
+  weekly_monthly: 'NIFTY, SENSEX',
+  monthly_only: 'MIDCPNIFTY, BANKNIFTY, FINNIFTY, BANKEX',
+  stocks_fno: 'All NIFTY 500 stocks',
+  mcx: 'CRUDEOIL, NATURALGAS, GOLD, SILVER, …',
+}
+
+/** Universe tab label, tolerant of a value the UI does not know. */
+export function universeTabLabel(tab: string): string {
+  return UNIVERSE_TAB_LABELS[tab as UniverseTab] ?? tab
+}
+
+export const EXPIRY_RANK_LABELS: Record<ExpiryRank, string> = {
+  weekly: 'Current Week',
+  next_week: 'Next Week',
+  monthly: 'Current Month',
+  next_month: 'Next Month',
+  // Older spellings of the monthly pair, still accepted by the validator so an
+  // existing strategy keeps rendering sensibly until it is next saved.
+  current: 'Current Month (legacy)',
+  next: 'Next Month (legacy)',
+}
+
+/**
+ * What expiry ranks a tab offers. Weekly contracts exist on the index options
+ * side only; stock F&O and MCX are monthly.
+ */
+export const TAB_EXPIRIES: Record<UniverseTab, ExpiryRank[]> = {
+  weekly_monthly: ['weekly', 'next_week', 'monthly', 'next_month'],
+  monthly_only: ['monthly', 'next_month'],
+  stocks_fno: ['monthly', 'next_month'],
+  mcx: ['monthly', 'next_month'],
+}
+
+export const TAB_SEGMENTS: Record<UniverseTab, Segment[]> = {
+  weekly_monthly: ['futures', 'options'],
+  monthly_only: ['futures', 'options'],
+  stocks_fno: ['cash', 'futures', 'options'],
+  mcx: ['futures', 'options'],
+}
+
+export interface UnderlyingChoice {
+  symbol: string
+  name: string
+  exchange: string
+}
+
+/**
+ * The underlying seed per tab.
+ *
+ * The index tabs are the whole universe, so the wizard offers them as a closed
+ * list. The stock and commodity tabs are open universes and the seed is only a
+ * starting point, so those tabs let the user type as well.
+ */
+export const TAB_DEFAULT_UNDERLYINGS: Record<UniverseTab, UnderlyingChoice[]> = {
+  weekly_monthly: [
+    { symbol: 'NIFTY', name: 'Nifty 50', exchange: 'NSE_INDEX' },
+    { symbol: 'SENSEX', name: 'BSE SENSEX', exchange: 'BSE_INDEX' },
+  ],
+  monthly_only: [
+    { symbol: 'BANKNIFTY', name: 'Nifty Bank', exchange: 'NSE_INDEX' },
+    { symbol: 'FINNIFTY', name: 'Nifty Fin Service', exchange: 'NSE_INDEX' },
+    { symbol: 'MIDCPNIFTY', name: 'Nifty Midcap Select', exchange: 'NSE_INDEX' },
+    { symbol: 'BANKEX', name: 'BSE Bankex', exchange: 'BSE_INDEX' },
+  ],
+  stocks_fno: [
+    { symbol: 'RELIANCE', name: 'Reliance Industries', exchange: 'NSE' },
+    { symbol: 'TCS', name: 'Tata Consultancy Services', exchange: 'NSE' },
+    { symbol: 'HDFCBANK', name: 'HDFC Bank', exchange: 'NSE' },
+    { symbol: 'INFY', name: 'Infosys', exchange: 'NSE' },
+  ],
+  mcx: [
+    { symbol: 'CRUDEOIL', name: 'Crude Oil', exchange: 'MCX' },
+    { symbol: 'NATURALGAS', name: 'Natural Gas', exchange: 'MCX' },
+    { symbol: 'GOLD', name: 'Gold', exchange: 'MCX' },
+    { symbol: 'SILVER', name: 'Silver', exchange: 'MCX' },
+  ],
+}
+
+/** Whether the tab's universe is closed (a dropdown) or open (type-ahead). */
+export const TAB_UNDERLYING_IS_CLOSED_SET: Record<UniverseTab, boolean> = {
+  weekly_monthly: true,
+  monthly_only: true,
+  stocks_fno: false,
+  mcx: false,
+}
+
+/** The exchange a typed underlying defaults to on an open-universe tab. */
+export const TAB_DEFAULT_EXCHANGE: Record<UniverseTab, string> = {
+  weekly_monthly: 'NSE_INDEX',
+  monthly_only: 'NSE_INDEX',
+  stocks_fno: 'NSE',
+  mcx: 'MCX',
+}
+
+/** A strike named relative to the money - the validator's `ATM_OFFSETS`. */
+export const ATM_OFFSETS: string[] = [
+  'ATM',
+  'ITM1',
+  'ITM2',
+  'ITM3',
+  'ITM4',
+  'ITM5',
+  'OTM1',
+  'OTM2',
+  'OTM3',
+  'OTM4',
+  'OTM5',
+]
+
+export const STRATEGY_KIND_LABELS: Record<StrategyKind, string> = {
+  batch: 'Multi-leg (batch)',
+  signal: 'Signal-driven (TradingView)',
+}
+
+export const STRATEGY_KIND_HINT: Record<StrategyKind, string> = {
+  batch: 'All legs entered together on start; exited together on stop. Best for option spreads.',
+  signal: 'Each leg reacts to long_entry / long_exit / short_entry / short_exit signals.',
+}
+
+export const STRATEGY_DIRECTION_LABELS: Record<StrategyDirection, string> = {
+  long_only: 'Long only',
+  short_only: 'Short only',
+  both: 'Both',
+}
+
+/**
+ * Intraday window per tab. NSE and BSE trade 09:15-15:30, so 09:35-15:15 skips
+ * the opening auction and exits before a broker's MIS square-off. MCX runs to
+ * 23:30 in winter, so its window closes at 23:25.
+ */
+export const TAB_INTRADAY_DEFAULTS: Record<UniverseTab, { entry: string; exit: string }> = {
+  weekly_monthly: { entry: '09:35', exit: '15:15' },
+  monthly_only: { entry: '09:35', exit: '15:15' },
+  stocks_fno: { entry: '09:35', exit: '15:15' },
+  mcx: { entry: '09:00', exit: '23:25' },
+}
+
+export const MAX_LEGS = 10
+export const MAX_LOTS = 50
+export const MAX_NAME_LENGTH = 200
+
+// ---------------------------------------------------------------------------
+// Pure configuration helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Products valid for a mix of segments.
+ *
+ * The product is a strategy-level field applied to every leg, so a basket that
+ * mixes cash with derivatives is restricted to MIS: it is the only product that
+ * exists on both sides of the exchange's rules.
+ */
+export function allowedProductsForLegs(legs: Leg[]): Product[] {
+  const segments = new Set(legs.map((leg) => leg.segment))
+  const hasCash = segments.has('cash')
+  const hasDerivative = segments.has('futures') || segments.has('options')
+  if (hasCash && hasDerivative) return ['MIS']
+  if (hasCash) return ['MIS', 'CNC']
+  return ['NRML', 'MIS']
+}
+
+/** Default product for a leg composition: cash-only is MIS, derivatives NRML. */
+export function defaultProductForLegs(legs: Leg[]): Product {
+  return allowedProductsForLegs(legs)[0]
+}
+
+/** Expiry choices for a leg, given its tab and segment. */
+export function expiriesFor(tab: UniverseTab, segment: Segment): ExpiryRank[] {
+  // Futures are monthly on every Indian exchange, index included: the weekly
+  // contracts exist on the options side only.
+  if (segment === 'cash') return []
+  if (segment === 'futures') return ['monthly', 'next_month']
+  return TAB_EXPIRIES[tab]
+}
+
+/**
+ * How far a leg has moved in its favour, in points.
+ *
+ * Derived from the price ratchet the trailing stop itself uses rather than read
+ * from a stored points value, so the two cannot disagree. Mirrors
+ * `favorable_peak_points` in `services/strategy_module/state.py`.
+ */
+export function favorablePeakPoints(
+  leg: Pick<LegState, 'position' | 'entry_avg' | 'highest_price' | 'lowest_price'>
+): number {
+  const entry = leg.entry_avg || 0
+  if (!entry) return 0
+  if (leg.position === 'B') {
+    const peak = leg.highest_price
+    return peak ? Math.max(0, peak - entry) : 0
+  }
+  const trough = leg.lowest_price
+  return trough ? Math.max(0, entry - trough) : 0
+}
+
+// ---------------------------------------------------------------------------
+// Display formatting
+//
+// Three rules, deliberately different, because they answer different questions.
+// The list is scanned, so a strategy that has not traded should read as blank
+// rather than as a real zero. A detail page is read, so there a zero is a
+// measurement and prints as one.
+// ---------------------------------------------------------------------------
+
+const EM_DASH = '—'
+
+/**
+ * A timestamp in IST.
+ *
+ * The API sends UTC with an explicit `+00:00` offset. Rendering in the
+ * browser's zone would put an Indian trading session in whatever zone the
+ * laptop is set to, so the zone is pinned and the suffix says which one it is.
+ */
+export function formatIst(iso: string | null | undefined, withSeconds = true): string {
+  if (!iso) return EM_DASH
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  return `${date.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: withSeconds ? 'numeric' : '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    ...(withSeconds ? { second: '2-digit' as const } : {}),
+    hour12: false,
+    timeZone: 'Asia/Kolkata',
+  })} IST`
+}
+
+/** P&L for the list: an untraded strategy reads as blank, not as 0.00. */
+export function formatListPnl(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value) || value === 0) return EM_DASH
+  return `${value > 0 ? '+' : ''}${value.toFixed(2)}`
+}
+
+/** P&L for the detail page: zero is a measurement and prints as one. */
+export function formatPnl(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return EM_DASH
+  if (value === 0) return '0.00'
+  return `${value > 0 ? '+' : ''}${value.toFixed(2)}`
+}
+
+/** P&L for a live tile, where an absent figure is not yet a zero. */
+export function formatLivePnl(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value) || value === 0) return EM_DASH
+  return `${value > 0 ? '+' : ''}${value.toFixed(2)}`
+}
+
+/** A price, or an em dash when there is not one yet. */
+export function formatPrice(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(Number(value))) return EM_DASH
+  return Number(value).toFixed(2)
+}
+
+/** A duration in minutes, in the largest unit that keeps it readable. */
+export function formatDuration(minutes: number): string {
+  if (!Number.isFinite(minutes) || minutes <= 0) return EM_DASH
+  if (minutes < 60) return `${minutes.toFixed(1)}m`
+  if (minutes < 24 * 60) return `${(minutes / 60).toFixed(1)}h`
+  return `${(minutes / (24 * 60)).toFixed(1)}d`
+}
+
+/** Colour class for a signed number: green up, red down, inherited at zero. */
+export function pnlToneClass(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return ''
+  if (value > 0) return 'text-green-600'
+  if (value < 0) return 'text-red-600'
+  return ''
+}

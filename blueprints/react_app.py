@@ -474,6 +474,32 @@ def react_analyzer():
 # ============================================================
 
 
+# Strategy module (multi-leg options strategies with risk management)
+#
+# Registered even though React Router would serve these anyway via the 404
+# fallback: an unregistered path counts against Error404Tracker for
+# unauthenticated visitors, and a shared strategy link opened while logged out
+# would push the visitor's address toward an IP ban.
+@react_bp.route("/strategy", strict_slashes=False)
+def react_strategy_index():
+    return serve_react_app()
+
+
+@react_bp.route("/strategy/new", strict_slashes=False)
+def react_strategy_new():
+    return serve_react_app()
+
+
+@react_bp.route("/strategy/<int:strategy_id>", strict_slashes=False)
+def react_strategy_detail(strategy_id):
+    return serve_react_app()
+
+
+@react_bp.route("/strategy/<int:strategy_id>/edit", strict_slashes=False)
+def react_strategy_edit(strategy_id):
+    return serve_react_app()
+
+
 # Python Strategies
 # Note: Using strict_slashes=False to handle both /python and /python/
 @react_bp.route("/python", strict_slashes=False)

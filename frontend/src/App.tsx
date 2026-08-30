@@ -88,6 +88,12 @@ const PythonStrategyLogs = lazy(() => import('@/pages/python-strategy/PythonStra
 const SchedulePythonStrategy = lazy(() => import('@/pages/python-strategy/SchedulePythonStrategy'))
 const PythonStrategyGuide = lazy(() => import('@/pages/python-strategy/PythonStrategyGuide'))
 
+// Strategy module: multi-leg options strategies with risk management
+const StrategyList = lazy(() => import('@/pages/strategy/List'))
+const StrategyWizard = lazy(() => import('@/pages/strategy/Wizard'))
+const StrategyDetail = lazy(() => import('@/pages/strategy/Detail'))
+const StrategyEdit = lazy(() => import('@/pages/strategy/Edit'))
+
 // Chartink pages
 const ChartinkIndex = lazy(() => import('@/pages/chartink/ChartinkIndex'))
 const NewChartinkStrategy = lazy(() => import('@/pages/chartink/NewChartinkStrategy'))
@@ -249,6 +255,13 @@ function App() {
                 <Route path="/python/:strategyId/logs" element={<PythonStrategyLogs />} />
                 <Route path="/python/:strategyId/schedule" element={<SchedulePythonStrategy />} />
                 <Route path="/python/guide" element={<PythonStrategyGuide />} />
+                {/* Strategy module. /strategy/new before /strategy/:id so the
+                    literal wins over the parameter. */}
+                <Route path="/strategy" element={<StrategyList />} />
+                <Route path="/strategy/new" element={<StrategyWizard />} />
+                <Route path="/strategy/:strategyId" element={<StrategyDetail />} />
+                <Route path="/strategy/:strategyId/edit" element={<StrategyEdit />} />
+
                 {/* Phase 6: Chartink Strategies */}
                 <Route path="/chartink" element={<ChartinkIndex />} />
                 <Route path="/chartink/new" element={<NewChartinkStrategy />} />
