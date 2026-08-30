@@ -381,6 +381,7 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
     if error:
         return SignalResult(ok=False, leg_id=leg_id, error=f"Leg {leg_id}: {error}")
 
+    resolved["position_ref"] = state.new_position_ref()
     state.add_leg(run_id, resolved)
     outcome = _place(strategy, run_id, resolved, "entry", _POSITION_OF_SIDE[side])
     if not outcome.ok:
@@ -457,9 +458,17 @@ def _exit(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
         # one, so an exit for the old side is real and has nowhere else to go.
         outgoing = state.claim_superseded_exit(run_id, leg_id, _POSITION_OF_SIDE[side])
         if outgoing is not None:
-            placed = _place(strategy, run_id, outgoing, "exit_signal", outgoing["position"], True)
+            placed = _place(
+                strategy,
+                run_id,
+                outgoing,
+                "exit_signal",
+                outgoing["position"],
+                True,
+                exit_owner="superseded",
+            )
             if not placed.ok:
-                state.release_superseded_exit(run_id, leg_id, state._SUPERSEDED_EXIT_PENDING)
+                state.release_superseded_exit(run_id, leg_id, placed.exit_claim_id)
                 return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error=placed.error)
             return SignalResult(ok=True, leg_id=leg_id, run_id=run_id)
 
@@ -509,6 +518,7 @@ def _exit(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
 class _Placement:
     ok: bool
     error: str | None = None
+    exit_claim_id: Any = None
 
 
 def _place(
@@ -518,11 +528,17 @@ def _place(
     kind: str,
     position: str,
     exiting: bool = False,
+    exit_owner: str = "live",
 ) -> _Placement:
     """Place one signal-driven order and record it."""
+    exit_claim_id = leg.get("claim_token") if exit_owner == "superseded" else None
     api_key = _api_key_for(strategy.user_id)
     if not api_key:
-        return _Placement(ok=False, error="No API key is configured for this user")
+        return _Placement(
+            ok=False,
+            error="No API key is configured for this user",
+            exit_claim_id=exit_claim_id,
+        )
 
     run = store.get_run(run_id)
     mode = run.mode if run else "sandbox"
@@ -558,6 +574,7 @@ def _place(
             "product": order.get("product"),
             "pricetype": order.get("pricetype", "MARKET"),
             "status": "pending",
+            "position_ref": leg.get("position_ref"),
         },
     )
     if row is None and not exiting:
@@ -577,6 +594,21 @@ def _place(
     # The id, not the instance: dispatch runs arbitrary code in between, and
     # the sandbox publishes its fill from inside the call.
     row_id = row.id if row is not None else None
+    if exit_owner == "live":
+        exit_claim_id = row_id
+    if exiting and exit_owner == "superseded" and row_id is not None:
+        if not state.bind_superseded_exit(run_id, leg["leg_id"], leg.get("claim_token"), row_id):
+            store.update_order(
+                row_id,
+                status="rejected",
+                reject_reason="Outgoing position exit claim changed before dispatch",
+            )
+            return _Placement(
+                ok=False,
+                error="The outgoing position changed before its exit could be placed",
+                exit_claim_id=leg.get("claim_token"),
+            )
+        exit_claim_id = row_id
     if row is None:
         # An exit that cannot be recorded is placed anyway. Refusing would
         # leave the position open with a database outage between it and every
@@ -606,7 +638,7 @@ def _place(
     with state.run_state(run_id) as state_run:
         live = state_run["legs"].get(str(leg["leg_id"])) if state_run else None
         if live is not None:
-            if exiting:
+            if exiting and exit_owner == "live":
                 if result.ok:
                     live["exit_order_id"] = row_id
                     live["exit_kind"] = kind
@@ -638,4 +670,4 @@ def _place(
         severity="info" if result.ok else "warn",
     )
 
-    return _Placement(ok=result.ok, error=result.error)
+    return _Placement(ok=result.ok, error=result.error, exit_claim_id=exit_claim_id)

@@ -172,6 +172,33 @@ def _report_stranded_exit(run_id: int, leg_id: Any, row: Any, ended: str) -> Non
         logger.exception("Could not record a stranded exit for run %s leg %s", run_id, leg_id)
 
 
+def _report_flip_outgoing_exit_rejected(run_id: int, leg_id: Any, row: Any, ended: str) -> None:
+    """Record that an active flip still manages its retryable outgoing side."""
+    try:
+        run = store.get_run(run_id)
+        if run is None or run.stopped_at is not None:
+            return
+        strategy = store.get_strategy_unscoped(run.strategy_id)
+        if strategy is None:
+            return
+        store.record_event(
+            run.strategy_id,
+            strategy.user_id,
+            "flip_outgoing_exit_rejected",
+            (
+                f"Exit order {row.broker_order_id} for the outgoing side of leg {leg_id} "
+                f"was {ended}. The old side is still held, remains managed, and can be retried."
+            ),
+            run_id=run_id,
+            leg_id=leg_id,
+            severity="critical",
+        )
+    except Exception:
+        logger.exception(
+            "Could not record an outgoing flip rejection for run %s leg %s", run_id, leg_id
+        )
+
+
 def _on_order_update(event: Any) -> None:
     """Bus callback. Returns immediately; the work happens on the pool.
 
@@ -252,16 +279,17 @@ def _apply_update(order_id: str, event: Any) -> None:
             if price is not None:
                 from services.strategy_module import engine
 
+                fill_identity = {"position_ref": row.position_ref} if row.position_ref else {}
                 engine.apply_fill(
                     run_id,
                     leg_id,
                     price,
                     is_entry=is_entry,
                     filled_qty=_whole_qty(filled_qty),
-                    # Which order this fill is for. A signal flip leaves one
-                    # leg id naming two positions for as long as the closing
-                    # order is unfilled, and only the order id separates them.
+                    # New rows name the position incarnation directly. The
+                    # row id remains the fallback for legacy NULL references.
                     order_row_id=row.id,
+                    **fill_identity,
                 )
             else:
                 # A fill with no usable price cannot seed a stop or a realized
@@ -316,7 +344,7 @@ def _apply_update(order_id: str, event: Any) -> None:
                     leg_id,
                     ended,
                 )
-                _report_stranded_exit(run_id, leg_id, row, ended)
+                _report_flip_outgoing_exit_rejected(run_id, leg_id, row, ended)
             elif state.get_run_state(run_id) is not None:
                 # Release the exit claim so the position stays exitable. Held,
                 # its stop loss, its target, the scheduler's square-off and the

@@ -78,6 +78,19 @@ def test_signal_entry_is_not_dispatched_when_its_intent_row_cannot_be_written(
     assert broker.orders == [], "the broker received an entry with no durable strategy row"
 
 
+def test_batch_entry_persists_the_live_position_reference(broker: qa.Broker) -> None:
+    """Batch live state and durable intent must name one position incarnation."""
+    strategy_id = qa._make()
+
+    result = qa._start(strategy_id)
+
+    entry = store.list_orders(result.run_id)[0]
+    leg = state.get_run_state(result.run_id)["legs"]["1"]
+    assert entry["position_ref"] is not None
+    assert len(entry["position_ref"]) == 32
+    assert leg.get("position_ref") == entry["position_ref"]
+
+
 def test_fill_between_exit_claim_and_classification_cannot_finalize_without_an_exit(
     broker: qa.Broker, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -126,3 +139,118 @@ def test_rejected_signal_flip_exit_keeps_the_outgoing_position_exitable(
     signals.handle_signal(strategy, "long_exit", leg_id=1)
 
     assert broker.actions == ["SELL"], "the rejected outgoing long can no longer be exited"
+
+
+def test_fill_of_retried_flip_exit_settles_outgoing_not_live_position(
+    broker: qa.Broker,
+) -> None:
+    """The retry order id must stay attached to superseded, not the new side."""
+    strategy = qa._signal_strategy()
+    strategy_id = strategy.id
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = qa._run_of(strategy)
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    signals.handle_signal(strategy, "short_entry", leg_id=1)
+    first_exit = next(row for row in store.list_orders(run_id) if row["kind"] == "exit_signal")
+    order_events._apply_update(
+        first_exit["broker_order_id"],
+        qa._event(first_exit["broker_order_id"], status="rejected"),
+    )
+    strategy = store.get_strategy(strategy_id, qa.USER)
+    signals.handle_signal(strategy, "long_exit", leg_id=1)
+    retry = max(
+        (row for row in store.list_orders(run_id) if row["kind"] == "exit_signal"),
+        key=lambda row: row["id"],
+    )
+
+    order_events._apply_update(
+        retry["broker_order_id"],
+        qa._event(retry["broker_order_id"], status="complete", avg=101.0),
+    )
+
+    live = state.get_run_state(run_id)["legs"]["1"]
+    assert live["position"] == "S" and live["status"] == "open", (
+        "the outgoing long's retry fill closed the newly opened short"
+    )
+    assert live.get("superseded") is None, "the filled outgoing position remained tracked"
+
+
+def test_rejected_retry_of_flip_exit_can_be_retried_again(broker: qa.Broker) -> None:
+    """A retry rejection must clear the replacement id from superseded."""
+    strategy = qa._signal_strategy()
+    strategy_id = strategy.id
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = qa._run_of(strategy)
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    signals.handle_signal(strategy, "short_entry", leg_id=1)
+    first_exit = next(row for row in store.list_orders(run_id) if row["kind"] == "exit_signal")
+    order_events._apply_update(
+        first_exit["broker_order_id"],
+        qa._event(first_exit["broker_order_id"], status="rejected"),
+    )
+    strategy = store.get_strategy(strategy_id, qa.USER)
+    signals.handle_signal(strategy, "long_exit", leg_id=1)
+    retry = max(
+        (row for row in store.list_orders(run_id) if row["kind"] == "exit_signal"),
+        key=lambda row: row["id"],
+    )
+    order_events._apply_update(
+        retry["broker_order_id"],
+        qa._event(retry["broker_order_id"], status="rejected"),
+    )
+    broker.clear()
+    strategy = store.get_strategy(strategy_id, qa.USER)
+
+    signals.handle_signal(strategy, "long_exit", leg_id=1)
+
+    assert broker.actions == ["SELL"], "a rejected retry left superseded permanently claimed"
+
+
+def test_retried_outgoing_exit_binds_only_superseded(broker: qa.Broker) -> None:
+    """A retry must arm only the outgoing position it closes."""
+    strategy = qa._signal_strategy()
+    strategy_id = strategy.id
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = qa._run_of(strategy)
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    signals.handle_signal(strategy, "short_entry", leg_id=1)
+    first_exit = next(row for row in store.list_orders(run_id) if row["kind"] == "exit_signal")
+    order_events._apply_update(
+        first_exit["broker_order_id"],
+        qa._event(first_exit["broker_order_id"], status="rejected"),
+    )
+
+    strategy = store.get_strategy(strategy_id, qa.USER)
+    signals.handle_signal(strategy, "long_exit", leg_id=1)
+
+    retry = max(store.list_orders(run_id), key=lambda row: row["id"])
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["superseded"]["exit_order_id"] == retry["id"]
+    assert leg["superseded"]["position_ref"] == retry["position_ref"]
+    assert leg["exit_order_id"] is None
+    assert leg["exit_kind"] is None
+
+
+def test_outgoing_claim_is_released_when_retry_fails_before_its_row(
+    broker: qa.Broker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pre-persistence refusal must release the exact outgoing claim token."""
+    strategy = qa._signal_strategy()
+    strategy_id = strategy.id
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = qa._run_of(strategy)
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    signals.handle_signal(strategy, "short_entry", leg_id=1)
+    first_exit = next(row for row in store.list_orders(run_id) if row["kind"] == "exit_signal")
+    order_events._apply_update(
+        first_exit["broker_order_id"],
+        qa._event(first_exit["broker_order_id"], status="rejected"),
+    )
+    strategy = store.get_strategy(strategy_id, qa.USER)
+    monkeypatch.setattr(signals, "_api_key_for", lambda _user_id: None)
+
+    result = signals.handle_signal(strategy, "long_exit", leg_id=1)
+
+    assert result.ok is False
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["superseded"]["exit_order_id"] is None

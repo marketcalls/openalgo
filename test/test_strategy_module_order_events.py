@@ -17,7 +17,7 @@ import pytest
 # restx_api first: see the note in test_strategy_module_order_dispatch.py.
 import restx_api  # noqa: F401
 from database import strategy_module_db as store
-from services.strategy_module import order_events
+from services.strategy_module import order_events, state
 
 USER = "order_events_user"
 
@@ -39,6 +39,8 @@ def clean_slate():
 
     def purge():
         for row in store.list_strategies(USER):
+            for run in store.list_runs(row["id"]):
+                state.clear_run_state(run["id"])
             store.set_strategy_status(row["id"], "stopped", None)
             store.delete_strategy(row["id"], USER)
         store.clear_strategy_module_cache()
@@ -168,6 +170,57 @@ def test_a_rejection_cannot_be_talked_back_into_a_fill(order):
 
     assert store.list_orders(order.run_id)[0]["status"] == "rejected"
     assert apply_fill.call_count == 0
+
+
+def test_live_flip_rejection_is_retryable_not_reported_as_closed(order):
+    """A dead outgoing exit remains owned by the active, managed run."""
+    state.init_run_state(
+        order.run_id,
+        order.strategy_id,
+        [
+            {
+                "leg_id": 1,
+                "position": "S",
+                "position_ref": "live-short",
+                "symbol": "NIFTY28MAY2624000CE",
+                "exchange": "NFO",
+                "quantity": 75,
+            }
+        ],
+    )
+    exit_row = store.record_order(
+        order.run_id,
+        leg_id=1,
+        kind="exit_signal",
+        order={
+            "position_ref": "outgoing-long",
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "SELL",
+            "qty": 75,
+            "broker_order_id": "BRK-FLIP",
+            "status": "open",
+        },
+    )
+    with state.run_state(order.run_id) as run:
+        run["legs"]["1"]["status"] = "open"
+        run["legs"]["1"]["entry_status"] = "complete"
+        run["legs"]["1"]["superseded"] = {
+            "position_ref": "outgoing-long",
+            "entry_order_id": order.order_id,
+            "exit_order_id": exit_row.id,
+            "position": "B",
+            "entry_avg": 100.0,
+            "qty": 75,
+        }
+
+    order_events._apply_update("BRK-FLIP", _event("BRK-FLIP", status="rejected", avg=0))
+
+    leg = state.get_run_state(order.run_id)["legs"]["1"]
+    assert leg["superseded"]["exit_order_id"] is None
+    events = store.list_events(order.strategy_id)
+    assert any(event["kind"] == "flip_outgoing_exit_rejected" for event in events)
+    assert not any(event["kind"] == "run_stop_failed" for event in events)
 
 
 def test_a_working_status_is_recorded_but_changes_nothing_the_engine_acts_on(order):

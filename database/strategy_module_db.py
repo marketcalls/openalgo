@@ -157,6 +157,7 @@ EVENT_KINDS = (
     "run_resumed",
     "run_stopped",
     "run_stop_failed",
+    "flip_outgoing_exit_rejected",
     "close_all_manual",
     # Entry and exit
     "leg_entry_placed",

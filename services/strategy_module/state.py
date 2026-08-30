@@ -35,6 +35,7 @@ do the slow work.
 from __future__ import annotations
 
 import threading
+import uuid
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from copy import deepcopy
@@ -131,10 +132,9 @@ def init_run_state(run_id: int, strategy_id: int, legs: list[dict]) -> dict[str,
     return state
 
 
-#: Placeholder written into a superseded record while its replacement exit is
-#: being dispatched, so a second alert cannot claim the same outgoing position
-#: before the real order id is known.
-_SUPERSEDED_EXIT_PENDING = "pending"
+def new_position_ref() -> str:
+    """Return an opaque durable identity for one position incarnation."""
+    return uuid.uuid4().hex
 
 
 def _new_leg_state(leg: dict) -> dict[str, Any]:
@@ -163,6 +163,7 @@ def _new_leg_state(leg: dict) -> dict[str, Any]:
         "lots": leg.get("lots", 1),
         "qty": leg["quantity"],
         # Order plumbing
+        "position_ref": leg.get("position_ref"),
         "entry_order_id": None,
         "entry_status": "pending",
         "entry_avg": 0.0,
@@ -309,6 +310,21 @@ def release_superseded_exit(run_id: int, leg_id: Any, exit_order_id: Any) -> boo
         return True
 
 
+def bind_superseded_exit(run_id: int, leg_id: Any, claim_token: Any, order_row_id: int) -> bool:
+    """Replace one outgoing-position claim with its durable order-row id."""
+    lock = _lock_for(run_id, create=False)
+    if lock is None:
+        return False
+    with lock:
+        run = _run_state.get(run_id)
+        leg = run["legs"].get(str(leg_id)) if run else None
+        superseded = leg.get("superseded") if leg else None
+        if not superseded or superseded.get("exit_order_id") != claim_token:
+            return False
+        superseded["exit_order_id"] = order_row_id
+        return True
+
+
 def claim_superseded_exit(run_id: int, leg_id: Any, position: str) -> dict[str, Any] | None:
     """Claim a flip's outgoing position for a fresh exit, if it is still held.
 
@@ -330,10 +346,14 @@ def claim_superseded_exit(run_id: int, leg_id: Any, position: str) -> dict[str, 
             return None
         # Marked in flight straight away, under the same hold, so two alerts
         # cannot each send a covering order for the one outgoing position.
-        superseded["exit_order_id"] = _SUPERSEDED_EXIT_PENDING
+        claim_token = new_position_ref()
+        superseded["exit_order_id"] = claim_token
         return {
             "leg_id": leg["leg_id"],
             "position": superseded["position"],
+            "position_ref": superseded.get("position_ref"),
+            "entry_order_id": superseded.get("entry_order_id"),
+            "claim_token": claim_token,
             "symbol": leg["symbol"],
             "exchange": leg["exchange"],
             "quantity": superseded.get("qty"),
@@ -405,6 +425,8 @@ def add_leg(run_id: int, leg: dict) -> dict[str, Any] | None:
             # settle the outgoing position when its fill arrives.
             leg_state["superseded"] = {
                 "exit_order_id": previous.get("exit_order_id"),
+                "entry_order_id": previous.get("entry_order_id"),
+                "position_ref": previous.get("position_ref"),
                 "position": previous.get("position"),
                 "entry_avg": previous.get("entry_avg"),
                 "qty": previous.get("qty"),

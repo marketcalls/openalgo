@@ -237,6 +237,20 @@ def test_a_long_signal_opens_a_long(placed):
     assert placed[0]["action"] == "BUY"
 
 
+def test_a_signal_entry_persists_the_live_position_reference(placed):
+    """The durable entry row and live position must name one incarnation."""
+    strategy = _make()
+
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    run_id = store.get_strategy(strategy.id, USER).current_run_id
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    entry = store.list_orders(run_id)[0]
+    assert entry["position_ref"] is not None
+    assert len(entry["position_ref"]) == 32
+    assert leg.get("position_ref") == entry["position_ref"]
+
+
 def test_an_exit_covers_the_side_actually_held(placed):
     strategy = _make()
     signals.handle_signal(strategy, "short_entry", leg_id=1)

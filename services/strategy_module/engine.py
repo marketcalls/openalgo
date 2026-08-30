@@ -222,6 +222,8 @@ def start_run(
     resolved, failures = _resolve_all_legs(strategy, api_key)
     if failures:
         return StartResult(ok=False, error=failures[0]["error"], legs=failures)
+    for leg in resolved:
+        leg["position_ref"] = state.new_position_ref()
 
     # One conditional UPDATE, not a read then a write. The UI, the scheduler
     # and a webhook can all fire at the same instant.
@@ -524,6 +526,7 @@ def _place_entries(
                 "product": order.get("product"),
                 "pricetype": strategy.get("pricetype", "MARKET"),
                 "status": "pending",
+                "position_ref": leg.get("position_ref"),
             },
         )
         if row is None:
@@ -623,6 +626,7 @@ def apply_fill(
     is_entry: bool,
     filled_qty: int | None = None,
     order_row_id: int | None = None,
+    position_ref: str | None = None,
 ) -> bool:
     """Record a fill against a leg. Returns whether the run went flat.
 
@@ -665,11 +669,16 @@ def apply_fill(
             not is_entry
             and superseded
             and (
-                superseded.get("exit_order_id") == order_row_id
+                (position_ref is not None and superseded.get("position_ref") == position_ref)
+                or (position_ref is None and superseded.get("exit_order_id") == order_row_id)
                 # No order id to match on: this is an internal caller rather
                 # than the order stream. An exit fill can only belong to the
                 # outgoing position when the live one has no exit in flight.
-                or (order_row_id is None and leg.get("exit_order_id") is None)
+                or (
+                    position_ref is None
+                    and order_row_id is None
+                    and leg.get("exit_order_id") is None
+                )
             )
         )
         if settles_superseded:
@@ -685,6 +694,15 @@ def apply_fill(
             run["pnl_realized"] = realized
             run["pnl_unrealized"] = unrealized
             run["pnl_total"] = realized + unrealized
+            return False
+
+        if position_ref is not None and leg.get("position_ref") != position_ref:
+            logger.warning(
+                "Ignoring a fill for position %s on leg %s: the live position is %s",
+                position_ref,
+                leg_id,
+                leg.get("position_ref"),
+            )
             return False
 
         # A fill that names an order this leg is not waiting on belongs to an
@@ -880,6 +898,7 @@ def _exit_legs(
                 "product": order.get("product"),
                 "pricetype": order_dispatch.EXIT_PRICETYPE,
                 "status": "pending",
+                "position_ref": leg.get("position_ref"),
             },
         )
         if row is None:
