@@ -519,7 +519,8 @@ def test_recovery_refuses_to_drop_a_third_held_position_reference():
     _order(run_id, kind="entry", action="BUY", status="complete", avg=102.0, position_ref="three")
     result = recovery.recover_run(run_id)
     assert result.ok is False
-    assert result.finalised is True
+    assert result.finalised is False
+    assert store.get_run(run_id).stopped_at is None
     assert "more than two" in result.error
 ```
 
