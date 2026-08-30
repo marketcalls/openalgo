@@ -662,6 +662,30 @@ def _store_error(message: str | None):
     return _error(text, 500)
 
 
+def _sync_schedule(sid: int, *, removed: bool = False) -> None:
+    """Bring this strategy's cron jobs in line with what was just saved.
+
+    Without this the scheduler only ever reflects the configuration as it stood
+    at boot: a schedule saved today would not fire until the next restart, an
+    edited start time would keep firing at the old one, and a deleted strategy
+    would leave its jobs behind. The job store is in memory precisely so that
+    the database stays the single source of truth, which only holds if every
+    write syncs.
+
+    Never allowed to fail the request. The configuration is saved either way,
+    and the next boot re-derives every job from it.
+    """
+    try:
+        from services.strategy_module import scheduler
+
+        if removed:
+            scheduler.remove_strategy_jobs(sid)
+        else:
+            scheduler.sync_strategy_jobs(sid)
+    except Exception:
+        logger.exception("Could not sync scheduler jobs for strategy %s", sid)
+
+
 def _resolve(sid: int):
     """``(username, row, error_response)`` for an owner-scoped route.
 
@@ -757,6 +781,7 @@ def create_strategy():
         "strategy_created",
         f"Strategy '{created['name']}' created",
     )
+    _sync_schedule(created["id"])
     logger.info("Created strategy %s for %s", created["id"], username)
     return _ok(
         {
@@ -834,6 +859,8 @@ def update_strategy(sid):
         f"Updated {', '.join(sorted(changes))}",
         payload={"fields": sorted(changes)},
     )
+    # An edited start time must take effect now, not at the next restart.
+    _sync_schedule(sid)
     return _ok({"data": updated})
 
 
@@ -852,6 +879,7 @@ def delete_strategy(sid):
     if not deleted:
         return _store_error(message)
 
+    _sync_schedule(sid, removed=True)
     logger.info("Deleted strategy %s for %s", sid, username)
     return _ok({"message": "Strategy deleted"})
 

@@ -636,17 +636,23 @@ def _finalise(run_id: int, strategy_id: int, user_id: str, reason: str, message:
     the kill switch recorded both as zero.
     """
     snapshot = state.get_run_state(run_id) or {}
-    store.finish_run(
-        run_id,
-        stop_reason=reason,
-        pnl_realized=snapshot.get("pnl_realized", 0.0) or 0.0,
-        pnl_peak=snapshot.get("pnl_peak", 0.0) or 0.0,
-        pnl_trough=snapshot.get("pnl_trough", 0.0) or 0.0,
-    )
-    store.release_strategy(strategy_id)
-    _emit(strategy_id, user_id, "run_stopped", message, run_id=run_id)
-    _unsubscribe_run(run_id)
-    state.clear_run_state(run_id)
+    try:
+        store.finish_run(
+            run_id,
+            stop_reason=reason,
+            pnl_realized=snapshot.get("pnl_realized", 0.0) or 0.0,
+            pnl_peak=snapshot.get("pnl_peak", 0.0) or 0.0,
+            pnl_trough=snapshot.get("pnl_trough", 0.0) or 0.0,
+        )
+        store.release_strategy(strategy_id)
+        _emit(strategy_id, user_id, "run_stopped", message, run_id=run_id)
+    finally:
+        # Unconditional. If anything above threw, the run's state and its lock
+        # would otherwise stay in the registries for the life of the worker,
+        # and the strategy would be stuck reading as running with nothing
+        # managing it.
+        _unsubscribe_run(run_id)
+        state.clear_run_state(run_id)
 
     # Arm the webhook cooling-off window for every stop, not just the ones a
     # webhook asked for. A strategy stopped by its own risk rules, by the

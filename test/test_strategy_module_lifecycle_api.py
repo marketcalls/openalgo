@@ -9,7 +9,7 @@ so a failing test cannot leave rows behind for the next one.
 """
 
 import sys
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -74,7 +74,25 @@ def _make(user=USER, name="Lifecycle", running_run_id=None):
             "underlying": "NIFTY",
             "underlying_exchange": "NSE_INDEX",
             "universe_tab": "weekly_monthly",
-            "legs": [{"id": 1, "segment": "options", "position": "S", "lots": 1}],
+            "strategy_type": "intraday",
+            "entry_time": time(9, 20),
+            "exit_time": time(15, 10),
+            # A complete leg. The store does no validation, but PATCH
+            # re-validates the whole merged configuration, so a fixture that
+            # wrote an incomplete one here would make every edit a 400.
+            "legs": [
+                {
+                    "id": 1,
+                    "segment": "options",
+                    "position": "S",
+                    "lots": 1,
+                    "option_type": "CE",
+                    "strike_mode": "atm",
+                    "atm_offset": "ATM",
+                    "expiry": "weekly",
+                    "trail": {"x": 0, "y": 0},
+                }
+            ],
         },
     )
     assert error is None, error
@@ -107,9 +125,7 @@ def test_start_hands_the_mode_through_and_returns_the_run(client):
         "services.strategy_module.engine.start_run",
         return_value=StartResult(ok=True, run_id=42, legs=[{"leg_id": 1, "ok": True}]),
     ) as start:
-        response = client.post(
-            f"/strategy/api/strategies/{sid}/start", json={"mode": "sandbox"}
-        )
+        response = client.post(f"/strategy/api/strategies/{sid}/start", json={"mode": "sandbox"})
 
     assert response.status_code == 200
     assert response.get_json()["run_id"] == 42
@@ -126,9 +142,7 @@ def test_starting_something_already_running_is_a_conflict_not_a_bad_request(clie
         "services.strategy_module.engine.start_run",
         return_value=StartResult(ok=False, error="This strategy is already running"),
     ):
-        response = client.post(
-            f"/strategy/api/strategies/{sid}/start", json={"mode": "sandbox"}
-        )
+        response = client.post(f"/strategy/api/strategies/{sid}/start", json={"mode": "sandbox"})
 
     assert response.status_code == 409
 
@@ -144,9 +158,7 @@ def test_a_refused_start_reports_which_leg_failed(client):
             legs=[{"leg_id": 1, "ok": False, "error": "Leg 1: No option contract found"}],
         ),
     ):
-        response = client.post(
-            f"/strategy/api/strategies/{sid}/start", json={"mode": "sandbox"}
-        )
+        response = client.post(f"/strategy/api/strategies/{sid}/start", json={"mode": "sandbox"})
 
     assert response.status_code == 400
     assert "No option contract found" in response.get_json()["message"]
@@ -184,9 +196,7 @@ def test_close_all_records_the_operator_intent_separately_from_the_stop(client):
     # when you are reconstructing a session afterwards.
     sid = _make(running_run_id=7)
 
-    with patch(
-        "services.strategy_module.engine.stop_run", return_value={"ok": True, "exits": []}
-    ):
+    with patch("services.strategy_module.engine.stop_run", return_value={"ok": True, "exits": []}):
         response = client.post(f"/strategy/api/strategies/{sid}/close_all", json={})
 
     assert response.status_code == 200
@@ -281,8 +291,85 @@ def test_somebody_elses_strategy_is_invisible_on_every_lifecycle_route(client, p
     # 404, never 403: a 403 confirms the id is real and lets the space be probed.
     sid = _make(user=OTHER, name="Not yours", running_run_id=7)
 
-    response = client.post(
-        f"/strategy/api/strategies/{sid}/{path}", json={"mode": "sandbox"}
-    )
+    response = client.post(f"/strategy/api/strategies/{sid}/{path}", json={"mode": "sandbox"})
 
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Scheduler sync
+#
+# The job store is in memory so the database stays the single source of truth,
+# which only holds if every write syncs. Without these calls the scheduler
+# reflects the configuration as it stood at boot: a schedule saved today would
+# not fire until the next restart, an edited start time would keep firing at
+# the old one, and a deleted strategy would leave its jobs behind.
+# ---------------------------------------------------------------------------
+
+
+def _payload(**overrides):
+    body = {
+        "name": "Scheduled",
+        "underlying": "NIFTY",
+        "underlying_exchange": "NSE_INDEX",
+        "strategy_type": "intraday",
+        "entry_time": "09:20",
+        "exit_time": "15:10",
+        "legs": [
+            {
+                "segment": "options",
+                "position": "S",
+                "lots": 1,
+                "option_type": "CE",
+                "strike_mode": "atm",
+                "atm_offset": "ATM",
+                "expiry": "weekly",
+            }
+        ],
+    }
+    body.update(overrides)
+    return body
+
+
+def test_creating_a_strategy_installs_its_jobs_now_not_at_the_next_restart(client):
+    with patch("services.strategy_module.scheduler.sync_strategy_jobs") as sync:
+        response = client.post("/strategy/api/strategies", json=_payload())
+
+    assert response.status_code in (200, 201)
+    assert sync.call_count == 1
+
+
+def test_editing_a_strategy_resyncs_its_jobs(client):
+    sid = _make(name="Editable")
+
+    with patch("services.strategy_module.scheduler.sync_strategy_jobs") as sync:
+        response = client.patch(f"/strategy/api/strategies/{sid}", json={"name": "Renamed"})
+
+    assert response.status_code == 200
+    assert sync.call_count == 1
+
+
+def test_deleting_a_strategy_removes_its_jobs(client):
+    sid = _make(name="Deletable")
+
+    with patch("services.strategy_module.scheduler.remove_strategy_jobs") as remove:
+        response = client.delete(f"/strategy/api/strategies/{sid}")
+
+    assert response.status_code == 200
+    assert remove.call_count == 1
+
+
+def test_a_scheduler_that_is_not_running_does_not_fail_the_request(client):
+    # The configuration is saved either way, and the next boot re-derives every
+    # job from it. Losing the save because a background scheduler was down
+    # would be the worse failure.
+    sid = _make(name="Resilient")
+
+    with patch(
+        "services.strategy_module.scheduler.sync_strategy_jobs",
+        side_effect=RuntimeError("scheduler down"),
+    ):
+        response = client.patch(f"/strategy/api/strategies/{sid}", json={"name": "Still saved"})
+
+    assert response.status_code == 200
+    assert store.get_strategy(sid, USER).name == "Still saved"
