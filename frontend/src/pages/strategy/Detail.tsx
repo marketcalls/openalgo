@@ -9,9 +9,11 @@ import {
   buildRoundTrips,
   closeAll,
   closeLeg,
+  type DerivedPosition,
   deleteStrategy,
   derivePositions,
   deriveTrades,
+  fetchStrategyPositions,
   getStrategy,
   killSwitch,
   LIVE_POLL_MS,
@@ -28,6 +30,7 @@ import {
   stopRun,
   strategyQueryKeys,
   unlockWebhook,
+  useBrokerBook,
   useStrategyLive,
 } from '@/api/strategy_module'
 import { Badge } from '@/components/ui/badge'
@@ -736,10 +739,47 @@ function PositionsTab({
   runs: Run[]
   loading: boolean
 }) {
-  const positions = useMemo(
+  const derived = useMemo(
     () => derivePositions(orders, strategy.product, live.legs),
     [orders, strategy.product, live.legs]
   )
+  const broker = useBrokerBook(
+    strategy.id,
+    'positions',
+    fetchStrategyPositions,
+    strategy.status === 'running'
+  )
+
+  // The broker's own position book when it answered, the derived view when it
+  // did not. The order rows record what the engine asked for; the broker knows
+  // what happened to it, and a fill or cancellation whose update never arrived
+  // leaves the local rows wrong. Realized-lifetime stays derived either way: a
+  // broker position row carries no history, and that column is strategy
+  // attribution rather than broker truth.
+  const positions = useMemo(() => {
+    if (!broker.rows) return derived
+    const realizedFor = new Map(
+      derived.map((row) => [
+        `${row.symbol}-${row.exchange}-${row.product}`,
+        row.realized_pnl_lifetime,
+      ])
+    )
+    return broker.rows.map((row) => {
+      const quantity = Number(row.quantity ?? 0)
+      const key = `${row.symbol}-${row.exchange}-${row.product}`
+      return {
+        symbol: String(row.symbol ?? ''),
+        exchange: String(row.exchange ?? ''),
+        product: String(row.product ?? ''),
+        side: quantity > 0 ? 'long' : quantity < 0 ? 'short' : 'flat',
+        net_qty: quantity,
+        avg_entry_price: Number(row.average_price ?? 0),
+        ltp: Number(row.ltp ?? 0),
+        unrealized_pnl: Number(row.pnl ?? 0),
+        realized_pnl_lifetime: realizedFor.get(key) ?? 0,
+      } satisfies DerivedPosition
+    })
+  }, [broker.rows, derived])
 
   const checkpoint = live.checkpoint
   // Lifetime realized is the sum of every finalised run. The current run's
@@ -757,7 +797,11 @@ function PositionsTab({
         <CardHeader>
           <CardTitle>Strategy positions</CardTitle>
           <CardDescription>
-            Net positions derived from this strategy's filled orders.
+            {broker.rows
+              ? "The broker's own position book, narrowed to the contracts this strategy traded. A position row is per contract, so if the same contract is also held from a manual order or another strategy the row is shared and cannot be divided: treat the quantity and unrealized figure as belonging to all of them."
+              : broker.unavailable
+                ? "The broker did not answer, so these are net positions derived from this strategy's filled orders."
+                : "Net positions derived from this strategy's filled orders."}
             {live.runId !== null && (
               <>
                 {' '}

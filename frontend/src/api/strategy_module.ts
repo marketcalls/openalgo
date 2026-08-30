@@ -51,6 +51,11 @@ export const strategyQueryKeys = {
   events: (id: number) => [...strategyQueryKeys.strategy(id), 'events'] as const,
   webhookEvents: (id: number) => [...strategyQueryKeys.strategy(id), 'webhook-events'] as const,
   checkpoints: (id: number) => [...strategyQueryKeys.strategy(id), 'checkpoints'] as const,
+  // The broker's own books, narrowed to this strategy. Keyed separately from
+  // the local order rows because they answer a different question: what the
+  // broker says happened, rather than what the engine asked for.
+  brokerBook: (id: number, book: string) =>
+    [...strategyQueryKeys.strategy(id), 'broker-book', book] as const,
 }
 
 /**
@@ -218,6 +223,102 @@ export async function listOrders(id: number, runId?: number): Promise<Order[]> {
     params: runId ? { run_id: runId } : {},
   })
   return response.data.data ?? []
+}
+
+/**
+ * The broker's own view of one strategy, for the books tabs.
+ *
+ * `rows` is the broker's answer when it gave one and null when it did not, so
+ * a page can say which it is showing rather than quietly presenting derived
+ * numbers as the broker's. Polls only while the run is live, on the same
+ * cadence as everything else on the page.
+ */
+export function useBrokerBook<T>(
+  strategyId: number | null,
+  book: 'orderbook' | 'tradebook' | 'positions',
+  fetcher: (id: number, runId?: number) => Promise<T | null>,
+  isRunning: boolean
+) {
+  const query = useQuery({
+    queryKey: strategyQueryKeys.brokerBook(strategyId ?? 0, book),
+    queryFn: () => fetcher(strategyId as number),
+    enabled: strategyId !== null,
+    refetchInterval: strategyId !== null && isRunning ? LIVE_POLL_MS : false,
+  })
+  return {
+    rows: query.data ?? null,
+    isLoading: query.isLoading,
+    // A null payload is the broker refusing, which the fetcher already turned
+    // into a value rather than a throw.
+    unavailable: !query.isLoading && query.data === null,
+  }
+}
+
+/**
+ * The three broker-backed books.
+ *
+ * These read the broker's own orderbook, tradebook and position book and
+ * narrow them to this strategy, rather than deriving from the order rows the
+ * engine wrote. The rows record what was asked for; the broker knows what
+ * happened to it, and for money that difference is the whole point: a fill or
+ * a cancellation whose update never arrived leaves the local rows wrong.
+ *
+ * Each returns null rather than throwing when the broker refuses, so the page
+ * can fall back to the derived view and say which one it is showing. One
+ * failing tab must not take out the detail page.
+ */
+export interface BrokerOrderbook {
+  orders: Record<string, unknown>[]
+  statistics: Record<string, unknown> | null
+}
+
+async function readBook<T>(
+  id: number,
+  path: string,
+  runId: number | undefined,
+  pick: (payload: Record<string, unknown>) => T
+): Promise<T | null> {
+  try {
+    const response = await webClient.get<Record<string, unknown>>(
+      `${BASE}/strategies/${id}/${path}`,
+      { params: runId ? { run_id: runId } : {} }
+    )
+    if (response.data?.status !== 'success') return null
+    return pick(response.data)
+  } catch {
+    return null
+  }
+}
+
+export function fetchStrategyOrderbook(
+  id: number,
+  runId?: number
+): Promise<BrokerOrderbook | null> {
+  return readBook(id, 'orderbook', runId, (payload) => {
+    const data = (payload.data ?? {}) as Record<string, unknown>
+    return {
+      orders: Array.isArray(data.orders) ? (data.orders as Record<string, unknown>[]) : [],
+      statistics: (data.statistics ?? null) as Record<string, unknown> | null,
+    }
+  })
+}
+
+export function fetchStrategyTradebook(
+  id: number,
+  runId?: number
+): Promise<Record<string, unknown>[] | null> {
+  return readBook(id, 'tradebook', runId, (payload) =>
+    Array.isArray(payload.data) ? (payload.data as Record<string, unknown>[]) : []
+  )
+}
+
+export function fetchStrategyPositions(
+  id: number,
+  runId?: number
+): Promise<Record<string, unknown>[] | null> {
+  return readBook(id, 'positions', runId, (payload) =>
+    Array.isArray(payload.data) ? (payload.data as Record<string, unknown>[]) : []
+  )
 }
 
 export async function listEvents(id: number, limit = 500): Promise<StrategyEvent[]> {
