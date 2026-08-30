@@ -721,6 +721,22 @@ def get_strategy(strategy_id: int, user_id: str) -> SmStrategy | None:
         return None
 
 
+def get_strategy_unscoped(strategy_id: int) -> SmStrategy | None:
+    """One strategy without an owner filter.
+
+    Every other read here takes a user_id so no call site can forget it. This
+    one exists for the engine, which reaches a strategy through a run it is
+    already executing rather than through a request: there is no user in scope
+    to filter by, and the run row is the authority on which strategy it belongs
+    to. Do not use it to serve a request.
+    """
+    try:
+        return db_session.query(SmStrategy).filter_by(id=strategy_id).first()
+    except Exception:
+        logger.exception("Could not read strategy %s", strategy_id)
+        return None
+
+
 # Fields a PATCH is allowed to touch. An allowlist, not a denylist: it is the
 # only thing standing between a mass-assignment and a caller setting
 # webhook_token_hash, user_id or current_run_id directly.
@@ -846,6 +862,51 @@ def set_strategy_status(strategy_id: int, status: str, run_id: int | None = None
     except Exception:
         db_session.rollback()
         logger.exception("Could not set status on strategy %s", strategy_id)
+        return False
+
+
+def claim_strategy_for_run(strategy_id: int) -> bool:
+    """Move a strategy from stopped to running, and say whether this call did it.
+
+    This is the idempotency guard for starting a run, and it is a single
+    conditional UPDATE rather than a read followed by a write. Three triggers
+    can start the same strategy at the same moment - the UI, the scheduler and
+    an inbound webhook - and a check-then-set between them would let two of
+    them both see "stopped" and both place a full set of entry orders.
+
+    The original guards this with SELECT ... FOR UPDATE, which SQLite parses
+    and does not honour, so the guard would be silently absent here. Making the
+    UPDATE itself carry the condition puts the check and the write in one
+    statement, which SQLite does serialise. The loser sees rowcount 0 and backs
+    off.
+
+    Returns True when this call is the one that started it.
+    """
+    try:
+        updated = (
+            db_session.query(SmStrategy)
+            .filter(SmStrategy.id == strategy_id, SmStrategy.status == "stopped")
+            .update({"status": "running"}, synchronize_session=False)
+        )
+        db_session.commit()
+        return bool(updated)
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not claim strategy %s for a run", strategy_id)
+        return False
+
+
+def release_strategy(strategy_id: int) -> bool:
+    """Return a strategy to stopped and clear its current run."""
+    try:
+        db_session.query(SmStrategy).filter(SmStrategy.id == strategy_id).update(
+            {"status": "stopped", "current_run_id": None}, synchronize_session=False
+        )
+        db_session.commit()
+        return True
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not release strategy %s", strategy_id)
         return False
 
 
