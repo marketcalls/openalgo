@@ -922,7 +922,8 @@ def test_an_exit_alert_after_the_scheduler_squared_off_places_nothing(broker):
     """The end-of-day job already sent the exit. The alert arrives after it."""
     strategy = _signal_strategy()
     signals.handle_signal(strategy, "short_entry", leg_id=1)
-    signals.close_all_signal_legs(store.get_strategy(strategy.id, USER), reason="eod")
+    run_id = store.get_strategy(strategy.id, USER).current_run_id
+    engine.stop_run(run_id, USER, reason="scheduler")
     broker.clear()
 
     signals.handle_signal(strategy, "short_exit", leg_id=1)

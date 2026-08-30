@@ -557,34 +557,3 @@ def _place(
     )
 
     return _Placement(ok=result.ok, error=result.error)
-
-
-def close_all_signal_legs(strategy: Any, reason: str = "eod") -> int:
-    """Square every open leg. The scheduler's end-of-day job for signal runs.
-
-    Returns how many legs were sent an exit. Each leg is exited on the side it
-    is actually held, read from run state rather than from configuration.
-    """
-    run_id = getattr(strategy, "current_run_id", None)
-    if not run_id:
-        return 0
-
-    with state.run_state(run_id) as run:
-        open_ids = [leg["leg_id"] for leg in state.open_legs(run)] if run else []
-
-    closed = 0
-    for leg_id in open_ids:
-        held = _held_side(run_id, leg_id)
-        if held is None:
-            continue
-        leg = _find_leg(strategy, leg_id, None, None)
-        if leg is None:
-            continue
-        result = _exit(strategy, run_id, leg, held)
-        if result.acted:
-            closed += 1
-
-    logger.info(
-        "Signal square-off (%s) closed %d leg(s) on strategy %s", reason, closed, strategy.id
-    )
-    return closed
