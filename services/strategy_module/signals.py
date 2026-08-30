@@ -1,0 +1,473 @@
+"""Signal-mode strategies: one TradingView alert moves one leg.
+
+Batch mode enters every leg together on ``start`` and exits them together on
+``stop``, which is what a multi-leg options spread wants. Signal mode is the
+other shape: an alert fires one action at a time, a strategy may hold several
+unrelated symbols, and quantity is raw shares rather than lots.
+
+    {"action": "long_entry", "leg_id": 1}
+    {"action": "short_exit", "symbol": "RELIANCE", "exchange": "NSE"}
+
+Same tables, same engine machinery for state, orders, risk and recovery. What
+differs is the protocol and the leg shape.
+
+Three things here are deliberately not errors, because an alert engine repeats
+itself and a strategy should not fight it:
+
+    long_exit on a leg that is flat        -> no-op, "no_matching_position"
+    long_entry on a leg already long       -> no-op, "already_long"
+    any signal outside the trading window  -> no-op, naming the window
+
+Each is recorded and answered 200. A refusal that reads as a failure invites a
+retry, and a retry on an order path is how one alert becomes two positions.
+
+Being rejected is different from being a no-op. A signal blocked by the
+strategy's direction, or by the leg's own side, is a configuration mismatch the
+operator should see, and answers as a refusal.
+
+A leg that exits returns to "configured" rather than "closed": the same symbol
+can be signalled again the same day. Its realized P&L accumulates on the leg,
+and services/risk/ counts realized from any leg that has it rather than only
+from closed ones.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
+
+import pytz
+
+from database import strategy_module_db as store
+from services.strategy_module import order_dispatch, state
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+IST = pytz.timezone("Asia/Kolkata")
+
+#: The four actions a signal-mode strategy accepts.
+SIGNAL_ACTIONS = ("long_entry", "long_exit", "short_entry", "short_exit")
+
+#: What a batch-mode strategy accepts. The router is shared; the validator
+#: branches on the strategy's kind, so a start against a signal strategy and a
+#: long_entry against a batch one are both refused rather than half-handled.
+BATCH_ACTIONS = ("start", "stop")
+
+_LONG = "long"
+_SHORT = "short"
+
+_SIDE_OF_ACTION = {
+    "long_entry": _LONG,
+    "long_exit": _LONG,
+    "short_entry": _SHORT,
+    "short_exit": _SHORT,
+}
+
+_IS_ENTRY = {"long_entry", "short_entry"}
+
+#: side -> the B/S the run state records for a leg held that way.
+_POSITION_OF_SIDE = {_LONG: "B", _SHORT: "S"}
+
+_DIRECTION_ALLOWS = {
+    "both": {_LONG, _SHORT},
+    "long_only": {_LONG},
+    "short_only": {_SHORT},
+}
+
+
+@dataclass
+class SignalResult:
+    """What one signal did, or why it did nothing."""
+
+    ok: bool
+    note: str | None = None
+    error: str | None = None
+    leg_id: Any = None
+    run_id: int | None = None
+    flipped: bool = False
+
+    @property
+    def acted(self) -> bool:
+        """Whether an order was actually placed."""
+        return self.ok and self.note is None
+
+
+def actions_for(strategy_kind: str) -> tuple[str, ...]:
+    """Which actions this kind of strategy accepts."""
+    return SIGNAL_ACTIONS if strategy_kind == "signal" else BATCH_ACTIONS
+
+
+def _now_ist() -> datetime:
+    return datetime.now(IST)
+
+
+def _window_note(strategy: Any, action: str) -> str | None:
+    """Why this signal is outside the strategy's trading window, if it is.
+
+    Entries stop at ``entry_time`` and everything stops at ``exit_time``. Exits
+    are deliberately allowed before the entry window opens: a position carried
+    in from a previous session must always be closable.
+    """
+    if getattr(strategy, "strategy_type", "intraday") != "intraday":
+        return None
+
+    now = _now_ist().time()
+    entry_time = getattr(strategy, "entry_time", None)
+    exit_time = getattr(strategy, "exit_time", None)
+
+    if exit_time and now >= exit_time:
+        return "outside_trading_window"
+    if action in _IS_ENTRY and entry_time and now < entry_time:
+        return "outside_entry_window"
+    return None
+
+
+def _find_leg(strategy: Any, leg_id: Any, symbol: str | None, exchange: str | None) -> dict | None:
+    """The configured leg this signal targets.
+
+    ``leg_id`` wins when both are given. The symbol fallback exists because an
+    alert template is often written once and reused across strategies, where
+    the leg numbering differs but the instrument does not.
+    """
+    legs = getattr(strategy, "legs", None) or []
+    if leg_id is not None:
+        wanted = str(leg_id)
+        for leg in legs:
+            if str(leg.get("id") or leg.get("leg_id")) == wanted:
+                return leg
+        return None
+
+    if symbol:
+        want_symbol = str(symbol).upper()
+        want_exchange = str(exchange or "").upper()
+        for leg in legs:
+            if str(leg.get("symbol", "")).upper() != want_symbol:
+                continue
+            if want_exchange and str(leg.get("exchange", "")).upper() != want_exchange:
+                continue
+            return leg
+    return None
+
+
+def _leg_id_of(leg: dict) -> Any:
+    return leg.get("id") or leg.get("leg_id")
+
+
+def _day_run(strategy: Any) -> tuple[int | None, str | None]:
+    """The run this signal belongs to, opening one if the day has none.
+
+    A signal strategy has one run per trading day rather than one per start and
+    stop: there is no start. The first signal of the day opens it and the
+    scheduler's square-off closes it.
+
+    Mode is not in the payload, so it is taken from the strategy's own opt-in:
+    live only if the operator has explicitly enabled it, sandbox otherwise. The
+    safe direction is the default.
+    """
+    run_id = getattr(strategy, "current_run_id", None)
+    if run_id:
+        run = store.get_run(run_id)
+        if run and run.stopped_at is None:
+            return run_id, None
+
+    mode = "live" if getattr(strategy, "live_enabled", False) else "sandbox"
+    api_key = _api_key_for(strategy.user_id)
+    broker = ""
+    if mode == "live" and api_key:
+        try:
+            from database.auth_db import get_auth_token_broker
+
+            _token, broker = get_auth_token_broker(api_key)
+        except Exception:
+            logger.exception("Could not read the broker for a signal run")
+
+    if not store.claim_strategy_for_run(strategy.id):
+        # Something else opened one between the read above and here.
+        refreshed = store.get_strategy_unscoped(strategy.id)
+        if refreshed and refreshed.current_run_id:
+            return refreshed.current_run_id, None
+        return None, "This strategy is already running"
+
+    run = store.create_run(
+        strategy_id=strategy.id,
+        mode=mode,
+        broker=broker or mode,
+        trigger_source="webhook",
+    )
+    if not run:
+        store.release_strategy(strategy.id)
+        return None, "Could not open a run"
+
+    store.set_strategy_status(strategy.id, "running", run.id)
+    state.init_run_state(run.id, strategy.id, [])
+    store.record_event(
+        strategy.id,
+        strategy.user_id,
+        "run_started",
+        f"Signal run opened in {mode} mode",
+        run_id=run.id,
+    )
+    return run.id, None
+
+
+def _api_key_for(user_id: str) -> str | None:
+    try:
+        from database.auth_db import get_api_key_for_tradingview
+
+        return get_api_key_for_tradingview(user_id)
+    except Exception:
+        logger.exception("Could not read the API key for %s", user_id)
+        return None
+
+
+def handle_signal(
+    strategy: Any,
+    action: str,
+    *,
+    leg_id: Any = None,
+    symbol: str | None = None,
+    exchange: str | None = None,
+) -> SignalResult:
+    """Apply one signal to one leg."""
+    if action not in SIGNAL_ACTIONS:
+        return SignalResult(ok=False, error=f"Unknown signal action: {action!r}")
+
+    side = _SIDE_OF_ACTION[action]
+
+    allowed = _DIRECTION_ALLOWS.get(
+        getattr(strategy, "direction", "both") or "both", {_LONG, _SHORT}
+    )
+    if side not in allowed:
+        return SignalResult(
+            ok=False,
+            error=f"This strategy is {strategy.direction}; a {side} signal is not accepted",
+        )
+
+    leg = _find_leg(strategy, leg_id, symbol, exchange)
+    if leg is None:
+        return SignalResult(ok=False, error="No leg matches this signal")
+    resolved_leg_id = _leg_id_of(leg)
+
+    leg_side = str(leg.get("side") or "both").lower()
+    if leg_side != "both" and leg_side != side:
+        return SignalResult(
+            ok=False,
+            leg_id=resolved_leg_id,
+            error=f"Leg {resolved_leg_id} only accepts {leg_side} signals",
+        )
+
+    note = _window_note(strategy, action)
+    if note:
+        return SignalResult(ok=True, note=note, leg_id=resolved_leg_id)
+
+    run_id, error = _day_run(strategy)
+    if error or not run_id:
+        return SignalResult(ok=False, leg_id=resolved_leg_id, error=error or "No run")
+
+    if action in _IS_ENTRY:
+        return _enter(strategy, run_id, leg, side)
+    return _exit(strategy, run_id, leg, side)
+
+
+def _held_side(run_id: int, leg_id: Any) -> str | None:
+    """Which side the run currently holds this leg, if any."""
+    with state.run_state(run_id) as run:
+        if run is None:
+            return None
+        live = run["legs"].get(str(leg_id))
+        if live is None or live.get("status") != "open":
+            return None
+        return _LONG if live.get("position") == "B" else _SHORT
+
+
+def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
+    """Open a leg on the requested side, flipping it if it is on the other."""
+    leg_id = _leg_id_of(leg)
+    held = _held_side(run_id, leg_id)
+    flipped = False
+
+    if held == side:
+        # Repeat alert. Adding to the position would double it on a signal the
+        # sender believes it has already delivered.
+        return SignalResult(ok=True, note=f"already_{side}", leg_id=leg_id, run_id=run_id)
+
+    if held is not None:
+        # Opposite side: square first, then open. Reversing without closing
+        # would leave both positions on the book.
+        closed = _exit(strategy, run_id, leg, held)
+        if not closed.ok:
+            return closed
+        flipped = True
+
+    resolved = _resolve_signal_leg(leg, side)
+    if resolved is None:
+        return SignalResult(ok=False, leg_id=leg_id, error=f"Leg {leg_id} is not usable")
+
+    state.add_leg(run_id, resolved)
+    outcome = _place(strategy, run_id, resolved, "entry", _POSITION_OF_SIDE[side])
+    if not outcome.ok:
+        return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error=outcome.error)
+
+    return SignalResult(ok=True, leg_id=leg_id, run_id=run_id, flipped=flipped)
+
+
+def _resolve_signal_leg(leg: dict, side: str) -> dict | None:
+    """A signal leg in the shape run state expects.
+
+    The side comes from the signal, never from the configuration. A signal leg
+    is configured with which signals it *accepts*, which is not the same as
+    which way it is currently held, and conflating the two is how a long leg
+    ends up evaluated as a short.
+    """
+    symbol = leg.get("symbol")
+    exchange = leg.get("exchange")
+    quantity = leg.get("qty") or leg.get("quantity")
+    if not symbol or not exchange or not quantity:
+        return None
+
+    return {
+        "leg_id": _leg_id_of(leg),
+        "position": _POSITION_OF_SIDE[side],
+        "symbol": str(symbol).upper(),
+        "exchange": str(exchange).upper(),
+        "quantity": int(quantity),
+        "lots": 1,
+        "sl_pts": leg.get("sl_pts"),
+        "target_pts": leg.get("target_pts"),
+        "trail": leg.get("trail") or {},
+    }
+
+
+def _exit(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
+    """Close a leg held on the requested side, or say it was not."""
+    leg_id = _leg_id_of(leg)
+    held = _held_side(run_id, leg_id)
+    if held != side:
+        # Flat, or held the other way. An exit for something not held is not a
+        # failure; the alert simply arrived after the position had gone.
+        return SignalResult(ok=True, note="no_matching_position", leg_id=leg_id, run_id=run_id)
+
+    with state.run_state(run_id) as run:
+        live = run["legs"].get(str(leg_id)) if run else None
+        if live is None:
+            return SignalResult(ok=True, note="no_matching_position", leg_id=leg_id)
+        snapshot = dict(live)
+
+    outcome = _place(strategy, run_id, snapshot, "exit_signal", snapshot["position"], exiting=True)
+    if not outcome.ok:
+        return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error=outcome.error)
+
+    return SignalResult(ok=True, leg_id=leg_id, run_id=run_id)
+
+
+@dataclass
+class _Placement:
+    ok: bool
+    error: str | None = None
+
+
+def _place(
+    strategy: Any,
+    run_id: int,
+    leg: dict,
+    kind: str,
+    position: str,
+    exiting: bool = False,
+) -> _Placement:
+    """Place one signal-driven order and record it."""
+    api_key = _api_key_for(strategy.user_id)
+    if not api_key:
+        return _Placement(ok=False, error="No API key is configured for this user")
+
+    run = store.get_run(run_id)
+    mode = run.mode if run else "sandbox"
+
+    action = (
+        order_dispatch.exit_action(position) if exiting else ("BUY" if position == "B" else "SELL")
+    )
+    order = order_dispatch.build_order(
+        symbol=leg["symbol"],
+        exchange=leg["exchange"],
+        action=action,
+        quantity=leg.get("quantity") or leg.get("qty"),
+        product=getattr(strategy, "product", "MIS"),
+        strategy_name=getattr(strategy, "name", ""),
+        pricetype=order_dispatch.EXIT_PRICETYPE
+        if exiting
+        else getattr(strategy, "pricetype", "MARKET"),
+    )
+    result = order_dispatch.dispatch_order(mode=mode, api_key=api_key, order=order)
+
+    row = store.record_order(
+        run_id,
+        leg["leg_id"],
+        kind,
+        {
+            "symbol": leg["symbol"],
+            "exchange": leg["exchange"],
+            "action": action,
+            "qty": leg.get("quantity") or leg.get("qty"),
+            "pricetype": order.get("pricetype", "MARKET"),
+            "broker_order_id": result.broker_order_id,
+            "status": "open" if result.ok else "rejected",
+        },
+    )
+    if row and not result.ok:
+        store.update_order(row.id, reject_reason=result.error)
+
+    with state.run_state(run_id) as state_run:
+        live = state_run["legs"].get(str(leg["leg_id"])) if state_run else None
+        if live is not None:
+            if exiting:
+                live["exit_order_id"] = row.id if row else None
+                live["exit_kind"] = kind
+            else:
+                live["entry_order_id"] = row.id if row else None
+                live["entry_status"] = "open" if result.ok else "rejected"
+                live["status"] = "open" if result.ok else "rejected"
+
+    store.record_event(
+        strategy.id,
+        strategy.user_id,
+        "leg_exit_placed" if exiting else "leg_entry_placed",
+        f"Signal {action} {leg.get('quantity') or leg.get('qty')} {leg['symbol']}"
+        + ("" if result.ok else f" rejected: {result.error}"),
+        run_id=run_id,
+        leg_id=leg["leg_id"],
+        severity="info" if result.ok else "warn",
+    )
+
+    return _Placement(ok=result.ok, error=result.error)
+
+
+def close_all_signal_legs(strategy: Any, reason: str = "eod") -> int:
+    """Square every open leg. The scheduler's end-of-day job for signal runs.
+
+    Returns how many legs were sent an exit. Each leg is exited on the side it
+    is actually held, read from run state rather than from configuration.
+    """
+    run_id = getattr(strategy, "current_run_id", None)
+    if not run_id:
+        return 0
+
+    with state.run_state(run_id) as run:
+        open_ids = [leg["leg_id"] for leg in state.open_legs(run)] if run else []
+
+    closed = 0
+    for leg_id in open_ids:
+        held = _held_side(run_id, leg_id)
+        if held is None:
+            continue
+        leg = _find_leg(strategy, leg_id, None, None)
+        if leg is None:
+            continue
+        result = _exit(strategy, run_id, leg, held)
+        if result.acted:
+            closed += 1
+
+    logger.info(
+        "Signal square-off (%s) closed %d leg(s) on strategy %s", reason, closed, strategy.id
+    )
+    return closed

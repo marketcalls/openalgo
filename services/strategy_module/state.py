@@ -204,6 +204,24 @@ def favorable_peak_points(leg: dict[str, Any]) -> float:
     return max(0.0, float(entry) - float(trough)) if trough else 0.0
 
 
+def add_leg(run_id: int, leg: dict) -> dict[str, Any] | None:
+    """Add one leg to a live run, returning its new state.
+
+    Batch runs seed every leg at start, because a batch enters them all at
+    once and its sides are known from the configuration. A signal-mode leg
+    does not exist here until a signal opens it: its side is decided by which
+    signal arrived, not by what was configured, and inventing a placeholder
+    side beforehand is exactly the defect this module refuses elsewhere.
+    """
+    with get_state_lock(run_id):
+        state = _run_state.get(run_id)
+        if state is None:
+            return None
+        leg_state = _new_leg_state(leg)
+        state["legs"][str(leg["leg_id"])] = leg_state
+        return leg_state
+
+
 def get_run_state(run_id: int) -> dict[str, Any] | None:
     """A deep copy of a run's state, safe to read outside the lock.
 

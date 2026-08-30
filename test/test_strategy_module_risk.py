@@ -411,3 +411,26 @@ def test_subscribed_symbols_covers_configured_and_open_legs_only():
     assert ("A", "NFO") in symbols
     assert ("B", "NFO") in symbols
     assert ("C", "NFO") not in symbols
+
+
+def test_a_leg_that_exited_and_can_re_enter_still_contributes_its_realized_profit():
+    # Signal mode: a leg exits back to "configured" so the same symbol can be
+    # signalled again the same day. Keying realized P&L on status == "closed"
+    # dropped that leg's profit out of the run total entirely, and every
+    # strategy-level rule was then judged against a number the run never made.
+    reentrant = _leg(leg_id=1, status="configured", realized_pnl=500.0, ltp=None)
+    open_leg = _leg(leg_id=2, position="B", entry_avg=100.0, qty=10, ltp=110.0)
+
+    realized, unrealized = ra.run_pnl(_state([reentrant, open_leg]))
+
+    assert realized == pytest.approx(500.0)
+    assert unrealized == pytest.approx(100.0)
+
+
+def test_a_leg_that_never_traded_contributes_nothing():
+    never = _leg(leg_id=1, status="configured", realized_pnl=0.0, entry_avg=0.0, ltp=None)
+
+    realized, unrealized = ra.run_pnl(_state([never]))
+
+    assert realized == 0.0
+    assert unrealized == 0.0

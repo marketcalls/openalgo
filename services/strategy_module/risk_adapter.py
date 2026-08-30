@@ -157,11 +157,19 @@ def run_pnl(state: dict[str, Any]) -> tuple[float, float]:
                 "entry_price": leg.get("entry_avg") or 0.0,
                 "quantity": leg.get("qty") or 0.0,
                 "last_price": leg.get("ltp"),
-                "closed": leg.get("status") == "closed",
+                # Anything not currently open contributes its realized figure
+                # rather than a mark. This is not the same as "status is
+                # closed": a signal-mode leg returns to "configured" after an
+                # exit so it can be signalled again the same day, and keying
+                # on "closed" alone dropped that leg's realized profit out of
+                # the run total entirely, leaving every strategy-level rule
+                # judged against a number the run never made.
+                "closed": leg.get("status") != "open",
                 "realized_pnl": leg.get("realized_pnl") or 0.0,
             }
             for leg in state.get("legs", {}).values()
-            if leg.get("status") in ("open", "closed")
+            # A leg that has never traded has nothing to contribute either way.
+            if leg.get("status") == "open" or leg.get("realized_pnl")
         ]
     )
     return summary.realized, summary.unrealized
