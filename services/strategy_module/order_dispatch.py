@@ -1,0 +1,197 @@
+"""The single place a strategy run turns a decision into an order.
+
+Every order the module places - entries, rule-driven exits, manual closes,
+square-offs - goes through :func:`dispatch_order`. One decision point means the
+live and sandbox paths cannot drift apart, and the engine never has to know
+which one it is on.
+
+Three deliberate departures from how the rest of the product places orders:
+
+**Mode is per run, not global.** OpenAlgo's analyzer setting is a single
+platform-wide switch, and ``services/place_order_service.place_order`` consults
+it. A strategy chooses live or sandbox when the run starts, and two runs may
+disagree, so this module branches explicitly on the run's own mode and calls
+each pipe directly. Nothing here reads the global toggle, and nothing here
+changes it.
+
+**Action Center is bypassed.** ``place_order`` routes API-key orders into the
+semi-automatic approval queue when that is enabled. That is right for a signal
+arriving from outside and wrong here: a stop-loss exit that sits in a queue
+waiting for a human is not a stop loss. The module calls
+``place_order_with_auth``, which is the same code path minus the queue.
+
+**Broker authorisation is resolved fresh, per order, and never cached in run
+state.** Indian broker tokens expire daily around 3 AM IST, and a run may be
+open across that boundary. If authorisation cannot be resolved, an automated
+exit is refused and reported rather than attempted: leaving the position open
+and telling the operator is recoverable, and pretending to have exited is not.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+# Exits are always MARKET. A limit exit that does not fill is not an exit, and
+# every exit this module places is a risk decision that has already fired.
+EXIT_PRICETYPE = "MARKET"
+
+
+@dataclass(frozen=True, slots=True)
+class DispatchResult:
+    """What one placement attempt produced.
+
+    ``ok`` is whether the order reached the broker or the sandbox, not whether
+    it filled. Fills arrive later, over the order-update event.
+    """
+
+    ok: bool
+    broker_order_id: str | None = None
+    response: dict[str, Any] | None = None
+    error: str | None = None
+
+    @property
+    def rejected(self) -> bool:
+        return not self.ok
+
+
+def build_order(
+    *,
+    symbol: str,
+    exchange: str,
+    action: str,
+    quantity: int,
+    product: str,
+    strategy_name: str,
+    pricetype: str = "MARKET",
+    price: float = 0,
+    trigger_price: float = 0,
+) -> dict[str, Any]:
+    """The order payload, in the shape the placement services expect.
+
+    Quantity is a string because that is what the rest of the order path uses;
+    passing an int works today but diverges from every other caller.
+    """
+    return {
+        "symbol": symbol,
+        "exchange": exchange,
+        "action": action.upper(),
+        "quantity": str(int(quantity)),
+        "product": product,
+        "pricetype": pricetype,
+        "price": str(price or 0),
+        "trigger_price": str(trigger_price or 0),
+        # Tags the order so it is attributable in the orderbook and in logs.
+        "strategy": strategy_name,
+    }
+
+
+def exit_action(position: str) -> str:
+    """The action that closes a leg.
+
+    Derived from the leg's own recorded side, never from its configuration. The
+    original reads the configured side, which defaults to "B" for every leg
+    including short ones, so a rule-driven exit on a short leg placed another
+    SELL and doubled the position instead of covering it.
+    """
+    normalised = (position or "").upper()
+    if normalised == "B":
+        return "SELL"
+    if normalised == "S":
+        return "BUY"
+    raise ValueError(f"Cannot derive an exit action from position {position!r}")
+
+
+def resolve_live_auth(api_key: str) -> tuple[str | None, str | None, str | None]:
+    """Broker authorisation for a live order, as ``(auth_token, broker, error)``.
+
+    Resolved on every call rather than held for the life of the run. A token
+    refreshed during the trading day is picked up transparently, and a session
+    that has expired or been revoked is reported instead of being used.
+    """
+    try:
+        from database.auth_db import get_auth_token_broker
+
+        auth_token, broker = get_auth_token_broker(api_key)
+        if not auth_token or not broker:
+            return None, None, "Broker session is not available or has expired"
+        return auth_token, broker, None
+    except Exception:
+        logger.exception("Could not resolve broker authorisation for a live order")
+        return None, None, "Could not resolve broker authorisation"
+
+
+def dispatch_order(
+    *,
+    mode: str,
+    api_key: str,
+    order: dict[str, Any],
+) -> DispatchResult:
+    """Place one order, live or sandbox, and normalise the answer.
+
+    Both pipes return ``(success, response, status_code)``, so the caller gets
+    one shape whichever ran.
+    """
+    if mode == "sandbox":
+        return _dispatch_sandbox(api_key, order)
+    if mode == "live":
+        return _dispatch_live(api_key, order)
+    return DispatchResult(ok=False, error=f"Unknown run mode: {mode!r}")
+
+
+def _dispatch_sandbox(api_key: str, order: dict[str, Any]) -> DispatchResult:
+    from services.sandbox_service import sandbox_place_order
+
+    original = dict(order)
+    original["apikey"] = api_key
+    try:
+        ok, response, _status = sandbox_place_order(dict(order), api_key, original)
+    except Exception:
+        logger.exception("Sandbox order placement raised for %s", order.get("symbol"))
+        return DispatchResult(ok=False, error="Sandbox order placement failed")
+
+    return _normalise(ok, response)
+
+
+def _dispatch_live(api_key: str, order: dict[str, Any]) -> DispatchResult:
+    auth_token, broker, error = resolve_live_auth(api_key)
+    if error:
+        # Deliberately not attempted. See the module docstring: refusing and
+        # saying so leaves a recoverable situation, and a silent failure does
+        # not.
+        return DispatchResult(ok=False, error=error)
+
+    from services.place_order_service import place_order_with_auth
+
+    original = dict(order)
+    original["apikey"] = api_key
+    try:
+        ok, response, _status = place_order_with_auth(dict(order), auth_token, broker, original)
+    except Exception:
+        logger.exception("Live order placement raised for %s", order.get("symbol"))
+        return DispatchResult(ok=False, error="Live order placement failed")
+
+    return _normalise(ok, response)
+
+
+def _normalise(ok: bool, response: Any) -> DispatchResult:
+    """One shape out of either pipe."""
+    payload = response if isinstance(response, dict) else {}
+    if ok:
+        return DispatchResult(
+            ok=True,
+            broker_order_id=payload.get("orderid"),
+            response=payload,
+        )
+    return DispatchResult(
+        ok=False,
+        # A rejected order can still carry a broker reference, and the audit row
+        # is more useful with it than without.
+        broker_order_id=payload.get("orderid"),
+        response=payload,
+        error=payload.get("message") or "Order rejected",
+    )
