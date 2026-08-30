@@ -1407,6 +1407,54 @@ def prune_checkpoints(run_id: int, keep: int = 200) -> int:
 # ---------------------------------------------------------------------------
 
 
+# An event that names no strategy came in on a token nothing recognises, so
+# there is no owner to show it to and nothing that ever deletes it. Left
+# unbounded, anyone who can reach the webhook URL can grow the database without
+# limit, and none of it is visible to say so. Kept, because the first sign of
+# somebody walking the token space is a run of these, but capped.
+MAX_UNATTRIBUTED_WEBHOOK_EVENTS = 1000
+_PRUNE_UNATTRIBUTED_EVERY = 100
+_unattributed_since_prune = 0
+
+
+def _prune_unattributed_webhook_events() -> None:
+    """Trim ownerless audit rows to the newest MAX, every Nth one.
+
+    Counted in process rather than queried per request: the check itself must
+    not become the cost of the flood it is bounding.
+    """
+    global _unattributed_since_prune
+    _unattributed_since_prune += 1
+    if _unattributed_since_prune < _PRUNE_UNATTRIBUTED_EVERY:
+        return
+    _unattributed_since_prune = 0
+    try:
+        keep = (
+            db_session.query(SmWebhookEvent.id)
+            .filter(SmWebhookEvent.strategy_id.is_(None))
+            .order_by(SmWebhookEvent.id.desc())
+            .limit(MAX_UNATTRIBUTED_WEBHOOK_EVENTS)
+            .all()
+        )
+        if len(keep) < MAX_UNATTRIBUTED_WEBHOOK_EVENTS:
+            return
+        oldest_kept = keep[-1][0]
+        removed = (
+            db_session.query(SmWebhookEvent)
+            .filter(
+                SmWebhookEvent.strategy_id.is_(None),
+                SmWebhookEvent.id < oldest_kept,
+            )
+            .delete(synchronize_session=False)
+        )
+        db_session.commit()
+        if removed:
+            logger.info("Pruned %d unattributed webhook audit rows", removed)
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not prune unattributed webhook events")
+
+
 def record_webhook_event(
     result: str,
     strategy_id: int | None = None,
@@ -1435,6 +1483,8 @@ def record_webhook_event(
         )
         db_session.add(row)
         db_session.commit()
+        if strategy_id is None:
+            _prune_unattributed_webhook_events()
         return row
     except Exception:
         db_session.rollback()

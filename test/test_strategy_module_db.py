@@ -476,3 +476,36 @@ def test_the_list_view_omits_legs_but_the_detail_view_carries_them():
     detail = sm.strategy_to_dict(sm.get_strategy(created["id"], USER))
     assert len(detail["legs"]) == 1
     assert detail["legs"][0]["option_type"] == "CE"
+
+
+def test_ownerless_webhook_audit_rows_are_capped():
+    """A token nothing recognises leaves a row with no owner and no reader.
+
+    Nothing shows it, because the audit view is scoped to a strategy, and
+    nothing deletes it. Left unbounded, anyone who can reach the webhook URL
+    grows the database as fast as they can send, invisibly. The rows are worth
+    keeping, since a run of them is the first sign of somebody walking the
+    token space, so they are capped rather than dropped.
+    """
+    cap = sm.MAX_UNATTRIBUTED_WEBHOOK_EVENTS
+    for _ in range(cap + sm._PRUNE_UNATTRIBUTED_EVERY + 5):
+        sm.record_webhook_event("rejected_token", ip="203.0.113.9")
+
+    remaining = (
+        sm.db_session.query(sm.SmWebhookEvent)
+        .filter(sm.SmWebhookEvent.strategy_id.is_(None))
+        .count()
+    )
+    assert remaining <= cap + sm._PRUNE_UNATTRIBUTED_EVERY, remaining
+    assert remaining >= cap, "the newest are kept, not everything discarded"
+
+
+def test_capping_ownerless_rows_leaves_a_strategys_own_audit_alone():
+    created, _ = sm.create_strategy(USER, _config())
+    sid = created["id"]
+    sm.record_webhook_event("ok", strategy_id=sid, action="start", mode="sandbox")
+
+    for _ in range(sm.MAX_UNATTRIBUTED_WEBHOOK_EVENTS + sm._PRUNE_UNATTRIBUTED_EVERY + 5):
+        sm.record_webhook_event("rejected_token", ip="203.0.113.9")
+
+    assert [e["result"] for e in sm.list_webhook_events(sid)] == ["ok"]

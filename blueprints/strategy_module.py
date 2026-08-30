@@ -30,6 +30,7 @@ Three rules the routes hold to:
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import math
 import os
@@ -43,6 +44,7 @@ from flask_socketio import join_room, leave_room
 from database import strategy_module_db as store
 from extensions import socketio
 from limiter import limiter
+from utils.ip_helper import get_real_ip
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -64,9 +66,17 @@ WEBHOOK_RATE_LIMIT = os.getenv("WEBHOOK_RATE_LIMIT", "100 per minute")
 
 
 def _webhook_token_key():
-    """Rate-limit key naming the strategy instead of the caller."""
+    """Rate-limit key naming the strategy instead of the caller.
+
+    Hashed, because the limiter's in-memory storage keeps a key forever once
+    it has seen it: the event list for an expired window is emptied but the
+    key itself is never removed. A raw token there would be a second copy of
+    the credential sitting in process memory for the life of the worker, one
+    entry per token ever presented, including every guess from a scanner. The
+    digest keys the same bucket without being replayable.
+    """
     token = (request.view_args or {}).get("token") or ""
-    return f"strategy-webhook:{token}"
+    return "strategy-webhook:" + hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 # Two limits at one budget, because neither subsumes the other.
@@ -1596,12 +1606,29 @@ def webhook(token):
     address banned, and a legitimate alert carrying a rotated token deserves a
     clear answer rather than a redirect.
     """
-    from services.strategy_module.webhook import handle_webhook
+    from services.strategy_module.webhook import MAX_PAYLOAD_BYTES, handle_webhook
+
+    # Refuse an oversized body from the header, before reading it. The cap
+    # applied inside the pipeline is measured on bytes already in memory, so
+    # an unauthenticated caller could make the worker read whatever it sent
+    # before anything checked the token.
+    declared = request.content_length
+    if declared is not None and declared > MAX_PAYLOAD_BYTES:
+        return jsonify(
+            {
+                "status": "error",
+                "message": f"Payload larger than {MAX_PAYLOAD_BYTES} bytes",
+            }
+        ), 413
 
     outcome = handle_webhook(
         token,
         request.get_data(cache=False),
-        ip=request.remote_addr,
+        # get_real_ip, not remote_addr: behind a reverse proxy, which is how
+        # most installs run, remote_addr is the proxy and every caller looks
+        # like the same address. The IP allowlist is then either useless or
+        # blocks everything, and the audit trail names the proxy.
+        ip=get_real_ip(),
         user_agent=request.headers.get("User-Agent"),
     )
     body, status = outcome.as_response()
