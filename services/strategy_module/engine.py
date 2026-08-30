@@ -389,6 +389,23 @@ def _resolve_all_legs(
     return resolved, failures
 
 
+def _replay_order_update(broker_order_id: str | None) -> None:
+    """Let the fill that arrived before this row existed be applied now.
+
+    Imported here rather than at module scope: order_events imports the engine
+    to apply a fill, so binding it the other way round at import time would be
+    circular.
+    """
+    if not broker_order_id:
+        return
+    try:
+        from services.strategy_module import order_events
+
+        order_events.replay_for(broker_order_id)
+    except Exception:
+        logger.exception("Could not replay a held order update for %s", broker_order_id)
+
+
 def _place_entries(
     run_id: int,
     strategy: dict[str, Any],
@@ -465,6 +482,14 @@ def _place_entries(
                     leg_state["entry_order_id"] = row.id if row else None
                     leg_state["entry_status"] = "open" if result.ok else "rejected"
                     leg_state["status"] = "open" if result.ok else "rejected"
+
+        # After the leg's own bookkeeping, never before it: the sandbox fills a
+        # MARKET order inside the dispatch above, so the fill was published
+        # before this row existed and was held rather than applied. Replaying it
+        # first would have the block above write "open" back over the fill it
+        # had just recorded.
+        if row and result.ok:
+            _replay_order_update(result.broker_order_id)
 
         _emit(
             strategy["id"],
@@ -754,6 +779,9 @@ def _exit_legs(
                 live = run["legs"].get(str(leg["leg_id"])) if run else None
                 if live is not None:
                     live["exit_order_id"] = row.id if row else None
+            if row:
+                # See the note in _place_entries: after the bookkeeping.
+                _replay_order_update(result.broker_order_id)
         else:
             # Release the claim so a later attempt is not mistaken for a
             # duplicate and skipped for the rest of the session.

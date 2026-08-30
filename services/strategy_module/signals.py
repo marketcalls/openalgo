@@ -546,6 +546,15 @@ def _place(
                 live["entry_status"] = "open" if result.ok else "rejected"
                 live["status"] = "open" if result.ok else "rejected"
 
+    if row and result.ok:
+        # After the leg bookkeeping above, never before it. See
+        # engine._replay_order_update: the sandbox publishes this order's fill
+        # from inside the dispatch, before the row existed, and replaying it
+        # early would have the block above write "open" back over it.
+        from services.strategy_module.engine import _replay_order_update
+
+        _replay_order_update(result.broker_order_id)
+
     store.record_event(
         strategy.id,
         strategy.user_id,

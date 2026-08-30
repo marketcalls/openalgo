@@ -220,3 +220,56 @@ def test_subscribing_twice_registers_one_subscriber():
             assert fake_bus.subscribe.call_count == 1
     finally:
         order_events._started = False
+
+
+def test_a_fill_that_arrives_before_its_row_exists_is_not_lost(order):
+    """The sandbox fills a MARKET order inside the dispatch call.
+
+    engine._place_entries dispatches and only then records the order row, so
+    the sandbox's "complete" event is published while no row carries that
+    broker id yet. Keyed on broker id alone, the update reads as somebody
+    else's order and is dropped, and the leg keeps entry_avg 0.0: no stop, no
+    target, no mark to market. In sandbox that is not a race, it happens every
+    time, so the risk engine manages nothing at all. A live broker whose fill
+    beats the insert lands in the same place.
+
+    The update has to survive until its row appears.
+    """
+    unrecorded = "BRK-LATE"
+
+    # The fill arrives first. Nothing on the platform knows this order yet.
+    with patch("services.strategy_module.engine.apply_fill") as apply_fill:
+        order_events._apply_update(unrecorded, _event(unrecorded, avg=142.5))
+    assert apply_fill.call_count == 0, "there is no row to apply it to yet"
+
+    # The engine now records the row, exactly as _place_entries does.
+    row = store.record_order(
+        order.run_id,
+        leg_id=2,
+        kind="entry",
+        order={
+            "symbol": "NIFTY28MAY2624000PE",
+            "exchange": "NFO",
+            "action": "SELL",
+            "qty": 75,
+            "broker_order_id": unrecorded,
+            "status": "open",
+        },
+    )
+    assert row is not None
+
+    with patch("services.strategy_module.engine.apply_fill") as apply_fill:
+        order_events.replay_for(unrecorded)
+
+    apply_fill.assert_called_once_with(
+        order.run_id, 2, 142.5, is_entry=True, filled_qty=75, order_row_id=row.id
+    )
+    stored = [o for o in store.list_orders(order.run_id) if o["broker_order_id"] == unrecorded][0]
+    assert stored["status"] == "complete"
+    assert stored["avg_fill_price"] == 142.5
+
+
+def test_replaying_an_id_nothing_buffered_is_harmless(order):
+    with patch("services.strategy_module.engine.apply_fill") as apply_fill:
+        order_events.replay_for("BRK-1")
+    assert apply_fill.call_count == 0

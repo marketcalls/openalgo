@@ -1556,3 +1556,49 @@ def test_a_leg_with_an_unusable_side_is_refused_rather_than_defaulted(broker):
         state._new_leg_state(
             {"leg_id": 1, "position": "", "symbol": CE, "exchange": "NFO", "quantity": 75}
         )
+
+
+def test_a_broker_that_fills_inside_the_dispatch_call_still_seeds_the_leg():
+    """The sandbox, exactly: a MARKET order is filled before dispatch returns.
+
+    _place_entries dispatches and only then records the order row, so the fill
+    is published while nothing carries that broker id. Keyed on broker id
+    alone the update reads as another surface's order and is dropped, and the
+    leg keeps entry_avg 0.0 for the rest of the run: stop_from_points refuses a
+    non-positive entry, so there is no stop, no target and no mark to market,
+    while the page shows the leg as open. Every sandbox run behaved this way,
+    which is the mode an operator tries first.
+
+    Nothing caught it because every other test either calls apply_fill directly
+    or delivers the update after the row exists. This one drives the order of
+    events the sandbox actually produces.
+    """
+    sid = _make()
+    filled = []
+
+    def fills_immediately(**_kwargs):
+        broker_id = f"SBX-{len(filled) + 1}"
+        filled.append(broker_id)
+        # The sandbox executes and publishes from inside place_order, so the
+        # update is delivered here, before dispatch_order has even returned.
+        order_events._apply_update(broker_id, _event(broker_id, avg=101.5, filled=75))
+        return DispatchResult(ok=True, broker_order_id=broker_id, response={})
+
+    with (
+        patch.object(engine, "resolve_leg", side_effect=[_resolved()] * 6),
+        patch.object(engine, "_broker_for", return_value="sandbox"),
+        patch.object(engine.order_dispatch, "dispatch_order", side_effect=fills_immediately),
+    ):
+        run_id = engine.start_run(sid, USER, "sandbox").run_id
+
+    leg = _live(run_id)
+    assert leg["entry_avg"] == 101.5, "the fill published during dispatch was applied"
+    assert leg["entry_status"] == "complete"
+
+    row = store.list_orders(run_id)[0]
+    assert row["status"] == "complete"
+    assert row["avg_fill_price"] == 101.5
+
+    # And the consequence that matters: the leg is now managed.
+    engine.process_tick(CE, "NFO", 101.5)
+    assert _live(run_id)["effective_sl"] is not None, "a seeded leg has a stop"

@@ -33,6 +33,8 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+from cachetools import TTLCache
+
 from database import strategy_module_db as store
 from utils.env_config import env_int
 from utils.event_bus import bus
@@ -116,6 +118,28 @@ def _shutdown_pool() -> None:
     _POOL.shutdown(wait=False, cancel_futures=True)
 
 
+#: Updates that arrived before their order row existed, keyed by broker order
+#: id. Small and short-lived on purpose: the window this covers is the few
+#: milliseconds between a dispatch returning and its row being committed.
+_pending_updates: TTLCache = TTLCache(maxsize=512, ttl=120)
+
+
+def replay_for(order_id: str | None) -> None:
+    """Apply an update that arrived before this order's row was written.
+
+    Called by the engine straight after it records an order, which is the
+    moment the update becomes matchable. A no-op when nothing was held, which
+    is the normal case for a broker that answers before it fills.
+    """
+    if not order_id:
+        return
+    event = _pending_updates.pop(str(order_id), None)
+    if event is None:
+        return
+    logger.debug("Replaying an order update that arrived before its row: %s", order_id)
+    _apply_update(str(order_id), event)
+
+
 def _on_order_update(event: Any) -> None:
     """Bus callback. Returns immediately; the work happens on the pool.
 
@@ -152,7 +176,21 @@ def _apply_update(order_id: str, event: Any) -> None:
     try:
         row = store.get_order_by_broker_id(order_id)
         if row is None:
-            # Not ours. The overwhelmingly common case.
+            # Either somebody else's order, which is the overwhelmingly common
+            # case, or ours a moment too early. The engine dispatches and only
+            # then records the row, and the sandbox executes a MARKET order
+            # synchronously inside the dispatch call, so its fill is published
+            # while no row carries that broker id yet. Dropping it there is not
+            # a rare race in sandbox: it happens every time, and the leg keeps
+            # an entry of zero, which means no stop, no target and no mark to
+            # market. A live broker whose fill beats the insert lands in the
+            # same place.
+            #
+            # Held briefly instead, and replayed by replay_for() the moment the
+            # row appears. Bounded in both size and time, so the updates that
+            # really do belong to other surfaces cost a capped amount of memory
+            # and expire on their own.
+            _pending_updates[order_id] = event
             return
 
         status = _normalise(getattr(event, "order_status", ""))
