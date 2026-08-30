@@ -287,6 +287,62 @@ def lot_size_for(symbol: str, exchange: str) -> int | None:
     return None
 
 
+def resolve_quantity(
+    value: Any, qty_mode: str, symbol: str, exchange: str
+) -> tuple[int | None, int | None, str | None]:
+    """Turn a configured quantity into the number the broker is sent.
+
+    Returns ``(quantity, lot_size, error)``.
+
+    Two modes, because a derivative and a cash instrument are counted
+    differently and pretending otherwise puts the conversion in the user's head:
+
+    ``lots``   the value is a lot count and the quantity is ``value * lot_size``.
+               Five lots of NIFTY at a lot size of 65 is 325.
+    ``units``  the value is the quantity itself.
+
+    Storing lots rather than units is what makes a strategy survive a lot-size
+    change. Exchanges revise them: NIFTY moved from 75 to 65. A leg stored as
+    325 units silently becomes 5 lots under one size and 4.33 under the next,
+    which is not a quantity any broker will accept. A leg stored as 5 lots is
+    still 5 lots.
+
+    An unknown lot size in ``lots`` mode is an error rather than a guess. The
+    quantity would be fabricated, and fabricating the size of a real order is
+    the one thing this must never do.
+    """
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return None, None, f"{value!r} is not a whole number"
+    if count <= 0:
+        return None, None, "Quantity must be greater than zero"
+
+    lot_size = lot_size_for(symbol, exchange)
+
+    if qty_mode != "lots":
+        # Units on a derivative still have to land on a lot boundary. The form
+        # checks this too, but a strategy saved before the master contract was
+        # downloaded, or edited directly, arrives here unchecked, and the broker
+        # would refuse the order rather than round it.
+        if lot_size and count % lot_size:
+            return (
+                None,
+                lot_size,
+                f"{count} is not a whole number of lots; {symbol} trades in lots of {lot_size}",
+            )
+        return count, lot_size, None
+
+    if not lot_size:
+        return (
+            None,
+            None,
+            f"No lot size is known for {symbol} on {exchange}. Download the master "
+            "contract, or set the quantity in units.",
+        )
+    return count * lot_size, lot_size, None
+
+
 def quantity_is_whole_lots(quantity: Any, symbol: str, exchange: str) -> tuple[bool, int | None]:
     """Whether a quantity is a whole number of lots. Returns ``(ok, lot_size)``.
 

@@ -328,9 +328,11 @@ def test_batch_legs_are_unaffected_by_the_direction_check():
 # ---------------------------------------------------------------------------
 
 
-def test_a_derivative_quantity_must_be_a_whole_number_of_lots():
-    # The broker refuses anything else at order time. Catching it here turns a
-    # rejected order into a message the user can act on from the form.
+def test_a_derivative_quantity_in_units_must_be_a_whole_number_of_lots():
+    # Units mode only: in lots mode the number IS a lot count, so checking it
+    # against the lot size would be nonsense. The broker refuses a part lot at
+    # order time, so catching it here turns a rejected order into a message the
+    # user can act on from the form.
     with patch("services.strategy_module.symbol_resolver.lot_size_for", return_value=25):
         _, error = validate_strategy_config(
             _signal(
@@ -341,6 +343,7 @@ def test_a_derivative_quantity_must_be_a_whole_number_of_lots():
                         segment="futures",
                         expiry="current",
                         qty=7,
+                        qty_mode="units",
                     )
                 ]
             )
@@ -357,6 +360,7 @@ def test_a_derivative_quantity_must_be_a_whole_number_of_lots():
                         segment="futures",
                         expiry="current",
                         qty=50,
+                        qty_mode="units",
                     )
                 ]
             )
@@ -394,3 +398,96 @@ def test_an_unknown_lot_size_does_not_block_the_form():
             )
         )
     assert error is None
+
+
+# ---------------------------------------------------------------------------
+# Quantity mode
+# ---------------------------------------------------------------------------
+
+
+def test_a_derivative_leg_defaults_to_lots_and_cash_to_units():
+    # The venue implies how the instrument is counted, so neither the user nor
+    # an API caller has to say it.
+    config, error = validate_strategy_config(
+        _signal(
+            legs=[_leg(symbol="NIFTY", exchange="NFO", segment="futures", expiry="current", qty=5)]
+        )
+    )
+    assert error is None
+    assert config["legs"][0]["qty_mode"] == "lots"
+    assert config["legs"][0]["qty"] == 5
+
+    config, error = validate_strategy_config(_signal(legs=[_leg(exchange="NSE", qty=100)]))
+    assert error is None
+    assert config["legs"][0]["qty_mode"] == "units"
+
+
+def test_lots_mode_stores_the_lot_count_not_the_product():
+    # This is what lets the leg survive an exchange revising its lot size.
+    # Storing 325 would silently become 5 lots under one size and 4.33 under
+    # the next; storing 5 lots is still 5 lots.
+    config, error = validate_strategy_config(
+        _signal(
+            legs=[
+                _leg(
+                    symbol="NIFTY",
+                    exchange="NFO",
+                    segment="futures",
+                    expiry="current",
+                    qty=5,
+                    qty_mode="lots",
+                )
+            ]
+        )
+    )
+    assert error is None
+    assert config["legs"][0]["qty"] == 5
+
+
+def test_lots_mode_is_refused_on_a_cash_leg():
+    _, error = validate_strategy_config(
+        _signal(legs=[_leg(exchange="NSE", qty=5, qty_mode="lots")])
+    )
+    assert error is not None
+    assert "no lot size" in error.lower()
+
+
+def test_units_mode_on_a_derivative_is_allowed_and_still_lot_checked():
+    with patch("services.strategy_module.symbol_resolver.lot_size_for", return_value=65):
+        config, error = validate_strategy_config(
+            _signal(
+                legs=[
+                    _leg(
+                        symbol="NIFTY",
+                        exchange="NFO",
+                        segment="futures",
+                        expiry="current",
+                        qty=325,
+                        qty_mode="units",
+                    )
+                ]
+            )
+        )
+        assert error is None
+        assert config["legs"][0]["qty"] == 325
+
+        _, error = validate_strategy_config(
+            _signal(
+                legs=[
+                    _leg(
+                        symbol="NIFTY",
+                        exchange="NFO",
+                        segment="futures",
+                        expiry="current",
+                        qty=7,
+                        qty_mode="units",
+                    )
+                ]
+            )
+        )
+        assert error is not None and "whole number of lots" in error
+
+
+def test_an_unknown_quantity_mode_is_refused():
+    _, error = validate_strategy_config(_signal(legs=[_leg(qty_mode="contracts")]))
+    assert error is not None and "qty_mode" in error

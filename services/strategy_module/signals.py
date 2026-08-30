@@ -301,28 +301,13 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
             return closed
         flipped = True
 
-    resolved = _resolve_signal_leg(leg, side)
-    if resolved is None:
-        return SignalResult(ok=False, leg_id=leg_id, error=f"Leg {leg_id} is not usable")
-
-    # The authoritative lot check. The form checks too, but a strategy saved
-    # before the master contract was downloaded, or edited directly, reaches
-    # here unchecked. Refusing now costs an alert; letting it through costs a
-    # broker rejection on a position the operator believes is open.
-    from services.strategy_module.symbol_resolver import quantity_is_whole_lots
-
-    whole, lot_size = quantity_is_whole_lots(
-        resolved["quantity"], resolved["symbol"], resolved["exchange"]
-    )
-    if not whole:
-        return SignalResult(
-            ok=False,
-            leg_id=leg_id,
-            error=(
-                f"Leg {leg_id} quantity {resolved['quantity']} is not a whole number of lots; "
-                f"{resolved['symbol']} trades in lots of {lot_size}"
-            ),
-        )
+    # Resolves the quantity too, which in lots mode means multiplying by the
+    # lot size from the master contract. This is the authoritative pass: the
+    # form checks as well, but a strategy saved before the master contract was
+    # downloaded, or edited directly, reaches here unchecked.
+    resolved, error = _resolve_signal_leg(leg, side)
+    if error:
+        return SignalResult(ok=False, leg_id=leg_id, error=f"Leg {leg_id}: {error}")
 
     state.add_leg(run_id, resolved)
     outcome = _place(strategy, run_id, resolved, "entry", _POSITION_OF_SIDE[side])
@@ -332,31 +317,50 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
     return SignalResult(ok=True, leg_id=leg_id, run_id=run_id, flipped=flipped)
 
 
-def _resolve_signal_leg(leg: dict, side: str) -> dict | None:
-    """A signal leg in the shape run state expects.
+def _resolve_signal_leg(leg: dict, side: str) -> tuple[dict | None, str | None]:
+    """A signal leg in the shape run state expects, or the reason it is not.
 
     The side comes from the signal, never from the configuration. A signal leg
     is configured with which signals it *accepts*, which is not the same as
     which way it is currently held, and conflating the two is how a long leg
     ends up evaluated as a short.
+
+    The quantity is resolved here rather than taken as written. In lots mode
+    the configured number is a lot count and the quantity is that count times
+    the lot size from the master contract, so five lots of NIFTY at a lot size
+    of 65 becomes 325. Storing the lot count rather than the product is what
+    lets a leg survive an exchange revising its lot size.
     """
+    from services.strategy_module.symbol_resolver import resolve_quantity
+
     symbol = leg.get("symbol")
     exchange = leg.get("exchange")
-    quantity = leg.get("qty") or leg.get("quantity")
-    if not symbol or not exchange or not quantity:
-        return None
+    raw_qty = leg.get("qty") or leg.get("quantity")
+    if not symbol or not exchange or not raw_qty:
+        return None, "symbol, exchange and quantity are all required"
+
+    symbol = str(symbol).upper()
+    exchange = str(exchange).upper()
+    quantity, lot_size, error = resolve_quantity(
+        raw_qty, leg.get("qty_mode") or "units", symbol, exchange
+    )
+    if error:
+        return None, error
 
     return {
         "leg_id": _leg_id_of(leg),
         "position": _POSITION_OF_SIDE[side],
-        "symbol": str(symbol).upper(),
-        "exchange": str(exchange).upper(),
-        "quantity": int(quantity),
-        "lots": 1,
+        "symbol": symbol,
+        "exchange": exchange,
+        "quantity": quantity,
+        # The lot count, so the UI and the audit trail can show what was
+        # configured rather than only what was sent.
+        "lots": int(raw_qty) if leg.get("qty_mode") == "lots" else 1,
+        "lot_size": lot_size,
         "sl_pts": leg.get("sl_pts"),
         "target_pts": leg.get("target_pts"),
         "trail": leg.get("trail") or {},
-    }
+    }, None
 
 
 def _exit(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:

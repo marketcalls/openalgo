@@ -384,57 +384,94 @@ def test_squaring_off_closes_every_open_leg_on_the_side_it_is_held(placed):
     assert actions == ["BUY", "SELL"]  # cover the short, sell the long
 
 
-def test_a_quantity_that_is_not_whole_lots_is_refused_at_entry(placed):
-    # The form checks too, but a strategy saved before the master contract was
-    # downloaded, or edited directly, reaches here unchecked. Refusing costs an
-    # alert; letting it through costs a broker rejection on a position the
-    # operator believes is open.
+def test_five_lots_of_nifty_is_sent_as_the_lot_size_times_five(placed):
+    # The whole point of lots mode. The user configures 5 lots; the broker is
+    # sent 325, because NIFTY's lot size is 65.
     strategy = _make(
         legs=[
             {
                 "id": 1,
-                "symbol": "RELIANCE",
+                "symbol": "NIFTY",
                 "exchange": "NFO",
                 "side": "both",
-                "qty": 7,
+                "qty": 5,
+                "qty_mode": "lots",
                 "segment": "futures",
                 "trail": {"x": 0, "y": 0},
             }
         ]
     )
 
-    with patch(
-        "services.strategy_module.symbol_resolver.quantity_is_whole_lots",
-        return_value=(False, 25),
-    ):
+    with patch("services.strategy_module.symbol_resolver.lot_size_for", return_value=65):
+        result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is True
+    assert placed[0]["quantity"] == "325"
+
+    run_id = store.get_strategy(strategy.id, USER).current_run_id
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["qty"] == 325
+    # The configured lot count is kept alongside, so the audit trail and the UI
+    # can show what was asked for rather than only what was sent.
+    assert leg["lots"] == 5
+
+
+def test_lots_mode_refuses_rather_than_guessing_an_unknown_lot_size(placed):
+    # Fabricating the size of a real order is the one thing this must not do.
+    strategy = _make(
+        legs=[
+            {
+                "id": 1,
+                "symbol": "WHATEVER",
+                "exchange": "NFO",
+                "side": "both",
+                "qty": 5,
+                "qty_mode": "lots",
+                "segment": "futures",
+                "trail": {"x": 0, "y": 0},
+            }
+        ]
+    )
+
+    with patch("services.strategy_module.symbol_resolver.lot_size_for", return_value=None):
+        result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is False
+    assert "lot size" in result.error
+    assert not placed
+
+
+def test_units_mode_still_has_to_land_on_a_lot_boundary(placed):
+    # A strategy saved before the master contract was downloaded, or edited
+    # directly, arrives here unchecked. The broker would refuse it rather than
+    # round it.
+    strategy = _make(
+        legs=[
+            {
+                "id": 1,
+                "symbol": "NIFTY",
+                "exchange": "NFO",
+                "side": "both",
+                "qty": 7,
+                "qty_mode": "units",
+                "segment": "futures",
+                "trail": {"x": 0, "y": 0},
+            }
+        ]
+    )
+
+    with patch("services.strategy_module.symbol_resolver.lot_size_for", return_value=65):
         result = signals.handle_signal(strategy, "long_entry", leg_id=1)
 
     assert result.ok is False
     assert "whole number of lots" in result.error
-    assert "25" in result.error
     assert not placed
 
 
-def test_a_whole_lot_quantity_is_placed(placed):
-    strategy = _make(
-        legs=[
-            {
-                "id": 1,
-                "symbol": "RELIANCE",
-                "exchange": "NFO",
-                "side": "both",
-                "qty": 50,
-                "segment": "futures",
-                "trail": {"x": 0, "y": 0},
-            }
-        ]
-    )
+def test_units_mode_on_cash_places_the_quantity_as_written(placed):
+    strategy = _make()
 
-    with patch(
-        "services.strategy_module.symbol_resolver.quantity_is_whole_lots",
-        return_value=(True, 25),
-    ):
-        result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    result = signals.handle_signal(strategy, "long_entry", leg_id=1)
 
     assert result.ok is True
-    assert placed and placed[0]["quantity"] == "50"
+    assert placed[0]["quantity"] == "100"

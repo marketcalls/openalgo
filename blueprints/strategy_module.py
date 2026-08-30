@@ -183,6 +183,7 @@ SIGNAL_LEG_FIELDS = (
     "exchange",
     "side",
     "qty",
+    "qty_mode",
     "segment",
     "expiry",
     "sl_pts",
@@ -194,8 +195,22 @@ SIGNAL_LEG_FIELDS = (
 #: decided by whichever signal opened it and lives in run state.
 LEG_SIDES = ("long", "short", "both")
 
-#: Signal legs trade raw quantity rather than lots, so the cap is on shares.
+#: How a signal leg's quantity is counted.
+#:
+#: "lots"  the number is a lot count; the quantity sent is count * lot size.
+#: "units" the number is the quantity itself.
+#:
+#: Storing lots is what makes a derivative leg survive a lot-size change.
+#: Exchanges revise them - NIFTY moved from 75 to 65 - and a leg stored as 325
+#: units silently becomes 5 lots under one size and 4.33 under the next. A leg
+#: stored as 5 lots is still 5 lots.
+QTY_MODES = ("lots", "units")
+
+#: Cash has no lot size, so a cash leg is always counted in units.
 MAX_SIGNAL_QTY = 1_000_000
+
+#: A lot count is small; the cap on units is much larger.
+MAX_SIGNAL_LOTS = 10_000
 
 TRAIL_FIELDS = ("x", "y")
 LOCK_PROFIT_FIELDS = ("mode", "if_profit_reaches", "lock_profit", "trail_step")
@@ -432,11 +447,32 @@ def _validate_signal_leg(raw: Any, index: int) -> dict:
         ).upper(),
         # Which signals this leg accepts. "both" is the usual intraday case.
         "side": _choice(leg.get("side") or "both", LEG_SIDES, f"{label}.side"),
-        "qty": _integer(
-            _required(leg, "qty", label), f"{label}.qty", minimum=1, maximum=MAX_SIGNAL_QTY
-        ),
         "segment": segment,
     }
+
+    # A derivative is naturally counted in lots and cash in units, so the mode
+    # defaults to whichever the venue implies rather than making every caller
+    # state it. An explicit value always wins.
+    from services.strategy_module.symbol_resolver import DERIVATIVE_EXCHANGES
+
+    derivative = clean["exchange"] in DERIVATIVE_EXCHANGES
+    qty_mode = _choice(
+        leg.get("qty_mode") or ("lots" if derivative else "units"),
+        QTY_MODES,
+        f"{label}.qty_mode",
+    )
+    if qty_mode == "lots" and not derivative:
+        raise ValidationError(
+            f"{label}.qty_mode is 'lots', but {clean['exchange']} has no lot size. "
+            "Cash instruments are counted in units."
+        )
+    clean["qty_mode"] = qty_mode
+    clean["qty"] = _integer(
+        _required(leg, "qty", label),
+        f"{label}.qty",
+        minimum=1,
+        maximum=MAX_SIGNAL_LOTS if qty_mode == "lots" else MAX_SIGNAL_QTY,
+    )
 
     if segment == "futures":
         clean["expiry"] = _choice(leg.get("expiry") or "current", LEG_EXPIRIES, f"{label}.expiry")
@@ -463,7 +499,13 @@ def _validate_signal_leg(raw: Any, index: int) -> dict:
     # letting the engine check again at entry, where the real contract is known.
     from services.strategy_module.symbol_resolver import quantity_is_whole_lots
 
-    whole, lot_size = quantity_is_whole_lots(clean["qty"], clean["symbol"], clean["exchange"])
+    # Only meaningful in units mode. A lot count is a whole number of lots by
+    # construction, so checking it against the lot size would be nonsense.
+    whole, lot_size = (
+        quantity_is_whole_lots(clean["qty"], clean["symbol"], clean["exchange"])
+        if clean["qty_mode"] == "units"
+        else (True, None)
+    )
     if not whole:
         raise ValidationError(
             f"{label}.qty is {clean['qty']}, which is not a whole number of lots. "
