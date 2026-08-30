@@ -452,6 +452,24 @@ def _validate_signal_leg(raw: Any, index: int) -> dict:
     trail = _validate_trail(leg.get("trail"), label)
     if trail is not None:
         clean["trail"] = trail
+
+    # A derivative trades in whole lots. The broker refuses anything else at
+    # order time, so catching it here turns a rejected order into a message the
+    # user can act on while still in the form.
+    #
+    # A lot size that cannot be determined is not treated as a failure: the
+    # master contract may not be downloaded yet, and refusing a configuration
+    # for a reason the user cannot fix from this screen would be worse than
+    # letting the engine check again at entry, where the real contract is known.
+    from services.strategy_module.symbol_resolver import quantity_is_whole_lots
+
+    whole, lot_size = quantity_is_whole_lots(clean["qty"], clean["symbol"], clean["exchange"])
+    if not whole:
+        raise ValidationError(
+            f"{label}.qty is {clean['qty']}, which is not a whole number of lots. "
+            f"{clean['symbol']} on {clean['exchange']} trades in lots of {lot_size}."
+        )
+
     return clean
 
 
@@ -746,7 +764,43 @@ def _validate_strategy_config(payload: Any) -> dict:
     if config["entry_time"] and config["exit_time"] and config["entry_time"] >= config["exit_time"]:
         raise ValidationError("entry_time must be earlier than exit_time")
 
+    _reject_contradictory_sides(config)
     return config
+
+
+#: Which leg sides a strategy-level direction can ever act on.
+_DIRECTION_ACCEPTS = {
+    "both": {"long", "short", "both"},
+    "long_only": {"long", "both"},
+    "short_only": {"short", "both"},
+}
+
+
+def _reject_contradictory_sides(config: dict[str, Any]) -> None:
+    """Refuse a leg whose side the strategy's direction can never act on.
+
+    A long_only strategy will discard every short signal before it reaches a
+    leg, so a leg declared short is configuration that looks complete and can
+    never trade. Nothing downstream complains: the direction gate refuses the
+    signal, the leg simply never opens, and the operator is left watching a
+    strategy that does nothing for a reason the form never mentioned.
+
+    Batch legs carry a B/S position rather than a side and are entered as a
+    basket regardless of direction, so this applies to signal strategies only.
+    """
+    if config.get("strategy_kind") != "signal":
+        return
+
+    direction = config.get("direction", "both")
+    accepted = _DIRECTION_ACCEPTS.get(direction, {"long", "short", "both"})
+
+    for index, leg in enumerate(config.get("legs") or []):
+        side = leg.get("side", "both")
+        if side not in accepted:
+            raise ValidationError(
+                f"legs[{index}].side is {side!r}, which a {direction!r} strategy never acts on. "
+                f"Use {' or '.join(sorted(accepted))}, or change the strategy direction."
+            )
 
 
 # ---------------------------------------------------------------------------

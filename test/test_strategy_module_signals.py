@@ -27,10 +27,25 @@ USER = "signal_test_user"
 
 def _legs():
     return [
-        {"id": 1, "symbol": "RELIANCE", "exchange": "NSE", "side": "both", "qty": 100,
-         "segment": "cash", "sl_pts": 20, "trail": {"x": 0, "y": 0}},
-        {"id": 2, "symbol": "SBIN", "exchange": "NSE", "side": "long", "qty": 50,
-         "segment": "cash", "trail": {"x": 0, "y": 0}},
+        {
+            "id": 1,
+            "symbol": "RELIANCE",
+            "exchange": "NSE",
+            "side": "both",
+            "qty": 100,
+            "segment": "cash",
+            "sl_pts": 20,
+            "trail": {"x": 0, "y": 0},
+        },
+        {
+            "id": 2,
+            "symbol": "SBIN",
+            "exchange": "NSE",
+            "side": "long",
+            "qty": 50,
+            "segment": "cash",
+            "trail": {"x": 0, "y": 0},
+        },
     ]
 
 
@@ -367,3 +382,59 @@ def test_squaring_off_closes_every_open_leg_on_the_side_it_is_held(placed):
     assert closed == 2
     actions = sorted(o["action"] for o in placed)
     assert actions == ["BUY", "SELL"]  # cover the short, sell the long
+
+
+def test_a_quantity_that_is_not_whole_lots_is_refused_at_entry(placed):
+    # The form checks too, but a strategy saved before the master contract was
+    # downloaded, or edited directly, reaches here unchecked. Refusing costs an
+    # alert; letting it through costs a broker rejection on a position the
+    # operator believes is open.
+    strategy = _make(
+        legs=[
+            {
+                "id": 1,
+                "symbol": "RELIANCE",
+                "exchange": "NFO",
+                "side": "both",
+                "qty": 7,
+                "segment": "futures",
+                "trail": {"x": 0, "y": 0},
+            }
+        ]
+    )
+
+    with patch(
+        "services.strategy_module.symbol_resolver.quantity_is_whole_lots",
+        return_value=(False, 25),
+    ):
+        result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is False
+    assert "whole number of lots" in result.error
+    assert "25" in result.error
+    assert not placed
+
+
+def test_a_whole_lot_quantity_is_placed(placed):
+    strategy = _make(
+        legs=[
+            {
+                "id": 1,
+                "symbol": "RELIANCE",
+                "exchange": "NFO",
+                "side": "both",
+                "qty": 50,
+                "segment": "futures",
+                "trail": {"x": 0, "y": 0},
+            }
+        ]
+    )
+
+    with patch(
+        "services.strategy_module.symbol_resolver.quantity_is_whole_lots",
+        return_value=(True, 25),
+    ):
+        result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is True
+    assert placed and placed[0]["quantity"] == "50"

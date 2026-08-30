@@ -226,6 +226,86 @@ def _expiry_forms(text: str) -> tuple[str, str] | None:
     return text.strip().upper(), parsed.strftime("%d%b%y").upper()
 
 
+def lot_size_for(symbol: str, exchange: str) -> int | None:
+    """The contract lot size for an underlying on an exchange, or None.
+
+    Read from the master contract rather than assumed. A derivative trades in
+    whole lots, so a quantity that is not a multiple of this is refused by the
+    broker at order time; catching it earlier turns a rejected order into a
+    validation message.
+
+    Matched on ``name`` first, which is the indexed column and holds the
+    underlying root on most brokers, then on the OpenAlgo ``symbol`` prefix for
+    the brokers whose master contract puts a description in ``name`` instead.
+    Both are confirmed against a positive lot size, so a row that carries none
+    cannot answer.
+
+    Returns None when the exchange is not a derivative one (cash trades in
+    single units), when the master contract has not been downloaded, or when
+    nothing matches. A None answer means "cannot say", never "any quantity is
+    fine", and callers must treat it that way.
+    """
+    if not symbol or not exchange:
+        return None
+    venue = str(exchange).upper()
+    if venue not in DERIVATIVE_EXCHANGES:
+        return None
+
+    root = str(symbol).upper()
+    try:
+        from database.symbol import SymToken, db_session
+
+        record = (
+            db_session.query(SymToken.lotsize)
+            .filter(
+                SymToken.name == root,
+                SymToken.exchange == venue,
+                SymToken.lotsize.isnot(None),
+                SymToken.lotsize > 0,
+            )
+            .first()
+        )
+        if record and record[0]:
+            return int(record[0])
+
+        # Fall back to the normalised symbol, which reads the same on every
+        # broker. Anchored with a prefix match and confirmed by lot size.
+        record = (
+            db_session.query(SymToken.lotsize)
+            .filter(
+                SymToken.symbol.like(f"{root}%"),
+                SymToken.exchange == venue,
+                SymToken.lotsize.isnot(None),
+                SymToken.lotsize > 0,
+            )
+            .first()
+        )
+        if record and record[0]:
+            return int(record[0])
+    except Exception:
+        logger.exception("Could not read a lot size for %s on %s", root, venue)
+    return None
+
+
+def quantity_is_whole_lots(quantity: Any, symbol: str, exchange: str) -> tuple[bool, int | None]:
+    """Whether a quantity is a whole number of lots. Returns ``(ok, lot_size)``.
+
+    ``ok`` is True when the exchange is not a derivative one, or when the lot
+    size cannot be determined. The second case is deliberate: refusing a
+    configuration because the master contract has not been downloaded would
+    block a user for a reason they cannot act on from the form. The engine
+    checks again at entry, where the real contract is known.
+    """
+    lot_size = lot_size_for(symbol, exchange)
+    if not lot_size:
+        return True, None
+    try:
+        qty = int(quantity)
+    except (TypeError, ValueError):
+        return False, lot_size
+    return qty > 0 and qty % lot_size == 0, lot_size
+
+
 def derivatives_exchange(exchange: str) -> str:
     """The exchange a derivative of this underlying is listed on.
 

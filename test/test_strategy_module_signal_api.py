@@ -46,8 +46,14 @@ def _signal(**overrides):
 
 
 def _leg(**overrides):
-    leg = {"id": 1, "symbol": "RELIANCE", "exchange": "NSE", "side": "both", "qty": 100,
-           "segment": "cash"}
+    leg = {
+        "id": 1,
+        "symbol": "RELIANCE",
+        "exchange": "NSE",
+        "side": "both",
+        "qty": 100,
+        "segment": "cash",
+    }
     leg.update(overrides)
     return leg
 
@@ -58,7 +64,9 @@ def _leg(**overrides):
 
 
 def test_a_signal_strategy_is_accepted_and_normalised():
-    config, error = validate_strategy_config(_signal(legs=[_leg(symbol="reliance", exchange="nse")]))
+    config, error = validate_strategy_config(
+        _signal(legs=[_leg(symbol="reliance", exchange="nse")])
+    )
 
     assert error is None
     leg = config["legs"][0]
@@ -190,7 +198,9 @@ def _call(strategy, body):
     token = "oaws_" + "A" * 43
     with (
         patch("database.strategy_module_db.get_strategy_by_webhook_token", return_value=strategy),
-        patch("database.strategy_module_db.record_webhook_event", return_value=SimpleNamespace(id=1)),
+        patch(
+            "database.strategy_module_db.record_webhook_event", return_value=SimpleNamespace(id=1)
+        ),
     ):
         return webhook.handle_webhook(token, body, ip="1.2.3.4", user_agent="TradingView")
 
@@ -229,9 +239,7 @@ def test_a_no_op_signal_is_reported_as_a_success():
     # retry that turns one alert into two positions.
     with patch(
         "services.strategy_module.signals.handle_signal",
-        return_value=SimpleNamespace(
-            ok=True, note="already_long", error=None, run_id=7, leg_id=1
-        ),
+        return_value=SimpleNamespace(ok=True, note="already_long", error=None, run_id=7, leg_id=1),
     ):
         outcome = _call(_strategy("signal"), {"action": "long_entry", "leg_id": 1})
 
@@ -251,3 +259,138 @@ def test_a_signal_refused_by_configuration_is_reported_as_a_refusal():
 
     assert outcome.ok is False
     assert "long_only" in outcome.message
+
+
+# ---------------------------------------------------------------------------
+# Contradictions the form used to accept
+# ---------------------------------------------------------------------------
+
+
+def test_a_leg_side_the_direction_can_never_act_on_is_refused():
+    # A long_only strategy discards every short signal before it reaches a leg,
+    # so a leg declared short is configuration that looks complete and can never
+    # trade. Nothing downstream complains: the gate refuses the signal, the leg
+    # never opens, and the operator watches a strategy do nothing.
+    _, error = validate_strategy_config(_signal(direction="long_only", legs=[_leg(side="short")]))
+    assert error is not None
+    assert "long_only" in error and "side" in error
+
+    _, error = validate_strategy_config(_signal(direction="short_only", legs=[_leg(side="long")]))
+    assert error is not None
+
+
+def test_a_both_sided_leg_is_accepted_under_any_direction():
+    for direction in ("both", "long_only", "short_only"):
+        _config, error = validate_strategy_config(
+            _signal(direction=direction, legs=[_leg(side="both")])
+        )
+        assert error is None, f"{direction} should accept a both-sided leg: {error}"
+
+
+def test_a_matching_side_is_accepted():
+    _config, error = validate_strategy_config(
+        _signal(direction="long_only", legs=[_leg(side="long")])
+    )
+    assert error is None
+
+
+def test_batch_legs_are_unaffected_by_the_direction_check():
+    # Batch legs carry a B/S position rather than a side, and are entered as a
+    # basket regardless of direction.
+    config, error = validate_strategy_config(
+        {
+            "name": "Batch",
+            "strategy_kind": "batch",
+            "direction": "long_only",
+            "universe_tab": "weekly_monthly",
+            "underlying": "NIFTY",
+            "underlying_exchange": "NSE_INDEX",
+            "strategy_type": "positional",
+            "legs": [
+                {
+                    "segment": "options",
+                    "position": "S",
+                    "lots": 1,
+                    "option_type": "CE",
+                    "strike_mode": "atm",
+                    "atm_offset": "ATM",
+                    "expiry": "weekly",
+                }
+            ],
+        }
+    )
+    assert error is None
+    assert config["legs"][0]["position"] == "S"
+
+
+# ---------------------------------------------------------------------------
+# Lot-size awareness on derivative exchanges
+# ---------------------------------------------------------------------------
+
+
+def test_a_derivative_quantity_must_be_a_whole_number_of_lots():
+    # The broker refuses anything else at order time. Catching it here turns a
+    # rejected order into a message the user can act on from the form.
+    with patch("services.strategy_module.symbol_resolver.lot_size_for", return_value=25):
+        _, error = validate_strategy_config(
+            _signal(
+                legs=[
+                    _leg(
+                        symbol="RELIANCE",
+                        exchange="NFO",
+                        segment="futures",
+                        expiry="current",
+                        qty=7,
+                    )
+                ]
+            )
+        )
+        assert error is not None
+        assert "whole number of lots" in error and "25" in error
+
+        config, error = validate_strategy_config(
+            _signal(
+                legs=[
+                    _leg(
+                        symbol="RELIANCE",
+                        exchange="NFO",
+                        segment="futures",
+                        expiry="current",
+                        qty=50,
+                    )
+                ]
+            )
+        )
+        assert error is None
+        assert config["legs"][0]["qty"] == 50
+
+
+def test_a_cash_leg_has_no_lot_constraint():
+    # Cash trades in single units, so any positive quantity is fine.
+    with patch("services.strategy_module.symbol_resolver.lot_size_for", return_value=None):
+        config, error = validate_strategy_config(
+            _signal(legs=[_leg(symbol="RELIANCE", exchange="NSE", qty=7)])
+        )
+    assert error is None
+    assert config["legs"][0]["qty"] == 7
+
+
+def test_an_unknown_lot_size_does_not_block_the_form():
+    # The master contract may not be downloaded yet. Refusing for a reason the
+    # user cannot fix from this screen is worse than letting the engine check
+    # again at entry, where the real contract is known.
+    with patch("services.strategy_module.symbol_resolver.lot_size_for", return_value=None):
+        _config, error = validate_strategy_config(
+            _signal(
+                legs=[
+                    _leg(
+                        symbol="WHATEVER",
+                        exchange="NFO",
+                        segment="futures",
+                        expiry="current",
+                        qty=7,
+                    )
+                ]
+            )
+        )
+    assert error is None

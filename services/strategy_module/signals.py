@@ -305,6 +305,25 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
     if resolved is None:
         return SignalResult(ok=False, leg_id=leg_id, error=f"Leg {leg_id} is not usable")
 
+    # The authoritative lot check. The form checks too, but a strategy saved
+    # before the master contract was downloaded, or edited directly, reaches
+    # here unchecked. Refusing now costs an alert; letting it through costs a
+    # broker rejection on a position the operator believes is open.
+    from services.strategy_module.symbol_resolver import quantity_is_whole_lots
+
+    whole, lot_size = quantity_is_whole_lots(
+        resolved["quantity"], resolved["symbol"], resolved["exchange"]
+    )
+    if not whole:
+        return SignalResult(
+            ok=False,
+            leg_id=leg_id,
+            error=(
+                f"Leg {leg_id} quantity {resolved['quantity']} is not a whole number of lots; "
+                f"{resolved['symbol']} trades in lots of {lot_size}"
+            ),
+        )
+
     state.add_leg(run_id, resolved)
     outcome = _place(strategy, run_id, resolved, "entry", _POSITION_OF_SIDE[side])
     if not outcome.ok:
