@@ -274,6 +274,7 @@ export function useBrokerBook<T>(
   return {
     rows: active ? (query.data ?? null) : null,
     isLoading: active && query.isLoading,
+    active,
     // A null payload is the broker refusing, which the fetcher already turned
     // into a value rather than a throw.
     unavailable: active && !query.isLoading && query.data === null,
@@ -320,9 +321,11 @@ function text(value: unknown): string {
   return value === null || value === undefined ? '' : String(value).trim()
 }
 
-function number(value: unknown): number {
+function numberOrNull(value: unknown): number | null {
+  if (typeof value !== 'number' && typeof value !== 'string') return null
+  if (typeof value === 'string' && value.trim() === '') return null
   const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : 0
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function normalizeBrokerOrder(value: unknown): BrokerOrder | null {
@@ -334,9 +337,9 @@ function normalizeBrokerOrder(value: unknown): BrokerOrder | null {
     symbol: text(row.symbol),
     exchange: text(row.exchange),
     action: text(row.action).toUpperCase(),
-    quantity: number(row.quantity),
-    price: number(row.price),
-    trigger_price: number(row.trigger_price),
+    quantity: numberOrNull(row.quantity),
+    price: numberOrNull(row.price),
+    trigger_price: numberOrNull(row.trigger_price),
     pricetype: text(row.pricetype),
     product: text(row.product),
     order_status: text(row.order_status).toLowerCase(),
@@ -354,9 +357,9 @@ function normalizeBrokerTrade(value: unknown): BrokerTrade | null {
     exchange: text(row.exchange),
     product: text(row.product),
     action: text(row.action).toUpperCase(),
-    quantity: number(row.quantity),
-    average_price: number(row.average_price),
-    trade_value: number(row.trade_value),
+    quantity: numberOrNull(row.quantity),
+    average_price: numberOrNull(row.average_price),
+    trade_value: numberOrNull(row.trade_value),
     timestamp: text(row.timestamp) || null,
   }
 }
@@ -503,8 +506,8 @@ export function reconcileBrokerOrders(
 
     matchedLocalIds.add(local.id)
     const disagreements: string[] = []
-    if (row.quantity !== local.qty) disagreements.push('quantity')
-    if (row.price !== local.price) disagreements.push('price')
+    if (row.quantity !== null && row.quantity !== local.qty) disagreements.push('quantity')
+    if (row.price !== null && row.price !== local.price) disagreements.push('price')
     if (canonicalStatus(row.order_status) !== canonicalStatus(local.status)) {
       disagreements.push('status')
     }
@@ -530,19 +533,34 @@ export function reconcileBrokerTrades(
   const locals = localByBrokerId(localOrders.filter(hasTradeFill))
   const brokerTotals = new Map<
     string,
-    { quantity: number; weightedValue: number; pricedQuantity: number }
+    {
+      quantity: number
+      quantityKnown: boolean
+      weightedValue: number
+      pricedQuantity: number
+      priceKnown: boolean
+    }
   >()
   for (const row of brokerRows) {
     const id = text(row.orderid)
     const total = brokerTotals.get(id) ?? {
       quantity: 0,
+      quantityKnown: true,
       weightedValue: 0,
       pricedQuantity: 0,
+      priceKnown: true,
     }
-    total.quantity += row.quantity
-    if (row.quantity > 0 && row.average_price > 0) {
+    if (row.quantity === null) {
+      total.quantityKnown = false
+      total.priceKnown = false
+    } else {
+      total.quantity += row.quantity
+    }
+    if (row.quantity !== null && row.quantity > 0 && row.average_price !== null) {
       total.weightedValue += row.quantity * row.average_price
       total.pricedQuantity += row.quantity
+    } else if (row.quantity !== null && row.quantity > 0) {
+      total.priceKnown = false
     }
     brokerTotals.set(id, total)
   }
@@ -558,12 +576,14 @@ export function reconcileBrokerTrades(
     const disagreements: string[] = []
     const total = brokerTotals.get(id)
     const localQuantity = filledQuantity(local)
-    if (total && Math.abs(total.quantity - localQuantity) > 1e-9) {
+    if (total?.quantityKnown && Math.abs(total.quantity - localQuantity) > 1e-9) {
       disagreements.push('quantity')
     }
     const localPrice = usableFillPrice(local)
     const brokerAverage =
-      total && total.pricedQuantity > 0 ? total.weightedValue / total.pricedQuantity : null
+      total?.quantityKnown && total.priceKnown && total.pricedQuantity > 0
+        ? total.weightedValue / total.pricedQuantity
+        : null
     // Missing local valuation is unknown, not a contradiction. The broker's
     // priced fill remains primary and no zero price is invented for comparison.
     if (
@@ -1125,12 +1145,11 @@ export interface RoundTrip {
 
 function filledQuantity(order: Order): number {
   const status = canonicalStatus(order.status)
-  const raw =
-    status === 'cancelled' || status === 'rejected'
-      ? order.filled_qty
-      : status === 'complete'
-        ? (order.filled_qty ?? order.qty)
-        : 0
+  // A positive executed quantity is evidence regardless of the order's final
+  // state: a working order may already be partially filled and a rejection can
+  // reject only the remainder. Requested quantity is a legacy fallback only
+  // for a complete row whose executed quantity was never recorded.
+  const raw = order.filled_qty !== null ? order.filled_qty : status === 'complete' ? order.qty : 0
   const qty = Number(raw ?? 0)
   return Number.isFinite(qty) && qty > 0 ? qty : 0
 }
@@ -1234,11 +1253,11 @@ export interface DerivedPosition {
   product: string
   net_qty: number
   side: 'long' | 'short' | 'flat'
-  avg_entry_price: number
+  avg_entry_price: number | null
   ltp: number | null
-  unrealized_pnl: number
+  unrealized_pnl: number | null
   /** Realized on this contract across every run of the strategy. */
-  realized_pnl_lifetime: number
+  realized_pnl_lifetime: number | null
 }
 
 /**
@@ -1263,7 +1282,7 @@ export function derivePositions(
 
   const byContract = new Map<string, Order[]>()
   for (const order of orders) {
-    if (!isFilled(order)) continue
+    if (!hasTradeFill(order)) continue
     const key = `${order.symbol}|${order.exchange}`
     const list = byContract.get(key)
     if (list) list.push(order)
@@ -1278,20 +1297,25 @@ export function derivePositions(
     interface Lot {
       side: 1 | -1
       qty: number
-      price: number
+      price: number | null
     }
     const open: Lot[] = []
     let realized = 0
+    let realizedKnown = true
 
     for (const order of list) {
       const side: 1 | -1 = (order.action || '').toUpperCase() === 'BUY' ? 1 : -1
-      let remaining = Number(order.filled_qty ?? order.qty ?? 0)
-      const price = Number(order.avg_fill_price ?? 0)
+      let remaining = filledQuantity(order)
+      const price = usableFillPrice(order)
 
       while (remaining > 0 && open.length > 0 && open[0].side !== side) {
         const lot = open[0]
         const matched = Math.min(remaining, lot.qty)
-        realized += (price - lot.price) * matched * lot.side
+        if (price === null || lot.price === null) {
+          realizedKnown = false
+        } else {
+          realized += (price - lot.price) * matched * lot.side
+        }
         lot.qty -= matched
         remaining -= matched
         if (lot.qty <= 0) open.shift()
@@ -1301,13 +1325,20 @@ export function derivePositions(
 
     const netQty = open.reduce((sum, lot) => sum + lot.qty * lot.side, 0)
     const grossQty = open.reduce((sum, lot) => sum + lot.qty, 0)
+    const openValuationKnown = open.every((lot) => lot.price !== null)
     const avgEntry =
-      grossQty > 0 ? open.reduce((sum, lot) => sum + lot.qty * lot.price, 0) / grossQty : 0
+      grossQty > 0 && openValuationKnown
+        ? open.reduce((sum, lot) => sum + lot.qty * (lot.price as number), 0) / grossQty
+        : null
 
     const live = liveByContract.get(`${symbol.toUpperCase()}|${exchange.toUpperCase()}`)
     const ltp = live?.ltp ?? null
     const unrealized =
-      ltp != null && netQty !== 0 ? (ltp - avgEntry) * Math.abs(netQty) * (netQty > 0 ? 1 : -1) : 0
+      netQty === 0
+        ? 0
+        : ltp != null && avgEntry !== null
+          ? (ltp - avgEntry) * Math.abs(netQty) * (netQty > 0 ? 1 : -1)
+          : null
 
     positions.push({
       symbol,
@@ -1318,7 +1349,7 @@ export function derivePositions(
       avg_entry_price: avgEntry,
       ltp,
       unrealized_pnl: unrealized,
-      realized_pnl_lifetime: realized,
+      realized_pnl_lifetime: realizedKnown ? realized : null,
     })
   }
 

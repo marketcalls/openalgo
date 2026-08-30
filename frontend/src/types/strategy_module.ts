@@ -274,9 +274,9 @@ export interface BrokerOrder {
   symbol: string
   exchange: string
   action: string
-  quantity: number
-  price: number
-  trigger_price: number
+  quantity: number | null
+  price: number | null
+  trigger_price: number | null
   pricetype: string
   product: string
   order_status: string
@@ -291,9 +291,9 @@ export interface BrokerTrade {
   exchange: string
   product: string
   action: string
-  quantity: number
-  average_price: number
-  trade_value: number
+  quantity: number | null
+  average_price: number | null
+  trade_value: number | null
   timestamp: string | null
   [field: string]: unknown
 }

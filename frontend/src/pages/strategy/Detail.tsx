@@ -112,6 +112,10 @@ function orderStatusVariant(status: string): 'default' | 'secondary' | 'destruct
   return 'secondary'
 }
 
+function brokerNumber(value: number | null, fractionDigits = 2): string {
+  return value === null ? 'Unavailable' : value.toFixed(fractionDigits)
+}
+
 function severityClass(severity: string): string {
   if (severity === 'critical') return 'text-red-600'
   if (severity === 'warn') return 'text-amber-600'
@@ -796,7 +800,7 @@ function PositionsTab({
         avg_entry_price: Number(row.average_price ?? 0),
         ltp: Number(row.ltp ?? 0),
         unrealized_pnl: Number(row.pnl ?? 0),
-        realized_pnl_lifetime: realizedFor.get(key) ?? 0,
+        realized_pnl_lifetime: realizedFor.has(key) ? (realizedFor.get(key) ?? null) : 0,
       } satisfies DerivedPosition
     })
   }, [broker.rows, derived])
@@ -909,7 +913,7 @@ function PositionsTab({
                       </TableCell>
                       <TableCell className="text-right font-mono">{position.net_qty}</TableCell>
                       <TableCell className="text-right font-mono">
-                        {position.avg_entry_price.toFixed(2)}
+                        {brokerNumber(position.avg_entry_price)}
                       </TableCell>
                       <TableCell className="text-right font-mono">
                         {formatPrice(position.ltp)}
@@ -920,7 +924,9 @@ function PositionsTab({
                           pnlToneClass(position.unrealized_pnl)
                         )}
                       >
-                        {formatPnl(position.unrealized_pnl)}
+                        {position.unrealized_pnl === null
+                          ? 'Unavailable'
+                          : formatPnl(position.unrealized_pnl)}
                       </TableCell>
                       <TableCell
                         className={cn(
@@ -929,7 +935,9 @@ function PositionsTab({
                         )}
                         title="Lifetime realized on this contract across all runs"
                       >
-                        {formatPnl(position.realized_pnl_lifetime)}
+                        {position.realized_pnl_lifetime === null
+                          ? 'Unavailable'
+                          : formatPnl(position.realized_pnl_lifetime)}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -1133,23 +1141,19 @@ export function OrdersTab({
         : { confirmed: [], localOnly: currentOrders },
     [broker.rows, currentOrders]
   )
-  const auditRows = broker.unavailable ? orders : [...reconciled.localOnly, ...historicalOrders]
-
-  if (runId === null && orders.length === 0) {
-    return (
-      <Card>
-        <CardContent className="py-12 text-center">
-          <p className="text-sm text-muted-foreground">
-            No orders yet. Start a run to see entries appear here.
-          </p>
-        </CardContent>
-      </Card>
-    )
-  }
+  const auditRows =
+    !broker.active || broker.unavailable
+      ? orders
+      : [...reconciled.localOnly, ...historicalOrders]
 
   return (
     <div className="space-y-4">
-      {broker.isLoading || loading ? (
+      {runId === null ? (
+        <output className="block rounded-md border border-amber-500/50 p-3 text-sm">
+          Broker orderbook was not requested because no strategy run is available. Showing recorded
+          strategy audit data, which is not broker confirmation.
+        </output>
+      ) : broker.isLoading || loading ? (
         <Card>
           <CardContent className="py-12 text-center">
             <p aria-live="polite" className="text-sm text-muted-foreground">
@@ -1202,14 +1206,14 @@ export function OrdersTab({
                     {reconciled.confirmed.map((row, index) => (
                       <TableRow key={`${row.orderid}-${index}`}>
                         <TableCell className="whitespace-nowrap text-xs">
-                          {row.timestamp ?? 'â€”'}
+                          {row.timestamp ?? 'Unavailable'}
                         </TableCell>
                         <TableCell className="font-mono text-xs">{row.orderid}</TableCell>
                         <TableCell className="font-mono text-xs">
-                          {row.run_id === null ? 'â€”' : `#${row.run_id}`}
+                          {row.run_id === null ? 'Unavailable' : `#${row.run_id}`}
                         </TableCell>
                         <TableCell className="font-mono text-xs">
-                          {row.leg_id === null ? 'â€”' : row.leg_id}
+                          {row.leg_id === null ? 'Unavailable' : row.leg_id}
                         </TableCell>
                         <TableCell>
                           {row.kind ? (
@@ -1217,19 +1221,21 @@ export function OrdersTab({
                               {row.kind}
                             </Badge>
                           ) : (
-                            'â€”'
+                            'Unavailable'
                           )}
                         </TableCell>
                         <TableCell className="font-mono">{row.symbol}</TableCell>
                         <TableCell className="font-mono text-xs">{row.exchange}</TableCell>
                         <TableCell>{row.action}</TableCell>
                         <TableCell>{row.product}</TableCell>
-                        <TableCell className="text-right font-mono">{row.quantity}</TableCell>
                         <TableCell className="text-right font-mono">
-                          {formatPrice(row.price)}
+                          {brokerNumber(row.quantity, 0)}
                         </TableCell>
                         <TableCell className="text-right font-mono">
-                          {formatPrice(row.trigger_price)}
+                          {brokerNumber(row.price)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {brokerNumber(row.trigger_price)}
                         </TableCell>
                         <TableCell>
                           <Badge variant={orderStatusVariant(row.order_status)}>
@@ -1237,7 +1243,7 @@ export function OrdersTab({
                           </Badge>
                         </TableCell>
                         <TableCell className="text-xs">
-                          {row.local_status ?? 'â€”'} / {row.position_ref ?? 'â€”'}
+                          {row.local_status ?? 'Unavailable'} / {row.position_ref ?? 'Unavailable'}
                         </TableCell>
                         <TableCell className="text-xs text-destructive">
                           {row.reject_reason ?? ''}
@@ -1294,13 +1300,18 @@ export function TradesTab({
         : { confirmed: [], localOnly: currentTrades },
     [broker.rows, currentTrades]
   )
-  const auditRows = broker.unavailable
+  const auditRows = !broker.active || broker.unavailable
     ? [...currentTrades, ...historicalTrades]
     : [...reconciled.localOnly, ...historicalTrades]
 
   return (
     <div className="space-y-4">
-      {broker.isLoading || loading ? (
+      {runId === null ? (
+        <output className="block rounded-md border border-amber-500/50 p-3 text-sm">
+          Broker tradebook was not requested because no strategy run is available. Showing recorded
+          strategy audit data, which is not broker confirmation.
+        </output>
+      ) : broker.isLoading || loading ? (
         <Card>
           <CardContent className="py-12 text-center">
             <p aria-live="polite" className="text-sm text-muted-foreground">
@@ -1344,6 +1355,7 @@ export function TradesTab({
                       <TableHead className="text-right">Average price</TableHead>
                       <TableHead className="text-right">Trade value</TableHead>
                       <TableHead>Local status/ref</TableHead>
+                      <TableHead>Local rejection</TableHead>
                       <TableHead>Reconciliation</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -1351,14 +1363,14 @@ export function TradesTab({
                     {reconciled.confirmed.map((row, index) => (
                       <TableRow key={`${row.orderid}-${row.timestamp ?? ''}-${index}`}>
                         <TableCell className="whitespace-nowrap text-xs">
-                          {row.timestamp ?? 'â€”'}
+                          {row.timestamp ?? 'Unavailable'}
                         </TableCell>
                         <TableCell className="font-mono text-xs">{row.orderid}</TableCell>
                         <TableCell className="font-mono text-xs">
-                          {row.run_id === null ? 'â€”' : `#${row.run_id}`}
+                          {row.run_id === null ? 'Unavailable' : `#${row.run_id}`}
                         </TableCell>
                         <TableCell className="font-mono text-xs">
-                          {row.leg_id === null ? 'â€”' : `Leg ${row.leg_id}`}
+                          {row.leg_id === null ? 'Unavailable' : `Leg ${row.leg_id}`}
                         </TableCell>
                         <TableCell>
                           {row.kind ? (
@@ -1366,22 +1378,27 @@ export function TradesTab({
                               {row.kind}
                             </Badge>
                           ) : (
-                            'â€”'
+                            'Unavailable'
                           )}
                         </TableCell>
                         <TableCell className="font-mono">{row.symbol}</TableCell>
                         <TableCell className="font-mono text-xs">{row.exchange}</TableCell>
                         <TableCell>{row.action}</TableCell>
                         <TableCell>{row.product}</TableCell>
-                        <TableCell className="text-right font-mono">{row.quantity}</TableCell>
                         <TableCell className="text-right font-mono">
-                          {row.average_price.toFixed(2)}
+                          {brokerNumber(row.quantity, 0)}
                         </TableCell>
                         <TableCell className="text-right font-mono">
-                          {row.trade_value.toFixed(2)}
+                          {brokerNumber(row.average_price)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {brokerNumber(row.trade_value)}
                         </TableCell>
                         <TableCell className="text-xs">
-                          {row.local_status ?? 'â€”'} / {row.position_ref ?? 'â€”'}
+                          {row.local_status ?? 'Unavailable'} / {row.position_ref ?? 'Unavailable'}
+                        </TableCell>
+                        <TableCell className="text-xs text-destructive">
+                          {row.reject_reason ?? ''}
                         </TableCell>
                         <TableCell className="text-xs">{reconciliationText(row)}</TableCell>
                       </TableRow>

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, render, renderHook, screen, waitFor } from '@testing-library/react'
+import { act, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -156,8 +156,50 @@ describe('broker book requests and cache ownership', () => {
       action: 'BUY',
       quantity: 25,
       price: 101.5,
-      trigger_price: 0,
+      trigger_price: null,
       order_status: 'complete',
+    })
+  })
+
+  it('preserves real zeroes but marks invalid broker numerics unavailable', async () => {
+    rest.get
+      .mockResolvedValueOnce({
+        data: {
+          status: 'success',
+          data: {
+            orders: [
+              {
+                orderid: 'A1',
+                quantity: 'not-a-number',
+                price: null,
+                trigger_price: '0',
+              },
+            ],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          status: 'success',
+          data: [
+            {
+              orderid: 'A1',
+              quantity: Number.POSITIVE_INFINITY,
+              average_price: '',
+              trade_value: '0',
+            },
+          ],
+        },
+      })
+
+    const orderbook = await fetchStrategyOrderbook(7, 42)
+    const tradebook = await fetchStrategyTradebook(7, 42)
+
+    expect(orderbook?.orders[0]).toMatchObject({ quantity: null, price: null, trigger_price: 0 })
+    expect(tradebook?.[0]).toMatchObject({
+      quantity: null,
+      average_price: null,
+      trade_value: 0,
     })
   })
 
@@ -195,14 +237,16 @@ describe('broker book requests and cache ownership', () => {
 
   it('does not fetch while the tab is inactive or there is no run', () => {
     const fetcher = vi.fn(async () => [])
-    const { rerender } = renderHook(
+    const { result, rerender } = renderHook(
       ({ runId, active }) => useBrokerBook(7, runId, 'orderbook', fetcher, true, active),
       { initialProps: { runId: 42 as number | null, active: false }, wrapper }
     )
 
     expect(fetcher).not.toHaveBeenCalled()
+    expect(result.current.active).toBe(false)
     rerender({ runId: null, active: true })
     expect(fetcher).not.toHaveBeenCalled()
+    expect(result.current.active).toBe(false)
   })
 
   it('cancels an in-flight request when its tab becomes inactive', async () => {
@@ -224,6 +268,25 @@ describe('broker book requests and cache ownership', () => {
 })
 
 describe('strategy Orderbook broker truth', () => {
+  it('does not claim broker truth when no run exists and labels the local audit fallback', async () => {
+    renderWithQuery(
+      <OrdersTab
+        strategy={{ ...strategy, status: 'stopped', current_run_id: null }}
+        live={{ ...live, runId: null }}
+        orders={[localOrder({ run_id: 41 })]}
+        loading={false}
+        active
+      />
+    )
+
+    expect(rest.get).not.toHaveBeenCalled()
+    expect(
+      screen.getByText(/broker orderbook was not requested because no strategy run is available/i)
+    ).toBeInTheDocument()
+    expect(screen.getByText('Strategy audit records')).toBeInTheDocument()
+    expect(screen.queryByText('Broker-confirmed orders')).not.toBeInTheDocument()
+  })
+
   it('uses the strategy current run while a stale live frame still names the prior run', async () => {
     rest.get.mockResolvedValue({
       data: { status: 'success', data: { orders: [], statistics: {} } },
@@ -284,6 +347,45 @@ describe('strategy Orderbook broker truth', () => {
     expect(screen.getByText(/disagrees: quantity, price, status/i)).toBeInTheDocument()
   })
 
+  it('renders unavailable broker order numerics without fabricating zero', async () => {
+    rest.get.mockResolvedValue({
+      data: {
+        status: 'success',
+        data: {
+          orders: [
+            {
+              orderid: 'A1',
+              symbol: 'NIFTY28MAY2625000CE',
+              exchange: 'NFO',
+              action: 'BUY',
+              quantity: false,
+              price: 'invalid',
+              trigger_price: null,
+              pricetype: 'MARKET',
+              product: 'NRML',
+              order_status: 'open',
+              timestamp: null,
+            },
+          ],
+          statistics: {},
+        },
+      },
+    })
+
+    const rendered = renderWithQuery(
+      <OrdersTab strategy={strategy} live={live} orders={[localOrder()]} loading={false} active />
+    )
+
+    const symbol = await screen.findByText('NIFTY28MAY2625000CE')
+    const row = symbol.closest('tr')
+    expect(row).not.toBeNull()
+    expect(
+      within(row as HTMLTableRowElement).getAllByText('Unavailable').length
+    ).toBeGreaterThanOrEqual(4)
+    expect(row?.textContent).not.toContain('0.00')
+    expect(rendered.container.textContent).not.toContain('â€”')
+  })
+
   it('labels local fallback when the broker endpoint is unavailable', async () => {
     rest.get.mockResolvedValue({
       data: { status: 'error', message: 'Broker session expired' },
@@ -327,6 +429,32 @@ describe('strategy Orderbook broker truth', () => {
 })
 
 describe('strategy Tradebook broker truth', () => {
+  it('does not claim broker truth when no run exists and labels the local audit fallback', () => {
+    renderWithQuery(
+      <TradesTab
+        strategy={{ ...strategy, status: 'stopped', current_run_id: null }}
+        live={{ ...live, runId: null }}
+        orders={[
+          localOrder({
+            run_id: 41,
+            status: 'open',
+            filled_qty: 5,
+            avg_fill_price: null,
+          }),
+        ]}
+        loading={false}
+        active
+      />
+    )
+
+    expect(rest.get).not.toHaveBeenCalled()
+    expect(
+      screen.getByText(/broker tradebook was not requested because no strategy run is available/i)
+    ).toBeInTheDocument()
+    expect(screen.getByText('Strategy audit records')).toBeInTheDocument()
+    expect(screen.queryByText('Broker-confirmed trades')).not.toBeInTheDocument()
+  })
+
   it('renders broker fills as primary and preserves exact local leg context', async () => {
     rest.get.mockResolvedValue({
       data: {
@@ -387,7 +515,14 @@ describe('strategy Tradebook broker truth', () => {
       <TradesTab
         strategy={strategy}
         live={live}
-        orders={[localOrder({ status: 'rejected', filled_qty: 25, avg_fill_price: null })]}
+        orders={[
+          localOrder({
+            status: 'rejected',
+            filled_qty: 25,
+            avg_fill_price: null,
+            reject_reason: 'Exchange RMS rejected the remainder',
+          }),
+        ]}
         loading={false}
         active
       />
@@ -395,7 +530,48 @@ describe('strategy Tradebook broker truth', () => {
 
     expect(await screen.findByText('Leg 3')).toBeInTheDocument()
     expect(screen.getByText(/rejected.*position-a/i)).toBeInTheDocument()
+    expect(screen.getByText('Exchange RMS rejected the remainder')).toBeInTheDocument()
     expect(screen.getByText('Matched')).toBeInTheDocument()
+  })
+
+  it('renders invalid broker numerics as unavailable without fabricating zero', async () => {
+    rest.get.mockResolvedValue({
+      data: {
+        status: 'success',
+        data: [
+          {
+            orderid: 'A1',
+            symbol: 'NIFTY28MAY2625000CE',
+            exchange: 'NFO',
+            product: 'NRML',
+            action: 'BUY',
+            quantity: 'bad',
+            average_price: null,
+            trade_value: undefined,
+            timestamp: null,
+          },
+        ],
+      },
+    })
+
+    const rendered = renderWithQuery(
+      <TradesTab
+        strategy={strategy}
+        live={live}
+        orders={[localOrder({ status: 'open', filled_qty: 5, avg_fill_price: null })]}
+        loading={false}
+        active
+      />
+    )
+
+    const symbol = await screen.findByText('NIFTY28MAY2625000CE')
+    const row = symbol.closest('tr')
+    expect(row).not.toBeNull()
+    expect(
+      within(row as HTMLTableRowElement).getAllByText('Unavailable').length
+    ).toBeGreaterThanOrEqual(4)
+    expect(row?.textContent).not.toContain('0.00')
+    expect(rendered.container.textContent).not.toContain('â€”')
   })
 
   it('falls back to priced and unpriced terminal partial fills but omits zero-fill deaths', async () => {

@@ -51,6 +51,7 @@ subprocess is created.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from database import strategy_module_db as store
@@ -82,11 +83,6 @@ _POSITION_TOTALS = {
     "total_unrealized_pnl": "unrealized_pnl",
     "total_today_realized_pnl": "today_realized_pnl",
 }
-
-# An order in one of these states never created a position, so its contract
-# must not pull a position row - possibly someone else's - into this view.
-_UNATTRIBUTABLE_STATUSES = frozenset({"rejected", "cancelled", "canceled"})
-
 
 # ---------------------------------------------------------------------------
 # Public views
@@ -281,16 +277,32 @@ def _broker_order_ids(rows: list[dict[str, Any]]) -> set[str]:
 def _traded_contracts(rows: list[dict[str, Any]]) -> set[tuple[str, str]]:
     """The ``(symbol, exchange)`` pairs this strategy actually traded.
 
-    Only orders that reached the broker count, and not the ones it refused or
-    cancelled: neither ever created a position, and admitting their contract
-    would attribute someone else's position row to this strategy.
+    A complete order counts for legacy rows that predate fill-quantity capture.
+    For every other status only an explicit positive fill proves exposure: a
+    working order may already be partially filled and a rejection/cancellation
+    can apply only to its remainder.
     """
     contracts = set()
     for row in rows:
-        if not _text(row.get("broker_order_id")):
-            continue
-        if _text(row.get("status")).lower() in _UNATTRIBUTABLE_STATUSES:
-            continue
+        status = _text(row.get("status")).lower()
+        raw_fill = row.get("filled_qty")
+        try:
+            fill_qty = float(raw_fill)
+            explicit_fill = math.isfinite(fill_qty) and fill_qty > 0
+        except (TypeError, ValueError):
+            explicit_fill = False
+        if not explicit_fill:
+            # A complete row with no fill quantity is a legacy record. Broker
+            # acknowledgement plus a positive requested quantity is the only
+            # safe fallback. Explicit zero/invalid fill evidence must win.
+            legacy_complete = (
+                raw_fill is None
+                and status == "complete"
+                and bool(_text(row.get("broker_order_id")))
+                and _number(row.get("qty")) > 0
+            )
+            if not legacy_complete:
+                continue
         symbol = _text(row.get("symbol")).upper()
         exchange = _text(row.get("exchange")).upper()
         if symbol and exchange:

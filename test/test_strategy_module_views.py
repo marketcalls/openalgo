@@ -53,6 +53,7 @@ def _order_rows():
             "leg_id": 1,
             "kind": "entry",
             "status": "complete",
+            "qty": 75,
         },
         {
             "broker_order_id": OURS_TWO,
@@ -61,6 +62,7 @@ def _order_rows():
             "leg_id": 2,
             "kind": "entry",
             "status": "complete",
+            "qty": 75,
         },
     ]
 
@@ -393,6 +395,95 @@ def test_a_contract_whose_only_order_was_rejected_is_not_claimed():
         result = views.strategy_positions(STRATEGY_ID, API_KEY)
 
     assert result["data"] == []
+
+
+@pytest.mark.parametrize("status", ["pending", "open", "rejected", "cancelled"])
+def test_any_status_with_explicit_positive_fill_claims_its_position(status):
+    rows = [
+        {
+            "broker_order_id": OURS_ONE,
+            "symbol": CE,
+            "exchange": "NFO",
+            "status": status,
+            "filled_qty": 25,
+        }
+    ]
+    with a_store(rows=rows), live_books():
+        result = views.strategy_positions(STRATEGY_ID, API_KEY)
+
+    assert [row["symbol"] for row in result["data"]] == [CE]
+
+
+@pytest.mark.parametrize("status", ["pending", "open", "rejected", "cancelled"])
+@pytest.mark.parametrize("filled_qty", [None, 0, "invalid"])
+def test_noncomplete_without_explicit_positive_fill_claims_no_position(status, filled_qty):
+    rows = [
+        {
+            "broker_order_id": OURS_ONE,
+            "symbol": CE,
+            "exchange": "NFO",
+            "status": status,
+            "filled_qty": filled_qty,
+        }
+    ]
+    with a_store(rows=rows), live_books():
+        result = views.strategy_positions(STRATEGY_ID, API_KEY)
+
+    assert result["data"] == []
+
+
+def test_a_complete_order_without_fill_quantity_retains_legacy_position_attribution():
+    rows = [
+        {
+            "broker_order_id": OURS_ONE,
+            "symbol": CE,
+            "exchange": "NFO",
+            "status": "complete",
+            "filled_qty": None,
+            "qty": 75,
+        }
+    ]
+    with a_store(rows=rows), live_books():
+        result = views.strategy_positions(STRATEGY_ID, API_KEY)
+
+    assert [row["symbol"] for row in result["data"]] == [CE]
+
+
+@pytest.mark.parametrize("filled_qty", [0, -1, "invalid"])
+def test_a_complete_order_with_nonpositive_or_invalid_explicit_fill_claims_no_position(
+    filled_qty,
+):
+    rows = [
+        {
+            "broker_order_id": OURS_ONE,
+            "symbol": CE,
+            "exchange": "NFO",
+            "status": "complete",
+            "filled_qty": filled_qty,
+            "qty": 75,
+        }
+    ]
+    with a_store(rows=rows), live_books():
+        result = views.strategy_positions(STRATEGY_ID, API_KEY)
+
+    assert result["data"] == []
+
+
+def test_explicit_positive_fill_is_position_evidence_even_when_ack_id_was_not_persisted():
+    rows = [
+        {
+            "broker_order_id": None,
+            "symbol": CE,
+            "exchange": "NFO",
+            "status": "open",
+            "filled_qty": 25,
+            "qty": 75,
+        }
+    ]
+    with a_store(rows=rows), live_books():
+        result = views.strategy_positions(STRATEGY_ID, API_KEY)
+
+    assert [row["symbol"] for row in result["data"]] == [CE]
 
 
 # ---------------------------------------------------------------------------

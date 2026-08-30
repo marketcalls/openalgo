@@ -397,7 +397,42 @@ describe('buildRoundTrips', () => {
 })
 
 describe('derivePositions', () => {
-  it('uses only explicit terminal partial quantity and does not invent an unpriced position', () => {
+  it('keeps explicit working exposure and does not reverse the net when its price is unavailable', () => {
+    const positions = derivePositions(
+      [
+        order({
+          id: 18,
+          status: 'open',
+          action: 'BUY',
+          qty: 50,
+          filled_qty: 25,
+          avg_fill_price: null,
+          filled_at: null,
+        }),
+        order({
+          id: 19,
+          kind: 'exit_manual',
+          status: 'complete',
+          action: 'SELL',
+          qty: 10,
+          filled_qty: 10,
+          avg_fill_price: 105,
+        }),
+      ],
+      'NRML'
+    )
+
+    expect(positions).toHaveLength(1)
+    expect(positions[0]).toMatchObject({
+      net_qty: 15,
+      side: 'long',
+      avg_entry_price: null,
+      unrealized_pnl: null,
+      realized_pnl_lifetime: null,
+    })
+  })
+
+  it('uses only explicit terminal partial quantity and keeps unpriced exposure unvalued', () => {
     const priced = derivePositions(
       [
         order({
@@ -424,7 +459,11 @@ describe('derivePositions', () => {
     )
 
     expect(priced[0]).toMatchObject({ net_qty: 25, avg_entry_price: 100 })
-    expect(unpriced).toEqual([])
+    expect(unpriced[0]).toMatchObject({
+      net_qty: 25,
+      avg_entry_price: null,
+      unrealized_pnl: null,
+    })
   })
 
   it('nets two legs on the same contract and averages only the open lots', () => {
@@ -528,6 +567,30 @@ describe('derivePositions', () => {
 })
 
 describe('deriveTrades', () => {
+  it('treats explicit positive fill quantity as exposure for every status', () => {
+    const trades = deriveTrades([
+      order({ id: 30, status: 'open', filled_qty: 7, avg_fill_price: 101 }),
+      order({ id: 31, status: 'pending', filled_qty: 8, avg_fill_price: null }),
+      order({ id: 32, status: 'open', qty: 50, filled_qty: null, avg_fill_price: 101 }),
+      order({ id: 33, status: 'complete', qty: 9, filled_qty: null, avg_fill_price: 101 }),
+      order({ id: 34, status: 'complete', qty: 50, filled_qty: 0, avg_fill_price: 101 }),
+      order({
+        id: 35,
+        status: 'complete',
+        qty: 50,
+        filled_qty: Number.NaN,
+        avg_fill_price: 101,
+      }),
+    ])
+
+    expect(trades.map((trade) => [trade.order_id, trade.filled_qty])).toEqual([
+      [30, 7],
+      [31, 8],
+      [33, 9],
+    ])
+    expect(trades.find((trade) => trade.order_id === 31)?.avg_fill_price).toBeNull()
+  })
+
   it('keeps only fills and values each one at its executed price', () => {
     const trades = deriveTrades([
       order({ id: 1, avg_fill_price: 101.5, filled_qty: 50 }),
