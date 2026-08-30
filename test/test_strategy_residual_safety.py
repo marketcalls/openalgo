@@ -29,6 +29,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from database import strategy_module_db as store  # noqa: E402
 from services.strategy_module import engine, order_events, signals, state  # noqa: E402
+from services.strategy_module.order_dispatch import DispatchResult  # noqa: E402
 from test import test_strategy_module_qa_edges as qa  # noqa: E402
 
 
@@ -399,3 +400,279 @@ def test_position_mismatch_warning_runs_after_the_run_lock_is_released(
     )
 
     assert lock_states == [False]
+
+
+def test_reentrant_opposite_entries_share_one_atomic_flip_claim(
+    broker: qa.Broker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two short alerts racing a filled long may send one flip, not a hybrid."""
+    strategy = qa._signal_strategy()
+    strategy_id = strategy.id
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = qa._run_of(strategy)
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    original_entry = next(row for row in store.list_orders(run_id) if row["kind"] == "entry")
+    broker.clear()
+    real_exit = signals._exit
+    nested_result = None
+    reentered = False
+
+    def exit_after_second_alert(*args, **kwargs):
+        nonlocal nested_result, reentered
+        if not reentered:
+            reentered = True
+            nested_result = signals.handle_signal(
+                store.get_strategy(strategy_id, qa.USER), "short_entry", leg_id=1
+            )
+        return real_exit(*args, **kwargs)
+
+    monkeypatch.setattr(signals, "_exit", exit_after_second_alert)
+
+    first_result = signals.handle_signal(strategy, "short_entry", leg_id=1)
+
+    entries = sorted(
+        (row for row in store.list_orders(run_id) if row["kind"] == "entry"),
+        key=lambda row: row["id"],
+    )
+    live = state.get_run_state(run_id)["legs"]["1"]
+    assert first_result.ok is True
+    assert nested_result.ok is True and nested_result.note == "flip_pending"
+    assert broker.actions == ["SELL", "SELL"]
+    assert len(entries) == 2
+    assert live["position_ref"] == entries[-1]["position_ref"]
+    assert live["superseded"]["position_ref"] == original_entry["position_ref"]
+
+
+def test_rejected_replacement_cannot_hide_and_duplicate_the_superseded_position(
+    broker: qa.Broker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rejected short replacement must leave its still-held long authoritative."""
+    strategy = qa._signal_strategy()
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = qa._run_of(strategy)
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    broker.clear()
+    dispatch_count = 0
+
+    def accept_exit_refuse_entry(**kwargs):
+        nonlocal dispatch_count
+        dispatch_count += 1
+        broker.orders.append(kwargs["order"])
+        if dispatch_count == 1:
+            return DispatchResult(ok=True, broker_order_id="FLIP-EXIT", response={})
+        return DispatchResult(ok=False, error="replacement refused")
+
+    monkeypatch.setattr(signals.order_dispatch, "dispatch_order", accept_exit_refuse_entry)
+    flip = signals.handle_signal(strategy, "short_entry", leg_id=1)
+    before = state.get_run_state(run_id)["legs"]["1"]
+    assert flip.ok is False
+    assert before["status"] == "rejected"
+    assert before["superseded"]["position"] == "B"
+    broker.clear()
+
+    repeated = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    after = state.get_run_state(run_id)["legs"]["1"]
+    assert repeated.ok is True and repeated.note == "already_long"
+    assert broker.orders == []
+    assert after["superseded"] == before["superseded"]
+
+
+def test_signal_entry_claim_is_released_after_resolution_failure(
+    broker: qa.Broker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    strategy = qa._signal_strategy()
+    real_resolve = signals._resolve_signal_leg
+    monkeypatch.setattr(signals, "_resolve_signal_leg", lambda *_args: (None, "bad contract"))
+
+    refused = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = qa._run_of(strategy)
+
+    assert refused.ok is False
+    assert state.get_run_state(run_id).get("signal_entry_claims") == {}
+    monkeypatch.setattr(signals, "_resolve_signal_leg", real_resolve)
+    assert signals.handle_signal(strategy, "long_entry", leg_id=1).ok is True
+
+
+def test_signal_entry_claim_is_released_after_intent_persistence_failure(
+    broker: qa.Broker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    strategy = qa._signal_strategy()
+    real_record_order = store.record_order
+    monkeypatch.setattr(store, "record_order", lambda *_args, **_kwargs: None)
+
+    refused = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = qa._run_of(strategy)
+
+    assert refused.ok is False
+    assert state.get_run_state(run_id).get("signal_entry_claims") == {}
+    monkeypatch.setattr(store, "record_order", real_record_order)
+    assert signals.handle_signal(strategy, "long_entry", leg_id=1).ok is True
+
+
+def test_flip_entry_claim_is_released_after_exit_refusal(broker: qa.Broker) -> None:
+    strategy = qa._signal_strategy()
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = qa._run_of(strategy)
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    broker.refuse = True
+
+    refused = signals.handle_signal(strategy, "short_entry", leg_id=1)
+
+    assert refused.ok is False
+    assert state.get_run_state(run_id).get("signal_entry_claims") == {}
+    broker.refuse = False
+    assert signals.handle_signal(strategy, "short_entry", leg_id=1).ok is True
+
+
+def _terminal_after_ack(
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+    *,
+    avg: float = 0.0,
+) -> None:
+    """Inject a terminal frame after its broker id is durable, inside placement."""
+    real_ack = engine._record_acknowledgement
+    # Production handles the frame on another green thread with its own scoped
+    # session. This deterministic same-stack injection must not detach the
+    # placement's strategy ORM instance when the worker cleanup runs.
+    monkeypatch.setattr("utils.db_sessions.remove_all_scoped_sessions", lambda: None)
+
+    def acknowledge_then_publish(row_id, result, strategy_id, user_id, run_id, leg_id):
+        acknowledged = real_ack(row_id, result, strategy_id, user_id, run_id, leg_id)
+        order_events._apply_update(
+            result.broker_order_id,
+            qa._event(result.broker_order_id, status=status, avg=avg),
+        )
+        return acknowledged
+
+    monkeypatch.setattr(engine, "_record_acknowledgement", acknowledge_then_publish)
+
+
+def test_signal_exit_rejection_in_ack_window_releases_exact_owner_for_retry(
+    broker: qa.Broker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    strategy = qa._signal_strategy()
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = qa._run_of(strategy)
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    broker.clear()
+    _terminal_after_ack(monkeypatch, "rejected")
+
+    signals.handle_signal(strategy, "long_exit", leg_id=1)
+
+    live = state.get_run_state(run_id)["legs"]["1"]
+    assert live["exit_kind"] is None
+    assert live["exit_order_id"] is None
+    assert live.get("exit_claim_token") is None
+    signals.handle_signal(strategy, "long_exit", leg_id=1)
+    assert broker.actions == ["SELL", "SELL"]
+
+
+def test_signal_entry_rejection_in_ack_window_is_not_overwritten_by_ack(
+    broker: qa.Broker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    strategy = qa._signal_strategy()
+    _terminal_after_ack(monkeypatch, "rejected")
+
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    run_id = qa._run_of(strategy)
+    live = state.get_run_state(run_id)["legs"]["1"]
+    assert live["entry_status"] == "rejected"
+    assert live["status"] == "rejected"
+    assert state.get_run_state(run_id)["signal_entry_claims"] == {}
+
+
+def test_signal_flip_fill_in_ack_window_does_not_create_ghost_superseded_owner(
+    broker: qa.Broker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    strategy = qa._signal_strategy()
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+    run_id = qa._run_of(strategy)
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    broker.clear()
+    _terminal_after_ack(monkeypatch, "complete", avg=101.0)
+
+    result = signals.handle_signal(strategy, "short_entry", leg_id=1)
+
+    live = state.get_run_state(run_id)["legs"]["1"]
+    assert result.ok is True
+    assert live["position"] == "S"
+    assert live["superseded"] is None
+
+
+def _batch_exit(
+    strategy_id: int,
+    run_id: int,
+) -> list[dict]:
+    strategy = store.strategy_to_dict(store.get_strategy(strategy_id, qa.USER))
+    return engine._exit_legs(
+        run_id,
+        strategy,
+        [1],
+        "exit_manual",
+        "sandbox",
+        "qa-api-key",
+        qa.USER,
+    )
+
+
+def test_batch_exit_rejection_in_ack_window_releases_exact_owner_for_retry(
+    broker: qa.Broker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    strategy_id = qa._make()
+    run_id = qa._start(strategy_id).run_id
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    broker.clear()
+    _terminal_after_ack(monkeypatch, "rejected")
+
+    _batch_exit(strategy_id, run_id)
+
+    live = state.get_run_state(run_id)["legs"]["1"]
+    assert live["exit_kind"] is None
+    assert live["exit_order_id"] is None
+    assert live.get("exit_claim_token") is None
+    _batch_exit(strategy_id, run_id)
+    assert broker.actions == ["BUY", "BUY"]
+
+
+def test_batch_exit_fill_in_ack_window_observes_durable_bound_owner(
+    broker: qa.Broker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    strategy_id = qa._make()
+    run_id = qa._start(strategy_id).run_id
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    broker.clear()
+    observed_owner_ids = []
+    real_fill = engine.apply_fill
+
+    def observe_bound_owner(*args, **kwargs):
+        live = state.get_run_state(run_id)["legs"]["1"]
+        observed_owner_ids.append(live["exit_order_id"])
+        return real_fill(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "apply_fill", observe_bound_owner)
+    _terminal_after_ack(monkeypatch, "complete", avg=101.0)
+
+    _batch_exit(strategy_id, run_id)
+
+    exit_row = max(
+        (row for row in store.list_orders(run_id) if row["kind"] == "exit_manual"),
+        key=lambda row: row["id"],
+    )
+    assert observed_owner_ids == [exit_row["id"]]
+
+
+def test_batch_entry_fill_in_ack_window_is_not_overwritten_by_ack(
+    broker: qa.Broker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    strategy_id = qa._make()
+    _terminal_after_ack(monkeypatch, "complete", avg=101.0)
+
+    run_id = qa._start(strategy_id).run_id
+
+    live = state.get_run_state(run_id)["legs"]["1"]
+    assert live["entry_status"] == "complete"
+    assert live["status"] == "open"
+    assert live["entry_avg"] == 101.0

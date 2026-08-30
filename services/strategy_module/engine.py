@@ -573,7 +573,11 @@ def _place_entries(
         with state.run_state(run_id) as run:
             if run is not None:
                 leg_state = run["legs"].get(str(leg["leg_id"]))
-                if leg_state is not None:
+                if (
+                    leg_state is not None
+                    and leg_state.get("position_ref") == leg.get("position_ref")
+                    and leg_state.get("entry_status") == "pending"
+                ):
                     leg_state["entry_order_id"] = row_id
                     leg_state["entry_status"] = "open" if result.ok else "rejected"
                     leg_state["status"] = "open" if result.ok else "rejected"
@@ -807,6 +811,9 @@ def _apply_fill(
             leg["realized_pnl"] = 0.0
         leg["status"] = "closed"
         leg["mtm"] = 0.0
+        leg["exit_order_id"] = None
+        leg["exit_claim_token"] = None
+        leg["exit_kind"] = None
 
         # Recompute the run totals now, while the lock is held, so the figures
         # finalise writes are the ones this fill produced.
@@ -950,6 +957,39 @@ def _exit_legs(
         # See the note in _place_entries: the id survives the dispatch, the
         # instance may not.
         row_id = row.id if row is not None else None
+        exit_claim_id = leg.get("exit_claim_token")
+        if row_id is not None:
+            if not state.bind_live_exit(
+                run_id,
+                leg["leg_id"],
+                leg.get("exit_claim_token"),
+                row_id,
+                leg.get("position_ref"),
+            ):
+                store.update_order(
+                    row_id,
+                    status="rejected",
+                    reject_reason="Live position exit claim changed before dispatch",
+                )
+                state.release_leg_exit(run_id, leg["leg_id"], leg.get("exit_claim_token"))
+                _emit(
+                    strategy["id"],
+                    user_id,
+                    "leg_exit_rejected",
+                    f"Exit claim changed on leg {leg['leg_id']} before dispatch",
+                    run_id=run_id,
+                    leg_id=leg["leg_id"],
+                    severity="critical",
+                )
+                outcomes.append(
+                    {
+                        "leg_id": leg["leg_id"],
+                        "ok": False,
+                        "error": "The live position changed before its exit could be placed",
+                    }
+                )
+                continue
+            exit_claim_id = row_id
 
         result = order_dispatch.dispatch_order(mode=mode, api_key=api_key, order=order)
 
@@ -957,17 +997,14 @@ def _exit_legs(
             _record_acknowledgement(row_id, result, strategy["id"], user_id, run_id, leg["leg_id"])
 
         if result.ok:
-            with state.run_state(run_id) as run:
-                live = run["legs"].get(str(leg["leg_id"])) if run else None
-                if live is not None:
-                    live["exit_order_id"] = row_id
             if row_id is not None:
-                # See the note in _place_entries: after the bookkeeping.
+                # Ownership was bound before dispatch, so a terminal update
+                # replayed here can always find its exact position.
                 _replay_order_update(result.broker_order_id)
         else:
             # Release the claim so a later attempt is not mistaken for a
             # duplicate and skipped for the rest of the session.
-            state.release_leg_exit(run_id, leg["leg_id"])
+            state.release_leg_exit(run_id, leg["leg_id"], exit_claim_id)
 
         _emit(
             strategy["id"],

@@ -357,45 +357,48 @@ def _held_side(run_id: int, leg_id: Any) -> str | None:
 def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
     """Open a leg on the requested side, flipping it if it is on the other."""
     leg_id = _leg_id_of(leg)
-    held_position, flip_pending = state.signal_entry_state(run_id, leg_id)
-    held = _LONG if held_position == "B" else _SHORT if held_position == "S" else None
-    flipped = False
+    claim = state.claim_signal_entry(run_id, leg_id, _POSITION_OF_SIDE[side])
+    if claim is None:
+        return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error="No active run")
+    if claim.get("note"):
+        return SignalResult(ok=True, note=claim["note"], leg_id=leg_id, run_id=run_id)
 
-    if held == side:
-        # Repeat alert. Adding to the position would double it on a signal the
-        # sender believes it has already delivered.
-        return SignalResult(ok=True, note=f"already_{side}", leg_id=leg_id, run_id=run_id)
+    claim_token = claim["claim_token"]
+    try:
+        held_position = claim.get("held_position")
+        held = _LONG if held_position == "B" else _SHORT if held_position == "S" else None
+        flipped = False
+        if held is not None:
+            # Opposite side: square first, then open. Reversing without closing
+            # would leave both positions on the book.
+            closed = _exit(strategy, run_id, leg, held)
+            if not closed.ok or closed.note is not None:
+                return closed
+            flipped = True
 
-    if held is not None:
-        if flip_pending:
-            return SignalResult(
-                ok=True,
-                note="flip_pending",
-                leg_id=leg_id,
-                run_id=run_id,
-            )
-        # Opposite side: square first, then open. Reversing without closing
-        # would leave both positions on the book.
-        closed = _exit(strategy, run_id, leg, held)
-        if not closed.ok:
-            return closed
-        flipped = True
+        # Resolves the quantity too, which in lots mode means multiplying by the
+        # lot size from the master contract. This is the authoritative pass: the
+        # form checks as well, but a strategy saved before the master contract was
+        # downloaded, or edited directly, reaches here unchecked.
+        resolved, error = _resolve_signal_leg(leg, side)
+        if error:
+            return SignalResult(ok=False, leg_id=leg_id, error=f"Leg {leg_id}: {error}")
 
-    # Resolves the quantity too, which in lots mode means multiplying by the
-    # lot size from the master contract. This is the authoritative pass: the
-    # form checks as well, but a strategy saved before the master contract was
-    # downloaded, or edited directly, reaches here unchecked.
-    resolved, error = _resolve_signal_leg(leg, side)
-    if error:
-        return SignalResult(ok=False, leg_id=leg_id, error=f"Leg {leg_id}: {error}")
+        resolved["position_ref"] = claim["position_ref"]
+        outcome = _place(
+            strategy,
+            run_id,
+            resolved,
+            "entry",
+            _POSITION_OF_SIDE[side],
+            entry_claim=claim,
+        )
+        if not outcome.ok:
+            return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error=outcome.error)
 
-    resolved["position_ref"] = state.new_position_ref()
-    state.add_leg(run_id, resolved)
-    outcome = _place(strategy, run_id, resolved, "entry", _POSITION_OF_SIDE[side])
-    if not outcome.ok:
-        return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error=outcome.error)
-
-    return SignalResult(ok=True, leg_id=leg_id, run_id=run_id, flipped=flipped)
+        return SignalResult(ok=True, leg_id=leg_id, run_id=run_id, flipped=flipped)
+    finally:
+        state.release_signal_entry_claim(run_id, leg_id, claim_token)
 
 
 def _resolve_signal_leg(leg: dict, side: str) -> tuple[dict | None, str | None]:
@@ -520,7 +523,7 @@ def _exit(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
     if not outcome.ok:
         # Leave the leg exitable: its stop loss, its target and the square-off
         # all skip a leg that still looks like it has an exit in flight.
-        state.release_leg_exit(run_id, leg_id)
+        state.release_leg_exit(run_id, leg_id, outcome.exit_claim_id)
         return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error=outcome.error)
 
     return SignalResult(ok=True, leg_id=leg_id, run_id=run_id)
@@ -541,9 +544,16 @@ def _place(
     position: str,
     exiting: bool = False,
     exit_owner: str = "live",
+    entry_claim: dict | None = None,
 ) -> _Placement:
     """Place one signal-driven order and record it."""
-    exit_claim_id = leg.get("claim_token") if exit_owner == "superseded" else None
+    exit_claim_id = (
+        leg.get("claim_token")
+        if exit_owner == "superseded"
+        else leg.get("exit_claim_token")
+        if exiting
+        else None
+    )
     api_key = _api_key_for(strategy.user_id)
     if not api_key:
         return _Placement(
@@ -606,7 +616,42 @@ def _place(
     # The id, not the instance: dispatch runs arbitrary code in between, and
     # the sandbox publishes its fill from inside the call.
     row_id = row.id if row is not None else None
-    if exit_owner == "live":
+    if not exiting and row_id is not None:
+        installed = state.add_leg(
+            run_id,
+            leg,
+            entry_claim.get("claim_token") if entry_claim else None,
+            entry_claim.get("expected_position_ref") if entry_claim else None,
+            row_id,
+        )
+        if installed is None:
+            store.update_order(
+                row_id,
+                status="rejected",
+                reject_reason="Signal entry claim changed before dispatch",
+            )
+            return _Placement(
+                ok=False,
+                error="The position changed before its entry could be placed",
+            )
+    if exiting and exit_owner == "live" and row_id is not None:
+        if not state.bind_live_exit(
+            run_id,
+            leg["leg_id"],
+            leg.get("exit_claim_token"),
+            row_id,
+            leg.get("position_ref"),
+        ):
+            store.update_order(
+                row_id,
+                status="rejected",
+                reject_reason="Live position exit claim changed before dispatch",
+            )
+            return _Placement(
+                ok=False,
+                error="The live position changed before its exit could be placed",
+                exit_claim_id=leg.get("exit_claim_token"),
+            )
         exit_claim_id = row_id
     if exiting and exit_owner == "superseded" and row_id is not None:
         if not state.bind_superseded_exit(run_id, leg["leg_id"], leg.get("claim_token"), row_id):
@@ -647,20 +692,14 @@ def _place(
             row_id, result, strategy.id, strategy.user_id, run_id, leg["leg_id"]
         )
 
-    with state.run_state(run_id) as state_run:
-        live = state_run["legs"].get(str(leg["leg_id"])) if state_run else None
-        if live is not None:
-            if exiting:
-                if exit_owner == "live" and result.ok:
-                    live["exit_order_id"] = row_id
-                    live["exit_kind"] = kind
-                # A superseded exit owns only live["superseded"], which was
-                # bound before dispatch. It must never touch the replacement
-                # position's entry or exit bookkeeping.
-            else:
-                live["entry_order_id"] = row_id
-                live["entry_status"] = "open" if result.ok else "rejected"
-                live["status"] = "open" if result.ok else "rejected"
+    if not exiting and entry_claim is not None:
+        state.finish_signal_entry(
+            run_id,
+            leg["leg_id"],
+            leg["position_ref"],
+            entry_claim["claim_token"],
+            result.ok,
+        )
 
     if row_id is not None and result.ok:
         # After the leg bookkeeping above, never before it. See

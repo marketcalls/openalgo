@@ -337,7 +337,10 @@ def _apply_update(order_id: str, event: Any) -> None:
                 # full-size order against nothing.
                 with state.run_state(run_id) as run:
                     leg = run["legs"].get(str(leg_id)) if run else None
-                    if leg is not None and leg.get("entry_status") != "complete":
+                    owns_entry = leg is not None and (
+                        row.position_ref is None or leg.get("position_ref") == row.position_ref
+                    )
+                    if owns_entry and leg.get("entry_status") != "complete":
                         leg["entry_status"] = ended
                         leg["status"] = "rejected"
             else:

@@ -125,6 +125,9 @@ def init_run_state(run_id: int, strategy_id: int, legs: list[dict]) -> dict[str,
         "lock_floor": None,
         "trail_to_entry_active": False,
         "tick_source_degraded": False,
+        # At most one in-flight signal entry decision per configured leg. The
+        # map lives and dies with the run and is keyed only by validated leg id.
+        "signal_entry_claims": {},
         "legs": {str(leg["leg_id"]): _new_leg_state(leg) for leg in legs},
     }
     with get_state_lock(run_id):
@@ -168,6 +171,7 @@ def _new_leg_state(leg: dict) -> dict[str, Any]:
         "entry_status": "pending",
         "entry_avg": 0.0,
         "exit_order_id": None,
+        "exit_claim_token": None,
         "exit_kind": None,
         "exit_avg": None,
         # Live figures
@@ -240,23 +244,76 @@ def claim_leg_exit(run_id: int, leg_id: Any, kind: str) -> dict[str, Any] | None
             # rather than treating it as flat, so the run stays managed and the
             # stop can be retried once the fill lands.
             return None
-        if leg.get("exit_kind") is not None or leg.get("exit_order_id") is not None:
+        if (
+            leg.get("exit_kind") is not None
+            or leg.get("exit_claim_token") is not None
+            or leg.get("exit_order_id") is not None
+        ):
             return None
         leg["exit_kind"] = kind
+        leg["exit_claim_token"] = new_position_ref()
         return dict(leg)
 
 
-def signal_entry_state(run_id: int, leg_id: Any) -> tuple[str | None, bool]:
-    """Return the live B/S side and whether an earlier flip is still unsettled."""
+def claim_signal_entry(run_id: int, leg_id: Any, position: str) -> dict[str, Any] | None:
+    """Claim one bounded signal entry decision before any external I/O."""
     lock = _lock_for(run_id, create=False)
     if lock is None:
-        return None, False
+        return None
     with lock:
         run = _run_state.get(run_id)
+        if run is None:
+            return None
+        key = str(leg_id)
+        claims = run.setdefault("signal_entry_claims", {})
+        if key in claims:
+            return {"note": "flip_pending"}
+
         leg = run["legs"].get(str(leg_id)) if run else None
-        if leg is None or leg.get("status") != "open":
-            return None, False
-        return leg.get("position"), leg.get("superseded") is not None
+        requested = str(position or "").upper()
+        live_position = leg.get("position") if leg and leg.get("status") == "open" else None
+        superseded = leg.get("superseded") if leg else None
+
+        if live_position == requested:
+            return {"note": "already_long" if requested == "B" else "already_short"}
+        if live_position is not None and superseded is not None:
+            return {"note": "flip_pending"}
+        if superseded and superseded.get("position") == requested:
+            return {"note": "already_long" if requested == "B" else "already_short"}
+        if superseded is not None:
+            return {"note": "flip_pending"}
+        if live_position is not None and (
+            leg.get("exit_kind") is not None
+            or leg.get("exit_claim_token") is not None
+            or leg.get("exit_order_id") is not None
+        ):
+            return {"note": "flip_pending"}
+
+        claim = {
+            "claim_token": new_position_ref(),
+            "position_ref": new_position_ref(),
+            "position": requested,
+            "held_position": live_position,
+            "expected_position_ref": leg.get("position_ref") if leg else None,
+        }
+        claims[key] = claim
+        return dict(claim)
+
+
+def release_signal_entry_claim(run_id: int, leg_id: Any, claim_token: Any) -> bool:
+    """Release only the signal-entry decision carrying this unique token."""
+    lock = _lock_for(run_id, create=False)
+    if lock is None:
+        return False
+    with lock:
+        run = _run_state.get(run_id)
+        claims = run.get("signal_entry_claims", {}) if run else {}
+        key = str(leg_id)
+        claim = claims.get(key)
+        if not claim or claim.get("claim_token") != claim_token:
+            return False
+        claims.pop(key, None)
+        return True
 
 
 def claim_legs_for_exit(
@@ -290,12 +347,17 @@ def claim_legs_for_exit(
             leg = state["legs"].get(str(leg_id))
             if leg is None or leg.get("status") != "open":
                 continue
-            if leg.get("exit_kind") is not None or leg.get("exit_order_id") is not None:
+            if (
+                leg.get("exit_kind") is not None
+                or leg.get("exit_claim_token") is not None
+                or leg.get("exit_order_id") is not None
+            ):
                 continue
             if leg.get("entry_status") != "complete":
                 unfilled.append(dict(leg))
                 continue
             leg["exit_kind"] = kind
+            leg["exit_claim_token"] = new_position_ref()
             claimed.append(dict(leg))
     return claimed, unfilled
 
@@ -310,6 +372,8 @@ def release_superseded_exit(run_id: int, leg_id: Any, exit_order_id: Any) -> boo
     describes only the new one. Clearing the dead order id is what lets the old
     side be closed again.
     """
+    if exit_order_id is None:
+        return False
     lock = _lock_for(run_id, create=False)
     if lock is None:
         return False
@@ -317,9 +381,13 @@ def release_superseded_exit(run_id: int, leg_id: Any, exit_order_id: Any) -> boo
         state = _run_state.get(run_id)
         leg = state["legs"].get(str(leg_id)) if state else None
         superseded = leg.get("superseded") if leg else None
-        if not superseded or superseded.get("exit_order_id") != exit_order_id:
+        if not superseded or exit_order_id not in {
+            superseded.get("exit_claim_token"),
+            superseded.get("exit_order_id"),
+        }:
             return False
         superseded["exit_order_id"] = None
+        superseded["exit_claim_token"] = None
         return True
 
 
@@ -345,11 +413,13 @@ def release_order_exit(
             and (position_ref is None or superseded.get("position_ref") == position_ref)
         ):
             superseded["exit_order_id"] = None
+            superseded["exit_claim_token"] = None
             return "superseded"
         if leg.get("exit_order_id") == exit_order_id and (
             position_ref is None or leg.get("position_ref") == position_ref
         ):
             leg["exit_order_id"] = None
+            leg["exit_claim_token"] = None
             leg["exit_kind"] = None
             return "live"
         return None
@@ -364,7 +434,11 @@ def bind_superseded_exit(run_id: int, leg_id: Any, claim_token: Any, order_row_i
         run = _run_state.get(run_id)
         leg = run["legs"].get(str(leg_id)) if run else None
         superseded = leg.get("superseded") if leg else None
-        if not superseded or superseded.get("exit_order_id") != claim_token:
+        if (
+            claim_token is None
+            or not superseded
+            or superseded.get("exit_claim_token") != claim_token
+        ):
             return False
         superseded["exit_order_id"] = order_row_id
         return True
@@ -385,14 +459,17 @@ def claim_superseded_exit(run_id: int, leg_id: Any, position: str) -> dict[str, 
         state = _run_state.get(run_id)
         leg = state["legs"].get(str(leg_id)) if state else None
         superseded = leg.get("superseded") if leg else None
-        if not superseded or superseded.get("exit_order_id") is not None:
+        if not superseded or (
+            superseded.get("exit_claim_token") is not None
+            or superseded.get("exit_order_id") is not None
+        ):
             return None
         if str(superseded.get("position") or "").upper() != str(position or "").upper():
             return None
         # Marked in flight straight away, under the same hold, so two alerts
         # cannot each send a covering order for the one outgoing position.
         claim_token = new_position_ref()
-        superseded["exit_order_id"] = claim_token
+        superseded["exit_claim_token"] = claim_token
         return {
             "leg_id": leg["leg_id"],
             "position": superseded["position"],
@@ -406,25 +483,59 @@ def claim_superseded_exit(run_id: int, leg_id: Any, position: str) -> dict[str, 
         }
 
 
-def release_leg_exit(run_id: int, leg_id: Any) -> None:
-    """Undo a claim whose order the broker refused, so the exit stays possible.
+def bind_live_exit(
+    run_id: int,
+    leg_id: Any,
+    claim_token: Any,
+    order_row_id: int,
+    position_ref: str | None,
+) -> bool:
+    """Bind a durable row to the exact live-exit claim before dispatch."""
+    lock = _lock_for(run_id, create=False)
+    if lock is None:
+        return False
+    with lock:
+        run = _run_state.get(run_id)
+        leg = run["legs"].get(str(leg_id)) if run else None
+        if (
+            leg is None
+            or claim_token is None
+            or leg.get("exit_claim_token") != claim_token
+            or leg.get("exit_order_id") is not None
+            or (position_ref is not None and leg.get("position_ref") != position_ref)
+        ):
+            return False
+        leg["exit_order_id"] = order_row_id
+        return True
+
+
+def release_leg_exit(run_id: int, leg_id: Any, claim_id: Any) -> bool:
+    """Undo only the exact live-exit claim whose order was refused.
 
     Without this the leg is skipped by every later exit attempt for the rest of
     the session: its stop loss, its target, the scheduler square-off and the
     operator's own Close button all pass over it while the position is still
     held at the broker.
     """
+    if claim_id is None:
+        return False
     lock = _lock_for(run_id, create=False)
     if lock is None:
-        return
+        return False
     with lock:
         state = _run_state.get(run_id)
         if state is None:
-            return
+            return False
         leg = state["legs"].get(str(leg_id))
-        if leg is not None:
-            leg["exit_kind"] = None
-            leg["exit_order_id"] = None
+        if leg is None or claim_id not in {
+            leg.get("exit_claim_token"),
+            leg.get("exit_order_id"),
+        }:
+            return False
+        leg["exit_kind"] = None
+        leg["exit_claim_token"] = None
+        leg["exit_order_id"] = None
+        return True
 
 
 def favorable_peak_points(leg: dict[str, Any]) -> float:
@@ -443,8 +554,14 @@ def favorable_peak_points(leg: dict[str, Any]) -> float:
     return max(0.0, float(entry) - float(trough)) if trough else 0.0
 
 
-def add_leg(run_id: int, leg: dict) -> dict[str, Any] | None:
-    """Add one leg to a live run, returning its new state.
+def add_leg(
+    run_id: int,
+    leg: dict,
+    claim_token: Any,
+    expected_position_ref: str | None,
+    entry_order_id: int,
+) -> dict[str, Any] | None:
+    """Install a claimed signal leg only over its exact expected owner.
 
     Batch runs seed every leg at start, because a batch enters them all at
     once and its sides are known from the configuration. A signal-mode leg
@@ -452,14 +569,36 @@ def add_leg(run_id: int, leg: dict) -> dict[str, Any] | None:
     signal arrived, not by what was configured, and inventing a placeholder
     side beforehand is exactly the defect this module refuses elsewhere.
     """
-    with get_state_lock(run_id):
+    lock = _lock_for(run_id, create=False)
+    if lock is None:
+        return None
+    with lock:
         state = _run_state.get(run_id)
         if state is None:
             return None
         key = str(leg["leg_id"])
-        leg_state = _new_leg_state(leg)
+        claim = state.get("signal_entry_claims", {}).get(key)
+        if (
+            not claim
+            or claim.get("claim_token") != claim_token
+            or claim.get("position_ref") != leg.get("position_ref")
+            or claim.get("expected_position_ref") != expected_position_ref
+        ):
+            return None
         previous = state["legs"].get(key)
-        if previous is not None and previous.get("exit_order_id") is not None:
+        current_position_ref = previous.get("position_ref") if previous else None
+        if current_position_ref != expected_position_ref:
+            return None
+        if previous is not None and previous.get("superseded") is not None:
+            return None
+
+        leg_state = _new_leg_state(leg)
+        leg_state["entry_order_id"] = entry_order_id
+        if claim.get("held_position") is not None and previous is not None:
+            if previous.get("status") == "open" and (
+                previous.get("exit_kind") is None or previous.get("exit_claim_token") is None
+            ):
+                return None
             # A flip squares the held side and opens the other one straight
             # away, so for as long as the closing order is unfilled this leg id
             # names two positions. Overwriting wholesale lost the outgoing
@@ -468,14 +607,16 @@ def add_leg(run_id: int, leg: dict) -> dict[str, Any] | None:
             # open_legs, no stop was evaluated for it, no square-off would
             # reach it, and the broker still held it. Keep what is needed to
             # settle the outgoing position when its fill arrives.
-            leg_state["superseded"] = {
-                "exit_order_id": previous.get("exit_order_id"),
-                "entry_order_id": previous.get("entry_order_id"),
-                "position_ref": previous.get("position_ref"),
-                "position": previous.get("position"),
-                "entry_avg": previous.get("entry_avg"),
-                "qty": previous.get("qty"),
-            }
+            if previous.get("status") == "open":
+                leg_state["superseded"] = {
+                    "exit_order_id": previous.get("exit_order_id"),
+                    "exit_claim_token": previous.get("exit_claim_token"),
+                    "entry_order_id": previous.get("entry_order_id"),
+                    "position_ref": previous.get("position_ref"),
+                    "position": previous.get("position"),
+                    "entry_avg": previous.get("entry_avg"),
+                    "qty": previous.get("qty"),
+                }
         if previous is not None:
             # A signal leg is re-entered on the same id after it has been
             # closed, and a fresh state would reset realized_pnl to zero. That
@@ -486,6 +627,35 @@ def add_leg(run_id: int, leg: dict) -> dict[str, Any] | None:
             leg_state["realized_pnl"] = float(previous.get("realized_pnl") or 0.0)
         state["legs"][key] = leg_state
         return leg_state
+
+
+def finish_signal_entry(
+    run_id: int,
+    leg_id: Any,
+    position_ref: str,
+    claim_token: Any,
+    accepted: bool,
+) -> bool:
+    """Apply one entry acknowledgement only to its installed incarnation."""
+    lock = _lock_for(run_id, create=False)
+    if lock is None:
+        return False
+    with lock:
+        run = _run_state.get(run_id)
+        leg = run["legs"].get(str(leg_id)) if run else None
+        claim = run.get("signal_entry_claims", {}).get(str(leg_id)) if run else None
+        if (
+            leg is None
+            or leg.get("position_ref") != position_ref
+            or not claim
+            or claim.get("claim_token") != claim_token
+        ):
+            return False
+        if leg.get("entry_status") == "pending":
+            leg["entry_status"] = "open" if accepted else "rejected"
+            leg["status"] = "open" if accepted else "rejected"
+        run["signal_entry_claims"].pop(str(leg_id), None)
+        return True
 
 
 def get_run_state(run_id: int) -> dict[str, Any] | None:
