@@ -115,6 +115,11 @@ def clean_slate():
             state.clear_run_state(row["current_run_id"] or -1)
             store.set_strategy_status(row["id"], "stopped", None)
             store.delete_strategy(row["id"], USER)
+        # See the note in test_strategy_module_qa_segments.py: run state is
+        # keyed by a rowid SQLite reuses, so anything left registered becomes
+        # another suite's run.
+        for run_id in list(state.active_run_ids()):
+            state.clear_run_state(run_id)
         store.clear_strategy_module_cache()
 
     purge()
@@ -480,15 +485,25 @@ def test_two_starts_racing_place_exactly_one_set_of_entries(broker):
     results = []
     barrier = threading.Barrier(2)
 
+    # Patched once, out here, rather than inside each thread. unittest.mock
+    # restores by writing the saved value back, so two threads patching the
+    # same attribute can interleave save and restore and leave the mock
+    # installed for the rest of the session: every later suite then resolved
+    # every leg to this file's fake option, until the side_effect list ran out
+    # and they raised StopIteration instead.
     def go():
         barrier.wait()
-        results.append(_start(sid))
+        results.append(engine.start_run(sid, USER, "sandbox"))
 
-    threads = [threading.Thread(target=go) for _ in range(2)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=20)
+    with (
+        patch.object(engine, "resolve_leg", side_effect=[_resolved()] * 6),
+        patch.object(engine, "_broker_for", return_value="sandbox"),
+    ):
+        threads = [threading.Thread(target=go) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=20)
 
     assert sorted(r.ok for r in results) == [False, True]
     assert len(store.list_runs(sid)) == 1

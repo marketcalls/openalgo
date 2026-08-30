@@ -127,7 +127,13 @@ def _rate_limited(error):
 CONFIG_FIELDS = store.UPDATABLE_FIELDS
 
 PRODUCTS = ("CNC", "NRML", "MIS")
-PRICETYPES = ("MARKET", "LIMIT", "SL", "SL-M")
+# MARKET only, and deliberately so. Neither the strategy configuration nor a
+# leg carries a price, so a LIMIT, SL or SL-M entry was built with price and
+# trigger_price both defaulting to zero: every entry of a LIMIT strategy went
+# out as a limit order at zero. Accepting a price type the module cannot
+# supply a price for is worse than not offering it. Exits are MARKET on every
+# path regardless, because a stop that cannot fill is not a stop.
+PRICETYPES = ("MARKET",)
 
 #: Exchanges an underlying can be quoted on. Indices are where an options
 #: strategy usually starts, but a stock or an MCX commodity underlying is valid

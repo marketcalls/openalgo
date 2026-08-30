@@ -65,6 +65,37 @@ class DispatchResult:
         return not self.ok
 
 
+# Which products each venue accepts. /scalping already carries this rule
+# (blueprints/scalping.py), and every broker enforces it: CNC is a delivery
+# product for cash, NRML a carry-forward product for derivatives, and neither
+# is accepted on the other's venue.
+DERIVATIVE_EXCHANGES_FOR_PRODUCT = frozenset({"NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "NCO"})
+DERIVATIVE_PRODUCTS = frozenset({"MIS", "NRML"})
+EQUITY_PRODUCTS = frozenset({"MIS", "CNC"})
+
+
+def product_for_exchange(product: str, exchange: str) -> str:
+    """The venue's spelling of the product the strategy asked for.
+
+    A strategy carries one product for every leg, so a basket holding a cash
+    leg and an option leg could not be given a product both would accept, and
+    the default NRML reached NSE and BSE while CNC reached NFO, BFO, MCX and
+    CDS. Nothing downstream catches it: the schemas and the sandbox only check
+    the value is one of the three, so it went to the broker as configured.
+
+    The product is read as the intent rather than as a literal. MIS is
+    intraday everywhere and passes through. Anything else means carry the
+    position, which is NRML on a derivatives venue and CNC on cash, so a mixed
+    basket works and no leg is ever sent a product its venue refuses.
+    """
+    wanted = (product or "").upper()
+    if wanted == "MIS":
+        return "MIS"
+    if (exchange or "").upper() in DERIVATIVE_EXCHANGES_FOR_PRODUCT:
+        return "NRML"
+    return "CNC"
+
+
 def build_order(
     *,
     symbol: str,
@@ -87,7 +118,9 @@ def build_order(
         "exchange": exchange,
         "action": action.upper(),
         "quantity": str(int(quantity)),
-        "product": product,
+        # Translated to what this venue accepts. Every order the module places
+        # passes through here, so this is the one place it has to be right.
+        "product": product_for_exchange(product, exchange),
         "pricetype": pricetype,
         "price": str(price or 0),
         "trigger_price": str(trigger_price or 0),

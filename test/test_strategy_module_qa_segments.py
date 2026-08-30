@@ -351,6 +351,12 @@ def clean_slate():
                 state.clear_run_state(row["current_run_id"])
             store.set_strategy_status(row["id"], "stopped", None)
             store.delete_strategy(row["id"], USER)
+        # Every registered run, not only this suite's. Run state is keyed by
+        # run id, SQLite reuses a rowid after a delete, and a sibling suite
+        # that left state behind therefore hands this one a run that is
+        # already populated with somebody else's legs.
+        for run_id in list(state.active_run_ids()):
+            state.clear_run_state(run_id)
         store.clear_strategy_module_cache()
 
     purge()
@@ -1425,13 +1431,6 @@ def test_the_run_row_records_the_expiry_each_leg_resolved_to(market, broker):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT F4: product is a single strategy-level value and is never "
-        "checked against a leg's exchange, so CNC reaches NFO, BFO, MCX and CDS"
-    ),
-)
 def test_a_derivative_leg_is_never_sent_cnc(market, broker):
     """CNC is equity only. An index option is never CNC.
 
@@ -1466,13 +1465,6 @@ def test_a_derivative_leg_is_never_sent_cnc(market, broker):
     assert broker[0]["product"] in legal_products(broker[0]["exchange"])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT F5: product defaults to NRML for every strategy, so a cash "
-        "leg is sent NRML on NSE, which equity does not accept"
-    ),
-)
 def test_a_cash_only_strategy_defaults_to_a_product_equity_accepts(market, broker):
     """A strategy that names no product gets NRML, and cash takes CNC or MIS."""
     sid = _make(
@@ -1486,13 +1478,6 @@ def test_a_cash_only_strategy_defaults_to_a_product_equity_accepts(market, broke
     assert broker[0]["product"] in legal_products("NSE")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT F6: one product covers every leg, so a basket mixing cash and "
-        "options cannot be given a product both legs accept"
-    ),
-)
 def test_a_basket_mixing_cash_and_options_can_be_given_a_legal_product(market, broker):
     """A covered call is cash plus an option, and the two take different products.
 
