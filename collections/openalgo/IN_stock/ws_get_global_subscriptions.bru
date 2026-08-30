@@ -1,0 +1,45 @@
+meta {
+  name: Get Global Subscriptions
+  type: websocket
+  seq: 15
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Get client-wise subscription breakdown with global summary across all connected clients
+}
+
+message:json {
+  {
+    "action": "get_global_subscriptions"
+  }
+}
+
+docs {
+  Returns a per-client breakdown of all active subscriptions plus global summary stats.
+
+  Server responds with:
+  {
+    "type": "global_subscriptions",
+    "status": "success",
+    "summary": {
+      "total_clients": 2,
+      "subscriptions_count": 25,
+      "by_mode": {"LTP": 20, "Quote": 15, "Depth": 5},
+      "by_exchange": {"NSE": 18, "NSE_INDEX": 5, "BSE": 2},
+      "broker": "angel"
+    },
+    "clients": [
+      {
+        "client_id": 140234567890,
+        "subscription_count": 25,
+        "subscriptions": [
+          {"symbol": "RELIANCE", "exchange": "NSE", "mode": "Quote", "depth": 5},
+          {"symbol": "NIFTY", "exchange": "NSE_INDEX", "mode": "LTP", "depth": 5}
+        ]
+      }
+    ]
+  }
+
+  Must be authenticated first.
+}
