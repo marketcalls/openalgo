@@ -9,9 +9,12 @@ import { Card, CardContent } from '@/components/ui/card'
 import StrategyWizard from './Wizard'
 
 export default function StrategyEdit() {
-  const { id } = useParams<{ id: string }>()
+  // Named to match the route, which declares :strategyId. Destructuring
+  // `id` from it yields undefined, so every visit to /strategy/<n> failed
+  // its own validity check and rendered "Invalid strategy id".
+  const { strategyId } = useParams<{ strategyId: string }>()
   const navigate = useNavigate()
-  const numId = Number(id)
+  const numId = Number(strategyId)
 
   const {
     data: strategy,

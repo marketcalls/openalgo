@@ -1969,8 +1969,11 @@ function HistoryTab({ runs, orders }: { runs: Run[]; orders: Order[] }) {
 // ---------------------------------------------------------------------------
 
 export default function StrategyDetail() {
-  const { id } = useParams<{ id: string }>()
-  const numId = Number(id)
+  // Named to match the route, which declares :strategyId. Destructuring
+  // `id` from it yields undefined, so every visit to /strategy/<n> failed
+  // its own validity check and rendered "Invalid strategy id".
+  const { strategyId } = useParams<{ strategyId: string }>()
+  const numId = Number(strategyId)
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
