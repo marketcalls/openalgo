@@ -99,6 +99,63 @@ def _emit(strategy_id: int, user_id: str, kind: str, message: str, **fields: Any
         logger.exception("Could not record event %s for strategy %s", kind, strategy_id)
 
 
+#: Runs whose risk has fired while no broker authorisation was available.
+#: Bounded by the number of concurrent runs, and an entry is removed as soon as
+#: authorisation returns or the run ends.
+_unactionable_runs: set[int] = set()
+
+
+def _note_unactionable(
+    strategy_id: int, user_id: str, run_id: int, leg_exits: list, stop_reason: str | None
+) -> None:
+    """Record that risk fired and could not be acted on.
+
+    This is the 3 AM window. OpenAlgo revokes broker tokens at the session
+    reset because Indian broker tokens expire daily, and until the user logs in
+    again there is nothing to place an order with. A positional strategy is
+    still holding, and a stop reached in that window cannot be honoured.
+
+    Refusing is correct: pretending to exit would be worse. What was missing is
+    that the only record was a log line, so the operator saw a position still
+    open past its stop with no explanation anywhere they would look. This
+    writes it to the audit trail, at critical, so it reaches the Events tab.
+
+    Recorded once per run per episode rather than per tick, because the tick
+    that fired a stop is followed by every tick after it and the trail would be
+    unreadable.
+    """
+    if not (leg_exits or stop_reason):
+        return
+    if run_id in _unactionable_runs:
+        return
+    _unactionable_runs.add(run_id)
+    logger.warning("Run %s has risk to act on but no broker session; positions left open", run_id)
+    _emit(
+        strategy_id,
+        user_id,
+        "leg_exit_rejected",
+        "Risk triggered but there is no broker session, so nothing could be exited. "
+        "Positions are still open. Log in to restore the session.",
+        run_id=run_id,
+        severity="critical",
+    )
+
+
+def _note_actionable_again(strategy_id: int, user_id: str, run_id: int) -> None:
+    """Record that a run can act again, having previously been unable to."""
+    if run_id not in _unactionable_runs:
+        return
+    _unactionable_runs.discard(run_id)
+    _emit(
+        strategy_id,
+        user_id,
+        "recovery_succeeded",
+        "Broker session restored; this run can act on its risk rules again.",
+        run_id=run_id,
+        severity="warn",
+    )
+
+
 def _position_to_action(position: str) -> str:
     """A leg's B/S as the action that opens it."""
     return "BUY" if (position or "").upper() == "B" else "SELL"
@@ -662,6 +719,7 @@ def _finalise(run_id: int, strategy_id: int, user_id: str, reason: str, message:
         store.release_strategy(strategy_id)
         _emit(strategy_id, user_id, "run_stopped", message, run_id=run_id)
     finally:
+        _unactionable_runs.discard(run_id)
         # Unconditional. If anything above threw, the run's state and its lock
         # would otherwise stay in the registries for the life of the worker,
         # and the strategy would be stuck reading as running with nothing
@@ -800,8 +858,10 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
 
     api_key = _api_key_for(user_id)
     if not api_key:
-        logger.warning("Run %s has risk to act on but no API key; leaving positions open", run_id)
+        _note_unactionable(strategy["id"], user_id, run_id, leg_exits, stop_reason)
         return
+
+    _note_actionable_again(strategy["id"], user_id, run_id)
 
     if stop_reason:
         # A strategy-level breach closes everything, so the per-leg exits it

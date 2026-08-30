@@ -547,3 +547,88 @@ def test_a_finished_run_leaves_no_live_state_behind(api_key):
 
     assert state.get_run_state(run_id) is None
     assert run_id not in state.active_run_ids()
+
+
+# ---------------------------------------------------------------------------
+# The tokenless window
+#
+# OpenAlgo revokes broker tokens at the session reset (03:00 IST by default)
+# because Indian broker tokens expire daily. Until the user logs in again there
+# is nothing to place an order with, and a positional strategy is still
+# holding.
+# ---------------------------------------------------------------------------
+
+
+def test_risk_that_cannot_be_acted_on_reaches_the_audit_trail(api_key):
+    # Refusing is correct; pretending to exit would be worse. What matters is
+    # that the operator can find out why a position sat past its stop.
+    sid = _make(_config(overall_sl_mtm=100))
+    run_id = _start(sid).run_id
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    engine._unactionable_runs.discard(run_id)
+
+    with (
+        patch.object(engine, "_api_key_for", return_value=None),
+        patch.object(engine.order_dispatch, "dispatch_order") as dispatch,
+    ):
+        engine.process_tick("NIFTY28MAY2624000CE", "NFO", 110.0)
+
+    assert dispatch.call_count == 0
+    events = store.list_events(sid)
+    critical = [e for e in events if e["severity"] == "critical"]
+    assert critical, "an unactionable stop must be recorded, not only logged"
+    assert "no broker session" in critical[0]["message"]
+    # And the position is still open, which is the correct outcome.
+    assert state.get_run_state(run_id)["legs"]["1"]["status"] == "open"
+
+
+def test_it_is_recorded_once_per_episode_not_once_per_tick(api_key):
+    # The tick that fires a stop is followed by every tick after it. One row
+    # per tick would make the trail unreadable exactly when it is needed.
+    sid = _make(_config(overall_sl_mtm=100))
+    run_id = _start(sid).run_id
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    engine._unactionable_runs.discard(run_id)
+
+    with patch.object(engine, "_api_key_for", return_value=None):
+        for _ in range(5):
+            engine.process_tick("NIFTY28MAY2624000CE", "NFO", 110.0)
+
+    critical = [e for e in store.list_events(sid) if e["severity"] == "critical"]
+    assert len(critical) == 1
+
+
+def test_the_session_returning_is_recorded_too(api_key):
+    sid = _make(_config(overall_sl_mtm=100))
+    run_id = _start(sid).run_id
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    engine._unactionable_runs.discard(run_id)
+
+    with patch.object(engine, "_api_key_for", return_value=None):
+        engine.process_tick("NIFTY28MAY2624000CE", "NFO", 110.0)
+
+    # The user logs back in; the next tick can act.
+    with patch.object(
+        engine.order_dispatch,
+        "dispatch_order",
+        return_value=DispatchResult(ok=True, broker_order_id="X", response={}),
+    ):
+        engine.process_tick("NIFTY28MAY2624000CE", "NFO", 110.0)
+
+    kinds = [e["kind"] for e in store.list_events(sid)]
+    assert "recovery_succeeded" in kinds
+    assert run_id not in engine._unactionable_runs
+
+
+def test_a_quiet_tick_with_no_session_records_nothing(api_key):
+    # Only risk that actually fired is worth a critical row. A tokenless window
+    # on a strategy with nothing to do is not an incident.
+    sid = _make()
+    run_id = _start(sid).run_id
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+    engine._unactionable_runs.discard(run_id)
+
+    with patch.object(engine, "_api_key_for", return_value=None):
+        engine.process_tick("NIFTY28MAY2624000CE", "NFO", 101.0)
+
+    assert not [e for e in store.list_events(sid) if e["severity"] == "critical"]
