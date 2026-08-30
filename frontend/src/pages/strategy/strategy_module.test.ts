@@ -6,17 +6,25 @@ import {
   deriveTrades,
 } from '@/api/strategy_module'
 import {
+  convertLegKind,
   derivativeExchangeFor,
   favorablePeakPoints,
   filterStrikes,
   formatIst,
   formatListPnl,
   formatPnl,
+  freshSignalLeg,
+  type Leg,
+  legToPayload,
+  MAX_SIGNAL_QTY,
   monthlyExpiries,
   type Order,
   parseExpiryDate,
   resolveExpiryRank,
+  SIGNAL_LEG_SEGMENTS,
+  SIGNAL_MODE_TABS,
   sortExpiries,
+  TAB_SEGMENTS,
 } from '@/types/strategy_module'
 
 function order(partial: Partial<Order> & Pick<Order, 'id'>): Order {
@@ -482,5 +490,287 @@ describe('collapseToUnderlyings', () => {
     expect(
       collapseToUnderlyings([{ symbol: '', name: '', exchange: 'NFO', instrumenttype: '' }], 'X')
     ).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Leg shapes
+//
+// The validator rejects unknown keys on both sides, so what matters is not
+// only the values but the exact key set. A batch field surviving into a signal
+// payload is refused outright, naming a field the user cannot see any more.
+// ---------------------------------------------------------------------------
+
+const BATCH_OPTION_LEG: Leg = {
+  id: 1,
+  segment: 'options',
+  position: 'S',
+  lots: 2,
+  option_type: 'CE',
+  strike_mode: 'atm',
+  atm_offset: 'OTM2',
+  strike: null,
+  expiry: 'weekly',
+  sl_pts: 30,
+  target_pts: 60,
+  trail: { x: 10, y: 5 },
+}
+
+describe('legToPayload, batch', () => {
+  // The regression guard: batch mode is the one that already works.
+  it('round-trips a batch options leg unchanged', () => {
+    expect(legToPayload(BATCH_OPTION_LEG, 'batch')).toEqual({
+      id: 1,
+      segment: 'options',
+      position: 'S',
+      lots: 2,
+      expiry: 'weekly',
+      option_type: 'CE',
+      strike_mode: 'atm',
+      atm_offset: 'OTM2',
+      sl_pts: 30,
+      target_pts: 60,
+      trail: { x: 10, y: 5 },
+    })
+  })
+
+  it('defaults to batch when no kind is given, so an old call site is unchanged', () => {
+    expect(legToPayload(BATCH_OPTION_LEG)).toEqual(legToPayload(BATCH_OPTION_LEG, 'batch'))
+  })
+
+  it('never emits a signal field', () => {
+    const payload = legToPayload(
+      { ...BATCH_OPTION_LEG, symbol: 'RELIANCE', exchange: 'NSE', side: 'long', qty: 500 },
+      'batch'
+    )
+    expect(payload).not.toHaveProperty('symbol')
+    expect(payload).not.toHaveProperty('exchange')
+    expect(payload).not.toHaveProperty('side')
+    expect(payload).not.toHaveProperty('qty')
+  })
+
+  it('sends atm_offset or strike, never both', () => {
+    const atm = legToPayload(BATCH_OPTION_LEG, 'batch')
+    expect(atm).toHaveProperty('atm_offset')
+    expect(atm).not.toHaveProperty('strike')
+
+    const direct = legToPayload(
+      { ...BATCH_OPTION_LEG, strike_mode: 'strike', strike: 24500 },
+      'batch'
+    )
+    expect(direct.strike).toBe(24500)
+    expect(direct).not.toHaveProperty('atm_offset')
+  })
+
+  it('omits expiry on a cash leg, which the validator refuses outright', () => {
+    const payload = legToPayload(
+      { id: 1, segment: 'cash', position: 'B', lots: 1, expiry: 'monthly' },
+      'batch'
+    )
+    expect(payload).not.toHaveProperty('expiry')
+    expect(Object.keys(payload).sort()).toEqual(['id', 'lots', 'position', 'segment'])
+  })
+})
+
+describe('legToPayload, signal', () => {
+  const SIGNAL_CASH_LEG: Leg = {
+    id: 1,
+    segment: 'cash',
+    symbol: ' reliance ',
+    exchange: 'nse',
+    side: 'long',
+    qty: 500,
+    expiry: null,
+    sl_pts: null,
+    target_pts: null,
+    trail: { x: 0, y: 0 },
+  }
+
+  it('emits exactly the keys the signal validator accepts', () => {
+    expect(legToPayload(SIGNAL_CASH_LEG, 'signal')).toEqual({
+      id: 1,
+      segment: 'cash',
+      symbol: 'RELIANCE',
+      exchange: 'NSE',
+      side: 'long',
+      qty: 500,
+    })
+  })
+
+  // The guard the whole conversion exists for.
+  it('never leaks a batch or option field, even when the leg still carries one', () => {
+    const stale: Leg = {
+      ...SIGNAL_CASH_LEG,
+      position: 'S',
+      lots: 3,
+      option_type: 'CE',
+      strike_mode: 'atm',
+      atm_offset: 'ATM',
+      strike: 24500,
+    }
+    const payload = legToPayload(stale, 'signal')
+    for (const forbidden of [
+      'position',
+      'lots',
+      'option_type',
+      'strike_mode',
+      'atm_offset',
+      'strike',
+    ]) {
+      expect(payload).not.toHaveProperty(forbidden)
+    }
+  })
+
+  it('omits expiry on a cash leg and keeps it on a futures leg', () => {
+    expect(legToPayload(SIGNAL_CASH_LEG, 'signal')).not.toHaveProperty('expiry')
+
+    const futures = legToPayload(
+      { ...SIGNAL_CASH_LEG, segment: 'futures', expiry: 'next_month' },
+      'signal'
+    )
+    expect(futures.expiry).toBe('next_month')
+  })
+
+  it('defaults a futures leg to the current month rather than sending nothing', () => {
+    const futures = legToPayload({ ...SIGNAL_CASH_LEG, segment: 'futures', expiry: null }, 'signal')
+    expect(futures.expiry).toBe('monthly')
+  })
+
+  it('defaults side to both and quantity to one', () => {
+    const payload = legToPayload(
+      { id: 2, segment: 'cash', symbol: 'TCS', exchange: 'NSE' },
+      'signal'
+    )
+    expect(payload.side).toBe('both')
+    expect(payload.qty).toBe(1)
+  })
+
+  it('sends a whole quantity, because the validator takes an integer', () => {
+    expect(legToPayload({ ...SIGNAL_CASH_LEG, qty: 12.9 }, 'signal').qty).toBe(12)
+    expect(Number.isInteger(legToPayload({ ...SIGNAL_CASH_LEG, qty: 0.5 }, 'signal').qty)).toBe(
+      true
+    )
+  })
+
+  it('keeps a quantity at the cap the validator allows', () => {
+    expect(legToPayload({ ...SIGNAL_CASH_LEG, qty: MAX_SIGNAL_QTY }, 'signal').qty).toBe(
+      MAX_SIGNAL_QTY
+    )
+  })
+
+  it('drops a zero trail and keeps a configured one', () => {
+    expect(legToPayload(SIGNAL_CASH_LEG, 'signal')).not.toHaveProperty('trail')
+    const trailing = legToPayload({ ...SIGNAL_CASH_LEG, trail: { x: 8, y: 2 } }, 'signal')
+    expect(trailing.trail).toEqual({ x: 8, y: 2 })
+  })
+})
+
+describe('convertLegKind', () => {
+  it('turns an options leg into a cash signal leg with no option fields left', () => {
+    const converted = convertLegKind(BATCH_OPTION_LEG, 'signal', 'stocks_fno')
+    expect(converted.segment).toBe('cash')
+    expect(converted.symbol).toBe('')
+    expect(converted.exchange).toBe('NSE')
+    expect(converted.side).toBe('both')
+    expect(converted.qty).toBe(1)
+    for (const forbidden of ['position', 'lots', 'option_type', 'strike_mode', 'atm_offset']) {
+      expect(converted).not.toHaveProperty(forbidden)
+    }
+  })
+
+  it('carries per-leg risk across the switch, because it means the same thing', () => {
+    const converted = convertLegKind(BATCH_OPTION_LEG, 'signal', 'stocks_fno')
+    expect(converted.sl_pts).toBe(30)
+    expect(converted.target_pts).toBe(60)
+    expect(converted.trail).toEqual({ x: 10, y: 5 })
+  })
+
+  it('leaves a futures leg on futures and keeps its rank', () => {
+    const converted = convertLegKind(
+      { id: 1, segment: 'futures', position: 'B', lots: 1, expiry: 'next_month' },
+      'signal',
+      'mcx'
+    )
+    expect(converted.segment).toBe('futures')
+    expect(converted.expiry).toBe('next_month')
+    expect(converted.exchange).toBe('MCX')
+  })
+
+  it('rebuilds a batch leg coming back from signal mode', () => {
+    const signalLeg = convertLegKind(BATCH_OPTION_LEG, 'signal', 'stocks_fno')
+    const back = convertLegKind(signalLeg, 'batch', 'stocks_fno')
+    expect(back.position).toBe('S')
+    expect(back.lots).toBe(1)
+    expect(back.segment).toBe('cash')
+    for (const forbidden of ['symbol', 'exchange', 'side', 'qty']) {
+      expect(back).not.toHaveProperty(forbidden)
+    }
+  })
+
+  it('never produces a segment the tab does not allow', () => {
+    // MCX has no cash market, so a cash signal leg cannot come back as one.
+    const back = convertLegKind(
+      { id: 1, segment: 'cash', symbol: 'GOLD', exchange: 'MCX', side: 'both', qty: 1 },
+      'batch',
+      'mcx'
+    )
+    expect(TAB_SEGMENTS.mcx).toContain(back.segment)
+    expect(back.segment).not.toBe('cash')
+  })
+
+  it('always comes back ATM-relative, since there is no strike to carry over', () => {
+    const back = convertLegKind(
+      { id: 1, segment: 'futures', symbol: 'RELIANCE', exchange: 'NFO', side: 'both', qty: 1 },
+      'batch',
+      'weekly_monthly'
+    )
+    // futures stays futures, so no option fields at all
+    expect(back.strike_mode).toBeNull()
+    expect(back.strike).toBeNull()
+  })
+})
+
+describe('freshSignalLeg', () => {
+  it('starts a stocks leg on cash with no expiry and no symbol', () => {
+    const leg = freshSignalLeg(1, 'stocks_fno')
+    expect(leg.segment).toBe('cash')
+    expect(leg.expiry).toBeNull()
+    expect(leg.symbol).toBe('')
+    expect(leg.exchange).toBe('NSE')
+    expect(leg.qty).toBe(1)
+    expect(leg.side).toBe('both')
+  })
+
+  it('starts an MCX leg on futures, which is what MCX trades', () => {
+    const leg = freshSignalLeg(1, 'mcx')
+    expect(leg.segment).toBe('futures')
+    expect(leg.expiry).toBe('monthly')
+    expect(leg.exchange).toBe('MCX')
+  })
+
+  it('produces a leg that survives its own payload conversion', () => {
+    const payload = legToPayload(freshSignalLeg(3, 'mcx'), 'signal')
+    expect(Object.keys(payload).sort()).toEqual([
+      'exchange',
+      'expiry',
+      'id',
+      'qty',
+      'segment',
+      'side',
+      'symbol',
+    ])
+  })
+})
+
+describe('signal mode universe', () => {
+  it('offers only the tabs that have something for a signal leg to trade', () => {
+    expect(SIGNAL_MODE_TABS).toEqual(['stocks_fno', 'mcx'])
+    expect(SIGNAL_MODE_TABS).not.toContain('weekly_monthly')
+    expect(SIGNAL_MODE_TABS).not.toContain('monthly_only')
+  })
+
+  it('offers no options segment, because a signal leg carries no option fields', () => {
+    expect(SIGNAL_LEG_SEGMENTS).toEqual(['cash', 'futures'])
+    expect(SIGNAL_LEG_SEGMENTS).not.toContain('options')
   })
 })

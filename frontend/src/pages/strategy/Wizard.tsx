@@ -32,21 +32,30 @@ import { cn } from '@/lib/utils'
 import {
   ATM_OFFSETS,
   allowedProductsForLegs,
+  convertLegKind,
   defaultProductForLegs,
   derivativeExchangeFor,
   EXPIRY_RANK_LABELS,
   type ExpiryRank,
   expiriesFor,
   filterStrikes,
+  freshBatchLeg,
+  freshSignalLeg,
+  LEG_SIDE_LABELS,
   type Leg,
   type LegPosition,
+  type LegSide,
   type LockProfitMode,
+  legToPayload,
   MAX_LEGS,
   MAX_LOTS,
   MAX_NAME_LENGTH,
+  MAX_SIGNAL_QTY,
   type OptionType,
   type Product,
   type Segment,
+  SIGNAL_LEG_SEGMENTS,
+  SIGNAL_MODE_TABS,
   STRATEGY_DIRECTION_LABELS,
   STRATEGY_KIND_HINT,
   STRATEGY_KIND_LABELS,
@@ -84,52 +93,6 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
     return () => clearTimeout(handle)
   }, [value, delayMs])
   return settled
-}
-
-function freshLeg(id: number, tab: UniverseTab): Leg {
-  return {
-    id,
-    segment: 'options',
-    position: 'S',
-    lots: 1,
-    option_type: 'CE',
-    strike_mode: 'atm',
-    atm_offset: 'ATM',
-    strike: null,
-    expiry: expiriesFor(tab, 'options')[0],
-    sl_pts: null,
-    target_pts: null,
-    trail: { x: 0, y: 0 },
-  }
-}
-
-/**
- * A leg reduced to what the validator accepts.
- *
- * The optional fields are conditionally forbidden rather than merely optional:
- * an `atm_offset` sent alongside `strike_mode: "strike"` is refused outright,
- * as is any options field on a futures leg. Pruning here rather than at each
- * form control means the form can keep a field's last value while the user
- * toggles a mode back and forth without that value leaking into the request.
- */
-function legToPayload(leg: Leg): Leg {
-  const clean: Leg = {
-    id: leg.id,
-    segment: leg.segment,
-    position: leg.position,
-    lots: leg.lots,
-  }
-  if (leg.segment !== 'cash') clean.expiry = leg.expiry
-  if (leg.segment === 'options') {
-    clean.option_type = leg.option_type ?? 'CE'
-    clean.strike_mode = leg.strike_mode ?? 'atm'
-    if (clean.strike_mode === 'atm') clean.atm_offset = leg.atm_offset ?? 'ATM'
-    else clean.strike = leg.strike ?? null
-  }
-  if (leg.sl_pts != null) clean.sl_pts = leg.sl_pts
-  if (leg.target_pts != null) clean.target_pts = leg.target_pts
-  if (leg.trail && (leg.trail.x > 0 || leg.trail.y > 0)) clean.trail = leg.trail
-  return clean
 }
 
 // ---------------------------------------------------------------------------
@@ -367,7 +330,7 @@ function LegCard({
               type="number"
               min={1}
               max={MAX_LOTS}
-              value={leg.lots}
+              value={leg.lots ?? 1}
               onChange={(event) =>
                 update('lots', Math.max(1, Number.parseInt(event.target.value || '1', 10)))
               }
@@ -558,6 +521,266 @@ function LegCard({
 }
 
 // ---------------------------------------------------------------------------
+// Signal leg card
+// ---------------------------------------------------------------------------
+
+interface SignalLegCardProps {
+  leg: Leg
+  tab: UniverseTab
+  index: number
+  onChange: (next: Leg) => void
+  onRemove: () => void
+  removable: boolean
+}
+
+/**
+ * One signal-mode leg.
+ *
+ * A different shape from a batch leg, not a superset: it names its own
+ * instrument and its own absolute quantity, and carries no option fields at
+ * all. The validator refuses the batch fields here and the signal fields
+ * there, so the two cards stay separate rather than one form hiding half of
+ * itself.
+ */
+function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: SignalLegCardProps) {
+  const cashVenue = TAB_DEFAULT_EXCHANGE[tab]
+  const derivativeVenue = derivativeExchangeFor(cashVenue)
+  const venueFor = (segment: Segment) => (segment === 'futures' ? derivativeVenue : cashVenue)
+
+  // A futures leg still names its contract by rank, so the same resolution the
+  // batch card does applies - keyed on this leg's own symbol, because in
+  // signal mode there is no single strategy-level underlying to key on.
+  const expiry = useExpiryResolution(
+    leg.symbol ?? '',
+    leg.exchange || venueFor(leg.segment),
+    'futures',
+    leg.segment === 'futures' && Boolean(leg.symbol?.trim())
+  )
+  const resolvedExpiry = leg.expiry ? expiry.resolve(leg.expiry) : null
+
+  const update = <K extends keyof Leg>(key: K, value: Leg[K]) => {
+    onChange({ ...leg, [key]: value })
+  }
+
+  const quantityLabel = leg.segment === 'cash' ? 'Quantity (shares)' : 'Quantity (units)'
+
+  return (
+    <Card className="border-dashed bg-muted/30">
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+        <CardTitle className="text-base">Leg {index + 1}</CardTitle>
+        {removable && (
+          <Button size="sm" variant="ghost" onClick={onRemove}>
+            Remove
+          </Button>
+        )}
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase">Symbol</Label>
+            <UnderlyingSearchField
+              value={leg.symbol ?? ''}
+              onChange={(symbol) =>
+                onChange({
+                  ...leg,
+                  symbol,
+                  // Picking a symbol fills the venue in, but never overwrites
+                  // one the user has already set by hand.
+                  exchange: leg.exchange || venueFor(leg.segment),
+                })
+              }
+              searchExchange={leg.segment === 'futures' ? derivativeVenue : cashVenue}
+              placeholder={leg.segment === 'cash' ? 'e.g. RELIANCE' : 'e.g. CRUDEOIL'}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase">Exchange</Label>
+            <Input
+              value={leg.exchange ?? ''}
+              onChange={(event) => update('exchange', event.target.value.toUpperCase())}
+              placeholder={venueFor(leg.segment)}
+              className="font-mono"
+              maxLength={20}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase">Segment</Label>
+            <select
+              value={leg.segment}
+              onChange={(event) => {
+                const segment = event.target.value as Segment
+                const wasDefaultVenue = !leg.exchange || leg.exchange === venueFor(leg.segment)
+                onChange({
+                  ...leg,
+                  segment,
+                  // Refused outright on a cash leg, so it is cleared here
+                  // rather than left for the payload to strip.
+                  expiry: segment === 'futures' ? (leg.expiry ?? 'monthly') : null,
+                  exchange: wasDefaultVenue ? venueFor(segment) : leg.exchange,
+                })
+              }}
+              className={SELECT_CLASS_SM}
+            >
+              {SIGNAL_LEG_SEGMENTS.map((segment) => (
+                <option key={segment} value={segment}>
+                  {segment}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {leg.segment === 'futures' && (
+            <div className="space-y-1.5">
+              <Label className="text-xs uppercase">Expiry</Label>
+              <select
+                value={leg.expiry ?? 'monthly'}
+                onChange={(event) => update('expiry', event.target.value as ExpiryRank)}
+                className={SELECT_CLASS_SM}
+              >
+                {expiriesFor(tab, 'futures').map((rank) => (
+                  <option key={rank} value={rank}>
+                    {EXPIRY_RANK_LABELS[rank]}
+                  </option>
+                ))}
+              </select>
+              {!leg.symbol?.trim() ? (
+                <p className="text-[10px] text-muted-foreground">pick a symbol first</p>
+              ) : expiry.isLoading ? (
+                <p className="text-[10px] text-muted-foreground">resolving…</p>
+              ) : expiry.error ? (
+                <p className="text-[10px] text-destructive" title={expiry.error}>
+                  could not resolve
+                </p>
+              ) : resolvedExpiry ? (
+                <p className="font-mono text-[10px] text-muted-foreground">{resolvedExpiry}</p>
+              ) : (
+                <p className="text-[10px] text-amber-600">not listed</p>
+              )}
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase">Side</Label>
+            <select
+              value={leg.side ?? 'both'}
+              onChange={(event) => update('side', event.target.value as LegSide)}
+              className={SELECT_CLASS_SM}
+            >
+              {(['long', 'short', 'both'] as LegSide[]).map((side) => (
+                <option key={side} value={side}>
+                  {LEG_SIDE_LABELS[side]}
+                </option>
+              ))}
+            </select>
+            {/* The single most confusable thing in this feature. */}
+            <p className="text-[10px] text-muted-foreground">
+              Which signals this leg accepts, not the side it is held. Both takes all four actions;
+              whichever signal opens the leg decides whether it is long or short.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase">{quantityLabel}</Label>
+            <Input
+              type="number"
+              min={1}
+              max={MAX_SIGNAL_QTY}
+              step={1}
+              value={leg.qty ?? 1}
+              onChange={(event) =>
+                update(
+                  'qty',
+                  Math.min(
+                    MAX_SIGNAL_QTY,
+                    Math.max(1, Number.parseInt(event.target.value || '1', 10) || 1)
+                  )
+                )
+              }
+              className="h-9"
+            />
+            <p className="text-[10px] text-muted-foreground">
+              {leg.segment === 'cash'
+                ? 'Shares, sent as-is.'
+                : 'Units, not lots: enter a whole multiple of the contract lot size.'}
+            </p>
+          </div>
+        </div>
+
+        <Separator />
+
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase">Stop Loss (pts)</Label>
+            <Input
+              type="number"
+              step={0.01}
+              min={0}
+              value={leg.sl_pts ?? ''}
+              placeholder="0 = off"
+              onChange={(event) =>
+                update('sl_pts', event.target.value === '' ? null : Number(event.target.value))
+              }
+              className="h-9"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase">Target (pts)</Label>
+            <Input
+              type="number"
+              step={0.01}
+              min={0}
+              value={leg.target_pts ?? ''}
+              placeholder="0 = off"
+              onChange={(event) =>
+                update('target_pts', event.target.value === '' ? null : Number(event.target.value))
+              }
+              className="h-9"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase">Trail SL — X (pts)</Label>
+            <Input
+              type="number"
+              step={0.01}
+              min={0}
+              value={leg.trail?.x ?? 0}
+              onChange={(event) =>
+                update('trail', { x: Number(event.target.value || 0), y: leg.trail?.y ?? 0 })
+              }
+              className="h-9"
+            />
+            <p className="text-[10px] text-muted-foreground">
+              Advance the stop by Y points for every X points the leg moves in your favour. Both
+              halves are required together.
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase">Trail SL — Y (step)</Label>
+            <Input
+              type="number"
+              step={0.01}
+              min={0}
+              value={leg.trail?.y ?? 0}
+              onChange={(event) =>
+                update('trail', { x: leg.trail?.x ?? 0, y: Number(event.target.value || 0) })
+              }
+              className="h-9"
+            />
+            <p className="text-[10px] text-muted-foreground">
+              Leave both at 0 for a leg with no trailing stop.
+            </p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Underlying picker for the open-universe tabs
 // ---------------------------------------------------------------------------
 
@@ -569,11 +792,15 @@ function LegCard({
  * underlyings that actually have contracts listed.
  */
 function UnderlyingSearchField({
+  id,
   value,
   onChange,
   searchExchange,
   placeholder,
 }: {
+  /** Only set where a <Label htmlFor> points at it; omitted inside leg cards,
+   *  where the field is rendered once per leg and an id would repeat. */
+  id?: string
   value: string
   onChange: (symbol: string) => void
   searchExchange: string
@@ -586,7 +813,7 @@ function UnderlyingSearchField({
   return (
     <div className="relative">
       <Input
-        id="underlying"
+        id={id}
         value={value}
         onChange={(event) => {
           onChange(event.target.value.toUpperCase())
@@ -655,9 +882,16 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
   const navigate = useNavigate()
   const isEdit = editing != null
 
-  const initialTab = asTab(editing?.universe_tab)
+  const initialKind: StrategyKind = editing?.strategy_kind ?? 'batch'
+  const storedTab = asTab(editing?.universe_tab)
+  // A signal strategy cannot sit on an index-options tab, so a new one starts
+  // on the first tab its kind allows.
+  const initialTab: UniverseTab =
+    initialKind === 'signal' && !SIGNAL_MODE_TABS.includes(storedTab)
+      ? SIGNAL_MODE_TABS[0]
+      : storedTab
 
-  const [kind, setKind] = useState<StrategyKind>(editing?.strategy_kind ?? 'batch')
+  const [kind, setKind] = useState<StrategyKind>(initialKind)
   const [direction, setDirection] = useState<StrategyDirection>(editing?.direction ?? 'both')
   const isSignal = kind === 'signal'
 
@@ -677,11 +911,18 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
   )
 
   const [legs, setLegs] = useState<Leg[]>(() =>
-    editing && editing.legs.length > 0 ? editing.legs : [freshLeg(1, initialTab)]
+    editing && editing.legs.length > 0
+      ? editing.legs
+      : [initialKind === 'signal' ? freshSignalLeg(1, initialTab) : freshBatchLeg(1, initialTab)]
   )
 
   const [product, setProduct] = useState<Product>(
-    editing?.product ?? defaultProductForLegs(editing?.legs ?? [freshLeg(1, initialTab)])
+    editing?.product ??
+      defaultProductForLegs(
+        editing?.legs ?? [
+          initialKind === 'signal' ? freshSignalLeg(1, initialTab) : freshBatchLeg(1, initialTab),
+        ]
+      )
   )
 
   const [overallSl, setOverallSl] = useState(
@@ -729,8 +970,16 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
   // Expiry lists are per (underlying, instrument), not per leg: ten legs on one
   // underlying ask the platform once. Only fetched for the instrument types the
   // legs actually use.
-  const hasOptionsLeg = useMemo(() => legs.some((leg) => leg.segment === 'options'), [legs])
-  const hasFuturesLeg = useMemo(() => legs.some((leg) => leg.segment === 'futures'), [legs])
+  // Signal legs resolve their own expiries per card, against their own symbol,
+  // so the strategy-level lookup is batch-only.
+  const hasOptionsLeg = useMemo(
+    () => !isSignal && legs.some((leg) => leg.segment === 'options'),
+    [legs, isSignal]
+  )
+  const hasFuturesLeg = useMemo(
+    () => !isSignal && legs.some((leg) => leg.segment === 'futures'),
+    [legs, isSignal]
+  )
   const optionExpiries = useExpiryResolution(
     underlying,
     underlyingExchange,
@@ -763,14 +1012,41 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
     if (!allowedProducts.includes(product)) setProduct(allowedProducts[0])
   }, [allowedProducts, product])
 
+  const freshLegFor = (id: number, forTab: UniverseTab, forKind: StrategyKind): Leg =>
+    forKind === 'signal' ? freshSignalLeg(id, forTab) : freshBatchLeg(id, forTab)
+
   const onTabChange = (next: UniverseTab) => {
     setTab(next)
     setUnderlying(TAB_DEFAULT_UNDERLYINGS[next][0].symbol)
-    const seeded = [freshLeg(1, next)]
+    const seeded = [freshLegFor(1, next, kind)]
     setLegs(seeded)
     setEntryTime(TAB_INTRADAY_DEFAULTS[next].entry)
     setExitTime(TAB_INTRADAY_DEFAULTS[next].exit)
     setProduct(defaultProductForLegs(seeded))
+  }
+
+  /**
+   * Switch the strategy between kinds.
+   *
+   * The legs are reshaped rather than thrown away: the per-leg risk the user
+   * has already typed means the same thing under both kinds. What cannot
+   * survive is the shape - a leg keeping `strike_mode` into signal mode would
+   * produce a payload the server refuses, naming a field no longer on screen.
+   */
+  const onKindChange = (next: StrategyKind) => {
+    if (isEdit || next === kind) return
+    const nextTab: UniverseTab =
+      next === 'signal' && !SIGNAL_MODE_TABS.includes(tab) ? SIGNAL_MODE_TABS[0] : tab
+    const reshaped = legs.map((leg) => convertLegKind(leg, next, nextTab))
+    setKind(next)
+    setTab(nextTab)
+    setLegs(reshaped)
+    if (nextTab !== tab) {
+      setUnderlying(TAB_DEFAULT_UNDERLYINGS[nextTab][0].symbol)
+      setEntryTime(TAB_INTRADAY_DEFAULTS[nextTab].entry)
+      setExitTime(TAB_INTRADAY_DEFAULTS[nextTab].exit)
+    }
+    setProduct(defaultProductForLegs(reshaped))
   }
 
   const addLeg = () => {
@@ -778,7 +1054,7 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
       showToast.error(`Up to ${MAX_LEGS} legs per strategy`)
       return
     }
-    setLegs([...legs, freshLeg((legs.at(-1)?.id ?? 0) + 1, tab)])
+    setLegs([...legs, freshLegFor((legs.at(-1)?.id ?? 0) + 1, tab, kind)])
   }
 
   const updateLeg = (index: number, next: Leg) => {
@@ -817,13 +1093,25 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
   /** Everything the server would refuse, refused here with a clearer message. */
   const validate = (): string | null => {
     if (!name.trim()) return 'Name is required'
-    if (!underlying.trim()) return 'Underlying is required'
+    if (!isSignal && !underlying.trim()) return 'Underlying is required'
     if (strategyType === 'intraday') {
       if (!entryTime) return 'Entry time is required for an intraday strategy'
       if (!exitTime) return 'Exit time is required for an intraday strategy'
       if (entryTime >= exitTime) return 'Entry time must be earlier than exit time'
     }
     for (const leg of legs) {
+      if (isSignal) {
+        if (!leg.symbol?.trim()) return `Leg ${leg.id}: symbol is required`
+        if (!leg.exchange?.trim()) return `Leg ${leg.id}: exchange is required`
+        const qty = Number(leg.qty)
+        if (!Number.isInteger(qty) || qty < 1) {
+          return `Leg ${leg.id}: quantity must be a whole number of at least 1`
+        }
+        if (qty > MAX_SIGNAL_QTY) {
+          return `Leg ${leg.id}: quantity cannot be more than ${MAX_SIGNAL_QTY.toLocaleString('en-IN')}`
+        }
+        continue
+      }
       if (leg.segment === 'options' && leg.strike_mode === 'strike') {
         if (leg.strike == null || leg.strike <= 0) {
           return `Leg ${leg.id}: pick a strike, or switch the leg to ATM-relative`
@@ -859,19 +1147,30 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
       return
     }
 
+    // The strategy row still carries one underlying, but a signal strategy's
+    // legs each name their own instrument. The first leg stands in, so the
+    // list and the detail header have something meaningful to show.
+    const firstLeg = legs[0]
+    const submittedUnderlying = isSignal
+      ? firstLeg?.symbol?.trim().toUpperCase() || 'MULTI'
+      : underlying.trim().toUpperCase()
+    const submittedExchange = isSignal
+      ? firstLeg?.exchange?.trim().toUpperCase() || TAB_DEFAULT_EXCHANGE[tab]
+      : underlyingExchange
+
     const payload: StrategyConfigPayload = {
       name: name.trim(),
       strategy_kind: kind,
       direction,
       universe_tab: tab,
-      underlying: underlying.trim().toUpperCase(),
-      underlying_exchange: underlyingExchange,
+      underlying: submittedUnderlying,
+      underlying_exchange: submittedExchange,
       strategy_type: strategyType,
       entry_time: strategyType === 'intraday' ? entryTime : null,
       exit_time: strategyType === 'intraday' ? exitTime : null,
       product,
       pricetype: 'MARKET',
-      legs: legs.map(legToPayload),
+      legs: legs.map((leg) => legToPayload(leg, kind)),
       overall_sl_mtm: overallSl ? Number(overallSl) : null,
       overall_target_mtm: overallTarget ? Number(overallTarget) : null,
       trail_sl_to_entry: trailToEntry,
@@ -939,7 +1238,7 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
                 key={option}
                 type="button"
                 disabled={isEdit && option !== kind}
-                onClick={() => !isEdit && setKind(option)}
+                onClick={() => onKindChange(option)}
                 className={cn(
                   'rounded-md border p-3 text-left transition-colors',
                   kind === option
@@ -961,24 +1260,34 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
       <Card>
         <CardContent className="p-4">
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {UNIVERSE_TABS.map((option) => (
-              <button
-                key={option}
-                type="button"
-                onClick={() => onTabChange(option)}
-                className={cn(
-                  'rounded-md border p-3 text-left transition-colors',
-                  tab === option
-                    ? 'border-primary bg-primary/10'
-                    : 'border-border hover:bg-muted/50'
-                )}
-              >
-                <div className="text-sm font-medium">{UNIVERSE_TAB_LABELS[option]}</div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  {UNIVERSE_TAB_HINT[option]}
-                </div>
-              </button>
-            ))}
+            {UNIVERSE_TABS.map((option) => {
+              const unavailable = isSignal && !SIGNAL_MODE_TABS.includes(option)
+              return (
+                <button
+                  key={option}
+                  type="button"
+                  disabled={unavailable}
+                  onClick={() => !unavailable && onTabChange(option)}
+                  className={cn(
+                    'rounded-md border p-3 text-left transition-colors',
+                    tab === option
+                      ? 'border-primary bg-primary/10'
+                      : 'border-border hover:bg-muted/50',
+                    unavailable && 'cursor-not-allowed opacity-40'
+                  )}
+                >
+                  <div className="text-sm font-medium">{UNIVERSE_TAB_LABELS[option]}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {UNIVERSE_TAB_HINT[option]}
+                  </div>
+                  {unavailable && (
+                    <div className="mt-1 text-[10px] uppercase text-muted-foreground">
+                      not available in signal mode
+                    </div>
+                  )}
+                </button>
+              )
+            })}
           </div>
         </CardContent>
       </Card>
@@ -1034,33 +1343,41 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
               />
             </div>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="underlying">Underlying</Label>
-              {closedUniverse ? (
-                <select
-                  id="underlying"
-                  value={underlying}
-                  onChange={(event) => setUnderlying(event.target.value)}
-                  className={SELECT_CLASS_MD}
-                >
-                  {seededUnderlyings.map((choice) => (
-                    <option key={choice.symbol} value={choice.symbol}>
-                      {choice.symbol} — {choice.name}
-                    </option>
-                  ))}
-                </select>
-              ) : (
-                <UnderlyingSearchField
-                  value={underlying}
-                  onChange={setUnderlying}
-                  searchExchange={derivativeExchangeFor(underlyingExchange)}
-                  placeholder={`Search ${seededUnderlyings[0]?.symbol ?? 'symbol'}…`}
-                />
-              )}
-              <p className="text-xs text-muted-foreground">
-                Exchange: <span className="font-mono">{underlyingExchange}</span>
-              </p>
-            </div>
+            {isSignal ? (
+              <div className="space-y-1.5 rounded-md bg-muted/40 p-2 text-xs text-muted-foreground">
+                Signal mode: each leg picks its own symbol below. The strategy row shows the first
+                leg's symbol as its label.
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <Label htmlFor="underlying">Underlying</Label>
+                {closedUniverse ? (
+                  <select
+                    id="underlying"
+                    value={underlying}
+                    onChange={(event) => setUnderlying(event.target.value)}
+                    className={SELECT_CLASS_MD}
+                  >
+                    {seededUnderlyings.map((choice) => (
+                      <option key={choice.symbol} value={choice.symbol}>
+                        {choice.symbol} — {choice.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <UnderlyingSearchField
+                    id="underlying"
+                    value={underlying}
+                    onChange={setUnderlying}
+                    searchExchange={derivativeExchangeFor(underlyingExchange)}
+                    placeholder={`Search ${seededUnderlyings[0]?.symbol ?? 'symbol'}…`}
+                  />
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Exchange: <span className="font-mono">{underlyingExchange}</span>
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -1161,24 +1478,36 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
         <CardContent className="space-y-4">
           {isSignal && (
             <p className="rounded-md bg-muted/40 p-2 text-xs text-muted-foreground">
-              Signal mode drives these same legs from long_entry / long_exit / short_entry /
-              short_exit webhooks instead of entering them all at start. Each leg keeps the contract
-              configured here; the direction filter above decides which signals are accepted.
+              Each leg reacts to long_entry / long_exit / short_entry / short_exit webhooks instead
+              of being entered with the rest at start. The direction filter above decides which of
+              the four the strategy accepts at all; each leg's Side narrows that further.
             </p>
           )}
-          {legs.map((leg, index) => (
-            <LegCard
-              key={leg.id}
-              leg={leg}
-              tab={tab}
-              index={index}
-              expiry={expiryStateFor(leg)}
-              onChange={(next) => updateLeg(index, next)}
-              onRemove={() => removeLeg(index)}
-              onOpenStrikePicker={() => setStrikePickerLegIndex(index)}
-              removable={legs.length > 1}
-            />
-          ))}
+          {legs.map((leg, index) =>
+            isSignal ? (
+              <SignalLegCard
+                key={leg.id}
+                leg={leg}
+                tab={tab}
+                index={index}
+                onChange={(next) => updateLeg(index, next)}
+                onRemove={() => removeLeg(index)}
+                removable={legs.length > 1}
+              />
+            ) : (
+              <LegCard
+                key={leg.id}
+                leg={leg}
+                tab={tab}
+                index={index}
+                expiry={expiryStateFor(leg)}
+                onChange={(next) => updateLeg(index, next)}
+                onRemove={() => removeLeg(index)}
+                onOpenStrikePicker={() => setStrikePickerLegIndex(index)}
+                removable={legs.length > 1}
+              />
+            )
+          )}
         </CardContent>
       </Card>
 

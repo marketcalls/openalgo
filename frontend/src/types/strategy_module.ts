@@ -32,6 +32,15 @@ export type OptionType = 'CE' | 'PE'
 export type StrikeMode = 'atm' | 'strike'
 
 /**
+ * Which signals a leg accepts, on a signal-mode strategy.
+ *
+ * Not the side the leg is currently held. That is decided by whichever signal
+ * opened it and lives in run state, so a leg declared "both" may be short right
+ * now. Mirrors `LEG_SIDES` in the validator.
+ */
+export type LegSide = 'long' | 'short' | 'both'
+
+/**
  * Expiry ranks the validator accepts (`LEG_EXPIRIES`).
  *
  * `weekly` and `monthly` are the nearest weekly and nearest monthly contract;
@@ -99,12 +108,25 @@ export interface TrailConfig {
 export interface Leg {
   id: number
   segment: Segment
-  position: LegPosition
-  lots: number
+
+  // --- Batch-mode fields. Absent on a signal leg, which the validator
+  // rejects outright rather than ignoring. ---
+  position?: LegPosition | null
+  lots?: number | null
   option_type?: OptionType | null
   strike_mode?: StrikeMode | null
   atm_offset?: string | null
   strike?: number | null
+
+  // --- Signal-mode fields. A signal leg names its own instrument and its own
+  // absolute quantity; it is a different shape, not a superset. ---
+  symbol?: string | null
+  exchange?: string | null
+  side?: LegSide | null
+  /** Raw shares or units, never lots. */
+  qty?: number | null
+
+  // --- Shared by both kinds. ---
   expiry?: ExpiryRank | null
   sl_pts?: number | null
   target_pts?: number | null
@@ -443,6 +465,23 @@ export const STRATEGY_DIRECTION_LABELS: Record<StrategyDirection, string> = {
   both: 'Both',
 }
 
+export const LEG_SIDE_LABELS: Record<LegSide, string> = {
+  long: 'Long',
+  short: 'Short',
+  both: 'Both',
+}
+
+/**
+ * Universe tabs a signal strategy can use.
+ *
+ * Signal mode does not do option spreads - a signal leg carries no option
+ * fields at all - so the two index-options tabs have nothing to offer it.
+ */
+export const SIGNAL_MODE_TABS: UniverseTab[] = ['stocks_fno', 'mcx']
+
+/** Segments a signal leg may take. Narrower than a batch leg's: no options. */
+export const SIGNAL_LEG_SEGMENTS: Segment[] = ['cash', 'futures']
+
 /**
  * Intraday window per tab. NSE and BSE trade 09:15-15:30, so 09:35-15:15 skips
  * the opening auction and exits before a broker's MIS square-off. MCX runs to
@@ -458,6 +497,8 @@ export const TAB_INTRADAY_DEFAULTS: Record<UniverseTab, { entry: string; exit: s
 export const MAX_LEGS = 10
 export const MAX_LOTS = 50
 export const MAX_NAME_LENGTH = 200
+/** A signal leg trades raw quantity, so its cap is on shares, not lots. */
+export const MAX_SIGNAL_QTY = 1_000_000
 
 // ---------------------------------------------------------------------------
 // Pure configuration helpers
@@ -491,6 +532,145 @@ export function expiriesFor(tab: UniverseTab, segment: Segment): ExpiryRank[] {
   if (segment === 'cash') return []
   if (segment === 'futures') return ['monthly', 'next_month']
   return TAB_EXPIRIES[tab]
+}
+
+// ---------------------------------------------------------------------------
+// Leg shapes
+//
+// A batch leg and a signal leg are different shapes, not one shape with
+// optional halves. The validator enforces that in both directions: it refuses
+// `position` and `lots` on a signal leg, and refuses `symbol`, `exchange`,
+// `side` and `qty` on a batch one, rather than ignoring what does not apply.
+//
+// That makes the conversion below load bearing. A form that let an option leg
+// keep its `strike_mode` while the strategy was switched to signal mode would
+// produce a payload the server rejects outright, naming a field the user
+// cannot see any more.
+// ---------------------------------------------------------------------------
+
+/** A new batch leg: one short ATM call, the usual starting point. */
+export function freshBatchLeg(id: number, tab: UniverseTab): Leg {
+  return {
+    id,
+    segment: 'options',
+    position: 'S',
+    lots: 1,
+    option_type: 'CE',
+    strike_mode: 'atm',
+    atm_offset: 'ATM',
+    strike: null,
+    expiry: expiriesFor(tab, 'options')[0],
+    sl_pts: null,
+    target_pts: null,
+    trail: { x: 0, y: 0 },
+  }
+}
+
+/**
+ * A new signal leg.
+ *
+ * Cash on the stocks tab, futures on MCX, which is what each of those
+ * universes actually trades. The symbol is left empty on purpose: it is the
+ * one field with no sensible default, and pre-filling it with a seed symbol
+ * invites a strategy that trades something nobody chose.
+ */
+export function freshSignalLeg(id: number, tab: UniverseTab): Leg {
+  const segment: Segment = tab === 'mcx' ? 'futures' : 'cash'
+  return {
+    id,
+    segment,
+    symbol: '',
+    exchange: TAB_DEFAULT_EXCHANGE[tab],
+    side: 'both',
+    qty: 1,
+    expiry: segment === 'futures' ? 'monthly' : null,
+    sl_pts: null,
+    target_pts: null,
+    trail: { x: 0, y: 0 },
+  }
+}
+
+/**
+ * The same leg, reshaped for the other kind.
+ *
+ * Per-leg risk carries across because it means the same thing under both
+ * kinds; everything else is rebuilt from the target shape's defaults. An
+ * options leg becomes a cash leg, because signal mode has no options at all.
+ */
+export function convertLegKind(leg: Leg, kind: StrategyKind, tab: UniverseTab): Leg {
+  const risk = {
+    sl_pts: leg.sl_pts ?? null,
+    target_pts: leg.target_pts ?? null,
+    trail: leg.trail ?? { x: 0, y: 0 },
+  }
+
+  if (kind === 'signal') {
+    const segment: Segment = leg.segment === 'futures' ? 'futures' : 'cash'
+    return {
+      id: leg.id,
+      segment,
+      symbol: leg.symbol ?? '',
+      exchange: leg.exchange || TAB_DEFAULT_EXCHANGE[tab],
+      side: leg.side ?? 'both',
+      qty: leg.qty ?? 1,
+      expiry: segment === 'futures' ? (leg.expiry ?? 'monthly') : null,
+      ...risk,
+    }
+  }
+
+  const allowed = TAB_SEGMENTS[tab]
+  const segment: Segment = allowed.includes(leg.segment) ? leg.segment : allowed[0]
+  const isOption = segment === 'options'
+  return {
+    id: leg.id,
+    segment,
+    position: leg.position ?? 'S',
+    lots: leg.lots ?? 1,
+    option_type: isOption ? (leg.option_type ?? 'CE') : null,
+    // Always ATM-relative coming back from signal mode: there is no strike to
+    // carry over, and an empty direct strike would fail validation on save.
+    strike_mode: isOption ? 'atm' : null,
+    atm_offset: isOption ? (leg.atm_offset ?? 'ATM') : null,
+    strike: null,
+    expiry: segment === 'cash' ? null : (leg.expiry ?? expiriesFor(tab, segment)[0] ?? 'monthly'),
+    ...risk,
+  }
+}
+
+/**
+ * A leg reduced to exactly the keys its kind accepts.
+ *
+ * The optional fields are conditionally forbidden rather than merely optional.
+ * Pruning in one place, at submit time, lets the form keep a field's last value
+ * while the user toggles a mode back and forth without that value reaching the
+ * request.
+ */
+export function legToPayload(leg: Leg, kind: StrategyKind = 'batch'): Leg {
+  const clean: Leg = { id: leg.id, segment: leg.segment }
+
+  if (kind === 'signal') {
+    clean.symbol = (leg.symbol ?? '').trim().toUpperCase()
+    clean.exchange = (leg.exchange ?? '').trim().toUpperCase()
+    clean.side = leg.side ?? 'both'
+    clean.qty = Math.trunc(leg.qty ?? 1)
+    // Refused outright on a cash leg, so it is omitted rather than nulled.
+    if (leg.segment === 'futures') clean.expiry = leg.expiry ?? 'monthly'
+  } else {
+    clean.position = leg.position ?? 'S'
+    clean.lots = leg.lots ?? 1
+    if (leg.segment !== 'cash') clean.expiry = leg.expiry
+    if (leg.segment === 'options') {
+      clean.option_type = leg.option_type ?? 'CE'
+      clean.strike_mode = leg.strike_mode ?? 'atm'
+      if (clean.strike_mode === 'atm') clean.atm_offset = leg.atm_offset ?? 'ATM'
+      else clean.strike = leg.strike ?? null
+    }
+  }
+
+  if (leg.sl_pts != null) clean.sl_pts = leg.sl_pts
+  if (leg.target_pts != null) clean.target_pts = leg.target_pts
+  if (leg.trail && (leg.trail.x > 0 || leg.trail.y > 0)) clean.trail = leg.trail
+  return clean
 }
 
 // ---------------------------------------------------------------------------

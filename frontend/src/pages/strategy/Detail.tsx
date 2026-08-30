@@ -422,8 +422,8 @@ function LiveTab({
                         : exit
                           ? 'closed'
                           : 'open')
-                  const symbol = legLive?.symbol ?? entry?.symbol ?? '—'
-                  const qty = legLive?.qty ?? entry?.qty ?? leg.lots
+                  const symbol = legLive?.symbol ?? entry?.symbol ?? leg.symbol ?? '—'
+                  const qty = legLive?.qty ?? entry?.qty ?? leg.qty ?? leg.lots ?? '—'
                   const mtm = legLive?.mtm
 
                   return (
@@ -431,7 +431,9 @@ function LiveTab({
                       <TableCell className="font-mono">{leg.id}</TableCell>
                       <TableCell className="font-mono text-xs">{symbol}</TableCell>
                       <TableCell>
-                        <Badge variant="outline">{leg.position}</Badge>
+                        <Badge variant="outline">
+                          {legLive?.position ?? leg.position ?? leg.side ?? '—'}
+                        </Badge>
                       </TableCell>
                       <TableCell className="text-right font-mono">{qty}</TableCell>
                       <TableCell className="text-right font-mono">
@@ -504,6 +506,7 @@ function LiveTab({
 function SetupTab({ strategy }: { strategy: Strategy }) {
   const navigate = useNavigate()
   const isStopped = strategy.status !== 'running'
+  const isSignal = strategy.strategy_kind === 'signal'
   const scheduler = strategy.scheduler
 
   return (
@@ -561,46 +564,83 @@ function SetupTab({ strategy }: { strategy: Strategy }) {
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="text-xs text-muted-foreground">
-                <tr>
-                  <th className="px-2 py-1 text-left">#</th>
-                  <th className="px-2 py-1 text-left">Segment</th>
-                  <th className="px-2 py-1 text-left">Pos</th>
-                  <th className="px-2 py-1 text-right">Lots</th>
-                  <th className="px-2 py-1 text-left">Expiry</th>
-                  <th className="px-2 py-1 text-left">Type</th>
-                  <th className="px-2 py-1 text-left">Strike</th>
-                </tr>
-              </thead>
-              <tbody>
-                {strategy.legs.map((leg) => {
-                  const strikeText =
-                    leg.segment !== 'options'
-                      ? '—'
-                      : leg.strike_mode === 'strike'
-                        ? leg.strike != null
-                          ? `${leg.strike}`
-                          : '—'
-                        : `ATM (${leg.atm_offset ?? 'ATM'})`
-                  return (
+            {isSignal ? (
+              // A signal leg names its own instrument and quantity, so it gets
+              // its own columns rather than blanks under the batch ones.
+              <table className="w-full text-sm">
+                <thead className="text-xs text-muted-foreground">
+                  <tr>
+                    <th className="px-2 py-1 text-left">#</th>
+                    <th className="px-2 py-1 text-left">Symbol</th>
+                    <th className="px-2 py-1 text-left">Exchange</th>
+                    <th className="px-2 py-1 text-left">Segment</th>
+                    <th className="px-2 py-1 text-left">Side</th>
+                    <th className="px-2 py-1 text-right">Qty</th>
+                    <th className="px-2 py-1 text-left">Expiry</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {strategy.legs.map((leg) => (
                     <tr key={leg.id} className="border-t">
                       <td className="px-2 py-1.5 font-mono">{leg.id}</td>
+                      <td className="px-2 py-1.5 font-mono">{leg.symbol ?? '—'}</td>
+                      <td className="px-2 py-1.5 font-mono">{leg.exchange ?? '—'}</td>
                       <td className="px-2 py-1.5">{leg.segment}</td>
                       <td className="px-2 py-1.5">
                         <Badge variant="outline" className="text-xs">
-                          {leg.position}
+                          {leg.side ?? 'both'}
                         </Badge>
                       </td>
-                      <td className="px-2 py-1.5 text-right font-mono">{leg.lots}</td>
-                      <td className="px-2 py-1.5">{leg.expiry ?? '—'}</td>
-                      <td className="px-2 py-1.5">{leg.option_type ?? '—'}</td>
-                      <td className="px-2 py-1.5 font-mono">{strikeText}</td>
+                      <td className="px-2 py-1.5 text-right font-mono">{leg.qty ?? '—'}</td>
+                      <td className="px-2 py-1.5">
+                        {leg.segment === 'futures' ? (leg.expiry ?? '—') : '—'}
+                      </td>
                     </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="text-xs text-muted-foreground">
+                  <tr>
+                    <th className="px-2 py-1 text-left">#</th>
+                    <th className="px-2 py-1 text-left">Segment</th>
+                    <th className="px-2 py-1 text-left">Pos</th>
+                    <th className="px-2 py-1 text-right">Lots</th>
+                    <th className="px-2 py-1 text-left">Expiry</th>
+                    <th className="px-2 py-1 text-left">Type</th>
+                    <th className="px-2 py-1 text-left">Strike</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {strategy.legs.map((leg) => {
+                    const strikeText =
+                      leg.segment !== 'options'
+                        ? '—'
+                        : leg.strike_mode === 'strike'
+                          ? leg.strike != null
+                            ? `${leg.strike}`
+                            : '—'
+                          : `ATM (${leg.atm_offset ?? 'ATM'})`
+                    return (
+                      <tr key={leg.id} className="border-t">
+                        <td className="px-2 py-1.5 font-mono">{leg.id}</td>
+                        <td className="px-2 py-1.5">{leg.segment}</td>
+                        <td className="px-2 py-1.5">
+                          <Badge variant="outline" className="text-xs">
+                            {leg.position ?? '—'}
+                          </Badge>
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-mono">{leg.lots ?? '—'}</td>
+                        <td className="px-2 py-1.5">{leg.expiry ?? '—'}</td>
+                        <td className="px-2 py-1.5">{leg.option_type ?? '—'}</td>
+                        <td className="px-2 py-1.5 font-mono">{strikeText}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -1076,7 +1116,7 @@ function RiskTab({ strategy }: { strategy: Strategy }) {
                     <td className="px-2 py-1.5">{leg.id}</td>
                     <td className="px-2 py-1.5">
                       <Badge variant="outline" className="text-xs">
-                        {leg.position} · {leg.segment}
+                        {leg.position ?? leg.side ?? '—'} · {leg.segment}
                         {leg.option_type ? ` · ${leg.option_type}` : ''}
                       </Badge>
                     </td>
