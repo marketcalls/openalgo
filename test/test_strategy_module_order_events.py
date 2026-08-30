@@ -827,6 +827,43 @@ def test_state_gone_stranding_event_is_reserved_for_a_genuine_zero_fill(order):
     assert "did not happen" in failures[0]["message"].lower()
 
 
+def test_priced_dead_exit_after_state_cleanup_reconciles_the_stopped_short_run(order):
+    assert store.update_order(
+        order.order_id,
+        status="complete",
+        avg_fill_price=100.0,
+        filled_qty=10,
+    )
+    exit_row = store.record_order(
+        order.run_id,
+        1,
+        "exit_close_all",
+        {
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "BUY",
+            "qty": 75,
+            "broker_order_id": "BRK-DEAD-PNL-NO-STATE",
+            "status": "open",
+        },
+    )
+    assert exit_row is not None
+    assert store.finish_run(order.run_id, "manual", pnl_realized=0.0) is True
+    assert state.get_run_state(order.run_id) is None
+
+    order_events._apply_update(
+        "BRK-DEAD-PNL-NO-STATE",
+        _event("BRK-DEAD-PNL-NO-STATE", status="cancelled", avg=101.0, filled=10),
+    )
+
+    durable_run = store.get_run(order.run_id)
+    assert durable_run.stopped_at is not None
+    assert float(durable_run.pnl_realized) == pytest.approx(-10.0)
+    durable_exit = next(row for row in store.list_orders(order.run_id) if row["id"] == exit_row.id)
+    assert durable_exit["status"] == "cancelled"
+    assert durable_exit["filled_qty"] == 10
+
+
 def _apply_two_updates_after_both_read(
     monkeypatch: pytest.MonkeyPatch, broker_order_id: str, event
 ) -> None:

@@ -56,6 +56,39 @@ def _run():
     return sm.create_run(strategy["id"], "sandbox", "zerodha")
 
 
+def _filled_order(
+    run_id,
+    leg_id,
+    kind,
+    action,
+    *,
+    requested_qty,
+    status,
+    avg_price,
+    filled_qty,
+):
+    """Persist one literal broker fill fact for reconciliation tests."""
+    row = sm.record_order(
+        run_id,
+        leg_id,
+        kind,
+        {
+            **ORDER,
+            "action": action,
+            "qty": requested_qty,
+            "position_ref": f"position-{leg_id}",
+            "status": "open",
+        },
+    )
+    assert row is not None
+    assert sm.update_order(
+        row.id,
+        status=status,
+        avg_fill_price=avg_price,
+        filled_qty=filled_qty,
+    )
+
+
 @pytest.fixture(autouse=True)
 def clean_slate():
     # Start from a clean session; see the note in
@@ -367,6 +400,165 @@ def test_finish_and_release_rolls_back_run_when_strategy_owns_a_different_run():
     strategy = sm.get_strategy(created["id"], USER)
     assert strategy.status == "running"
     assert strategy.current_run_id == current.id
+
+
+@pytest.mark.parametrize(
+    ("entry_status", "exit_status", "entry_action", "exit_action", "expected"),
+    [
+        ("cancelled", "rejected", "BUY", "SELL", 12.0),
+        ("rejected", "cancelled", "SELL", "BUY", -12.0),
+    ],
+)
+def test_reconcile_run_pnl_uses_exact_terminal_partial_entry_and_exit_quantities(
+    entry_status,
+    exit_status,
+    entry_action,
+    exit_action,
+    expected,
+):
+    run = _run()
+    _filled_order(
+        run.id,
+        1,
+        "entry",
+        entry_action,
+        requested_qty=40,
+        status=entry_status,
+        avg_price=100.0,
+        filled_qty=4,
+    )
+    _filled_order(
+        run.id,
+        1,
+        "exit_close_all",
+        exit_action,
+        requested_qty=30,
+        status=exit_status,
+        avg_price=104.0,
+        filled_qty=3,
+    )
+
+    reconciled = sm.reconcile_run_pnl(run.id)
+
+    assert reconciled == pytest.approx(expected)
+    assert float(sm.get_run(run.id).pnl_realized) == pytest.approx(expected)
+
+
+def test_reconcile_run_pnl_keeps_complete_fills_without_inventing_dead_fill_facts():
+    run = _run()
+    # Existing complete-row behavior: a missing filled quantity means the
+    # broker completed the requested two units, for +10 on this long.
+    _filled_order(
+        run.id,
+        1,
+        "entry",
+        "BUY",
+        requested_qty=2,
+        status="complete",
+        avg_price=10.0,
+        filled_qty=None,
+    )
+    _filled_order(
+        run.id,
+        1,
+        "exit_close_all",
+        "SELL",
+        requested_qty=2,
+        status="complete",
+        avg_price=15.0,
+        filled_qty=None,
+    )
+    # A terminal zero-fill must not fall back to the requested 100 units.
+    _filled_order(
+        run.id,
+        2,
+        "entry",
+        "BUY",
+        requested_qty=100,
+        status="cancelled",
+        avg_price=20.0,
+        filled_qty=0,
+    )
+    _filled_order(
+        run.id,
+        2,
+        "exit_close_all",
+        "SELL",
+        requested_qty=100,
+        status="rejected",
+        avg_price=25.0,
+        filled_qty=0,
+    )
+    # Quantity without a usable terminal entry price proves exposure, but it
+    # cannot create valued P&L.
+    _filled_order(
+        run.id,
+        3,
+        "entry",
+        "BUY",
+        requested_qty=50,
+        status="rejected",
+        avg_price=0.0,
+        filled_qty=3,
+    )
+    _filled_order(
+        run.id,
+        3,
+        "exit_close_all",
+        "SELL",
+        requested_qty=50,
+        status="cancelled",
+        avg_price=25.0,
+        filled_qty=3,
+    )
+    # A usable entry plus an unpriced dead exit likewise cannot invent P&L.
+    _filled_order(
+        run.id,
+        4,
+        "entry",
+        "BUY",
+        requested_qty=4,
+        status="complete",
+        avg_price=30.0,
+        filled_qty=4,
+    )
+    _filled_order(
+        run.id,
+        4,
+        "exit_close_all",
+        "SELL",
+        requested_qty=40,
+        status="cancelled",
+        avg_price=0.0,
+        filled_qty=2,
+    )
+    # One priced dead partial closes exactly two requested-of-99 short units,
+    # adding +10 rather than +495.
+    _filled_order(
+        run.id,
+        5,
+        "entry",
+        "SELL",
+        requested_qty=99,
+        status="complete",
+        avg_price=50.0,
+        filled_qty=2,
+    )
+    _filled_order(
+        run.id,
+        5,
+        "exit_close_all",
+        "BUY",
+        requested_qty=99,
+        status="rejected",
+        avg_price=45.0,
+        filled_qty=2,
+    )
+
+    reconciled = sm.reconcile_run_pnl(run.id)
+
+    assert reconciled == pytest.approx(20.0)
+    assert float(sm.get_run(run.id).pnl_realized) == pytest.approx(20.0)
 
 
 def test_a_run_records_its_final_numbers_on_stop():

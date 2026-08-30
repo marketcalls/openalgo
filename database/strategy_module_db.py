@@ -1279,14 +1279,28 @@ def reconcile_run_pnl(run_id: int) -> float | None:
 
         per_leg: dict[Any, dict[str, Any]] = {}
         for order in db_session.query(SmStrategyOrder).filter_by(run_id=run_id).all():
-            if order.status != "complete" or order.avg_fill_price is None:
+            status = (order.status or "").lower()
+            terminal_partial = status in {"cancelled", "rejected"}
+            if status != "complete" and not terminal_partial:
+                continue
+            if order.avg_fill_price is None:
                 continue
             price = float(order.avg_fill_price)
             if price <= 0:
                 # An entry of zero means the leg never traded, so nothing can
                 # be derived from it. Same rule the engine applies live.
                 continue
-            quantity = int(order.filled_qty or order.qty or 0)
+            if terminal_partial:
+                # A dead remainder does not erase the portion that traded, but
+                # zero means nothing traded and must never fall back to the
+                # requested quantity. This applies equally to entries and exits.
+                quantity = int(order.filled_qty or 0)
+                if quantity <= 0:
+                    continue
+            else:
+                # Preserve the established complete-order fallback for brokers
+                # that omit filled_qty after confirming the whole request.
+                quantity = int(order.filled_qty or order.qty or 0)
             leg = per_leg.setdefault(order.leg_id, {"entry": None, "action": None, "exits": []})
             if order.kind == "entry":
                 leg["entry"] = price
