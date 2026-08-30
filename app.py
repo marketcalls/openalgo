@@ -859,6 +859,17 @@ def setup_environment(app):
                 logger.error(f"Failed to initialize Historify scheduler: {e}")
 
             try:
+                # Multi-leg options strategies with end-to-end risk management.
+                # Starts its own order-update subscriber, crash recovery, price
+                # feed, checkpoint writer and scheduler, in that order.
+                from services.strategy_module.runtime import start_strategy_module
+
+                start_strategy_module()
+                logger.debug("Strategy module initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize Strategy module: {e}")
+
+            try:
                 # Server-side scalping SL / target / trailing-stop engine. Runs
                 # browser-independently so stops keep working after the user
                 # leaves /scalping or closes the tab. Idles when no SL is set.

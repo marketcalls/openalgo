@@ -296,6 +296,7 @@ class RiskTickFeed:
         self._dropped = 0
 
         self._notify: Callable[[TickSourceEvent], None] | None = None
+        self._on_price: Callable[[str, str, float], None] | None = None
 
         self._degraded = False
         self._backoff_index = -1
@@ -321,6 +322,19 @@ class RiskTickFeed:
         than accumulating handlers in a process that never restarts.
         """
         self._notify = callback
+
+    def set_on_price(self, callback: Callable[[str, str, float], None] | None) -> None:
+        """Register the per-price hook. One handler, replaced not accumulated.
+
+        This is what drives risk evaluation. ``set_notify`` reports only source
+        transitions, which is a display concern; this fires for every usable
+        price from either source, which is what a stop is judged against.
+
+        Both the websocket and the REST fallback go through it. A leg that has
+        fallen back to polling has to be evaluated on polled prices too, or the
+        fallback would keep the price fresh on screen while protecting nothing.
+        """
+        self._on_price = callback
 
     # ------------------------------------------------------------ subscriptions
 
@@ -519,6 +533,7 @@ class RiskTickFeed:
         """Apply queued ticks. Green side. Returns how many were applied."""
         applied = 0
         events: list[TickSourceEvent] = []
+        prices: list[tuple[str, str, float]] = []
         while applied < limit:
             try:
                 key, payload, at = self._queue.get_nowait()
@@ -530,7 +545,11 @@ class RiskTickFeed:
             event = self._apply_tick(key, payload, at)
             if event is not None:
                 events.append(event)
+            price = _price_from(payload)
+            if price is not None:
+                prices.append((str(payload.get("symbol")), str(payload.get("exchange")), price))
         self._emit(events)
+        self._emit_prices(prices)
         return applied
 
     def _apply_tick(self, key: str, payload: dict, at: float) -> TickSourceEvent | None:
@@ -686,6 +705,7 @@ class RiskTickFeed:
             return 0
         now = self._clock()
         applied = 0
+        prices: list[tuple[str, str, float]] = []
         with self._lock:
             for row in rows:
                 if not isinstance(row, dict):
@@ -704,7 +724,10 @@ class RiskTickFeed:
                     continue
                 state.ltp = price
                 state.last_price_at = now
+                prices.append((state.symbol, state.exchange, price))
                 applied += 1
+        # Outside the lock: the hook evaluates risk and may place an order.
+        self._emit_prices(prices)
         return applied
 
     def _enter_backoff(self, now: float) -> None:
@@ -997,6 +1020,26 @@ class RiskTickFeed:
             logger.exception("Strategy tick feed could not resolve an API key")
             self._api_key = None
         return self._api_key
+
+    def _emit_prices(self, prices: list[tuple[str, str, float]]) -> None:
+        """Hand prices to the risk hook. Green side, always outside every lock.
+
+        Outside the lock because the handler evaluates risk and can place an
+        order. A greenlet cannot yield while holding a lock, so calling this
+        from inside one would stall the worker for the length of a broker call.
+        """
+        if not prices:
+            return
+        callback = self._on_price
+        if callback is None:
+            return
+        for symbol, exchange, price in prices:
+            try:
+                callback(symbol, exchange, price)
+            except Exception:
+                # One symbol's evaluation failing must not cost the rest of the
+                # batch their prices.
+                logger.exception("Strategy tick feed price hook raised for %s", symbol)
 
     def _emit(self, events: list[TickSourceEvent]) -> None:
         """Log and push transitions. Green side, always outside every lock.

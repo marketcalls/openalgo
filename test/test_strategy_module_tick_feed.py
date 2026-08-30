@@ -779,3 +779,86 @@ def test_reconnect_resubscribes_every_tracked_symbol():
         assert len(ws.subscribe_calls) == 2
     finally:
         feed.stop()
+
+
+# ---------------------------------------------------------------------------
+# The per-price hook
+#
+# This is what drives risk evaluation. set_notify reports source transitions,
+# which is a display concern; this fires for every usable price.
+# ---------------------------------------------------------------------------
+
+
+def test_a_websocket_tick_reaches_the_price_hook():
+    feed, _clock, _ws, _quotes = make_feed()
+    feed.add_run_subscriptions(1, [("RELIANCE", "NSE")])
+    seen = []
+    feed.set_on_price(lambda s, e, p: seen.append((s, e, p)))
+
+    feed.on_tick(tick("RELIANCE", "NSE", 1287.5))
+    feed._drain_ticks_once()
+
+    assert seen == [("RELIANCE", "NSE", 1287.5)]
+
+
+def test_a_polled_price_reaches_the_price_hook_too():
+    # The one that matters most. A leg that has fallen back to REST must still
+    # be risk evaluated: if only websocket ticks drove the hook, the fallback
+    # would keep the price fresh on screen while protecting nothing.
+    feed, clock, _ws, quotes = make_feed(stale_threshold_sec=10.0)
+    try:
+        feed.add_run_subscriptions(1, [("RELIANCE", "NSE")])
+        seen = []
+        feed.set_on_price(lambda s, e, p: seen.append((s, e, p)))
+        quotes.prices[("RELIANCE", "NSE")] = 1290.0
+
+        # Age it past the stale threshold so it falls back to polling.
+        clock.advance(10)
+        priced = feed._poll_once()
+
+        assert priced == 1
+        assert seen == [("RELIANCE", "NSE", 1290.0)]
+    finally:
+        feed.stop()
+
+
+def test_a_price_hook_may_call_back_into_the_feed_without_deadlocking():
+    # The hook evaluates risk, which reads prices. If it were invoked while the
+    # feed held its own lock, this would hang rather than fail.
+    feed, _clock, _ws, _quotes = make_feed()
+    feed.add_run_subscriptions(1, [("RELIANCE", "NSE")])
+    read_back = []
+    feed.set_on_price(lambda s, e, _p: read_back.append(feed.get_ltp(s, e)))
+
+    feed.on_tick(tick("RELIANCE", "NSE", 1287.5))
+    feed._drain_ticks_once()
+
+    assert read_back == [1287.5]
+
+
+def test_a_raising_price_hook_does_not_cost_the_rest_of_the_batch():
+    feed, _clock, _ws, _quotes = make_feed()
+    feed.add_run_subscriptions(1, [("A", "NSE"), ("B", "NSE")])
+    seen = []
+
+    def hook(symbol, _exchange, _price):
+        if symbol == "A":
+            raise RuntimeError("boom")
+        seen.append(symbol)
+
+    feed.set_on_price(hook)
+    feed.on_tick(tick("A", "NSE", 1.0))
+    feed.on_tick(tick("B", "NSE", 2.0))
+    feed._drain_ticks_once()
+
+    assert seen == ["B"]
+
+
+def test_ticks_are_applied_even_with_no_price_hook_registered():
+    feed, _clock, _ws, _quotes = make_feed()
+    feed.add_run_subscriptions(1, [("RELIANCE", "NSE")])
+
+    feed.on_tick(tick("RELIANCE", "NSE", 1287.5))
+    feed._drain_ticks_once()
+
+    assert feed.get_ltp("RELIANCE", "NSE") == 1287.5

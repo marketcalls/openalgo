@@ -168,6 +168,11 @@ def start_run(
 
         store.set_strategy_status(strategy_id, "running", run.id)
         state.init_run_state(run.id, strategy_id, resolved)
+        # Ask for prices before the entries go out. A fill can be reported
+        # within milliseconds, and a leg whose instrument is not subscribed
+        # would sit with no price and therefore no stop until the next
+        # subscription sweep.
+        _subscribe_run(run.id, resolved)
         _emit(
             strategy_id,
             user_id,
@@ -192,6 +197,34 @@ def start_run(
         else:
             store.release_strategy(strategy_id)
         return StartResult(ok=False, error="Could not start the strategy")
+
+
+def _subscribe_run(run_id: int, resolved: list[dict[str, Any]]) -> None:
+    """Ask the tick feed for this run's instruments.
+
+    Subscriptions are refcounted per run, so two strategies holding the same
+    contract share one and it is released when the last one lets go. A failure
+    here is logged rather than raised: the run has real positions by this point,
+    and refusing to start it because a price feed is unavailable would leave
+    them unmanaged rather than merely unpriced.
+    """
+    try:
+        from services.strategy_module.tick_feed import get_risk_tick_feed
+
+        symbols = [(leg["symbol"], leg["exchange"]) for leg in resolved]
+        get_risk_tick_feed().add_run_subscriptions(run_id, symbols)
+    except Exception:
+        logger.exception("Could not subscribe prices for run %s", run_id)
+
+
+def _unsubscribe_run(run_id: int) -> None:
+    """Release this run's price subscriptions."""
+    try:
+        from services.strategy_module.tick_feed import get_risk_tick_feed
+
+        get_risk_tick_feed().remove_run_subscriptions(run_id)
+    except Exception:
+        logger.exception("Could not release prices for run %s", run_id)
 
 
 def _broker_for(api_key: str, mode: str) -> str:
@@ -612,6 +645,7 @@ def _finalise(run_id: int, strategy_id: int, user_id: str, reason: str, message:
     )
     store.release_strategy(strategy_id)
     _emit(strategy_id, user_id, "run_stopped", message, run_id=run_id)
+    _unsubscribe_run(run_id)
     state.clear_run_state(run_id)
 
     # Arm the webhook cooling-off window for every stop, not just the ones a
