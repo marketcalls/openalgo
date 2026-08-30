@@ -301,6 +301,115 @@ def test_a_long_exit_fill_carries_the_opposite_sign(api_key):
     assert leg["realized_pnl"] < 0
 
 
+@pytest.mark.parametrize("fill_order", [("superseded", "live"), ("live", "superseded")])
+def test_every_position_incarnation_adds_realized_pnl_in_any_final_fill_order(api_key, fill_order):
+    sid = _make(_config(strategy_kind="signal"))
+    run = store.create_run(sid, "sandbox", "sandbox")
+    assert store.set_strategy_status(sid, "running", run.id)
+    state.init_run_state(
+        run.id,
+        sid,
+        [
+            {
+                "leg_id": 1,
+                "position": "S",
+                "position_ref": "live-short",
+                "symbol": "NIFTY28MAY2624000CE",
+                "exchange": "NFO",
+                "quantity": 10,
+            }
+        ],
+    )
+    with state.run_state(run.id) as live:
+        leg = live["legs"]["1"]
+        leg.update(
+            {
+                "status": "open",
+                "entry_status": "complete",
+                "entry_avg": 120.0,
+                "exit_order_id": 202,
+                "exit_kind": "exit_signal",
+                "realized_pnl": 50.0,
+                "superseded": {
+                    "position_ref": "old-long",
+                    "position": "B",
+                    "entry_avg": 100.0,
+                    "qty": 10,
+                    "exit_order_id": 101,
+                },
+            }
+        )
+
+    fills = {
+        "superseded": lambda: engine.apply_fill(
+            run.id,
+            1,
+            110.0,
+            is_entry=False,
+            order_row_id=101,
+            position_ref="old-long",
+        ),
+        "live": lambda: engine.apply_fill(
+            run.id,
+            1,
+            100.0,
+            is_entry=False,
+            order_row_id=202,
+            position_ref="live-short",
+        ),
+    }
+    for owner in fill_order:
+        fills[owner]()
+
+    leg = state.get_run_state(run.id)["legs"]["1"]
+    assert leg["realized_pnl"] == pytest.approx(350.0)
+    assert state.get_run_state(run.id)["pnl_realized"] == pytest.approx(350.0)
+    assert store.get_run(run.id).stopped_at is None
+
+
+def test_zero_entry_price_exit_does_not_erase_prior_signal_session_realized_pnl(api_key):
+    sid = _make(_config(strategy_kind="signal"))
+    run = store.create_run(sid, "sandbox", "sandbox")
+    assert store.set_strategy_status(sid, "running", run.id)
+    state.init_run_state(
+        run.id,
+        sid,
+        [
+            {
+                "leg_id": 1,
+                "position": "B",
+                "position_ref": "price-missing",
+                "symbol": "NIFTY28MAY2624000CE",
+                "exchange": "NFO",
+                "quantity": 10,
+            }
+        ],
+    )
+    with state.run_state(run.id) as live:
+        leg = live["legs"]["1"]
+        leg.update(
+            {
+                "status": "open",
+                "entry_status": "complete",
+                "entry_avg": 0.0,
+                "exit_order_id": 9,
+                "exit_kind": "exit_signal",
+                "realized_pnl": 75.0,
+            }
+        )
+
+    engine.apply_fill(
+        run.id,
+        1,
+        90.0,
+        is_entry=False,
+        order_row_id=9,
+        position_ref="price-missing",
+    )
+
+    assert state.get_run_state(run.id)["legs"]["1"]["realized_pnl"] == pytest.approx(75.0)
+
+
 # ---------------------------------------------------------------------------
 # Exit
 # ---------------------------------------------------------------------------
@@ -566,6 +675,86 @@ def test_a_finished_run_leaves_no_live_state_behind(api_key):
     assert run_id not in state.active_run_ids()
 
 
+def test_a_flat_run_can_finalize_without_a_broker_api_key(api_key):
+    sid = _make()
+    run = store.create_run(sid, "sandbox", "sandbox")
+    assert store.set_strategy_status(sid, "running", run.id)
+    state.init_run_state(run.id, sid, [])
+
+    with (
+        patch.object(engine, "_api_key_for", return_value=None),
+        patch.object(engine.order_dispatch, "dispatch_order") as dispatch,
+        patch.object(engine, "_unsubscribe_run"),
+    ):
+        result = engine.stop_run(run.id, USER, reason="manual")
+
+    assert result == {"ok": True, "stop_pending": False, "exits": []}
+    assert dispatch.call_count == 0
+    assert store.get_run(run.id).stopped_at is not None
+    assert store.get_strategy(sid, USER).status == "stopped"
+    assert state.get_run_state(run.id) is None
+
+
+def test_a_keyless_stop_with_possible_exposure_is_durable_pending_and_retryable(api_key):
+    sid = _make()
+    run_id = _start(sid).run_id
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+
+    with (
+        patch.object(engine, "_api_key_for", return_value=None),
+        patch.object(engine.order_dispatch, "dispatch_order") as dispatch,
+    ):
+        result = engine.stop_run(run_id, USER, reason="manual")
+
+    assert result["ok"] is False
+    assert result["stop_pending"] is True
+    assert result["exits"] == []
+    assert "API key" in result["error"]
+    assert dispatch.call_count == 0
+    durable = store.get_run(run_id)
+    assert durable.stop_requested_reason == "manual"
+    assert durable.stopped_at is None
+    live = state.get_run_state(run_id)
+    assert live["stopping"] is True
+    assert live["legs"]["1"]["status"] == "open"
+
+
+def test_atomic_finalise_loser_keeps_state_subscription_and_terminal_event_ownership(api_key):
+    sid = _make()
+    run = store.create_run(sid, "sandbox", "sandbox")
+    assert store.set_strategy_status(sid, "running", run.id)
+    state.init_run_state(run.id, sid, [])
+    lock_was_free_at_cas = []
+
+    def lose_terminal_cas(*_args, **_kwargs):
+        lock = state.get_state_lock(run.id)
+        acquired = lock.acquire(blocking=False)
+        lock_was_free_at_cas.append(acquired)
+        if acquired:
+            lock.release()
+        return False
+
+    with (
+        patch.object(
+            store,
+            "finish_run_and_release_strategy",
+            side_effect=lose_terminal_cas,
+            create=True,
+        ),
+        patch.object(engine, "_unsubscribe_run") as unsubscribe,
+        patch.object(engine, "_emit") as emit,
+    ):
+        won = engine._finalise(run.id, sid, USER, "manual", "Run stopped (manual)")
+
+    assert won is False
+    assert state.get_run_state(run.id) is not None
+    assert store.get_run(run.id).stopped_at is None
+    assert store.get_strategy(sid, USER).current_run_id == run.id
+    assert lock_was_free_at_cas == [True]
+    unsubscribe.assert_not_called()
+    assert not [call for call in emit.call_args_list if call.args[2] == "run_stopped"]
+
+
 # ---------------------------------------------------------------------------
 # The tokenless window
 #
@@ -595,6 +784,8 @@ def test_risk_that_cannot_be_acted_on_reaches_the_audit_trail(api_key):
     critical = [e for e in events if e["severity"] == "critical"]
     assert critical, "an unactionable stop must be recorded, not only logged"
     assert "no broker session" in critical[0]["message"]
+    assert store.get_run(run_id).stop_requested_reason == "overall_sl"
+    assert state.get_run_state(run_id)["stopping"] is True
     # And the position is still open, which is the correct outcome.
     assert state.get_run_state(run_id)["legs"]["1"]["status"] == "open"
 
@@ -649,3 +840,22 @@ def test_a_quiet_tick_with_no_session_records_nothing(api_key):
         engine.process_tick("NIFTY28MAY2624000CE", "NFO", 101.0)
 
     assert not [e for e in store.list_events(sid) if e["severity"] == "critical"]
+
+
+def test_synchronous_signal_risk_exit_fill_does_not_end_the_session_run(api_key):
+    sid = _make(_config(strategy_kind="signal"))
+    run_id = _start(sid).run_id
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+
+    def fill_inline(**_kwargs):
+        engine.apply_fill(run_id, 1, 121.0, is_entry=False)
+        return DispatchResult(ok=True, broker_order_id="SYNC-RISK-EXIT", response={})
+
+    with patch.object(engine.order_dispatch, "dispatch_order", side_effect=fill_inline):
+        engine.process_tick("NIFTY28MAY2624000CE", "NFO", 121.0)
+
+    assert store.get_run(run_id).stopped_at is None
+    assert store.get_strategy(sid, USER).current_run_id == run_id
+    live = state.get_run_state(run_id)
+    assert live is not None
+    assert live["legs"]["1"]["status"] == "closed"

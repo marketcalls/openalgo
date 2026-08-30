@@ -396,6 +396,28 @@ def test_stop_resolves_the_run_from_the_strategy(client, engine):
     assert engine.calls == [("stop_run", RUN_ID, USER, "manual")]
 
 
+@pytest.mark.parametrize("route", ["stop", "close_all"])
+def test_stop_failures_preserve_pending_and_per_exit_detail(client, engine, route):
+    sid, _token = _make(running=True)
+    exits = [{"leg_id": 1, "ok": False, "error": "No API key"}]
+    engine.stop_result = {
+        "ok": False,
+        "stop_pending": True,
+        "error": "No API key is configured for this user",
+        "exits": exits,
+    }
+
+    response = post(client, route, strategy_id=sid)
+
+    assert response.status_code == 409
+    assert response.get_json() == {
+        "status": "error",
+        "message": "No API key is configured for this user",
+        "stop_pending": True,
+        "exits": exits,
+    }
+
+
 def test_close_all_records_the_intent_before_stopping(client, engine):
     """Kept distinct from stop so the audit trail says what happened."""
     sid, _token = _make(running=True)

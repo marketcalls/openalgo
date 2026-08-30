@@ -207,6 +207,28 @@ def test_stop_endpoints_report_accepted_but_still_pending_exits(client, route):
     assert body["exits"] == [{"ok": True}]
 
 
+@pytest.mark.parametrize("route", ["stop", "close_all"])
+def test_stop_endpoint_failures_preserve_pending_and_per_exit_detail(client, route):
+    sid = _make(running_run_id=7)
+    exits = [{"leg_id": 1, "ok": False, "error": "No API key"}]
+
+    with patch(
+        "services.strategy_module.engine.stop_run",
+        return_value={
+            "ok": False,
+            "stop_pending": True,
+            "error": "No API key is configured for this user",
+            "exits": exits,
+        },
+    ):
+        response = client.post(f"/strategy/api/strategies/{sid}/{route}", json={})
+
+    assert response.status_code == 409
+    body = response.get_json()
+    assert body["stop_pending"] is True
+    assert body["exits"] == exits
+
+
 def test_close_all_records_the_operator_intent_separately_from_the_stop(client):
     # "The operator closed everything" reads differently from "the run stopped"
     # when you are reconstructing a session afterwards.
@@ -309,6 +331,9 @@ def test_the_kill_switch_still_locks_when_flattening_fails(client):
     assert response.status_code == 200
     assert response.get_json()["run_stopped"] is False
     assert response.get_json()["stop_pending"] is True
+    assert "exit fills pending" not in response.get_json()["message"].lower()
+    events = store.list_events(sid)
+    assert "exit fills pending" not in events[-1]["message"].lower()
     assert store.get_strategy(sid, USER).webhook_locked is True
 
 

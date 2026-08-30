@@ -908,8 +908,11 @@ def _ok(payload: dict | None = None, code: int = 200):
     return jsonify(body), code
 
 
-def _error(message: str, code: int):
-    return jsonify({"status": "error", "message": message}), code
+def _error(message: str, code: int, payload: dict | None = None):
+    body = {"status": "error", "message": message}
+    if payload:
+        body.update(payload)
+    return jsonify(body), code
 
 
 def _store_error(message: str | None):
@@ -1235,12 +1238,15 @@ def engage_kill_switch(sid):
     run_id = row.current_run_id
     stopped = False
     stop_pending = False
+    exits = []
+    accepted = False
     if run_id:
         from services.strategy_module import engine
 
         result = engine.stop_run(run_id, username, reason="manual")
         accepted = bool(result.get("ok"))
         stop_pending = bool(result.get("stop_pending", False))
+        exits = result.get("exits", [])
         stopped = accepted and not stop_pending
         if not accepted:
             logger.error(
@@ -1250,9 +1256,14 @@ def engage_kill_switch(sid):
                 result.get("error"),
             )
 
-    flatten_message = (
-        " and open legs closed" if stopped else "; exit fills pending" if stop_pending else ""
-    )
+    if stopped:
+        flatten_message = " and open legs closed"
+    elif accepted and stop_pending:
+        flatten_message = "; exit fills pending"
+    elif stop_pending:
+        flatten_message = "; flatten refused, stop remains pending and retryable"
+    else:
+        flatten_message = ""
     store.record_event(
         sid,
         username,
@@ -1267,6 +1278,7 @@ def engage_kill_switch(sid):
             "webhook_locked": True,
             "run_stopped": stopped,
             "stop_pending": stop_pending,
+            "exits": exits,
             "message": "Webhook locked" + flatten_message,
         }
     )
@@ -1354,7 +1366,14 @@ def _stop_run_for(sid: int, reason: str, event: str | None = None):
 
     result = engine.stop_run(run_id, username, reason=reason)
     if not result.get("ok"):
-        return _error(result.get("error") or "Could not stop the run", 409)
+        return _error(
+            result.get("error") or "Could not stop the run",
+            409,
+            {
+                "stop_pending": result.get("stop_pending", False),
+                "exits": result.get("exits", []),
+            },
+        )
 
     return _ok(
         {

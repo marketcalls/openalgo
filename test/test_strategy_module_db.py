@@ -325,6 +325,50 @@ def test_request_run_stop_is_pending_until_finish():
     assert complete["stop_requested_reason"] is None
 
 
+def test_finish_and_release_is_one_atomic_owner_checked_transition():
+    created, error = sm.create_strategy(USER, _config())
+    assert error is None
+    run = sm.create_run(created["id"], "sandbox", "zerodha")
+    assert sm.set_strategy_status(created["id"], "running", run.id)
+
+    won = sm.finish_run_and_release_strategy(
+        run.id,
+        created["id"],
+        "manual",
+        pnl_realized=125.0,
+        pnl_peak=150.0,
+        pnl_trough=-10.0,
+    )
+
+    assert won is True
+    durable = sm.get_run(run.id)
+    assert durable.stopped_at is not None
+    assert float(durable.pnl_realized) == pytest.approx(125.0)
+    strategy = sm.get_strategy(created["id"], USER)
+    assert strategy.status == "stopped"
+    assert strategy.current_run_id is None
+
+    # The run and strategy have one terminal owner. A duplicate finalizer
+    # loses without changing either row a second time.
+    assert sm.finish_run_and_release_strategy(run.id, created["id"], "manual") is False
+
+
+def test_finish_and_release_rolls_back_run_when_strategy_owns_a_different_run():
+    created, error = sm.create_strategy(USER, _config())
+    assert error is None
+    first = sm.create_run(created["id"], "sandbox", "zerodha")
+    current = sm.create_run(created["id"], "sandbox", "zerodha")
+    assert sm.set_strategy_status(created["id"], "running", current.id)
+
+    won = sm.finish_run_and_release_strategy(first.id, created["id"], "manual")
+
+    assert won is False
+    assert sm.get_run(first.id).stopped_at is None
+    strategy = sm.get_strategy(created["id"], USER)
+    assert strategy.status == "running"
+    assert strategy.current_run_id == current.id
+
+
 def test_a_run_records_its_final_numbers_on_stop():
     created, _ = sm.create_strategy(USER, _config())
     run = sm.create_run(created["id"], "sandbox", "zerodha", trigger_source="manual")

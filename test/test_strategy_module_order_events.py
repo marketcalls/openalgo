@@ -19,7 +19,8 @@ import pytest
 # restx_api first: see the note in test_strategy_module_order_dispatch.py.
 import restx_api  # noqa: F401
 from database import strategy_module_db as store
-from services.strategy_module import order_events, state
+from services.strategy_module import engine, order_events, state
+from services.strategy_module.order_dispatch import DispatchResult
 
 USER = "order_events_user"
 
@@ -81,6 +82,29 @@ def order():
         },
     )
     return SimpleNamespace(strategy_id=created["id"], run_id=run.id, order_id=row.id)
+
+
+def _install_pending_entry(order):
+    """Make the fixture row the exact in-flight entry owned by live state."""
+    assert store.set_strategy_status(order.strategy_id, "running", order.run_id)
+    state.init_run_state(
+        order.run_id,
+        order.strategy_id,
+        [
+            {
+                "leg_id": 1,
+                "position": "S",
+                "symbol": "NIFTY28MAY2624000CE",
+                "exchange": "NFO",
+                "quantity": 75,
+            }
+        ],
+    )
+    with state.run_state(order.run_id) as run:
+        leg = run["legs"]["1"]
+        leg["entry_order_id"] = order.order_id
+        leg["entry_status"] = "open"
+        leg["status"] = "open"
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +184,110 @@ def test_a_rejection_marks_the_row_and_seeds_nothing(order):
     assert row["status"] == "rejected"
     assert row["reject_reason"] == "Insufficient margin"
     assert apply_fill.call_count == 0
+
+
+@pytest.mark.parametrize("ended", ["rejected", "cancelled"])
+def test_a_terminal_partial_entry_is_real_exposure_and_pending_stop_exits_exact_fill(order, ended):
+    _install_pending_entry(order)
+    assert store.request_run_stop(order.run_id, "manual") is True
+    dispatched = []
+
+    def accept(**kwargs):
+        dispatched.append(kwargs["order"])
+        return DispatchResult(ok=True, broker_order_id="BRK-PARTIAL-EXIT", response={})
+
+    with (
+        patch.object(engine, "_api_key_for", return_value="test-key"),
+        patch.object(engine.order_dispatch, "dispatch_order", side_effect=accept),
+    ):
+        order_events._apply_update(
+            "BRK-1",
+            _event("BRK-1", status=ended, avg=101.25, filled=25, rejection="remainder dead"),
+        )
+
+    durable = store.list_orders(order.run_id)[0]
+    assert durable["status"] == ended
+    assert durable["avg_fill_price"] == pytest.approx(101.25)
+    assert durable["filled_qty"] == 25
+    live = state.get_run_state(order.run_id)
+    leg = live["legs"]["1"]
+    assert leg["status"] == "open"
+    assert leg["entry_status"] == "complete"
+    assert leg["entry_avg"] == pytest.approx(101.25)
+    assert leg["qty"] == 25
+    assert dispatched[0]["quantity"] == "25"
+    assert store.get_run(order.run_id).stopped_at is None
+
+
+def test_terminal_zero_fields_preserve_a_previously_reported_partial_fill(order):
+    _install_pending_entry(order)
+
+    order_events._apply_update("BRK-1", _event("BRK-1", status="open", avg=101.25, filled=25))
+    order_events._apply_update(
+        "BRK-1",
+        _event("BRK-1", status="cancelled", avg=0, filled=0, rejection="remainder dead"),
+    )
+
+    durable = store.list_orders(order.run_id)[0]
+    assert durable["status"] == "cancelled"
+    assert durable["avg_fill_price"] == pytest.approx(101.25)
+    assert durable["filled_qty"] == 25
+    leg = state.get_run_state(order.run_id)["legs"]["1"]
+    assert leg["status"] == "open"
+    assert leg["entry_avg"] == pytest.approx(101.25)
+    assert leg["qty"] == 25
+
+
+def test_zero_fill_terminal_entry_completes_a_pending_stop_as_confirmed_flat(order):
+    _install_pending_entry(order)
+    assert store.request_run_stop(order.run_id, "scheduler") is True
+
+    with (
+        patch.object(engine, "_api_key_for", return_value=None),
+        patch.object(engine.order_dispatch, "dispatch_order") as dispatch,
+        patch.object(engine, "_unsubscribe_run"),
+    ):
+        order_events._apply_update(
+            "BRK-1",
+            _event("BRK-1", status="rejected", avg=0, filled=0, rejection="no fill"),
+        )
+
+    assert dispatch.call_count == 0
+    assert store.get_run(order.run_id).stopped_at is not None
+    assert store.get_run(order.run_id).stop_reason == "scheduler"
+    assert state.get_run_state(order.run_id) is None
+    assert [event["kind"] for event in store.list_events(order.strategy_id)].count(
+        "run_stopped"
+    ) == 1
+
+
+def test_entry_fill_after_initial_unfilled_stop_is_immediately_kept_managed_and_exited(order):
+    _install_pending_entry(order)
+    exits = []
+
+    def accept(**kwargs):
+        exits.append(kwargs["order"])
+        return DispatchResult(ok=True, broker_order_id="BRK-LATE-EXIT", response={})
+
+    with (
+        patch.object(engine, "_api_key_for", return_value="test-key"),
+        patch.object(engine.order_dispatch, "dispatch_order", side_effect=accept),
+    ):
+        initial = engine.stop_run(order.run_id, USER, reason="manual")
+        assert initial["ok"] is False
+        assert initial["stop_pending"] is True
+        assert exits == []
+
+        order_events._apply_update("BRK-1", _event("BRK-1", status="complete", avg=99.5, filled=75))
+
+    assert len(exits) == 1
+    assert exits[0]["action"] == "BUY"
+    assert exits[0]["quantity"] == "75"
+    live = state.get_run_state(order.run_id)
+    assert live is not None
+    assert live["stopping"] is True
+    assert live["legs"]["1"]["exit_kind"] == "exit_close_all"
+    assert store.get_run(order.run_id).stopped_at is None
 
 
 def test_a_rejection_cannot_be_talked_back_into_a_fill(order):

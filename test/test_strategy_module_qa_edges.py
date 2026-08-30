@@ -2026,7 +2026,7 @@ def test_an_entry_rejected_after_dispatch_is_not_squared_off(broker):
     run_id = _start(sid).run_id
     broker.clear()
 
-    order_events._apply_update("QA-1", _event("QA-1", status="rejected"))
+    order_events._apply_update("QA-1", _event("QA-1", status="rejected", avg=0, filled=0))
 
     assert _live(run_id)["status"] == "rejected"
     engine.stop_run(run_id, USER, reason="manual")

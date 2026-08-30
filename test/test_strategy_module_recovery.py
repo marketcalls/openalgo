@@ -11,6 +11,7 @@ on the loop would test the sleep, not the write.
 """
 
 import time
+from unittest.mock import patch
 
 import pytest
 
@@ -101,6 +102,7 @@ def _order(
     qty=75,
     status="complete",
     avg=None,
+    filled_qty=None,
     position_ref=None,
 ):
     row = store.record_order(
@@ -118,7 +120,7 @@ def _order(
         },
     )
     assert row is not None
-    store.update_order(row.id, status=status, avg_fill_price=avg)
+    store.update_order(row.id, status=status, avg_fill_price=avg, filled_qty=filled_qty)
     return row.id
 
 
@@ -300,6 +302,54 @@ def test_a_rejected_entry_is_never_upgraded_by_a_checkpoint():
     assert resumed[run_id] == {(PE, "NFO")}
 
 
+@pytest.mark.parametrize("ended", ["rejected", "cancelled"])
+def test_recovery_treats_terminal_partial_entry_fields_as_actual_exposure(ended):
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        1,
+        "entry",
+        action="SELL",
+        status=ended,
+        avg=101.5,
+        filled_qty=25,
+        position_ref="partial-entry",
+    )
+    assert store.request_run_stop(run_id, "scheduler") is True
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    live = state.get_run_state(run_id)
+    assert live is not None
+    assert live["stopping"] is True
+    leg = live["legs"]["1"]
+    assert leg["status"] == "open"
+    assert leg["entry_status"] == "complete"
+    assert leg["entry_avg"] == pytest.approx(101.5)
+    assert leg["qty"] == 25
+    assert leg["position_ref"] == "partial-entry"
+    assert store.get_run(run_id).stop_requested_reason == "scheduler"
+
+
+def test_recovery_finalizes_zero_fill_pending_stop_with_persisted_reason_and_stop_event():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(run_id, 1, "entry", action="SELL", status="rejected", avg=0, filled_qty=0)
+    assert store.request_run_stop(run_id, "scheduler") is True
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.finalised is True
+    durable = store.get_run(run_id)
+    assert durable.stopped_at is not None
+    assert durable.stop_reason == "scheduler"
+    matching = [event for event in store.list_events(sid) if event["run_id"] == run_id]
+    assert [event["kind"] for event in matching].count("run_stopped") == 1
+    assert "scheduler" in matching[-1]["message"]
+
+
 def test_an_entry_still_working_holds_nothing_yet_but_is_still_watched():
     sid = _strategy()
     run_id = _run(sid)
@@ -426,6 +476,45 @@ def test_a_run_whose_every_leg_has_closed_is_finished_rather_than_left_running()
     assert run["pnl_realized"] == pytest.approx(1500.0)
     assert store.get_strategy(sid, USER).status == "stopped"
     assert state.get_run_state(run_id) is None
+
+
+def test_recovery_atomic_finalise_loser_emits_nothing_and_keeps_live_ownership():
+    sid = _strategy()
+    run_id = _run(sid)
+    state.hydrate_run_state(
+        run_id,
+        {
+            "run_id": run_id,
+            "strategy_id": sid,
+            "stopping": True,
+            "signal_entry_claims": {},
+            "legs": {},
+        },
+    )
+
+    with (
+        patch.object(
+            store,
+            "finish_run_and_release_strategy",
+            return_value=False,
+            create=True,
+        ),
+        patch.object(recovery, "_record_event") as record_event,
+    ):
+        won = recovery._finalise(
+            run_id,
+            sid,
+            reason="manual",
+            kind="run_stopped",
+            severity="info",
+            message="Run stopped (manual)",
+        )
+
+    assert won is False
+    assert store.get_run(run_id).stopped_at is None
+    assert store.get_strategy(sid, USER).current_run_id == run_id
+    assert state.get_run_state(run_id) is not None
+    record_event.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

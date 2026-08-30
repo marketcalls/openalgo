@@ -346,7 +346,28 @@ def _apply_update(order_id: str, event: Any) -> None:
             # and recovery.normalise_order_status already distinguishes them,
             # so collapsing them here only loses audit accuracy.
             ended = "cancelled" if status in _CANCELLED else "rejected"
-            if not store.transition_order_terminal(row.id, status=ended, reject_reason=rejection):
+            terminal_qty = None
+            terminal_price = None
+            durable_qty = filled_qty
+            durable_price = avg_price
+            if is_entry:
+                # Terminal frames commonly send zeroes for fields already
+                # reported by an earlier partial update. Preserve the durable
+                # positive facts rather than overwriting real exposure with
+                # the dead remainder's zero values.
+                terminal_qty = _whole_qty(filled_qty) or _whole_qty(row.filled_qty)
+                terminal_price = _usable_price(avg_price) or _usable_price(row.avg_fill_price)
+                if terminal_qty is not None:
+                    durable_qty = terminal_qty
+                if terminal_price is not None:
+                    durable_price = terminal_price
+            if not store.transition_order_terminal(
+                row.id,
+                status=ended,
+                avg_fill_price=durable_price,
+                filled_qty=durable_qty,
+                reject_reason=rejection,
+            ):
                 return
             logger.warning("Strategy order %s ended as %s", order_id, status)
 
@@ -357,17 +378,39 @@ def _apply_update(order_id: str, event: Any) -> None:
             from services.strategy_module import state
 
             if is_entry:
-                # The entry will never fill, so the leg is not a position. Left
-                # as "open" it is exited by the next square-off, which sends a
-                # full-size order against nothing.
-                with state.run_state(run_id) as run:
-                    leg = run["legs"].get(str(leg_id)) if run else None
-                    owns_entry = leg is not None and (
-                        row.position_ref is None or leg.get("position_ref") == row.position_ref
+                if terminal_qty is not None and terminal_price is not None:
+                    # A cancelled/rejected remainder does not erase what
+                    # already traded. Install the actual fill using the same
+                    # engine path as a complete entry, then let its pending-stop
+                    # reconciliation claim precisely that quantity for exit.
+                    from services.strategy_module import engine
+
+                    fill_identity = {"position_ref": row.position_ref} if row.position_ref else {}
+                    engine.apply_fill(
+                        run_id,
+                        leg_id,
+                        terminal_price,
+                        is_entry=True,
+                        filled_qty=terminal_qty,
+                        order_row_id=row.id,
+                        **fill_identity,
                     )
-                    if owns_entry and leg.get("entry_status") != "complete":
-                        leg["entry_status"] = ended
-                        leg["status"] = "rejected"
+                else:
+                    # Zero fill: the entry will never become a position. Mark
+                    # it flat under the state lock, then reconcile a pending
+                    # stop after releasing the lock so its terminal CAS can run.
+                    with state.run_state(run_id) as run:
+                        leg = run["legs"].get(str(leg_id)) if run else None
+                        owns_entry = leg is not None and (
+                            row.position_ref is None or leg.get("position_ref") == row.position_ref
+                        )
+                        if owns_entry and leg.get("entry_status") != "complete":
+                            leg["entry_status"] = ended
+                            leg["status"] = "rejected"
+
+                    from services.strategy_module import engine
+
+                    engine.reconcile_pending_stop(run_id)
             else:
                 exit_owner = state.release_order_exit(run_id, leg_id, row.id, row.position_ref)
                 if exit_owner == "superseded":
@@ -393,7 +436,12 @@ def _apply_update(order_id: str, event: Any) -> None:
         # Anything else is still working. Recorded so the audit trail follows
         # the order, but it changes nothing the engine acts on.
         if not already_terminal and status:
-            store.update_order(row.id, status="open", filled_qty=filled_qty)
+            store.update_order(
+                row.id,
+                status="open",
+                avg_fill_price=avg_price,
+                filled_qty=filled_qty,
+            )
     except Exception:
         logger.exception("Could not apply order update %s", order_id)
     finally:

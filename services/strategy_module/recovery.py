@@ -54,6 +54,7 @@ caller subscribes them.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -303,7 +304,7 @@ def recover_run(run_id: int) -> RecoveredRun:
     except Exception as exc:
         logger.exception("Could not recover run %s", run_id)
         strategy_id = _strategy_id_for(run_id)
-        _finalise(
+        finalised = _finalise(
             run_id,
             strategy_id,
             reason="recovery_failed",
@@ -315,7 +316,7 @@ def recover_run(run_id: int) -> RecoveredRun:
             run_id=run_id,
             strategy_id=strategy_id,
             ok=False,
-            finalised=True,
+            finalised=finalised,
             error=str(exc),
         )
 
@@ -357,7 +358,14 @@ def _recover_run(run_id: int) -> RecoveredRun:
     checkpoint = store.latest_checkpoint(run_id) or {}
     config_legs = _config_legs(strategy_id)
 
-    rebuilt = _rebuild_state(run_id, strategy_id, orders, checkpoint, config_legs)
+    rebuilt = _rebuild_state(
+        run_id,
+        strategy_id,
+        orders,
+        checkpoint,
+        config_legs,
+        stopping=run_row.stop_requested_reason is not None,
+    )
     symbols = state.subscribed_symbols(rebuilt)
     open_count = len(state.open_legs(rebuilt))
 
@@ -368,22 +376,32 @@ def _recover_run(run_id: int) -> RecoveredRun:
         # leave a strategy reading as running while holding nothing, which is
         # exactly the state engine._finalise exists to prevent, and no tick
         # would ever arrive to close it.
-        _finalise(
+        stop_reason = run_row.stop_requested_reason or "manual"
+        pending_stop = run_row.stop_requested_reason is not None
+        finalised = _finalise(
             run_id,
             strategy_id,
-            reason="manual",
-            kind="recovery_succeeded",
+            reason=stop_reason,
+            kind="run_stopped" if pending_stop else "recovery_succeeded",
             severity="info",
-            message="Recovered flat: every leg had already closed, so the run was finished",
+            message=(
+                f"Run stopped ({stop_reason}); recovery confirmed it was flat"
+                if pending_stop
+                else "Recovered flat: every leg had already closed, so the run was finished"
+            ),
             pnl=_final_pnl(checkpoint, rebuilt),
         )
-        logger.info("Run %s recovered flat and was finished", run_id)
+        if finalised:
+            logger.info("Run %s recovered flat and was finished", run_id)
+        else:
+            logger.warning("Run %s recovered flat but terminal ownership was not won", run_id)
         return RecoveredRun(
             run_id=run_id,
             strategy_id=strategy_id,
             ok=False,
-            finalised=True,
+            finalised=finalised,
             legs=len(rebuilt["legs"]),
+            error=None if finalised else "Could not atomically finish the recovered flat run",
         )
 
     state.hydrate_run_state(run_id, rebuilt)
@@ -419,6 +437,8 @@ def _rebuild_state(
     orders: list[dict[str, Any]],
     checkpoint: dict[str, Any],
     config_legs: dict[str, dict[str, Any]],
+    *,
+    stopping: bool = False,
 ) -> dict[str, Any]:
     """The run's state dict, in exactly the shape ``state.init_run_state`` builds."""
     checkpoint_legs = checkpoint.get("leg_state") or {}
@@ -464,6 +484,7 @@ def _rebuild_state(
         # Re-derived by the tick feed, which knows nothing about what the feed
         # was doing before the restart.
         "tick_source_degraded": False,
+        "stopping": stopping,
         "signal_entry_claims": {},
         "legs": legs,
     }
@@ -512,10 +533,21 @@ def _rebuild_leg(
     # fill the engine applies to live state and the row may not have caught up.
     # It can never downgrade, so a rejected order stays rejected.
     entry_status = normalise_order_status(entry["status"]) if entry else None
-    entry_dead = entry is not None and order_is_dead(entry["status"])
-    entry_filled = (entry is not None and order_is_filled(entry["status"])) or (
-        not entry_dead and _checkpoint_says_entry_filled(cp_leg)
+    terminal_partial = bool(
+        entry is not None
+        and order_is_dead(entry["status"])
+        and _positive_whole(entry.get("filled_qty")) is not None
+        and _usable_fill_price(entry.get("avg_fill_price")) is not None
     )
+    entry_dead = entry is not None and order_is_dead(entry["status"]) and not terminal_partial
+    entry_filled = (
+        terminal_partial
+        or (entry is not None and order_is_filled(entry["status"]))
+        or (not entry_dead and _checkpoint_says_entry_filled(cp_leg))
+    )
+
+    if terminal_partial:
+        qty = _positive_whole(entry.get("filled_qty")) or qty
 
     exit_dead = exit_order is not None and order_is_dead(exit_order["status"])
     exit_live = exit_order is not None and not exit_dead
@@ -653,6 +685,24 @@ def _entry_status(order_status: str | None, entry_filled: bool, cp_leg: dict[str
     return str(cp_leg.get("entry_status") or "pending")
 
 
+def _positive_whole(value: Any) -> int | None:
+    """A positive whole fill quantity, or None."""
+    try:
+        qty = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return qty if qty > 0 else None
+
+
+def _usable_fill_price(value: Any) -> float | None:
+    """A positive finite durable average fill price, or None."""
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return None
+    return price if price > 0.0 and math.isfinite(price) else None
+
+
 def _checkpoint_says_entry_filled(cp_leg: dict[str, Any]) -> bool:
     """Whether the newest checkpoint witnessed this leg's entry filling."""
     if not cp_leg:
@@ -759,7 +809,7 @@ def _finalise(
     severity: str,
     message: str,
     pnl: dict[str, Any] | None = None,
-) -> None:
+) -> bool:
     """Close a run, release its strategy, and drop any live state.
 
     The same order as ``engine._finalise``: the run row, then the strategy,
@@ -767,21 +817,21 @@ def _finalise(
     checkpoint, which is the only record of them once the process is gone.
     """
     snapshot = pnl or {}
-    try:
-        store.finish_run(
-            run_id,
-            stop_reason=reason,
-            pnl_realized=_float(snapshot.get("pnl_realized"), 0.0) or 0.0,
-            pnl_peak=_float(snapshot.get("pnl_peak"), 0.0) or 0.0,
-            pnl_trough=_float(snapshot.get("pnl_trough"), 0.0) or 0.0,
-        )
-        if strategy_id is not None:
-            store.release_strategy(strategy_id)
-    except Exception:
-        logger.exception("Could not finalise run %s during recovery", run_id)
-
+    if strategy_id is None:
+        return False
+    won = store.finish_run_and_release_strategy(
+        run_id,
+        strategy_id,
+        stop_reason=reason,
+        pnl_realized=_float(snapshot.get("pnl_realized"), 0.0) or 0.0,
+        pnl_peak=_float(snapshot.get("pnl_peak"), 0.0) or 0.0,
+        pnl_trough=_float(snapshot.get("pnl_trough"), 0.0) or 0.0,
+    )
+    if not won:
+        return False
     _record_event(strategy_id, kind, message, run_id=run_id, severity=severity)
     state.clear_run_state(run_id)
+    return True
 
 
 def _record_event(

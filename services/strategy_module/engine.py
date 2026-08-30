@@ -202,7 +202,9 @@ def _managed_leg_ids(run: dict[str, Any]) -> list[Any]:
 
 def _run_requires_management(run: dict[str, Any]) -> bool:
     """Whether any actual or still-working position keeps this run non-terminal."""
-    return any(_leg_requires_management(leg) for leg in run.get("legs", {}).values())
+    return bool(run.get("signal_entry_claims")) or any(
+        _leg_requires_management(leg) for leg in run.get("legs", {}).values()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -710,6 +712,7 @@ def _apply_fill(
 
     went_flat = False
     strategy_id = None
+    entry_applied = False
     with state.run_state(run_id) as run:
         if run is None:
             # A duplicate or late terminal update can arrive after another
@@ -801,29 +804,31 @@ def _apply_fill(
                     leg["qty"] = filled_qty
                 leg["entry_status"] = "complete"
                 leg["status"] = "open"
-                return False
-
-            leg["exit_avg"] = float(avg_price)
-            entry = float(leg.get("entry_avg") or 0.0)
-            qty = float(leg.get("qty") or 0.0)
-            sign = 1.0 if leg.get("position") == "B" else -1.0
-            if entry > 0.0:
-                leg["realized_pnl"] = (float(avg_price) - entry) * qty * sign
+                entry_applied = True
             else:
-                # An entry price of zero means the leg never traded, so there
-                # is no round trip to book.
-                deferred_warnings.append(
-                    (
-                        "Leg %s on run %s exited with no entry price; booking no realized P&L",
-                        (leg_id, run_id),
+                leg["exit_avg"] = float(avg_price)
+                entry = float(leg.get("entry_avg") or 0.0)
+                qty = float(leg.get("qty") or 0.0)
+                sign = 1.0 if leg.get("position") == "B" else -1.0
+                if entry > 0.0:
+                    leg["realized_pnl"] = float(leg.get("realized_pnl") or 0.0) + (
+                        (float(avg_price) - entry) * qty * sign
                     )
-                )
-                leg["realized_pnl"] = 0.0
-            leg["status"] = "closed"
-            leg["mtm"] = 0.0
-            leg["exit_order_id"] = None
-            leg["exit_claim_token"] = None
-            leg["exit_kind"] = None
+                else:
+                    # An entry price of zero means this incarnation contributes
+                    # no round trip. Prior signal-session P&L remains intact.
+                    deferred_warnings.append(
+                        (
+                            "Leg %s on run %s exited with no entry price; booking no realized P&L",
+                            (leg_id, run_id),
+                        )
+                    )
+                    leg["realized_pnl"] = float(leg.get("realized_pnl") or 0.0)
+                leg["status"] = "closed"
+                leg["mtm"] = 0.0
+                leg["exit_order_id"] = None
+                leg["exit_claim_token"] = None
+                leg["exit_kind"] = None
 
         # Recompute the run totals now, while the lock is held, so the figures
         # finalise writes are the ones this fill produced.
@@ -836,6 +841,13 @@ def _apply_fill(
 
         went_flat = not _run_requires_management(run)
         strategy_id = run.get("strategy_id")
+
+    if entry_applied:
+        # The entry may have filled after stop_run reported it unfilled. The
+        # durable request is read and retried only after the state lock is
+        # released, so the exact filled size is claimed for exit immediately.
+        reconcile_pending_stop(run_id)
+        return False
 
     if not went_flat:
         return False
@@ -1124,10 +1136,6 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
         return {"ok": False, "error": "Strategy not found"}
     strategy = store.strategy_to_dict(strategy_row)
 
-    api_key = _api_key_for(user_id)
-    if not api_key:
-        return {"ok": False, "error": "No API key is configured for this user"}
-
     # Durable before every broker call. A process death after this write leaves
     # recovery knowing that a flat run should finish and that a held one must
     # reject new entries while its exits are retried.
@@ -1138,6 +1146,11 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
             "error": "Could not persist the stop request; no exit order was placed",
             "exits": [],
         }
+    # The live gate follows the durable write and precedes API-key lookup or
+    # any other I/O. A signal that already claimed an entry is counted below;
+    # a signal that has not claimed yet is refused by this flag under the same
+    # run lock used to create claims.
+    state.mark_stopping(run_id)
     _emit(
         run_row.strategy_id,
         user_id,
@@ -1146,8 +1159,66 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
         run_id=run_id,
     )
 
-    with state.run_state(run_id) as run:
-        managed_ids = _managed_leg_ids(run) if run else []
+    snapshot = state.get_run_state(run_id)
+    if snapshot is None:
+        _emit(
+            run_row.strategy_id,
+            user_id,
+            "run_stop_failed",
+            "Stop remains pending because the active run state is unavailable; no flatness "
+            "claim was made",
+            run_id=run_id,
+            severity="critical",
+        )
+        return {
+            "ok": False,
+            "stop_pending": True,
+            "error": "The run remains open because its live state is unavailable",
+            "exits": [],
+        }
+
+    managed_ids = _managed_leg_ids(snapshot)
+    still_held = _run_requires_management(snapshot)
+
+    api_key = _api_key_for(user_id)
+    if not api_key:
+        if not still_held:
+            persisted_reason = store.get_run(run_id).stop_requested_reason or reason
+            finalised = _finalise(
+                run_id,
+                run_row.strategy_id,
+                user_id,
+                persisted_reason,
+                f"Run stopped ({persisted_reason})",
+            )
+            if finalised:
+                return {"ok": True, "stop_pending": False, "exits": []}
+            return {
+                "ok": False,
+                "stop_pending": True,
+                "error": "The run is flat but its final stop could not be persisted; retry the stop",
+                "exits": [],
+            }
+
+        if run_id not in _unactionable_runs:
+            _unactionable_runs.add(run_id)
+            _emit(
+                run_row.strategy_id,
+                user_id,
+                "run_stop_failed",
+                "Stop remains pending because there is no broker session/API key. Positions "
+                "and possible entry exposure remain managed and retryable.",
+                run_id=run_id,
+                severity="critical",
+            )
+        return {
+            "ok": False,
+            "stop_pending": True,
+            "error": "No API key is configured for this user; the run remains managed",
+            "exits": [],
+        }
+
+    _note_actionable_again(run_row.strategy_id, user_id, run_id)
 
     kind = "exit_close_all" if reason == "manual" else f"exit_{reason}"
     if kind not in store.ORDER_KINDS:
@@ -1212,6 +1283,21 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
     if still_held:
         return {"ok": True, "stop_pending": True, "exits": exits}
 
+    # Revalidate under the live run lock immediately before the terminal
+    # database CAS. This hold performs no I/O. Once ``stopping`` is true no new
+    # signal claim can appear after it, and every pre-existing claim is counted
+    # as possible exposure.
+    with state.run_state(run_id) as live:
+        if live is None:
+            return {
+                "ok": False,
+                "stop_pending": True,
+                "error": "The run remains open because its live state is unavailable",
+                "exits": exits,
+            }
+        if _run_requires_management(live):
+            return {"ok": True, "stop_pending": True, "exits": exits}
+
     persisted_reason = (
         current_row.stop_requested_reason
         if current_row is not None and current_row.stop_requested_reason
@@ -1232,6 +1318,30 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
             "exits": exits,
         }
     return {"ok": True, "stop_pending": False, "exits": exits}
+
+
+def reconcile_pending_stop(run_id: int) -> dict[str, Any] | None:
+    """Continue a durable stop after an entry reaches a terminal fill state.
+
+    Called by the fill/update path after releasing the run lock. ``None`` means
+    no stop is pending; otherwise the ordinary stop contract is returned.
+    """
+    run_row = store.get_run(run_id)
+    if run_row is None or run_row.stopped_at is not None or run_row.stop_requested_reason is None:
+        return None
+    strategy_row = store.get_strategy_unscoped(run_row.strategy_id)
+    if strategy_row is None:
+        return {
+            "ok": False,
+            "stop_pending": True,
+            "error": "The strategy owning this pending stop is unavailable",
+            "exits": [],
+        }
+    return stop_run(
+        run_id,
+        strategy_row.user_id,
+        reason=run_row.stop_requested_reason or "manual",
+    )
 
 
 def close_leg(run_id: int, leg_id: Any, user_id: str) -> dict[str, Any]:
@@ -1295,42 +1405,47 @@ def _finalise(run_id: int, strategy_id: int, user_id: str, reason: str, message:
     closed by an overall stop, a target, a lock-profit floor, the scheduler or
     the kill switch recorded both as zero.
     """
-    snapshot = state.get_run_state(run_id) or {}
-    finished = False
-    try:
-        finished = store.finish_run(
-            run_id,
-            stop_reason=reason,
-            pnl_realized=snapshot.get("pnl_realized", 0.0) or 0.0,
-            pnl_peak=snapshot.get("pnl_peak", 0.0) or 0.0,
-            pnl_trough=snapshot.get("pnl_trough", 0.0) or 0.0,
-        )
-        if not finished:
+    # The terminal eligibility check and figure capture are one in-memory
+    # critical section. No query, emit, unsubscribe or broker work occurs
+    # while the run lock is held. A durably stopping run refuses new entry
+    # claims, so a flat check here remains valid until the CAS directly below.
+    with state.run_state(run_id) as live:
+        if live is not None and _run_requires_management(live):
             return False
-        store.release_strategy(strategy_id)
+        snapshot = {
+            "pnl_realized": (live or {}).get("pnl_realized", 0.0) or 0.0,
+            "pnl_peak": (live or {}).get("pnl_peak", 0.0) or 0.0,
+            "pnl_trough": (live or {}).get("pnl_trough", 0.0) or 0.0,
+        }
+
+    finished = store.finish_run_and_release_strategy(
+        run_id,
+        strategy_id,
+        stop_reason=reason,
+        pnl_realized=snapshot["pnl_realized"],
+        pnl_peak=snapshot["pnl_peak"],
+        pnl_trough=snapshot["pnl_trough"],
+    )
+    if not finished:
+        return False
+
+    try:
         _emit(strategy_id, user_id, "run_stopped", message, run_id=run_id)
+        # The final figures, forced past the throttle: without it the page is
+        # left frozen one tick short of the truth for the rest of the day.
+        _push_delta(run_id, force=True)
+        try:
+            from services.strategy_module import broadcast
+
+            broadcast.push_terminal(strategy_id, run_id, reason, snapshot["pnl_realized"])
+        except Exception:
+            logger.exception("Could not push the terminal frame for run %s", run_id)
     finally:
-        if finished:
-            # The final figures, forced past the throttle: without it the page
-            # is left frozen one tick short of the truth for the rest of the
-            # day. Both happen before clear_run_state, which is what the
-            # payloads read.
-            _push_delta(run_id, force=True)
-            try:
-                from services.strategy_module import broadcast
-
-                broadcast.push_terminal(
-                    strategy_id, run_id, reason, snapshot.get("pnl_realized", 0.0) or 0.0
-                )
-            except Exception:
-                logger.exception("Could not push the terminal frame for run %s", run_id)
-
-            _unactionable_runs.discard(run_id)
-            # Unconditional for the winning finaliser. If anything above
-            # threw, the run's state and lock would otherwise stay registered
-            # for the life of the worker.
-            _unsubscribe_run(run_id)
-            state.clear_run_state(run_id)
+        _unactionable_runs.discard(run_id)
+        # Cleanup belongs only to the transactional winner, even when an
+        # optional event/broadcast fails afterwards.
+        _unsubscribe_run(run_id)
+        state.clear_run_state(run_id)
 
     # Arm the webhook cooling-off window for every stop, not just the ones a
     # webhook asked for. A strategy stopped by its own risk rules, by the
@@ -1546,6 +1661,14 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
         severity = extra.pop("severity", "info")
         _emit(strategy["id"], user_id, kind, message, run_id=run_id, severity=severity, **extra)
 
+    if stop_reason:
+        # A strategy-level breach closes everything, so the per-leg exits it
+        # would also have triggered are redundant.
+        result = stop_run(run_id, user_id, reason=stop_reason)
+        if result.get("ok"):
+            _note_actionable_again(strategy["id"], user_id, run_id)
+        return
+
     api_key = _api_key_for(user_id)
     if not api_key:
         _note_unactionable(strategy["id"], user_id, run_id, leg_exits, stop_reason)
@@ -1553,16 +1676,5 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
 
     _note_actionable_again(strategy["id"], user_id, run_id)
 
-    if stop_reason:
-        # A strategy-level breach closes everything, so the per-leg exits it
-        # would also have triggered are redundant.
-        stop_run(run_id, user_id, reason=stop_reason)
-        return
-
     for leg_id, kind in leg_exits:
         _exit_legs(run_id, strategy, [leg_id], kind, run_row.mode, api_key, user_id)
-
-    with state.run_state(run_id) as run:
-        still_open = bool(state.open_legs(run)) if run else False
-    if leg_exits and not still_open:
-        _finalise(run_id, strategy["id"], user_id, "manual", "All legs closed by rule")

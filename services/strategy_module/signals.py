@@ -265,14 +265,16 @@ def _started_before_today(run: Any) -> bool:
 def _finalise_stale_run(strategy: Any, run_id: int) -> None:
     """Close out a flat run left open from an earlier day."""
     snapshot = state.get_run_state(run_id) or {}
-    store.finish_run(
+    won = store.finish_run_and_release_strategy(
         run_id,
+        strategy.id,
         stop_reason="eod",
         pnl_realized=snapshot.get("pnl_realized", 0.0) or 0.0,
         pnl_peak=snapshot.get("pnl_peak", 0.0) or 0.0,
         pnl_trough=snapshot.get("pnl_trough", 0.0) or 0.0,
     )
-    store.release_strategy(strategy.id)
+    if not won:
+        return
     state.clear_run_state(run_id)
     store.record_event(
         strategy.id,
@@ -369,7 +371,12 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
     if claim is None:
         return SignalResult(ok=False, leg_id=leg_id, run_id=run_id, error="No active run")
     if claim.get("note"):
-        return SignalResult(ok=True, note=claim["note"], leg_id=leg_id, run_id=run_id)
+        return SignalResult(
+            ok=claim["note"] != "run_stopping",
+            note=claim["note"],
+            leg_id=leg_id,
+            run_id=run_id,
+        )
 
     claim_token = claim["claim_token"]
     try:
@@ -700,6 +707,7 @@ def _place(
             row_id, result, strategy.id, strategy.user_id, run_id, leg["leg_id"]
         )
 
+    reconcile_rejected_entry_stop = False
     if not exiting and entry_claim is not None:
         state.finish_signal_entry(
             run_id,
@@ -708,6 +716,7 @@ def _place(
             entry_claim["claim_token"],
             result.ok,
         )
+        reconcile_rejected_entry_stop = not result.ok
 
     if row_id is not None and result.ok:
         # After the leg bookkeeping above, never before it. See
@@ -728,5 +737,13 @@ def _place(
         leg_id=leg["leg_id"],
         severity="info" if result.ok else "warn",
     )
+
+    if reconcile_rejected_entry_stop:
+        # A stop can become durable while dispatch is in flight. Once a
+        # zero-fill refusal has released the entry claim, reconcile outside
+        # the state lock so a now-flat pending stop can atomically finish.
+        from services.strategy_module import engine
+
+        engine.reconcile_pending_stop(run_id)
 
     return _Placement(ok=result.ok, error=result.error, exit_claim_id=exit_claim_id)

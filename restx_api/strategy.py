@@ -97,8 +97,11 @@ def _success(payload: dict | None = None, code: int = 200):
     return make_response(jsonify(body), code)
 
 
-def _failure(message, code: int):
-    return make_response(jsonify({"status": "error", "message": message}), code)
+def _failure(message, code: int, payload: dict | None = None):
+    body = {"status": "error", "message": message}
+    if payload:
+        body.update(payload)
+    return make_response(jsonify(body), code)
 
 
 def _resolve(schema, *, needs_strategy: bool = True):
@@ -148,7 +151,14 @@ def _stop_current_run(row, user_id: str, *, event: str | None = None):
 
     result = _engine().stop_run(run_id, user_id, reason="manual")
     if not result.get("ok"):
-        return _failure(result.get("error") or "Could not stop the run", 409)
+        return _failure(
+            result.get("error") or "Could not stop the run",
+            409,
+            {
+                "stop_pending": result.get("stop_pending", False),
+                "exits": result.get("exits", []),
+            },
+        )
 
     return _success(
         {

@@ -10,7 +10,9 @@ repeats itself; answering a repeat as a failure invites a retry, and a retry on
 an order path is how one alert becomes two positions.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import time
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -438,6 +440,88 @@ def test_signal_entry_is_refused_while_stop_pending_but_exit_retry_is_allowed(pl
     assert len(placed) == orders_before_retry + 1
     assert placed[-1]["action"] == "SELL"
     assert placed[-1]["quantity"] == "100"
+
+
+def test_zero_fill_signal_entry_refusal_reconciles_a_stop_requested_during_dispatch(placed):
+    strategy = _make()
+    run_id, error = signals._day_run(strategy)
+    assert error is None
+    strategy = store.get_strategy(strategy.id, USER)
+
+    def refuse_after_stop_requested(**_kwargs):
+        assert store.request_run_stop(run_id, "manual") is True
+        assert state.mark_stopping(run_id) is True
+        return DispatchResult(ok=False, error="venue refused")
+
+    with patch.object(
+        signals.order_dispatch,
+        "dispatch_order",
+        side_effect=refuse_after_stop_requested,
+    ):
+        result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is False
+    assert placed == []
+    assert store.get_run(run_id).stopped_at is not None
+    assert state.get_run_state(run_id) is None
+    assert [event["kind"] for event in store.list_events(strategy.id)].count("run_stopped") == 1
+
+
+def test_stop_cannot_finalize_while_a_claimed_signal_entry_is_between_check_and_dispatch(
+    placed, monkeypatch
+):
+    """A claimed entry is possible exposure until it is released.
+
+    Hold the signal after its in-memory claim, then hold stop after its
+    management decision.  The signal gets to try installing and dispatching
+    before stop returns, reproducing the exact interleaving that used to let
+    the run finalize underneath a new broker order.
+    """
+    strategy = _make()
+    run_id, error = signals._day_run(strategy)
+    assert error is None
+    strategy = store.get_strategy(strategy.id, USER)
+
+    entry_claimed = Event()
+    stop_checked_management = Event()
+    release_signal = Event()
+    signal_finished = Event()
+    real_resolve = signals._resolve_signal_leg
+    real_requires_management = engine._run_requires_management
+
+    def paused_resolve(leg, side):
+        entry_claimed.set()
+        assert release_signal.wait(timeout=5)
+        return real_resolve(leg, side)
+
+    def paused_management_check(run):
+        result = real_requires_management(run)
+        stop_checked_management.set()
+        assert signal_finished.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(signals, "_resolve_signal_leg", paused_resolve)
+    monkeypatch.setattr(engine, "_run_requires_management", paused_management_check)
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        entry_future = workers.submit(signals.handle_signal, strategy, "long_entry", leg_id=1)
+        assert entry_claimed.wait(timeout=5)
+        stop_future = workers.submit(engine.stop_run, run_id, USER, "manual")
+        assert stop_checked_management.wait(timeout=5)
+        assert state.claim_signal_entry(run_id, 2, "B") == {"note": "run_stopping"}
+        release_signal.set()
+        entry_result = entry_future.result(timeout=10)
+        signal_finished.set()
+        stop_result = stop_future.result(timeout=10)
+
+    assert entry_result.ok is False
+    assert placed == []
+    # Once the blocked claim has released, the locked terminal recheck can
+    # prove flatness. Finalizing now is safe precisely because no dispatch
+    # crossed the stopping gate.
+    assert stop_result["stop_pending"] is False
+    assert store.get_run(run_id).stopped_at is not None
+    assert state.get_run_state(run_id) is None
 
 
 def test_a_run_is_sandbox_unless_the_strategy_opted_into_live(placed):

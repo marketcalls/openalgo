@@ -593,11 +593,27 @@ def run_scheduled_stop(strategy_id: int) -> None:
         from services.strategy_module import engine
 
         result = engine.stop_run(row.current_run_id, row.user_id, reason="scheduler")
-        if isinstance(result, dict) and result.get("ok"):
+        accepted = isinstance(result, dict) and bool(result.get("ok"))
+        pending = isinstance(result, dict) and bool(result.get("stop_pending"))
+        if accepted and pending:
+            logger.info(
+                "Scheduled square-off accepted for run %s of strategy %s; exit fills pending",
+                row.current_run_id,
+                strategy_id,
+            )
+        elif accepted:
             logger.info(
                 "Scheduled square-off closed run %s of strategy %s",
                 row.current_run_id,
                 strategy_id,
+            )
+        elif pending:
+            error = result.get("error") if isinstance(result, dict) else result
+            logger.error(
+                "Scheduled square-off refused for strategy %s; stop remains pending and "
+                "retryable: %s",
+                strategy_id,
+                error,
             )
         else:
             error = result.get("error") if isinstance(result, dict) else result

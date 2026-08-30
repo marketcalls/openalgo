@@ -466,10 +466,58 @@ def test_the_stop_job_squares_off_the_current_run():
     sid = _make()
     store.set_strategy_status(sid, "running", 55)
 
-    with patch.object(engine, "stop_run", return_value={"ok": True}) as stop:
+    with (
+        patch.object(engine, "stop_run", return_value={"ok": True, "stop_pending": False}) as stop,
+        patch.object(sched.logger, "info") as info,
+    ):
         sched.run_scheduled_stop(sid)
 
     stop.assert_called_once_with(55, USER, reason="scheduler")
+    assert "closed" in info.call_args.args[0].lower()
+
+
+def test_the_stop_job_reports_accepted_pending_separately_from_confirmed_stopped():
+    sid = _make()
+    store.set_strategy_status(sid, "running", 56)
+
+    with (
+        patch.object(
+            engine,
+            "stop_run",
+            return_value={"ok": True, "stop_pending": True, "exits": [{"ok": True}]},
+        ),
+        patch.object(sched.logger, "info") as info,
+    ):
+        sched.run_scheduled_stop(sid)
+
+    rendered = " ".join(str(part) for part in info.call_args.args).lower()
+    assert "pending" in rendered
+    assert "closed" not in rendered
+
+
+def test_the_stop_job_reports_refused_pending_as_retryable_not_accepted():
+    sid = _make()
+    store.set_strategy_status(sid, "running", 57)
+
+    with (
+        patch.object(
+            engine,
+            "stop_run",
+            return_value={
+                "ok": False,
+                "stop_pending": True,
+                "error": "No API key",
+                "exits": [],
+            },
+        ),
+        patch.object(sched.logger, "error") as error,
+    ):
+        sched.run_scheduled_stop(sid)
+
+    rendered = " ".join(str(part) for part in error.call_args.args).lower()
+    assert "refused" in rendered
+    assert "pending" in rendered
+    assert "closed" not in rendered
 
 
 def test_the_stop_job_is_a_no_op_when_nothing_is_running():

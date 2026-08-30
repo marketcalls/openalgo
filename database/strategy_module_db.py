@@ -1107,6 +1107,75 @@ def finish_run(
         return False
 
 
+def finish_run_and_release_strategy(
+    run_id: int,
+    strategy_id: int,
+    stop_reason: str,
+    pnl_realized: float = 0.0,
+    pnl_peak: float = 0.0,
+    pnl_trough: float = 0.0,
+) -> bool:
+    """Atomically finish one active run and release only its current strategy.
+
+    The two conditional updates share one transaction. If the run was already
+    finished, or the strategy now points at another run, neither row changes.
+    The single True caller owns terminal events and in-process cleanup.
+    """
+    try:
+        finished = (
+            db_session.query(SmStrategyRun)
+            .filter(
+                SmStrategyRun.id == run_id,
+                SmStrategyRun.strategy_id == strategy_id,
+                SmStrategyRun.stopped_at.is_(None),
+            )
+            .update(
+                {
+                    "stopped_at": utcnow(),
+                    "stop_reason": stop_reason,
+                    "stop_requested_at": None,
+                    "stop_requested_reason": None,
+                    "pnl_realized": pnl_realized,
+                    "pnl_peak": pnl_peak,
+                    "pnl_trough": pnl_trough,
+                },
+                synchronize_session=False,
+            )
+        )
+        if finished != 1:
+            db_session.rollback()
+            return False
+
+        released = (
+            db_session.query(SmStrategy)
+            .filter(
+                SmStrategy.id == strategy_id,
+                SmStrategy.current_run_id == run_id,
+            )
+            .update(
+                {"status": "stopped", "current_run_id": None},
+                synchronize_session=False,
+            )
+        )
+        if released != 1:
+            db_session.rollback()
+            db_session.expire_all()
+            return False
+
+        db_session.commit()
+        db_session.expire_all()
+        _forget_session_pnl(strategy_id)
+        return True
+    except Exception:
+        db_session.rollback()
+        logger.exception(
+            "Could not atomically finish run %s and release strategy %s",
+            run_id,
+            strategy_id,
+        )
+        return False
+
+
 def request_run_stop(run_id: int, reason: str) -> bool:
     """Persist a stop request while leaving the run active until it is flat."""
     try:

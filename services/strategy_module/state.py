@@ -125,6 +125,10 @@ def init_run_state(run_id: int, strategy_id: int, legs: list[dict]) -> dict[str,
         "lock_floor": None,
         "trail_to_entry_active": False,
         "tick_source_degraded": False,
+        # Set after the stop request is durable and before any broker/API-key
+        # work.  Entry claims consult this under the same run lock, closing the
+        # window between a signal's database check and its eventual dispatch.
+        "stopping": False,
         # At most one in-flight signal entry decision per configured leg. The
         # map lives and dies with the run and is keyed only by validated leg id.
         "signal_entry_claims": {},
@@ -264,6 +268,8 @@ def claim_signal_entry(run_id: int, leg_id: Any, position: str) -> dict[str, Any
         run = _run_state.get(run_id)
         if run is None:
             return None
+        if run.get("stopping"):
+            return {"note": "run_stopping"}
         key = str(leg_id)
         claims = run.setdefault("signal_entry_claims", {})
         if key in claims:
@@ -554,6 +560,23 @@ def favorable_peak_points(leg: dict[str, Any]) -> float:
     return max(0.0, float(entry) - float(trough)) if trough else 0.0
 
 
+def mark_stopping(run_id: int) -> bool:
+    """Block new signal entries for a durably requested stop.
+
+    Pure in-memory bookkeeping under the run lock. The caller persists the
+    request first, so a process death cannot forget a stop that state observed.
+    """
+    lock = _lock_for(run_id, create=False)
+    if lock is None:
+        return False
+    with lock:
+        run = _run_state.get(run_id)
+        if run is None:
+            return False
+        run["stopping"] = True
+        return True
+
+
 def add_leg(
     run_id: int,
     leg: dict,
@@ -575,6 +598,8 @@ def add_leg(
     with lock:
         state = _run_state.get(run_id)
         if state is None:
+            return None
+        if state.get("stopping"):
             return None
         key = str(leg["leg_id"])
         claim = state.get("signal_entry_claims", {}).get(key)
