@@ -43,6 +43,7 @@ export const navItems: NavItem[] = [
   { href: '/positions', label: 'Positions', icon: TrendingUp },
   { href: '/trading', label: 'Trading', icon: CandlestickChart },
   { href: '/platforms', label: 'Platforms', icon: Layers },
+  { href: '/strategy', label: 'Strategies', icon: Boxes },
   { href: '/logs', label: 'Logs', icon: FileBarChart },
   { href: '/tools', label: 'Tools', icon: Wrench },
 ]
@@ -71,7 +72,6 @@ export const profileMenuItems: NavItem[] = [
   { href: '/whatsapp', label: 'WhatsApp Bot', icon: MessageCircle },
   { href: '/holdings', label: 'Holdings', icon: ClipboardList },
   { href: '/flow', label: 'Flow Editor', icon: Workflow },
-  { href: '/strategy', label: 'Strategies', icon: Boxes },
   { href: '/scalping', label: 'Scalping', icon: Zap },
   { href: '/python', label: 'Python Strategies', icon: Code2 },
   { href: '/pnl-tracker', label: 'PnL Tracker', icon: BarChart3 },
