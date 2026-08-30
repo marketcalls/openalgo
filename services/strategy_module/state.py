@@ -683,6 +683,29 @@ def finish_signal_entry(
         return True
 
 
+def reject_entry_intent(run_id: int, leg_id: Any, position_ref: str | None) -> bool:
+    """Make one exact batch placeholder non-managed when intent persistence fails.
+
+    The broker was never called, so the configured placeholder cannot become
+    exposure. Matching the position reference prevents a delayed failure from
+    rejecting a newer incarnation that reused the same leg id.
+    """
+    lock = _lock_for(run_id, create=False)
+    if lock is None:
+        return False
+    with lock:
+        run = _run_state.get(run_id)
+        leg = run["legs"].get(str(leg_id)) if run else None
+        if leg is None or leg.get("position_ref") != position_ref:
+            return False
+        if leg.get("entry_status") == "complete":
+            return False
+        leg["entry_order_id"] = None
+        leg["entry_status"] = "rejected"
+        leg["status"] = "rejected"
+        return True
+
+
 def get_run_state(run_id: int) -> dict[str, Any] | None:
     """A deep copy of a run's state, safe to read outside the lock.
 

@@ -467,6 +467,79 @@ def test_zero_fill_signal_entry_refusal_reconciles_a_stop_requested_during_dispa
     assert [event["kind"] for event in store.list_events(strategy.id)].count("run_stopped") == 1
 
 
+@pytest.mark.parametrize("seam", ["resolver", "api_key", "record_row", "install"])
+def test_every_pre_dispatch_entry_refusal_releases_claim_then_reconciles_pending_stop(
+    placed, monkeypatch, seam
+):
+    strategy = _make()
+    run_id, error = signals._day_run(strategy)
+    assert error is None
+    strategy = store.get_strategy(strategy.id, USER)
+
+    def make_stop_durable():
+        assert store.request_run_stop(run_id, "manual") is True
+        assert state.mark_stopping(run_id) is True
+
+    if seam == "resolver":
+
+        def refuse_resolver(_leg, _side):
+            make_stop_durable()
+            return None, "resolver refused"
+
+        monkeypatch.setattr(signals, "_resolve_signal_leg", refuse_resolver)
+    elif seam == "api_key":
+
+        def refuse_api_key(_user_id):
+            make_stop_durable()
+            return None
+
+        monkeypatch.setattr(signals, "_api_key_for", refuse_api_key)
+    elif seam == "record_row":
+
+        def refuse_record(*_args, **_kwargs):
+            make_stop_durable()
+            return None
+
+        monkeypatch.setattr(store, "record_order", refuse_record)
+    else:
+
+        def refuse_install(*_args, **_kwargs):
+            make_stop_durable()
+            return None
+
+        monkeypatch.setattr(state, "add_leg", refuse_install)
+
+    observed_claim_release = []
+    real_reconcile = engine.reconcile_pending_stop
+
+    def observe_reconcile(candidate_run_id):
+        snapshot = state.get_run_state(candidate_run_id)
+        observed_claim_release.append(snapshot is not None and not snapshot["signal_entry_claims"])
+        return real_reconcile(candidate_run_id)
+
+    terminal_attempts = []
+    real_finish = store.finish_run_and_release_strategy
+
+    def count_terminal_attempt(*args, **kwargs):
+        terminal_attempts.append(args[0])
+        return real_finish(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "reconcile_pending_stop", observe_reconcile)
+    monkeypatch.setattr(store, "finish_run_and_release_strategy", count_terminal_attempt)
+
+    result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is False
+    assert placed == []
+    assert observed_claim_release == [True]
+    assert store.get_run(run_id).stopped_at is not None
+    assert state.get_run_state(run_id) is None
+    assert terminal_attempts == [run_id]
+    assert real_reconcile(run_id) is None
+    assert terminal_attempts == [run_id]
+    assert [event["kind"] for event in store.list_events(strategy.id)].count("run_stopped") == 1
+
+
 def test_stop_cannot_finalize_while_a_claimed_signal_entry_is_between_check_and_dispatch(
     placed, monkeypatch
 ):
@@ -496,8 +569,9 @@ def test_stop_cannot_finalize_while_a_claimed_signal_entry_is_between_check_and_
 
     def paused_management_check(run):
         result = real_requires_management(run)
-        stop_checked_management.set()
-        assert signal_finished.wait(timeout=5)
+        if not stop_checked_management.is_set():
+            stop_checked_management.set()
+            assert signal_finished.wait(timeout=5)
         return result
 
     monkeypatch.setattr(signals, "_resolve_signal_leg", paused_resolve)
@@ -664,6 +738,77 @@ def _age_run(run_id, days):
     run = store.get_run(run_id)
     run.started_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days)
     store.db_session.commit()
+
+
+@pytest.mark.parametrize(
+    "management",
+    ["superseded", "working_entry", "configured_entry", "signal_claim", "unavailable_state"],
+)
+def test_stale_signal_rollover_uses_full_stop_management_before_replacement(placed, management):
+    strategy = _make()
+    run_id, error = signals._day_run(strategy)
+    assert error is None
+
+    if management in {"superseded", "working_entry", "configured_entry"}:
+        state.init_run_state(
+            run_id,
+            strategy.id,
+            [
+                {
+                    "leg_id": 1,
+                    "position": "B",
+                    "position_ref": "stale-live",
+                    "symbol": "RELIANCE",
+                    "exchange": "NSE",
+                    "quantity": 10,
+                }
+            ],
+        )
+        with state.run_state(run_id) as live:
+            leg = live["legs"]["1"]
+            if management == "superseded":
+                leg["entry_status"] = "rejected"
+                leg["status"] = "rejected"
+                leg["superseded"] = {
+                    "position_ref": "stale-old-long",
+                    "entry_order_id": 101,
+                    "exit_order_id": None,
+                    "exit_claim_token": None,
+                    "position": "B",
+                    "entry_avg": 100.0,
+                    "qty": 10,
+                }
+            elif management == "working_entry":
+                leg["entry_status"] = "open"
+                leg["status"] = "open"
+    elif management == "signal_claim":
+        claim = state.claim_signal_entry(run_id, 1, "B")
+        assert claim is not None and claim.get("claim_token")
+    else:
+        state.clear_run_state(run_id)
+
+    _age_run(run_id, days=3)
+
+    result = signals.handle_signal(
+        store.get_strategy(strategy.id, USER),
+        "long_entry",
+        leg_id=2,
+    )
+
+    assert result.ok is False
+    assert result.note == "run_stopping"
+    assert result.run_id == run_id
+    assert store.get_strategy(strategy.id, USER).current_run_id == run_id
+    assert len(store.list_runs(strategy.id)) == 1
+    durable = store.get_run(run_id)
+    assert durable.stopped_at is None
+    assert durable.stop_requested_reason == "eod"
+    if management == "superseded":
+        assert [(order["action"], order["quantity"]) for order in placed] == [("SELL", "10")]
+    else:
+        assert placed == []
+    if management != "unavailable_state":
+        assert state.get_run_state(run_id)["stopping"] is True
 
 
 def test_a_flat_run_from_an_earlier_day_is_rolled(placed):

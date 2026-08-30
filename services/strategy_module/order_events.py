@@ -230,6 +230,64 @@ def report_pending_stop_exit_failed(
         logger.exception("Could not record a pending-stop exit failure for run %s", run_id)
 
 
+def _report_unpriced_fill(
+    run_id: int,
+    leg_id: Any,
+    broker_order_id: str,
+    filled_qty: int,
+    *,
+    is_entry: bool,
+) -> None:
+    """Record exposure whose exact quantity is known but valuation is not."""
+    try:
+        run = store.get_run(run_id)
+        if run is None or run.stopped_at is not None:
+            return
+        strategy = store.get_strategy_unscoped(run.strategy_id)
+        if strategy is None:
+            return
+        store.record_event(
+            run.strategy_id,
+            strategy.user_id,
+            "leg_entry_placed" if is_entry else "leg_exit_placed",
+            (
+                f"Broker order {broker_order_id} reports {filled_qty} filled on leg {leg_id} "
+                "without a usable average price. The exact remaining exposure is still "
+                "managed, but risk valuation and realized P&L are unavailable; reconcile "
+                "the broker fill price."
+            ),
+            run_id=run_id,
+            leg_id=leg_id,
+            severity="critical",
+        )
+    except Exception:
+        logger.exception("Could not record an unpriced fill for run %s leg %s", run_id, leg_id)
+
+
+def _exit_owner_for_row(
+    run_id: int, leg_id: Any, row_id: int, position_ref: str | None
+) -> str | None:
+    """Identify the exact owner before a terminal partial mutates it."""
+    from services.strategy_module import state
+
+    snapshot = state.get_run_state(run_id)
+    leg = (snapshot.get("legs") or {}).get(str(leg_id)) if snapshot else None
+    if leg is None:
+        return None
+    superseded = leg.get("superseded")
+    if (
+        superseded
+        and superseded.get("exit_order_id") == row_id
+        and (position_ref is None or superseded.get("position_ref") == position_ref)
+    ):
+        return "superseded"
+    if leg.get("exit_order_id") == row_id and (
+        position_ref is None or leg.get("position_ref") == position_ref
+    ):
+        return "live"
+    return None
+
+
 def _on_order_update(event: Any) -> None:
     """Bus callback. Returns immediately; the work happens on the pool.
 
@@ -308,7 +366,8 @@ def _apply_update(order_id: str, event: Any) -> None:
             ):
                 return
             price = _usable_price(avg_price)
-            if price is not None:
+            quantity = _whole_qty(filled_qty)
+            if price is not None or quantity is not None:
                 from services.strategy_module import engine
 
                 fill_identity = {"position_ref": row.position_ref} if row.position_ref else {}
@@ -317,17 +376,25 @@ def _apply_update(order_id: str, event: Any) -> None:
                     leg_id,
                     price,
                     is_entry=is_entry,
-                    filled_qty=_whole_qty(filled_qty),
+                    filled_qty=quantity,
                     # New rows name the position incarnation directly. The
                     # row id remains the fallback for legacy NULL references.
                     order_row_id=row.id,
                     **fill_identity,
                 )
+                if price is None and quantity is not None:
+                    _report_unpriced_fill(
+                        run_id,
+                        leg_id,
+                        order_id,
+                        quantity,
+                        is_entry=is_entry,
+                    )
             else:
-                # A fill with no usable price cannot seed a stop or a realized
-                # figure. Recorded, but deliberately not applied to the run.
+                # Neither price nor quantity supplied a usable fill fact.
                 logger.warning(
-                    "Order %s reported filled with an unusable average price %r; leg %s not marked",
+                    "Order %s reported filled without usable quantity or average price %r; "
+                    "leg %s not marked",
                     order_id,
                     avg_price,
                     leg_id,
@@ -350,17 +417,16 @@ def _apply_update(order_id: str, event: Any) -> None:
             terminal_price = None
             durable_qty = filled_qty
             durable_price = avg_price
-            if is_entry:
-                # Terminal frames commonly send zeroes for fields already
-                # reported by an earlier partial update. Preserve the durable
-                # positive facts rather than overwriting real exposure with
-                # the dead remainder's zero values.
-                terminal_qty = _whole_qty(filled_qty) or _whole_qty(row.filled_qty)
-                terminal_price = _usable_price(avg_price) or _usable_price(row.avg_fill_price)
-                if terminal_qty is not None:
-                    durable_qty = terminal_qty
-                if terminal_price is not None:
-                    durable_price = terminal_price
+            # Terminal frames commonly send zeroes for fields already
+            # reported by an earlier partial update. Preserve the durable
+            # positive facts rather than overwriting real exposure or a real
+            # reduction with the dead remainder's zero values.
+            terminal_qty = _whole_qty(filled_qty) or _whole_qty(row.filled_qty)
+            terminal_price = _usable_price(avg_price) or _usable_price(row.avg_fill_price)
+            if terminal_qty is not None:
+                durable_qty = terminal_qty
+            if terminal_price is not None:
+                durable_price = terminal_price
             if not store.transition_order_terminal(
                 row.id,
                 status=ended,
@@ -378,11 +444,11 @@ def _apply_update(order_id: str, event: Any) -> None:
             from services.strategy_module import state
 
             if is_entry:
-                if terminal_qty is not None and terminal_price is not None:
+                if terminal_qty is not None:
                     # A cancelled/rejected remainder does not erase what
-                    # already traded. Install the actual fill using the same
-                    # engine path as a complete entry, then let its pending-stop
-                    # reconciliation claim precisely that quantity for exit.
+                    # already traded. Quantity alone proves exposure; price is
+                    # optional valuation metadata. Install the actual fill,
+                    # then let pending-stop reconciliation claim that quantity.
                     from services.strategy_module import engine
 
                     fill_identity = {"position_ref": row.position_ref} if row.position_ref else {}
@@ -395,6 +461,14 @@ def _apply_update(order_id: str, event: Any) -> None:
                         order_row_id=row.id,
                         **fill_identity,
                     )
+                    if terminal_price is None:
+                        _report_unpriced_fill(
+                            run_id,
+                            leg_id,
+                            order_id,
+                            terminal_qty,
+                            is_entry=True,
+                        )
                 else:
                     # Zero fill: the entry will never become a position. Mark
                     # it flat under the state lock, then reconcile a pending
@@ -412,7 +486,35 @@ def _apply_update(order_id: str, event: Any) -> None:
 
                     engine.reconcile_pending_stop(run_id)
             else:
-                exit_owner = state.release_order_exit(run_id, leg_id, row.id, row.position_ref)
+                exit_owner = _exit_owner_for_row(run_id, leg_id, row.id, row.position_ref)
+                if terminal_qty is not None:
+                    from services.strategy_module import engine
+
+                    fill_identity = {"position_ref": row.position_ref} if row.position_ref else {}
+                    engine.apply_fill(
+                        run_id,
+                        leg_id,
+                        terminal_price,
+                        is_entry=False,
+                        filled_qty=terminal_qty,
+                        order_row_id=row.id,
+                        **fill_identity,
+                    )
+                    if terminal_price is None:
+                        _report_unpriced_fill(
+                            run_id,
+                            leg_id,
+                            order_id,
+                            terminal_qty,
+                            is_entry=False,
+                        )
+                else:
+                    exit_owner = state.release_order_exit(
+                        run_id,
+                        leg_id,
+                        row.id,
+                        row.position_ref,
+                    )
                 if exit_owner == "superseded":
                     # This closed the outgoing side of a flip, and it was
                     # refused. Both sides are on the book now: the leg

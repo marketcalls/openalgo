@@ -333,6 +333,38 @@ def test_recovery_treats_terminal_partial_entry_fields_as_actual_exposure(ended)
     assert store.get_run(run_id).stop_requested_reason == "scheduler"
 
 
+@pytest.mark.parametrize("ended", ["rejected", "cancelled"])
+def test_recovery_keeps_terminal_partial_entry_quantity_when_price_is_unavailable(ended):
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        1,
+        "entry",
+        action="SELL",
+        status=ended,
+        avg=0,
+        filled_qty=25,
+        position_ref="unpriced-partial-entry",
+    )
+    assert store.request_run_stop(run_id, "scheduler") is True
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    assert recovered.finalised is False
+    assert store.get_run(run_id).stopped_at is None
+    live = state.get_run_state(run_id)
+    assert live is not None
+    assert live["stopping"] is True
+    leg = live["legs"]["1"]
+    assert leg["status"] == "open"
+    assert leg["entry_status"] == "complete"
+    assert leg["entry_avg"] == 0.0
+    assert leg["qty"] == 25
+    assert leg["position_ref"] == "unpriced-partial-entry"
+
+
 def test_recovery_finalizes_zero_fill_pending_stop_with_persisted_reason_and_stop_event():
     sid = _strategy()
     run_id = _run(sid)
@@ -406,6 +438,54 @@ def test_a_rejected_exit_leaves_the_leg_open_and_the_exit_retryable():
     assert leg["status"] == "open"
     assert leg["exit_order_id"] is None
     assert leg["exit_kind"] is None
+
+
+@pytest.mark.parametrize(
+    ("exit_avg", "expected_realized"),
+    [(80.0, 500.0), (0.0, 0.0)],
+)
+def test_recovery_reduces_single_owner_by_terminal_partial_exit_quantity(
+    exit_avg, expected_realized
+):
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        1,
+        "entry",
+        action="SELL",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        filled_qty=75,
+        position_ref="single-owner",
+    )
+    _order(
+        run_id,
+        1,
+        "exit_close_all",
+        action="BUY",
+        qty=75,
+        status="cancelled",
+        avg=exit_avg,
+        filled_qty=25,
+        position_ref="single-owner",
+    )
+    assert store.request_run_stop(run_id, "manual") is True
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    assert recovered.finalised is False
+    assert store.get_run(run_id).stopped_at is None
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["status"] == "open"
+    assert leg["entry_status"] == "complete"
+    assert leg["qty"] == 50
+    assert leg["position_ref"] == "single-owner"
+    assert leg["exit_order_id"] is None
+    assert leg["exit_kind"] is None
+    assert leg["realized_pnl"] == pytest.approx(expected_realized)
 
 
 def test_recovery_preserves_pending_stop_and_exact_rejected_exit_owner():

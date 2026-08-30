@@ -208,7 +208,13 @@ def _live(run_id, leg_id=1):
     return snapshot["legs"][str(leg_id)]
 
 
-def _event(orderid, status="complete", avg=100.0, filled=75, rejection=""):
+def _event(orderid, status="complete", avg=100.0, filled=None, rejection=""):
+    if filled is None and str(status).strip().lower() in {
+        "rejected",
+        "cancelled",
+        "canceled",
+    }:
+        filled = 0
     return SimpleNamespace(
         orderid=orderid,
         order_status=status,
@@ -291,49 +297,48 @@ def test_apply_fill_warnings_run_after_the_run_lock_is_released(case):
     assert warning_lock_states == [True], "logger.warning ran while state.run_state was held"
 
 
-def test_a_fill_priced_at_the_string_zero_seeds_no_leg(broker):
-    """A broker that sends prices as strings must not disarm a stop loss.
-
-    ``order_events`` guards the zero-price case with ``if avg_price:``. That is
-    a truthiness test, and the string "0" is truthy, so a leg is marked filled
-    at a price of zero. A leg with an entry of zero derives no stop from its
-    configured points (``stop_from_points`` refuses a non-positive entry), so
-    the position runs uncovered for the rest of the session with nothing in the
-    logs to say the stop is gone.
-    """
+def test_a_positive_fill_quantity_without_price_stays_managed_and_visible(broker):
+    """A positive broker quantity is exposure even when its price is unusable."""
     sid = _make()
     run_id = _start(sid).run_id
 
-    order_events._apply_update("QA-1", _event("QA-1", avg="0"))
+    order_events._apply_update("QA-1", _event("QA-1", avg="0", filled=75))
 
     leg = _live(run_id)
     assert leg["entry_avg"] == 0.0
-    assert leg["entry_status"] == "open", (
-        "a leg was marked filled at a price of zero, which leaves it with no stop"
-    )
+    assert leg["entry_status"] == "complete"
+    assert leg["status"] == "open"
+    assert leg["qty"] == 75
+    critical = [
+        event
+        for event in store.list_events(sid)
+        if event["kind"] == "leg_entry_placed" and event["severity"] == "critical"
+    ]
+    assert critical
+    assert "managed" in critical[0]["message"].lower()
+    assert "price" in critical[0]["message"].lower()
     assert store.get_strategy(sid, USER)  # keep the strategy referenced
 
 
-def test_a_leg_reported_as_filled_always_has_a_stop_to_be_managed_by(broker):
-    """The consequence of the previous case.
-
-    The leg is a short configured with a 20 point stop. Once it reads as filled,
-    the UI, the audit trail and the operator all treat it as a managed position.
-    Seeded from a string zero it has no stop at all: 500 is 380 points through
-    where the stop belongs and places nothing.
-    """
+def test_an_unpriced_filled_leg_can_still_be_flattened_at_exact_quantity(broker):
+    """Unavailable valuation disables automatic risk, not manual flattening."""
     sid = _make()
     run_id = _start(sid).run_id
-    order_events._apply_update("QA-1", _event("QA-1", avg="0"))
+    order_events._apply_update("QA-1", _event("QA-1", avg="0", filled=75))
     broker.clear()
 
     engine.process_tick(CE, "NFO", 500.0)
 
     leg = _live(run_id)
-    assert not (leg["entry_status"] == "complete" and leg["effective_sl"] is None), (
-        "the leg reads as filled but carries no stop, so no price can ever exit it"
-    )
+    assert leg["entry_status"] == "complete"
+    assert leg["effective_sl"] is None
     assert broker.orders == []
+
+    result = engine.stop_run(run_id, USER, reason="manual")
+
+    assert result["ok"] is True
+    assert result["stop_pending"] is True
+    assert broker.quantities == [75]
 
 
 def test_a_fill_priced_negative_is_not_applied(broker):
@@ -428,7 +433,7 @@ def test_a_complete_arriving_after_a_cancel_cannot_resurrect_the_order(broker):
     sid = _make()
     run_id = _start(sid).run_id
 
-    order_events._apply_update("QA-1", _event("QA-1", status="cancelled", avg=0))
+    order_events._apply_update("QA-1", _event("QA-1", status="cancelled", avg=0, filled=0))
     order_events._apply_update("QA-1", _event("QA-1", status="complete", avg=101.5))
 
     assert _live(run_id)["entry_avg"] == 0.0
@@ -828,7 +833,7 @@ def test_async_rejected_stop_exit_stays_managed_and_retryable(broker):
 
     order_events._apply_update(
         exit_row["broker_order_id"],
-        _event(exit_row["broker_order_id"], status="rejected", avg=0),
+        _event(exit_row["broker_order_id"], status="rejected", avg=0, filled=0),
     )
 
     assert first["stop_pending"] is True
@@ -2008,7 +2013,8 @@ def test_an_exit_rejected_after_dispatch_can_be_retried(broker):
 
     # The broker then rejects it.
     order_events._apply_update(
-        exit_order["broker_order_id"], _event(exit_order["broker_order_id"], status="rejected")
+        exit_order["broker_order_id"],
+        _event(exit_order["broker_order_id"], status="rejected", avg=0, filled=0),
     )
 
     # The position is still held, so the next tick must try again.
@@ -2042,7 +2048,8 @@ def test_an_exit_rejected_after_stop_acceptance_is_reported_as_managed(broker):
     exit_order = [o for o in store.list_orders(run_id) if o["kind"] != "entry"][0]
 
     order_events._apply_update(
-        exit_order["broker_order_id"], _event(exit_order["broker_order_id"], status="rejected")
+        exit_order["broker_order_id"],
+        _event(exit_order["broker_order_id"], status="rejected", avg=0, filled=0),
     )
 
     stranded = [e for e in store.list_events(sid) if e["kind"] == "run_stop_failed"]

@@ -186,20 +186,13 @@ def _day_run(strategy: Any) -> tuple[int | None, str | None]:
             # alone over a long weekend silently reports one run spanning four
             # sessions.
             #
-            # Only rolled when nothing is held. An open leg is a live position,
-            # and finalising the run that owns it would leave it with no run to
-            # be managed by, which is far worse than a merged P&L figure.
-            with state.run_state(run_id) as live:
-                still_open = bool(state.open_legs(live)) if live else False
-            if still_open:
-                logger.info(
-                    "Run %s is from an earlier day but still holds positions; keeping it",
-                    run_id,
-                )
+            # Route every stale run through the durable stop lifecycle. Its
+            # management predicate includes superseded positions, working or
+            # configured entries, in-flight signal claims, and unavailable
+            # live state. Only confirmed flatness permits a replacement run.
+            logger.info("Rolling signal run %s through end-of-day stop", run_id)
+            if not _finalise_stale_run(strategy, run_id):
                 return run_id, None
-
-            logger.info("Rolling signal run %s to a new trading day", run_id)
-            _finalise_stale_run(strategy, run_id)
 
     mode = "live" if getattr(strategy, "live_enabled", False) else "sandbox"
     api_key = _api_key_for(strategy.user_id)
@@ -262,20 +255,14 @@ def _started_before_today(run: Any) -> bool:
     return _session_day(started_ist) < _session_day(_now_ist())
 
 
-def _finalise_stale_run(strategy: Any, run_id: int) -> None:
-    """Close out a flat run left open from an earlier day."""
-    snapshot = state.get_run_state(run_id) or {}
-    won = store.finish_run_and_release_strategy(
-        run_id,
-        strategy.id,
-        stop_reason="eod",
-        pnl_realized=snapshot.get("pnl_realized", 0.0) or 0.0,
-        pnl_peak=snapshot.get("pnl_peak", 0.0) or 0.0,
-        pnl_trough=snapshot.get("pnl_trough", 0.0) or 0.0,
-    )
-    if not won:
-        return
-    state.clear_run_state(run_id)
+def _finalise_stale_run(strategy: Any, run_id: int) -> bool:
+    """Stop one stale run and say whether confirmed flatness won."""
+    from services.strategy_module import engine
+
+    result = engine.stop_run(run_id, strategy.user_id, reason="eod")
+    confirmed = bool(result.get("ok")) and not bool(result.get("stop_pending"))
+    if not confirmed:
+        return False
     store.record_event(
         strategy.id,
         strategy.user_id,
@@ -284,6 +271,7 @@ def _finalise_stale_run(strategy: Any, run_id: int) -> None:
         run_id=run_id,
         severity="warn",
     )
+    return True
 
 
 def _api_key_for(user_id: str) -> str | None:
@@ -413,7 +401,15 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
 
         return SignalResult(ok=True, leg_id=leg_id, run_id=run_id, flipped=flipped)
     finally:
-        state.release_signal_entry_claim(run_id, leg_id, claim_token)
+        released = state.release_signal_entry_claim(run_id, leg_id, claim_token)
+        if released:
+            # Every refusal before finish_signal_entry leaves the exact claim
+            # here. A stop may have become durable at any resolver/auth/store/
+            # install seam; release first, then do database/broker work after
+            # the run lock has exited.
+            from services.strategy_module import engine
+
+            engine.reconcile_pending_stop(run_id)
 
 
 def _resolve_signal_leg(leg: dict, side: str) -> tuple[dict | None, str | None]:

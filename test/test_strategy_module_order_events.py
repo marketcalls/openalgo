@@ -177,7 +177,14 @@ def test_an_exit_fill_is_applied_as_an_exit_not_an_entry(order):
 def test_a_rejection_marks_the_row_and_seeds_nothing(order):
     with patch("services.strategy_module.engine.apply_fill") as apply_fill:
         order_events._apply_update(
-            "BRK-1", _event("BRK-1", status="rejected", avg=0, rejection="Insufficient margin")
+            "BRK-1",
+            _event(
+                "BRK-1",
+                status="rejected",
+                avg=0,
+                filled=0,
+                rejection="Insufficient margin",
+            ),
         )
 
     row = store.list_orders(order.run_id)[0]
@@ -236,6 +243,31 @@ def test_terminal_zero_fields_preserve_a_previously_reported_partial_fill(order)
     assert leg["status"] == "open"
     assert leg["entry_avg"] == pytest.approx(101.25)
     assert leg["qty"] == 25
+
+
+@pytest.mark.parametrize("ended", ["rejected", "cancelled"])
+def test_terminal_partial_entry_without_price_remains_exact_managed_exposure(order, ended):
+    """A positive broker quantity is exposure even when valuation is unavailable."""
+    _install_pending_entry(order)
+
+    order_events._apply_update(
+        "BRK-1",
+        _event("BRK-1", status=ended, avg=0, filled=25, rejection="remainder dead"),
+    )
+
+    durable = store.list_orders(order.run_id)[0]
+    assert durable["status"] == ended
+    assert durable["filled_qty"] == 25
+    leg = state.get_run_state(order.run_id)["legs"]["1"]
+    assert leg["status"] == "open"
+    assert leg["entry_status"] == "complete"
+    assert leg["entry_avg"] == 0.0
+    assert leg["qty"] == 25
+    critical = [
+        event for event in store.list_events(order.strategy_id) if event["severity"] == "critical"
+    ]
+    assert any("price" in event["message"].lower() for event in critical)
+    assert any("managed" in event["message"].lower() for event in critical)
 
 
 def test_zero_fill_terminal_entry_completes_a_pending_stop_as_confirmed_flat(order):
@@ -344,7 +376,10 @@ def test_live_flip_rejection_is_retryable_not_reported_as_closed(order):
             "qty": 75,
         }
 
-    order_events._apply_update("BRK-FLIP", _event("BRK-FLIP", status="rejected", avg=0))
+    order_events._apply_update(
+        "BRK-FLIP",
+        _event("BRK-FLIP", status="rejected", avg=0, filled=0),
+    )
 
     leg = state.get_run_state(order.run_id)["legs"]["1"]
     assert leg["superseded"]["exit_order_id"] is None
@@ -411,6 +446,196 @@ def test_pending_stop_dead_exit_releases_exact_owner_and_reports_managed_retry(o
     assert "managed" in failures[0]["message"].lower()
     assert "retry" in failures[0]["message"].lower()
     assert not any(event["kind"] == "run_stopped" for event in store.list_events(order.strategy_id))
+
+
+def test_cancelled_live_exit_preserves_prior_partial_fill_and_retries_only_remainder(order):
+    _install_pending_entry(order)
+    assert (
+        engine.apply_fill(
+            order.run_id,
+            1,
+            100.0,
+            is_entry=True,
+            filled_qty=75,
+            order_row_id=order.order_id,
+        )
+        is False
+    )
+    exit_row = store.record_order(
+        order.run_id,
+        1,
+        "exit_close_all",
+        {
+            "position_ref": None,
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "BUY",
+            "qty": 75,
+            "broker_order_id": "BRK-PARTIAL-LIVE",
+            "status": "open",
+        },
+    )
+    exit_row_id = exit_row.id
+    with state.run_state(order.run_id) as run:
+        leg = run["legs"]["1"]
+        leg["exit_order_id"] = exit_row_id
+        leg["exit_kind"] = "exit_close_all"
+    assert store.request_run_stop(order.run_id, "manual") is True
+    assert state.mark_stopping(order.run_id) is True
+
+    order_events._apply_update(
+        "BRK-PARTIAL-LIVE",
+        _event("BRK-PARTIAL-LIVE", status="open", avg=105.0, filled=25),
+    )
+    order_events._apply_update(
+        "BRK-PARTIAL-LIVE",
+        _event(
+            "BRK-PARTIAL-LIVE",
+            status="cancelled",
+            avg=0,
+            filled=0,
+            rejection="remainder cancelled",
+        ),
+    )
+
+    durable = next(row for row in store.list_orders(order.run_id) if row["id"] == exit_row_id)
+    assert durable["status"] == "cancelled"
+    assert durable["filled_qty"] == 25
+    assert durable["avg_fill_price"] == pytest.approx(105.0)
+    leg = state.get_run_state(order.run_id)["legs"]["1"]
+    assert leg["status"] == "open"
+    assert leg["qty"] == 50
+    assert leg["realized_pnl"] == pytest.approx((105.0 - 100.0) * 25 * -1)
+    assert leg["exit_order_id"] is None
+    assert leg["exit_kind"] is None
+
+    retried = []
+
+    def accept(**kwargs):
+        retried.append(kwargs["order"])
+        return DispatchResult(ok=True, broker_order_id="BRK-LIVE-RETRY", response={})
+
+    with (
+        patch.object(engine, "_api_key_for", return_value="test-key"),
+        patch.object(engine.order_dispatch, "dispatch_order", side_effect=accept),
+    ):
+        result = engine.stop_run(order.run_id, USER, reason="manual")
+
+    assert result["stop_pending"] is True
+    assert retried[0]["quantity"] == "50"
+
+
+def test_rejected_superseded_exit_reduces_exact_owner_and_retries_only_remainder(order):
+    state.init_run_state(
+        order.run_id,
+        order.strategy_id,
+        [
+            {
+                "leg_id": 1,
+                "position": "S",
+                "position_ref": "live-short",
+                "symbol": "NIFTY28MAY2624000CE",
+                "exchange": "NFO",
+                "quantity": 10,
+            }
+        ],
+    )
+    exit_row = store.record_order(
+        order.run_id,
+        1,
+        "exit_signal",
+        {
+            "position_ref": "old-long",
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "SELL",
+            "qty": 10,
+            "broker_order_id": "BRK-PARTIAL-OLD",
+            "status": "open",
+        },
+    )
+    exit_row_id = exit_row.id
+    with state.run_state(order.run_id) as run:
+        leg = run["legs"]["1"]
+        leg.update(
+            {
+                "status": "open",
+                "entry_status": "complete",
+                "entry_avg": 120.0,
+                "superseded": {
+                    "position_ref": "old-long",
+                    "entry_order_id": order.order_id,
+                    "exit_order_id": exit_row_id,
+                    "exit_claim_token": None,
+                    "position": "B",
+                    "entry_avg": 100.0,
+                    "qty": 10,
+                },
+            }
+        )
+
+    order_events._apply_update(
+        "BRK-PARTIAL-OLD",
+        _event("BRK-PARTIAL-OLD", status="open", avg=110.0, filled=4),
+    )
+    order_events._apply_update(
+        "BRK-PARTIAL-OLD",
+        _event("BRK-PARTIAL-OLD", status="rejected", avg=0, filled=0),
+    )
+
+    durable = next(row for row in store.list_orders(order.run_id) if row["id"] == exit_row_id)
+    assert durable["filled_qty"] == 4
+    assert durable["avg_fill_price"] == pytest.approx(110.0)
+    leg = state.get_run_state(order.run_id)["legs"]["1"]
+    assert leg["status"] == "open"
+    assert leg["superseded"]["qty"] == 6
+    assert leg["superseded"]["exit_order_id"] is None
+    assert leg["realized_pnl"] == pytest.approx((110.0 - 100.0) * 4)
+
+    retry = state.claim_superseded_exit(order.run_id, 1, "B")
+    assert retry["position_ref"] == "old-long"
+    assert retry["quantity"] == 6
+
+
+def test_terminal_partial_exit_without_price_still_reduces_the_exact_live_owner(order):
+    _install_pending_entry(order)
+    engine.apply_fill(
+        order.run_id,
+        1,
+        100.0,
+        is_entry=True,
+        filled_qty=75,
+        order_row_id=order.order_id,
+    )
+    exit_row = store.record_order(
+        order.run_id,
+        1,
+        "exit_close_all",
+        {
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "BUY",
+            "qty": 75,
+            "broker_order_id": "BRK-UNPRICED-EXIT",
+            "status": "open",
+        },
+    )
+    with state.run_state(order.run_id) as run:
+        leg = run["legs"]["1"]
+        leg["exit_order_id"] = exit_row.id
+        leg["exit_kind"] = "exit_close_all"
+
+    order_events._apply_update(
+        "BRK-UNPRICED-EXIT",
+        _event("BRK-UNPRICED-EXIT", status="cancelled", avg=0, filled=25),
+    )
+
+    leg = state.get_run_state(order.run_id)["legs"]["1"]
+    assert leg["status"] == "open"
+    assert leg["qty"] == 50
+    assert leg["realized_pnl"] == 0.0
+    assert leg["exit_order_id"] is None
+    assert leg["exit_kind"] is None
 
 
 def _apply_two_updates_after_both_read(
@@ -576,14 +801,20 @@ def test_a_working_status_is_recorded_but_changes_nothing_the_engine_acts_on(ord
     assert apply_fill.call_count == 0
 
 
-def test_a_fill_with_no_price_is_recorded_but_not_applied(order):
-    # A fill price is what a stop is measured from. Applying a leg with no
-    # entry price would give it a stop derived from zero.
+def test_a_positive_fill_with_no_price_is_recorded_and_managed_at_exact_quantity(order):
+    # Quantity proves broker exposure even when risk valuation is unavailable.
     with patch("services.strategy_module.engine.apply_fill") as apply_fill:
-        order_events._apply_update("BRK-1", _event("BRK-1", avg=0))
+        order_events._apply_update("BRK-1", _event("BRK-1", avg=0, filled=25))
 
     assert store.list_orders(order.run_id)[0]["status"] == "complete"
-    assert apply_fill.call_count == 0
+    apply_fill.assert_called_once_with(
+        order.run_id,
+        1,
+        None,
+        is_entry=True,
+        filled_qty=25,
+        order_row_id=order.order_id,
+    )
 
 
 def test_a_failure_applying_one_update_does_not_escape(order):

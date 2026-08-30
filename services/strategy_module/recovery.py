@@ -537,7 +537,6 @@ def _rebuild_leg(
         entry is not None
         and order_is_dead(entry["status"])
         and _positive_whole(entry.get("filled_qty")) is not None
-        and _usable_fill_price(entry.get("avg_fill_price")) is not None
     )
     entry_dead = entry is not None and order_is_dead(entry["status"]) and not terminal_partial
     entry_filled = (
@@ -550,15 +549,24 @@ def _rebuild_leg(
         qty = _positive_whole(entry.get("filled_qty")) or qty
 
     exit_dead = exit_order is not None and order_is_dead(exit_order["status"])
-    exit_live = exit_order is not None and not exit_dead
+    exit_working = exit_order is not None and order_is_working(exit_order["status"])
     exit_filled = (
         (exit_order is not None and order_is_filled(exit_order["status"]))
-        or (exit_live and _checkpoint_says_exit_filled(cp_leg))
+        or (exit_working and _checkpoint_says_exit_filled(cp_leg))
         # No order row at all: the checkpoint is the only witness there is.
         or (identity is None and _checkpoint_says_exit_filled(cp_leg))
     )
-
+    reported_exit_qty = _positive_whole(exit_order.get("filled_qty")) if exit_order else None
     if exit_filled:
+        applied_exit_qty = min(qty, reported_exit_qty if reported_exit_qty is not None else qty)
+    elif exit_dead and reported_exit_qty is not None:
+        applied_exit_qty = min(qty, reported_exit_qty)
+    else:
+        applied_exit_qty = 0
+    remaining_qty = max(0, qty - applied_exit_qty)
+    exit_applied = applied_exit_qty > 0
+
+    if exit_applied and remaining_qty == 0:
         status = "closed"
     elif entry_filled:
         status = "open"
@@ -574,6 +582,9 @@ def _rebuild_leg(
         # lands.
         status = "configured"
 
+    if status == "open" and exit_applied:
+        qty = remaining_qty
+
     entry_avg = 0.0
     if entry_filled:
         entry_avg = (
@@ -584,30 +595,31 @@ def _rebuild_leg(
         )
 
     exit_avg = None
-    if exit_filled:
+    if exit_applied:
         exit_avg = (
-            _float(exit_order.get("avg_fill_price"))
-            or _float(cp_leg.get("exit_avg"))
-            or _float(exit_order.get("price"))
+            _usable_fill_price(exit_order.get("avg_fill_price"))
+            or _usable_fill_price(cp_leg.get("exit_avg"))
+            or _usable_fill_price(exit_order.get("price"))
         )
 
     # Volatile, from the checkpoint, with a derivation for the one figure the
     # orders can supply on their own: a leg that exited after the last
     # checkpoint has no realized figure recorded anywhere else.
-    realized = 0.0
-    if status == "closed":
-        realized = _float(cp_leg.get("realized_pnl"), 0.0) or 0.0
-        if not realized and entry_avg and exit_avg is not None:
-            sign = 1.0 if position == "B" else -1.0
-            realized = (float(exit_avg) - float(entry_avg)) * qty * sign
+    realized = _float(cp_leg.get("realized_pnl"), 0.0) or 0.0
+    if exit_applied and not realized and entry_avg and exit_avg is not None:
+        sign = 1.0 if position == "B" else -1.0
+        realized = (float(exit_avg) - float(entry_avg)) * applied_exit_qty * sign
 
     sl_pts, target_pts, trail_x, trail_y, lots = _risk_params(cp_leg, config_leg)
 
     # Set only while an exit is filled or still working. A dead exit must leave
     # this clear, or the engine's duplicate-exit guard would mistake the failed
     # attempt for one in flight and never retry it.
-    if exit_live:
+    if exit_working:
         exit_order_id = exit_order["id"]
+        exit_kind = exit_order.get("kind")
+    elif exit_filled and remaining_qty == 0:
+        exit_order_id = None
         exit_kind = exit_order.get("kind")
     elif exit_order is not None:
         exit_order_id = None

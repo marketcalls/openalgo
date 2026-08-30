@@ -41,6 +41,10 @@ class _PositionRefMismatch(Exception):
     """Carry ignored-fill details beyond the run lock."""
 
 
+class _LateExitFillWithoutState(Exception):
+    """Move durable late-fill reconciliation beyond the detached run lock."""
+
+
 # Which exit reasons make a leg's own stop the cause. Only these trigger the
 # trail-to-entry rule, because that rule is a response to the market having
 # moved against the book. A manual close is an operator override, not a signal,
@@ -186,6 +190,23 @@ def _position_to_action(position: str) -> str:
     return "BUY" if (position or "").upper() == "B" else "SELL"
 
 
+def _exit_fill_quantities(filled_qty: int | None, held_qty: Any) -> tuple[int, int]:
+    """Return the applied and remaining whole quantities for one owner."""
+    try:
+        held = max(0, int(float(held_qty or 0)))
+    except (TypeError, ValueError):
+        held = 0
+    if filled_qty is None:
+        applied = held
+    else:
+        try:
+            applied = max(0, int(float(filled_qty)))
+        except (TypeError, ValueError):
+            applied = 0
+        applied = min(applied, held)
+    return applied, held - applied
+
+
 def _leg_requires_management(leg: dict[str, Any]) -> bool:
     """Whether a leg still owns exposure or an entry that may become exposure."""
     if leg.get("superseded") is not None:
@@ -291,7 +312,23 @@ def start_run(
         # Every leg rejected means there is no position and nothing to manage.
         # Leaving the run open would show a running strategy holding nothing.
         if not any(leg["ok"] for leg in placed):
-            _finalise(run.id, strategy_id, user_id, "error", "No entry order was accepted")
+            finalised = _finalise(
+                run.id,
+                strategy_id,
+                user_id,
+                "error",
+                "No entry order was accepted",
+            )
+            if not finalised:
+                return StartResult(
+                    ok=False,
+                    run_id=run.id,
+                    error=(
+                        "Every entry order was rejected, but the flat run could not be "
+                        "finalised; retry stop"
+                    ),
+                    legs=placed,
+                )
             return StartResult(ok=False, error="Every entry order was rejected", legs=placed)
 
         return StartResult(ok=True, run_id=run.id, legs=placed)
@@ -559,6 +596,7 @@ def _place_entries(
             # managed, so it is not placed. Refusing costs one leg; placing it
             # blind costs a position with no stop and no way to find it. Exits
             # take the opposite decision, deliberately: see _exit_legs.
+            state.reject_entry_intent(run_id, leg["leg_id"], leg.get("position_ref"))
             _emit(
                 strategy["id"],
                 user_id,
@@ -651,7 +689,7 @@ def _place_entries(
 def apply_fill(
     run_id: int,
     leg_id: Any,
-    avg_price: float,
+    avg_price: float | None,
     is_entry: bool,
     filled_qty: int | None = None,
     order_row_id: int | None = None,
@@ -676,6 +714,11 @@ def apply_fill(
             *mismatch.args,
         )
         return False
+    except _LateExitFillWithoutState:
+        # The context manager has released the retained lock before this
+        # durable repair touches the database.
+        store.reconcile_run_pnl(run_id)
+        return False
     finally:
         for message, args in deferred_warnings:
             logger.warning(message, *args)
@@ -684,7 +727,7 @@ def apply_fill(
 def _apply_fill(
     run_id: int,
     leg_id: Any,
-    avg_price: float,
+    avg_price: float | None,
     is_entry: bool,
     filled_qty: int | None = None,
     order_row_id: int | None = None,
@@ -719,7 +762,7 @@ def _apply_fill(
             # worker won finalisation. Reconcile from the durable order rows
             # without attempting a second terminal transition.
             if not is_entry:
-                store.reconcile_run_pnl(run_id)
+                raise _LateExitFillWithoutState
             return False
         leg = run["legs"].get(str(leg_id))
         if leg is None:
@@ -748,13 +791,21 @@ def _apply_fill(
         )
         if settles_superseded:
             entry = float(superseded.get("entry_avg") or 0.0)
-            qty = float(superseded.get("qty") or 0.0)
+            applied_qty, remaining_qty = _exit_fill_quantities(
+                filled_qty,
+                superseded.get("qty"),
+            )
             sign = 1.0 if superseded.get("position") == "B" else -1.0
-            if entry > 0.0:
+            if entry > 0.0 and avg_price is not None:
                 leg["realized_pnl"] = float(leg.get("realized_pnl") or 0.0) + (
-                    (float(avg_price) - entry) * qty * sign
+                    (float(avg_price) - entry) * applied_qty * sign
                 )
-            leg["superseded"] = None
+            if remaining_qty > 0:
+                superseded["qty"] = remaining_qty
+                superseded["exit_order_id"] = None
+                superseded["exit_claim_token"] = None
+            else:
+                leg["superseded"] = None
         else:
             if position_ref is not None and leg.get("position_ref") != position_ref:
                 raise _PositionRefMismatch(position_ref, leg_id, leg.get("position_ref"))
@@ -790,7 +841,16 @@ def _apply_fill(
                 return False
 
             if is_entry:
-                leg["entry_avg"] = float(avg_price)
+                if avg_price is not None:
+                    leg["entry_avg"] = float(avg_price)
+                else:
+                    deferred_warnings.append(
+                        (
+                            "Leg %s on run %s filled without a usable average price; "
+                            "managing its quantity with valuation unavailable",
+                            (leg_id, run_id),
+                        )
+                    )
                 # Reconcile the size with what actually traded. A partial fill
                 # whose remainder was cancelled is ordinary on an illiquid
                 # strike; every later exit must use what actually filled.
@@ -806,26 +866,36 @@ def _apply_fill(
                 leg["status"] = "open"
                 entry_applied = True
             else:
-                leg["exit_avg"] = float(avg_price)
+                if avg_price is not None:
+                    leg["exit_avg"] = float(avg_price)
                 entry = float(leg.get("entry_avg") or 0.0)
-                qty = float(leg.get("qty") or 0.0)
+                applied_qty, remaining_qty = _exit_fill_quantities(
+                    filled_qty,
+                    leg.get("qty"),
+                )
                 sign = 1.0 if leg.get("position") == "B" else -1.0
-                if entry > 0.0:
+                if entry > 0.0 and avg_price is not None:
                     leg["realized_pnl"] = float(leg.get("realized_pnl") or 0.0) + (
-                        (float(avg_price) - entry) * qty * sign
+                        (float(avg_price) - entry) * applied_qty * sign
                     )
                 else:
                     # An entry price of zero means this incarnation contributes
-                    # no round trip. Prior signal-session P&L remains intact.
+                    # no valued round trip. An unavailable exit price likewise
+                    # cannot be invented. Prior signal-session P&L remains intact.
                     deferred_warnings.append(
                         (
-                            "Leg %s on run %s exited with no entry price; booking no realized P&L",
+                            "Leg %s on run %s exited without complete fill pricing; "
+                            "booking no realized P&L for that quantity",
                             (leg_id, run_id),
                         )
                     )
                     leg["realized_pnl"] = float(leg.get("realized_pnl") or 0.0)
-                leg["status"] = "closed"
-                leg["mtm"] = 0.0
+                if remaining_qty > 0:
+                    leg["qty"] = remaining_qty
+                    leg["status"] = "open"
+                else:
+                    leg["status"] = "closed"
+                    leg["mtm"] = 0.0
                 leg["exit_order_id"] = None
                 leg["exit_claim_token"] = None
                 leg["exit_kind"] = None

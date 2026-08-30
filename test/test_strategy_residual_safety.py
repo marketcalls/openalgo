@@ -132,7 +132,7 @@ def test_rejected_signal_flip_exit_keeps_the_outgoing_position_exitable(
     exit_row = next(row for row in store.list_orders(run_id) if row["kind"] == "exit_signal")
     order_events._apply_update(
         exit_row["broker_order_id"],
-        qa._event(exit_row["broker_order_id"], status="rejected"),
+        qa._event(exit_row["broker_order_id"], status="rejected", avg=0, filled=0),
     )
     broker.clear()
     strategy = store.get_strategy(strategy_id, qa.USER)
@@ -155,7 +155,7 @@ def test_fill_of_retried_flip_exit_settles_outgoing_not_live_position(
     first_exit = next(row for row in store.list_orders(run_id) if row["kind"] == "exit_signal")
     order_events._apply_update(
         first_exit["broker_order_id"],
-        qa._event(first_exit["broker_order_id"], status="rejected"),
+        qa._event(first_exit["broker_order_id"], status="rejected", avg=0, filled=0),
     )
     strategy = store.get_strategy(strategy_id, qa.USER)
     signals.handle_signal(strategy, "long_exit", leg_id=1)
@@ -166,7 +166,7 @@ def test_fill_of_retried_flip_exit_settles_outgoing_not_live_position(
 
     order_events._apply_update(
         retry["broker_order_id"],
-        qa._event(retry["broker_order_id"], status="complete", avg=101.0),
+        qa._event(retry["broker_order_id"], status="complete", avg=101.0, filled=100),
     )
 
     live = state.get_run_state(run_id)["legs"]["1"]
@@ -187,7 +187,7 @@ def test_rejected_retry_of_flip_exit_can_be_retried_again(broker: qa.Broker) -> 
     first_exit = next(row for row in store.list_orders(run_id) if row["kind"] == "exit_signal")
     order_events._apply_update(
         first_exit["broker_order_id"],
-        qa._event(first_exit["broker_order_id"], status="rejected"),
+        qa._event(first_exit["broker_order_id"], status="rejected", avg=0, filled=0),
     )
     strategy = store.get_strategy(strategy_id, qa.USER)
     signals.handle_signal(strategy, "long_exit", leg_id=1)
@@ -197,7 +197,7 @@ def test_rejected_retry_of_flip_exit_can_be_retried_again(broker: qa.Broker) -> 
     )
     order_events._apply_update(
         retry["broker_order_id"],
-        qa._event(retry["broker_order_id"], status="rejected"),
+        qa._event(retry["broker_order_id"], status="rejected", avg=0, filled=0),
     )
     broker.clear()
     strategy = store.get_strategy(strategy_id, qa.USER)
@@ -218,7 +218,7 @@ def test_retried_outgoing_exit_binds_only_superseded(broker: qa.Broker) -> None:
     first_exit = next(row for row in store.list_orders(run_id) if row["kind"] == "exit_signal")
     order_events._apply_update(
         first_exit["broker_order_id"],
-        qa._event(first_exit["broker_order_id"], status="rejected"),
+        qa._event(first_exit["broker_order_id"], status="rejected", avg=0, filled=0),
     )
 
     strategy = store.get_strategy(strategy_id, qa.USER)
@@ -245,7 +245,7 @@ def test_outgoing_claim_is_released_when_retry_fails_before_its_row(
     first_exit = next(row for row in store.list_orders(run_id) if row["kind"] == "exit_signal")
     order_events._apply_update(
         first_exit["broker_order_id"],
-        qa._event(first_exit["broker_order_id"], status="rejected"),
+        qa._event(first_exit["broker_order_id"], status="rejected", avg=0, filled=0),
     )
     strategy = store.get_strategy(strategy_id, qa.USER)
     monkeypatch.setattr(signals, "_api_key_for", lambda _user_id: None)
@@ -280,7 +280,7 @@ def _rejected_flip(broker: qa.Broker):
     first_exit = next(row for row in store.list_orders(run_id) if row["kind"] == "exit_signal")
     order_events._apply_update(
         first_exit["broker_order_id"],
-        qa._event(first_exit["broker_order_id"], status="rejected"),
+        qa._event(first_exit["broker_order_id"], status="rejected", avg=0, filled=0),
     )
     broker.clear()
     return strategy_id, run_id
@@ -530,6 +530,7 @@ def _terminal_after_ack(
     status: str,
     *,
     avg: float = 0.0,
+    filled: int,
 ) -> None:
     """Inject a terminal frame after its broker id is durable, inside placement."""
     real_ack = engine._record_acknowledgement
@@ -542,7 +543,7 @@ def _terminal_after_ack(
         acknowledged = real_ack(row_id, result, strategy_id, user_id, run_id, leg_id)
         order_events._apply_update(
             result.broker_order_id,
-            qa._event(result.broker_order_id, status=status, avg=avg),
+            qa._event(result.broker_order_id, status=status, avg=avg, filled=filled),
         )
         return acknowledged
 
@@ -557,7 +558,7 @@ def test_signal_exit_rejection_in_ack_window_releases_exact_owner_for_retry(
     run_id = qa._run_of(strategy)
     engine.apply_fill(run_id, 1, 100.0, is_entry=True)
     broker.clear()
-    _terminal_after_ack(monkeypatch, "rejected")
+    _terminal_after_ack(monkeypatch, "rejected", filled=0)
 
     signals.handle_signal(strategy, "long_exit", leg_id=1)
 
@@ -573,7 +574,7 @@ def test_signal_entry_rejection_in_ack_window_is_not_overwritten_by_ack(
     broker: qa.Broker, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     strategy = qa._signal_strategy()
-    _terminal_after_ack(monkeypatch, "rejected")
+    _terminal_after_ack(monkeypatch, "rejected", filled=0)
 
     signals.handle_signal(strategy, "long_entry", leg_id=1)
 
@@ -592,7 +593,7 @@ def test_signal_flip_fill_in_ack_window_does_not_create_ghost_superseded_owner(
     run_id = qa._run_of(strategy)
     engine.apply_fill(run_id, 1, 100.0, is_entry=True)
     broker.clear()
-    _terminal_after_ack(monkeypatch, "complete", avg=101.0)
+    _terminal_after_ack(monkeypatch, "complete", avg=101.0, filled=100)
 
     result = signals.handle_signal(strategy, "short_entry", leg_id=1)
 
@@ -625,7 +626,7 @@ def test_batch_exit_rejection_in_ack_window_releases_exact_owner_for_retry(
     run_id = qa._start(strategy_id).run_id
     engine.apply_fill(run_id, 1, 100.0, is_entry=True)
     broker.clear()
-    _terminal_after_ack(monkeypatch, "rejected")
+    _terminal_after_ack(monkeypatch, "rejected", filled=0)
 
     _batch_exit(strategy_id, run_id)
 
@@ -653,7 +654,7 @@ def test_batch_exit_fill_in_ack_window_observes_durable_bound_owner(
         return real_fill(*args, **kwargs)
 
     monkeypatch.setattr(engine, "apply_fill", observe_bound_owner)
-    _terminal_after_ack(monkeypatch, "complete", avg=101.0)
+    _terminal_after_ack(monkeypatch, "complete", avg=101.0, filled=75)
 
     _batch_exit(strategy_id, run_id)
 
@@ -668,7 +669,7 @@ def test_batch_entry_fill_in_ack_window_is_not_overwritten_by_ack(
     broker: qa.Broker, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     strategy_id = qa._make()
-    _terminal_after_ack(monkeypatch, "complete", avg=101.0)
+    _terminal_after_ack(monkeypatch, "complete", avg=101.0, filled=75)
 
     run_id = qa._start(strategy_id).run_id
 

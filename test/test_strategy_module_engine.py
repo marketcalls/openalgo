@@ -220,6 +220,68 @@ def test_every_entry_rejected_finalises_the_run_rather_than_leaving_it_running(a
     assert runs[0]["stop_reason"] == "error"
 
 
+def test_every_unrecordable_entry_rejects_its_placeholder_and_cleans_up_the_run(api_key):
+    sid = _make()
+
+    with (
+        patch.object(store, "record_order", return_value=None),
+        patch.object(engine, "_subscribe_run") as subscribe,
+        patch.object(engine, "_unsubscribe_run") as unsubscribe,
+    ):
+        result = _start(sid)
+
+    assert result.ok is False
+    assert "Every entry order was rejected" in result.error
+    durable = store.list_runs(sid)[0]
+    assert durable["stopped_at"] is not None
+    assert durable["stop_reason"] == "error"
+    strategy = store.get_strategy(sid, USER)
+    assert strategy.status == "stopped"
+    assert strategy.current_run_id is None
+    assert state.get_run_state(durable["id"]) is None
+    subscribe.assert_called_once()
+    unsubscribe.assert_called_once_with(durable["id"])
+
+
+def test_all_rejected_start_reports_atomic_cleanup_failure_and_later_stop_can_finish(api_key):
+    sid = _make()
+    real_finish = store.finish_run_and_release_strategy
+    attempts = []
+
+    def lose_once(*args, **kwargs):
+        attempts.append(args[0])
+        if len(attempts) == 1:
+            return False
+        return real_finish(*args, **kwargs)
+
+    with (
+        patch.object(store, "record_order", return_value=None),
+        patch.object(store, "finish_run_and_release_strategy", side_effect=lose_once),
+        patch.object(engine, "_subscribe_run"),
+        patch.object(engine, "_unsubscribe_run") as unsubscribe,
+    ):
+        started = _start(sid)
+
+        assert started.ok is False
+        assert started.run_id is not None
+        assert "final" in started.error.lower()
+        pending = store.get_run(started.run_id)
+        assert pending.stopped_at is None
+        assert store.get_strategy(sid, USER).current_run_id == started.run_id
+        live = state.get_run_state(started.run_id)
+        assert live["legs"]["1"]["entry_status"] == "rejected"
+        assert live["legs"]["1"]["status"] == "rejected"
+
+        retried = engine.stop_run(started.run_id, USER, reason="manual")
+
+    assert retried == {"ok": True, "stop_pending": False, "exits": []}
+    assert attempts == [started.run_id, started.run_id]
+    assert store.get_run(started.run_id).stopped_at is not None
+    assert store.get_strategy(sid, USER).current_run_id is None
+    assert state.get_run_state(started.run_id) is None
+    unsubscribe.assert_called_once_with(started.run_id)
+
+
 def test_a_started_run_records_its_orders_and_live_state(api_key):
     sid = _make()
 
@@ -753,6 +815,33 @@ def test_atomic_finalise_loser_keeps_state_subscription_and_terminal_event_owner
     assert lock_was_free_at_cas == [True]
     unsubscribe.assert_not_called()
     assert not [call for call in emit.call_args_list if call.args[2] == "run_stopped"]
+
+
+def test_late_exit_fill_reconciles_durable_pnl_only_after_detached_run_lock_releases(api_key):
+    sid = _make()
+    run = store.create_run(sid, "sandbox", "sandbox")
+    assert run is not None
+    state.init_run_state(run.id, sid, [])
+    state_lock = state.get_state_lock(run.id)
+    with state_lock:
+        state._run_state.pop(run.id, None)
+    lock_was_free = []
+
+    def observe_reconcile(candidate_run_id):
+        assert candidate_run_id == run.id
+        acquired = state_lock.acquire(blocking=False)
+        lock_was_free.append(acquired)
+        if acquired:
+            state_lock.release()
+        return True
+
+    with patch.object(store, "reconcile_run_pnl", side_effect=observe_reconcile) as reconcile:
+        applied = engine.apply_fill(run.id, 1, 101.0, is_entry=False)
+
+    state.clear_run_state(run.id)
+    assert applied is False
+    reconcile.assert_called_once_with(run.id)
+    assert lock_was_free == [True]
 
 
 # ---------------------------------------------------------------------------
