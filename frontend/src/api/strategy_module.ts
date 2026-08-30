@@ -18,6 +18,7 @@ import { normalizeExpiryCode } from '@/lib/strategyContracts'
 import { useAuthStore } from '@/stores/authStore'
 import type {
   BrokerOrder,
+  BrokerPosition,
   BrokerStrategyContext,
   BrokerTrade,
   Checkpoint,
@@ -364,6 +365,21 @@ function normalizeBrokerTrade(value: unknown): BrokerTrade | null {
   }
 }
 
+function normalizeBrokerPosition(value: unknown): BrokerPosition | null {
+  const row = record(value)
+  if (!row) return null
+  return {
+    ...row,
+    symbol: text(row.symbol),
+    exchange: text(row.exchange),
+    product: text(row.product),
+    quantity: numberOrNull(row.quantity),
+    average_price: numberOrNull(row.average_price),
+    ltp: numberOrNull(row.ltp),
+    pnl: numberOrNull(row.pnl),
+  }
+}
+
 async function readBook<T>(
   id: number,
   path: string,
@@ -430,12 +446,17 @@ export function fetchStrategyPositions(
   id: number,
   runId?: number,
   signal?: AbortSignal
-): Promise<Record<string, unknown>[] | null> {
+): Promise<BrokerPosition[] | null> {
   return readBook(
     id,
     'positions',
     runId,
-    (payload) => (Array.isArray(payload.data) ? (payload.data as Record<string, unknown>[]) : []),
+    (payload) =>
+      Array.isArray(payload.data)
+        ? payload.data
+            .map(normalizeBrokerPosition)
+            .filter((row): row is BrokerPosition => row !== null)
+        : [],
     signal
   )
 }

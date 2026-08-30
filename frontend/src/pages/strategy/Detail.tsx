@@ -746,7 +746,7 @@ function brokerBookRunId(strategy: Strategy, live: StrategyLiveState): number | 
   return live.runId ?? strategy.current_run_id
 }
 
-function PositionsTab({
+export function PositionsTab({
   strategy,
   orders,
   live,
@@ -761,13 +761,14 @@ function PositionsTab({
   loading: boolean
   active: boolean
 }) {
+  const runId = brokerBookRunId(strategy, live)
   const derived = useMemo(
     () => derivePositions(orders, strategy.product, live.legs),
     [orders, strategy.product, live.legs]
   )
   const broker = useBrokerBook(
     strategy.id,
-    brokerBookRunId(strategy, live),
+    runId,
     'positions',
     fetchStrategyPositions,
     strategy.status === 'running',
@@ -780,7 +781,12 @@ function PositionsTab({
   // leaves the local rows wrong. Realized-lifetime stays derived either way: a
   // broker position row carries no history, and that column is strategy
   // attribution rather than broker truth.
-  const positions = useMemo(() => {
+  const positions = useMemo<
+    (Omit<DerivedPosition, 'net_qty' | 'side'> & {
+      net_qty: number | null
+      side: DerivedPosition['side'] | null
+    })[]
+  >(() => {
     if (!broker.rows) return derived
     const realizedFor = new Map(
       derived.map((row) => [
@@ -789,28 +795,28 @@ function PositionsTab({
       ])
     )
     return broker.rows.map((row) => {
-      const quantity = Number(row.quantity ?? 0)
+      const quantity = row.quantity
       const key = `${row.symbol}-${row.exchange}-${row.product}`
       return {
-        symbol: String(row.symbol ?? ''),
-        exchange: String(row.exchange ?? ''),
-        product: String(row.product ?? ''),
-        side: quantity > 0 ? 'long' : quantity < 0 ? 'short' : 'flat',
+        symbol: row.symbol,
+        exchange: row.exchange,
+        product: row.product,
+        side: quantity === null ? null : quantity > 0 ? 'long' : quantity < 0 ? 'short' : 'flat',
         net_qty: quantity,
-        avg_entry_price: Number(row.average_price ?? 0),
-        ltp: Number(row.ltp ?? 0),
-        unrealized_pnl: Number(row.pnl ?? 0),
-        realized_pnl_lifetime: realizedFor.has(key) ? (realizedFor.get(key) ?? null) : 0,
-      } satisfies DerivedPosition
+        avg_entry_price: row.average_price,
+        ltp: row.ltp,
+        unrealized_pnl: row.pnl,
+        realized_pnl_lifetime: realizedFor.get(key) ?? null,
+      }
     })
   }, [broker.rows, derived])
 
-  const checkpoint = live.checkpoint
+  const checkpoint = live.runId === runId ? live.checkpoint : null
   // Lifetime realized is the sum of every finalised run. The current run's
   // in-flight realized comes from the checkpoint, because its run row is not
   // written until the run ends.
   const historicalRealized = runs
-    .filter((run) => run.id !== live.runId)
+    .filter((run) => run.id !== runId)
     .reduce((sum, run) => sum + run.pnl_realized, 0)
   const runRealized = checkpoint?.pnl_realized ?? 0
   const cumulativeRealized = historicalRealized + runRealized
@@ -826,10 +832,10 @@ function PositionsTab({
               : broker.unavailable
                 ? "The broker did not answer, so these are net positions derived from this strategy's filled orders."
                 : "Net positions derived from this strategy's filled orders."}
-            {live.runId !== null && (
+            {runId !== null && (
               <>
                 {' '}
-                Run <span className="font-mono">#{live.runId}</span>.
+                Run <span className="font-mono">#{runId}</span>.
               </>
             )}
           </CardDescription>
@@ -904,19 +910,23 @@ function PositionsTab({
                               ? 'default'
                               : position.side === 'short'
                                 ? 'destructive'
-                                : 'secondary'
+                                : position.side === 'flat'
+                                  ? 'secondary'
+                                  : 'outline'
                           }
                           className="text-xs"
                         >
-                          {position.side}
+                          {position.side ?? 'Unavailable'}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right font-mono">{position.net_qty}</TableCell>
+                      <TableCell className="text-right font-mono">
+                        {brokerNumber(position.net_qty, 0)}
+                      </TableCell>
                       <TableCell className="text-right font-mono">
                         {brokerNumber(position.avg_entry_price)}
                       </TableCell>
                       <TableCell className="text-right font-mono">
-                        {formatPrice(position.ltp)}
+                        {brokerNumber(position.ltp)}
                       </TableCell>
                       <TableCell
                         className={cn(
@@ -1142,9 +1152,7 @@ export function OrdersTab({
     [broker.rows, currentOrders]
   )
   const auditRows =
-    !broker.active || broker.unavailable
-      ? orders
-      : [...reconciled.localOnly, ...historicalOrders]
+    !broker.active || broker.unavailable ? orders : [...reconciled.localOnly, ...historicalOrders]
 
   return (
     <div className="space-y-4">
@@ -1300,9 +1308,10 @@ export function TradesTab({
         : { confirmed: [], localOnly: currentTrades },
     [broker.rows, currentTrades]
   )
-  const auditRows = !broker.active || broker.unavailable
-    ? [...currentTrades, ...historicalTrades]
-    : [...reconciled.localOnly, ...historicalTrades]
+  const auditRows =
+    !broker.active || broker.unavailable
+      ? [...currentTrades, ...historicalTrades]
+      : [...reconciled.localOnly, ...historicalTrades]
 
   return (
     <div className="space-y-4">

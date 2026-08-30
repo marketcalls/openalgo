@@ -17,12 +17,13 @@ vi.mock('@/api/client', () => ({
 
 import {
   fetchStrategyOrderbook,
+  fetchStrategyPositions,
   fetchStrategyTradebook,
   type StrategyLiveState,
   useBrokerBook,
 } from '@/api/strategy_module'
 import type { Order, Strategy } from '@/types/strategy_module'
-import { OrdersTab, TradesTab } from './Detail'
+import { OrdersTab, PositionsTab, TradesTab } from './Detail'
 
 function client() {
   return new QueryClient({
@@ -200,6 +201,60 @@ describe('broker book requests and cache ownership', () => {
       quantity: null,
       average_price: null,
       trade_value: 0,
+    })
+  })
+
+  it('normalizes missing and invalid broker position numerics without losing real zero', async () => {
+    rest.get.mockResolvedValue({
+      data: {
+        status: 'success',
+        data: [
+          {
+            symbol: 'MISSING',
+            exchange: 'NFO',
+            product: 'NRML',
+          },
+          {
+            symbol: 'INVALID',
+            exchange: 'NFO',
+            product: 'NRML',
+            quantity: false,
+            average_price: 'not-a-number',
+            ltp: Number.POSITIVE_INFINITY,
+            pnl: '',
+          },
+          {
+            symbol: 'ZERO',
+            exchange: 'NFO',
+            product: 'NRML',
+            quantity: '0',
+            average_price: 0,
+            ltp: '0',
+            pnl: 0,
+          },
+        ],
+      },
+    })
+
+    const positions = await fetchStrategyPositions(7, 42)
+
+    expect(positions?.[0]).toMatchObject({
+      quantity: null,
+      average_price: null,
+      ltp: null,
+      pnl: null,
+    })
+    expect(positions?.[1]).toMatchObject({
+      quantity: null,
+      average_price: null,
+      ltp: null,
+      pnl: null,
+    })
+    expect(positions?.[2]).toMatchObject({
+      quantity: 0,
+      average_price: 0,
+      ltp: 0,
+      pnl: 0,
     })
   })
 
@@ -425,6 +480,99 @@ describe('strategy Orderbook broker truth', () => {
 
     expect(screen.getByText(/loading broker orderbook/i)).toBeInTheDocument()
     expect(screen.queryByText(/broker reports no orders/i)).not.toBeInTheDocument()
+  })
+})
+
+describe('strategy Positions broker truth', () => {
+  it('renders invalid broker position numerics and direction as unavailable', async () => {
+    rest.get.mockResolvedValue({
+      data: {
+        status: 'success',
+        data: [
+          {
+            symbol: 'INVALID',
+            exchange: 'NFO',
+            product: 'NRML',
+            quantity: null,
+            average_price: 'bad',
+            ltp: Number.NaN,
+            pnl: '',
+          },
+        ],
+      },
+    })
+
+    renderWithQuery(
+      <PositionsTab strategy={strategy} live={live} orders={[]} runs={[]} loading={false} active />
+    )
+
+    const symbol = await screen.findByText('INVALID')
+    const row = symbol.closest('tr')
+    expect(row).not.toBeNull()
+    expect(
+      within(row as HTMLTableRowElement).getAllByText('Unavailable').length
+    ).toBeGreaterThanOrEqual(5)
+    expect(within(row as HTMLTableRowElement).queryByText('flat')).not.toBeInTheDocument()
+    expect(row?.textContent).not.toContain('NaN')
+    expect(row?.textContent).not.toContain('Infinity')
+    expect(row?.textContent).not.toContain('0.00')
+  })
+
+  it('preserves broker-confirmed numeric zero and classifies zero quantity as flat', async () => {
+    rest.get.mockResolvedValue({
+      data: {
+        status: 'success',
+        data: [
+          {
+            symbol: 'ZERO',
+            exchange: 'NFO',
+            product: 'NRML',
+            quantity: 0,
+            average_price: 0,
+            ltp: 0,
+            pnl: 0,
+          },
+        ],
+      },
+    })
+
+    renderWithQuery(
+      <PositionsTab strategy={strategy} live={live} orders={[]} runs={[]} loading={false} active />
+    )
+
+    const symbol = await screen.findByText('ZERO')
+    const row = symbol.closest('tr')
+    expect(row).not.toBeNull()
+    expect(within(row as HTMLTableRowElement).getByText('flat')).toBeInTheDocument()
+    expect(within(row as HTMLTableRowElement).getByText('0')).toBeInTheDocument()
+    expect(within(row as HTMLTableRowElement).getAllByText(/0\.00/).length).toBeGreaterThanOrEqual(
+      3
+    )
+  })
+
+  it('uses the current strategy run consistently when the live frame is stale', async () => {
+    rest.get.mockResolvedValue({ data: { status: 'success', data: [] } })
+
+    renderWithQuery(
+      <PositionsTab
+        strategy={{ ...strategy, current_run_id: 43 }}
+        live={live}
+        orders={[]}
+        runs={[]}
+        loading={false}
+        active
+      />
+    )
+
+    await waitFor(() =>
+      expect(rest.get).toHaveBeenCalledWith('/strategy/api/strategies/7/positions', {
+        params: { run_id: 43 },
+        signal: expect.any(AbortSignal),
+      })
+    )
+    const header = screen.getByText('Strategy positions').closest('[data-slot="card-header"]')
+    expect(header?.textContent).toContain('Run #43.')
+    expect(header?.textContent).not.toContain('Run #42.')
   })
 })
 

@@ -298,6 +298,18 @@ export interface BrokerTrade {
   [field: string]: unknown
 }
 
+/** A normalized contract row from the broker's position book. */
+export interface BrokerPosition {
+  symbol: string
+  exchange: string
+  product: string
+  quantity: number | null
+  average_price: number | null
+  ltp: number | null
+  pnl: number | null
+  [field: string]: unknown
+}
+
 export type BrokerReconciliation = 'matched' | 'disagrees' | 'unmatched' | 'ambiguous'
 
 /** Strategy-only context attached only when one exact local identifier matches. */
