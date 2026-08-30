@@ -209,7 +209,14 @@ def claim_leg_exit(run_id: int, leg_id: Any, kind: str) -> dict[str, Any] | None
     Returns a copy of the leg to dispatch from, so the caller does its order
     building and its network call outside the lock.
     """
-    with get_state_lock(run_id):
+    # create=False: a dispatch can outlive the run it belongs to, and creating
+    # a lock here would register one for a run id that no longer has state and
+    # that nothing ever removes. That is the leak _lock_for was given its
+    # create flag for; a run with no lock has no state either way.
+    lock = _lock_for(run_id, create=False)
+    if lock is None:
+        return None
+    with lock:
         state = _run_state.get(run_id)
         if state is None:
             return None
@@ -230,7 +237,10 @@ def release_leg_exit(run_id: int, leg_id: Any) -> None:
     operator's own Close button all pass over it while the position is still
     held at the broker.
     """
-    with get_state_lock(run_id):
+    lock = _lock_for(run_id, create=False)
+    if lock is None:
+        return
+    with lock:
         state = _run_state.get(run_id)
         if state is None:
             return

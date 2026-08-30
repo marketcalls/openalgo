@@ -72,6 +72,19 @@ Base.query = db_session.query_property()
 # stop working quickly, and the cache is invalidated explicitly on both.
 _webhook_token_cache: TTLCache = TTLCache(maxsize=2000, ttl=300)
 
+# What each strategy has banked this session, read on every tick by the daily
+# loss limit. Bounded by strategy count rather than by tick rate, and
+# invalidated whenever a run's realized figure changes, so the TTL only covers
+# a path that forgot to invalidate.
+_session_pnl_cache: TTLCache = TTLCache(maxsize=512, ttl=60)
+
+
+def _forget_session_pnl(strategy_id: int | None) -> None:
+    """Drop the cached session total for one strategy, or all of them."""
+    for key in [k for k in list(_session_pnl_cache) if strategy_id is None or k[0] == strategy_id]:
+        _session_pnl_cache.pop(key, None)
+
+
 # Webhook token prefix, so a leaked string is recognisable in a log or a paste.
 WEBHOOK_TOKEN_PREFIX = "oaws_"
 
@@ -1046,6 +1059,7 @@ def finish_run(
         row.pnl_peak = pnl_peak
         row.pnl_trough = pnl_trough
         db_session.commit()
+        _forget_session_pnl(row.strategy_id)
         return True
     except Exception:
         db_session.rollback()
@@ -1080,6 +1094,19 @@ def realized_pnl_since(
     # strings and quietly answer with the wrong set of runs.
     if since.tzinfo is not None:
         since = since.astimezone(UTC).replace(tzinfo=None)
+
+    # Cached, because the caller is the per-tick risk evaluation and this
+    # figure only changes when a run finishes. Without it a strategy with a
+    # daily limit set opened and closed a database connection on every tick of
+    # every leg, which under NullPool is a real connection each time, in the
+    # one worker that serves everything else too. finish_run and
+    # reconcile_run_pnl invalidate it, so the TTL is a safety net rather than
+    # the mechanism.
+    key = (strategy_id, since, exclude_run_id)
+    cached = _session_pnl_cache.get(key)
+    if cached is not None:
+        return cached
+
     try:
         query = db_session.query(SmStrategyRun.pnl_realized).filter(
             SmStrategyRun.strategy_id == strategy_id,
@@ -1087,7 +1114,9 @@ def realized_pnl_since(
         )
         if exclude_run_id is not None:
             query = query.filter(SmStrategyRun.id != exclude_run_id)
-        return float(sum(float(row[0] or 0.0) for row in query.all()))
+        total = float(sum(float(row[0] or 0.0) for row in query.all()))
+        _session_pnl_cache[key] = total
+        return total
     except Exception:
         logger.exception("Could not total realized P&L for strategy %s", strategy_id)
         # Zero, not a guess. A caller uses this to decide whether a limit has
@@ -1154,6 +1183,7 @@ def reconcile_run_pnl(run_id: int) -> float | None:
 
         row.pnl_realized = realized
         db_session.commit()
+        _forget_session_pnl(row.strategy_id)
         return realized
     except Exception:
         db_session.rollback()
