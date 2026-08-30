@@ -98,6 +98,7 @@ from blueprints.security import security_bp  # Import the security blueprint
 from blueprints.settings import settings_bp  # Import the settings blueprint
 from blueprints.straddle_chart import straddle_bp  # Import the straddle chart blueprint
 from blueprints.strategy_chart import strategy_chart_bp  # Import the strategy chart blueprint
+from blueprints.strategy_module import strategy_module_bp  # Multi-leg options strategies with RMS
 from blueprints.strategy_portfolio import strategy_portfolio_bp  # Strategy Builder portfolio
 from blueprints.system_permissions import (
     system_permissions_bp,  # Import the system permissions blueprint
@@ -307,6 +308,7 @@ def create_app():
     app.register_blueprint(latency_bp)
     app.register_blueprint(leverage_bp)  # Register Leverage blueprint
     app.register_blueprint(health_bp)  # Register Health monitoring blueprint
+    app.register_blueprint(strategy_module_bp)  # Register Strategy Module blueprint
     app.register_blueprint(master_contract_status_bp)
     app.register_blueprint(websocket_bp)  # Register WebSocket example blueprint
     app.register_blueprint(chart_test_bp)  # Register standalone chart test page (dev/testing only)

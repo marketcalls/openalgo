@@ -133,6 +133,8 @@ EVENT_KINDS = (
     "webhook_token_rotated",
     "live_enabled",
     "live_disabled",
+    "webhook_locked",
+    "webhook_unlocked",
     "run_started",
     "run_paused",
     "run_resumed",
@@ -1219,15 +1221,22 @@ def latest_checkpoint(run_id: int) -> dict | None:
         return None
 
 
-def list_checkpoints(run_id: int, limit: int = 1000) -> list[dict]:
+def list_checkpoints(run_id: int, limit: int = 1000, strategy_id: int | None = None) -> list[dict]:
+    """A run's checkpoints, oldest first.
+
+    ``strategy_id`` narrows the query to a run that actually belongs to that
+    strategy. Every other list helper here is scoped by strategy already; this
+    one was keyed only by run id, which left each caller to re-check ownership
+    for itself. A caller that forgot would answer for somebody else's run.
+    Passing it makes the store safe by default rather than by convention.
+    """
     try:
-        rows = (
-            db_session.query(SmStrategyCheckpoint)
-            .filter_by(run_id=run_id)
-            .order_by(SmStrategyCheckpoint.ts.asc())
-            .limit(limit)
-            .all()
-        )
+        query = db_session.query(SmStrategyCheckpoint).filter(SmStrategyCheckpoint.run_id == run_id)
+        if strategy_id is not None:
+            query = query.join(
+                SmStrategyRun, SmStrategyCheckpoint.run_id == SmStrategyRun.id
+            ).filter(SmStrategyRun.strategy_id == strategy_id)
+        rows = query.order_by(SmStrategyCheckpoint.ts.asc()).limit(limit).all()
         return [checkpoint_to_dict(r) for r in rows]
     except Exception:
         logger.exception("Could not list checkpoints for run %s", run_id)
