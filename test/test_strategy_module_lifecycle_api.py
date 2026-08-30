@@ -230,16 +230,17 @@ def test_stop_endpoint_failures_preserve_pending_and_per_exit_detail(client, rou
 
 
 def test_close_all_records_the_operator_intent_separately_from_the_stop(client):
-    # "The operator closed everything" reads differently from "the run stopped"
-    # when you are reconstructing a session afterwards.
+    # This event is recorded before the broker exits settle, so it must preserve
+    # operator intent without claiming that the account is already flat.
     sid = _make(running_run_id=7)
 
     with patch("services.strategy_module.engine.stop_run", return_value={"ok": True, "exits": []}):
         response = client.post(f"/strategy/api/strategies/{sid}/close_all", json={})
 
     assert response.status_code == 200
-    kinds = [event["kind"] for event in store.list_events(sid)]
-    assert "close_all_manual" in kinds
+    events = store.list_events(sid)
+    close_request = next(event for event in events if event["kind"] == "close_all_manual")
+    assert close_request["message"] == "Operator requested closure of all held legs"
 
 
 def test_closing_one_leg_reports_whether_the_run_is_now_flat(client):

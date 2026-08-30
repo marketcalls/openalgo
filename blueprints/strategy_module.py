@@ -1341,11 +1341,11 @@ def stop_strategy(sid):
 @check_session_validity
 @_api_limit
 def close_all(sid):
-    """Same effect as stop, named for what the operator is doing.
+    """Same effect as stop, named for what the operator requested.
 
     Kept as its own route rather than an alias so the audit trail records the
-    intent: "the operator closed everything" reads differently from "the run
-    was stopped" when you are reconstructing a session afterwards.
+    intent without claiming the broker is already flat.  Confirmed-flat
+    finalisation is recorded separately when the exit orders settle.
     """
     return _stop_run_for(sid, reason="manual", event="close_all_manual")
 
@@ -1362,7 +1362,13 @@ def _stop_run_for(sid: int, reason: str, event: str | None = None):
     from services.strategy_module import engine
 
     if event:
-        store.record_event(sid, username, event, "Operator closed all legs", run_id=run_id)
+        store.record_event(
+            sid,
+            username,
+            event,
+            "Operator requested closure of all held legs",
+            run_id=run_id,
+        )
 
     result = engine.stop_run(run_id, username, reason=reason)
     if not result.get("ok"):
