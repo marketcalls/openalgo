@@ -1287,6 +1287,81 @@ def list_webhook_events(sid):
     return _ok({"data": store.list_webhook_events(sid)})
 
 
+def _api_key_for(username: str) -> str | None:
+    """The user's own API key, for the server-side broker calls these views make."""
+    try:
+        from database.auth_db import get_api_key_for_tradingview
+
+        return get_api_key_for_tradingview(username)
+    except Exception:
+        logger.exception("Could not read the API key for %s", username)
+        return None
+
+
+def _book(sid: int, fetch):
+    """Shared shape for the three broker-backed views."""
+    username, _row, error = _resolve(sid)
+    if error:
+        return error
+
+    run_id, error = _int_arg("run_id")
+    if error:
+        return error
+
+    api_key = _api_key_for(username)
+    if not api_key:
+        return _error("No API key is configured for this user", 400)
+
+    payload = fetch(sid, api_key, run_id)
+    if payload.get("status") != "success":
+        # The broker's own refusal, passed through rather than reshaped: the
+        # message is more useful than anything this layer could invent.
+        return jsonify(payload), 502
+    return jsonify(payload), 200
+
+
+@strategy_module_bp.route("/api/strategies/<int:sid>/orderbook", methods=["GET"])
+@check_session_validity
+@_api_limit
+def strategy_orderbook(sid):
+    """This strategy's orders, as the broker currently reports them.
+
+    Not derived from the stored rows. Those record what was placed; the broker
+    knows what actually happened to it, and for money that difference is the
+    whole point. The envelope matches the global /orderbook exactly, so the
+    same table renders it.
+    """
+    from services.strategy_module import views
+
+    return _book(sid, views.strategy_orderbook)
+
+
+@strategy_module_bp.route("/api/strategies/<int:sid>/tradebook", methods=["GET"])
+@check_session_validity
+@_api_limit
+def strategy_tradebook(sid):
+    """This strategy's fills, as the broker reports them."""
+    from services.strategy_module import views
+
+    return _book(sid, views.strategy_tradebook)
+
+
+@strategy_module_bp.route("/api/strategies/<int:sid>/positions", methods=["GET"])
+@check_session_validity
+@_api_limit
+def strategy_positions(sid):
+    """This strategy's positions, filtered from the broker's position book.
+
+    A weaker guarantee than the orderbook, and deliberately so: a position row
+    is per contract, so if the same contract is also held from a manual order
+    or another strategy, the row is shared and cannot be divided. The
+    strategy's reported P&L comes from its own fills, never from these rows.
+    """
+    from services.strategy_module import views
+
+    return _book(sid, views.strategy_positions)
+
+
 @strategy_module_bp.route("/api/strategies/<int:sid>/checkpoints", methods=["GET"])
 @check_session_validity
 @_api_limit

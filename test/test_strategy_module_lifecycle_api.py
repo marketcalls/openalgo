@@ -373,3 +373,75 @@ def test_a_scheduler_that_is_not_running_does_not_fail_the_request(client):
 
     assert response.status_code == 200
     assert store.get_strategy(sid, USER).name == "Still saved"
+
+
+# ---------------------------------------------------------------------------
+# Broker-backed views
+#
+# These read the broker rather than the stored order rows. The stored rows
+# record what was placed; the broker knows what happened to it, and for money
+# that difference is the point.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("path", "fn"),
+    [
+        ("orderbook", "strategy_orderbook"),
+        ("tradebook", "strategy_tradebook"),
+        ("positions", "strategy_positions"),
+    ],
+)
+def test_a_broker_backed_view_passes_the_brokers_answer_through(client, path, fn):
+    sid = _make(name=f"Book {path}")
+    payload = {"status": "success", "data": {"orders": [{"orderid": "1"}]}}
+
+    with (
+        patch(f"services.strategy_module.views.{fn}", return_value=payload) as view,
+        patch("database.auth_db.get_api_key_for_tradingview", return_value="k"),
+    ):
+        response = client.get(f"/strategy/api/strategies/{sid}/{path}")
+
+    assert response.status_code == 200
+    assert response.get_json() == payload
+    assert view.call_args[0][0] == sid
+
+
+def test_a_broker_failure_is_reported_as_an_upstream_error(client):
+    # Passed through rather than reshaped: the broker's own message is more
+    # useful than anything this layer could invent.
+    sid = _make(name="Book fail")
+
+    with (
+        patch(
+            "services.strategy_module.views.strategy_orderbook",
+            return_value={"status": "error", "message": "Broker unreachable"},
+        ),
+        patch("database.auth_db.get_api_key_for_tradingview", return_value="k"),
+    ):
+        response = client.get(f"/strategy/api/strategies/{sid}/orderbook")
+
+    assert response.status_code == 502
+    assert "Broker unreachable" in response.get_json()["message"]
+
+
+def test_a_broker_backed_view_needs_an_api_key(client):
+    sid = _make(name="Book nokey")
+
+    with (
+        patch("database.auth_db.get_api_key_for_tradingview", return_value=None),
+        patch("services.strategy_module.views.strategy_orderbook") as view,
+    ):
+        response = client.get(f"/strategy/api/strategies/{sid}/orderbook")
+
+    assert response.status_code == 400
+    assert view.call_count == 0
+
+
+@pytest.mark.parametrize("path", ["orderbook", "tradebook", "positions"])
+def test_somebody_elses_book_is_invisible(client, path):
+    sid = _make(user=OTHER, name=f"Not yours {path}")
+
+    response = client.get(f"/strategy/api/strategies/{sid}/{path}")
+
+    assert response.status_code == 404
