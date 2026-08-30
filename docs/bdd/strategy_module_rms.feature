@@ -21,7 +21,7 @@ Feature: Strategy module and risk management
     And the response is produced by the route rather than the application 404 handler
     And the miss does not count towards an IP ban
 
-  # Source: blueprints/strategy_module.py:1609, utils/traffic_logger.py
+  # Source: blueprints/strategy_module.py:1609, utils/traffic_logger.py:107
   Scenario: The webhook token is not written anywhere it could be read back
     Given the URL token is the entire credential
     When a webhook request is logged
@@ -53,7 +53,7 @@ Feature: Strategy module and risk management
     And any other product is sent as NRML on a derivatives venue and CNC on cash
     And a basket mixing a cash leg and an option leg is therefore legal
 
-  # Source: services/place_order_service.py, services/strategy_module/order_dispatch.py
+  # Source: services/place_order_service.py:119, services/strategy_module/order_dispatch.py:99
   Scenario: A live run is not diverted by the platform analyzer toggle
     Given a live run holding real positions
     When an operator switches the platform-wide analyzer mode on
@@ -98,14 +98,14 @@ Feature: Strategy module and risk management
     Then the outgoing long is tracked separately until its own fill settles it
     And the short remains open, priced and evaluated for risk
 
-  # Source: services/risk/aggregate.py:67, services/strategy_module/risk_adapter.py
+  # Source: services/risk/aggregate.py:67, services/strategy_module/risk_adapter.py:136
   Scenario: Risk decisions come from the shared core, never a second evaluator
     Given a leg with a stop, a target and a trailing configuration
     When a price arrives
     Then the leg is translated into the core's own types and the core decides
     And a position's realized P&L counts whether or not it is currently open
 
-  # Source: services/strategy_module/engine.py:964, services/strategy_module/session.py
+  # Source: services/strategy_module/engine.py:964, services/strategy_module/session.py:39
   Scenario: The daily loss limit is measured across the session, not one run
     Given a strategy with a daily loss limit that has already been reached
       across runs that finished earlier today
@@ -150,7 +150,7 @@ Feature: Strategy module and risk management
     And a rejected order is never upgraded by a checkpoint
     And a run that cannot be recovered is finalised rather than wedging startup
 
-  # Source: services/strategy_module/broadcast.py, blueprints/strategy_module.py
+  # Source: services/strategy_module/broadcast.py:522, blueprints/strategy_module.py:1609
   Scenario: A page watching a strategy is pushed to rather than polling
     Given a browser viewing one strategy
     When it joins that strategy's room

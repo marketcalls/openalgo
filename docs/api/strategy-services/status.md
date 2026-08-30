@@ -161,7 +161,7 @@ The `data` object above is abridged for readability. A real response always carr
 | started_at | string | ISO 8601 UTC |
 | stopped_at | string or null | ISO 8601 UTC, `null` while the run is open |
 | stop_reason | string or null | One of the stop reasons, `null` while the run is open |
-| pnl_realized | number | Final realized P&L, written on stop |
+| pnl_realized | number | Realized P&L. Written on stop and then reconciled from the order rows as the exit fills arrive, so it is not final the instant a run stops |
 | pnl_peak | number | Highest P&L the run reached |
 | pnl_trough | number | Lowest P&L the run reached |
 | trigger_source | string | `manual`, `webhook` or `scheduler` |
@@ -172,6 +172,7 @@ The `data` object above is abridged for readability. A real response always carr
 
 - `run` is `null` whenever the strategy has no `current_run_id`, which is the normal state of a stopped strategy.
 - While a run is open, `pnl_realized`, `pnl_peak` and `pnl_trough` are the values last written to the run row, not a live mark. The live figures come from the run's checkpoints.
+- **`pnl_realized` is not final the instant a run stops.** A stop places its exits and closes the run without waiting for the fills, because the position is on its way out and nothing should block on the broker, so the figure written at that moment is what live state held: zero for any leg whose exit had not filled. Each fill that arrives afterwards reconciles the row from the order rows. Read it a moment after the stop rather than in the same breath as it; see [`/runs`](./runs.md).
 - Expiries are resolved once at run start and held for the run, so a positional strategy does not roll to a new contract mid-run. `resolved_expiries` is that snapshot.
 - The strategy's own `status` field and the presence of `run` are separate reads. Prefer `run` when you need to know whether anything is actually open.
 - A strategy that is not yours returns 404 with `Strategy not found`, identical to one that does not exist.

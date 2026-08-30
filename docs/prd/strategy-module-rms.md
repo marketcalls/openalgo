@@ -14,9 +14,12 @@ rules:
   `short_exit` each move a single leg, and a leg can be flipped from one side to
   the other.
 
-Both are driven from the browser, from a public webhook that TradingView and
-similar senders can post to, and from the API-key surface at
-`/api/v1/strategy/`.
+Both are driven from the browser and from a public webhook that TradingView and
+similar senders can post to. The API-key surface at `/api/v1/strategy/` carries
+**lifecycle and reads only**: start, stop, close_all, close_leg, status, list,
+runs, orders and events. The four signal actions are accepted **only** on the
+tokenized public webhook, so a signal strategy is controlled by its alert
+sender rather than by an API key.
 
 ## Problem Statement
 

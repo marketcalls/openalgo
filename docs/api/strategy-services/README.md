@@ -140,6 +140,18 @@ A run started through this API records `manual`: an API-key start is a person as
 
 Signal-mode exits are recorded as `exit_signal`, which the tuple now lists.
 
+### Event kinds an operator must not ignore
+
+The full list is in [`/events`](./events.md). Two of them mean something has to
+be acted on:
+
+- **`run_stop_failed`** (`critical`) - the broker refused the exit orders of a
+  stop. The run is still open and **still holding those positions**. It is the
+  one lifecycle event that means the opposite of what a stop usually means.
+- **`leg_expiry_fallback`** (`warn`) - the chain did not list the expiry rank
+  the leg asked for, so a nearer one was used. A `next_week` leg trading the
+  current week is a different trade from the one that was configured.
+
 ### Quantity modes
 
 `lots`, `units`
