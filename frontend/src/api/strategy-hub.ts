@@ -2,6 +2,15 @@ import type { ApiResponse } from '@/types/trading'
 import { webClient } from './client'
 
 export type StrategyHubStatus = 'online' | 'stale' | 'offline'
+export type StrategyHubLogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR'
+
+export interface StrategyHubLog {
+  id: string
+  timestamp: string
+  level: StrategyHubLogLevel
+  source: string
+  message: string
+}
 
 export interface StrategyHubLastCommand {
   command: string
@@ -42,5 +51,12 @@ export const strategyHubApi = {
       `/strategy-hub/api/strategies/${strategyId}/stop`
     )
     return response.data
+  },
+
+  getLogs: async (strategyId: string, limit = 500): Promise<StrategyHubLog[]> => {
+    const response = await webClient.get<ApiResponse<StrategyHubLog[]>>(
+      `/strategy-hub/api/strategies/${encodeURIComponent(strategyId)}/logs?limit=${limit}`
+    )
+    return response.data.data || []
   },
 }

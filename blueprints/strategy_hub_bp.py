@@ -7,9 +7,9 @@ control endpoints. Real-time updates are pushed over SocketIO
 load and manual actions.
 """
 
-from flask import Blueprint, jsonify, session
+from flask import Blueprint, jsonify, request, session
 
-from blueprints.strategy_zmq_listener import get_registry_snapshot, send_command
+from blueprints.strategy_zmq_listener import get_logs, get_registry_snapshot, send_command
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -46,6 +46,16 @@ def stop_strategy(strategy_id):
     success, message = send_command(strategy_id, "STOP")
     logger.info("Strategy Hub stop requested for %s by %s: %s", strategy_id, user_id, message)
     return jsonify({"status": "success" if success else "error", "message": message})
+
+
+@strategy_hub_bp.route("/api/strategies/<strategy_id>/logs", methods=["GET"])
+@check_session_validity
+def strategy_logs(strategy_id):
+    try:
+        limit = int(request.args.get("limit", 500))
+    except (TypeError, ValueError):
+        limit = 500
+    return jsonify({"status": "success", "data": get_logs(strategy_id, limit)})
 
 
 @strategy_hub_bp.route("/api/strategies/<strategy_id>/start", methods=["POST"])

@@ -31,10 +31,12 @@ Disable with STRATEGY_HUB_ENABLED=FALSE in .env.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import threading as _patched_threading
 import time
+from collections import deque
 from datetime import UTC, datetime, timezone
 from typing import Any
 
@@ -58,6 +60,11 @@ STATUS_OFFLINE = "offline"
 
 _REGISTRY: dict[str, dict[str, Any]] = {}
 _REGISTRY_LOCK = _threading.Lock()
+_LOGS: dict[str, deque[dict[str, Any]]] = {}
+MAX_LOG_ENTRIES = 500
+_SECRET_PATTERN = re.compile(
+    r"(?i)(api[_ -]?key|secret|password|token)(\s*[:=]\s*)([^,\s}\]]+)"
+)
 
 _started = False
 _start_lock = _threading.Lock()
@@ -113,6 +120,38 @@ def _emit_update(strategy_id: str, entry: dict[str, Any]) -> None:
         logger.exception("Failed to emit strategy_hub_update for %s", strategy_id)
 
 
+def _emit_log(strategy_id: str, entry: dict[str, Any]) -> None:
+    try:
+        from extensions import socketio
+
+        socketio.emit("strategy_hub_log", {"strategy_id": strategy_id, "log": entry})
+    except Exception:
+        logger.exception("Failed to emit strategy_hub_log for %s", strategy_id)
+
+
+def _redact_log_message(message: Any) -> str:
+    return _SECRET_PATTERN.sub(r"\1\2[REDACTED]", str(message))
+
+
+def _append_log(strategy_id: str, message: Any, level: str = "INFO", source: str = "runner") -> dict[str, Any]:
+    entry = {
+        "id": f"{strategy_id}-{time.time_ns()}",
+        "timestamp": _now_iso(),
+        "level": str(level).upper() if str(level).upper() in {"DEBUG", "INFO", "WARN", "ERROR"} else "INFO",
+        "source": str(source),
+        "message": _redact_log_message(message),
+    }
+    with _REGISTRY_LOCK:
+        _LOGS.setdefault(strategy_id, deque(maxlen=MAX_LOG_ENTRIES)).append(entry)
+    return entry
+
+
+def get_logs(strategy_id: str, limit: int = MAX_LOG_ENTRIES) -> list[dict[str, Any]]:
+    limit = max(1, min(int(limit), MAX_LOG_ENTRIES))
+    with _REGISTRY_LOCK:
+        return list(_LOGS.get(strategy_id, ())) [-limit:]
+
+
 def get_registry_snapshot() -> dict[str, dict[str, Any]]:
     """Return a shallow copy of the full registry for the REST API."""
     with _REGISTRY_LOCK:
@@ -136,6 +175,7 @@ def _upsert(strategy_id: str, **fields: Any) -> dict[str, Any]:
                 "host": "127.0.0.1",
                 "zmq_port": None,
                 "unit_name": None,
+                "session_id": None,
                 "metrics": {},
                 "first_seen": _now_iso(),
                 "last_seen": _now_iso(),
@@ -151,6 +191,27 @@ def _handle_frame(msg: dict[str, Any]) -> None:
     if not strategy_id:
         return
     frame_type = msg.get("type", "")
+
+    if frame_type == "ANNOUNCE" and msg.get("session_id"):
+        with _REGISTRY_LOCK:
+            previous = _REGISTRY.get(strategy_id, {}).get("session_id")
+            if previous and previous != msg["session_id"]:
+                _LOGS.pop(strategy_id, None)
+
+    if frame_type == "LOG":
+        snapshot = _upsert(
+            strategy_id,
+            status=STATUS_ONLINE,
+            host=msg.get("host"),
+            zmq_port=msg.get("zmq_port"),
+            unit_name=msg.get("unit_name"),
+            session_id=msg.get("session_id"),
+            last_seen=_now_iso(),
+        )
+        _emit_update(strategy_id, snapshot)
+        entry = _append_log(strategy_id, msg.get("message", ""), msg.get("level", "INFO"), msg.get("source", "runner"))
+        _emit_log(strategy_id, entry)
+        return
 
     if frame_type == "BYE":
         with _REGISTRY_LOCK:
@@ -172,6 +233,7 @@ def _handle_frame(msg: dict[str, Any]) -> None:
         host=msg.get("host"),
         zmq_port=msg.get("zmq_port"),
         unit_name=msg.get("unit_name"),
+        session_id=msg.get("session_id"),
         metrics=metrics if metrics is not None else None,
         last_seen=_now_iso(),
     )
@@ -285,6 +347,7 @@ def _poll_loop() -> None:
                     host=reply.get("host", "127.0.0.1"),
                     zmq_port=reply.get("zmq_port", port),
                     unit_name=reply.get("unit_name"),
+                    session_id=reply.get("session_id"),
                     last_seen=_now_iso(),
                 )
                 _emit_update(reply["strategy_id"], snapshot)
