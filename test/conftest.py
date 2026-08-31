@@ -41,15 +41,15 @@ os.environ["LATENCY_DATABASE_URL"] = "sqlite:///db/latency-test.db"
 os.environ["LOG_DIR"] = "log/test"
 
 
-# test_bot_web.py is a manual diagnostic script, not a test: it defines no test
-# function, and its module body prints, sleeps and starts the Telegram bot as a
-# side effect of being imported. It has been uncollectable for a while because
-# the four names it imports (get_telegram_bot, init_bot_sync, start_bot_sync,
-# stop_bot_sync) no longer exist on services.telegram_bot_service, and that
-# ImportError is the only reason a full `uv run pytest test/` has not been
-# starting a bot during collection.
+# These are manual diagnostics, not pytest modules. test_bot_web.py starts the
+# Telegram bot from its module body. The WebSocket scripts require a live proxy,
+# operator API key and timed terminal interaction; their ``test_*`` helpers take
+# ordinary arguments rather than fixtures.
 #
-# Skipped rather than repaired, deliberately. Repairing the import would make
-# the script run, which is worse than not collecting it; and it is documentation
-# of an API that is gone, so there is nothing left for it to test.
-collect_ignore = ["test_bot_web.py"]
+# Keep the scripts runnable directly while preventing collection from starting
+# external services or misclassifying their function parameters as fixtures.
+collect_ignore = [
+    "test_bot_web.py",
+    "test_websocket.py",
+    "test_websocket_service.py",
+]

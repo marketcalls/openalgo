@@ -75,6 +75,12 @@ Custom Host  :  ws://<your-host>:8765
 }
 ```
 
+The unsubscribe acknowledgement lists exact outcomes in `successful` and
+`failed`; every item carries the canonical `mode` value `"Depth"`. A broker
+refusal leaves the final local owner registered so the request can be retried.
+Disconnect cleanup does not retain a dead client owner; any unresolved feed is
+reclaimed by the user's last-client adapter teardown.
+
 ## Python SDK Example
 
 ```python

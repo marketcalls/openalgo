@@ -107,12 +107,45 @@ To unsubscribe from a stream:
   "symbols": [
     {"symbol": "RELIANCE", "exchange": "NSE"}
   ],
-  "mode": "Quote"
+  "mode": "Quote",
+  "request_id": "req-7"
 }
 ```
 
 For an array request, a `mode` on an individual symbol wins; otherwise the
 top-level `mode` applies, and only a request with neither defaults to `Quote`.
+The acknowledgement identifies the exact canonical mode on every successful or
+failed item:
+
+```json
+{
+  "type": "unsubscribe",
+  "status": "success",
+  "message": "Unsubscription processing complete",
+  "successful": [
+    {
+      "symbol": "RELIANCE",
+      "exchange": "NSE",
+      "mode": "Quote",
+      "status": "success",
+      "broker": "zerodha"
+    }
+  ],
+  "failed": [],
+  "broker": "zerodha",
+  "request_id": "req-7"
+}
+```
+
+For the final client that owns a broker subscription, local ownership is
+removed only after the adapter returns success. A failed or malformed broker
+response leaves the subscription registered so the caller can retry. When
+another client still owns the exact symbol, exchange and mode, only the
+requesting client's local owner is removed and the broker stream stays active.
+A socket disconnect is terminal for that client session, so its registry owner
+is removed after the server's cleanup attempt. A release that still fails is
+reclaimed by last-client adapter teardown; the persistent Flattrade or Shoonya
+adapter is retained only after `unsubscribe_all` acknowledges success.
 
 ### Error Handling
 

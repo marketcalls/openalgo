@@ -197,7 +197,8 @@ class _PooledAdapterWrapper:
     def unsubscribe_all(self):
         """Unsubscribe from all symbols"""
         if self._pool:
-            self._pool.unsubscribe_all()
+            return self._pool.unsubscribe_all()
+        return {"status": "error", "message": "Not initialized"}
 
     def get_stats(self) -> dict:
         """Get pool statistics"""

@@ -270,6 +270,42 @@ def test_websocket_depth_and_partial_error_examples_have_the_exact_wire_shape() 
     ]
 
 
+def test_websocket_unsubscribe_ack_identifies_the_exact_canonical_mode() -> None:
+    prompt = _read("docs/prompt/websockets-format.md")
+    unsubscribe = _json_blocks(_section(prompt, "### Unsubscription"))
+    assert len(unsubscribe) == 2
+    request, ack = unsubscribe
+    assert request["action"] == "unsubscribe"
+    assert set(ack) == {
+        "type",
+        "status",
+        "message",
+        "successful",
+        "failed",
+        "broker",
+        "request_id",
+    }
+    assert ack["successful"] == [
+        {
+            "symbol": "RELIANCE",
+            "exchange": "NSE",
+            "mode": "Quote",
+            "status": "success",
+            "broker": "zerodha",
+        }
+    ]
+    assert ack["failed"] == []
+
+    assert "A socket disconnect is terminal for that client session" in prompt
+    assert "last-client adapter teardown" in prompt
+    assert "only after `unsubscribe_all` acknowledges success" in prompt
+
+    for name in ("ltp.md", "quote.md", "depth.md"):
+        page = _read(Path("docs/api/websocket-streaming") / name)
+        assert "canonical `mode`" in page
+        assert re.search(r"`successful`\s+and\s+`failed`", page)
+
+
 def test_websocket_heartbeat_and_reconnect_docs_match_session_ownership() -> None:
     heartbeat = _section(
         _read("docs/prompt/websockets-format.md"), "### Heartbeat and Reconnection"
@@ -285,7 +321,7 @@ def test_websocket_heartbeat_and_reconnect_docs_match_session_ownership() -> Non
     assert 'os.getenv("WS_PING_TIMEOUT", "20")' in server
     cleanup = server[server.index("async def cleanup_client") :]
     cleanup = cleanup[: cleanup.index("async def process_client_message")]
-    assert "del self.subscriptions[client_id]" in cleanup
+    assert "self._purge_client_subscription_ownership(client_id)" in cleanup
 
 
 def test_webhook_docs_distinguish_route_preflight_from_audited_pipeline() -> None:

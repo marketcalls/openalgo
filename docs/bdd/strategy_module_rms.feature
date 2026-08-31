@@ -3,7 +3,7 @@ Feature: Strategy module and risk management
   durable order ownership, confirmed-flat stopping and restart-safe risk
   management. Scenarios are grouped by the money or operator truth they protect.
 
-  # Source: test/test_strategy_module_webhook.py:890, test/test_strategy_module_docs.py:291
+  # Source: test/test_strategy_module_webhook.py:890, test/test_strategy_module_docs.py:327
   Scenario: Every admitted webhook outcome is validated and audited
     Given a strategy has a webhook token
     When an alert is admitted past route preflight on that token

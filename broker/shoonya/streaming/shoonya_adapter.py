@@ -1352,14 +1352,7 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     elif mode == Config.MODE_DEPTH:
                         depth_scrips.add(scrip)
 
-                # Clear all subscription tracking but keep WebSocket connection alive
                 subscription_count = len(self.subscriptions)
-                self.subscriptions.clear()
-                self.scrip_to_symbol.clear()
-                self.ws_subscription_refs.clear()
-                self._scrip_to_cids.clear()
-                self._token_to_scrips.clear()
-
                 # Snapshot ws_client reference under lock
                 ws = self.ws_client
 
@@ -1385,6 +1378,19 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             if unsub_errors:
                 self.logger.warning(f"Partial unsubscribe_all failure: {unsub_errors}")
+                return self._create_error_response(
+                    "UNSUBSCRIBE_ALL_ERROR", "; ".join(unsub_errors)
+                )
+
+            # Commit local ownership only after every broker call succeeds.
+            # The proxy disconnects the adapter if this method returns error,
+            # so a partial broker release cannot be presented as reusable.
+            with self.lock:
+                self.subscriptions.clear()
+                self.scrip_to_symbol.clear()
+                self.ws_subscription_refs.clear()
+                self._scrip_to_cids.clear()
+                self._token_to_scrips.clear()
 
             # Clear market data cache
             self.market_cache.clear()
@@ -1394,10 +1400,7 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 f"WebSocket connection remains active for fast reconnection."
             )
 
-            # SA-R6-10 fix: Include warnings in response when partial failure occurs
             response_msg = f"Unsubscribed from all {subscription_count} subscriptions. Connection kept alive."
-            if unsub_errors:
-                response_msg += f" Warnings: {unsub_errors}"
 
             return self._create_success_response(
                 response_msg,

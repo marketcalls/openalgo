@@ -843,7 +843,12 @@ class ConnectionPool:
                 return {"status": "error", "code": "UNSUBSCRIPTION_ERROR", "message": str(e)}
 
     def unsubscribe_all(self):
-        """Unsubscribe from all symbols across all connections"""
+        """Unsubscribe from all symbols across all connections.
+
+        Pool ownership is committed only when every child adapter explicitly
+        acknowledges the release.  A caller can then disconnect the pool when
+        any child refuses or returns an invalid response.
+        """
         with self.lock:
             # Log stats before clearing
             total_symbols = sum(self.adapter_symbol_counts) if self.adapter_symbol_counts else 0
@@ -860,15 +865,43 @@ class ConnectionPool:
                         )
                 self.logger.info("[POOL] ==========================================")
 
-            for adapter in self.adapters:
-                if hasattr(adapter, "unsubscribe_all"):
-                    adapter.unsubscribe_all()
+            errors = []
+            for index, adapter in enumerate(self.adapters):
+                if not hasattr(adapter, "unsubscribe_all"):
+                    errors.append(f"connection {index + 1}: unsupported")
+                    continue
+                try:
+                    response = adapter.unsubscribe_all()
+                except Exception as exc:
+                    self.logger.exception(
+                        "Error unsubscribing all on connection %s", index + 1
+                    )
+                    errors.append(f"connection {index + 1}: {exc}")
+                    continue
+                if not isinstance(response, dict) or response.get("status") != "success":
+                    message = (
+                        response.get("message")
+                        if isinstance(response, dict)
+                        else "invalid response"
+                    )
+                    errors.append(f"connection {index + 1}: {message}")
+
+            if errors:
+                return {
+                    "status": "error",
+                    "code": "UNSUBSCRIBE_ALL_ERROR",
+                    "message": "; ".join(errors),
+                }
 
             self.subscription_map.clear()
             self.subscription_depths.clear()
             self.adapter_symbol_counts = [0] * len(self.adapters)
 
             self.logger.info("[POOL] Unsubscribed from all symbols")
+            return {
+                "status": "success",
+                "message": "Unsubscribed from all symbols",
+            }
 
     def disconnect(self):
         """Disconnect all adapters and clean up"""
