@@ -26,7 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { PRICE_TYPES, PRODUCT_TYPES, STRIKE_OFFSETS } from '@/lib/flow/constants'
+import { PRICE_TYPES, PRODUCT_TYPES, strikeOffsetOptions } from '@/lib/flow/constants'
 import {
   type CustomLeg,
   describeLeg,
@@ -265,6 +265,16 @@ function LegRow({
   const listedExpiries = listing.data?.expiries ?? []
   const selectedStrike = listedStrikes.find((row) => String(row.strike) === leg.strike)
 
+  // The chain comes back as a window around ATM (OPTION_STRIKE_WINDOW), so a
+  // leg deliberately pinned far out of the money has no row to select and the
+  // control comes up empty - after which the next strike picked silently
+  // replaces one the author chose. Keep it selectable, for the same reason the
+  // expiry below keeps a date the contract no longer lists.
+  const strikeOptions =
+    leg.strike && !selectedStrike
+      ? [{ strike: Number(leg.strike), symbol: null, label: '' }, ...listedStrikes]
+      : listedStrikes
+
   // A typed value stays typed. The picker is an aid, not a cage: a strike or
   // expiry carrying a {{variable}} is resolved at run time and has no listing to
   // choose from, and the editor has to stay usable when the lookup fails - no
@@ -456,7 +466,7 @@ function LegRow({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {STRIKE_OFFSETS.map((offset) => (
+                  {strikeOffsetOptions(leg.offset).map((offset) => (
                     <SelectItem key={offset.value} value={offset.value}>
                       {offset.label}
                     </SelectItem>
@@ -469,7 +479,7 @@ function LegRow({
                   <SelectValue placeholder="Pick a listed strike" />
                 </SelectTrigger>
                 <SelectContent>
-                  {listedStrikes.map((row) => (
+                  {strikeOptions.map((row) => (
                     <SelectItem key={row.strike} value={String(row.strike)}>
                       <span className="flex w-full items-center justify-between gap-3">
                         <span className="font-mono">{row.strike}</span>

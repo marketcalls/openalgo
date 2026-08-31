@@ -92,24 +92,61 @@ export const OPTION_TYPES = [
   { value: 'PE', label: 'Put (PE)', description: 'Put Option' },
 ] as const
 
-export const STRIKE_OFFSETS = [
+/**
+ * How far out the offset dropdowns count, in either direction.
+ *
+ * Matched to OPTION_STRIKE_WINDOW in blueprints/flow.py, which is the number
+ * of strikes either side of ATM the chain endpoint returns. The two controls
+ * sit next to each other on the same leg - pick "Offset" or pick "Strike" -
+ * and offering an offset further out than the strike picker will show you is
+ * offering a contract this panel cannot then confirm exists.
+ *
+ * Deliberately narrower than the executor's own limit, which is ITM1-ITM50 and
+ * OTM1-OTM50 (OPTION_OFFSET_PATTERN in services/flow_node_contracts.py,
+ * mirrored by OFFSET_PATTERN in ./customLegs.ts). A leg already storing
+ * something beyond this window is still valid and still runs; strikeOffsetOptions
+ * keeps it selectable rather than blanking the control. The dropdowns used to
+ * stop at ITM5 and OTM10 with no such fallback, which is how an imported OTM12
+ * leg rendered empty and lost its strike to the next value picked.
+ */
+export const MAX_STRIKE_OFFSET = 25
+
+const strikeOffset = (kind: 'ITM' | 'OTM', n: number) => ({
+  value: `${kind}${n}`,
+  label: `${kind}${n}`,
+  description: `${n} ${n === 1 ? 'strike' : 'strikes'} ${
+    kind === 'ITM' ? 'In The Money' : 'Out of The Money'
+  }`,
+})
+
+const strikeOffsetRange = (kind: 'ITM' | 'OTM') =>
+  Array.from({ length: MAX_STRIKE_OFFSET }, (_, i) => strikeOffset(kind, i + 1))
+
+export const STRIKE_OFFSETS: ReadonlyArray<{
+  value: string
+  label: string
+  description: string
+}> = [
   { value: 'ATM', label: 'ATM', description: 'At The Money' },
-  { value: 'ITM1', label: 'ITM1', description: '1 strike In The Money' },
-  { value: 'ITM2', label: 'ITM2', description: '2 strikes In The Money' },
-  { value: 'ITM3', label: 'ITM3', description: '3 strikes In The Money' },
-  { value: 'ITM4', label: 'ITM4', description: '4 strikes In The Money' },
-  { value: 'ITM5', label: 'ITM5', description: '5 strikes In The Money' },
-  { value: 'OTM1', label: 'OTM1', description: '1 strike Out of The Money' },
-  { value: 'OTM2', label: 'OTM2', description: '2 strikes Out of The Money' },
-  { value: 'OTM3', label: 'OTM3', description: '3 strikes Out of The Money' },
-  { value: 'OTM4', label: 'OTM4', description: '4 strikes Out of The Money' },
-  { value: 'OTM5', label: 'OTM5', description: '5 strikes Out of The Money' },
-  { value: 'OTM6', label: 'OTM6', description: '6 strikes Out of The Money' },
-  { value: 'OTM7', label: 'OTM7', description: '7 strikes Out of The Money' },
-  { value: 'OTM8', label: 'OTM8', description: '8 strikes Out of The Money' },
-  { value: 'OTM9', label: 'OTM9', description: '9 strikes Out of The Money' },
-  { value: 'OTM10', label: 'OTM10', description: '10 strikes Out of The Money' },
-] as const
+  ...strikeOffsetRange('ITM'),
+  ...strikeOffsetRange('OTM'),
+]
+
+/**
+ * The offset list with ``current`` guaranteed to be in it.
+ *
+ * A stored value the list does not carry renders as an empty control, and the
+ * next thing the author picks silently replaces a strike they never chose.
+ * That is the same reason the leg editor's expiry keeps an unlisted date
+ * selectable. Anything reaches this - a legacy value, a hand-written offset, an
+ * offset past the window that the executor still accepts - so it is shown
+ * as-is rather than corrected.
+ */
+export function strikeOffsetOptions(current: unknown) {
+  const value = typeof current === 'string' ? current.trim() : ''
+  if (!value || STRIKE_OFFSETS.some((offset) => offset.value === value)) return STRIKE_OFFSETS
+  return [{ value, label: value, description: 'Stored on this node' }, ...STRIKE_OFFSETS]
+}
 
 export const OPTION_STRATEGIES = [
   {

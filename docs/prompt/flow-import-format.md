@@ -794,7 +794,7 @@ Single-leg options order resolved from underlying + offset + option type.
 | `exchange` | `"NSE_INDEX"` \| `"NFO"` \| `"BSE_INDEX"` \| `"BFO"` \| `"MCX"` \| `"CDS"` \| `"BCD"` \| `"NCDEX"` \| `"NCO"` | `"NSE_INDEX"` | **Only consulted for an `underlying` not listed above.** |
 | `expiryType` | relative type, **or** a `DDMMMYY` date, or a reference | `"current_week"` | A relative type (`"current_week"`, `"next_week"`, `"current_month"`, `"next_month"`) is resolved by the Symbol service. A `DDMMMYY` value such as `"28OCT25"` is used as given, which is how a far contract the four choices cannot reach is named. MCX contracts are monthly, so use `"current_month"`/`"next_month"` there. |
 | `expiryDate` | `"DDMMMYY"` or a reference | - | Optional. The same explicit date under its own key, for callers that prefer to send the two apart. Wins over `expiryType` when both are set. |
-| `offset` | `"ATM"` \| `"ITM1"`-`"ITM50"` \| `"OTM1"`-`"OTM50"` | `"ATM"` | Checked against `OPTION_OFFSET_PATTERN`. |
+| `offset` | `"ATM"` \| `"ITM1"`-`"ITM50"` \| `"OTM1"`-`"OTM50"` | `"ATM"` | Checked against `OPTION_OFFSET_PATTERN`. Counted in strikes the contract actually lists, walking out from ATM, so an offset further than the chain reaches resolves to nothing and the leg is refused at run time rather than at import. |
 | `optionType` | `"CE"` \| `"PE"` | `"CE"` | |
 | `action` | `"BUY"` \| `"SELL"` | `"BUY"` | |
 | `quantity` | int | `1` | **In lots** (executor multiplies by lot size). |
@@ -901,7 +901,7 @@ node, though the editor does not offer it.
 | Leg field | Type | Default | Notes |
 |---|---|---|---|
 | `strikeMode` | `"OFFSET"` \| `"STRIKE"` | `"OFFSET"` | Absent is `OFFSET`. A leg carrying `strike` and no mode is read as `STRIKE`. |
-| `offset` | `"ATM"` \| `"ITM1"`-`"ITM50"` \| `"OTM1"`-`"OTM50"` | - | **Required unless `strike` is given.** Re-resolved against the live underlying on every run. |
+| `offset` | `"ATM"` \| `"ITM1"`-`"ITM50"` \| `"OTM1"`-`"OTM50"` | - | **Required unless `strike` is given.** Re-resolved against the live underlying on every run, counted in strikes the contract lists. |
 | `strike` | number | - | **Required when `strikeMode` is `STRIKE`.** An absolute strike, used exactly as given; must be positive and must be listed for that expiry. |
 | `expiry` | string | - | Overrides the node expiry with an exact date in `DDMMMYY`, e.g. `28OCT25`. |
 | `expiryType` | `"current_week"` \| `"next_week"` \| `"current_month"` \| `"next_month"` | - | Overrides the node expiry with a relative one. Ignored when `expiry` is set. |

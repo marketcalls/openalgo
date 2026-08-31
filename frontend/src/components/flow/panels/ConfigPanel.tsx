@@ -36,7 +36,7 @@ import {
   ORDER_ACTIONS,
   PRODUCT_TYPES,
   SCHEDULE_TYPES,
-  STRIKE_OFFSETS,
+  strikeOffsetOptions,
 } from '@/lib/flow/constants'
 import { cn } from '@/lib/utils'
 import { useFlowWorkflowStore } from '@/stores/flowWorkflowStore'
@@ -1005,7 +1005,7 @@ export function ConfigPanel() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {STRIKE_OFFSETS.map((o) => (
+                      {strikeOffsetOptions(nodeData.offset).map((o) => (
                         <SelectItem key={o.value} value={o.value}>
                           {o.label}
                         </SelectItem>
@@ -2269,12 +2269,11 @@ export function ConfigPanel() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="ATM">ATM</SelectItem>
-                      <SelectItem value="ITM1">ITM 1</SelectItem>
-                      <SelectItem value="ITM2">ITM 2</SelectItem>
-                      <SelectItem value="OTM1">OTM 1</SelectItem>
-                      <SelectItem value="OTM2">OTM 2</SelectItem>
-                      <SelectItem value="OTM3">OTM 3</SelectItem>
+                      {strikeOffsetOptions(nodeData.offset).map((o) => (
+                        <SelectItem key={o.value} value={o.value}>
+                          {o.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </TemplatableField>
