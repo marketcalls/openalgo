@@ -338,9 +338,23 @@ class WebSocketClient:
 
         try:
             request_id = str(uuid.uuid4())
+            # Repeat the effective mode on every item.  OpenAlgo's proxy also
+            # accepts the top-level mode, but explicit items interoperate with
+            # strict servers and preserve a caller's per-symbol override.
+            wire_symbols = [
+                {
+                    **symbol_info,
+                    "mode": (
+                        symbol_info["mode"]
+                        if "mode" in symbol_info
+                        else mode
+                    ),
+                }
+                for symbol_info in symbols
+            ]
             unsubscription_msg = {
                 "action": "unsubscribe",
-                "symbols": symbols,
+                "symbols": wire_symbols,
                 "mode": mode,
                 "request_id": request_id,
             }
@@ -364,15 +378,25 @@ class WebSocketClient:
 
         # Update local tracking only for symbols the proxy confirmed.
         successful = ack.get("successful", []) or []
+        requested_modes: dict[tuple[str, str], list[Any]] = {}
+        for symbol_info in wire_symbols:
+            sym = symbol_info.get("symbol")
+            exch = symbol_info.get("exchange")
+            if sym and exch:
+                requested_modes.setdefault((exch, sym), []).append(
+                    symbol_info["mode"]
+                )
         with self.lock:
             for entry in successful:
                 sym = entry.get("symbol")
                 exch = entry.get("exchange")
                 if not sym or not exch:
                     continue
+                modes = requested_modes.get((exch, sym), [])
+                acknowledged_mode = modes.pop(0) if modes else mode
                 key = f"{exch}:{sym}"
                 if key in self.active_subscriptions:
-                    self.active_subscriptions[key].discard(mode)
+                    self.active_subscriptions[key].discard(acknowledged_mode)
                     if not self.active_subscriptions[key]:
                         del self.active_subscriptions[key]
 

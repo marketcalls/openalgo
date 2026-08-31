@@ -184,7 +184,7 @@ The body must be a JSON object. A JSON array, a bare string and a number are all
 | Field | Type | Description |
 |-------|------|-------------|
 | status | string | `success` or `error` |
-| result | string | The outcome label, always a member of the webhook result vocabulary |
+| result | string | The outcome label, always a member of the webhook result vocabulary. Absent on the declared-size 413 route preflight response |
 | message | string | What happened, in words |
 | strategy_id | integer | The strategy the token resolved to. Absent when the token resolved to nothing |
 | run_id | integer | The run the signal opened or affected. Absent when there is none |
@@ -209,15 +209,24 @@ The body must be a JSON object. A JSON array, a bare string and a number are all
 | `rejected_engine_error` | 500 | The engine refused the signal or raised while acting on it |
 | `rate_limited` | 429 | The route's rate limiter refused the request |
 
-Every one of those outcomes, rejections included, writes a row to the webhook
-audit table. The session endpoint can read that audit, but the `/strategy` page
-does not currently expose it. The page also does not provide an IP-allowlist
+Only requests admitted to the validation pipeline are audited. Every terminal
+outcome inside that pipeline, accepted or rejected, writes a row to the webhook
+audit table. The route's rate limiter and declared-size 413 run before durable
+webhook-event audit, so those preflight refusals do not create an audit row.
+The declared-size 413 response contains `status` and `message` but no `result`;
+the limiter's 429 response contains `result: "rate_limited"`.
+The session endpoint can read admitted events, but the `/strategy` page does
+not currently expose them. The page also does not provide an IP-allowlist
 editor; creation currently stores no allowlist. Configure/read these through
 the session API until those operator surfaces are built.
 
 ## Validation Order
 
-The order is part of the contract. Each stage writes its own audit row and stops the request.
+The order is part of the contract. Before this list, the route applies its
+caller/token rate limits and refuses a declared oversized body with 413 before
+reading it. Those route preflight guards do not enter the pipeline and do not
+write webhook audit rows. Once admitted, each terminal pipeline stage writes
+its own audit row and stops the request.
 
 1. The token resolves to a strategy, or `rejected_token`
 2. The strategy is not locked, or `rejected_locked`
@@ -244,7 +253,7 @@ The kill switch outranks the allowlist, and the allowlist outranks the payload, 
 - **Duplicate suppression, batch only.** Two identical `(strategy, action, mode)` deliveries inside 60 seconds are one signal. This exists because senders retry a delivery they believe failed. A delivery whose engine call then failed releases its claim, so a genuine retry is not swallowed as a duplicate of something that never happened.
 - **Cooling off, batch `start` only.** A strategy that stopped within the last 30 seconds refuses a `start`, so a misconfigured pair of alerts firing against each other cannot oscillate and pay the spread each time. A stop is never blocked by the window, and a stop against an already-stopped strategy does not arm it.
 - **The IP allowlist is a closed set when it is non-empty.** An empty or absent allowlist allows every address, which is how a strategy is created. Entries are CIDR ranges, and a bare address is read as its own `/32` or `/128`. A request that arrives with no address at all fails a non-empty allowlist. One malformed entry is skipped rather than failing the whole list closed.
-- **Body size cap: 16384 bytes.** An oversized `Content-Length` is refused with a 413 **before the body is read**, so an unauthenticated caller does not get to decide how much the worker reads; the pipeline's own cap then applies to what actually arrived. A TradingView alert is a few hundred bytes.
+- **Body size cap: 16384 bytes.** An oversized `Content-Length` is refused with a 413 **before the body is read or audited**, so an unauthenticated caller does not get to decide how much the worker reads. The admitted pipeline then applies its own byte cap to what actually arrived and audits that `rejected_payload` outcome. A TradingView alert is a few hundred bytes.
 - **The caller is identified by the real client address.** The proxy headers are honoured through `get_real_ip()`, so the IP allowlist and the audit trail name the sender rather than the reverse proxy most installs run behind.
 - **`action` and `mode` are trimmed and lower-cased** before matching, so `" START "` and `"Sandbox"` are accepted. Nothing else about the payload is normalised.
 - **Audit rows for an unrecognised token are capped at the newest 1000.** They name no strategy, so nothing displays them and nothing deleted them: anyone who could reach the URL could otherwise grow the database without limit, invisibly. They are kept rather than dropped, because a run of them is the first sign of somebody walking the token space.
@@ -252,7 +261,12 @@ The kill switch outranks the allowlist, and the allowlist outranks the payload, 
 
 ## Rate Limits
 
-The validation pipeline applies no rate limit of its own. The route in front of it does, and `rate_limited` is the result label that outcome carries, answering 429. The platform's webhook budget is `WEBHOOK_RATE_LIMIT` in `.env`, which `.sample.env` ships as `100 per minute` and which the other public webhook surfaces draw on. See [rate limiting](../rate-limiting.md).
+The validation pipeline applies no rate limit of its own. The route in front of
+it does, and `rate_limited` is the result label that outcome carries, answering
+429 before the pipeline and therefore before durable webhook-event audit. The
+platform's webhook budget is `WEBHOOK_RATE_LIMIT` in `.env`, which `.sample.env`
+ships as `100 per minute` and which the other public webhook surfaces draw on.
+See [rate limiting](../rate-limiting.md).
 
 Two limits share that budget, because neither subsumes the other. **By caller address** is the only key that can stop someone walking the token space: every guess carries a different token, so a token-keyed limit would score each against an empty bucket and never fire. **By token** bounds what one leaked token can do to the broker account however many addresses replay it, which matters because the token is the whole credential.
 

@@ -109,7 +109,10 @@ On a schema validation failure, `message` is an object keyed by field name rathe
 
 The `/api/v1/strategy/` routes use `API_RATE_LIMIT`, the same budget as the rest of the v1 surface. The module default when the variable is unset is `10 per second`; `.sample.env` ships `100 per second`. See [rate limiting](../rate-limiting.md).
 
-The public webhook is limited by the route in front of the pipeline. `rate_limited` is a member of the result vocabulary and answers 429.
+The public webhook is limited by the route in front of the pipeline.
+`rate_limited` is a member of the result vocabulary and answers 429. Because
+that guard and the declared-size 413 run before the validation pipeline,
+neither preflight refusal writes a durable webhook audit row.
 
 ## Vocabularies
 

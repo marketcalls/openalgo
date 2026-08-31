@@ -50,7 +50,11 @@ The strategy subpackage is intentionally documented separately. This page
 defines the account-service boundary it reuses; do not copy its engine, state,
 recovery or risk contracts here. Its broker-backed book views call the existing
 authenticated orderbook, tradebook and positionbook services with internal
-credentials. The run's own mode selects live versus sandbox; the platform-wide
+credentials: `services/strategy_module/views.py` exposes `strategy_orderbook`,
+`strategy_tradebook` and `strategy_positions`, which reuse
+`get_orderbook_with_auth`, `get_tradebook_with_auth` and
+`get_positionbook_with_auth` for live runs (and the matching sandbox book
+services for sandbox runs). The run's own mode selects live versus sandbox; the platform-wide
 analyzer toggle cannot divert a live strategy, and sandbox never reads the real
 account. Broker rows are narrowed by durable strategy order ids/contracts and
 the browser labels recorded order rows as local audit rather than broker truth.

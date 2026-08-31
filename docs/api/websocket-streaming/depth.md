@@ -42,20 +42,22 @@ Custom Host  :  ws://<your-host>:8765
     "volume": 14414545,
     "totalbuyqty": 591351,
     "totalsellqty": 835701,
-    "bids": [
-      {"price": 1187.70, "quantity": 886},
-      {"price": 1187.65, "quantity": 212},
-      {"price": 1187.60, "quantity": 351},
-      {"price": 1187.55, "quantity": 343},
-      {"price": 1187.50, "quantity": 399}
-    ],
-    "asks": [
-      {"price": 1187.80, "quantity": 767},
-      {"price": 1187.85, "quantity": 115},
-      {"price": 1187.90, "quantity": 162},
-      {"price": 1187.95, "quantity": 1121},
-      {"price": 1188.00, "quantity": 430}
-    ],
+    "depth": {
+      "buy": [
+        {"price": 1187.70, "quantity": 886, "orders": 4},
+        {"price": 1187.65, "quantity": 212, "orders": 2},
+        {"price": 1187.60, "quantity": 351, "orders": 3},
+        {"price": 1187.55, "quantity": 343, "orders": 5},
+        {"price": 1187.50, "quantity": 399, "orders": 2}
+      ],
+      "sell": [
+        {"price": 1187.80, "quantity": 767, "orders": 3},
+        {"price": 1187.85, "quantity": 115, "orders": 1},
+        {"price": 1187.90, "quantity": 162, "orders": 2},
+        {"price": 1187.95, "quantity": 1121, "orders": 6},
+        {"price": 1188.00, "quantity": 430, "orders": 2}
+      ]
+    },
     "timestamp": 1712572800000
   }
 }
@@ -95,11 +97,12 @@ instruments = [
 # Callback for depth updates
 def on_depth(data):
     print(f"Depth: {data['symbol']}")
-    print(f"  LTP: {data['ltp']}")
-    print(f"  Best Bid: {data['bids'][0]['price']} x {data['bids'][0]['quantity']}")
-    print(f"  Best Ask: {data['asks'][0]['price']} x {data['asks'][0]['quantity']}")
-    print(f"  Total Buy Qty: {data['totalbuyqty']}")
-    print(f"  Total Sell Qty: {data['totalsellqty']}")
+    market = data['data']
+    print(f"  LTP: {market['ltp']}")
+    print(f"  Best Bid: {market['depth']['buy'][0]['price']} x {market['depth']['buy'][0]['quantity']}")
+    print(f"  Best Ask: {market['depth']['sell'][0]['price']} x {market['depth']['sell'][0]['quantity']}")
+    print(f"  Total Buy Qty: {market['totalbuyqty']}")
+    print(f"  Total Sell Qty: {market['totalsellqty']}")
 
 # Connect and subscribe
 client.connect()
@@ -148,20 +151,28 @@ finally:
 | volume | number | Total traded volume |
 | totalbuyqty | number | Total buy quantity in order book |
 | totalsellqty | number | Total sell quantity in order book |
-| bids | array | Top 5 bid levels |
-| asks | array | Top 5 ask levels |
+| depth | object | Order book with `buy` and `sell` arrays |
 | timestamp | number | Update time (epoch ms) |
 
-### Bid/Ask Object
+### Depth Object
+
+| Field | Type | Description |
+|-------|------|-------------|
+| buy | array | Bid levels, best price first |
+| sell | array | Ask levels, best price first |
+
+### Buy/Sell Level Object
 
 | Field | Type | Description |
 |-------|------|-------------|
 | price | number | Price level |
 | quantity | number | Quantity at this level |
+| orders | number | Order count at this level when supplied by the broker |
 
 ## Notes
 
-- Depth mode provides **full order book** data (top 5 levels)
+- Depth mode provides the requested number of order-book levels when the
+  broker supports it; `5` is the default
 - Highest bandwidth consumption among streaming modes
 - Updates on every order book change
 - Use for:

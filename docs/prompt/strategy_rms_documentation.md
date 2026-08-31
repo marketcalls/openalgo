@@ -173,7 +173,7 @@ is the protocol, the leg shape and the run lifecycle.
 | Trigger | `start` enters every leg, `stop` exits every leg | one alert moves one leg |
 | Leg shape | segment, position, lots, option type, strike mode, offset, expiry | symbol, exchange, side, qty, segment, expiry |
 | Options | relative option legs and spreads | an exact option contract may be named, but there is no `options` segment, expiry-rank or strike resolution; spreads stay in batch mode |
-| Quantity | lots multiplied by `lotsize` from `SymToken` | absolute shares or units |
+| Quantity | derivative lots multiplied by the exact `SymToken` lot size; cash uses the configured count as units | derivatives accept `qty_mode=lots` (multiplied by the exact `SymToken` lot size) or `qty_mode=units` (absolute quantity on a whole-lot boundary); cash is units only and uses the exact quantity |
 | Run | one per start-to-stop cycle | one per platform session, opened by the first signal |
 | Webhook actions | `start`, `stop` | `long_entry`, `long_exit`, `short_entry`, `short_exit` |
 | Legs at run start | all entered together | inactive until a signal opens one |
@@ -227,7 +227,7 @@ related to each other or to this module.
 | `sm_strategy_run` | one activation, including durable pending-stop timestamp/reason and terminal P&L |
 | `sm_strategy_order` | every durable order intent, its exact `position_ref`, acknowledgement, fills and rejection context |
 | `sm_strategy_checkpoint` | periodic runtime snapshot, for crash recovery |
-| `sm_webhook_event` | every inbound webhook, accepted or rejected |
+| `sm_webhook_event` | every request admitted to the webhook pipeline, accepted or rejected; route preflight 429/declared-size 413 refusals are not stored |
 | `sm_strategy_event` | risk-event audit trail |
 
 Conventions:
@@ -675,8 +675,9 @@ Five properties the token being the whole credential makes necessary:
 - **The caller is `get_real_ip()`, not `remote_addr`.** Behind a reverse proxy,
   which is how most installs run, `remote_addr` is the proxy: the IP allowlist
   would be either useless or total, and the audit trail would name the proxy.
-- **An oversized body is refused from `Content-Length`, before it is read.**
-  The cap inside the pipeline is measured on bytes already in memory.
+- **An oversized body is refused from `Content-Length`, before it is read or
+  audited.** The cap inside the admitted pipeline is measured on bytes already
+  in memory, and a refusal at that second cap is audited as `rejected_payload`.
 - **The rate limiter is keyed on the token's digest.** Its in-memory storage
   empties the event list of an expired window but never removes the key, so a
   raw token there would persist for the life of the worker, one entry per token
@@ -687,7 +688,10 @@ Five properties the token being the whole credential makes necessary:
   are kept rather than dropped because a run of them is the first sign of
   somebody walking the token space.
 
-Validation pipeline, in order, with every stage audited to `sm_webhook_event`:
+The route applies its two rate limits and the declared `Content-Length` cap
+before this function. A preflight 429 or 413 does not write `sm_webhook_event`.
+For a request admitted to `handle_webhook`, the validation pipeline is in this
+order and every terminal stage is audited:
 
 | Stage | Result label | Status |
 |---|---|---|

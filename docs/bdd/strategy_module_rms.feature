@@ -3,13 +3,14 @@ Feature: Strategy module and risk management
   durable order ownership, confirmed-flat stopping and restart-safe risk
   management. Scenarios are grouped by the money or operator truth they protect.
 
-  # Source: test/test_strategy_module_webhook.py:890
-  Scenario: Every webhook outcome is validated and audited
+  # Source: test/test_strategy_module_webhook.py:890, test/test_strategy_module_docs.py:291
+  Scenario: Every admitted webhook outcome is validated and audited
     Given a strategy has a webhook token
-    When an alert arrives on that token
+    When an alert is admitted past route preflight on that token
     Then token, kill switch, IP allowlist, payload, action, mode, live opt-in,
       duplicate window and cooling-off are checked in order
     And every accepted or rejected outcome has its own audit result label
+    But Route preflight refusals are not durable webhook audit rows
 
   # Source: test/test_strategy_module_webhook.py:365
   Scenario: An unknown token cannot be distinguished from a malformed one

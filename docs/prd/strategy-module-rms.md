@@ -73,7 +73,7 @@ restx_api/strategy.py                API-key surface (lifecycle plus reads)
         |
         v
 services/strategy_module/
-  webhook.py        validation pipeline, every stage audited
+  webhook.py        admitted-request validation pipeline, every outcome audited
   signals.py        signal-mode vocabulary, one leg per alert
   engine.py         run lifecycle, tick evaluation, fills
   state.py          in-process run state, the lock every writer holds
@@ -111,7 +111,7 @@ Six tables, all `sm_` prefixed, in the main database: `sm_strategy`,
 ### FR2: Order Execution
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| FR2.1 | Every leg resolves to a contract before anything is claimed or placed | P0 |
+| FR2.1 | Batch start resolves every leg to a contract before the strategy or any leg is claimed or placed | P0 |
 | FR2.2 | Entries go BUY before SELL, so a spread is not refused for margin it would have had | P0 |
 | FR2.3 | The product is translated to what the leg's venue accepts | P0 |
 | FR2.4 | Exits are MARKET on every path | P0 |
@@ -148,14 +148,14 @@ Six tables, all `sm_` prefixed, in the main database: `sm_strategy`,
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | FR5.1 | Token in the URL, stored only as a digest, shown once, rotatable | P0 |
-| FR5.2 | Ten-stage validation pipeline, every outcome audited | P0 |
+| FR5.2 | All admitted pipeline outcomes are audited; route-level rate limits and declared-size 413 preflight refusals happen before durable webhook-event audit | P0 |
 | FR5.3 | A signal that changes nothing answers success with a note, never a failure | P0 |
 | FR5.4 | Live is opt-in per strategy; a strategy is born sandbox-only | P0 |
 | FR5.5 | Kill switch that refuses inbound alerts while engaged | P0 |
 | FR5.6 | Optional CIDR allowlist, closed when non-empty | P1 |
 | FR5.7 | Duplicate suppression and a cooling-off window on batch starts | P1 |
 | FR5.8 | A leg may be named by id or by symbol and exchange | P1 |
-| FR5.9 | Signal entry claim, duplicate decision and stopping gate are atomic, so one alert never opens two positions or enters after a stop request | P0 |
+| FR5.9 | Signal entry claims the leg atomically before contract resolution, durable intent and dispatch; duplicate decision and stopping gate share that claim so one alert never opens two positions or enters after a stop request | P0 |
 | FR5.10 | A normal signal risk exit leaves the platform-session run open so later alerts share one session P&L and audit trail | P0 |
 
 ### FR6: Scheduling
@@ -196,7 +196,7 @@ Six tables, all `sm_` prefixed, in the main database: `sm_strategy`,
 
 | ID | Requirement |
 |----|-------------|
-| NFR1 | No polling on the money path: fills arrive on the `order.update` bus, prices over the websocket, risk from the price hook |
+| NFR1 | Fills arrive on the `order.update` bus and prices normally arrive over the websocket; bounded REST polling may provide a safety fallback for prices and risk. No blocking or broker I/O is allowed while a run lock is held |
 | NFR2 | The risk core performs no I/O, so it is testable without a running platform and identical across consumers |
 | NFR3 | Order dispatch happens outside the run lock; a critical section holds in-memory bookkeeping only |
 | NFR4 | Nothing creates a database engine, thread, executor, socket or subprocess per call |
@@ -212,7 +212,7 @@ Six tables, all `sm_` prefixed, in the main database: `sm_strategy`,
 | `sm_strategy_run` | One execution: mode, broker, trigger source, durable pending-stop timestamp/reason, terminal stop reason, final P&L, resolved expiries |
 | `sm_strategy_order` | Every durable intent, with exact `position_ref`, broker acknowledgement, product and price type sent, fills and reject reasons |
 | `sm_strategy_checkpoint` | Volatile risk state, written continuously, pruned to a bound |
-| `sm_webhook_event` | Every inbound alert and its outcome; ownerless rows capped |
+| `sm_webhook_event` | Every request admitted to the webhook pipeline and its outcome; ownerless rows capped; route preflight refusals are not stored |
 | `sm_strategy_event` | Lifecycle and risk transitions with severity |
 
 ## API Endpoints

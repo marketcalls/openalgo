@@ -111,22 +111,35 @@ To unsubscribe from a stream:
 }
 ```
 
+For an array request, a `mode` on an individual symbol wins; otherwise the
+top-level `mode` applies, and only a request with neither defaults to `Quote`.
+
 ### Error Handling
 
-If a client requests a depth level not supported by their broker:
+Subscription failures are reported on the subscribe acknowledgement, one
+result per symbol. If a broker refuses the requested depth, the wire shape is:
 
 ```json
 {
-  "type": "error",
-  "code": "UNSUPPORTED_DEPTH_LEVEL",
-  "message": "Depth level 50 is not supported by broker Angel for exchange NSE",
-  "symbol": "RELIANCE",
-  "exchange": "NSE",
-  "requested_mode": 3,
-  "requested_depth": 50,
-  "supported_depths": [5, 20]
+  "type": "subscribe",
+  "status": "partial",
+  "subscriptions": [
+    {
+      "symbol": "RELIANCE",
+      "exchange": "NSE",
+      "status": "error",
+      "message": "Depth level 50 is not supported by this broker",
+      "broker": "angel"
+    }
+  ],
+  "message": "Subscription processing complete",
+  "broker": "angel"
 }
 ```
+
+`status` is `partial` when at least one symbol failed and `success` only when
+every requested symbol succeeded. Adapter messages are broker-specific; there
+is no standardized top-level error code for this case.
 
 ### Market Data Format
 
@@ -198,8 +211,7 @@ If a client requests a depth level not supported by their broker:
         {"price": 1426.0, "quantity": 30, "orders": 1}
       ]
     },
-    "timestamp": 1756376445123,
-    "broker_supported": true
+    "timestamp": 1756376445123
   }
 }
 ```
@@ -260,10 +272,15 @@ configured, deduplicate on `orderid` + `order_status` + `filled_quantity`.
 
 ### Heartbeat and Reconnection
 
-* Server sends `ping` messages every 30 seconds.
-* Clients must respond with `pong` or will be disconnected.
-* Upon reconnection, clients must re-authenticate and re-subscribe to streams.
-* Proxy may automatically restore prior subscriptions if supported by broker.
+* The server's WebSocket control ping interval and timeout are 20 seconds by default.
+  Operators may change them with `WS_PING_INTERVAL` and `WS_PING_TIMEOUT`.
+* A compliant WebSocket library automatically answers control pings with pong
+  frames. The JSON `{"action":"ping"}` / `{"type":"pong"}` exchange is an
+  optional application-level latency probe, not the control-frame obligation.
+* After a disconnect, clients must re-authenticate and re-subscribe. A client
+  library may remember its own desired subscriptions and issue them again.
+* The server does not restore subscriptions for a disconnected client session;
+  it removes that session's registry entries during cleanup.
 
 ### Security & Compliance
 

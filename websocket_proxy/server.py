@@ -1426,9 +1426,19 @@ class WebSocketProxy:
                 symbol = symbol_info.get("symbol")
                 exchange = symbol_info.get("exchange")
                 # Normalize mode (accepts 1/2/3 or LTP/Quote/Depth case-insensitive).
-                # Default to Quote mode (2) if absent.
+                # A per-symbol mode is the most specific value.  Array-form
+                # requests historically ignored their documented top-level
+                # mode and silently defaulted every item to Quote, which could
+                # answer success while leaving an LTP/Depth subscription live.
+                # Fall back to the request mode, then Quote only when neither
+                # spelling supplied one.
                 try:
-                    mode, _ = normalize_mode(symbol_info.get("mode", 2))
+                    raw_mode = (
+                        symbol_info["mode"]
+                        if "mode" in symbol_info
+                        else data.get("mode", 2)
+                    )
+                    mode, _ = normalize_mode(raw_mode)
                 except (ValueError, TypeError) as e:
                     failed_unsubscriptions.append(
                         {
