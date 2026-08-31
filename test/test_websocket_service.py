@@ -178,7 +178,7 @@ def test_depth(client, symbols):
             print("-" * 30)
 
             buy_depth = depth_data.get("buy", [])
-            for i, level in enumerate(buy_depth[:5]):
+            for _i, level in enumerate(buy_depth[:5]):
                 price = format_price(level.get("price", 0))
                 qty = level.get("quantity", 0)
                 orders = level.get("orders", 0)
@@ -190,7 +190,7 @@ def test_depth(client, symbols):
             print("-" * 30)
 
             sell_depth = depth_data.get("sell", [])
-            for i, level in enumerate(sell_depth[:5]):
+            for _i, level in enumerate(sell_depth[:5]):
                 price = format_price(level.get("price", 0))
                 qty = level.get("quantity", 0)
                 orders = level.get("orders", 0)

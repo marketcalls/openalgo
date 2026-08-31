@@ -379,6 +379,121 @@ def test_entry_fill_after_initial_unfilled_stop_is_immediately_kept_managed_and_
     assert store.get_run(order.run_id).stopped_at is None
 
 
+def test_late_fill_after_confirmed_zero_cancel_reopens_pending_stop_and_exits_exposure(order):
+    """A corrected terminal fact after flat finalisation must become managed again."""
+    _install_pending_entry(order)
+    assert store.request_run_stop(order.run_id, "manual") is True
+
+    with (
+        patch.object(engine, "_api_key_for", return_value=None),
+        patch.object(engine, "_unsubscribe_run"),
+    ):
+        order_events._apply_update(
+            "BRK-1",
+            _event("BRK-1", status="cancelled", avg=0, filled=0),
+        )
+
+    assert store.get_run(order.run_id).stopped_at is not None
+    assert state.get_run_state(order.run_id) is None
+    exits = []
+
+    def accept_exit(**kwargs):
+        exits.append(kwargs["order"])
+        return DispatchResult(ok=True, broker_order_id="BRK-LATE-CORRECTION-EXIT", response={})
+
+    with (
+        patch.object(engine, "_api_key_for", return_value="test-key"),
+        patch.object(engine.order_dispatch, "dispatch_order", side_effect=accept_exit),
+        patch.object(engine, "_subscribe_run"),
+        patch.object(engine, "_unsubscribe_run"),
+    ):
+        order_events._apply_update(
+            "BRK-1",
+            _event("BRK-1", status="complete", avg=101.5, filled=75),
+        )
+
+        durable = store.get_run(order.run_id)
+        assert durable.stopped_at is None
+        assert durable.stop_requested_reason == "manual"
+        assert store.get_strategy(order.strategy_id, USER).current_run_id == order.run_id
+        entry = store.get_order_by_broker_id("BRK-1")
+        assert entry.status == "complete"
+        assert entry.filled_qty == 75
+        live = state.get_run_state(order.run_id)
+        assert live["stopping"] is True
+        assert live["legs"]["1"]["status"] == "open"
+        assert live["legs"]["1"]["qty"] == 75
+        assert exits[0]["quantity"] == "75"
+
+        order_events._apply_update(
+            "BRK-LATE-CORRECTION-EXIT",
+            _event("BRK-LATE-CORRECTION-EXIT", status="complete", avg=102.0, filled=75),
+        )
+
+    assert store.get_run(order.run_id).stopped_at is not None
+    assert state.get_run_state(order.run_id) is None
+
+
+def test_late_fill_residual_finishes_without_releasing_a_newer_current_run(order):
+    """An older corrected run is independent once a newer run owns the strategy."""
+    _install_pending_entry(order)
+    assert store.request_run_stop(order.run_id, "manual") is True
+
+    with (
+        patch.object(engine, "_api_key_for", return_value=None),
+        patch.object(engine, "_unsubscribe_run"),
+    ):
+        order_events._apply_update(
+            "BRK-1",
+            _event("BRK-1", status="cancelled", avg=0, filled=0),
+        )
+
+    newer = store.create_run(order.strategy_id, "sandbox", "zerodha")
+    assert newer is not None
+    newer_id = newer.id
+    assert store.set_strategy_status(order.strategy_id, "running", newer_id)
+
+    with (
+        patch.object(engine, "_api_key_for", return_value="test-key"),
+        patch.object(
+            engine.order_dispatch,
+            "dispatch_order",
+            return_value=DispatchResult(
+                ok=True,
+                broker_order_id="BRK-DETACHED-RESIDUAL-EXIT",
+                response={},
+            ),
+        ),
+        patch.object(engine, "_subscribe_run"),
+        patch.object(engine, "_unsubscribe_run"),
+    ):
+        order_events._apply_update(
+            "BRK-1",
+            _event("BRK-1", status="complete", avg=101.5, filled=75),
+        )
+
+        assert store.get_run(order.run_id).stopped_at is None
+        strategy = store.get_strategy(order.strategy_id, USER)
+        assert strategy.current_run_id == newer_id
+        assert strategy.status == "running"
+
+        order_events._apply_update(
+            "BRK-DETACHED-RESIDUAL-EXIT",
+            _event(
+                "BRK-DETACHED-RESIDUAL-EXIT",
+                status="complete",
+                avg=102.0,
+                filled=75,
+            ),
+        )
+
+    assert store.get_run(order.run_id).stopped_at is not None
+    assert state.get_run_state(order.run_id) is None
+    strategy = store.get_strategy(order.strategy_id, USER)
+    assert strategy.current_run_id == newer_id
+    assert strategy.status == "running"
+
+
 def test_higher_complete_evidence_after_rejection_is_applied_as_one_positive_delta(order):
     _install_pending_entry(order)
     order_events._apply_update(
@@ -470,6 +585,49 @@ def test_working_exit_fill_then_lower_cancellation_applies_only_the_working_delt
     assert leg["exit_order_id"] is None
 
 
+def test_terminal_cumulative_exit_applies_only_delta_and_retry_uses_exact_remainder(order):
+    """A terminal cumulative 50 after working 25 settles 25 more, never 50 more."""
+    exit_row = _install_live_exit(order, broker_order_id="BRK-CUMULATIVE-EXIT")
+
+    order_events._apply_update(
+        "BRK-CUMULATIVE-EXIT",
+        _event("BRK-CUMULATIVE-EXIT", status="open", avg=110.0, filled=25),
+    )
+    order_events._apply_update(
+        "BRK-CUMULATIVE-EXIT",
+        _event("BRK-CUMULATIVE-EXIT", status="cancelled", avg=112.0, filled=50),
+    )
+
+    durable = store.get_order(exit_row.id)
+    leg = state.get_run_state(order.run_id)["legs"]["1"]
+    assert durable.status == "cancelled"
+    assert durable.filled_qty == 50
+    assert float(durable.avg_fill_price) == pytest.approx(112.0)
+    assert leg["qty"] == 25
+    assert leg["realized_pnl"] == pytest.approx((112.0 - 100.0) * 50)
+    assert leg["exit_order_id"] is None
+    assert leg["exit_kind"] is None
+
+    retries = []
+
+    def accept_retry(**kwargs):
+        retries.append(kwargs["order"])
+        return DispatchResult(ok=True, broker_order_id="BRK-CUMULATIVE-RETRY", response={})
+
+    with (
+        patch.object(engine, "_api_key_for", return_value="test-key"),
+        patch.object(engine.order_dispatch, "dispatch_order", side_effect=accept_retry),
+    ):
+        result = engine.stop_run(order.run_id, USER, reason="manual")
+
+    assert result["ok"] is True
+    assert result["stop_pending"] is True
+    assert retries[0]["quantity"] == "25"
+    retry = store.get_order_by_broker_id("BRK-CUMULATIVE-RETRY")
+    assert retry.qty == 25
+    assert state.get_run_state(order.run_id)["legs"]["1"]["exit_order_id"] == retry.id
+
+
 def test_late_correction_cancels_and_replaces_an_already_working_retry(order, monkeypatch):
     original = _install_live_exit(order, broker_order_id="BRK-ORIGINAL")
     order_events._apply_update(
@@ -548,6 +706,65 @@ def test_late_correction_cancels_and_replaces_an_already_working_retry(order, mo
     assert state.get_run_state(order.run_id) is None
     assert store.get_order_by_broker_id("BRK-ORIGINAL").filled_qty == 50
     assert original_id != retry_id
+
+
+def test_failed_retry_cancel_audits_with_scalars_after_session_cleanup(order):
+    """A broker helper may remove scoped sessions before the refusal is audited."""
+    retry = store.record_order(
+        order.run_id,
+        1,
+        "exit_close_all",
+        {
+            "position_ref": "detached-retry-owner",
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "SELL",
+            "qty": 25,
+            "broker_order_id": "BRK-DETACHED-RETRY",
+            "status": "open",
+        },
+    )
+    assert retry is not None
+    retry_id = retry.id
+    assert store.request_run_stop(order.run_id, "manual") is True
+
+    def refuse_after_cleanup(**_kwargs):
+        # A real broker path can log/commit before its scoped-session cleanup;
+        # the commit expires every ORM instance held by this caller.
+        store.record_event(
+            order.strategy_id,
+            USER,
+            "leg_exit_placed",
+            "broker cancellation attempt",
+            run_id=order.run_id,
+            leg_id=1,
+        )
+        store.db_session.remove()
+        return DispatchResult(
+            ok=False,
+            broker_order_id="BRK-DETACHED-RETRY",
+            error="broker busy",
+        )
+
+    with (
+        patch.object(engine, "_api_key_for", return_value="test-key"),
+        patch.object(
+            engine.order_dispatch,
+            "cancel_exit_order",
+            side_effect=refuse_after_cleanup,
+        ),
+    ):
+        cancelled = order_events._cancel_working_retry(order.run_id, retry_id)
+
+    assert cancelled is False
+    failures = [
+        event
+        for event in store.list_events(order.strategy_id)
+        if event["kind"] == "run_stop_failed"
+    ]
+    assert len(failures) == 1
+    assert "BRK-DETACHED-RETRY" in failures[0]["message"]
+    assert failures[0]["leg_id"] == 1
 
 
 def test_live_flip_rejection_is_retryable_not_reported_as_closed(order):
@@ -1026,10 +1243,24 @@ def test_state_gone_stranding_event_is_reserved_for_a_genuine_zero_fill(order):
     )
     assert zero_fill is not None
 
-    order_events._apply_update(
-        "BRK-ZERO-DEAD-NO-STATE",
-        _event("BRK-ZERO-DEAD-NO-STATE", status="cancelled", avg=0, filled=0),
-    )
+    fold_order_broker_frame = store.fold_order_broker_frame
+
+    def fold_then_remove_session(*args, **kwargs):
+        folded = fold_order_broker_frame(*args, **kwargs)
+        # The fold commits and expires its input ORM row. Model the normal
+        # worker cleanup boundary before the legacy stranded reporter runs.
+        store.db_session.remove()
+        return folded
+
+    with patch.object(
+        store,
+        "fold_order_broker_frame",
+        side_effect=fold_then_remove_session,
+    ):
+        order_events._apply_update(
+            "BRK-ZERO-DEAD-NO-STATE",
+            _event("BRK-ZERO-DEAD-NO-STATE", status="cancelled", avg=0, filled=0),
+        )
 
     failures = [
         event
@@ -1038,6 +1269,7 @@ def test_state_gone_stranding_event_is_reserved_for_a_genuine_zero_fill(order):
     ]
     assert len(failures) == 1
     assert "BRK-ZERO-DEAD-NO-STATE" in failures[0]["message"]
+    assert "BUY of 10 NIFTY28MAY2624000CE" in failures[0]["message"]
     assert "did not happen" in failures[0]["message"].lower()
 
 

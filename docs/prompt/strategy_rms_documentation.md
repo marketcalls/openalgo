@@ -143,6 +143,29 @@ Two mappings in here are easy to get wrong:
 - **`overall_sl_mtm` is stored positive and applied as a negative threshold.**
   It passes through unchanged; the core takes it the same way.
 
+### Combined MTM is an exit trigger, not an execution guarantee
+
+The combined stop, target and lock-profit rules evaluate the run's rolling
+latest-known LTP mark. A tick for one symbol updates the matching leg and the
+engine immediately evaluates the basket using that new mark plus the most
+recent marks already held for the other legs. Independent WebSocket ticks are
+not a simultaneous, exchange-atomic basket snapshot.
+
+Crossing `overall_sl_mtm` or `overall_target_mtm` therefore proves that the
+marked basket crossed the configured threshold and that an exit was requested.
+It does not guarantee the same realized P&L. The covering MARKET orders execute
+against the available side of the book (a BUY at the ask and a SELL at the bid),
+and the spread, price movement and sequential leg placements can move the final
+fills away from the trigger mark. The durable run keeps both truths: `pnl_peak`
+and `pnl_trough` describe the marked path, while `pnl_realized` comes from the
+confirmed entry and exit fills.
+
+For the reported Run 12, the durable evidence proves a `513.00` peak, an
+`overall_target` stop and `117.00` realized after both exits filled. It does not
+retain sufficiently granular per-leg tick-arrival evidence to prove that mixed-
+age marks caused the difference. The rolling calculation makes that a possible
+contributor, but not an established cause for that run.
+
 ## The daily loss limit
 
 `daily_loss_limit_inr` is a limit on the **session**, not on a run.
@@ -371,9 +394,14 @@ Load-bearing orderings:
   to it: the leg was never seeded and nothing evaluated a stop for a position
   that existed. The replay buffer cannot cover this, because the id it would
   match on is what was lost. Retried once, and if it still will not persist the
-  broker order id goes to the event log as `order_ack_unrecorded` at critical
-  severity, which is the last durable place to say a real position needs
-  reconciling by hand.
+  exact row/run/leg, broker id and accepted/rejected facts go to the event log
+  as structured `order_ack_unrecorded` metadata at critical severity. The
+  dispatch call immediately binds only that row through an idempotent CAS. The
+  existing shared scheduler rotates through bounded pages of ordinary open
+  runs, retries interrupted repair, and broker-polls an accepted working order
+  if the short-lived replay frame is gone. Recovery and pending-stop polling
+  use the same repair. Missing or conflicting linkage remains open and
+  reserved; it is never read as flat.
 - **A leg whose entry has been accepted but not filled is never exited.** A leg
   is `open` from broker acceptance, so squaring off would send the configured
   size the other way against a position that may be nothing at all, and if that

@@ -40,8 +40,10 @@ The public webhook is **not** under `/api/v1` and takes no `apikey`. The URL tok
    the per-leg outcomes; never infer flatness from the HTTP status.
 6. **`acknowledged: false` is not an order rejection.** The broker accepted the
    entry, but its broker id and status could not be written back after a retry.
-   The durable pending intent and a critical `order_ack_unrecorded` event remain;
-   reconcile the broker order manually.
+   The durable pending intent and a structured critical `order_ack_unrecorded`
+   event remain. The dispatch call immediately binds only the exact named row;
+   a bounded shared open-run sweep retries and broker-polls it if needed.
+   Conflicts keep the run open and reserved.
 7. **Final P&L is written only after confirmed flatness.** Exact, priced order
    reference groups are authoritative, including an exact zero. If durable
    fills have no usable price and no checkpoint that witnessed the same owner
@@ -167,9 +169,9 @@ important to an operator:
   stop. The run is still open and **still holding those positions**. It is the
   one lifecycle event that means the opposite of what a stop usually means.
 - **`order_ack_unrecorded`** (`critical`) - the broker accepted an order but
-  its acknowledgement could not be written, so the position exists and is not
-  attributable from the database. The message carries the broker order id;
-  reconcile by hand.
+  its acknowledgement could not be written. Structured exact-row metadata is
+  retained for immediate exact-row repair and the bounded shared open-run
+  sweep. A missing or conflicting link never auto-finalises possible exposure.
 - **`leg_expiry_fallback`** (`warn`) - the chain did not list the expiry rank
   the leg asked for, so a nearer one was used. A `next_week` leg trading the
   current week is a different trade from the one that was configured.

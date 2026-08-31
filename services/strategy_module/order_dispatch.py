@@ -65,6 +65,15 @@ class DispatchResult:
         return not self.ok
 
 
+@dataclass(frozen=True, slots=True)
+class OrderStatusResult:
+    """One broker orderbook fact, or why it could not be read."""
+
+    ok: bool
+    order: dict[str, Any] | None = None
+    error: str | None = None
+
+
 # Which products each venue accepts. /scalping already carries this rule
 # (blueprints/scalping.py), and every broker enforces it: CNC is a delivery
 # product for cash, NRML a carry-forward product for derivatives, and neither
@@ -182,19 +191,17 @@ def dispatch_order(
     return DispatchResult(ok=False, error=f"Unknown run mode: {mode!r}")
 
 
-def cancel_exit_order(
+def cancel_order(
     *,
     mode: str,
     api_key: str,
     broker_order_id: str,
 ) -> DispatchResult:
-    """Cancel a stale strategy retry through the run's own execution pipe.
+    """Cancel a strategy order through the run's own execution pipe.
 
-    A late cumulative correction can make an already-working retry too large.
-    Cancelling that retry before replacing it is the only safe response; merely
-    shrinking local state would leave the broker free to reverse the position.
-    Like placement, this bypasses the platform analyzer toggle because ``mode``
-    was fixed durably when the run started.
+    Used both for an entry whose run is stopping and for an exit retry made too
+    large by a late cumulative correction. Like placement, this bypasses the
+    platform analyzer toggle because ``mode`` was fixed durably at run start.
     """
     if not broker_order_id:
         return DispatchResult(ok=False, error="Broker order id is unavailable")
@@ -206,11 +213,11 @@ def cancel_exit_order(
         try:
             ok, response, _status = sandbox_cancel_order(request, api_key, original)
         except Exception:
-            logger.exception("Sandbox retry cancellation raised for %s", broker_order_id)
+            logger.exception("Sandbox strategy cancellation raised for %s", broker_order_id)
             return DispatchResult(
                 ok=False,
                 broker_order_id=broker_order_id,
-                error="Sandbox retry cancellation failed",
+                error="Sandbox strategy cancellation failed",
             )
         result = _normalise(ok, response)
         return DispatchResult(
@@ -238,11 +245,11 @@ def cancel_exit_order(
     try:
         response, status_code = broker_module.cancel_order(broker_order_id, auth_token)
     except Exception:
-        logger.exception("Live retry cancellation raised for %s", broker_order_id)
+        logger.exception("Live strategy cancellation raised for %s", broker_order_id)
         return DispatchResult(
             ok=False,
             broker_order_id=broker_order_id,
-            error="Live retry cancellation failed",
+            error="Live strategy cancellation failed",
         )
     payload = response if isinstance(response, dict) else {}
     if status_code == 200:
@@ -251,7 +258,70 @@ def cancel_exit_order(
         ok=False,
         broker_order_id=broker_order_id,
         response=payload,
-        error=payload.get("message") or "Broker refused retry cancellation",
+        error=payload.get("message") or "Broker refused strategy cancellation",
+    )
+
+
+def cancel_exit_order(
+    *,
+    mode: str,
+    api_key: str,
+    broker_order_id: str,
+) -> DispatchResult:
+    """Backward-compatible name for correction-retry cancellation."""
+    return cancel_order(
+        mode=mode,
+        api_key=api_key,
+        broker_order_id=broker_order_id,
+    )
+
+
+def fetch_order_status(
+    *,
+    mode: str,
+    api_key: str,
+    broker_order_id: str,
+) -> OrderStatusResult:
+    """Read one order through the run's sandbox or live order-status path."""
+    if not broker_order_id:
+        return OrderStatusResult(ok=False, error="Broker order id is unavailable")
+
+    request = {"orderid": broker_order_id}
+    if mode == "sandbox":
+        from services.sandbox_service import sandbox_get_order_status
+
+        original = {**request, "apikey": api_key}
+        try:
+            ok, response, _status = sandbox_get_order_status(request, api_key, original)
+        except Exception:
+            logger.exception("Sandbox strategy status lookup raised for %s", broker_order_id)
+            return OrderStatusResult(ok=False, error="Sandbox order status lookup failed")
+    elif mode == "live":
+        auth_token, broker, error = resolve_live_auth(api_key)
+        if error:
+            return OrderStatusResult(ok=False, error=error)
+
+        from services.orderstatus_service import get_order_status
+
+        try:
+            ok, response, _status = get_order_status(
+                dict(request),
+                auth_token=auth_token,
+                broker=broker,
+            )
+        except Exception:
+            logger.exception("Live strategy status lookup raised for %s", broker_order_id)
+            return OrderStatusResult(ok=False, error="Live order status lookup failed")
+    else:
+        return OrderStatusResult(ok=False, error=f"Unknown run mode: {mode!r}")
+
+    payload = response if isinstance(response, dict) else {}
+    order = payload.get("data")
+    if ok and isinstance(order, dict):
+        return OrderStatusResult(ok=True, order=order)
+    return OrderStatusResult(
+        ok=False,
+        error=payload.get("message") or "Broker order status is unavailable",
     )
 
 

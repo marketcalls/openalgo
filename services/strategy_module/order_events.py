@@ -1,4 +1,4 @@
-"""Turns broker order updates into strategy state, without polling.
+"""Turns broker order updates and targeted reconciliation facts into strategy state.
 
 A strategy places an order and then needs to know when it filled and at what
 price: the fill price is what every stop, target and trailing stop is measured
@@ -140,7 +140,56 @@ def replay_for(order_id: str | None) -> None:
     _apply_update(str(order_id), event)
 
 
-def _report_stranded_exit(run_id: int, leg_id: Any, row: Any, ended: str) -> None:
+def apply_order_snapshot(broker_order_id: str, order: dict[str, Any]) -> None:
+    """Fold one targeted order-status/orderbook response through the push path.
+
+    Pending-stop reconciliation calls this after a cancellation attempt. The
+    common event shape keeps the durable CAS, cumulative quantity fold and
+    state mutation in one place rather than introducing another broker-status
+    implementation inside the engine.
+    """
+    from events import OrderUpdateEvent
+
+    def value(*keys: str, default: Any = None) -> Any:
+        for key in keys:
+            if key in order and order.get(key) is not None:
+                return order.get(key)
+        return default
+
+    order_id = str(value("orderid", "order_id", default=broker_order_id) or broker_order_id)
+    event = OrderUpdateEvent(
+        orderid=order_id,
+        symbol=str(value("symbol", default="") or ""),
+        exchange=str(value("exchange", default="") or ""),
+        action=str(value("action", default="") or ""),
+        quantity=int(value("quantity", "qty", default=0) or 0),
+        order_status=str(value("order_status", "orderstatus", "status", default="") or ""),
+        filled_quantity=int(
+            value("filled_quantity", "filledqty", "filled_qty", default=0) or 0
+        ),
+        pending_quantity=int(
+            value("pending_quantity", "pendingqty", "pending_qty", default=0) or 0
+        ),
+        average_price=float(
+            value("average_price", "averageprice", "avg_fill_price", default=0) or 0
+        ),
+        rejection_reason=str(
+            value("rejection_reason", "reject_reason", default="") or ""
+        ),
+    )
+    _apply_update(order_id, event)
+
+
+def _report_stranded_exit(
+    run_id: int,
+    leg_id: Any,
+    ended: str,
+    *,
+    broker_order_id: str | None,
+    action: str,
+    qty: int,
+    symbol: str,
+) -> None:
     """Legacy guard for an exit that dies after its run has already closed."""
     try:
         run = store.get_run(run_id)
@@ -154,8 +203,8 @@ def _report_stranded_exit(run_id: int, leg_id: Any, row: Any, ended: str) -> Non
             strategy.user_id,
             "run_stop_failed",
             (
-                f"Exit order {row.broker_order_id} for leg {leg_id} was {ended} after the run "
-                f"had already closed. The {row.action} of {row.qty} {row.symbol} did not happen, "
+                f"Exit order {broker_order_id} for leg {leg_id} was {ended} after the run "
+                f"had already closed. The {action} of {qty} {symbol} did not happen, "
                 "so that position is still held and nothing is managing it."
             ),
             run_id=run_id,
@@ -370,21 +419,27 @@ def _cancel_working_retry(run_id: int, retry_order_id: int) -> bool:
     run = store.get_run(run_id)
     if retry is None or run is None or not retry.broker_order_id:
         return False
-    strategy = store.get_strategy_unscoped(run.strategy_id)
+    broker_order_id = str(retry.broker_order_id)
+    leg_id = retry.leg_id
+    strategy_id = int(run.strategy_id)
+    run_mode = str(run.mode)
+    stop_pending = run.stop_requested_reason is not None
+    strategy = store.get_strategy_unscoped(strategy_id)
     if strategy is None:
         return False
+    user_id = str(strategy.user_id)
 
     from services.strategy_module import engine
 
-    api_key = engine._api_key_for(strategy.user_id)
+    api_key = engine._api_key_for(user_id)
     if not api_key:
         result = None
         error = "the OpenAlgo API key is unavailable"
     else:
         result = engine.order_dispatch.cancel_exit_order(
-            mode=run.mode,
+            mode=run_mode,
             api_key=api_key,
-            broker_order_id=retry.broker_order_id,
+            broker_order_id=broker_order_id,
         )
         error = result.error or "the broker refused cancellation"
     if result is not None and result.ok:
@@ -392,16 +447,16 @@ def _cancel_working_retry(run_id: int, retry_order_id: int) -> bool:
 
     try:
         store.record_event(
-            run.strategy_id,
-            strategy.user_id,
-            "run_stop_failed" if run.stop_requested_reason else "leg_exit_rejected",
+            strategy_id,
+            user_id,
+            "run_stop_failed" if stop_pending else "leg_exit_rejected",
             (
-                f"A higher fill correction made retry order {retry.broker_order_id} too large, "
+                f"A higher fill correction made retry order {broker_order_id} too large, "
                 f"but it could not be cancelled because {error}. Its position remains managed; "
                 "verify the broker order immediately to prevent reversal."
             ),
             run_id=run_id,
-            leg_id=retry.leg_id,
+            leg_id=leg_id,
             severity="critical",
         )
     except Exception:
@@ -481,6 +536,9 @@ def _apply_update(order_id: str, event: Any) -> None:
         row_id = row.id
         position_ref = row.position_ref
         broker_order_id = row.broker_order_id
+        order_action = str(row.action)
+        order_qty = int(row.qty)
+        order_symbol = str(row.symbol)
 
         fold = store.fold_order_broker_frame(
             row_id,
@@ -502,6 +560,8 @@ def _apply_update(order_id: str, event: Any) -> None:
         should_apply = fold.fill_delta > 0 or (
             fold.terminal and fold.cumulative_filled_qty > 0
         )
+        run_row = store.get_run(run_id) if is_entry and fold.fill_delta > 0 else None
+        late_entry_correction = bool(run_row is not None and run_row.stopped_at is not None)
         if should_apply:
             price = (
                 _usable_price(fold.average_fill_price)
@@ -516,16 +576,19 @@ def _apply_update(order_id: str, event: Any) -> None:
                 fill_options["order_terminal"] = False
             if fold.was_terminal:
                 fill_options["allow_prior_order_correction"] = True
-            engine.apply_fill(
-                run_id,
-                leg_id,
-                price,
-                is_entry=is_entry,
-                filled_qty=fold.fill_delta,
-                order_row_id=row_id,
-                **fill_identity,
-                **fill_options,
-            )
+            if late_entry_correction:
+                engine.manage_late_entry_correction(run_id)
+            else:
+                engine.apply_fill(
+                    run_id,
+                    leg_id,
+                    price,
+                    is_entry=is_entry,
+                    filled_qty=fold.fill_delta,
+                    order_row_id=row_id,
+                    **fill_identity,
+                    **fill_options,
+                )
             if fold.fill_delta > 0 and price is None:
                 _report_unpriced_fill(
                     run_id,
@@ -603,7 +666,15 @@ def _apply_update(order_id: str, event: Any) -> None:
                     and exit_owner is None
                     and state.get_run_state(run_id) is None
                 ):
-                    _report_stranded_exit(run_id, leg_id, row, ended)
+                    _report_stranded_exit(
+                        run_id,
+                        leg_id,
+                        ended,
+                        broker_order_id=broker_order_id,
+                        action=order_action,
+                        qty=order_qty,
+                        symbol=order_symbol,
+                    )
 
         if fold.fill_delta > 0 or fold.terminal:
             durable = store.get_order_by_broker_id(order_id)

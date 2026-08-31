@@ -175,7 +175,7 @@ def test_pending_stop_and_acknowledgement_examples_preserve_lifecycle_truth() ->
     assert '"acknowledged": true' in start_sample
     start = _read(STRATEGY_API / "start.md")
     assert '"acknowledged": false' in start
-    assert "manual reconciliation" in start
+    assert "automatic reconciliation" in start
     assert '"stop_pending": true' in stop_sample
     assert '"stop_pending": true' in close_all_sample
     assert '"stop_pending": true' in webhook_stop_sample

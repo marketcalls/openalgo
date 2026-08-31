@@ -21,6 +21,7 @@ import pytest
 # hits it because restx_api is always loaded first; this mirrors that order.
 import restx_api  # noqa: F401
 import services.cancel_order_service  # noqa: F401
+import services.orderstatus_service  # noqa: F401
 import services.place_order_service  # noqa: F401
 import services.sandbox_service  # noqa: F401
 from services.strategy_module import order_dispatch as od
@@ -121,6 +122,55 @@ def test_a_live_retry_cancel_calls_the_resolved_broker_directly():
     assert result.ok is True
     assert result.broker_order_id == "LIVE-RETRY"
     broker_module.cancel_order.assert_called_once_with("LIVE-RETRY", "tok")
+
+
+def test_a_sandbox_status_poll_uses_the_sandbox_orderstatus_pipe():
+    broker_fact = {
+        "orderid": "SB-WORKING",
+        "order_status": "cancelled",
+        "filled_quantity": 0,
+    }
+    with patch("services.sandbox_service.sandbox_get_order_status") as sandbox:
+        sandbox.return_value = (True, {"status": "success", "data": broker_fact}, 200)
+
+        result = od.fetch_order_status(
+            mode="sandbox",
+            api_key="k",
+            broker_order_id="SB-WORKING",
+        )
+
+    assert result.ok is True
+    assert result.order == broker_fact
+    assert sandbox.call_args.args[0] == {"orderid": "SB-WORKING"}
+    assert sandbox.call_args.args[1] == "k"
+
+
+def test_a_live_status_poll_uses_resolved_auth_and_the_shared_orderbook_path():
+    broker_fact = {
+        "orderid": "LIVE-WORKING",
+        "order_status": "complete",
+        "filled_quantity": 25,
+        "average_price": 101.25,
+    }
+    with (
+        patch("database.auth_db.get_auth_token_broker", return_value=("tok", "zerodha")),
+        patch("services.orderstatus_service.get_order_status") as status,
+    ):
+        status.return_value = (True, {"status": "success", "data": broker_fact}, 200)
+
+        result = od.fetch_order_status(
+            mode="live",
+            api_key="k",
+            broker_order_id="LIVE-WORKING",
+        )
+
+    assert result.ok is True
+    assert result.order == broker_fact
+    status.assert_called_once_with(
+        {"orderid": "LIVE-WORKING"},
+        auth_token="tok",
+        broker="zerodha",
+    )
 
 
 def test_an_unknown_mode_is_refused_rather_than_defaulted():

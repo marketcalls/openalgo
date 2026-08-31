@@ -11,7 +11,7 @@ import time
 import uuid
 from collections.abc import Callable
 from queue import Queue
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import websockets
 from dotenv import load_dotenv
@@ -206,6 +206,9 @@ class WebSocketClient:
 
         self.connected = False
         self.authenticated = False
+        with self.lock:
+            self.active_subscriptions.clear()
+            self.market_data_cache.clear()
         logger.info("Disconnected from WebSocket server")
 
     def _run_on_loop(self, coro, timeout: float):
@@ -310,7 +313,7 @@ class WebSocketClient:
                 self._send_and_await_ack(subscription_msg, request_id, timeout=10),
                 timeout=12,
             )
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             logger.warning(
                 f"Subscribe timed out waiting for proxy ack (mode={mode}, "
                 f"symbols={len(symbols)})"
@@ -391,6 +394,7 @@ class WebSocketClient:
                 self.active_subscriptions[key].discard(acknowledged_mode)
                 if not self.active_subscriptions[key]:
                     del self.active_subscriptions[key]
+                    self.market_data_cache.pop(key, None)
 
     def unsubscribe(self, symbols: list[dict[str, str]], mode: str = "Quote") -> dict[str, Any]:
         """
@@ -441,7 +445,7 @@ class WebSocketClient:
                 self._send_and_await_ack(unsubscription_msg, request_id, timeout=10),
                 timeout=12,
             )
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             logger.warning(
                 f"Unsubscribe timed out waiting for proxy ack (mode={mode}, "
                 f"symbols={len(symbols)})"
@@ -698,10 +702,14 @@ class WebSocketClient:
                 exchange = data.get("exchange")
 
                 if symbol and exchange:
-                    # Cache the data
+                    # Subscription cleanup and cache ownership share this
+                    # real OS-thread lock. Whichever wins the race, a frame
+                    # arriving after the final acknowledged unsubscribe cannot
+                    # recreate a cache entry with no remaining owner.
                     with self.lock:
                         key = f"{exchange}:{symbol}"
-                        self.market_data_cache[key] = data
+                        if self.active_subscriptions.get(key):
+                            self.market_data_cache[key] = data
 
                     # Trigger market data callbacks
                     self._dispatch("market_data", data)

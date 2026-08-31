@@ -132,13 +132,28 @@ for the later fill-confirmed `run_stopped` transition.
 
 `leg_expiry_fallback` is written at `warn` severity, before the entry goes out, when the chain did not list the expiry rank the leg asked for and a nearer one was used. A `next_week` leg trading the current week is a different trade from the one that was configured, so it is said out loud rather than inferred from the symbol afterwards.
 
-`order_ack_unrecorded` is critical. The broker accepted the order, but the
-acknowledgement write failed twice. Its message carries the broker order id and
-the durable pending row id so the real order can be reconciled manually.
+`order_ack_unrecorded` is critical. The acknowledgement write failed twice.
+Its structured `payload` carries versioned exact `order_id`, `run_id`, `leg_id`,
+`broker_order_id`, `accepted`, `status` and `reject_reason` facts. The dispatch
+call immediately uses those facts to bind only the named pending row. The
+shared five-second scheduler job also rotates through a bounded page of every
+ordinary open run, replays a held frame, and broker-polls an accepted working
+order when no frame remains. Recovery and pending-stop polling use the same
+idempotent repair. Later terminal facts are preserved; missing or conflicting
+linkage leaves the run open and reserved rather than asserting flatness.
+Rejected acknowledgements are repaired to `rejected` without creating
+exposure.
 
 Per-leg risk: `leg_sl_hit`, `leg_target_hit`, `leg_trail_armed`, `leg_trail_advanced`
 
 Strategy risk: `overall_sl_hit`, `overall_target_hit`, `lock_profit_armed`, `lock_profit_floor_advanced`, `lock_profit_triggered`, `trail_to_entry_activated`, `eod_squareoff`, `expiry_squareoff`
+
+For a synchronous combined-target exit, lifecycle order is meaningful:
+`overall_target_hit` records the marked breach, every accepted
+`leg_exit_placed` records dispatch, and only the later `run_stopped` event proves
+all exact owners filled flat. Terminal finalization preserves
+`stop_reason="overall_target"`; a synchronous fill cannot publish
+`run_stopped` ahead of the accepted placement that made the basket flat.
 
 Tick source: `tick_source_switched_to_polling`, `tick_source_switched_to_ws`, `tick_source_stale`
 
@@ -161,7 +176,7 @@ the same owners and quantities.
 - **A `run_id` belonging to another strategy matches nothing.** The query is scoped to this strategy before the run filter is applied.
 - Configuration-layer events share the table with runtime ones and carry `run_id: null`. Filtering by `run_id` therefore excludes them.
 - The `close_all_manual` event written by [`/close_all`](./close_all.md) records the request before broker exits settle; use `run_stopped` as confirmed-flat evidence.
-- `payload` is free-form JSON and is `null` on most events: the engine puts its detail in `message`. A scheduler-started run is one of the few that carries one, `{"trigger_source": "scheduler", "mode": "sandbox"}`. Do not assume a fixed shape across kinds.
+- `payload` is free-form JSON and is `null` on most events. A scheduler-started run carries `{"trigger_source": "scheduler", "mode": "sandbox"}`; `order_ack_unrecorded` carries the exact reconciliation fields documented above. Do not assume one shape across kinds.
 
 ## Use Cases
 

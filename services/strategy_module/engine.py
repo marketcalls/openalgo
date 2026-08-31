@@ -279,7 +279,8 @@ def start_run(
     if not store.claim_strategy_for_run(strategy_id):
         return StartResult(ok=False, error="This strategy is already running")
 
-    run = None
+    run_id: int | None = None
+    placement_progress: dict[str, set[str]] = {"dispatch_attempted": set()}
     try:
         run = store.create_run(
             strategy_id=strategy_id,
@@ -295,28 +296,58 @@ def start_run(
             store.release_strategy(strategy_id)
             return StartResult(ok=False, error="Could not open a run")
 
-        store.set_strategy_status(strategy_id, "running", run.id)
-        state.init_run_state(run.id, strategy_id, resolved)
+        # Synchronous fill replay removes every scoped session on this thread.
+        # Capture the scalar immediately; even an ORM primary key can be
+        # expired by a store commit and detached while dispatch is in flight.
+        run_id = int(run.id)
+
+        if not store.set_strategy_status(strategy_id, "running", run_id):
+            cleaned = store.finish_unlinked_run_and_release_claim(
+                run_id,
+                strategy_id,
+                "error",
+            )
+            if not cleaned:
+                logger.critical(
+                    "Run %s could not be linked to strategy %s and its empty claim "
+                    "could not be fully released",
+                    run_id,
+                    strategy_id,
+                )
+            return StartResult(
+                ok=False,
+                run_id=None if cleaned else run_id,
+                error="Could not link the new run to its strategy; no order was placed",
+            )
+        state.init_run_state(run_id, strategy_id, resolved)
         # Ask for prices before the entries go out. A fill can be reported
         # within milliseconds, and a leg whose instrument is not subscribed
         # would sit with no price and therefore no stop until the next
         # subscription sweep.
-        _subscribe_run(run.id, resolved)
+        _subscribe_run(run_id, resolved)
         _emit(
             strategy_id,
             user_id,
             "run_started",
             f"Run started in {mode} mode ({trigger_source})",
-            run_id=run.id,
+            run_id=run_id,
         )
 
-        placed = _place_entries(run.id, strategy, resolved, mode, api_key, user_id)
+        placed = _place_entries(
+            run_id,
+            strategy,
+            resolved,
+            mode,
+            api_key,
+            user_id,
+            placement_progress=placement_progress,
+        )
 
         # Every leg rejected means there is no position and nothing to manage.
         # Leaving the run open would show a running strategy holding nothing.
         if not any(leg["ok"] for leg in placed):
             finalised = _finalise(
-                run.id,
+                run_id,
                 strategy_id,
                 user_id,
                 "error",
@@ -325,7 +356,7 @@ def start_run(
             if not finalised:
                 return StartResult(
                     ok=False,
-                    run_id=run.id,
+                    run_id=run_id,
                     error=(
                         "Every entry order was rejected, but the flat run could not be "
                         "finalised; retry stop"
@@ -334,11 +365,17 @@ def start_run(
                 )
             return StartResult(ok=False, error="Every entry order was rejected", legs=placed)
 
-        return StartResult(ok=True, run_id=run.id, legs=placed)
+        return StartResult(ok=True, run_id=run_id, legs=placed)
     except Exception:
         logger.exception("Start failed for strategy %s", strategy_id)
-        if run is not None:
-            _finalise(run.id, strategy_id, user_id, "error", "Start failed")
+        if run_id is not None:
+            return _manage_failed_start(
+                run_id,
+                strategy_id,
+                user_id,
+                resolved,
+                placement_progress,
+            )
         else:
             store.release_strategy(strategy_id)
         return StartResult(ok=False, error="Could not start the strategy")
@@ -474,10 +511,11 @@ def _record_acknowledgement(
     on is exactly what was lost.
 
     Retried once, since the common failure is a transient write lock rather
-    than a broken statement. If it still will not persist, the broker order id
-    is put somewhere durable the operator can find, which is the event log, at
-    critical severity: the position is real and now has to be reconciled by
-    hand.
+    than a broken statement. If it still will not persist, exact row, run, leg,
+    broker-id and accepted/rejected facts are retained in a structured critical
+    event. The same call repairs only the named pending row immediately, and
+    the shared scheduler revisits ordinary open runs if that first repair is
+    interrupted; ambiguous ownership remains open and reserved.
     """
     fields = {
         "status": "open" if result.ok else "rejected",
@@ -492,20 +530,50 @@ def _record_acknowledgement(
         row_id,
         result.broker_order_id,
     )
-    if result.ok:
-        _emit(
-            strategy_id,
-            user_id,
-            "order_ack_unrecorded",
-            (
-                f"Broker order {result.broker_order_id} was accepted for leg {leg_id} but its "
-                f"acknowledgement could not be written to order row {row_id}. The position "
-                "exists and is not attributable from the database; reconcile it by hand."
-            ),
-            run_id=run_id,
-            leg_id=leg_id,
-            severity="critical",
-        )
+    broker_order_id = str(result.broker_order_id) if result.broker_order_id else None
+    status = "open" if result.ok else "rejected"
+    _emit(
+        strategy_id,
+        user_id,
+        "order_ack_unrecorded",
+        (
+            f"Broker order {broker_order_id or '(no broker id)'} was accepted for leg "
+            f"{leg_id}, but order row {row_id} remains pending. Exact row and broker "
+            "metadata is retained for automatic reconciliation; possible exposure remains "
+            "managed until a broker fact confirms it terminal."
+            if result.ok
+            else (
+                f"The broker rejected the order for leg {leg_id}, but rejection status could "
+                f"not be written to exact order row {row_id}. Structured metadata is retained "
+                "for automatic reconciliation; the rejected dispatch created no new exposure."
+            )
+        ),
+        run_id=run_id,
+        leg_id=leg_id,
+        severity="critical",
+        payload={
+            "version": 1,
+            "order_id": row_id,
+            "run_id": run_id,
+            "leg_id": leg_id,
+            "broker_order_id": broker_order_id,
+            "accepted": bool(result.ok),
+            "status": status,
+            "reject_reason": None if result.ok else result.error,
+        },
+    )
+    try:
+        from services.strategy_module import ack_reconciliation
+
+        # Bind the exact row as soon as its append-only witness is durable.
+        # Replay remains at the call site, after the leg's acknowledgement
+        # bookkeeping, so a synchronous fill cannot be overwritten to open.
+        ack_reconciliation.reconcile(run_id, replay_updates=False)
+    except Exception:
+        # The durable event remains retryable by the shared scheduler. An
+        # acknowledgement failure must not turn into a dispatch failure after
+        # the broker has already accepted the order.
+        logger.exception("Immediate acknowledgement repair failed for run %s", run_id)
     return False
 
 
@@ -533,6 +601,8 @@ def _place_entries(
     mode: str,
     api_key: str,
     user_id: str,
+    *,
+    placement_progress: dict[str, set[str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Place every leg's entry, longs first.
 
@@ -541,6 +611,8 @@ def _place_entries(
     """
     ordered = sorted(resolved, key=lambda leg: 0 if leg["position"] == "B" else 1)
     outcomes: list[dict[str, Any]] = []
+    progress = placement_progress if placement_progress is not None else {}
+    dispatch_attempted = progress.setdefault("dispatch_attempted", set())
 
     for leg in ordered:
         if leg.get("expiry_fallback"):
@@ -625,7 +697,13 @@ def _place_entries(
         # and the handler for that clears its scoped session, which detaches
         # any ORM object still being held across the call.
         row_id = row.id
+        position_ref = str(leg.get("position_ref") or "")
 
+        # Mark the exact incarnation immediately before the call. If arbitrary
+        # adapter code raises, the send may already have reached the broker;
+        # the failed-start path must retain it as possible exposure rather than
+        # misclassifying it as an undispatched placeholder.
+        dispatch_attempted.add(position_ref)
         result = order_dispatch.dispatch_order(mode=mode, api_key=api_key, order=order)
 
         acknowledged = _record_acknowledgement(
@@ -682,6 +760,58 @@ def _place_entries(
         )
 
     return outcomes
+
+
+def _manage_failed_start(
+    run_id: int,
+    strategy_id: int,
+    user_id: str,
+    resolved: list[dict[str, Any]],
+    placement_progress: dict[str, set[str]],
+) -> StartResult:
+    """Reject never-sent placeholders and stop every possibly sent entry."""
+    attempted = placement_progress.get("dispatch_attempted", set())
+    for leg in resolved:
+        position_ref = str(leg.get("position_ref") or "")
+        if position_ref not in attempted:
+            state.reject_entry_intent(run_id, leg["leg_id"], leg.get("position_ref"))
+
+    snapshot = state.get_run_state(run_id)
+    if snapshot is not None and not _run_requires_management(snapshot):
+        _finalise(run_id, strategy_id, user_id, "error", "Start failed before any entry dispatch")
+        return StartResult(ok=False, run_id=run_id, error="Could not start the strategy")
+
+    try:
+        stopped = stop_run(run_id, user_id, reason="error")
+    except Exception:
+        logger.exception("Could not reconcile interrupted start for run %s", run_id)
+        stopped = {"ok": False, "stop_pending": True}
+
+    durable = store.get_run(run_id)
+    if durable is not None and durable.stopped_at is not None:
+        return StartResult(ok=False, run_id=run_id, error="Could not start the strategy")
+
+    _emit(
+        strategy_id,
+        user_id,
+        "run_stop_failed",
+        (
+            "Start failed after one or more entry dispatches became possible. "
+            "Undispatched intents were rejected; accepted or uncertain entries remain "
+            "managed under a durable pending stop until broker facts confirm flatness."
+        ),
+        run_id=run_id,
+        severity="critical",
+    )
+    detail = stopped.get("error") if isinstance(stopped, dict) else None
+    return StartResult(
+        ok=False,
+        run_id=run_id,
+        error=(
+            "Could not start the strategy; possible entry exposure remains managed"
+            + (f": {detail}" if detail else "")
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -958,10 +1088,10 @@ def _apply_fill(
     run_row = store.get_run(run_id)
     if not run_row or run_row.stopped_at is not None:
         return True
+    requested_reason = run_row.stop_requested_reason
     strategy_row = store.get_strategy_unscoped(strategy_id)
     user_id = strategy_row.user_id if strategy_row else ""
-
-    requested_reason = run_row.stop_requested_reason
+    strategy_kind = strategy_row.strategy_kind if strategy_row is not None else None
 
     # Only a batch run ends when it goes flat without a stop request. A batch
     # is a basket entered and exited as a unit, so nothing held means it is
@@ -976,8 +1106,7 @@ def _apply_fill(
     # boundary when the next day's first signal arrives.
     if (
         requested_reason is None
-        and strategy_row is not None
-        and strategy_row.strategy_kind == "signal"
+        and strategy_kind == "signal"
     ):
         logger.debug("Run %s is flat but signal-mode; leaving it open for the session", run_id)
         return True
@@ -1178,12 +1307,7 @@ def _exit_legs(
         if row_id is not None:
             _record_acknowledgement(row_id, result, strategy["id"], user_id, run_id, leg["leg_id"])
 
-        if result.ok:
-            if row_id is not None:
-                # Ownership was bound before dispatch, so a terminal update
-                # replayed here can always find its exact position.
-                _replay_order_update(result.broker_order_id)
-        else:
+        if not result.ok:
             # Release the claim so a later attempt is not mistaken for a
             # duplicate and skipped for the rest of the session.
             if exit_owner == "superseded":
@@ -1214,6 +1338,14 @@ def _exit_legs(
             severity="info" if result.ok else "critical",
         )
 
+        if result.ok and row_id is not None:
+            # The accepted acknowledgement and its audit event must precede a
+            # cached synchronous fill that can make the basket terminal.
+            # Ownership was bound before dispatch, so replay can find the
+            # exact position without publishing run_stopped before the order
+            # placement that actually made it flat.
+            _replay_order_update(result.broker_order_id)
+
         outcomes.append(
             {
                 "leg_id": leg["leg_id"],
@@ -1227,13 +1359,118 @@ def _exit_legs(
     return outcomes + unfilled
 
 
+def _cancel_and_reconcile_working_entries(
+    run_id: int,
+    mode: str,
+    api_key: str,
+) -> None:
+    """Cancel each accepted working entry, then fold one broker status fact.
+
+    Cancellation is an accepted intent, never proof that the entry is dead.
+    The immediate status read uses the existing orderstatus/orderbook path and
+    is folded by ``order_events`` exactly like a pushed update. A missing or
+    still-working fact leaves the durable stop and live ownership untouched so
+    an operator or the scheduler can retry.
+    """
+    working_statuses = {"pending", "open", "working", "trigger pending", "trigger_pending"}
+    candidates = [
+        row
+        for row in store.list_orders(run_id)
+        if row.get("kind") == "entry"
+        and str(row.get("status") or "pending").strip().lower() in working_statuses
+    ]
+    if not candidates:
+        return
+
+    from services.strategy_module import order_events
+
+    for row in candidates:
+        broker_order_id = str(row.get("broker_order_id") or "")
+        if not broker_order_id:
+            continue
+
+        cancellation = order_dispatch.cancel_order(
+            mode=mode,
+            api_key=api_key,
+            broker_order_id=broker_order_id,
+        )
+        if not cancellation.ok:
+            logger.warning(
+                "Working entry %s on run %s could not be cancelled: %s",
+                broker_order_id,
+                run_id,
+                cancellation.error or "broker refusal",
+            )
+
+        status = order_dispatch.fetch_order_status(
+            mode=mode,
+            api_key=api_key,
+            broker_order_id=broker_order_id,
+        )
+        if status.ok and status.order is not None:
+            order_events.apply_order_snapshot(broker_order_id, status.order)
+        else:
+            logger.warning(
+                "Working entry %s on run %s remains unconfirmed after cancellation: %s",
+                broker_order_id,
+                run_id,
+                status.error or "status unavailable",
+            )
+
+
+def _reconcile_working_exits(
+    run_id: int,
+    mode: str,
+    api_key: str,
+) -> None:
+    """Fold one broker fact for each accepted exit still awaiting a frame.
+
+    A pushed terminal update can be lost while the broker orderbook already
+    knows the exit completed, partially filled, or died. Polling through the
+    same order-event fold releases the exact owner, applies only the cumulative
+    fill delta, and lets the ordinary stop path retry only a proven remainder.
+    """
+    working_statuses = {"pending", "open", "working", "trigger pending", "trigger_pending"}
+    candidates = [
+        row
+        for row in store.list_orders(run_id)
+        if row.get("kind") != "entry"
+        and str(row.get("status") or "pending").strip().lower() in working_statuses
+    ]
+    if not candidates:
+        return
+
+    from services.strategy_module import order_events
+
+    for row in candidates:
+        broker_order_id = str(row.get("broker_order_id") or "")
+        if not broker_order_id:
+            continue
+        status = order_dispatch.fetch_order_status(
+            mode=mode,
+            api_key=api_key,
+            broker_order_id=broker_order_id,
+        )
+        if status.ok and status.order is not None:
+            order_events.apply_order_snapshot(broker_order_id, status.order)
+        else:
+            logger.warning(
+                "Working exit %s on run %s remains unconfirmed: %s",
+                broker_order_id,
+                run_id,
+                status.error or "status unavailable",
+            )
+
+
 def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any]:
     """Request a stop, exit every owned position, and finalise only once flat."""
     run_row = store.get_run(run_id)
     if not run_row or run_row.stopped_at is not None:
         return {"ok": False, "error": "Run is not active"}
+    strategy_id = int(run_row.strategy_id)
+    run_mode = str(run_row.mode)
 
-    strategy_row = store.get_strategy(run_row.strategy_id, user_id)
+    strategy_row = store.get_strategy(strategy_id, user_id)
     if not strategy_row:
         return {"ok": False, "error": "Strategy not found"}
     strategy = store.strategy_to_dict(strategy_row)
@@ -1248,23 +1485,49 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
             "error": "Could not persist the stop request; no exit order was placed",
             "exits": [],
         }
+    requested_row = store.get_run(run_id)
+    if requested_row is not None and requested_row.stop_requested_reason:
+        reason = str(requested_row.stop_requested_reason)
     # The live gate follows the durable write and precedes API-key lookup or
     # any other I/O. A signal that already claimed an entry is counted below;
     # a signal that has not claimed yet is refused by this flag under the same
     # run lock used to create claims.
     state.mark_stopping(run_id)
     _emit(
-        run_row.strategy_id,
+        strategy_id,
         user_id,
         "run_stop_requested",
         f"Stop requested ({reason}); exit orders are being attempted",
         run_id=run_id,
     )
 
+    from services.strategy_module import ack_reconciliation
+
+    ack_repairs = ack_reconciliation.reconcile(run_id)
+    if ack_repairs.unresolved_exposure:
+        _emit(
+            strategy_id,
+            user_id,
+            "run_stop_failed",
+            (
+                "Stop remains pending because one or more broker acknowledgements could not "
+                "be linked to their exact durable order rows. No ambiguous exposure was "
+                "finalised; reconciliation will retry."
+            ),
+            run_id=run_id,
+            severity="critical",
+        )
+        return {
+            "ok": False,
+            "stop_pending": True,
+            "error": "Unresolved broker acknowledgement ownership; the run remains managed",
+            "exits": [],
+        }
+
     snapshot = state.get_run_state(run_id)
     if snapshot is None:
         _emit(
-            run_row.strategy_id,
+            strategy_id,
             user_id,
             "run_stop_failed",
             "Stop remains pending because the active run state is unavailable; no flatness "
@@ -1288,7 +1551,7 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
             persisted_reason = store.get_run(run_id).stop_requested_reason or reason
             finalised = _finalise(
                 run_id,
-                run_row.strategy_id,
+                strategy_id,
                 user_id,
                 persisted_reason,
                 f"Run stopped ({persisted_reason})",
@@ -1305,7 +1568,7 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
         if run_id not in _unactionable_runs:
             _unactionable_runs.add(run_id)
             _emit(
-                run_row.strategy_id,
+                strategy_id,
                 user_id,
                 "run_stop_failed",
                 "Stop remains pending because there is no broker session/API key. Positions "
@@ -1320,13 +1583,34 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
             "exits": [],
         }
 
-    _note_actionable_again(run_row.strategy_id, user_id, run_id)
+    _note_actionable_again(strategy_id, user_id, run_id)
+
+    # A working entry is possible future exposure, not a position to reverse
+    # with a full-size market exit. Cancel it through the immutable run mode,
+    # then reconcile a broker fact before deciding what remains. Every broker,
+    # database and event call here is outside the run lock.
+    _reconcile_working_exits(run_id, run_mode, api_key)
+    _cancel_and_reconcile_working_entries(run_id, run_mode, api_key)
+
+    current_row = store.get_run(run_id)
+    if current_row is not None and current_row.stopped_at is not None:
+        return {"ok": True, "stop_pending": False, "exits": []}
+
+    snapshot = state.get_run_state(run_id)
+    if snapshot is None:
+        return {
+            "ok": False,
+            "stop_pending": True,
+            "error": "The run remains open because its live state is unavailable",
+            "exits": [],
+        }
+    managed_ids = _managed_leg_ids(snapshot)
 
     kind = "exit_close_all" if reason == "manual" else f"exit_{reason}"
     if kind not in store.ORDER_KINDS:
         kind = "exit_close_all"
 
-    exits = _exit_legs(run_id, strategy, managed_ids, kind, run_row.mode, api_key, user_id)
+    exits = _exit_legs(run_id, strategy, managed_ids, kind, run_mode, api_key, user_id)
 
     # A synchronous sandbox fill can finish the run from replay_for() before
     # dispatch returns. That fill owns terminal completion; do not emit a
@@ -1338,7 +1622,7 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
     snapshot = state.get_run_state(run_id)
     if snapshot is None:
         _emit(
-            run_row.strategy_id,
+            strategy_id,
             user_id,
             "run_stop_failed",
             "Stop remains pending because the active run state is unavailable; no flatness "
@@ -1364,7 +1648,7 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
     refused = [outcome for outcome in exits if not outcome.get("ok")]
     if refused and still_held:
         _emit(
-            run_row.strategy_id,
+            strategy_id,
             user_id,
             "run_stop_failed",
             f"Stop refused for {len(refused)} position(s); the run remains open, managed, "
@@ -1407,7 +1691,7 @@ def stop_run(run_id: int, user_id: str, reason: str = "manual") -> dict[str, Any
     )
     finalised = _finalise(
         run_id,
-        run_row.strategy_id,
+        strategy_id,
         user_id,
         persisted_reason,
         f"Run stopped ({persisted_reason})",
@@ -1431,7 +1715,9 @@ def reconcile_pending_stop(run_id: int) -> dict[str, Any] | None:
     run_row = store.get_run(run_id)
     if run_row is None or run_row.stopped_at is not None or run_row.stop_requested_reason is None:
         return None
-    strategy_row = store.get_strategy_unscoped(run_row.strategy_id)
+    strategy_id = int(run_row.strategy_id)
+    stop_reason = str(run_row.stop_requested_reason)
+    strategy_row = store.get_strategy_unscoped(strategy_id)
     if strategy_row is None:
         return {
             "ok": False,
@@ -1439,11 +1725,66 @@ def reconcile_pending_stop(run_id: int) -> dict[str, Any] | None:
             "error": "The strategy owning this pending stop is unavailable",
             "exits": [],
         }
+    user_id = str(strategy_row.user_id)
     return stop_run(
         run_id,
-        strategy_row.user_id,
-        reason=run_row.stop_requested_reason or "manual",
+        user_id,
+        reason=stop_reason or "manual",
     )
+
+
+def manage_late_entry_correction(run_id: int) -> bool:
+    """Restore and stop exposure discovered after a zero-fill finalisation.
+
+    The broker fact is already durable before this function runs. Reopening,
+    recovery, subscription and broker reconciliation all happen without a run
+    lock; recovery installs a fresh managed state before the pending stop can
+    dispatch an exact exit.
+    """
+    run_row = store.get_run(run_id)
+    if run_row is None:
+        return False
+    strategy_id = int(run_row.strategy_id)
+    strategy = store.get_strategy_unscoped(strategy_id)
+    user_id = strategy.user_id if strategy is not None else ""
+
+    if not store.reopen_run_for_late_entry_fill(run_id):
+        _emit(
+            strategy_id,
+            user_id,
+            "run_stop_failed",
+            (
+                "A late broker entry fill corrected a previously flat terminal fact, "
+                "but the run could not be reopened. The durable fill requires immediate "
+                "manual broker reconciliation."
+            ),
+            run_id=run_id,
+            severity="critical",
+        )
+        return False
+
+    from services.strategy_module import recovery
+
+    recovered = recovery.recover_run(run_id)
+    if not recovered.ok:
+        _emit(
+            strategy_id,
+            user_id,
+            "run_stop_failed",
+            (
+                "A late broker entry fill reopened this run, but its exposure could not "
+                "be reconstructed automatically. Manual broker reconciliation is required."
+            ),
+            run_id=run_id,
+            severity="critical",
+        )
+        return False
+
+    snapshot = state.get_run_state(run_id)
+    if snapshot is not None:
+        _subscribe_run(run_id, list((snapshot.get("legs") or {}).values()))
+    reconcile_pending_stop(run_id)
+    return True
 
 
 def close_leg(run_id: int, leg_id: Any, user_id: str) -> dict[str, Any]:
@@ -1457,8 +1798,10 @@ def close_leg(run_id: int, leg_id: Any, user_id: str) -> dict[str, Any]:
     run_row = store.get_run(run_id)
     if not run_row or run_row.stopped_at is not None:
         return {"ok": False, "error": "Run is not active"}
+    strategy_id = int(run_row.strategy_id)
+    run_mode = str(run_row.mode)
 
-    strategy_row = store.get_strategy(run_row.strategy_id, user_id)
+    strategy_row = store.get_strategy(strategy_id, user_id)
     if not strategy_row:
         return {"ok": False, "error": "Strategy not found"}
     strategy = store.strategy_to_dict(strategy_row)
@@ -1468,7 +1811,7 @@ def close_leg(run_id: int, leg_id: Any, user_id: str) -> dict[str, Any]:
         return {"ok": False, "error": "No API key is configured for this user"}
 
     exits = _exit_legs(
-        run_id, strategy, [leg_id], "exit_leg_manual", run_row.mode, api_key, user_id
+        run_id, strategy, [leg_id], "exit_leg_manual", run_mode, api_key, user_id
     )
     if not exits:
         return {"ok": False, "error": "That leg is not open"}
@@ -1481,7 +1824,7 @@ def close_leg(run_id: int, leg_id: Any, user_id: str) -> dict[str, Any]:
         return {"ok": False, "error": f"Exit refused: {errors}", "exits": exits}
 
     _emit(
-        run_row.strategy_id,
+        strategy_id,
         user_id,
         "leg_close_manual",
         leg_close_requested_message(leg_id),
@@ -1493,7 +1836,7 @@ def close_leg(run_id: int, leg_id: Any, user_id: str) -> dict[str, Any]:
     with state.run_state(run_id) as run:
         still_open = bool(state.open_legs(run)) if run else False
     if not still_open:
-        _finalise(run_id, run_row.strategy_id, user_id, "manual", "All legs closed")
+        _finalise(run_id, strategy_id, user_id, "manual", "All legs closed")
         return {"ok": True, "exits": exits, "run_stopped": True}
 
     return {"ok": True, "exits": exits, "run_stopped": False}
@@ -1528,6 +1871,18 @@ def _finalise(run_id: int, strategy_id: int, user_id: str, reason: str, message:
         pnl_peak=snapshot["pnl_peak"],
         pnl_trough=snapshot["pnl_trough"],
     )
+    if not finished:
+        # A corrected older run can be managed beside a newer current run. It
+        # owns only its run row in that case; the guarded fallback may close
+        # that residual but cannot release or relabel the newer strategy.
+        finished = store.finish_detached_run(
+            run_id,
+            strategy_id,
+            stop_reason=reason,
+            pnl_realized=snapshot["pnl_realized"],
+            pnl_peak=snapshot["pnl_peak"],
+            pnl_trough=snapshot["pnl_trough"],
+        )
     if not finished:
         return False
 
@@ -1646,10 +2001,12 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
     run_row = store.get_run(run_id)
     if not run_row or run_row.stopped_at is not None:
         return
+    strategy_id = int(run_row.strategy_id)
+    run_mode = str(run_row.mode)
     # Unscoped on purpose: the engine reaches a strategy through a run it is
     # already executing, so there is no user in scope to filter by and the run
     # row is the authority on which strategy it belongs to.
-    strategy_row = store.get_strategy_unscoped(run_row.strategy_id)
+    strategy_row = store.get_strategy_unscoped(strategy_id)
     if not strategy_row:
         return
     strategy = store.strategy_to_dict(strategy_row)
@@ -1744,6 +2101,44 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
             )
         elif aggregate.breached and aggregate.reason in _STOP_REASON_FOR_REASON:
             stop_reason = _STOP_REASON_FOR_REASON[aggregate.reason]
+            if stop_reason == "overall_sl":
+                threshold = -abs(float(strategy["overall_sl_mtm"]))
+            elif stop_reason == "overall_target":
+                threshold = float(strategy["overall_target_mtm"])
+            else:
+                # A lock-profit breach is judged against the ratcheted floor
+                # returned by this exact aggregate evaluation, not merely the
+                # strategy's configured starting floor.
+                threshold = float(aggregate.lock_floor)
+            breach_payload = {
+                "trigger_total": round(float(aggregate.total_pnl), 2),
+                "reason": stop_reason,
+                "threshold": round(threshold, 2),
+                "triggering_tick": {
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "ltp": float(ltp),
+                },
+                # This is the exact latest-known mark set present during the
+                # decision. It deliberately carries no invented timestamps.
+                "legs": [
+                    {
+                        "symbol": str(leg.get("symbol") or ""),
+                        "exchange": str(leg.get("exchange") or ""),
+                        "ltp": (
+                            float(leg["ltp"])
+                            if leg.get("ltp") is not None
+                            else None
+                        ),
+                        "mtm": round(float(leg.get("mtm") or 0.0), 2),
+                        "tick_source": str(leg.get("tick_source") or ""),
+                        "qty": int(leg.get("qty") or 0),
+                        "position": str(leg.get("position") or ""),
+                    }
+                    for leg in run.get("legs", {}).values()
+                    if leg.get("status") == "open" or leg.get("realized_pnl")
+                ],
+            }
             events.append(
                 (
                     {
@@ -1752,7 +2147,7 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
                         "lock_profit": "lock_profit_triggered",
                     }[stop_reason],
                     aggregate.detail,
-                    {"severity": "warn"},
+                    {"severity": "warn", "payload": breach_payload},
                 )
             )
 
@@ -1779,4 +2174,4 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
     _note_actionable_again(strategy["id"], user_id, run_id)
 
     for leg_id, kind in leg_exits:
-        _exit_legs(run_id, strategy, [leg_id], kind, run_row.mode, api_key, user_id)
+        _exit_legs(run_id, strategy, [leg_id], kind, run_mode, api_key, user_id)

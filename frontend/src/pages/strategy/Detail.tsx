@@ -7,7 +7,6 @@ import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import {
   buildRoundTrips,
-  closeAll,
   closeLeg,
   type DerivedPosition,
   deleteStrategy,
@@ -314,6 +313,7 @@ function LiveTab({
   onCloseLeg: (legId: number) => void
 }) {
   const isRunning = strategy.status === 'running'
+  const isStopped = strategy.status === 'stopped'
 
   // The REST fallback for a leg that has no live state yet. Scoped to the
   // current run: without that filter an exit from a previous run marks the leg
@@ -339,17 +339,22 @@ function LiveTab({
   for (const leg of live.legs) liveByLegId.set(Number(leg.leg_id), leg)
 
   const badge = liveStatusBadge(live.status)
-  const checkpoint = live.checkpoint
+  // A checkpoint is live authority only while the strategy is running. The
+  // checkpoint endpoint deliberately keeps the last sample after stop, so a
+  // stopped page can still retain the curve without presenting that sample as
+  // the final result.
+  const checkpoint = isStopped ? null : live.checkpoint
 
   // While a run is active the checkpoint is the truth. Once it stops, the run
   // row carries the finalised realized P&L, and unrealized is zero by
   // definition because nothing is open.
-  const showLast = !isRunning && checkpoint == null && lastRun != null
+  const showLast = isStopped && lastRun != null
   const pnlRealized = showLast ? lastRun.pnl_realized : (checkpoint?.pnl_realized ?? null)
   const pnlUnrealized = showLast ? 0 : (checkpoint?.pnl_unrealized ?? null)
   const pnlTotal = showLast ? lastRun.pnl_realized : (checkpoint?.pnl_total ?? null)
   const pnlPeak = showLast ? lastRun.pnl_peak : (checkpoint?.pnl_peak ?? null)
   const pnlTrough = showLast ? lastRun.pnl_trough : (checkpoint?.pnl_trough ?? null)
+  const formatCurrentPnl = showLast ? formatPnl : formatLivePnl
 
   return (
     <div className="space-y-4">
@@ -388,7 +393,7 @@ function LiveTab({
                     pnlToneClass(metric.value)
                   )}
                 >
-                  {formatLivePnl(metric.value)}
+                  {formatCurrentPnl(metric.value)}
                 </p>
               </div>
             ))}
@@ -396,10 +401,10 @@ function LiveTab({
           {(checkpoint || showLast) && (
             <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground sm:grid-cols-4">
               <span>
-                Peak: <span className="font-mono">{formatLivePnl(pnlPeak)}</span>
+                Peak: <span className="font-mono">{formatCurrentPnl(pnlPeak)}</span>
               </span>
               <span>
-                Trough: <span className="font-mono">{formatLivePnl(pnlTrough)}</span>
+                Trough: <span className="font-mono">{formatCurrentPnl(pnlTrough)}</span>
               </span>
               {checkpoint && (
                 <span>
@@ -736,12 +741,21 @@ function SetupTab({ strategy }: { strategy: Strategy }) {
 // Positions tab
 // ---------------------------------------------------------------------------
 
-function brokerBookRunId(strategy: Strategy, live: StrategyLiveState): number | null {
+function brokerBookRunId(
+  strategy: Strategy,
+  live: StrategyLiveState,
+  latestFinalizedRunId: number | null = null
+): number | null {
   // A newly started run can be present in the strategy row before the first
   // socket/checkpoint frame replaces the prior run. While running, the store's
   // current owner wins so an old frame can never label the new broker book.
   if (strategy.status === 'running' && strategy.current_run_id !== null) {
     return strategy.current_run_id
+  }
+  // A stopped strategy has no current_run_id. Its newest durable run row is
+  // authoritative over a socket/checkpoint value retained from before stop.
+  if (strategy.status === 'stopped' && latestFinalizedRunId !== null) {
+    return latestFinalizedRunId
   }
   return live.runId ?? strategy.current_run_id
 }
@@ -761,7 +775,10 @@ export function PositionsTab({
   loading: boolean
   active: boolean
 }) {
-  const runId = brokerBookRunId(strategy, live)
+  const stoppedRun = strategy.status === 'stopped' ? (runs[0] ?? null) : null
+  // Once stopped, the finalized run row outranks a checkpoint/frame that may
+  // still name the just-finished run (or an even older one during refetch).
+  const runId = brokerBookRunId(strategy, live, stoppedRun?.id ?? null)
   // Orders stay lifetime-scoped on purpose: they retain a residual position
   // stranded by an earlier run and the realized-lifetime column. Runtime legs
   // are different—they are a mark frame owned by one exact run, so a stale
@@ -827,26 +844,27 @@ export function PositionsTab({
     const omittedResiduals = derived
       .filter(
         (row) =>
-          row.net_qty !== 0 &&
-          !coveredContracts.has(`${row.symbol}-${row.exchange}-${row.product}`)
+          row.net_qty !== 0 && !coveredContracts.has(`${row.symbol}-${row.exchange}-${row.product}`)
       )
       .map((row) => ({ ...row, source: 'local/unreconciled' as const }))
     return [...brokerPositions, ...omittedResiduals]
   }, [broker.rows, derived])
 
-  const checkpoint = live.runId === runId ? live.checkpoint : null
+  const checkpoint = strategy.status === 'running' && live.runId === runId ? live.checkpoint : null
   // Lifetime realized is the sum of every finalised run. The current run's
   // in-flight realized comes from the checkpoint, because its run row is not
   // written until the run ends.
   const historicalRealized = runs
     .filter((run) => run.id !== runId)
     .reduce((sum, run) => sum + run.pnl_realized, 0)
-  const runRealized = checkpoint?.pnl_realized ?? null
+  const runRealized = stoppedRun?.pnl_realized ?? checkpoint?.pnl_realized ?? null
+  const runUnrealized = stoppedRun ? 0 : (checkpoint?.pnl_unrealized ?? null)
+  const runTotal = stoppedRun?.pnl_realized ?? checkpoint?.pnl_total ?? null
   // Historical runs are known, but the lifetime total is not: an active run
   // with no checkpoint may already have realized P&L. Never add an invented
   // zero contribution just to keep the tile numeric.
-  const cumulativeRealized =
-    runRealized === null ? null : historicalRealized + runRealized
+  const cumulativeRealized = runRealized === null ? null : historicalRealized + runRealized
+  const formatCurrentPnl = stoppedRun ? formatPnl : formatLivePnl
 
   return (
     <div className="space-y-4">
@@ -855,7 +873,7 @@ export function PositionsTab({
           <CardTitle>Strategy positions</CardTitle>
           <CardDescription>
             {broker.rows
-              ? "Broker quantities are overlaid on every attributable unresolved owner across all runs. Rows marked local/unreconciled were omitted by the broker book or cannot be divided safely; broker/shared is the undivided contract aggregate."
+              ? 'Broker quantities are overlaid on every attributable unresolved owner across all runs. Rows marked local/unreconciled were omitted by the broker book or cannot be divided safely; broker/shared is the undivided contract aggregate.'
               : broker.unavailable
                 ? "The broker did not answer, so these are net positions derived from this strategy's filled orders."
                 : "Net positions derived from this strategy's filled orders."}
@@ -872,21 +890,19 @@ export function PositionsTab({
             <div className="rounded-md border p-3">
               <div className="text-xs uppercase text-muted-foreground">Realized (this run)</div>
               <div className={cn('font-mono text-xl', pnlToneClass(runRealized))}>
-                {formatLivePnl(runRealized)}
+                {formatCurrentPnl(runRealized)}
               </div>
             </div>
             <div className="rounded-md border p-3">
               <div className="text-xs uppercase text-muted-foreground">Unrealized</div>
-              <div
-                className={cn('font-mono text-xl', pnlToneClass(checkpoint?.pnl_unrealized))}
-              >
-                {formatLivePnl(checkpoint?.pnl_unrealized)}
+              <div className={cn('font-mono text-xl', pnlToneClass(runUnrealized))}>
+                {formatCurrentPnl(runUnrealized)}
               </div>
             </div>
             <div className="rounded-md border p-3">
               <div className="text-xs uppercase text-muted-foreground">Run total</div>
-              <div className={cn('font-mono text-xl', pnlToneClass(checkpoint?.pnl_total))}>
-                {formatLivePnl(checkpoint?.pnl_total)}
+              <div className={cn('font-mono text-xl', pnlToneClass(runTotal))}>
+                {formatCurrentPnl(runTotal)}
               </div>
             </div>
             <div className="rounded-md border-2 p-3">
@@ -1153,16 +1169,18 @@ export function OrdersTab({
   strategy,
   orders,
   live,
+  lastRunId = null,
   loading,
   active,
 }: {
   strategy: Strategy
   orders: Order[]
   live: StrategyLiveState
+  lastRunId?: number | null
   loading: boolean
   active: boolean
 }) {
-  const runId = brokerBookRunId(strategy, live)
+  const runId = brokerBookRunId(strategy, live, lastRunId)
   const broker = useBrokerBook(
     strategy.id,
     runId,
@@ -1310,16 +1328,18 @@ export function TradesTab({
   strategy,
   orders,
   live,
+  lastRunId = null,
   loading,
   active,
 }: {
   strategy: Strategy
   orders: Order[]
   live: StrategyLiveState
+  lastRunId?: number | null
   loading: boolean
   active: boolean
 }) {
-  const runId = brokerBookRunId(strategy, live)
+  const runId = brokerBookRunId(strategy, live, lastRunId)
   const broker = useBrokerBook(
     strategy.id,
     runId,
@@ -1517,6 +1537,10 @@ function RiskTab({ strategy }: { strategy: Strategy }) {
       <Card>
         <CardHeader>
           <CardTitle>Strategy-level risk</CardTitle>
+          <CardDescription>
+            Overall SL and Overall Target trigger exits from LTP-based MTM. MARKET orders fill at
+            the available bid/ask, so final realized P&amp;L can differ from the trigger value.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <RiskRow
@@ -2404,7 +2428,6 @@ export default function StrategyDetail() {
   const queryClient = useQueryClient()
 
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [confirmCloseAll, setConfirmCloseAll] = useState(false)
   const [confirmKill, setConfirmKill] = useState(false)
   const [confirmStop, setConfirmStop] = useState(false)
   const [confirmEnableLive, setConfirmEnableLive] = useState(false)
@@ -2456,7 +2479,11 @@ export default function StrategyDetail() {
     mutationFn: (mode: RunMode) => startRun(numId, mode),
     onSuccess: (result) => {
       const rejected = result.legs.filter((leg) => leg.ok === false || leg.status === 'rejected')
-      if (rejected.length > 0) {
+      if (result.acknowledged === false) {
+        showToast.warning(
+          'Run started, but broker acknowledgement is pending. Check Events and Orders before relying on RMS.'
+        )
+      } else if (rejected.length > 0) {
         showToast.warning(
           `Run started, but ${rejected.length} leg(s) were rejected. See the Orders tab.`
         )
@@ -2481,20 +2508,6 @@ export default function StrategyDetail() {
       invalidateAll()
     },
     onError: (err: Error) => showToast.error(err.message || 'Stop failed'),
-  })
-
-  const closeAllMutation = useMutation({
-    mutationFn: () => closeAll(numId),
-    onSuccess: (result) => {
-      showToast.success(
-        result.run_stopped === true || result.stop_pending === false
-          ? 'All open legs closed — run stopped'
-          : 'Close-all requested — exit orders are pending'
-      )
-      setConfirmCloseAll(false)
-      invalidateAll()
-    },
-    onError: (err: Error) => showToast.error(err.message || 'Close-all failed'),
   })
 
   const closeLegMutation = useMutation({
@@ -2537,9 +2550,12 @@ export default function StrategyDetail() {
     mutationFn: () => killSwitch(numId),
     onSuccess: (result) => {
       showToast.warning(
-        result.run_stopped
-          ? 'Kill switch fired. Webhook locked and open legs closed.'
-          : 'Kill switch fired. Webhook locked.'
+        result.message?.trim() ||
+          (result.run_stopped
+            ? 'Webhook locked and open legs closed'
+            : result.stop_pending
+              ? 'Webhook locked; exit fills pending'
+              : 'Webhook locked; flattening was not confirmed')
       )
       setConfirmKill(false)
       invalidateAll()
@@ -2653,22 +2669,14 @@ export default function StrategyDetail() {
             <Button onClick={() => setStartDialogOpen(true)}>Start run</Button>
           )}
           {running && (
-            <>
-              <Button
-                variant="destructive"
-                disabled={closeAllMutation.isPending}
-                onClick={() => setConfirmCloseAll(true)}
-              >
-                {closeAllMutation.isPending ? 'Closing…' : 'Close All'}
-              </Button>
-              <Button
-                variant="outline"
-                disabled={stopMutation.isPending}
-                onClick={() => setConfirmStop(true)}
-              >
-                {stopMutation.isPending ? 'Stopping…' : 'Stop'}
-              </Button>
-            </>
+            <Button
+              variant="outline"
+              disabled={stopMutation.isPending}
+              onClick={() => setConfirmStop(true)}
+              title="Exit all held legs at MARKET and stop this run"
+            >
+              {stopMutation.isPending ? 'Stopping…' : 'Stop & Close Positions'}
+            </Button>
           )}
           {stopped && !strategy.live_enabled && (
             <Button
@@ -2764,6 +2772,7 @@ export default function StrategyDetail() {
             strategy={strategy}
             orders={orders}
             live={live}
+            lastRunId={runs[0]?.id ?? null}
             loading={ordersQuery.isLoading}
             active={activeTab === 'orders'}
           />
@@ -2773,6 +2782,7 @@ export default function StrategyDetail() {
             strategy={strategy}
             orders={orders}
             live={live}
+            lastRunId={runs[0]?.id ?? null}
             loading={ordersQuery.isLoading}
             active={activeTab === 'trades'}
           />
@@ -2860,22 +2870,11 @@ export default function StrategyDetail() {
       />
 
       <ConfirmDialog
-        open={confirmCloseAll}
-        onOpenChange={setConfirmCloseAll}
-        title="Close all open legs?"
-        description="Exits every open leg at MARKET and stops the run."
-        confirmLabel="Close all"
-        destructive
-        loading={closeAllMutation.isPending}
-        onConfirm={() => closeAllMutation.mutate()}
-      />
-
-      <ConfirmDialog
         open={confirmStop}
         onOpenChange={setConfirmStop}
-        title="Stop the run?"
-        description="Every open leg will be exited at MARKET and the run finalised. Realized P&L gets locked in; the strategy returns to a stopped state and stops accepting webhook signals until you start it again."
-        confirmLabel="Stop run"
+        title="Stop and close all positions?"
+        description="Requests MARKET exits for every open leg. The run is finalised only after broker fills confirm the strategy is flat; until then the stop remains pending and retryable."
+        confirmLabel="Stop & close positions"
         destructive
         loading={stopMutation.isPending}
         onConfirm={() => stopMutation.mutate()}
@@ -2896,7 +2895,7 @@ export default function StrategyDetail() {
         open={confirmKill}
         onOpenChange={setConfirmKill}
         title="Activate kill switch?"
-        description="This locks the webhook so external TradingView signals are refused, and flattens every open position at MARKET. The strategy stays stopped until you explicitly unlock and start it."
+        description="Immediately locks the webhook so external TradingView signals are refused, then requests MARKET exits for open positions. The run is finalised only after broker fills confirm the strategy is flat; pending or refused exits remain visible and retryable."
         confirmLabel="KILL"
         destructive
         loading={killSwitchMutation.isPending}

@@ -488,9 +488,15 @@ if [ "$SERVER_MODE" = true ]; then
     if [ -f "$OPENALGO_PATH/upgrade/migrate_all.py" ]; then
         log_message "Running database migrations..." "$BLUE"
         sudo -u "$WEB_USER" bash -c "source $VENV_PATH/bin/activate && cd $OPENALGO_PATH && python upgrade/migrate_all.py" 2>&1 | tee -a "$LOG_FILE"
-        if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        migration_status=${PIPESTATUS[0]}
+        if [ "$migration_status" -ne 0 ]; then
             log_message "Retrying migrations with elevated permissions..." "$YELLOW"
             sudo bash -c "source $VENV_PATH/bin/activate && cd $OPENALGO_PATH && python upgrade/migrate_all.py" 2>&1 | tee -a "$LOG_FILE"
+            migration_status=${PIPESTATUS[0]}
+            if [ "$migration_status" -ne 0 ]; then
+                log_message "Database migrations failed after retry; update aborted." "$RED"
+                exit 1
+            fi
         fi
         log_message "Database migrations completed" "$GREEN"
     else
@@ -501,6 +507,11 @@ else
     if [ -f "$OPENALGO_PATH/upgrade/migrate_all.py" ]; then
         cd "$OPENALGO_PATH"
         $UV_CMD run upgrade/migrate_all.py 2>&1 | tee -a "$LOG_FILE"
+        migration_status=${PIPESTATUS[0]}
+        if [ "$migration_status" -ne 0 ]; then
+            log_message "Database migrations failed; update aborted." "$RED"
+            exit 1
+        fi
         log_message "Database migrations completed" "$GREEN"
     else
         log_message "No migration script found (upgrade/migrate_all.py)" "$YELLOW"

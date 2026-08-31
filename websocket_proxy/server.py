@@ -6,7 +6,6 @@ import socket
 import threading
 import time
 from collections import defaultdict
-from typing import Any, Dict, Optional, Set, Tuple
 
 import websockets
 import zmq
@@ -22,6 +21,8 @@ from .base_adapter import BaseBrokerWebSocketAdapter
 from .broker_factory import create_broker_adapter
 from .mode_utils import (
     MODE_BY_UPPER_LABEL as _MODE_BY_UPPER_LABEL,
+)
+from .mode_utils import (
     normalize_mode,
     normalize_mode_or_none,
 )
@@ -144,7 +145,7 @@ class WebSocketProxy:
             loop = aio.get_running_loop()
 
             # Create the ZMQ listener task
-            zmq_task = loop.create_task(self.zmq_listener())
+            _zmq_task = loop.create_task(self.zmq_listener())
 
             # Start WebSocket server
             stop = aio.Future()  # Used to stop the server
@@ -635,40 +636,47 @@ class WebSocketProxy:
         adapter = self.broker_adapters.get(user_id) if user_id else None
         release_failed = False
 
-        for sub_json in list(self.subscriptions.get(client_id, ())):
+        parsed_subscriptions, rows_by_key = self._indexed_client_subscriptions(client_id)
+        processed_keys = set()
+        processed_count = 0
+        for _sub_info, sub_key, _mode_label, mode_error in parsed_subscriptions:
             try:
-                sub_info = json.loads(sub_json)
-                symbol = sub_info.get("symbol")
-                exchange = sub_info.get("exchange")
-                mode, _mode_label = normalize_mode(sub_info.get("mode"))
-                if not symbol or not exchange:
+                if mode_error is not None or sub_key is None or sub_key in processed_keys:
                     continue
-                sub_key = (symbol, exchange, mode)
+                processed_keys.add(sub_key)
+                symbol, exchange, mode = sub_key
+                stored_rows = rows_by_key[sub_key]
                 if adapter is None:
-                    stored_rows = self._matching_client_subscriptions(
-                        client_id, sub_key
-                    )
                     self._drop_subscription_ownership(
                         client_id, sub_key, stored_rows
                     )
-                    continue
-                ok, error = self._unsubscribe_owned_subscription(
-                    client_id, adapter, symbol, exchange, mode
-                )
-                if not ok:
-                    release_failed = True
-                    logger.error(
-                        "Disconnect could not release %s:%s mode %s exactly: %s",
+                else:
+                    ok, error = self._unsubscribe_owned_subscription(
+                        client_id,
+                        adapter,
                         symbol,
                         exchange,
                         mode,
-                        error,
+                        stored_rows=stored_rows,
                     )
-            except json.JSONDecodeError as e:
-                logger.exception(f"Error parsing subscription: {sub_json}, Error: {e}")
+                    if not ok:
+                        release_failed = True
+                        logger.error(
+                            "Disconnect could not release %s:%s mode %s exactly: %s",
+                            symbol,
+                            exchange,
+                            mode,
+                            error,
+                        )
             except Exception as e:
                 logger.exception(f"Error processing subscription: {e}")
                 release_failed = True
+            finally:
+                processed_count += 1
+                if processed_count % 128 == 0:
+                    # Keep the single event loop responsive during a maximum
+                    # 3,000-symbol teardown. No thread or executor is created.
+                    await aio.sleep(0)
 
         if user_id in self.order_subscribers:
             self.order_subscribers[user_id].discard(client_id)
@@ -975,7 +983,7 @@ class WebSocketProxy:
                 # - ConnectionPool format: {"success": False, "error": "..."}
                 is_error = (
                     (connect_result and connect_result.get("status") == "error") or
-                    (connect_result and connect_result.get("success") == False)
+                    (connect_result and connect_result.get("success") is False)
                 )
                 if is_error:
                     error_msg = connect_result.get("message", connect_result.get("error", "Failed to connect to broker"))
@@ -1009,7 +1017,7 @@ class WebSocketProxy:
                         # Handle both response formats
                         init_is_error = (
                             (init_retry_result and init_retry_result.get("status") == "error") or
-                            (init_retry_result and init_retry_result.get("success") == False)
+                            (init_retry_result and init_retry_result.get("success") is False)
                         )
                         if init_is_error:
                             error_msg = init_retry_result.get("message", init_retry_result.get("error", "Failed to re-initialize"))
@@ -1023,7 +1031,7 @@ class WebSocketProxy:
                         # Handle both response formats
                         connect_is_error = (
                             (connect_result and connect_result.get("status") == "error") or
-                            (connect_result and connect_result.get("success") == False)
+                            (connect_result and connect_result.get("success") is False)
                         )
                         if connect_is_error:
                             error_msg = connect_result.get("message", connect_result.get("error", "Failed to connect after retry"))
@@ -1065,14 +1073,14 @@ class WebSocketProxy:
                             # Handle both response formats
                             init_is_error = (
                                 (initialization_result and initialization_result.get("status") == "error") or
-                                (initialization_result and initialization_result.get("success") == False)
+                                (initialization_result and initialization_result.get("success") is False)
                             )
                             if not init_is_error:
                                 connect_result = adapter.connect()
                                 # Handle both response formats
                                 connect_is_error = (
                                     (connect_result and connect_result.get("status") == "error") or
-                                    (connect_result and connect_result.get("success") == False)
+                                    (connect_result and connect_result.get("success") is False)
                                 )
                                 if not connect_is_error:
                                     self.broker_adapters[user_id] = adapter
@@ -1342,6 +1350,33 @@ class WebSocketProxy:
                 matches.append(sub_json)
         return matches
 
+    def _indexed_client_subscriptions(self, client_id):
+        """Parse one client's stored rows once and index them by exact key."""
+        parsed = []
+        rows_by_key = defaultdict(list)
+        for sub_json in self.subscriptions.get(client_id, ()):
+            try:
+                sub_data = json.loads(sub_json)
+            except json.JSONDecodeError as exc:
+                logger.error("Failed to parse subscription %r: %s", sub_json, exc)
+                continue
+
+            try:
+                mode, mode_label = normalize_mode(sub_data.get("mode"))
+                mode_error = None
+            except (ValueError, TypeError) as exc:
+                mode = None
+                mode_label = None
+                mode_error = str(exc)
+
+            symbol = sub_data.get("symbol")
+            exchange = sub_data.get("exchange")
+            sub_key = (symbol, exchange, mode) if symbol and exchange and mode is not None else None
+            parsed.append((sub_data, sub_key, mode_label, mode_error))
+            if sub_key is not None:
+                rows_by_key[sub_key].append(sub_json)
+        return parsed, rows_by_key
+
     def _drop_subscription_ownership(self, client_id, sub_key, stored_rows):
         """Commit an acknowledged local ownership release."""
         owners = self.subscription_index.get(sub_key)
@@ -1363,7 +1398,14 @@ class WebSocketProxy:
         self.subscriptions.pop(client_id, None)
 
     def _unsubscribe_owned_subscription(
-        self, client_id, adapter, symbol, exchange, mode
+        self,
+        client_id,
+        adapter,
+        symbol,
+        exchange,
+        mode,
+        *,
+        stored_rows=None,
     ):
         """Release one exact owner, committing only after the broker ack.
 
@@ -1374,7 +1416,8 @@ class WebSocketProxy:
         retry or disconnect able to release a feed the broker still holds.
         """
         sub_key = (symbol, exchange, mode)
-        stored_rows = self._matching_client_subscriptions(client_id, sub_key)
+        if stored_rows is None:
+            stored_rows = self._matching_client_subscriptions(client_id, sub_key)
         owners = self.subscription_index.get(sub_key, set())
         owns_subscription = bool(stored_rows) or client_id in owners
         if not owns_subscription:
@@ -1478,40 +1521,40 @@ class WebSocketProxy:
 
         # Handle unsubscribe_all case
         if is_unsubscribe_all:
-            # Get all current subscriptions
             if client_id in self.subscriptions:
-                # Convert all stored subscription strings back to dictionaries
-                all_subscriptions = []
-                for sub_json in self.subscriptions[client_id]:
-                    try:
-                        sub_dict = json.loads(sub_json)
-                        all_subscriptions.append(sub_dict)
-                    except json.JSONDecodeError:
-                        logger.error(f"Failed to parse subscription: {sub_json}")
-
-                # Unsubscribe from each subscription.  Failed final-owner
-                # releases stay in both registries for retry.
-                for sub in all_subscriptions:
+                parsed_subscriptions, rows_by_key = self._indexed_client_subscriptions(client_id)
+                processed_keys = set()
+                for index, (sub, sub_key, mode_label, mode_error) in enumerate(
+                    parsed_subscriptions,
+                    start=1,
+                ):
                     symbol = sub.get("symbol")
                     exchange = sub.get("exchange")
-                    try:
-                        mode, mode_label = normalize_mode(sub.get("mode"))
-                    except (ValueError, TypeError) as e:
+                    if index % 128 == 0:
+                        await aio.sleep(0)
+                    if mode_error is not None:
                         failed_unsubscriptions.append(
                             {
                                 "symbol": symbol,
                                 "exchange": exchange,
                                 "mode": None,
                                 "status": "error",
-                                "message": str(e),
+                                "message": mode_error,
                                 "broker": broker_name,
                             }
                         )
                         continue
 
-                    if symbol and exchange:
+                    if sub_key is not None and sub_key not in processed_keys:
+                        processed_keys.add(sub_key)
+                        mode = sub_key[2]
                         ok, error = self._unsubscribe_owned_subscription(
-                            client_id, adapter, symbol, exchange, mode
+                            client_id,
+                            adapter,
+                            symbol,
+                            exchange,
+                            mode,
+                            stored_rows=rows_by_key[sub_key],
                         )
                         if not ok:
                             failed_unsubscriptions.append(

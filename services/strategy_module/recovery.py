@@ -370,11 +370,25 @@ def _recover_run(run_id: int) -> RecoveredRun:
     if run_row is None:
         logger.warning("Run %s does not exist; nothing to recover", run_id)
         return RecoveredRun(run_id=run_id, ok=False, error="Run not found")
-    strategy_id = run_row.strategy_id
-    if run_row.stopped_at is not None:
+    # Keep no ORM row alive across the store calls below. Any commit expires
+    # it, and worker/session cleanup can then detach it before recovery reaches
+    # the stop facts again.
+    strategy_id = int(run_row.strategy_id)
+    stopped_at = run_row.stopped_at
+    stop_requested_reason = run_row.stop_requested_reason
+    if stopped_at is not None:
         logger.debug("Run %s is already stopped; nothing to recover", run_id)
         return RecoveredRun(
             run_id=run_id, strategy_id=strategy_id, ok=False, error="Run is already stopped"
+        )
+
+    from services.strategy_module import ack_reconciliation
+
+    ack_repairs = ack_reconciliation.reconcile(run_id)
+    if ack_repairs.unresolved_exposure:
+        raise _ManagedRecoveryError(
+            f"{ack_repairs.unresolved_exposure} broker acknowledgement event(s) could not "
+            "be linked to exact order rows; possible exposure remains reserved"
         )
 
     orders = store.list_orders(run_id)
@@ -387,7 +401,7 @@ def _recover_run(run_id: int) -> RecoveredRun:
         orders,
         checkpoint,
         config_legs,
-        stopping=run_row.stop_requested_reason is not None,
+        stopping=stop_requested_reason is not None,
     )
     if not rebuilt.get("pnl_realized_authoritative", True):
         _record_event(
@@ -411,8 +425,8 @@ def _recover_run(run_id: int) -> RecoveredRun:
         # leave a strategy reading as running while holding nothing, which is
         # exactly the state engine._finalise exists to prevent, and no tick
         # would ever arrive to close it.
-        stop_reason = run_row.stop_requested_reason or "manual"
-        pending_stop = run_row.stop_requested_reason is not None
+        stop_reason = stop_requested_reason or "manual"
+        pending_stop = stop_requested_reason is not None
         finalised = _finalise(
             run_id,
             strategy_id,
@@ -719,13 +733,12 @@ def _rebuild_referenced_position(
     last_exit_avg: float | None = None
     for exit_order in sorted(exits, key=_order_rank):
         status = exit_order.get("status")
-        if order_is_working(status):
-            # A working row's filled_qty is cumulative for that still-active
-            # attempt. Restoring it as settled quantity makes its later
-            # terminal cumulative frame apply the same fill twice. Prior
-            # terminal attempts reduce the owner; the active attempt remains
-            # armed against the pre-attempt remainder and settles once.
-            continue
+        # ``filled_qty`` is the durable cumulative broker fact even while the
+        # attempt remains working. Recovery must restore that already-settled
+        # quantity now: the next event fold compares its cumulative quantity
+        # with this same durable row and emits only the additional delta. If we
+        # instead restore the pre-attempt owner, that later delta is applied to
+        # too much exposure and the run can over-exit on its retry.
         reported = _positive_whole(exit_order.get("filled_qty"))
         if reported is not None:
             applied = min(remaining, reported)
@@ -1175,17 +1188,20 @@ def _config_legs(strategy_id: int) -> dict[str, dict[str, Any]]:
 def _final_pnl(checkpoint: dict[str, Any], rebuilt: dict[str, Any]) -> dict[str, Any]:
     """The figures to close a flat run with.
 
-    The last checkpoint, except for the realized total: a run goes flat on its
-    final exit fill, which is very often what the process died before
-    checkpointing, so a zero there is re-derived from the legs themselves.
+    Keep checkpoint-only peak/trough figures. Realized P&L comes from the legs
+    when every leg has complete durable pricing, including legacy rows with no
+    position reference. If any owner remains unpriced or ambiguous, retain the
+    authority decision already made by ``_rebuild_state`` instead of inventing
+    a complete total.
     """
     final = dict(checkpoint)
-    if "pnl_realized" in rebuilt:
-        final["pnl_realized"] = _float(rebuilt.get("pnl_realized"), 0.0) or 0.0
-    else:
+    legs = rebuilt.get("legs") or {}
+    if all(leg.get("realized_pnl_authoritative", True) for leg in legs.values()):
         final["pnl_realized"] = sum(
-            _float(leg.get("realized_pnl"), 0.0) or 0.0 for leg in rebuilt["legs"].values()
+            _float(leg.get("realized_pnl"), 0.0) or 0.0 for leg in legs.values()
         )
+    else:
+        final["pnl_realized"] = _float(rebuilt.get("pnl_realized"), 0.0) or 0.0
     return final
 
 
@@ -1226,6 +1242,24 @@ def _finalise(
         pnl_peak=_float(snapshot.get("pnl_peak"), 0.0) or 0.0,
         pnl_trough=_float(snapshot.get("pnl_trough"), 0.0) or 0.0,
     )
+    if not won:
+        won = store.finish_empty_unlinked_run_and_release_claim(
+            run_id,
+            strategy_id,
+            stop_reason=reason,
+            pnl_realized=_float(snapshot.get("pnl_realized"), 0.0) or 0.0,
+            pnl_peak=_float(snapshot.get("pnl_peak"), 0.0) or 0.0,
+            pnl_trough=_float(snapshot.get("pnl_trough"), 0.0) or 0.0,
+        )
+    if not won:
+        won = store.finish_detached_run(
+            run_id,
+            strategy_id,
+            stop_reason=reason,
+            pnl_realized=_float(snapshot.get("pnl_realized"), 0.0) or 0.0,
+            pnl_peak=_float(snapshot.get("pnl_peak"), 0.0) or 0.0,
+            pnl_trough=_float(snapshot.get("pnl_trough"), 0.0) or 0.0,
+        )
     if not won:
         return False
     _record_event(strategy_id, kind, message, run_id=run_id, severity=severity)

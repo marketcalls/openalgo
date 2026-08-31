@@ -48,6 +48,15 @@ def redact(text: str) -> str:
         ("password with symbols", "password=" + SECRET + "@!#$"),
         ("access_token colon", "access_token: " + SECRET),
         ("feed token json", '{"feed_token":"' + SECRET + '"}'),
+        ("ICICI callback apisession", "apisession=" + SECRET),
+        ("Dhan callback tokenId", "{'tokenId': '" + SECRET + "'}"),
+        ("broker requestToken", '"requestToken":"' + SECRET + '"'),
+        ("broker authCode", "authCode: " + SECRET),
+        ("prose authorization code", "Received authorization code: " + SECRET),
+        ("prose request token", "The request token is " + SECRET),
+        ("prose OAuth code", "OAuth callback with code: " + SECRET),
+        ("prose generic code", "The code is " + SECRET),
+        ("prose tokenId", "Received tokenId: " + SECRET),
     ],
 )
 def test_secret_never_survives_redaction(label, message):
@@ -69,6 +78,12 @@ def test_bearer_does_not_swallow_the_rest_of_a_headers_dict():
 def test_non_secret_text_is_left_alone():
     """A message with no credential in it must pass through untouched."""
     message = "Placed order 250826000123456 for SBIN-EQ on NSE, qty 100"
+
+    assert redact(message) == message
+
+
+def test_normal_status_codes_are_not_redacted_as_callback_credentials():
+    message = "Broker response status code=200; retry status_code=429"
 
     assert redact(message) == message
 
@@ -148,6 +163,19 @@ def test_shared_url_redactor_masks_every_shipped_url_secret_route(path, visible_
         assert visible_tail in redacted
 
 
+def test_shared_url_redactor_masks_callback_query_credentials_but_not_status_codes():
+    url = (
+        "https://openalgo.example/dhan/callback?status_code=200"
+        f"&tokenId={SECRET}&apisession={SECRET}&code={SECRET}"
+    )
+
+    redacted = redact_url_credentials(url)
+
+    assert SECRET not in redacted
+    assert "status_code=200" in redacted
+    assert redacted.count("[REDACTED]") == 3
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -175,3 +203,31 @@ def test_standard_log_filter_masks_a_webhook_url_in_the_message():
 
     assert URL_CREDENTIAL not in output
     assert "<redacted>" in output
+
+
+def test_callback_credentials_never_reach_the_json_error_sink():
+    try:
+        raise RuntimeError(
+            "callback refused at "
+            f"https://openalgo.example/dhan/callback?tokenId={SECRET}"
+        )
+    except RuntimeError:
+        exc_info = sys.exc_info()
+
+    record = logging.LogRecord(
+        "broker.callback",
+        logging.ERROR,
+        __file__,
+        1,
+        "apisession=%s authCode=%s",
+        (SECRET, SECRET),
+        exc_info,
+    )
+    assert SensitiveDataFilter().filter(record) is True
+
+    output = JSONErrorFormatter().format(record)
+
+    assert SECRET not in output
+    payload = json.loads(output)
+    assert "[REDACTED]" in payload["message"]
+    assert "[REDACTED]" in "".join(payload["exception"])

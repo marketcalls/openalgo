@@ -142,6 +142,8 @@ export async function deleteStrategy(id: number): Promise<void> {
 export interface StartedRun {
   run_id: number
   mode: RunMode
+  /** False means a broker order may exist but its durable acknowledgement is pending repair. */
+  acknowledged?: boolean
   /** Per-leg outcome, so a caller can say which leg failed and why. */
   legs: Array<{
     leg_id?: number | null
@@ -212,6 +214,8 @@ export async function setLiveEnabled(id: number, enabled: boolean): Promise<bool
 export interface KillSwitchOutcome {
   webhook_locked: boolean
   run_stopped: boolean
+  /** True while accepted exit orders still own exposure. */
+  stop_pending: boolean
   message?: string
 }
 

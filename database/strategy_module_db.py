@@ -50,6 +50,7 @@ from sqlalchemy import (
     Text,
     Time,
     UniqueConstraint,
+    exists,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -1202,12 +1203,204 @@ def finish_run_and_release_strategy(
         return False
 
 
+def finish_detached_run(
+    run_id: int,
+    strategy_id: int,
+    stop_reason: str,
+    pnl_realized: float = 0.0,
+    pnl_peak: float = 0.0,
+    pnl_trough: float = 0.0,
+) -> bool:
+    """Finish one residual run only when it is not the strategy's current run.
+
+    A late broker correction can reopen an older run while a newer run owns
+    the strategy pointer. That residual still needs an exact terminal CAS, but
+    must never release or relabel the newer run. The ``NOT EXISTS`` guard is
+    part of the same UPDATE as ``stopped_at IS NULL`` so there is no read/write
+    gap in which current-run ownership can be confused.
+    """
+    try:
+        current_owner = exists().where(
+            SmStrategy.id == strategy_id,
+            SmStrategy.current_run_id == run_id,
+        )
+        finished = (
+            db_session.query(SmStrategyRun)
+            .filter(
+                SmStrategyRun.id == run_id,
+                SmStrategyRun.strategy_id == strategy_id,
+                SmStrategyRun.stopped_at.is_(None),
+                ~current_owner,
+            )
+            .update(
+                {
+                    "stopped_at": utcnow(),
+                    "stop_reason": stop_reason,
+                    "stop_requested_at": None,
+                    "stop_requested_reason": None,
+                    "pnl_realized": pnl_realized,
+                    "pnl_peak": pnl_peak,
+                    "pnl_trough": pnl_trough,
+                },
+                synchronize_session=False,
+            )
+        )
+        if finished != 1:
+            db_session.rollback()
+            db_session.expire_all()
+            return False
+        db_session.commit()
+        db_session.expire_all()
+        _forget_session_pnl(strategy_id)
+        return True
+    except Exception:
+        db_session.rollback()
+        logger.exception(
+            "Could not atomically finish detached run %s for strategy %s",
+            run_id,
+            strategy_id,
+        )
+        return False
+
+
+def finish_empty_unlinked_run_and_release_claim(
+    run_id: int,
+    strategy_id: int,
+    stop_reason: str,
+    pnl_realized: float = 0.0,
+    pnl_peak: float = 0.0,
+    pnl_trough: float = 0.0,
+) -> bool:
+    """Atomically finish the exact crash window between run creation and linkage.
+
+    Entry dispatch is sequenced after ``set_strategy_status``. Therefore the
+    only safe unlinked recovery shape is an open, zero-order run whose strategy
+    still carries the empty ``running/current_run_id=NULL`` claim. Both rows
+    are conditional updates in one transaction, so an older detached run or a
+    newer owner cannot be closed or released by this cleanup.
+    """
+    try:
+        empty_claim = exists().where(
+            SmStrategy.id == strategy_id,
+            SmStrategy.status == "running",
+            SmStrategy.current_run_id.is_(None),
+        )
+        no_orders = ~exists().where(SmStrategyOrder.run_id == run_id)
+        finished = (
+            db_session.query(SmStrategyRun)
+            .filter(
+                SmStrategyRun.id == run_id,
+                SmStrategyRun.strategy_id == strategy_id,
+                SmStrategyRun.stopped_at.is_(None),
+                empty_claim,
+                no_orders,
+            )
+            .update(
+                {
+                    "stopped_at": utcnow(),
+                    "stop_reason": stop_reason,
+                    "stop_requested_at": None,
+                    "stop_requested_reason": None,
+                    "pnl_realized": pnl_realized,
+                    "pnl_peak": pnl_peak,
+                    "pnl_trough": pnl_trough,
+                },
+                synchronize_session=False,
+            )
+        )
+        if finished != 1:
+            db_session.rollback()
+            return False
+
+        released = (
+            db_session.query(SmStrategy)
+            .filter(
+                SmStrategy.id == strategy_id,
+                SmStrategy.status == "running",
+                SmStrategy.current_run_id.is_(None),
+            )
+            .update(
+                {"status": "stopped", "current_run_id": None},
+                synchronize_session=False,
+            )
+        )
+        if released != 1:
+            db_session.rollback()
+            db_session.expire_all()
+            return False
+
+        db_session.commit()
+        db_session.expire_all()
+        _forget_session_pnl(strategy_id)
+        return True
+    except Exception:
+        db_session.rollback()
+        logger.exception(
+            "Could not atomically finish empty unlinked run %s and release strategy %s",
+            run_id,
+            strategy_id,
+        )
+        return False
+
+
+def finish_unlinked_run_and_release_claim(
+    run_id: int,
+    strategy_id: int,
+    stop_reason: str,
+) -> bool:
+    """Close a never-linked run, then release only its empty strategy claim.
+
+    Run creation and strategy linkage are separate durable writes. If linkage
+    fails, no order may be dispatched, but the already-created run still has
+    to become terminal. ``finish_detached_run`` refuses to close a run that is
+    current, and the second CAS refuses to release a strategy that now points
+    at any run. A newer owner therefore survives a delayed cleanup intact.
+
+    The close intentionally commits first. If releasing the empty claim then
+    fails, the strategy remains fail-closed as ``running`` with no current run
+    rather than leaving an open orphan that recovery could mistake for
+    exposure.
+    """
+    if not finish_detached_run(run_id, strategy_id, stop_reason):
+        return False
+
+    try:
+        released = (
+            db_session.query(SmStrategy)
+            .filter(
+                SmStrategy.id == strategy_id,
+                SmStrategy.status == "running",
+                SmStrategy.current_run_id.is_(None),
+            )
+            .update(
+                {"status": "stopped", "current_run_id": None},
+                synchronize_session=False,
+            )
+        )
+        db_session.commit()
+        db_session.expire_all()
+        return released == 1
+    except Exception:
+        db_session.rollback()
+        logger.exception(
+            "Could not release the empty run claim for strategy %s after closing run %s",
+            strategy_id,
+            run_id,
+        )
+        return False
+
+
 def request_run_stop(run_id: int, reason: str) -> bool:
     """Persist a stop request while leaving the run active until it is flat."""
     try:
         updated = (
             db_session.query(SmStrategyRun)
-            .filter(SmStrategyRun.id == run_id, SmStrategyRun.stopped_at.is_(None))
+            .filter(
+                SmStrategyRun.id == run_id,
+                SmStrategyRun.stopped_at.is_(None),
+                SmStrategyRun.stop_requested_at.is_(None),
+                SmStrategyRun.stop_requested_reason.is_(None),
+            )
             .update(
                 {
                     "stop_requested_at": utcnow(),
@@ -1218,10 +1411,90 @@ def request_run_stop(run_id: int, reason: str) -> bool:
         )
         db_session.commit()
         db_session.expire_all()
-        return updated == 1
+        if updated == 1:
+            return True
+        existing = (
+            db_session.query(SmStrategyRun.id)
+            .filter(
+                SmStrategyRun.id == run_id,
+                SmStrategyRun.stopped_at.is_(None),
+                SmStrategyRun.stop_requested_at.is_not(None),
+                SmStrategyRun.stop_requested_reason.is_not(None),
+            )
+            .first()
+        )
+        return existing is not None
     except Exception:
         db_session.rollback()
         logger.exception("Could not request stop for run %s", run_id)
+        return False
+
+
+def reopen_run_for_late_entry_fill(run_id: int) -> bool:
+    """Reopen a terminal run after stronger durable entry-fill evidence.
+
+    A broker may first report ``cancelled, filled=0`` and later correct that
+    terminal fact to ``complete`` with a higher cumulative quantity. The
+    original stop was allowed to finish on the zero fact, so this conditional
+    repair restores its pending-stop reason. If the strategy is still free it
+    also regains ordinary current-run ownership; if a newer run owns it, the
+    old run remains an independently managed residual and the shared pending
+    stop reconciler still services it.
+    """
+    try:
+        db_session.expire_all()
+        run = db_session.query(SmStrategyRun).filter_by(id=run_id).first()
+        if run is None:
+            return False
+        if run.stopped_at is None:
+            return run.stop_requested_reason is not None
+
+        stopped_at = run.stopped_at
+        strategy_id = run.strategy_id
+        reason = run.stop_reason or "manual"
+        reopened = (
+            db_session.query(SmStrategyRun)
+            .filter(
+                SmStrategyRun.id == run_id,
+                SmStrategyRun.stopped_at == stopped_at,
+            )
+            .update(
+                {
+                    "stopped_at": None,
+                    "stop_reason": None,
+                    "stop_requested_at": utcnow(),
+                    "stop_requested_reason": reason,
+                },
+                synchronize_session=False,
+            )
+        )
+        if reopened != 1:
+            db_session.rollback()
+            db_session.expire_all()
+            current = db_session.query(SmStrategyRun).filter_by(id=run_id).first()
+            return bool(
+                current is not None
+                and current.stopped_at is None
+                and current.stop_requested_reason is not None
+            )
+
+        # Claim the ordinary UI/current-run pointer only when nobody newer owns
+        # it. This conditional update races safely with a fresh start.
+        db_session.query(SmStrategy).filter(
+            SmStrategy.id == strategy_id,
+            SmStrategy.current_run_id.is_(None),
+            SmStrategy.status == "stopped",
+        ).update(
+            {"status": "running", "current_run_id": run_id},
+            synchronize_session=False,
+        )
+        db_session.commit()
+        db_session.expire_all()
+        _forget_session_pnl(strategy_id)
+        return True
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not reopen run %s after a late entry fill", run_id)
         return False
 
 
@@ -1459,6 +1732,26 @@ def list_open_runs() -> list[SmStrategyRun]:
         return db_session.query(SmStrategyRun).filter(SmStrategyRun.stopped_at.is_(None)).all()
     except Exception:
         logger.exception("Could not list open runs")
+        return []
+
+
+def list_open_run_ids_after(after_id: int, limit: int) -> list[int]:
+    """A bounded ascending page of open run ids for background safety sweeps."""
+    try:
+        page_size = max(1, min(int(limit), 100))
+        rows = (
+            db_session.query(SmStrategyRun.id)
+            .filter(
+                SmStrategyRun.stopped_at.is_(None),
+                SmStrategyRun.id > max(0, int(after_id)),
+            )
+            .order_by(SmStrategyRun.id.asc())
+            .limit(page_size)
+            .all()
+        )
+        return [int(row[0]) for row in rows]
+    except Exception:
+        logger.exception("Could not page open runs after %s", after_id)
         return []
 
 
@@ -1731,6 +2024,119 @@ def get_order(order_id: int) -> SmStrategyOrder | None:
         return None
 
 
+def bind_order_acknowledgement(
+    order_id: int,
+    run_id: int,
+    leg_id: int,
+    *,
+    broker_order_id: str | None,
+    status: str,
+    reject_reason: str | None,
+) -> str:
+    """Repair one exact pre-dispatch row from its durable ack event.
+
+    Returns ``repaired``, ``already_bound``, ``conflict`` or ``missing``.
+    Only the exact pending row identified by id/run/leg may move. An existing
+    different broker id is never overwritten, and the statement also refuses
+    a broker id already carried by another strategy order. Replays preserve a
+    later terminal broker fact rather than reopening it.
+    """
+    desired_status = str(status or "").strip().lower()
+    if desired_status not in {"open", "rejected"}:
+        return "conflict"
+    desired_broker_id = str(broker_order_id).strip() if broker_order_id else None
+    if desired_status == "open" and not desired_broker_id:
+        return "conflict"
+
+    for _attempt in range(4):
+        try:
+            db_session.expire_all()
+            row = (
+                db_session.query(SmStrategyOrder)
+                .filter(
+                    SmStrategyOrder.id == order_id,
+                    SmStrategyOrder.run_id == run_id,
+                    SmStrategyOrder.leg_id == leg_id,
+                )
+                .first()
+            )
+            if row is None:
+                return "missing"
+
+            raw_status = row.status
+            current_status = str(raw_status or "pending").strip().lower()
+            raw_broker_id = row.broker_order_id
+            current_broker_id = str(raw_broker_id).strip() if raw_broker_id else None
+            if current_broker_id and current_broker_id != desired_broker_id:
+                return "conflict"
+
+            if desired_broker_id:
+                collision = (
+                    db_session.query(SmStrategyOrder.id)
+                    .filter(
+                        SmStrategyOrder.id != order_id,
+                        SmStrategyOrder.broker_order_id == desired_broker_id,
+                    )
+                    .first()
+                )
+                if collision is not None:
+                    return "conflict"
+
+            if current_status != "pending":
+                if desired_status == "open" and current_broker_id == desired_broker_id:
+                    # Open or a later terminal fact with the exact id is
+                    # stronger than the lost initial acknowledgement.
+                    return "already_bound"
+                if (
+                    desired_status == "rejected"
+                    and current_status == "rejected"
+                    and current_broker_id == desired_broker_id
+                ):
+                    return "already_bound"
+                return "conflict"
+
+            fields: dict[str, Any] = {"status": desired_status}
+            if desired_broker_id:
+                fields["broker_order_id"] = desired_broker_id
+            if desired_status == "rejected":
+                fields["reject_reason"] = reject_reason
+
+            query = db_session.query(SmStrategyOrder).filter(
+                SmStrategyOrder.id == order_id,
+                SmStrategyOrder.run_id == run_id,
+                SmStrategyOrder.leg_id == leg_id,
+                SmStrategyOrder.status == raw_status,
+            )
+            if raw_broker_id is None:
+                query = query.filter(SmStrategyOrder.broker_order_id.is_(None))
+            else:
+                query = query.filter(SmStrategyOrder.broker_order_id == raw_broker_id)
+            if desired_broker_id:
+                other_owner = exists().where(
+                    (SmStrategyOrder.id != order_id)
+                    & (SmStrategyOrder.broker_order_id == desired_broker_id)
+                )
+                query = query.filter(~other_owner)
+
+            updated = query.update(fields, synchronize_session=False)
+            if updated != 1:
+                db_session.rollback()
+                continue
+            db_session.commit()
+            db_session.expire_all()
+            return "repaired"
+        except Exception:
+            db_session.rollback()
+            logger.exception(
+                "Could not bind acknowledgement for order row %s on run %s",
+                order_id,
+                run_id,
+            )
+            return "conflict"
+
+    return "conflict"
+
+
 def list_orders(run_id: int) -> list[dict]:
     try:
         rows = (
@@ -1765,6 +2171,26 @@ def list_orders_for_strategy(strategy_id: int, run_id: int | None = None) -> lis
 # ---------------------------------------------------------------------------
 # Events
 # ---------------------------------------------------------------------------
+
+
+def list_order_ack_events(run_id: int) -> list[dict] | None:
+    """All append-only lost-ack witnesses for one run, oldest first."""
+    try:
+        rows = (
+            db_session.query(SmStrategyEvent)
+            .filter(
+                SmStrategyEvent.run_id == run_id,
+                SmStrategyEvent.kind == "order_ack_unrecorded",
+            )
+            .order_by(SmStrategyEvent.id.asc())
+            .all()
+        )
+        return [event_to_dict(row) for row in rows]
+    except Exception:
+        logger.exception("Could not list unrecorded acknowledgements for run %s", run_id)
+        # Empty means "there are no witnesses". None means the safety query
+        # itself failed and callers must keep the run reserved.
+        return None
 
 
 def record_event(

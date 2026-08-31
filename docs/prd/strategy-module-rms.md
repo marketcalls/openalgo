@@ -121,10 +121,11 @@ Six tables, all `sm_` prefixed, in the main database: `sm_strategy`,
 | FR2.8 | The product actually sent is recorded on the order row | P1 |
 | FR2.9 | Batch and signal paths write a durable pending intent before calling the broker | P0 |
 | FR2.10 | If intent persistence fails an entry is refused; an exit is still attempted and the lost audit row is reported at critical severity | P0 |
-| FR2.11 | A broker acknowledgement write is checked and retried once; persistent failure records the broker id in `order_ack_unrecorded` for manual reconciliation | P0 |
+| FR2.11 | A broker acknowledgement write is checked and retried once; persistent failure records structured exact row/run/leg, broker id and accepted/rejected facts in `order_ack_unrecorded`, immediately attempts idempotent exact-row repair, and is retried by a bounded shared open-run sweep with broker-status folding; conflicts keep possible exposure open and reserved | P0 |
 | FR2.12 | Every position incarnation has a durable `position_ref`; entry, exit and fill settle only the exact owner they name | P0 |
 | FR2.13 | An accepted but unfilled entry is never squared off at requested size; the stop stays open until a confirmed quantity exists | P0 |
 | FR2.14 | A stop request is durable before exits and finalises only after exact owner quantities confirm the run is flat | P0 |
+| FR2.15 | An accepted exit placement is audited before a replayed synchronous fill may produce the confirmed-flat `run_stopped` transition | P0 |
 
 ### FR3: Per-Leg Risk
 | ID | Requirement | Priority |
@@ -143,6 +144,7 @@ Six tables, all `sm_` prefixed, in the main database: `sm_strategy`,
 | FR4.3 | Trail every other leg to entry once one leg's stop fires | P1 |
 | FR4.4 | Daily loss limit measured across the session, not one run | P0 |
 | FR4.5 | The session boundary is the platform session reset, not midnight | P0 |
+| FR4.6 | Combined thresholds evaluate rolling latest-known marks after each one-symbol tick and trigger MARKET exits; final fill-derived P&L may differ, while the terminal reason preserves the rule that fired | P0 |
 
 ### FR5: Signals And The Public Webhook
 | ID | Requirement | Priority |
@@ -191,6 +193,7 @@ Six tables, all `sm_` prefixed, in the main database: `sm_strategy`,
 | FR8.7 | Broker orders/trades reconcile unique ids, aggregate multiple fills, expose local-only/ambiguous/mismatch states and keep local rejection reasons visible | P1 |
 | FR8.8 | Shared account-level positions are not attributed to one strategy; strategy P&L comes from its own fills | P0 |
 | FR8.9 | Local position fallback preserves lifetime residual exposure, but live leg marks value it only when the frame and selected/current run ids match | P0 |
+| FR8.10 | Once stopped, Detail uses the newest finalized run for realized P&L, peak, trough, stop metadata and broker-book scope; stale live/checkpoint state cannot restore unrealized P&L | P0 |
 
 ## Non-Functional Requirements
 

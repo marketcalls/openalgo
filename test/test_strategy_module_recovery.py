@@ -279,6 +279,88 @@ def test_a_run_with_no_checkpoint_recovers_from_its_orders_alone():
     assert leg["sl_pts"] == 20
 
 
+def test_restart_binds_an_accepted_ack_event_to_its_exact_pending_entry_row():
+    sid = _strategy()
+    run_id = _run(sid)
+    row_id = _order(
+        run_id,
+        1,
+        "entry",
+        status="pending",
+        position_ref="ack-restart-owner",
+    )
+    store.record_event(
+        sid,
+        USER,
+        "order_ack_unrecorded",
+        "Accepted acknowledgement is pending automatic reconciliation",
+        run_id=run_id,
+        leg_id=1,
+        severity="critical",
+        payload={
+            "version": 1,
+            "order_id": row_id,
+            "run_id": run_id,
+            "leg_id": 1,
+            "broker_order_id": "ACK-ENTRY-RESTART",
+            "accepted": True,
+            "status": "open",
+            "reject_reason": None,
+        },
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    durable = store.get_order(row_id)
+    assert durable.broker_order_id == "ACK-ENTRY-RESTART"
+    assert durable.status == "open"
+    live = state.get_run_state(run_id)
+    assert live is not None
+    assert live["legs"]["1"]["entry_order_id"] == row_id
+    assert live["legs"]["1"]["entry_status"] == "open"
+    assert store.get_run(run_id).stopped_at is None
+
+
+def test_legacy_unstructured_ack_event_keeps_possible_exposure_open_and_reserved():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(run_id, 1, "entry", status="pending")
+    store.record_event(
+        sid,
+        USER,
+        "order_ack_unrecorded",
+        "Legacy accepted broker acknowledgement without structured linkage",
+        run_id=run_id,
+        leg_id=1,
+        severity="critical",
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is False
+    assert recovered.finalised is False
+    assert "could not be linked" in str(recovered.error).lower()
+    assert store.get_run(run_id).stopped_at is None
+    assert store.get_strategy(sid, USER).current_run_id == run_id
+    assert state.get_run_state(run_id) is None
+
+
+def test_ack_witness_read_failure_cannot_be_misread_as_no_ambiguous_exposure():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(run_id, 1, "entry", status="pending")
+
+    with patch.object(store, "list_order_ack_events", return_value=None):
+        recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is False
+    assert recovered.finalised is False
+    assert store.get_run(run_id).stopped_at is None
+    assert store.get_strategy(sid, USER).current_run_id == run_id
+    assert state.get_run_state(run_id) is None
+
+
 def test_the_checkpoint_may_witness_a_fill_the_order_row_has_not_caught_up_with():
     # The checkpoint is written from the same fill engine.apply_fill applies to
     # live state, so it can see a fill before the row is updated. That upgrade
@@ -543,6 +625,43 @@ def test_recovery_preserves_pending_stop_and_exact_rejected_exit_owner():
     assert leg["exit_kind"] is None
 
 
+def test_recovery_snapshots_run_facts_before_session_cleanup():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        1,
+        "entry",
+        action="SELL",
+        status="complete",
+        avg=100.0,
+        filled_qty=75,
+        position_ref="detached-recovery-position",
+    )
+    assert store.request_run_stop(run_id, "manual") is True
+
+    list_orders = store.list_orders
+
+    def list_orders_then_remove_session(target_run_id):
+        rows = list_orders(target_run_id)
+        # Model a sibling store/event call that commits and clears the scoped
+        # session while recovery still owns the plain run facts it read first.
+        store.db_session.expire_all()
+        store.db_session.remove()
+        return rows
+
+    with patch.object(store, "list_orders", side_effect=list_orders_then_remove_session):
+        recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    assert recovered.finalised is False
+    assert recovered.strategy_id == sid
+    assert state.get_run_state(run_id)["stopping"] is True
+    durable = store.get_run(run_id)
+    assert durable.stopped_at is None
+    assert durable.stop_requested_reason == "manual"
+
+
 def test_an_exit_in_flight_comes_back_marked_so_it_is_not_sent_twice():
     sid = _strategy()
     run_id = _run(sid)
@@ -744,9 +863,9 @@ def test_recovered_working_partial_is_applied_once_when_its_terminal_cumulative_
     assert recovery.recover_run(run_id).ok is True
     before = state.get_run_state(run_id)["legs"]["1"]
     owner_before = before["superseded"] if with_replacement else before
-    assert owner_before["qty"] == 75
+    assert owner_before["qty"] == 50
     assert owner_before["exit_order_id"] == active_exit
-    assert before["realized_pnl"] == pytest.approx(0.0)
+    assert before["realized_pnl"] == pytest.approx(250.0)
 
     order_events._apply_update(
         "WORKING-EXIT",
@@ -1174,6 +1293,45 @@ def test_post_recovery_rejection_releases_the_exact_superseded_owner_for_retry()
     assert retry is not None
     assert retry["position_ref"] == "old-position"
     assert retry["quantity"] == 75
+
+
+def test_authoritative_legacy_leg_pnl_overrides_zero_checkpoint_when_recovery_is_flat():
+    """Legacy terminal prices are stronger than a checkpoint written before the exit."""
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="complete",
+        avg=110.0,
+    )
+    _checkpoint(
+        run_id,
+        {
+            "1": _cp_leg(
+                position="B",
+                status="closed",
+                exit_avg=110.0,
+                realized_pnl=0.0,
+            )
+        },
+        pnl_realized=0.0,
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.finalised is True
+    assert float(store.get_run(run_id).pnl_realized) == pytest.approx(750.0)
 
 
 def test_reference_group_pnl_overrides_a_stale_nonzero_checkpoint_when_recovery_is_flat():
@@ -1736,6 +1894,29 @@ def test_an_unrecognised_status_is_read_as_working_rather_than_dead():
 # ---------------------------------------------------------------------------
 # Failure and idempotence
 # ---------------------------------------------------------------------------
+
+
+def test_recovery_releases_an_empty_claim_when_a_process_dies_before_run_linkage():
+    """A crash after ``create_run`` but before linkage must not wedge a strategy.
+
+    No entry can be dispatched before the linkage write, so this exact
+    zero-order run is safe to finish.  The strategy claim has no
+    ``current_run_id`` yet, which is deliberately different from a detached
+    residual run belonging to an older activation.
+    """
+    sid = _strategy(name="Unlinked crash-window run")
+    assert store.claim_strategy_for_run(sid) is True
+    run = store.create_run(sid, "sandbox", "sandbox")
+    assert run is not None
+    run_id = int(run.id)
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.finalised is True
+    assert store.get_run(run_id).stopped_at is not None
+    strategy = store.get_strategy(sid, USER)
+    assert strategy.status == "stopped"
+    assert strategy.current_run_id is None
 
 
 def test_a_run_that_cannot_be_recovered_is_finalised_rather_than_wedging_the_boot():

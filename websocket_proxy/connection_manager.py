@@ -15,7 +15,7 @@ import os
 import threading
 from collections import defaultdict
 from collections.abc import Callable
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import zmq
 
@@ -414,7 +414,7 @@ class ConnectionPool:
                 # - {"success": False, "error": "..."} (ConnectionPool format)
                 # - {"status": "error", "code": "...", "message": "..."} (Adapter format)
                 is_error = (
-                    (result and result.get("success") == False) or
+                    (result and result.get("success") is False) or
                     (result and result.get("status") == "error")
                 )
                 if is_error:
@@ -552,7 +552,7 @@ class ConnectionPool:
                     # - {"success": False, "error": "..."} (ConnectionPool format)
                     # - {"status": "error", "code": "...", "message": "..."} (Adapter format)
                     is_error = (
-                        (result and result.get("success") == False) or
+                        (result and result.get("success") is False) or
                         (result and result.get("status") == "error")
                     )
                     if is_error:

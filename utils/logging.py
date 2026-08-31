@@ -88,13 +88,22 @@ SENSITIVE_PATTERNS = [
     # That still stops at a quote, comma or brace, so it cannot swallow the rest
     # of a headers dict.
     (r"(Bearer\s+)[\w\-\.]+(?:[:\s][\w\-\.]+)*", r"\1[REDACTED]"),
+    # Legacy callback diagnostics also used prose rather than key=value:
+    # "Received authorization code: X", "The request token is X", and
+    # similar forms. Keep the useful label while removing the replayable
+    # value. This is deliberately narrower than a generic ``code`` rule so
+    # HTTP/status/error codes remain visible.
+    (
+        r"((?:received\s+(?:authorization\s+code|token[_-]?id)|the\s+(?:request\s+token|code)\s+is|oauth\s+callback\s+with\s+code)\s*:?\s*)[^\s'\",;}\]]+",
+        r"\1[REDACTED]",
+    ),
     # Common credential keys in any of: key=val, key: val, 'key': 'val',
     # "key":"val", key="val". Includes broker-token aliases the codebase
     # actually logs (enctoken, feed_token, access_token, session_token).
     # Value class is a negated set so passwords with symbols (@!#$ ...) are
     # fully consumed; we stop at whitespace, quotes, and dict/JSON structure.
     (
-        r"(['\"]?(?:api[_-]?key[_-]?pepper|api[_-]?key|app[_-]?key|password|access[_-]?token|enctoken|feed[_-]?token|session[_-]?token|auth[_-]?token|authorization|cookie|secret|pepper|token)['\"]?\s*[:=]\s*['\"]?)[^\s'\",;}\]]+",
+        r"(['\"]?(?:api[_-]?key[_-]?pepper|api[_-]?key|app[_-]?key|password|access[_-]?token|enctoken|feed[_-]?token|session[_-]?token|auth[_-]?token|api[_-]?session|token[_-]?id|request[_-]?token|auth[_-]?code|authorization|cookie|secret|pepper|token)['\"]?\s*[:=]\s*['\"]?)[^\s'\",;}\]]+",
         r"\1[REDACTED]",
     ),
 ]
@@ -566,8 +575,6 @@ def highlight_url(url: str, text: str = None) -> str:
     bright_cyan = Fore.CYAN + Style.BRIGHT
     bright_white = Fore.WHITE + Style.BRIGHT
     reset = Style.RESET_ALL
-
-    display_text = text or url
 
     # Format: [bright_white]text[reset] -> [bright_cyan]url[reset]
     if text and text != url:

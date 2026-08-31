@@ -39,7 +39,7 @@ def ratelimit_handler(e):
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_callback(broker, para=None):
     logger.info(f"Broker callback initiated for: {broker}")
-    logger.debug(f"Session contents: {dict(session)}")
+    logger.debug("Session keys: %s", sorted(session.keys()))
     logger.info(f"Session has user key: {'user' in session}")
 
     # Special handling for brokers that come from external auth and might lose session
@@ -106,7 +106,10 @@ def broker_callback(broker, para=None):
         elif request.method == "POST":
             # Check if user session is lost
             if "user" not in session:
-                logger.error(f"mstock POST - Session lost! Cookies: {request.cookies}")
+                logger.error(
+                    "mstock POST - Session lost; cookie names: %s",
+                    sorted(request.cookies.keys()),
+                )
                 return jsonify(
                     {"status": "error", "message": "Session expired. Please login again."}
                 ), 401
@@ -144,7 +147,11 @@ def broker_callback(broker, para=None):
 
         if authCode and userId:
             # Callback from AliceBlue with authorization code
-            logger.info(f"AliceBlue OAuth callback received for user {userId}")
+            logger.info(
+                "AliceBlue OAuth callback received (authCode present: %s, userId present: %s)",
+                bool(authCode),
+                bool(userId),
+            )
             auth_token, client_id, error_message = auth_function(userId, authCode)
             user_id = client_id or userId  # clientId from API response, fallback to OAuth userId
             feed_token = None  # AliceBlue doesn't use a separate feed token
@@ -163,7 +170,7 @@ def broker_callback(broker, para=None):
 
     elif broker == "fivepaisaxts":
         code = "fivepaisaxts"
-        logger.debug(f"FivePaisaXTS broker - code: {code}")
+        logger.debug("FivePaisaXTS broker - authentication initiated")
 
         # Fetch auth token, feed token and user ID
         auth_token, feed_token, user_id, error_message = auth_function(code)
@@ -218,10 +225,10 @@ def broker_callback(broker, para=None):
                 else:
                     session_json = session_data
 
-            except json.JSONDecodeError as e:
-                return jsonify(
-                    {"error": f"Invalid JSON format: {str(e)}", "raw_data": session_data}
-                ), 400
+            except json.JSONDecodeError:
+                # This is the broker's session/access-token container. Never
+                # reflect it into browser or proxy diagnostics.
+                return jsonify({"error": "Invalid session JSON"}), 400
 
             # Extract access token
             access_token = session_json.get("accessToken")
@@ -244,7 +251,7 @@ def broker_callback(broker, para=None):
 
     elif broker == "fyers":
         code = request.args.get("auth_code")
-        logger.debug(f"Fyers broker - The code is {code}")
+        logger.debug("Fyers broker - auth_code present: %s", bool(code))
         auth_token, error_message = auth_function(code)
         forward_url = "broker.html"
 
@@ -276,13 +283,13 @@ def broker_callback(broker, para=None):
 
         logger.debug(f"ICICI broker - Full URL: {redact_url_credentials(full_url)}")
         code = request.args.get("apisession")
-        logger.debug(f"ICICI broker - The code is {code}")
+        logger.debug("ICICI broker - apisession present: %s", bool(code))
         auth_token, error_message = auth_function(code)
         forward_url = "broker.html"
 
     elif broker == "ibulls":
         code = "ibulls"
-        logger.debug(f"Indiabulls broker - code: {code}")
+        logger.debug("Indiabulls broker - authentication initiated")
 
         # Fetch auth token, feed token and user ID
         auth_token, feed_token, user_id, error_message = auth_function(code)
@@ -290,7 +297,7 @@ def broker_callback(broker, para=None):
 
     elif broker == "iifl":
         code = "iifl"
-        logger.debug(f"IIFL broker - The code is {code}")
+        logger.debug("IIFL broker - authentication initiated")
 
         # Fetch auth token, feed token and user ID
         auth_token, feed_token, user_id, error_message = auth_function(code)
@@ -366,7 +373,7 @@ def broker_callback(broker, para=None):
 
     elif broker == "jainamxts":
         code = "jainamxts"
-        logger.debug(f"JainamXTS broker - code: {code}")
+        logger.debug("JainamXTS broker - authentication initiated")
 
         # Fetch auth token, feed token and user ID
         auth_token, feed_token, user_id, error_message = auth_function(code)
@@ -379,22 +386,22 @@ def broker_callback(broker, para=None):
 
         if request.method == "GET":
             # Handle OAuth callback with tokenId
-            # Log all incoming parameters to debug
-            logger.info(f"Dhan callback - GET parameters: {dict(request.args)}")
             from utils.url_redaction import redact_url_credentials
 
             logger.info(
-                f"Dhan callback - Full URL: {redact_url_credentials(request.url)}"
+                "Dhan callback received with parameters: %s",
+                sorted(request.args.keys()),
             )
             logger.info(
-                "Dhan callback - Request path: "
-                f"{redact_url_credentials(request.path)}"
+                f"Dhan callback - Full URL: {redact_url_credentials(request.url)}"
             )
-            logger.info(f"Dhan callback - Query string: {request.query_string.decode()}")
 
             # Log if we're coming from a redirect
             referrer = request.headers.get("Referer", "No referrer")
-            logger.info(f"Dhan callback - Referrer: {referrer}")
+            logger.info(
+                "Dhan callback - Referrer: %s",
+                redact_url_credentials(referrer),
+            )
 
             # Check for tokenId in various possible parameter names
             token_id = (
@@ -405,7 +412,7 @@ def broker_callback(broker, para=None):
 
             if token_id:
                 # Step 3: Consume consent with tokenId
-                logger.debug(f"Dhan broker - Received tokenId: {token_id}")
+                logger.debug("Dhan broker - tokenId present: %s", bool(token_id))
                 # auth_function now returns (auth_token, user_id, error_message)
                 auth_result = auth_function(token_id)
 
@@ -545,32 +552,32 @@ def broker_callback(broker, para=None):
 
     elif broker == "deltaexchange":
         code = "deltaexchange"
-        logger.debug(f"DeltaExchange broker - code: {code}")
+        logger.debug("DeltaExchange broker - authentication initiated")
         auth_token, error_message = auth_function(code)
         forward_url = "broker.html"
 
     elif broker == "dhan_sandbox":
         code = "dhan_sandbox"
-        logger.debug(f"Dhan Sandbox broker - The code is {code}")
+        logger.debug("Dhan Sandbox broker - authentication initiated")
         auth_token, error_message = auth_function(code)
         forward_url = "broker.html"
 
     elif broker == "groww":
         code = "groww"
-        logger.debug(f"Groww broker - The code is {code}")
+        logger.debug("Groww broker - authentication initiated")
         auth_token, error_message = auth_function(code)
         forward_url = "broker.html"
 
     elif broker == "wisdom":
         code = "wisdom"
-        logger.debug(f"Wisdom broker - The code is {code}")
+        logger.debug("Wisdom broker - authentication initiated")
         auth_token, feed_token, user_id, error_message = auth_function(code)
         forward_url = "broker.html"
 
     elif broker == "zebu":
         code = request.args.get("code")
         if code:
-            logger.debug(f"Zebu broker - OAuth callback with code: {code}")
+            logger.debug("Zebu broker - OAuth code present: %s", bool(code))
             auth_token, error_message = auth_function(code)
             forward_url = "broker.html"
         else:
@@ -696,7 +703,11 @@ def broker_callback(broker, para=None):
     elif broker == "flattrade":
         code = request.args.get("code")
         client = request.args.get("client")  # Flattrade returns client ID as well
-        logger.debug(f"Flattrade broker - The code is {code} for client {client}")
+        logger.debug(
+            "Flattrade broker - OAuth code present: %s, client present: %s",
+            bool(code),
+            bool(client),
+        )
         auth_token, error_message = auth_function(code)  # Only pass the code parameter
         forward_url = "broker.html"
 
@@ -772,7 +783,7 @@ def broker_callback(broker, para=None):
 
     elif broker == "paytm":
         request_token = request.args.get("requestToken")
-        logger.debug(f"Paytm broker - The request token is {request_token}")
+        logger.debug("Paytm broker - request token present: %s", bool(request_token))
         auth_token, feed_token, error_message = auth_function(request_token)
         forward_url = "broker.html"
 
@@ -795,7 +806,11 @@ def broker_callback(broker, para=None):
             logger.error(error_msg)
             return handle_auth_failure(error_msg, forward_url="broker.html")
 
-        logger.debug(f"Pocketful broker - Received authorization code: {auth_code}")
+        logger.debug(
+            "Pocketful broker - authorization code present: %s, state present: %s",
+            bool(auth_code),
+            bool(state),
+        )
         # Exchange auth code for access token and fetch client_id
         auth_token, feed_token, user_id, error_message = auth_function(auth_code, state)
         forward_url = "broker.html"
@@ -820,7 +835,15 @@ def broker_callback(broker, para=None):
                     return redirect("/broker/definedge/totp")
                 else:
                     error_msg = "Failed to send OTP. Please check your API credentials."
-                    logger.error(f"Definedge OTP generation failed: {step1_response}")
+                    response_keys = (
+                        sorted(step1_response.keys())
+                        if isinstance(step1_response, dict)
+                        else []
+                    )
+                    logger.error(
+                        "Definedge OTP generation failed; response keys: %s",
+                        response_keys,
+                    )
                     return jsonify({"status": "error", "message": error_msg}), 500
             except Exception as e:
                 error_msg = f"Error sending OTP: {str(e)}"
@@ -921,7 +944,10 @@ def broker_callback(broker, para=None):
                     logger.error(f"RMoney callback - No token in session. Keys: {list(session_json.keys())}")
                     return jsonify({"error": "No token found in session data"}), 400
 
-                logger.info(f"RMoney OAuth authentication successful for user: {user_id}")
+                logger.info(
+                    "RMoney OAuth authentication successful (user ID present: %s)",
+                    bool(user_id),
+                )
 
                 # Get feed token for market data
                 from broker.rmoney.api.auth_api import get_feed_token
@@ -1001,7 +1027,7 @@ def broker_callback(broker, para=None):
 
     else:
         code = request.args.get("code") or request.args.get("request_token")
-        logger.debug(f"Generic broker - The code is {code}")
+        logger.debug("Generic broker - callback code present: %s", bool(code))
         auth_token, error_message = auth_function(code)
         forward_url = "broker.html"
 
@@ -1083,7 +1109,9 @@ def dhan_initiate_oauth():
         # Get the login URL
         login_url = get_login_url(consent_app_id)
         if login_url:
-            logger.info(f"Redirecting to Dhan OAuth login URL: {login_url}")
+            # ``consentAppId`` in the URL is a single-use OAuth credential.
+            # The browser needs the URL below, but application logs do not.
+            logger.info("Redirecting to Dhan OAuth login URL (consent credential redacted)")
             # Return a page that will redirect via JavaScript
             # This ensures the browser properly redirects to the external URL
             return f'''

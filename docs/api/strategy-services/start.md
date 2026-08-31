@@ -81,9 +81,12 @@ curl -X POST http://127.0.0.1:5000/api/v1/strategy/start \
 ```
 
 This is a real broker order, not a rejection. The durable pending intent still
-exists and `order_ack_unrecorded` carries the broker id plus local row id, but
-the database could not attach the two after one retry. Stop automatic retries
-of the entry and perform manual reconciliation.
+exists and structured `order_ack_unrecorded` metadata carries the exact broker,
+row, run and leg linkage. The dispatch call immediately binds only that pending
+row. A bounded shared open-run sweep retries the repair and broker-polls a
+still-working acknowledgement when no held frame remains; a missing or
+conflicting link remains open and reserved instead of retrying the entry or
+claiming flatness.
 
 ## Sample API Request (Live)
 
@@ -144,7 +147,7 @@ Each object in `legs`:
 |-------|------|-------------|
 | leg_id | integer | The leg's id within the strategy |
 | ok | boolean | Whether the entry order was accepted |
-| acknowledged | boolean, optional | Present after dispatch. Whether the broker id and status were durably written back. `false` with `ok: true` requires manual reconciliation; it is not a rejection. Absent when the durable intent itself could not be written and no broker call was made |
+| acknowledged | boolean, optional | Present after dispatch. Whether the broker id and status were durably written back. `false` with `ok: true` leaves structured exact-row metadata for automatic reconciliation; it is not a rejection. Absent when the durable intent itself could not be written and no broker call was made |
 | symbol | string | The contract the leg resolved to |
 | broker_order_id | string or null | Order reference: the broker's id on a live run, the sandbox engine's id on a sandbox run, `null` when the order was not accepted |
 | error | string or null | Rejection reason when `ok` is false |
@@ -173,8 +176,10 @@ Each object in `legs`:
 - **`ok: true, acknowledged: false` is a real broker order with incomplete
   database attribution.** The intent row was durable before dispatch and the
   acknowledgement write was retried, but its broker id/status still could not
-  be saved. A critical `order_ack_unrecorded` event carries both ids; reconcile
-  manually rather than retrying the entry as if it had been refused.
+  be saved. A structured critical `order_ack_unrecorded` event carries exact
+  row/run/leg and broker facts for immediate and bounded periodic
+  reconciliation. Conflicts remain managed and reserved rather than retrying
+  the entry or asserting flatness.
 - Long legs are placed before short legs. On a spread, a short leg alone can be refused for margin the account would have had once the long leg existed.
 - This endpoint is for `batch` strategies. A `signal` strategy has no start: its first inbound signal after the platform session boundary opens the run. See the [webhook page](./webhook.md).
 

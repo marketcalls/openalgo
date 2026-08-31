@@ -131,6 +131,14 @@ Each object in `data`:
   atomically writes `stopped_at`/`stop_reason`, releases the strategy and clears
   both request fields.
 - `pnl_peak` and `pnl_trough` are authoritative only once the run has stopped. While a run is open, the in-process state and its checkpoints are the authority, not these columns.
+- **An overall threshold triggers an exit; it does not promise the realized
+  result.** Aggregate risk is evaluated after each one-symbol tick from the
+  basket's rolling latest-known LTP marks, not a guaranteed simultaneous basket
+  snapshot. MARKET exits fill at the available bid/ask, and spread, movement or
+  sequential leg placement can make `pnl_realized` differ from the threshold
+  and from `pnl_peak`/`pnl_trough`. A run triggered by the combined target keeps
+  `stop_reason: "overall_target"` even when its final realized P&L is below that
+  target.
 - **Final P&L follows evidence, not timing.** Exact priced `position_ref` groups
   override a stale checkpoint, including an exact zero. If durable fills prove
   exposure but have no usable price, a checkpoint total is used only when its

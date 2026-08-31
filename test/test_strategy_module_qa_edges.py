@@ -368,8 +368,8 @@ def test_a_fill_priced_as_a_numeric_string_is_applied_as_that_number(broker):
     assert leg["entry_status"] == "complete"
 
 
-def test_a_fill_priced_as_unparseable_text_seeds_nothing(broker):
-    """Junk in the price field must not become an entry price."""
+def test_an_unparseable_fill_price_keeps_quantity_managed_but_unpriced(broker):
+    """Junk is not a price, but a complete quantity remains real exposure."""
     sid = _make()
     run_id = _start(sid).run_id
 
@@ -377,7 +377,9 @@ def test_a_fill_priced_as_unparseable_text_seeds_nothing(broker):
 
     leg = _live(run_id)
     assert leg["entry_avg"] == 0.0
-    assert leg["entry_status"] == "open"
+    assert leg["entry_status"] == "complete"
+    assert leg["status"] == "open"
+    assert leg["qty"] == 75
 
 
 def test_a_partially_filled_entry_is_exited_at_the_quantity_that_actually_filled(broker):
@@ -428,20 +430,21 @@ def test_the_same_exit_fill_arriving_twice_is_counted_once_in_the_run_pnl(broker
     assert state.get_run_state(run_id)["pnl_realized"] == pytest.approx(expected)
 
 
-def test_a_complete_arriving_after_a_cancel_cannot_resurrect_the_order(broker):
-    """A cancelled order is a fact. A late fill must not re-open the position."""
+def test_higher_complete_after_cancel_is_terminal_correction_and_managed_exposure(broker):
+    """Higher cumulative fill evidence corrects a dead zero without becoming working."""
     sid = _make()
     run_id = _start(sid).run_id
 
     order_events._apply_update("QA-1", _event("QA-1", status="cancelled", avg=0, filled=0))
     order_events._apply_update("QA-1", _event("QA-1", status="complete", avg=101.5))
 
-    assert _live(run_id)["entry_avg"] == 0.0
-    # A cancelled entry is not a working one. Left reading "open" it was a
-    # position as far as every exit path was concerned, so the next square-off
-    # sent the full configured size against nothing.
-    assert _live(run_id)["entry_status"] == "cancelled"
-    assert _live(run_id)["status"] == "rejected"
+    durable = store.list_orders(run_id)[0]
+    assert durable["status"] == "complete"
+    assert durable["filled_qty"] == 75
+    assert _live(run_id)["entry_avg"] == pytest.approx(101.5)
+    assert _live(run_id)["entry_status"] == "complete"
+    assert _live(run_id)["status"] == "open"
+    assert _live(run_id)["qty"] == 75
 
 
 def test_a_cancelled_order_is_recorded_as_cancelled_not_as_rejected(broker):
@@ -806,6 +809,155 @@ def test_immediate_exit_fill_finishes_the_stop_once_and_returns_not_pending(brok
     assert kinds.count("run_stopped") == 1
 
 
+def test_synchronous_sandbox_target_lifecycle_preserves_reason_and_final_figures():
+    """A target peak and later execution P&L are separate durable truths."""
+    sid = _make(
+        _config(
+            legs=[
+                _leg(leg_id=1, position="S"),
+                _leg(leg_id=2, position="S"),
+            ],
+            overall_target_mtm=500,
+        )
+    )
+    entry_prices = iter([888.10, 620.50])
+    exit_prices = iter([883.45, 623.85])
+    entry_number = 0
+    exit_number = 0
+
+    def fill_inside_dispatch(**kwargs):
+        nonlocal entry_number, exit_number
+        order = kwargs["order"]
+        if order["action"] == "SELL":
+            entry_number += 1
+            broker_order_id = f"SYNC-ENTRY-{entry_number}"
+            price = next(entry_prices)
+        else:
+            exit_number += 1
+            broker_order_id = f"SYNC-TARGET-EXIT-{exit_number}"
+            price = next(exit_prices)
+        # The sandbox publishes before dispatch returns. The update is cached
+        # until the durable pending row receives this broker reference, then
+        # replayed synchronously by the engine acknowledgement path.
+        order_events._apply_update(
+            broker_order_id,
+            _event(
+                broker_order_id,
+                status="complete",
+                avg=price,
+                filled=90,
+            ),
+        )
+        return DispatchResult(
+            ok=True,
+            broker_order_id=broker_order_id,
+            response={},
+        )
+
+    with (
+        patch.object(
+            engine,
+            "resolve_leg",
+            side_effect=[
+                _resolved(symbol=CE, qty=90),
+                _resolved(symbol=PE, qty=90),
+            ],
+        ),
+        patch.object(engine, "_broker_for", return_value="sandbox"),
+        patch.object(
+            engine.order_dispatch,
+            "dispatch_order",
+            side_effect=fill_inside_dispatch,
+        ),
+    ):
+        started = engine.start_run(sid, USER, "sandbox")
+        assert started.ok is True
+        run_id = started.run_id
+        assert run_id is not None
+
+        # First mark contributes +418.50. The second latest mark contributes
+        # +94.50 and takes the basket to its +513.00 target. Execution then
+        # realizes only +117.00 because the PE exit fills at 623.85.
+        engine.process_tick(CE, "NFO", 883.45)
+        engine.process_tick(PE, "NFO", 619.45)
+
+    durable = store.get_run(run_id)
+    assert durable.stopped_at is not None
+    assert durable.stop_reason == "overall_target"
+    assert durable.stop_requested_reason is None
+    assert float(durable.pnl_realized) == pytest.approx(117.0)
+    assert float(durable.pnl_peak) == pytest.approx(513.0)
+    assert float(durable.pnl_trough) == pytest.approx(0.0)
+    assert state.get_run_state(run_id) is None
+
+    orders = store.list_orders(run_id)
+    assert [row["kind"] for row in orders] == [
+        "entry",
+        "entry",
+        "exit_overall_target",
+        "exit_overall_target",
+    ]
+    assert [row["status"] for row in orders] == [
+        "complete",
+        "complete",
+        "complete",
+        "complete",
+    ]
+    events = store.list_events(sid)
+    event_kinds = [event["kind"] for event in events]
+    assert event_kinds.count("overall_target_hit") == 1
+    assert event_kinds.count("run_stop_requested") == 1
+    assert event_kinds.count("run_stopped") == 1
+    target_event = next(event for event in events if event["kind"] == "overall_target_hit")
+    payload = target_event["payload"]
+    assert payload == {
+        "trigger_total": 513.0,
+        "reason": "overall_target",
+        "threshold": 500.0,
+        "triggering_tick": {
+            "symbol": PE,
+            "exchange": "NFO",
+            "ltp": 619.45,
+        },
+        "legs": [
+            {
+                "symbol": CE,
+                "exchange": "NFO",
+                "ltp": 883.45,
+                "mtm": 418.5,
+                "tick_source": "ws",
+                "qty": 90,
+                "position": "S",
+            },
+            {
+                "symbol": PE,
+                "exchange": "NFO",
+                "ltp": 619.45,
+                "mtm": 94.5,
+                "tick_source": "ws",
+                "qty": 90,
+                "position": "S",
+            },
+        ],
+    }
+    assert sum(leg["mtm"] for leg in payload["legs"]) == pytest.approx(513.0)
+    assert sum(leg["mtm"] for leg in payload["legs"]) == pytest.approx(
+        payload["trigger_total"]
+    )
+    lifecycle = [
+        event["kind"]
+        for event in sorted(events, key=lambda event: event["id"])
+        if event["kind"]
+        in {"overall_target_hit", "leg_exit_placed", "run_stopped"}
+    ]
+    assert lifecycle == [
+        "overall_target_hit",
+        "leg_exit_placed",
+        "leg_exit_placed",
+        "run_stopped",
+    ]
+
+
 def test_final_exit_fill_completes_a_pending_stop(broker):
     strategy_id, run_id = _filled_batch_run(broker)
     pending = engine.stop_run(run_id, USER, reason="scheduler")
@@ -951,6 +1103,39 @@ def test_a_stop_whose_exits_were_all_refused_does_not_close_the_run(broker):
     assert "run_stop_requested" in kinds
     assert "run_stop_failed" in kinds
     assert "run_stopped" not in kinds
+
+
+def test_manual_retry_keeps_the_first_automatic_stop_cause_and_exit_kind(broker):
+    """An operator retry must not rewrite why risk first stopped the run."""
+    sid = _make()
+    run_id = _start(sid).run_id
+    order_events._apply_update("QA-1", _event("QA-1", avg=100.0))
+    broker.clear()
+    broker.refuse = True
+
+    first = engine.stop_run(run_id, USER, reason="overall_target")
+    first_requested_at = store.get_run(run_id).stop_requested_at
+    broker.refuse = False
+    second = engine.stop_run(run_id, USER, reason="manual")
+
+    assert first["stop_pending"] is True
+    assert second["stop_pending"] is True
+    durable = store.get_run(run_id)
+    assert durable.stop_requested_at == first_requested_at
+    assert durable.stop_requested_reason == "overall_target"
+    exit_kinds = [
+        row["kind"] for row in store.list_orders(run_id) if row["kind"] != "entry"
+    ]
+    assert exit_kinds == ["exit_overall_target", "exit_overall_target"]
+    requested_messages = [
+        event["message"]
+        for event in store.list_events(sid)
+        if event["kind"] == "run_stop_requested"
+    ]
+    assert requested_messages == [
+        "Stop requested (overall_target); exit orders are being attempted",
+        "Stop requested (overall_target); exit orders are being attempted",
+    ]
 
 
 def test_closing_a_leg_whose_exit_was_refused_reports_the_failure(broker):

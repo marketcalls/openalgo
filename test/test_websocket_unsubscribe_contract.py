@@ -10,12 +10,14 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from collections import defaultdict
 from typing import Any
 
 import pytest
 
 from services.websocket_client import WebSocketClient
+from websocket_proxy import server as proxy_server
 from websocket_proxy.broker_factory import _PooledAdapterWrapper
 from websocket_proxy.connection_manager import ConnectionPool
 from websocket_proxy.server import WebSocketProxy
@@ -489,6 +491,98 @@ def test_special_broker_fallback_disconnect_exception_still_evicts_dead_adapter(
     assert 7 not in proxy.user_mapping
 
 
+@pytest.mark.parametrize("release_path", ["disconnect", "unsubscribe_all"])
+def test_three_thousand_subscription_cleanup_is_linear_and_yields_to_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+    release_path: str,
+) -> None:
+    """Each stored row is parsed once and long cleanup lets the hub make progress."""
+    row_count = 3000
+    heartbeat = asyncio.Event()
+
+    class ScaleAdapter:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.saw_heartbeat_during_release = False
+            self.disconnect_calls = 0
+
+        def unsubscribe(self, _symbol: str, _exchange: str, _mode: int) -> dict[str, str]:
+            self.calls += 1
+            if heartbeat.is_set():
+                self.saw_heartbeat_during_release = True
+            return {"status": "success"}
+
+        def disconnect(self) -> None:
+            self.disconnect_calls += 1
+
+    adapter = ScaleAdapter()
+    proxy = WebSocketProxy.__new__(WebSocketProxy)
+    proxy.user_mapping = {7: "scale-user"}
+    proxy.broker_adapters = {"scale-user": adapter}
+    proxy.user_broker_mapping = {"scale-user": "sandbox"}
+    proxy.clients = {7: object()}
+    proxy.order_subscribers = defaultdict(set)
+    proxy.subscription_index = defaultdict(set)
+    parsed_rows: dict[str, dict[str, Any]] = {}
+    stored_rows = set()
+    for index in range(row_count):
+        row = {
+            "symbol": f"SYM{index}",
+            "exchange": "NSE",
+            "mode": 1,
+            "depth_level": 5,
+            "broker": "sandbox",
+        }
+        encoded = json.dumps(row)
+        parsed_rows[encoded] = row
+        stored_rows.add(encoded)
+        proxy.subscription_index[(row["symbol"], "NSE", 1)].add(7)
+    proxy.subscriptions = {7: stored_rows}
+    responses = []
+
+    async def capture(_client_id: int, response: dict[str, Any]) -> None:
+        responses.append(response)
+
+    proxy.send_message = capture
+    parse_count = 0
+
+    def counted_loads(raw: str) -> dict[str, Any]:
+        nonlocal parse_count
+        parse_count += 1
+        return parsed_rows[raw]
+
+    monkeypatch.setattr(proxy_server.json, "loads", counted_loads)
+
+    async def exercise() -> None:
+        async def beat() -> None:
+            await asyncio.sleep(0)
+            heartbeat.set()
+
+        heartbeat_task = asyncio.create_task(beat())
+        if release_path == "disconnect":
+            await proxy.cleanup_client(7)
+        else:
+            await proxy.unsubscribe_client(7, {"action": "unsubscribe_all"})
+        await heartbeat_task
+
+    started = time.perf_counter()
+    asyncio.run(exercise())
+    elapsed = time.perf_counter() - started
+
+    assert adapter.calls == row_count
+    assert parse_count <= row_count + 1
+    assert adapter.saw_heartbeat_during_release is True
+    assert elapsed < 3.0
+    assert proxy.subscription_index == {}
+    assert proxy.subscriptions.get(7, set()) == set()
+    if release_path == "disconnect":
+        assert adapter.disconnect_calls == 1
+        assert 7 not in proxy.user_mapping
+    else:
+        assert adapter.disconnect_calls == 0
+        assert responses[-1]["status"] == "success"
+
+
 def _connection_pool_with_adapter(adapter: _Adapter) -> ConnectionPool:
     pool = ConnectionPool.__new__(ConnectionPool)
     pool.lock = threading.RLock()
@@ -950,6 +1044,10 @@ def test_internal_client_sends_explicit_item_modes_and_cleans_only_acknowledged_
         "NSE:RELIANCE": {"Depth", "LTP"},
         "NSE:INFY": {"LTP"},
     }
+    client.market_data_cache = {
+        "NSE:RELIANCE": {"ltp": 2500.0},
+        "NSE:INFY": {"ltp": 1500.0},
+    }
     sent: list[dict[str, Any]] = []
 
     async def acknowledge(message: dict[str, Any], _request_id: str, timeout: float) -> dict[str, Any]:
@@ -1017,6 +1115,10 @@ def test_internal_client_sends_explicit_item_modes_and_cleans_only_acknowledged_
         "NSE:RELIANCE": {"LTP"},
         "NSE:INFY": {"LTP"},
     }
+    assert client.get_market_data() == {
+        "NSE:RELIANCE": {"ltp": 2500.0},
+        "NSE:INFY": {"ltp": 1500.0},
+    }
 
 
 def _ready_client(active: dict[str, set[str]]) -> WebSocketClient:
@@ -1032,6 +1134,7 @@ def _ready_client(active: dict[str, set[str]]) -> WebSocketClient:
 
 def test_client_normalizes_lowercase_mode_for_wire_and_tracking_cleanup() -> None:
     client = _ready_client({"NSE:RELIANCE": {"LTP"}})
+    client.market_data_cache = {"NSE:RELIANCE": {"ltp": 2500.0}}
     sent: list[dict[str, Any]] = []
 
     async def acknowledge(message: dict[str, Any], _request_id: str, timeout: float) -> dict[str, Any]:
@@ -1058,6 +1161,7 @@ def test_client_normalizes_lowercase_mode_for_wire_and_tracking_cleanup() -> Non
     assert sent[0]["mode"] == "LTP"
     assert sent[0]["symbols"][0]["mode"] == "LTP"
     assert client.active_subscriptions == {}
+    assert client.get_market_data() == {}
 
 
 def test_client_subscribe_normalizes_wire_and_active_tracking_mode() -> None:
@@ -1153,6 +1257,7 @@ def test_client_legacy_ack_without_mode_only_cleans_an_unambiguous_request(
 
 def test_client_unsubscribe_all_waits_for_ack_and_preserves_failed_modes() -> None:
     client = _ready_client({"NSE:RELIANCE": {"Depth", "LTP"}})
+    client.market_data_cache = {"NSE:RELIANCE": {"ltp": 2500.0}}
     sent: list[dict[str, Any]] = []
 
     async def acknowledge(message: dict[str, Any], _request_id: str, timeout: float) -> dict[str, Any]:
@@ -1184,6 +1289,127 @@ def test_client_unsubscribe_all_waits_for_ack_and_preserves_failed_modes() -> No
     assert sent[0]["request_id"]
     assert result["status"] == "partial"
     assert client.active_subscriptions == {"NSE:RELIANCE": {"Depth"}}
+    assert client.get_market_data("RELIANCE", "NSE") == {"ltp": 2500.0}
+
+
+def test_client_acknowledged_unsubscribe_churn_does_not_retain_contract_cache() -> None:
+    """Every distinct contract must leave the cache with its final owner."""
+    client = WebSocketClient("test-key")
+
+    for index in range(3000):
+        symbol = f"NIFTY{index}CE"
+        key = f"NFO:{symbol}"
+        client.active_subscriptions[key] = {"LTP"}
+        client.market_data_cache[key] = {"ltp": float(index)}
+        client._remove_acknowledged_modes(
+            [
+                {
+                    "symbol": symbol,
+                    "exchange": "NFO",
+                    "mode": "LTP",
+                    "status": "success",
+                }
+            ],
+            {("NFO", symbol): {"LTP"}},
+        )
+
+    assert client.get_subscriptions()["count"] == 0
+    assert client.get_market_data() == {}
+
+
+def test_client_disconnect_releases_subscription_and_market_data_state() -> None:
+    client = WebSocketClient("test-key")
+    client.active_subscriptions = {"NSE:RELIANCE": {"LTP"}}
+    client.market_data_cache = {"NSE:RELIANCE": {"ltp": 2500.0}}
+
+    client.disconnect()
+
+    assert client.get_subscriptions()["count"] == 0
+    assert client.get_market_data() == {}
+
+
+def test_late_market_data_after_final_unsubscribe_cannot_repopulate_cache() -> None:
+    client = WebSocketClient("test-key")
+    client.active_subscriptions = {"NSE:RELIANCE": {"LTP"}}
+    client.market_data_cache = {"NSE:RELIANCE": {"ltp": 2499.0}}
+    received: list[dict[str, Any]] = []
+    client._dispatch = lambda event, data: received.append({"event": event, **data})
+
+    client._remove_acknowledged_modes(
+        [
+            {
+                "symbol": "RELIANCE",
+                "exchange": "NSE",
+                "mode": "LTP",
+                "status": "success",
+            }
+        ],
+        {("NSE", "RELIANCE"): {"LTP"}},
+    )
+    asyncio.run(
+        client._handle_message(
+            json.dumps(
+                {
+                    "type": "market_data",
+                    "symbol": "RELIANCE",
+                    "exchange": "NSE",
+                    "ltp": 2500.0,
+                }
+            )
+        )
+    )
+
+    assert client.get_subscriptions()["count"] == 0
+    assert client.get_market_data() == {}
+    assert received == [
+        {
+            "event": "market_data",
+            "type": "market_data",
+            "symbol": "RELIANCE",
+            "exchange": "NSE",
+            "ltp": 2500.0,
+        }
+    ]
+
+
+@pytest.mark.parametrize("frame_first", [True, False])
+def test_final_unsubscribe_and_market_frame_are_serializable_under_one_lock(
+    frame_first: bool,
+) -> None:
+    """Either lock order ends cache-free once the final owner is gone."""
+    client = WebSocketClient("test-key")
+    client.active_subscriptions = {"NSE:RELIANCE": {"LTP"}}
+    frame = json.dumps(
+        {
+            "type": "market_data",
+            "symbol": "RELIANCE",
+            "exchange": "NSE",
+            "ltp": 2500.0,
+        }
+    )
+
+    def unsubscribe() -> None:
+        client._remove_acknowledged_modes(
+            [
+                {
+                    "symbol": "RELIANCE",
+                    "exchange": "NSE",
+                    "mode": "LTP",
+                    "status": "success",
+                }
+            ],
+            {("NSE", "RELIANCE"): {"LTP"}},
+        )
+
+    if frame_first:
+        asyncio.run(client._handle_message(frame))
+        unsubscribe()
+    else:
+        unsubscribe()
+        asyncio.run(client._handle_message(frame))
+
+    assert client.active_subscriptions == {}
+    assert client.get_market_data() == {}
 
 
 def test_subscribe_rejection_is_a_partial_ack_with_a_per_symbol_error() -> None:

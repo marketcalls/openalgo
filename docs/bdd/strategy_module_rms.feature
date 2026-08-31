@@ -26,14 +26,14 @@ Feature: Strategy module and risk management
     Then the plaintext token appears in none of them
     And only its digest is used for lookup and rate-limit identity
 
-  # Source: test/test_strategy_module_qa_edges.py:643
+  # Source: test/test_strategy_module_qa_edges.py:646
   Scenario: Two starts racing produce exactly one run
     Given a stopped strategy
     When two callers start it at the same instant
     Then a single conditional update claims it
     And only one set of entry orders reaches the broker
 
-  # Source: test/test_strategy_module_engine.py:126
+  # Source: test/test_strategy_module_engine.py:127
   Scenario: Every batch leg resolves before anything is claimed
     Given one configured leg cannot resolve to a listed contract
     When the batch strategy starts
@@ -48,20 +48,22 @@ Feature: Strategy module and risk management
     And carry is NRML on derivatives and CNC on cash
     And the literal product sent is persisted with the order
 
-  # Source: test/test_strategy_module_order_dispatch.py:234
+  # Source: test/test_strategy_module_order_dispatch.py:284
   Scenario: A run mode cannot be diverted by the analyzer toggle
     Given a live run is holding broker positions
     When the platform analyzer toggle changes
     Then subsequent live exits still reach the broker
     And a sandbox run still uses the sandbox book and execution pipe
 
-  # Source: services/strategy_module/engine.py:459, test/test_strategy_module_qa_edges.py:1926
+  # Source: services/strategy_module/engine.py:496, test/test_strategy_module_engine.py:304, test/test_strategy_module_scheduler.py:730
   Scenario: Durable intent and acknowledgement surround every broker call
     Given the engine is about to place an entry or exit
     When it dispatches the order
     Then the pending intent row already exists with its exact owner reference
     And the broker acknowledgement write is checked and retried once
-    And persistent acknowledgement failure emits order_ack_unrecorded with the broker id
+    And persistent acknowledgement failure emits structured exact-row order_ack_unrecorded facts
+    And the dispatch call immediately binds only that row or keeps the run reserved
+    And a bounded shared sweep repairs every ordinary open run and folds broker status
 
   # Source: test/test_strategy_module_order_events.py:197
   Scenario: Each fill is applied once to the exact order it names
@@ -77,14 +79,14 @@ Feature: Strategy module and risk management
     Then only the superseded position_ref is reduced
     And the replacement remains open and evaluated for risk
 
-  # Source: test/test_strategy_module_engine.py:520
+  # Source: test/test_strategy_module_engine.py:703
   Scenario: One exact owner cannot be sent two covering exits
     Given an open position owner
     When two risk rules fire before the first exit returns
     Then claim and duplicate detection happen under one run-lock hold
     And exactly one covering order is placed
 
-  # Source: test/test_strategy_module_qa_edges.py:751
+  # Source: test/test_strategy_module_qa_edges.py:754
   Scenario: An accepted stop remains pending until confirmed flat
     Given a running strategy with filled positions
     When its stop request and exit acknowledgements succeed
@@ -92,7 +94,7 @@ Feature: Strategy module and risk management
     And the response says stop_pending true while exits are working
     And the run stays current, subscribed and managed
 
-  # Source: test/test_strategy_module_qa_edges.py:809
+  # Source: test/test_strategy_module_qa_edges.py:961
   Scenario: The final exit fill performs terminal stop finalization
     Given a run has a durable pending stop
     When the last exact owner quantity fills flat
@@ -115,7 +117,7 @@ Feature: Strategy module and risk management
     Then the exact position quantity remains managed
     And average price and P&L are unavailable rather than fabricated as zero
 
-  # Source: test/test_strategy_module_order_events.py:608
+  # Source: test/test_strategy_module_order_events.py:825
   Scenario: An asynchronous rejected stop exit remains retryable
     Given a stop exit was accepted and later rejected or cancelled
     When its terminal update arrives
@@ -123,14 +125,14 @@ Feature: Strategy module and risk management
     And run_stop_failed is recorded at critical severity
     And the pending run stays open for another exit attempt
 
-  # Source: test/test_strategy_module_signals.py:408
+  # Source: test/test_strategy_module_signals.py:550
   Scenario: A durable stop gates new signal entries but permits exit retries
     Given a signal run has stop_requested_reason populated
     When entry and exit alerts arrive
     Then a new entry claim is refused under the run lock
     And an alert targeting exposure still held can retry its exit
 
-  # Source: test/test_strategy_module_signals.py:878
+  # Source: test/test_strategy_module_signals.py:1020
   Scenario: A normal signal round trip keeps one platform-session run
     Given a signal leg opens and exits for a risk reason
     When it becomes flat before the session ends
@@ -144,14 +146,24 @@ Feature: Strategy module and risk management
     Then the adapter translates both levels into the shared risk types
     And the shared position and aggregate evaluators make the decisions
 
-  # Source: test/test_strategy_module_qa_edges.py:544
+  # Source: test/test_strategy_module_qa_edges.py:812, frontend/src/pages/strategy/Detail.test.tsx:524
+  Scenario: An overall target preserves trigger, execution and terminal truth
+    Given a multi-leg basket is marked from rolling latest-known one-symbol ticks
+    And those marks reach its overall target without promising a simultaneous snapshot
+    When MARKET exits fill at the available bid or ask and confirm every owner flat
+    Then overall_target_hit precedes every accepted leg_exit_placed event
+    And run_stopped follows those placements with stop_reason overall_target
+    And the finalized run keeps fill-derived realized P&L separately from its marked peak
+    And stopped views show zero unrealized and ignore an older checkpoint
+
+  # Source: test/test_strategy_module_qa_edges.py:547
   Scenario: The daily loss limit spans the platform session
     Given earlier runs already reached the strategy daily loss limit
     When a later run receives a price
     Then it is stopped for daily_loss_limit
     And the boundary is the platform session reset rather than midnight
 
-  # Source: test/test_strategy_module_scheduler.py:269
+  # Source: test/test_strategy_module_scheduler.py:281
   Scenario: An intraday strategy always receives a square-off job
     Given an intraday strategy has an exit time and scheduling is disabled
     When jobs are synchronized
@@ -165,14 +177,14 @@ Feature: Strategy module and risk management
     Then a base symbol is refused before placement
     And a repeated exact-contract signal is a successful no-op
 
-  # Source: test/test_strategy_module_recovery.py:561
+  # Source: test/test_strategy_module_recovery.py:680
   Scenario: Recovery restores a live and superseded owner independently
     Given a crash occurs while a flip holds an outgoing and replacement side
     When the open run is recovered
     Then order rows are grouped by exact position_ref
     And both owners recover with independent quantities, exits and risk state
 
-  # Source: test/test_strategy_module_recovery.py:838
+  # Source: test/test_strategy_module_recovery.py:957
   Scenario: Proven unrepresentable exposure remains database open
     Given durable rows prove more than two held owner references on one leg
     When recovery cannot fit them into live plus superseded state
@@ -180,14 +192,14 @@ Feature: Strategy module and risk management
     And the strategy remains reserved
     And recovery_failed requests manual reconciliation at critical severity
 
-  # Source: test/test_strategy_module_recovery.py:1281
+  # Source: test/test_strategy_module_recovery.py:1439
   Scenario: Exact durable break-even overrides a stale checkpoint
     Given every reference group has usable priced entry and exit fills
     And those fills sum to exactly zero realized P&L
     When recovery reads a stale nonzero checkpoint
     Then the exact durable zero is authoritative
 
-  # Source: test/test_strategy_module_recovery.py:1369
+  # Source: test/test_strategy_module_recovery.py:1527
   Scenario: Incomplete valuation retains only known P&L
     Given durable fills prove exposure but one fill has no usable price
     And no checkpoint witnessed the same owner shape and quantities
@@ -195,7 +207,7 @@ Feature: Strategy module and risk management
     Then the known priced portion is retained
     And a critical recovery_succeeded event requests manual P&L reconciliation
 
-  # Source: test/test_strategy_module_recovery.py:1741
+  # Source: test/test_strategy_module_recovery.py:1899
   Scenario: Malformed recovery with no proven exposure cannot wedge startup
     Given an open run has malformed state but no durable evidence of exposure
     When it cannot be reconstructed
@@ -230,7 +242,7 @@ Feature: Strategy module and risk management
     Then real zero remains zero
     And every unusable quantity, price and P&L value renders unavailable
 
-  # Source: frontend/src/pages/strategy/Detail.test.tsx:924, frontend/src/pages/strategy/strategy_module.test.ts:121
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:1085, frontend/src/pages/strategy/strategy_module.test.ts:121
   Scenario: Broker order and trade truth keeps local reconciliation context
     Given broker rows and recorded strategy orders can match, differ or be ambiguous
     When the page reconciles them by broker order id
@@ -238,7 +250,7 @@ Feature: Strategy module and risk management
     And multiple trade fills aggregate quantity and weighted price before comparison
     And local-only, ambiguous, mismatch and rejection context remain visible
 
-  # Source: frontend/src/pages/strategy/Detail.test.tsx:619, frontend/src/pages/strategy/Detail.test.tsx:707, frontend/src/pages/strategy/strategy_module.test.ts:400, test/test_strategy_module_views.py:441
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:787, frontend/src/pages/strategy/Detail.test.tsx:875, frontend/src/pages/strategy/strategy_module.test.ts:400, test/test_strategy_module_views.py:441
   Scenario: Position fallback preserves exposure without inventing valuation
     Given local audit has explicit positive fills in working or terminal statuses
     When the broker positionbook is unavailable

@@ -96,6 +96,42 @@ class SignalResult:
         return self.ok and self.note is None
 
 
+@dataclass(frozen=True)
+class _StrategySnapshot:
+    """Plain signal configuration safe across commits and session cleanup."""
+
+    id: int
+    user_id: str
+    current_run_id: int | None
+    live_enabled: bool
+    strategy_type: str
+    entry_time: Any
+    exit_time: Any
+    legs: list[dict[str, Any]]
+    direction: str
+    product: str
+    name: str
+    pricetype: str
+
+
+def _snapshot_strategy(strategy: Any) -> _StrategySnapshot:
+    current_run_id = getattr(strategy, "current_run_id", None)
+    return _StrategySnapshot(
+        id=int(strategy.id),
+        user_id=str(strategy.user_id),
+        current_run_id=int(current_run_id) if current_run_id is not None else None,
+        live_enabled=bool(getattr(strategy, "live_enabled", False)),
+        strategy_type=str(getattr(strategy, "strategy_type", "intraday") or "intraday"),
+        entry_time=getattr(strategy, "entry_time", None),
+        exit_time=getattr(strategy, "exit_time", None),
+        legs=[dict(leg) for leg in (getattr(strategy, "legs", None) or [])],
+        direction=str(getattr(strategy, "direction", "both") or "both"),
+        product=str(getattr(strategy, "product", "MIS") or "MIS"),
+        name=str(getattr(strategy, "name", "") or ""),
+        pricetype=str(getattr(strategy, "pricetype", "MARKET") or "MARKET"),
+    )
+
+
 def actions_for(strategy_kind: str) -> tuple[str, ...]:
     """Which actions this kind of strategy accepts."""
     return SIGNAL_ACTIONS if strategy_kind == "signal" else BATCH_ACTIONS
@@ -168,7 +204,10 @@ def _day_run(strategy: Any) -> tuple[int | None, str | None]:
     live only if the operator has explicitly enabled it, sandbox otherwise. The
     safe direction is the default.
     """
+    strategy_id = int(strategy.id)
+    user_id = str(strategy.user_id)
     run_id = getattr(strategy, "current_run_id", None)
+    live_enabled = bool(getattr(strategy, "live_enabled", False))
     if run_id:
         run = store.get_run(run_id)
         if run and run.stopped_at is None:
@@ -194,8 +233,8 @@ def _day_run(strategy: Any) -> tuple[int | None, str | None]:
             if not _finalise_stale_run(strategy, run_id):
                 return run_id, None
 
-    mode = "live" if getattr(strategy, "live_enabled", False) else "sandbox"
-    api_key = _api_key_for(strategy.user_id)
+    mode = "live" if live_enabled else "sandbox"
+    api_key = _api_key_for(user_id)
     broker = ""
     if mode == "live" and api_key:
         try:
@@ -205,33 +244,49 @@ def _day_run(strategy: Any) -> tuple[int | None, str | None]:
         except Exception:
             logger.exception("Could not read the broker for a signal run")
 
-    if not store.claim_strategy_for_run(strategy.id):
+    if not store.claim_strategy_for_run(strategy_id):
         # Something else opened one between the read above and here.
-        refreshed = store.get_strategy_unscoped(strategy.id)
+        refreshed = store.get_strategy_unscoped(strategy_id)
         if refreshed and refreshed.current_run_id:
             return refreshed.current_run_id, None
         return None, "This strategy is already running"
 
     run = store.create_run(
-        strategy_id=strategy.id,
+        strategy_id=strategy_id,
         mode=mode,
         broker=broker or mode,
         trigger_source="webhook",
     )
     if not run:
-        store.release_strategy(strategy.id)
+        store.release_strategy(strategy_id)
         return None, "Could not open a run"
 
-    store.set_strategy_status(strategy.id, "running", run.id)
-    state.init_run_state(run.id, strategy.id, [])
+    # Store calls commit and synchronous order replay removes scoped sessions.
+    # Never retain an ORM row beyond the boundary that created it.
+    new_run_id = int(run.id)
+    if not store.set_strategy_status(strategy_id, "running", new_run_id):
+        cleaned = store.finish_unlinked_run_and_release_claim(
+            new_run_id,
+            strategy_id,
+            "error",
+        )
+        if not cleaned:
+            logger.critical(
+                "Signal run %s could not be linked to strategy %s and its empty claim "
+                "could not be fully released",
+                new_run_id,
+                strategy_id,
+            )
+        return None, "Could not link the new signal run; no order was placed"
+    state.init_run_state(new_run_id, strategy_id, [])
     store.record_event(
-        strategy.id,
-        strategy.user_id,
+        strategy_id,
+        user_id,
         "run_started",
         f"Signal run opened in {mode} mode",
-        run_id=run.id,
+        run_id=new_run_id,
     )
-    return run.id, None
+    return new_run_id, None
 
 
 # Both live in services/strategy_module/session.py now: the engine needs the
@@ -259,13 +314,15 @@ def _finalise_stale_run(strategy: Any, run_id: int) -> bool:
     """Stop one stale run and say whether confirmed flatness won."""
     from services.strategy_module import engine
 
-    result = engine.stop_run(run_id, strategy.user_id, reason="eod")
+    strategy_id = int(strategy.id)
+    user_id = str(strategy.user_id)
+    result = engine.stop_run(run_id, user_id, reason="eod")
     confirmed = bool(result.get("ok")) and not bool(result.get("stop_pending"))
     if not confirmed:
         return False
     store.record_event(
-        strategy.id,
-        strategy.user_id,
+        strategy_id,
+        user_id,
         "eod_squareoff",
         "Previous day's run closed on the first signal of a new day",
         run_id=run_id,
@@ -295,6 +352,12 @@ def handle_signal(
     """Apply one signal to one leg."""
     if action not in SIGNAL_ACTIONS:
         return SignalResult(ok=False, error=f"Unknown signal action: {action!r}")
+
+    # A stale-day stop and a synchronous sandbox replay can both clean scoped
+    # sessions before this call reaches _enter/_exit. The signal configuration
+    # is immutable for this decision, so carry a plain snapshot, never the ORM
+    # instance, across _day_run and broker dispatch.
+    strategy = _snapshot_strategy(strategy)
 
     side = _SIDE_OF_ACTION[action]
 
@@ -558,6 +621,14 @@ def _place(
     entry_claim: dict | None = None,
 ) -> _Placement:
     """Place one signal-driven order and record it."""
+    # Dispatch may synchronously publish a fill whose cleanup removes every
+    # scoped session on this thread. Snapshot every strategy scalar needed by
+    # acknowledgement and audit before the broker call.
+    strategy_id = int(strategy.id)
+    user_id = str(strategy.user_id)
+    strategy_product = getattr(strategy, "product", "MIS")
+    strategy_name = getattr(strategy, "name", "")
+    strategy_pricetype = getattr(strategy, "pricetype", "MARKET")
     exit_claim_id = (
         leg.get("claim_token")
         if exit_owner == "superseded"
@@ -565,7 +636,7 @@ def _place(
         if exiting
         else None
     )
-    api_key = _api_key_for(strategy.user_id)
+    api_key = _api_key_for(user_id)
     if not api_key:
         return _Placement(
             ok=False,
@@ -574,7 +645,7 @@ def _place(
         )
 
     run = store.get_run(run_id)
-    mode = run.mode if run else "sandbox"
+    mode = str(run.mode) if run else "sandbox"
 
     action = (
         order_dispatch.exit_action(position) if exiting else ("BUY" if position == "B" else "SELL")
@@ -584,11 +655,11 @@ def _place(
         exchange=leg["exchange"],
         action=action,
         quantity=leg.get("quantity") or leg.get("qty"),
-        product=getattr(strategy, "product", "MIS"),
-        strategy_name=getattr(strategy, "name", ""),
+        product=strategy_product,
+        strategy_name=strategy_name,
         pricetype=order_dispatch.EXIT_PRICETYPE
         if exiting
-        else getattr(strategy, "pricetype", "MARKET"),
+        else strategy_pricetype,
     )
     # Durable intent before the broker is called, exactly as the batch path
     # does. Recording afterwards meant a crash or a database failure between
@@ -614,8 +685,8 @@ def _place(
         # An entry that cannot be recorded is one that cannot be managed, so it
         # is not placed. Exits take the opposite decision below, deliberately.
         store.record_event(
-            strategy.id,
-            strategy.user_id,
+            strategy_id,
+            user_id,
             "leg_entry_rejected",
             f"Signal entry for leg {leg['leg_id']} not placed: its order row could not be written",
             run_id=run_id,
@@ -682,8 +753,8 @@ def _place(
         # leave the position open with a database outage between it and every
         # attempt to close it; getting flat wins, and the audit row is lost.
         store.record_event(
-            strategy.id,
-            strategy.user_id,
+            strategy_id,
+            user_id,
             "leg_exit_placed",
             (
                 f"Signal exit for leg {leg['leg_id']} is being placed without an order row: "
@@ -700,7 +771,7 @@ def _place(
         from services.strategy_module.engine import _record_acknowledgement
 
         _record_acknowledgement(
-            row_id, result, strategy.id, strategy.user_id, run_id, leg["leg_id"]
+            row_id, result, strategy_id, user_id, run_id, leg["leg_id"]
         )
 
     reconcile_rejected_entry_stop = False
@@ -714,18 +785,9 @@ def _place(
         )
         reconcile_rejected_entry_stop = not result.ok
 
-    if row_id is not None and result.ok:
-        # After the leg bookkeeping above, never before it. See
-        # engine._replay_order_update: the sandbox publishes this order's fill
-        # from inside the dispatch, before the row existed, and replaying it
-        # early would have the block above write "open" back over it.
-        from services.strategy_module.engine import _replay_order_update
-
-        _replay_order_update(result.broker_order_id)
-
     store.record_event(
-        strategy.id,
-        strategy.user_id,
+        strategy_id,
+        user_id,
         "leg_exit_placed" if exiting else "leg_entry_placed",
         f"Signal {action} {leg.get('quantity') or leg.get('qty')} {leg['symbol']}"
         + ("" if result.ok else f" rejected: {result.error}"),
@@ -733,6 +795,14 @@ def _place(
         leg_id=leg["leg_id"],
         severity="info" if result.ok else "warn",
     )
+
+    if row_id is not None and result.ok:
+        # After the leg bookkeeping and accepted-placement audit above, never
+        # before either. Synchronous replay may finish a pending stop and emit
+        # run_stopped, so the placement that made it flat must already exist.
+        from services.strategy_module.engine import _replay_order_update
+
+        _replay_order_update(result.broker_order_id)
 
     if reconcile_rejected_entry_stop:
         # A stop can become durable while dispatch is in flight. Once a

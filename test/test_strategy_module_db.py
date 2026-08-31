@@ -412,6 +412,176 @@ def test_finish_and_release_rolls_back_run_when_strategy_owns_a_different_run():
     assert strategy.current_run_id == current.id
 
 
+def test_detached_finish_cannot_close_current_but_can_close_an_older_residual():
+    created, error = sm.create_strategy(USER, _config())
+    assert error is None
+    residual = sm.create_run(created["id"], "sandbox", "zerodha")
+    current = sm.create_run(created["id"], "sandbox", "zerodha")
+    assert residual is not None and current is not None
+    residual_id = residual.id
+    current_id = current.id
+    assert sm.set_strategy_status(created["id"], "running", current_id)
+
+    assert sm.finish_detached_run(current_id, created["id"], "manual") is False
+    assert sm.get_run(current_id).stopped_at is None
+
+    assert sm.finish_detached_run(
+        residual_id,
+        created["id"],
+        "manual",
+        pnl_realized=75.0,
+    ) is True
+    assert sm.get_run(residual_id).stopped_at is not None
+    assert float(sm.get_run(residual_id).pnl_realized) == pytest.approx(75.0)
+    strategy = sm.get_strategy(created["id"], USER)
+    assert strategy.current_run_id == current_id
+    assert strategy.status == "running"
+
+
+def test_unlinked_run_cleanup_releases_only_an_unlinked_strategy_claim():
+    created, error = sm.create_strategy(USER, _config())
+    assert error is None
+    strategy_id = created["id"]
+    assert sm.claim_strategy_for_run(strategy_id)
+    run = sm.create_run(strategy_id, "sandbox", "zerodha")
+    assert run is not None
+    run_id = run.id
+
+    assert sm.finish_unlinked_run_and_release_claim(run_id, strategy_id, "error") is True
+    assert sm.get_run(run_id).stopped_at is not None
+    strategy = sm.get_strategy(strategy_id, USER)
+    assert strategy.status == "stopped"
+    assert strategy.current_run_id is None
+
+    # A stale cleanup can close its own detached row, but it must not release
+    # a newer run that has since acquired exact strategy ownership.
+    assert sm.claim_strategy_for_run(strategy_id)
+    stale = sm.create_run(strategy_id, "sandbox", "zerodha")
+    current = sm.create_run(strategy_id, "sandbox", "zerodha")
+    assert stale is not None and current is not None
+    stale_id = stale.id
+    current_id = current.id
+    assert sm.set_strategy_status(strategy_id, "running", current_id)
+
+    assert sm.finish_unlinked_run_and_release_claim(stale_id, strategy_id, "error") is False
+    assert sm.get_run(stale_id).stopped_at is not None
+    assert sm.get_run(current_id).stopped_at is None
+    strategy = sm.get_strategy(strategy_id, USER)
+    assert strategy.status == "running"
+    assert strategy.current_run_id == current_id
+
+
+def test_ack_binding_is_idempotent_and_refuses_target_or_broker_id_conflicts():
+    run = _run()
+    target = sm.record_order(run.id, 1, "entry", {**ORDER, "status": "pending"})
+    other = sm.record_order(
+        run.id,
+        2,
+        "entry",
+        {**ORDER, "symbol": "NIFTY28MAY2624100CE", "status": "pending"},
+    )
+    assert target is not None and other is not None
+
+    assert (
+        sm.bind_order_acknowledgement(
+            target.id,
+            run.id,
+            1,
+            broker_order_id="ACK-EXACT",
+            status="open",
+            reject_reason=None,
+        )
+        == "repaired"
+    )
+    assert (
+        sm.bind_order_acknowledgement(
+            target.id,
+            run.id,
+            1,
+            broker_order_id="ACK-EXACT",
+            status="open",
+            reject_reason=None,
+        )
+        == "already_bound"
+    )
+
+    # Exact target row already owns another broker id: never overwrite it.
+    assert (
+        sm.bind_order_acknowledgement(
+            target.id,
+            run.id,
+            1,
+            broker_order_id="ACK-CONFLICT",
+            status="open",
+            reject_reason=None,
+        )
+        == "conflict"
+    )
+    assert sm.get_order(target.id).broker_order_id == "ACK-EXACT"
+
+    # A later terminal fact is stronger and must not be reopened by replaying
+    # the original accepted acknowledgement event.
+    assert sm.update_order(target.id, status="complete", filled_qty=75)
+    assert (
+        sm.bind_order_acknowledgement(
+            target.id,
+            run.id,
+            1,
+            broker_order_id="ACK-EXACT",
+            status="open",
+            reject_reason=None,
+        )
+        == "already_bound"
+    )
+    assert sm.get_order(target.id).status == "complete"
+
+    # A broker id already bound to another row cannot be attached here.
+    assert sm.update_order(other.id, broker_order_id="ACK-OTHER")
+    third = sm.record_order(
+        run.id,
+        3,
+        "entry",
+        {**ORDER, "symbol": "NIFTY28MAY2624200CE", "status": "pending"},
+    )
+    assert third is not None
+    assert (
+        sm.bind_order_acknowledgement(
+            third.id,
+            run.id,
+            3,
+            broker_order_id="ACK-OTHER",
+            status="open",
+            reject_reason=None,
+        )
+        == "conflict"
+    )
+    unchanged = sm.get_order(third.id)
+    assert unchanged.broker_order_id is None
+    assert unchanged.status == "pending"
+
+
+def test_rejected_ack_binding_can_terminally_repair_an_exact_pending_row_without_broker_id():
+    run = _run()
+    row = sm.record_order(run.id, 1, "entry", {**ORDER, "status": "pending"})
+    assert row is not None
+
+    assert (
+        sm.bind_order_acknowledgement(
+            row.id,
+            run.id,
+            1,
+            broker_order_id=None,
+            status="rejected",
+            reject_reason="margin refused",
+        )
+        == "repaired"
+    )
+    durable = sm.get_order(row.id)
+    assert durable.status == "rejected"
+    assert durable.broker_order_id is None
+    assert durable.reject_reason == "margin refused"
+
+
 @pytest.mark.parametrize(
     ("entry_status", "exit_status", "entry_action", "exit_action", "expected"),
     [
@@ -754,6 +924,20 @@ def test_a_run_records_its_final_numbers_on_stop():
     assert stopped.stop_reason == "overall_target"
     assert float(stopped.pnl_realized) == 5230.0
     assert stopped.id not in [r.id for r in sm.list_open_runs()]
+
+
+def test_repeated_stop_request_preserves_the_first_cause_and_timestamp():
+    run = _run()
+
+    assert sm.request_run_stop(run.id, "overall_target") is True
+    first = sm.get_run(run.id)
+    first_requested_at = first.stop_requested_at
+
+    assert sm.request_run_stop(run.id, "manual") is True
+    repeated = sm.get_run(run.id)
+
+    assert repeated.stop_requested_at == first_requested_at
+    assert repeated.stop_requested_reason == "overall_target"
 
 
 def test_orders_are_recorded_at_placement_and_updated_on_fill():

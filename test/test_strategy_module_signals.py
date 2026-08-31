@@ -21,7 +21,7 @@ import pytest
 # restx_api first: see the note in test_strategy_module_order_dispatch.py.
 import restx_api  # noqa: F401
 from database import strategy_module_db as store
-from services.strategy_module import engine, order_events, signals, state
+from services.strategy_module import engine, order_events, signals, state, webhook
 from services.strategy_module.order_dispatch import DispatchResult
 
 USER = "signal_test_user"
@@ -392,6 +392,148 @@ def test_the_first_signal_of_the_day_opens_the_run(placed):
     assert refreshed.current_run_id is not None
     assert refreshed.status == "running"
     assert len(store.list_runs(strategy.id)) == 1
+
+
+def test_first_signal_does_not_dispatch_when_run_link_cannot_be_persisted(placed):
+    """The daily run must own the strategy before any signal can place an order."""
+    strategy = _make()
+
+    with patch.object(store, "set_strategy_status", return_value=False):
+        result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is False
+    assert "link" in str(result.error).lower()
+    assert placed == []
+    assert state.active_run_ids() == []
+    runs = store.list_runs(strategy.id)
+    assert len(runs) == 1
+    assert runs[0]["stopped_at"] is not None
+    assert runs[0]["stop_reason"] == "error"
+    durable = store.get_strategy(strategy.id, USER)
+    assert durable.status == "stopped"
+    assert durable.current_run_id is None
+
+
+def test_synchronous_signal_fill_does_not_reuse_detached_strategy_or_run_rows():
+    """Sandbox replay removes scoped sessions before the signal call returns."""
+    strategy = _make()
+    strategy_id = strategy.id
+
+    def fill_inside_dispatch(**_kwargs):
+        broker_order_id = "SYNC-SIGNAL-ENTRY"
+        order_events._apply_update(
+            broker_order_id,
+            SimpleNamespace(
+                orderid=broker_order_id,
+                order_status="complete",
+                average_price=101.5,
+                filled_quantity=100,
+                rejection_reason="",
+            ),
+        )
+        return DispatchResult(
+            ok=True,
+            broker_order_id=broker_order_id,
+            response={},
+        )
+
+    with (
+        patch.object(signals, "_api_key_for", return_value="test-key"),
+        patch.object(
+            signals.order_dispatch,
+            "dispatch_order",
+            side_effect=fill_inside_dispatch,
+        ),
+    ):
+        result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is True
+    run_id = result.run_id
+    assert run_id is not None
+    assert store.get_strategy(strategy_id, USER).current_run_id == run_id
+    durable = store.list_orders(run_id)[0]
+    assert durable["status"] == "complete"
+    assert durable["filled_qty"] == 100
+    assert durable["avg_fill_price"] == pytest.approx(101.5)
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["entry_status"] == "complete"
+    assert leg["entry_avg"] == pytest.approx(101.5)
+    assert [
+        event["kind"]
+        for event in store.list_events(strategy_id)
+        if event["kind"] == "leg_entry_placed"
+    ] == ["leg_entry_placed"]
+
+
+def test_day_run_session_cleanup_does_not_detach_signal_configuration():
+    """A rollover/stop may clean sessions before handle_signal enters the leg."""
+    strategy = _make()
+    strategy_id = strategy.id
+
+    def open_day_then_cleanup(strategy_snapshot):
+        run = store.create_run(strategy_id, "sandbox", "sandbox", trigger_source="webhook")
+        assert run is not None
+        run_id = run.id
+        assert store.set_strategy_status(strategy_id, "running", run_id)
+        state.init_run_state(run_id, strategy_id, [])
+        store.record_event(
+            strategy_id,
+            USER,
+            "run_started",
+            "day boundary",
+            run_id=run_id,
+        )
+        store.db_session.remove()
+        assert strategy_snapshot is not None
+        return run_id, None
+
+    with (
+        patch.object(signals, "_day_run", side_effect=open_day_then_cleanup),
+        patch.object(signals, "_api_key_for", return_value="test-key"),
+        patch.object(
+            signals.order_dispatch,
+            "dispatch_order",
+            return_value=DispatchResult(
+                ok=True,
+                broker_order_id="DAY-CLEANUP-ENTRY",
+                response={},
+            ),
+        ),
+    ):
+        result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is True
+    assert result.run_id is not None
+    assert store.list_orders(result.run_id)[0]["broker_order_id"] == "DAY-CLEANUP-ENTRY"
+
+
+def test_webhook_signal_audit_uses_plain_id_after_handler_session_cleanup():
+    strategy = _make()
+    strategy_id = strategy.id
+
+    def accepted_after_cleanup(*_args, **_kwargs):
+        store.record_event(strategy_id, USER, "leg_entry_placed", "signal accepted")
+        store.db_session.remove()
+        return signals.SignalResult(ok=True, run_id=91, leg_id=1)
+
+    with (
+        patch.object(signals, "handle_signal", side_effect=accepted_after_cleanup),
+        patch.object(webhook, "_audit", return_value=73) as audit,
+    ):
+        outcome = webhook._dispatch_signal(
+            strategy=strategy,
+            action="long_entry",
+            payload={"leg_id": 1},
+            safe_payload={"leg_id": 1},
+            ip="127.0.0.1",
+            user_agent="test",
+        )
+
+    assert outcome.ok is True
+    assert outcome.strategy_id == strategy_id
+    assert outcome.run_id == 91
+    assert outcome.webhook_event_id == 73
+    assert audit.call_args.kwargs["strategy_id"] == strategy_id
 
 
 def test_later_signals_reuse_the_same_run(placed):

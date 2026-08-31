@@ -521,6 +521,179 @@ describe('strategy Orderbook broker truth', () => {
 })
 
 describe('strategy Positions broker truth', () => {
+  it('uses the finalized run across Live and Positions after a stale checkpoint survives stop', async () => {
+    const stoppedStrategy = {
+      ...strategy,
+      id: 7,
+      name: 'Test Strategy Monthly',
+      status: 'stopped',
+      current_run_id: null,
+      updated_at: '2026-08-31T04:15:29.517782+00:00',
+    } satisfies Strategy
+    const lastRun = {
+      id: 12,
+      strategy_id: 7,
+      mode: 'sandbox',
+      broker: null,
+      started_at: '2026-08-31T04:15:17.624913+00:00',
+      stopped_at: '2026-08-31T04:15:29.517782+00:00',
+      stop_reason: 'overall_target',
+      pnl_realized: 117,
+      pnl_peak: 513,
+      pnl_trough: -355.5,
+      trigger_source: 'manual',
+      webhook_event_id: null,
+      resolved_expiries: null,
+    } satisfies Run
+    const priorRun = {
+      ...lastRun,
+      id: 11,
+      pnl_realized: -733.5,
+      pnl_peak: 0,
+      pnl_trough: -733.5,
+    } satisfies Run
+    const staleCheckpoint = {
+      id: 99,
+      run_id: 12,
+      ts: '2026-08-31T04:15:26.713000+00:00',
+      pnl_realized: 0,
+      pnl_unrealized: 81,
+      pnl_total: 81,
+      pnl_peak: 135,
+      pnl_trough: -355.5,
+      lock_floor: null,
+      trail_to_entry_active: false,
+      leg_state: {},
+    }
+    liveHook.mockReturnValue({
+      ...live,
+      status: 'idle',
+      runId: 12,
+      checkpoint: staleCheckpoint,
+      updatedAt: staleCheckpoint.ts,
+      curve: [staleCheckpoint],
+    })
+    rest.get.mockImplementation((url: string) => {
+      if (url === '/strategy/api/strategies/7') {
+        return Promise.resolve({ data: { data: stoppedStrategy } })
+      }
+      if (url === '/strategy/api/strategies/7/runs') {
+        return Promise.resolve({ data: { data: [lastRun, priorRun] } })
+      }
+      if (url === '/strategy/api/strategies/7/positions') {
+        return Promise.resolve({ data: { status: 'success', data: [] } })
+      }
+      return Promise.resolve({ data: { data: [] } })
+    })
+    const user = userEvent.setup()
+
+    renderDetail()
+
+    await screen.findByText('Test Strategy Monthly')
+    const liveCard = screen.getByText('Live P&L').closest('[data-slot="card"]')
+    expect(liveCard).not.toBeNull()
+    expect(within(liveCard as HTMLElement).getByText('Realized').parentElement).toHaveTextContent(
+      '+117.00'
+    )
+    expect(within(liveCard as HTMLElement).getByText('Unrealized').parentElement).toHaveTextContent(
+      '0.00'
+    )
+    expect(within(liveCard as HTMLElement).getByText('Total P&L').parentElement).toHaveTextContent(
+      '+117.00'
+    )
+    expect(liveCard).toHaveTextContent('Peak: +513.00')
+    expect(liveCard).toHaveTextContent('Trough: -355.50')
+    expect(liveCard).toHaveTextContent('Stopped: 31 Aug 2026, 09:45:29 IST')
+    expect(liveCard).not.toHaveTextContent('Updated:')
+    expect(liveCard).not.toHaveTextContent('+81.00')
+
+    await user.click(screen.getByRole('tab', { name: 'Positions' }))
+
+    const thisRun = await screen.findByText('Realized (this run)')
+    expect(thisRun.parentElement).toHaveTextContent('+117.00')
+    expect(screen.getByText('Unrealized').parentElement).toHaveTextContent('0.00')
+    expect(screen.getByText('Run total').parentElement).toHaveTextContent('+117.00')
+    expect(screen.getByText('Cumulative realized').parentElement).toHaveTextContent('-616.50')
+    expect(screen.queryByText('+81.00')).not.toBeInTheDocument()
+  })
+
+  it('explains that overall MTM thresholds trigger exits rather than guarantee realized P&L', async () => {
+    rest.get.mockImplementation((url: string) => {
+      if (url === '/strategy/api/strategies/7') {
+        return Promise.resolve({
+          data: {
+            data: { ...strategy, overall_sl_mtm: 500, overall_target_mtm: 500 },
+          },
+        })
+      }
+      return Promise.resolve({ data: { data: [] } })
+    })
+    const user = userEvent.setup()
+
+    renderDetail()
+    await user.click(await screen.findByRole('tab', { name: 'Risk' }))
+
+    expect(
+      screen.getByText(
+        /overall sl and overall target trigger exits from ltp-based mtm.*market orders fill at the available bid\/ask.*final realized p&l can differ from the trigger value/i
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('uses the latest finalized run for every broker book after a stale live run survives stop', async () => {
+    const stoppedStrategy = {
+      ...strategy,
+      status: 'stopped',
+      current_run_id: null,
+    } satisfies Strategy
+    const lastRun = {
+      id: 12,
+      strategy_id: 7,
+      mode: 'sandbox',
+      broker: null,
+      started_at: '2026-08-31T04:15:17.624913+00:00',
+      stopped_at: '2026-08-31T04:15:29.517782+00:00',
+      stop_reason: 'overall_target',
+      pnl_realized: 117,
+      pnl_peak: 513,
+      pnl_trough: -355.5,
+      trigger_source: 'manual',
+      webhook_event_id: null,
+      resolved_expiries: null,
+    } satisfies Run
+    liveHook.mockReturnValue({ ...live, status: 'idle', runId: 11 })
+    rest.get.mockImplementation((url: string) => {
+      if (url === '/strategy/api/strategies/7') {
+        return Promise.resolve({ data: { data: stoppedStrategy } })
+      }
+      if (url === '/strategy/api/strategies/7/runs') {
+        return Promise.resolve({ data: { data: [lastRun] } })
+      }
+      if (url.endsWith('/orderbook')) {
+        return Promise.resolve({ data: { status: 'success', data: { orders: [] } } })
+      }
+      return Promise.resolve({ data: { status: 'success', data: [] } })
+    })
+    const user = userEvent.setup()
+
+    renderDetail()
+    await screen.findByText('Broker truth')
+
+    for (const [tab, endpoint] of [
+      ['Positions', '/strategy/api/strategies/7/positions'],
+      ['Orders', '/strategy/api/strategies/7/orderbook'],
+      ['Trades', '/strategy/api/strategies/7/tradebook'],
+    ] as const) {
+      await user.click(screen.getByRole('tab', { name: tab }))
+      await waitFor(() =>
+        expect(rest.get).toHaveBeenCalledWith(endpoint, {
+          params: { run_id: 12 },
+          signal: expect.any(AbortSignal),
+        })
+      )
+    }
+  })
+
   it('renders missing active checkpoint P&L as unknown, including cumulative realized', () => {
     rest.get.mockResolvedValue({ data: { status: 'success', data: [] } })
     const priorRun = { id: 41, pnl_realized: 125 } as Run
@@ -536,12 +709,7 @@ describe('strategy Positions broker truth', () => {
       />
     )
 
-    for (const label of [
-      'Realized (this run)',
-      'Unrealized',
-      'Run total',
-      'Cumulative realized',
-    ]) {
+    for (const label of ['Realized (this run)', 'Unrealized', 'Run total', 'Cumulative realized']) {
       const metric = screen.getByText(label).parentElement
       expect(metric).not.toBeNull()
       expect(metric).toHaveTextContent('—')
@@ -879,14 +1047,7 @@ describe('strategy Positions broker truth', () => {
     })
 
     renderWithQuery(
-      <PositionsTab
-        strategy={strategy}
-        live={live}
-        orders={[]}
-        runs={[]}
-        loading={false}
-        active
-      />
+      <PositionsTab strategy={strategy} live={live} orders={[]} runs={[]} loading={false} active />
     )
 
     expect(await screen.findByText('broker/shared')).toBeInTheDocument()
@@ -1109,18 +1270,64 @@ describe('strategy exit action toasts describe proven state only', () => {
     })
   }
 
+  it('shows one ordinary stop action alongside the emergency kill switch', async () => {
+    mockRunningDetailReads()
+
+    renderDetail()
+
+    expect(
+      await screen.findByRole('button', { name: 'Stop & Close Positions' })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'KILL SWITCH' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Close All' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
+  })
+
+  it('does not promise a flat run before broker fills confirm it', async () => {
+    mockRunningDetailReads()
+    const user = userEvent.setup()
+
+    renderDetail()
+    await user.click(await screen.findByRole('button', { name: 'Stop & Close Positions' }))
+    expect(
+      screen.getByText(/finalised only after broker fills confirm the strategy is flat/i)
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    await user.click(screen.getByRole('button', { name: 'KILL SWITCH' }))
+    expect(
+      screen.getByText(/finalised only after broker fills confirm the strategy is flat/i)
+    ).toBeInTheDocument()
+  })
+
+  it('uses the kill-switch pending message returned by the backend', async () => {
+    mockRunningDetailReads()
+    rest.post.mockResolvedValue({
+      data: {
+        webhook_locked: true,
+        run_stopped: false,
+        stop_pending: true,
+        message: 'Webhook locked; exit fills pending',
+      },
+    })
+    const user = userEvent.setup()
+
+    renderDetail()
+    await user.click(await screen.findByRole('button', { name: 'KILL SWITCH' }))
+    await user.click(screen.getByRole('button', { name: 'KILL' }))
+
+    await waitFor(() =>
+      expect(rest.post).toHaveBeenCalledWith('/strategy/api/strategies/7/kill_switch')
+    )
+    expect(toast.warning).toHaveBeenCalledWith('Webhook locked; exit fills pending')
+  })
+
   it.each([
     {
-      button: 'Stop',
-      confirm: 'Stop run',
+      button: 'Stop & Close Positions',
+      confirm: 'Stop & close positions',
       endpoint: '/strategy/api/strategies/7/stop',
       expected: 'Stop requested — exit orders are pending',
-    },
-    {
-      button: 'Close All',
-      confirm: 'Close all',
-      endpoint: '/strategy/api/strategies/7/close_all',
-      expected: 'Close-all requested — exit orders are pending',
     },
   ])('keeps $button pending when the API accepted only exit intent', async (contract) => {
     mockRunningDetailReads()
@@ -1170,5 +1377,35 @@ describe('strategy exit action toasts describe proven state only', () => {
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
     expect(toast.success).toHaveBeenCalledWith('Leg closed — last open leg, run stopped')
+  })
+
+  it('warns when a started run has no durable broker acknowledgement', async () => {
+    const stoppedStrategy = { ...strategy, status: 'stopped', current_run_id: null }
+    rest.get.mockImplementation((url: string) => {
+      if (url === '/strategy/api/strategies/7') {
+        return Promise.resolve({ data: { data: stoppedStrategy } })
+      }
+      return Promise.resolve({ data: { data: [] } })
+    })
+    rest.post.mockResolvedValue({
+      data: {
+        run_id: 42,
+        mode: 'sandbox',
+        acknowledged: false,
+        legs: [{ leg_id: 3, ok: true, status: 'open' }],
+      },
+    })
+    const user = userEvent.setup()
+
+    renderDetail()
+    await user.click(await screen.findByRole('button', { name: 'Start run' }))
+    await user.click(screen.getByRole('button', { name: 'Start sandbox' }))
+
+    await waitFor(() =>
+      expect(rest.post).toHaveBeenCalledWith('/strategy/api/strategies/7/start', { mode: 'sandbox' })
+    )
+    expect(toast.warning).toHaveBeenCalledWith(
+      'Run started, but broker acknowledgement is pending. Check Events and Orders before relying on RMS.'
+    )
   })
 })

@@ -176,6 +176,10 @@ The `data` object above is abridged for readability. A real response always carr
 
 - `run` is `null` whenever the strategy has no `current_run_id`, which is the normal state of a stopped strategy.
 - While a run is open, `pnl_realized`, `pnl_peak` and `pnl_trough` are the values last written to the run row, not a live mark. The live figures come from the run's checkpoints.
+- Once the strategy is stopped, the newest finalized row from [`/runs`](./runs.md)
+  is authoritative for realized P&L, peak, trough, stop time and stop reason.
+  A socket frame or checkpoint retained from before the stop must not override
+  it; the stopped run has zero unrealized P&L.
 - A populated `stop_requested_reason` means the stop is durable but not yet
   confirmed flat. The run remains current and managed; do not interpret a
   successful stop request as terminal until `stopped_at` is populated or `run`
