@@ -762,9 +762,13 @@ export function PositionsTab({
   active: boolean
 }) {
   const runId = brokerBookRunId(strategy, live)
+  // Orders stay lifetime-scoped on purpose: they retain a residual position
+  // stranded by an earlier run and the realized-lifetime column. Runtime legs
+  // are different—they are a mark frame owned by one exact run, so a stale
+  // frame must never value the authoritative run's local fallback.
   const derived = useMemo(
-    () => derivePositions(orders, strategy.product, live.legs),
-    [orders, strategy.product, live.legs]
+    () => derivePositions(orders, strategy.product, live.runId === runId ? live.legs : []),
+    [orders, strategy.product, live.runId, live.legs, runId]
   )
   const broker = useBrokerBook(
     strategy.id,

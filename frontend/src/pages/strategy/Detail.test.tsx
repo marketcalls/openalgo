@@ -574,6 +574,121 @@ describe('strategy Positions broker truth', () => {
     expect(header?.textContent).toContain('Run #43.')
     expect(header?.textContent).not.toContain('Run #42.')
   })
+
+  it('does not value the current fallback with legs from a stale prior-run frame', async () => {
+    rest.get.mockResolvedValue({
+      data: { status: 'error', message: 'Broker session expired' },
+    })
+    const staleLeg = {
+      leg_id: 3,
+      position: 'B' as const,
+      symbol: 'NIFTY28MAY2625000CE',
+      exchange: 'NFO',
+      lots: 1,
+      qty: 50,
+      entry_order_id: 1,
+      entry_status: 'complete',
+      entry_avg: 100,
+      exit_order_id: null,
+      exit_kind: null,
+      exit_avg: null,
+      ltp: 200,
+      mtm: 5000,
+      realized_pnl: 0,
+      status: 'open' as const,
+      tick_source: 'ws' as const,
+      sl_pts: null,
+      target_pts: null,
+      trail_x: 0,
+      trail_y: 0,
+      effective_sl: null,
+      effective_target: null,
+      trail_active: false,
+      highest_price: 200,
+      lowest_price: 100,
+    }
+
+    renderWithQuery(
+      <PositionsTab
+        strategy={{ ...strategy, current_run_id: 43 }}
+        live={{ ...live, runId: 42, legs: [staleLeg] }}
+        orders={[
+          localOrder({
+            run_id: 43,
+            status: 'complete',
+            filled_qty: 50,
+            avg_fill_price: 100,
+          }),
+        ]}
+        runs={[]}
+        loading={false}
+        active
+      />
+    )
+
+    expect(await screen.findByText(/broker did not answer/i)).toBeInTheDocument()
+    const row = screen.getByText('NIFTY28MAY2625000CE').closest('tr')
+    expect(row).not.toBeNull()
+    expect(
+      within(row as HTMLTableRowElement).getAllByText('Unavailable').length
+    ).toBeGreaterThanOrEqual(2)
+    expect(row?.textContent).not.toContain('200.00')
+    expect(row?.textContent).not.toContain('5,000.00')
+    const header = screen.getByText('Strategy positions').closest('[data-slot="card-header"]')
+    expect(header?.textContent).toContain('Run #43.')
+  })
+
+  it('keeps prior-run fills for residual exposure and lifetime realized fallback', async () => {
+    rest.get.mockResolvedValue({
+      data: { status: 'error', message: 'Broker session expired' },
+    })
+
+    renderWithQuery(
+      <PositionsTab
+        strategy={{ ...strategy, current_run_id: 43 }}
+        live={{ ...live, runId: 43, legs: [] }}
+        orders={[
+          localOrder({
+            id: 10,
+            run_id: 41,
+            status: 'complete',
+            filled_qty: 50,
+            avg_fill_price: 100,
+            filled_at: '2026-05-28T03:50:00+00:00',
+          }),
+          localOrder({
+            id: 11,
+            run_id: 41,
+            kind: 'exit_eod',
+            action: 'SELL',
+            status: 'complete',
+            filled_qty: 50,
+            avg_fill_price: 110,
+            filled_at: '2026-05-28T03:51:00+00:00',
+          }),
+          localOrder({
+            id: 12,
+            run_id: 43,
+            qty: 25,
+            status: 'complete',
+            filled_qty: 25,
+            avg_fill_price: 120,
+            filled_at: '2026-05-28T03:52:00+00:00',
+          }),
+        ]}
+        runs={[]}
+        loading={false}
+        active
+      />
+    )
+
+    expect(await screen.findByText(/broker did not answer/i)).toBeInTheDocument()
+    const row = screen.getByText('NIFTY28MAY2625000CE').closest('tr')
+    expect(row).not.toBeNull()
+    expect(within(row as HTMLTableRowElement).getByText('25')).toBeInTheDocument()
+    expect(within(row as HTMLTableRowElement).getByText('120.00')).toBeInTheDocument()
+    expect(within(row as HTMLTableRowElement).getByText('+500.00')).toBeInTheDocument()
+  })
 })
 
 describe('strategy Tradebook broker truth', () => {
