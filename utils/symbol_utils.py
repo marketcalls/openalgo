@@ -3,9 +3,31 @@
 Shared symbol classification helpers used across the sandbox and other modules.
 """
 
+from decimal import Decimal
+
 from utils.constants import CRYPTO_EXCHANGES, FNO_EXCHANGES
 from database.token_db_enhanced import fno_search_symbols
 from utils.constants import INSTRUMENT_PERPFUT
+
+
+def normalize_contract_value(raw) -> Decimal:
+    """Validate a raw ``contract_value`` into a positive, finite ``Decimal`` multiplier.
+
+    ``contract_value`` scales notional and P&L for instruments where one contract is a
+    fraction of the underlying (e.g. 0.001 BTC or 0.01 ETH per crypto contract). Both the
+    sandbox margin path (``fund_manager``) and the P&L path (``position_manager``) use this
+    single normalizer so their ledgers cannot diverge. Returns ``Decimal('1.0')`` when the
+    value is missing, non-finite, or non-positive, so a bad multiplier can never turn
+    margin or P&L negative or zero.
+    """
+    try:
+        if raw is not None:
+            candidate = Decimal(str(raw))
+            if candidate.is_finite() and candidate > 0:
+                return candidate
+    except (ArithmeticError, TypeError, ValueError):
+        pass
+    return Decimal("1.0")
 
 
 def get_underlying_quote_symbol(base_symbol: str, exchange: str) -> str:
