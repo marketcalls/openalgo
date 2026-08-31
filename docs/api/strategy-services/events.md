@@ -110,13 +110,26 @@ Each object in `data`:
 
 ### Event kinds
 
-Lifecycle: `strategy_created`, `strategy_updated`, `webhook_token_rotated`, `live_enabled`, `live_disabled`, `webhook_locked`, `webhook_unlocked`, `run_started`, `run_paused`, `run_resumed`, `run_stopped`, `run_stop_failed`, `close_all_manual`
+Lifecycle: `strategy_created`, `strategy_updated`, `webhook_token_rotated`, `live_enabled`, `live_disabled`, `webhook_locked`, `webhook_unlocked`, `run_started`, `run_paused`, `run_resumed`, `run_stop_requested`, `run_stopped`, `run_stop_failed`, `flip_outgoing_exit_rejected`, `close_all_manual`
 
-`run_stop_failed` is written at `critical` severity when the broker refused the exit orders of a stop. The run is still open and still holding those positions; it is the one lifecycle event that means the opposite of what a stop usually means.
+`run_stop_requested` says the stop intent is durable and new signal entries are
+gated; it is not proof of flatness. `run_stopped` is the terminal transition
+after the engine has confirmed that no owned position remains. `run_stop_failed`
+is critical whenever a pending stop could not make progress, including an
+unfilled entry, a refused order, or an asynchronous rejection/cancellation. The
+run remains open and managed for a retry.
 
-Entry and exit: `leg_entry_placed`, `leg_entry_filled`, `leg_entry_rejected`, `leg_exit_placed`, `leg_exit_filled`, `leg_exit_rejected`, `leg_close_manual`, `leg_expiry_fallback`
+`flip_outgoing_exit_rejected` is critical. It means the old side of a signal
+flip is still held under its exact `position_ref`, remains managed, and can be
+targeted by another exit even though the replacement side is also live.
+
+Entry and exit: `leg_entry_placed`, `leg_entry_filled`, `leg_entry_rejected`, `leg_exit_placed`, `leg_exit_filled`, `leg_exit_rejected`, `leg_close_manual`, `leg_expiry_fallback`, `order_ack_unrecorded`
 
 `leg_expiry_fallback` is written at `warn` severity, before the entry goes out, when the chain did not list the expiry rank the leg asked for and a nearer one was used. A `next_week` leg trading the current week is a different trade from the one that was configured, so it is said out loud rather than inferred from the symbol afterwards.
+
+`order_ack_unrecorded` is critical. The broker accepted the order, but the
+acknowledgement write failed twice. Its message carries the broker order id and
+the durable pending row id so the real order can be reconciled manually.
 
 Per-leg risk: `leg_sl_hit`, `leg_target_hit`, `leg_trail_armed`, `leg_trail_advanced`
 
@@ -126,11 +139,19 @@ Tick source: `tick_source_switched_to_polling`, `tick_source_switched_to_ws`, `t
 
 Operational: `recovery_succeeded`, `recovery_failed`
 
+Operational severity carries meaning. `recovery_failed` can mean an ordinary
+malformed run with no proven exposure was finalised, or that proven exposure
+could not fit the live-plus-superseded state and was deliberately left database
+open and reserved for manual reconciliation. A `recovery_succeeded` event can
+also be critical when a run was recovered with only the known portion of P&L
+because one or more fills were unpriced and no matching checkpoint witnessed
+the same owners and quantities.
+
 ## Notes
 
 - Rows are ordered by timestamp, **newest first**.
 - **The trail is append-only.** Nothing updates or deletes an event row, so what you read is what the engine wrote at the time.
-- **`limit` is bounded rather than clamped.** A value below 1 or above 1000 is a 400, so a caller learns the value was refused. SQLite reads a negative `LIMIT` as "no limit", so an unbounded field would let `limit: -1` serialize every event the strategy has ever recorded. The engine writes an event per risk transition per leg, which is a whole trading day's worth.
+- **`limit` is bounded rather than clamped.** A value below 1 or above 1000 is a 400, so a caller learns the value was refused. SQLite reads a negative `LIMIT` as "no limit", so an unbounded field would let `limit: -1` serialize every event the strategy has ever recorded. The engine writes an event per risk transition per leg, which can be a whole platform session's worth.
 - **An out-of-vocabulary `kind` or `severity` is a 400**, not an empty list. Send a value from the lists above.
 - **A `run_id` belonging to another strategy matches nothing.** The query is scoped to this strategy before the run filter is applied.
 - Configuration-layer events share the table with runtime ones and carry `run_id: null`. Filtering by `run_id` therefore excludes them.

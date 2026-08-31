@@ -1,6 +1,7 @@
 # Strategy Stop
 
-Exit every open leg at market and finalise the strategy's current run.
+Persist a stop request, exit every owned position at market, and finalise the
+current run only after fills confirm it is flat.
 
 ## Endpoint URL
 
@@ -36,15 +37,20 @@ curl -X POST http://127.0.0.1:5000/api/v1/strategy/stop \
 {
   "status": "success",
   "run_id": 42,
+  "stop_pending": true,
   "exits": [
     {
       "leg_id": 1,
       "ok": true,
+      "position_ref": "969bc536b1c14d15992f730c2c136d7a",
+      "exit_owner": "live",
       "error": null
     },
     {
       "leg_id": 2,
       "ok": true,
+      "position_ref": "80bb5fc9333f4922a582229f06a0fe45",
+      "exit_owner": "live",
       "error": null
     }
   ]
@@ -74,7 +80,8 @@ HTTP 409.
 | Field | Type | Description |
 |-------|------|-------------|
 | status | string | "success" or "error" |
-| run_id | integer | The run that was stopped |
+| run_id | integer | The run the stop applies to. It remains current while `stop_pending` is true |
+| stop_pending | boolean | `true` while owned exposure still needs a fill, retry or reconciliation; `false` only when this call confirmed flatness and won terminal finalization |
 | exits | array | Per-leg exit outcome |
 
 Each object in `exits`:
@@ -83,13 +90,17 @@ Each object in `exits`:
 |-------|------|-------------|
 | leg_id | integer | The leg's id within the strategy |
 | ok | boolean | Whether the exit order was accepted |
+| position_ref | string or null | Exact durable owner the exit targets |
+| exit_owner | string | `live` or `superseded` for the outgoing side of a signal flip |
+| symbol | string, optional | Held symbol, included when an unfilled entry is refused before dispatch |
+| broker_order_id | string or null, optional | Broker id when available; `null` on an unfilled-entry refusal |
 | error | string or null | Rejection reason when `ok` is false |
 
 ## Status Codes
 
 | Code | Cause |
 |---|---|
-| 200 | Exits were dispatched and the run was finalised |
+| 200 | The durable stop was accepted. `stop_pending: true` means exit fills are still outstanding; `false` means this call confirmed flatness and finalized |
 | 400 | Schema validation failed |
 | 403 | `Invalid openalgo apikey` |
 | 404 | `Strategy not found` |
@@ -106,9 +117,21 @@ Each object in `exits`:
 - **A leg whose entry has been accepted but not filled is not exited, and the stop is reported as refused.** There is no confirmed quantity to close, and sending the configured size the other way would be a naked position if that entry later cancels. The run stays open and managed; retry once the fill lands.
 - **A stop whose exit orders were all refused does not close the run.** The positions are still at the broker, so finalising would release the strategy and stop evaluating their stops while they are open. The response reports which legs were refused and the run stays live and managed; retry the stop.
 - A refused exit leaves the leg exitable rather than marking it as having an exit in flight, so a later stop, a stop loss, a target or the scheduler's square-off can still reach it.
-- `run_stopped` is not part of this response. A successful stop always ends the run; see [`/close_leg`](./close_leg.md) for the partial case.
-- Finalising a run arms the [webhook](./webhook.md) cooling-off window, so an inbound `start` alert is refused for the next 30 seconds. That holds for every stop, not only the ones a webhook asked for, so a stale alert cannot re-enter the position that was just closed.
-- The run's `pnl_peak` and `pnl_trough` are written on stop. `pnl_realized` is written on stop and then **reconciled from the order rows when the exit fills arrive**, because a stop does not wait for them: read it from [`/runs`](./runs.md) after the fills, not in the same breath as the stop.
+- The stop request is written before API-key lookup or broker dispatch. If that
+  write fails, the response has `stop_pending: false`, no exit is sent and the
+  request can be retried. Once it succeeds, new signal entries are gated and a
+  restart resumes the same reason.
+- A 200 with `stop_pending: true` means accepted exits are working. The run
+  stays current, subscribed and managed. A terminal fill retries the pending
+  stop and only confirmed flatness emits `run_stopped`; a terminal rejection or
+  cancellation emits `run_stop_failed` and leaves the exact owner retryable.
+- `run_stopped` is an event, not a field in this response. Use `stop_pending`
+  here and the run's `stopped_at`/pending-stop fields in [`/runs`](./runs.md).
+- Confirmed-flat finalization arms the [webhook](./webhook.md) cooling-off
+  window. An accepted pending stop does not claim that the position is gone.
+- Final P&L is written from exact owner/fill evidence. Unpriced exposure is
+  reported as unavailable or retained as a known portion with a critical
+  manual-reconciliation event; it is never silently valued as zero.
 
 ## Use Cases
 

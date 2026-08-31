@@ -9,29 +9,29 @@ Local Host   :  ws://127.0.0.1:8765
 Custom Host  :  ws://<your-host>:8765
 ```
 
-## Subscribe to Quotes
-
-### Subscribe Message
+## WebSocket Request
 
 ```json
 {
   "action": "subscribe",
-  "mode": "quote",
-  "instruments": [
+  "mode": "Quote",
+  "symbols": [
     {"exchange": "NSE", "symbol": "RELIANCE"},
     {"exchange": "NSE", "symbol": "INFY"}
   ]
 }
 ```
 
-### Quote Update Message
+## Sample Response
 
 ```json
 {
-  "type": "quote",
+  "type": "market_data",
+  "symbol": "RELIANCE",
+  "exchange": "NSE",
+  "mode": 2,
+  "broker": "zerodha",
   "data": {
-    "exchange": "NSE",
-    "symbol": "RELIANCE",
     "ltp": 1187.75,
     "open": 1172.0,
     "high": 1196.6,
@@ -48,8 +48,8 @@ Custom Host  :  ws://<your-host>:8765
 ```json
 {
   "action": "unsubscribe",
-  "mode": "quote",
-  "instruments": [
+  "mode": "Quote",
+  "symbols": [
     {"exchange": "NSE", "symbol": "RELIANCE"}
   ]
 }
@@ -100,22 +100,24 @@ finally:
 | Field | Type | Description |
 |-------|------|-------------|
 | action | string | "subscribe" or "unsubscribe" |
-| mode | string | "quote" |
-| instruments | array | Array of instrument objects |
+| mode | integer or string | `2` or case-insensitive `Quote` |
+| symbols | array | Array of symbol/exchange objects. Singular `symbol` plus `exchange` is a compatibility alias |
 
-### Quote Update Message
+### Market Data Update Message
 
 | Field | Type | Description |
 |-------|------|-------------|
-| type | string | "quote" |
+| type | string | Always `market_data` |
+| symbol | string | Trading symbol |
+| exchange | string | Exchange code |
+| mode | integer | Numeric subscribed mode (`2`) |
+| broker | string | Broker that supplied the frame |
 | data | object | Quote data object |
 
 ### Data Object
 
 | Field | Type | Description |
 |-------|------|-------------|
-| exchange | string | Exchange code |
-| symbol | string | Trading symbol |
 | ltp | number | Last traded price |
 | open | number | Day's open price |
 | high | number | Day's high price |

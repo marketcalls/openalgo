@@ -43,6 +43,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/strategy/start \
     {
       "leg_id": 1,
       "ok": true,
+      "acknowledged": true,
       "symbol": "NIFTY04SEP2624500CE",
       "broker_order_id": "26083004118201",
       "error": null
@@ -50,6 +51,7 @@ curl -X POST http://127.0.0.1:5000/api/v1/strategy/start \
     {
       "leg_id": 2,
       "ok": true,
+      "acknowledged": true,
       "symbol": "NIFTY04SEP2624500PE",
       "broker_order_id": "26083004118244",
       "error": null
@@ -57,6 +59,31 @@ curl -X POST http://127.0.0.1:5000/api/v1/strategy/start \
   ]
 }
 ```
+
+## Sample API Response (Broker Accepted, Acknowledgement Not Recorded)
+
+```json
+{
+  "status": "success",
+  "run_id": 42,
+  "mode": "live",
+  "legs": [
+    {
+      "leg_id": 1,
+      "ok": true,
+      "acknowledged": false,
+      "symbol": "NIFTY04SEP2624500CE",
+      "broker_order_id": "26083004118201",
+      "error": null
+    }
+  ]
+}
+```
+
+This is a real broker order, not a rejection. The durable pending intent still
+exists and `order_ack_unrecorded` carries the broker id plus local row id, but
+the database could not attach the two after one retry. Stop automatic retries
+of the entry and perform manual reconciliation.
 
 ## Sample API Request (Live)
 
@@ -117,6 +144,7 @@ Each object in `legs`:
 |-------|------|-------------|
 | leg_id | integer | The leg's id within the strategy |
 | ok | boolean | Whether the entry order was accepted |
+| acknowledged | boolean, optional | Present after dispatch. Whether the broker id and status were durably written back. `false` with `ok: true` requires manual reconciliation; it is not a rejection. Absent when the durable intent itself could not be written and no broker call was made |
 | symbol | string | The contract the leg resolved to |
 | broker_order_id | string or null | Order reference: the broker's id on a live run, the sandbox engine's id on a sandbox run, `null` when the order was not accepted |
 | error | string or null | Rejection reason when `ok` is false |
@@ -142,8 +170,13 @@ Each object in `legs`:
 - A start through this API records `trigger_source: "manual"` on the run.
 - A run whose entry orders were **all** rejected is closed immediately and the call answers 400 with `Every entry order was rejected`: a running strategy holding nothing would be worse than none.
 - Partial success is a 200. Check `legs[].ok` rather than assuming every leg is in the market.
+- **`ok: true, acknowledged: false` is a real broker order with incomplete
+  database attribution.** The intent row was durable before dispatch and the
+  acknowledgement write was retried, but its broker id/status still could not
+  be saved. A critical `order_ack_unrecorded` event carries both ids; reconcile
+  manually rather than retrying the entry as if it had been refused.
 - Long legs are placed before short legs. On a spread, a short leg alone can be refused for margin the account would have had once the long leg existed.
-- This endpoint is for `batch` strategies. A `signal` strategy has no start: its first inbound signal of the day opens the run. See the [webhook page](./webhook.md).
+- This endpoint is for `batch` strategies. A `signal` strategy has no start: its first inbound signal after the platform session boundary opens the run. See the [webhook page](./webhook.md).
 
 ## Use Cases
 

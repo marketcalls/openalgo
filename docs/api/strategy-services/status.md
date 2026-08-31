@@ -98,6 +98,8 @@ curl -X POST http://127.0.0.1:5000/api/v1/strategy/status \
     "started_at": "2026-08-30T03:50:11.402118+00:00",
     "stopped_at": null,
     "stop_reason": null,
+    "stop_requested_at": "2026-08-30T04:05:10.123456+00:00",
+    "stop_requested_reason": "manual",
     "pnl_realized": 0.0,
     "pnl_peak": 0.0,
     "pnl_trough": 0.0,
@@ -161,7 +163,9 @@ The `data` object above is abridged for readability. A real response always carr
 | started_at | string | ISO 8601 UTC |
 | stopped_at | string or null | ISO 8601 UTC, `null` while the run is open |
 | stop_reason | string or null | One of the stop reasons, `null` while the run is open |
-| pnl_realized | number | Realized P&L. Written on stop and then reconciled from the order rows as the exit fills arrive, so it is not final the instant a run stops |
+| stop_requested_at | string or null | ISO 8601 UTC set while a durable stop is pending; cleared after terminal finalization |
+| stop_requested_reason | string or null | Reason for the pending stop. A populated value means new signal entries are gated and recovery will resume the stop |
+| pnl_realized | number | Realized P&L written at confirmed-flat finalization; a critical recovery event says when only the known priced portion is authoritative |
 | pnl_peak | number | Highest P&L the run reached |
 | pnl_trough | number | Lowest P&L the run reached |
 | trigger_source | string | `manual`, `webhook` or `scheduler` |
@@ -172,7 +176,13 @@ The `data` object above is abridged for readability. A real response always carr
 
 - `run` is `null` whenever the strategy has no `current_run_id`, which is the normal state of a stopped strategy.
 - While a run is open, `pnl_realized`, `pnl_peak` and `pnl_trough` are the values last written to the run row, not a live mark. The live figures come from the run's checkpoints.
-- **`pnl_realized` is not final the instant a run stops.** A stop places its exits and closes the run without waiting for the fills, because the position is on its way out and nothing should block on the broker, so the figure written at that moment is what live state held: zero for any leg whose exit had not filled. Each fill that arrives afterwards reconciles the row from the order rows. Read it a moment after the stop rather than in the same breath as it; see [`/runs`](./runs.md).
+- A populated `stop_requested_reason` means the stop is durable but not yet
+  confirmed flat. The run remains current and managed; do not interpret a
+  successful stop request as terminal until `stopped_at` is populated or `run`
+  becomes `null`.
+- Finalization uses exact order ownership and fill evidence. Unpriced exposure
+  is never valued as zero merely because a broker numeric is missing. See
+  [`/runs`](./runs.md) for recovery P&L authority rules.
 - Expiries are resolved once at run start and held for the run, so a positional strategy does not roll to a new contract mid-run. `resolved_expiries` is that snapshot.
 - The strategy's own `status` field and the presence of `run` are separate reads. Prefer `run` when you need to know whether anything is actually open.
 - A strategy that is not yours returns 404 with `Strategy not found`, identical to one that does not exist.

@@ -16,14 +16,18 @@ Use `PRD.md` as the source for current behavior. It is grounded in `DISCOVERY_MA
 - App-level routes: 1
 - Broker plugins: 36
 - RESTX Swagger UI: deliberately disabled (`doc=False`)
-- BDD feature files: 17
-- BDD scenario definitions: 85
-- BDD expanded cases: 183
+- BDD feature files: 18
+- BDD scenario definitions: 119
+- BDD expanded cases: 219
 - Application / SDK: `2.0.1.4` / `2.0.2`
 
 ## Existing Module PRDs
 
-The files below are module-level historical PRDs. Treat them as secondary references until they are reconciled against the current-state PRD.
+The files below are module-level PRDs. Treat historical modules as secondary
+references until reconciled against the current-state PRD. The Strategy Module
+and RMS PRD is actively maintained as the current contract for that isolated
+surface; if it conflicts with the global PRD, record and resolve the conflict
+rather than silently choosing one.
 
 - [Flow](./flow.md)
 - [Flow Execution](./flow-execution.md)

@@ -84,15 +84,29 @@ curl -X POST http://127.0.0.1:5000/strategy/webhook/oaws_your_webhook_token_here
   "result": "ok",
   "message": "Strategy stop accepted",
   "strategy_id": 7,
-  "run_id": 42
+  "run_id": 42,
+  "stop_pending": true,
+  "exits": [
+    {
+      "leg_id": 1,
+      "ok": true,
+      "position_ref": "969bc536b1c14d15992f730c2c136d7a",
+      "exit_owner": "live",
+      "error": null
+    }
+  ]
 }
 ```
 
 `mode` is required on `start` and ignored on `stop`. A stop that carries a stray `mode` is not refused for it: the sender's extra field is not a reason to leave a position open.
 
+`Strategy stop accepted` means the durable request was handed to the engine; it
+does not mean the broker is flat. `stop_pending: true` keeps the run current,
+subscribed and managed until exact exit fills confirm every owner is flat.
+
 ## Signal Strategies
 
-A signal strategy moves one leg at a time. It accepts `long_entry`, `long_exit`, `short_entry` and `short_exit`, and nothing else. There is no `start` and no `mode`: the first signal of the day opens the run, and the mode comes from the strategy's own live opt-in.
+A signal strategy moves one leg at a time. It accepts `long_entry`, `long_exit`, `short_entry` and `short_exit`, and nothing else. There is no `start` and no `mode`: the first signal after the platform session boundary opens the run, and the mode comes from the strategy's own live opt-in.
 
 The leg is named either by `leg_id` or by `symbol` plus `exchange`. `leg_id` wins when both are given.
 
@@ -174,6 +188,8 @@ The body must be a JSON object. A JSON array, a bare string and a number are all
 | message | string | What happened, in words |
 | strategy_id | integer | The strategy the token resolved to. Absent when the token resolved to nothing |
 | run_id | integer | The run the signal opened or affected. Absent when there is none |
+| stop_pending | boolean | Stop responses only. `true` means the durable stop still has exposure to fill, retry or reconcile; `false` means the stop confirmed flatness |
+| exits | array | Stop responses only, present with `stop_pending`; per-owner exit outcomes including `position_ref`, `exit_owner`, `ok` and rejection context |
 
 `status` and `result` answer different questions. A deduplicated retry has `status: "success"` because the caller's intent was already satisfied, and `result: "rejected_dedupe"` because the audit trail has to show that this particular delivery did nothing.
 
@@ -193,7 +209,11 @@ The body must be a JSON object. A JSON array, a bare string and a number are all
 | `rejected_engine_error` | 500 | The engine refused the signal or raised while acting on it |
 | `rate_limited` | 429 | The route's rate limiter refused the request |
 
-Every one of those outcomes, rejections included, writes a row to the webhook audit table. A webhook that was refused is exactly what an operator needs to see when an alert quietly stops working. Read them on the strategy's page at `/strategy`.
+Every one of those outcomes, rejections included, writes a row to the webhook
+audit table. The session endpoint can read that audit, but the `/strategy` page
+does not currently expose it. The page also does not provide an IP-allowlist
+editor; creation currently stores no allowlist. Configure/read these through
+the session API until those operator surfaces are built.
 
 ## Validation Order
 

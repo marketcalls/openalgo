@@ -65,7 +65,10 @@ Clients can subscribe to different types of market data using the `mode` paramet
 | 2    | **Quote Mode** | Includes OHLC, LTP, volume, change, etc.   |
 | 3    | **Depth Mode** | Includes buy/sell order book (5–50 levels) |
 
-> Note: Mode 3 supports optional parameter `depth_level` to define the number of depth levels requested (e.g., 5, 20, 30, 50). Actual support depends on the broker.
+> Note: Mode 3 supports optional request field `depth` to define the number of
+> depth levels requested (for example 5, 20, 30 or 50). Actual support depends
+> on the broker. Modes may be sent as `1`/`2`/`3` or the case-insensitive labels
+> `LTP`/`Quote`/`Depth`.
 
 ### Subscription Format
 
@@ -74,9 +77,10 @@ Clients can subscribe to different types of market data using the `mode` paramet
 ```json
 {
   "action": "subscribe",
-  "symbol": "RELIANCE",
-  "exchange": "NSE",
-  "mode": 1
+  "symbols": [
+    {"symbol": "RELIANCE", "exchange": "NSE"}
+  ],
+  "mode": "LTP"
 }
 ```
 
@@ -85,10 +89,11 @@ Clients can subscribe to different types of market data using the `mode` paramet
 ```json
 {
   "action": "subscribe",
-  "symbol": "RELIANCE",
-  "exchange": "NSE",
-  "mode": 3,
-  "depth_level": 5
+  "symbols": [
+    {"symbol": "RELIANCE", "exchange": "NSE"}
+  ],
+  "mode": "Depth",
+  "depth": 5
 }
 ```
 
@@ -99,9 +104,10 @@ To unsubscribe from a stream:
 ```json
 {
   "action": "unsubscribe",
-  "symbol": "RELIANCE",
-  "exchange": "NSE",
-  "mode": 2
+  "symbols": [
+    {"symbol": "RELIANCE", "exchange": "NSE"}
+  ],
+  "mode": "Quote"
 }
 ```
 
@@ -129,13 +135,13 @@ If a client requests a depth level not supported by their broker:
 ```json
 {
   "type": "market_data",
+  "symbol": "RELIANCE",
+  "exchange": "NSE",
   "mode": 1,
-  "topic": "RELIANCE.NSE",
+  "broker": "zerodha",
   "data": {
-    "symbol": "RELIANCE",
-    "exchange": "NSE",
     "ltp": 1424.0,
-    "timestamp": "2025-05-28T10:30:45.123Z"
+    "timestamp": 1756376445123
   }
 }
 ```
@@ -145,11 +151,11 @@ If a client requests a depth level not supported by their broker:
 ```json
 {
   "type": "market_data",
+  "symbol": "RELIANCE",
+  "exchange": "NSE",
   "mode": 2,
-  "topic": "RELIANCE.NSE",
+  "broker": "zerodha",
   "data": {
-    "symbol": "RELIANCE",
-    "exchange": "NSE",
     "ltp": 1424.0,
     "change": 6.0,
     "change_percent": 0.42,
@@ -160,22 +166,21 @@ If a client requests a depth level not supported by their broker:
     "close": 1418.0,
     "last_trade_quantity": 50,
     "avg_trade_price": 1419.35,
-    "timestamp": "2025-05-28T10:30:45.123Z"
+    "timestamp": 1756376445123
   }
 }
 ```
 
-#### Depth (Mode 3 with depth\_level = 5)
+#### Depth (Mode 3 with `depth` = 5)
 
 ```json
 {
   "type": "market_data",
+  "symbol": "RELIANCE",
+  "exchange": "NSE",
   "mode": 3,
-  "depth_level": 5,
-  "topic": "RELIANCE.NSE",
+  "broker": "zerodha",
   "data": {
-    "symbol": "RELIANCE",
-    "exchange": "NSE",
     "ltp": 1424.0,
     "depth": {
       "buy": [
@@ -193,7 +198,7 @@ If a client requests a depth level not supported by their broker:
         {"price": 1426.0, "quantity": 30, "orders": 1}
       ]
     },
-    "timestamp": "2025-05-28T10:30:45.123Z",
+    "timestamp": 1756376445123,
     "broker_supported": true
   }
 }

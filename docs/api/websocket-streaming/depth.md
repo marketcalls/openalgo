@@ -9,29 +9,30 @@ Local Host   :  ws://127.0.0.1:8765
 Custom Host  :  ws://<your-host>:8765
 ```
 
-## Subscribe to Depth
-
-### Subscribe Message
+## WebSocket Request
 
 ```json
 {
   "action": "subscribe",
-  "mode": "depth",
-  "instruments": [
+  "mode": "Depth",
+  "depth": 5,
+  "symbols": [
     {"exchange": "NSE", "symbol": "RELIANCE"},
     {"exchange": "NSE", "symbol": "INFY"}
   ]
 }
 ```
 
-### Depth Update Message
+## Sample Response
 
 ```json
 {
-  "type": "depth",
+  "type": "market_data",
+  "symbol": "RELIANCE",
+  "exchange": "NSE",
+  "mode": 3,
+  "broker": "zerodha",
   "data": {
-    "exchange": "NSE",
-    "symbol": "RELIANCE",
     "ltp": 1187.75,
     "ltq": 100,
     "open": 1172.0,
@@ -65,8 +66,8 @@ Custom Host  :  ws://<your-host>:8765
 ```json
 {
   "action": "unsubscribe",
-  "mode": "depth",
-  "instruments": [
+  "mode": "Depth",
+  "symbols": [
     {"exchange": "NSE", "symbol": "RELIANCE"}
   ]
 }
@@ -119,22 +120,25 @@ finally:
 | Field | Type | Description |
 |-------|------|-------------|
 | action | string | "subscribe" or "unsubscribe" |
-| mode | string | "depth" |
-| instruments | array | Array of instrument objects |
+| mode | integer or string | `3` or case-insensitive `Depth` |
+| depth | integer | Requested levels, default `5`; broker capability decides the supported maximum |
+| symbols | array | Array of symbol/exchange objects. Singular `symbol` plus `exchange` is a compatibility alias |
 
-### Depth Update Message
+### Market Data Update Message
 
 | Field | Type | Description |
 |-------|------|-------------|
-| type | string | "depth" |
+| type | string | Always `market_data` |
+| symbol | string | Trading symbol |
+| exchange | string | Exchange code |
+| mode | integer | Numeric subscribed mode (`3`) |
+| broker | string | Broker that supplied the frame |
 | data | object | Depth data object |
 
 ### Data Object
 
 | Field | Type | Description |
 |-------|------|-------------|
-| exchange | string | Exchange code |
-| symbol | string | Trading symbol |
 | ltp | number | Last traded price |
 | ltq | number | Last traded quantity |
 | open | number | Day's open price |
