@@ -27,3 +27,8 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Local run artifacts from the example strategies (not source)
+examples/.bhavcopy_cache/
+examples/backtest_results.json
+examples/.iron_condor_daily_state.json
