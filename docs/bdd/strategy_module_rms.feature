@@ -1,167 +1,268 @@
 Feature: Strategy module and risk management
-  The /strategy surface runs multi-leg option baskets and signal-driven legs with
-  end-to-end risk management. Two kinds share one engine: a batch enters and exits
-  every leg together, a signal moves one leg per alert. Every risk decision comes
-  from the shared services/risk core, and every order goes out through one dispatch
-  point. Scenarios below are grouped by the property they protect.
+  The /strategy surface runs multi-leg baskets and signal-driven legs with
+  durable order ownership, confirmed-flat stopping and restart-safe risk
+  management. Scenarios are grouped by the money or operator truth they protect.
 
-  # Source: blueprints/strategy_module.py:1609, services/strategy_module/webhook.py:608
-  Scenario: An inbound alert is validated before it reaches the engine
+  # Source: test/test_strategy_module_webhook.py:890, test/test_strategy_module_docs.py:335
+  Scenario: Every admitted webhook outcome is validated and audited
     Given a strategy has a webhook token
-    When an alert arrives on that token
-    Then the token, kill switch, IP allowlist, payload, action, mode, live opt-in,
-      duplicate window and cooling-off window are each checked in that order
-    And every outcome is written to the webhook audit trail with its own result label
+    When an alert is admitted past route preflight on that token
+    Then token, kill switch, IP allowlist, payload, action, mode, live opt-in,
+      duplicate window and cooling-off are checked in order
+    And every accepted or rejected outcome has its own audit result label
+    But Route preflight refusals are not durable webhook audit rows
 
-  # Source: services/strategy_module/webhook.py:608, blueprints/strategy_module.py:1609
+  # Source: test/test_strategy_module_webhook.py:365
   Scenario: An unknown token cannot be distinguished from a malformed one
-    Given a token that resolves to no strategy
-    When it is presented to the webhook
-    Then the result label, message and status are identical to a malformed token
-    And the response is produced by the route rather than the application 404 handler
-    And the miss does not count towards an IP ban
+    Given a token resolves to no strategy
+    When it is presented to the public webhook
+    Then its label, message and status match a malformed token
+    And the route answers JSON without counting the miss toward an IP ban
 
-  # Source: blueprints/strategy_module.py:1609, utils/traffic_logger.py:107
-  Scenario: The webhook token is not written anywhere it could be read back
-    Given the URL token is the entire credential
-    When a webhook request is logged
-    Then the credential segment of the path is masked in the traffic log
-    And the stored audit payload carries no token-shaped value
-    And the rate limiter is keyed on the token digest rather than the token
-    And an oversized Content-Length is refused before the body is read
+  # Source: test/test_strategy_module_webhook.py:911
+  Scenario: The webhook token is not written anywhere it can be read back
+    Given the URL token is the complete credential
+    When a request, audit row or response is produced
+    Then the plaintext token appears in none of them
+    And only its digest is used for lookup and rate-limit identity
 
-  # Source: database/strategy_module_db.py:895, services/strategy_module/engine.py:190
+  # Source: test/test_strategy_module_qa_edges.py:646
   Scenario: Two starts racing produce exactly one run
-    Given a strategy that is stopped
+    Given a stopped strategy
     When two callers start it at the same instant
-    Then a single conditional update claims the strategy
-    And one caller opens a run and the other is refused
+    Then a single conditional update claims it
     And only one set of entry orders reaches the broker
 
-  # Source: services/strategy_module/engine.py:190, services/strategy_module/symbol_resolver.py:302
-  Scenario: Every leg resolves before anything is claimed
-    Given a basket in which one leg cannot be resolved to a contract
-    When the strategy is started
-    Then no run row is created, the strategy is not claimed, and no order is placed
-    And the failure names the leg and the reason
+  # Source: test/test_strategy_module_engine.py:127
+  Scenario: Every batch leg resolves before anything is claimed
+    Given one configured leg cannot resolve to a listed contract
+    When the batch strategy starts
+    Then no run row, strategy claim or broker order is created
+    And the failure names the leg and reason
 
-  # Source: services/strategy_module/order_dispatch.py:77
-  Scenario: A leg is sent a product its venue accepts
-    Given a strategy configured with one product for every leg
-    When an order is built for a leg
-    Then MIS is sent unchanged as an intraday product
-    And any other product is sent as NRML on a derivatives venue and CNC on cash
-    And a basket mixing a cash leg and an option leg is therefore legal
+  # Source: test/test_strategy_module_qa_segments.py:687
+  Scenario: Every leg is sent a product its venue accepts
+    Given one strategy product applies to cash and derivative legs
+    When an order is built
+    Then MIS remains MIS
+    And carry is NRML on derivatives and CNC on cash
+    And the literal product sent is persisted with the order
 
-  # Source: services/place_order_service.py:119, services/strategy_module/order_dispatch.py:99
-  Scenario: A live run is not diverted by the platform analyzer toggle
-    Given a live run holding real positions
-    When an operator switches the platform-wide analyzer mode on
-    Then the run's subsequent orders still reach the broker
-    And no exit is answered by the sandbox on behalf of a real position
+  # Source: test/test_strategy_module_order_dispatch.py:284
+  Scenario: A run mode cannot be diverted by the analyzer toggle
+    Given a live run is holding broker positions
+    When the platform analyzer toggle changes
+    Then subsequent live exits still reach the broker
+    And a sandbox run still uses the sandbox book and execution pipe
 
-  # Source: services/strategy_module/state.py:194, services/strategy_module/engine.py:781
-  Scenario: One leg cannot be sent two exits
-    Given an open leg
-    When two rules fire on it before the first exit order returns
-    Then the claim and the duplicate check happen in one hold of the run lock
+  # Source: services/strategy_module/engine.py:496, test/test_strategy_module_engine.py:304, test/test_strategy_module_scheduler.py:730
+  Scenario: Durable intent and acknowledgement surround every broker call
+    Given the engine is about to place an entry or exit
+    When it dispatches the order
+    Then the pending intent row already exists with its exact owner reference
+    And the broker acknowledgement write is checked and retried once
+    And persistent acknowledgement failure emits structured exact-row order_ack_unrecorded facts
+    And the dispatch call immediately binds only that row or keeps the run reserved
+    And a bounded shared sweep repairs every ordinary open run and folds broker status
+
+  # Source: test/test_strategy_module_order_events.py:197
+  Scenario: Each fill is applied once to the exact order it names
+    Given the same completed fill arrives from more than one broker channel
+    When the order-update subscriber applies those events
+    Then the first event changes only the order and position_ref it names
+    And every repeat changes neither exposure nor realized P&L
+
+  # Source: test/test_strategy_residual_safety.py:145
+  Scenario: A signal flip settles only the owner its fill names
+    Given a leg has an outgoing superseded side and a live replacement side
+    When the retried outgoing exit fills
+    Then only the superseded position_ref is reduced
+    And the replacement remains open and evaluated for risk
+
+  # Source: test/test_strategy_module_engine.py:703
+  Scenario: One exact owner cannot be sent two covering exits
+    Given an open position owner
+    When two risk rules fire before the first exit returns
+    Then claim and duplicate detection happen under one run-lock hold
     And exactly one covering order is placed
 
-  # Source: services/strategy_module/state.py:194, services/strategy_module/engine.py:781
-  Scenario: An exit the broker refused stays retryable
-    Given an exit order the broker rejected
-    When a later stop, stop loss, target or square-off reaches that leg
-    Then the leg is not treated as having an exit in flight
-    And another exit can be placed for the position that is still held
+  # Source: test/test_strategy_module_qa_edges.py:754
+  Scenario: An accepted stop remains pending until confirmed flat
+    Given a running strategy with filled positions
+    When its stop request and exit acknowledgements succeed
+    Then the stop timestamp and reason are durable before dispatch
+    And the response says stop_pending true while exits are working
+    And the run stays current, subscribed and managed
 
-  # Source: services/strategy_module/engine.py:781
-  Scenario: A stop whose exits were refused leaves the run open
-    Given a running strategy whose exit orders are all rejected by the broker
-    When a stop is requested
-    Then the run is not finalised and its prices stay subscribed
-    And a run_stop_failed event is recorded at critical severity
-    And the caller is told which legs were refused
+  # Source: test/test_strategy_module_qa_edges.py:961
+  Scenario: The final exit fill performs terminal stop finalization
+    Given a run has a durable pending stop
+    When the last exact owner quantity fills flat
+    Then stopped_at, stop_reason and strategy release commit atomically
+    And one run_stopped event is emitted
+    And the pending-stop fields are cleared
 
-  # Source: services/strategy_module/engine.py:501, services/strategy_module/order_events.py:59
-  Scenario: A fill is applied once, to the order it belongs to, at a usable price
-    Given an order update carrying a fill
-    When it is applied to a leg
-    Then a repeat of the same fill changes nothing
-    And a price that is not strictly positive and finite seeds no leg
-    And the leg is resized to the quantity that actually filled
-    And a fill naming an order the leg is not waiting on is ignored
+  # Source: test/test_strategy_module_order_events.py:254
+  Scenario: A terminal partial entry is real exposure
+    Given an entry partially filled before it was cancelled or rejected
+    When the terminal update arrives during a pending stop
+    Then positive filled_qty is the quantity held regardless of status
+    And only that exact quantity is exited
+    And requested quantity is never used to open the opposite side
 
-  # Source: services/strategy_module/engine.py:501, services/strategy_module/state.py:194
-  Scenario: A signal flip does not abandon the position it opens
-    Given a leg held long
-    When a short entry squares the long and opens a short before the close fills
-    Then the outgoing long is tracked separately until its own fill settles it
-    And the short remains open, priced and evaluated for risk
+  # Source: test/test_strategy_module_order_events.py:306
+  Scenario: Unpriced exposure remains managed and visibly unavailable
+    Given a terminal partial fill has positive quantity but no usable price
+    When it reaches the engine and operator views
+    Then the exact position quantity remains managed
+    And average price and P&L are unavailable rather than fabricated as zero
 
-  # Source: services/risk/aggregate.py:67, services/strategy_module/risk_adapter.py:136
-  Scenario: Risk decisions come from the shared core, never a second evaluator
-    Given a leg with a stop, a target and a trailing configuration
-    When a price arrives
-    Then the leg is translated into the core's own types and the core decides
-    And a position's realized P&L counts whether or not it is currently open
+  # Source: test/test_strategy_module_order_events.py:825
+  Scenario: An asynchronous rejected stop exit remains retryable
+    Given a stop exit was accepted and later rejected or cancelled
+    When its terminal update arrives
+    Then only that exact owner claim is released
+    And run_stop_failed is recorded at critical severity
+    And the pending run stays open for another exit attempt
 
-  # Source: services/strategy_module/engine.py:964, services/strategy_module/session.py:39
-  Scenario: The daily loss limit is measured across the session, not one run
-    Given a strategy with a daily loss limit that has already been reached
-      across runs that finished earlier today
-    When a further run is open and a price arrives
-    Then the run is squared off and stopped with reason daily_loss_limit
-    And the session boundary used is the platform session reset, not midnight
+  # Source: test/test_strategy_module_signals.py:550
+  Scenario: A durable stop gates new signal entries but permits exit retries
+    Given a signal run has stop_requested_reason populated
+    When entry and exit alerts arrive
+    Then a new entry claim is refused under the run lock
+    And an alert targeting exposure still held can retry its exit
 
-  # Source: services/strategy_module/scheduler.py:254
-  Scenario: An intraday strategy is always given a square-off
-    Given a strategy with an exit time and the scheduler switched off
-    When its jobs are synchronised
-    Then a square-off job is installed on weekdays at that exit time
+  # Source: test/test_strategy_module_signals.py:1020
+  Scenario: A normal signal round trip keeps one platform-session run
+    Given a signal leg opens and exits for a risk reason
+    When it becomes flat before the session ends
+    Then the platform-session run remains open
+    And a later alert reuses its P&L, peak, trough and audit history
+
+  # Source: services/strategy_module/risk_adapter.py:136, services/strategy_module/risk_adapter.py:225
+  Scenario: Every strategy risk decision comes from the shared core
+    Given a held leg and run have configured stops, targets and trailing rules
+    When a usable market price reaches the engine
+    Then the adapter translates both levels into the shared risk types
+    And the shared position and aggregate evaluators make the decisions
+
+  # Source: test/test_strategy_module_qa_edges.py:812, frontend/src/pages/strategy/Detail.test.tsx:524
+  Scenario: An overall target preserves trigger, execution and terminal truth
+    Given a multi-leg basket is marked from rolling latest-known one-symbol ticks
+    And those marks reach its overall target without promising a simultaneous snapshot
+    When MARKET exits fill at the available bid or ask and confirm every owner flat
+    Then overall_target_hit precedes every accepted leg_exit_placed event
+    And run_stopped follows those placements with stop_reason overall_target
+    And the finalized run keeps fill-derived realized P&L separately from its marked peak
+    And stopped views show zero unrealized and ignore an older checkpoint
+
+  # Source: test/test_strategy_module_qa_edges.py:547
+  Scenario: The daily loss limit spans the platform session
+    Given earlier runs already reached the strategy daily loss limit
+    When a later run receives a price
+    Then it is stopped for daily_loss_limit
+    And the boundary is the platform session reset rather than midnight
+
+  # Source: test/test_strategy_module_scheduler.py:281
+  Scenario: An intraday strategy always receives a square-off job
+    Given an intraday strategy has an exit time and scheduling is disabled
+    When jobs are synchronized
+    Then a weekday square-off is installed at that time
     And no start job is installed
 
-  # Source: services/strategy_module/signals.py:297, services/strategy_module/symbol_resolver.py:302
-  Scenario: A signal leg must name a contract that exists
-    Given a signal leg naming a base symbol on a derivatives exchange
-    When an entry signal arrives
-    Then the signal is refused and no order is placed
-    And the refusal names what should be configured instead
+  # Source: test/test_strategy_module_qa_segments.py:1856, test/test_strategy_module_webhook_e2e.py:229
+  Scenario: A signal must name a listed contract and never doubles a held side
+    Given a derivatives signal leg names only a base symbol or repeats its held side
+    When its entry alert arrives
+    Then a base symbol is refused before placement
+    And a repeated exact-contract signal is a successful no-op
 
-  # Source: services/strategy_module/signals.py:297
-  Scenario: A repeated signal is a no-op rather than a second position
-    Given a leg already held on the side a signal asks for
-    When that signal arrives again
-    Then the response is a success carrying a note
-    And no order is placed, because reporting failure would invite a retry
+  # Source: test/test_strategy_module_recovery.py:680
+  Scenario: Recovery restores a live and superseded owner independently
+    Given a crash occurs while a flip holds an outgoing and replacement side
+    When the open run is recovered
+    Then order rows are grouped by exact position_ref
+    And both owners recover with independent quantities, exits and risk state
 
-  # Source: database/strategy_module_db.py:1135, services/strategy_module/engine.py:501
-  Scenario: A stopped run records the P&L its exit fills produced
-    Given a run stopped before its exit orders filled
-    When those fills arrive
-    Then the run row is reconciled from its own order rows
-    And a run whose order rows record no completed round trip is left unchanged
+  # Source: test/test_strategy_module_recovery.py:957
+  Scenario: Proven unrepresentable exposure remains database open
+    Given durable rows prove more than two held owner references on one leg
+    When recovery cannot fit them into live plus superseded state
+    Then the run is not hydrated and not finalised
+    And the strategy remains reserved
+    And recovery_failed requests manual reconciliation at critical severity
 
-  # Source: services/strategy_module/recovery.py:246
-  Scenario: A restart recovers open runs from orders and checkpoints
-    Given the process restarted while runs were open
-    When recovery runs
-    Then identity and disposition come from the order rows
-    And volatile risk state comes from the checkpoint
-    And a rejected order is never upgraded by a checkpoint
-    And a run that cannot be recovered is finalised rather than wedging startup
+  # Source: test/test_strategy_module_recovery.py:1439
+  Scenario: Exact durable break-even overrides a stale checkpoint
+    Given every reference group has usable priced entry and exit fills
+    And those fills sum to exactly zero realized P&L
+    When recovery reads a stale nonzero checkpoint
+    Then the exact durable zero is authoritative
 
-  # Source: services/strategy_module/broadcast.py:522, blueprints/strategy_module.py:1609
-  Scenario: A page watching a strategy is pushed to rather than polling
-    Given a browser viewing one strategy
-    When it joins that strategy's room
-    Then ownership is checked on the join
-    And snapshot, delta, event, order, run and terminal frames are pushed
-    And a frame older than the last one received is discarded
-    And the periodic read remains as a fallback until frames actually arrive
+  # Source: test/test_strategy_module_recovery.py:1527
+  Scenario: Incomplete valuation retains only known P&L
+    Given durable fills prove exposure but one fill has no usable price
+    And no checkpoint witnessed the same owner shape and quantities
+    When the run recovers
+    Then the known priced portion is retained
+    And a critical recovery_succeeded event requests manual P&L reconciliation
 
-  # Source: services/strategy_module/views.py:178
-  Scenario: A position row cannot be divided between its owners
-    Given a contract this strategy holds that is also held from another source
-    When the strategy's positions are read from the broker
-    Then the row is reported as shared rather than attributed to this strategy
-    And the strategy's own profit and loss is taken from its fills instead
+  # Source: test/test_strategy_module_recovery.py:1899
+  Scenario: Malformed recovery with no proven exposure cannot wedge startup
+    Given an open run has malformed state but no durable evidence of exposure
+    When it cannot be reconstructed
+    Then it is finalised with recovery_failed
+    And recovery continues for every other open run
+
+  # Source: frontend/src/pages/strategy/useStrategyLive.test.tsx:246
+  Scenario: A stale strategy socket returns to periodic reads
+    Given the strategy page once received a live frame
+    When that socket becomes silent beyond the recency window
+    Then periodic reads resume
+    And fresh REST state replaces the stale frame and run id
+
+  # Source: test/test_strategy_module_views.py:765
+  Scenario: Broker books follow the run mode rather than analyzer state
+    Given a current or selected strategy run
+    When its orderbook, tradebook or positions are requested
+    Then a live run reads the broker and a sandbox run reads sandbox
+    And account rows are narrowed to the strategy's durable orders or contracts
+
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:364
+  Scenario: No run means broker truth was not requested
+    Given a strategy has no current or historical run
+    When an operator opens a broker-backed tab
+    Then no broker request is made
+    And the page labels recorded rows as strategy audit rather than broker-empty truth
+
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:165
+  Scenario: Broker numerics preserve zero and expose unavailable values
+    Given a broker row contains zero, missing, malformed and non-finite numerics
+    When the Detail page normalizes it
+    Then real zero remains zero
+    And every unusable quantity, price and P&L value renders unavailable
+
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:1085, frontend/src/pages/strategy/strategy_module.test.ts:121
+  Scenario: Broker order and trade truth keeps local reconciliation context
+    Given broker rows and recorded strategy orders can match, differ or be ambiguous
+    When the page reconciles them by broker order id
+    Then broker values remain primary
+    And multiple trade fills aggregate quantity and weighted price before comparison
+    And local-only, ambiguous, mismatch and rejection context remain visible
+
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:787, frontend/src/pages/strategy/Detail.test.tsx:875, frontend/src/pages/strategy/strategy_module.test.ts:400, test/test_strategy_module_views.py:441
+  Scenario: Position fallback preserves exposure without inventing valuation
+    Given local audit has explicit positive fills in working or terminal statuses
+    When the broker positionbook is unavailable
+    Then lifetime orders preserve residual owners from earlier runs
+    And side and exact filled quantity remain visible
+    And unpriced average, realized and unrealized values remain unavailable
+    And a prior-run live frame never values the current run's fallback
+    And a broker contract shared with another source is not attributed to this strategy
+
+  # Source: test/test_strategy_module_lifecycle_api.py:232
+  Scenario: Close all records an attempt rather than proof of flatness
+    Given an operator calls close_all
+    When its intent event is written before the stop and broker results
+    Then close_all_manual proves the request or attempt
+    And only confirmed-flat run_stopped proves the broker position is gone

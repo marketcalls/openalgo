@@ -23,15 +23,15 @@ These Gherkin files describe current OpenAlgo behavior for review, acceptance-te
 | `notifications_observability.feature` | Telegram, WhatsApp, EventBus, health, traffic | 8 |
 | `admin_and_security.feature` | Admin, IP security, CSP, Remote MCP controls | 4 |
 | `historify_and_tools.feature` | Historify jobs/schedules and option tools | 4 |
-| `strategy_module_rms.feature` | Multi-leg baskets, signal legs, order path, risk, recovery, streaming | 21 |
+| `strategy_module_rms.feature` | Multi-leg baskets, signal legs, durable ownership, aggregate-trigger versus execution truth, pending stops, recovery/P&L authority, broker-primary UI truth | 35 |
 
 Current totals:
 
-- Feature files: 17
-- Scenario definitions: 85
+- Feature files: 18
+- Scenario definitions: 120
 - Scenario outlines: 6
-- Example rows across outlines: 104
-- Expanded scenario cases: 183 (`85 - 6 + 104`)
+- Example rows across outlines: 106
+- Expanded scenario cases: 220 (`120 - 6 + 106`)
 
 The REST inventory outline is contract coverage, not proof that every endpoint succeeds against every broker. The broker outline proves configuration inventory only; broker-specific behavioral verification remains in broker tests and adapter integration checks.
 

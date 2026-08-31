@@ -329,6 +329,10 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._last_sub_flush_at: float = 0.0
         self._last_unsub_flush_at: float = 0.0
         self._batch_delay = 0.5
+        # Exact unsubscribe calls are synchronous at the broker-send boundary.
+        # This marker prevents a concurrent subscribe from treating a feed that
+        # is being released as already active without sending its own request.
+        self._pending_ws_unsubscribes: set[tuple[str, str]] = set()
 
     def _setup_normalizers(self):
         """Initialize data normalizers"""
@@ -417,6 +421,7 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._unsub_batch_timer = None
             self._sub_queue.clear()
             self._unsub_queue.clear()
+            self._pending_ws_unsubscribes.clear()
             resub_to_join = self._resub_thread
             ws_to_stop = self.ws_client
             self.ws_client = None
@@ -500,9 +505,16 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         f"[SUBSCRIBE] New WebSocket subscription needed for {correlation_id}"
                     )
 
-                # Store the subscription
-                self.subscriptions[correlation_id] = subscription
                 scrip = subscription["scrip"]
+                ws_call = self._ws_call_for_mode(mode)
+                if ws_call and (scrip, ws_call) in self._pending_ws_unsubscribes:
+                    return self._create_error_response(
+                        "SUBSCRIPTION_BUSY",
+                        f"Broker release is in progress for {symbol}.{exchange}; retry subscription",
+                    )
+
+                # Store the subscription only after any in-flight release check.
+                self.subscriptions[correlation_id] = subscription
                 self.scrip_to_symbol[scrip] = (
                     subscription["symbol"],
                     subscription["exchange"],
@@ -546,16 +558,15 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def unsubscribe(
         self, symbol: str, exchange: str, mode: int = Config.MODE_QUOTE
     ) -> dict[str, Any]:
-        """Unsubscribe from market data"""
+        """Unsubscribe after the broker WebSocket send succeeds.
+
+        The last exact owner stays in every local index until the synchronous
+        broker release path succeeds. A failed or absent socket therefore
+        leaves enough state for the proxy to retry or disconnect safely.
+        """
         base_correlation_id = f"{symbol}_{exchange}_{mode}"
 
-        # Collect state under lock, execute WS calls outside
-        need_ws_unsubscribe = False
-        subscription = None
-        scrip_to_clear = None
-
         with self.lock:
-            # M7 fix: Use trailing underscore in prefix match
             matching_subscriptions = [
                 (cid, sub)
                 for cid, sub in self.subscriptions.items()
@@ -567,51 +578,97 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "NOT_SUBSCRIBED", f"Not subscribed to {symbol}.{exchange}"
                 )
 
-            # Remove the first matching subscription
             correlation_id, subscription = matching_subscriptions[0]
-
-            # Check if this is the last subscription for this symbol/exchange/mode
             is_last = len(matching_subscriptions) == 1
 
-            # Remove the subscription
-            del self.subscriptions[correlation_id]
+            if not is_last:
+                self._remove_subscription_locked(correlation_id, subscription)
+                return self._create_success_response(
+                    f"Unsubscribed from {symbol}.{exchange}",
+                    symbol=symbol,
+                    exchange=exchange,
+                    mode=mode,
+                )
 
-            # Maintain scrip → correlation_id index
             scrip = subscription["scrip"]
-            if scrip in self._scrip_to_cids:
-                self._scrip_to_cids[scrip].discard(correlation_id)
-                if not self._scrip_to_cids[scrip]:
-                    del self._scrip_to_cids[scrip]
+            ws_call = self._ws_call_for_mode(subscription["mode"])
+            if ws_call is None:
+                return self._create_error_response(
+                    "INVALID_MODE",
+                    f"Unsupported subscription mode {subscription['mode']}",
+                )
 
-            # Clean up scrip mapping if no other subscriptions use it
-            if scrip not in self._scrip_to_cids:
-                self.scrip_to_symbol.pop(scrip, None)
-                token = subscription["token"]
-                scrips_for_token = self._token_to_scrips.get(token)
-                if scrips_for_token is not None:
-                    scrips_for_token.discard(scrip)
-                    if not scrips_for_token:
-                        del self._token_to_scrips[token]
-                scrip_to_clear = scrip
+            pending_key = (scrip, ws_call)
+            if pending_key in self._pending_ws_unsubscribes:
+                return self._create_error_response(
+                    "UNSUBSCRIPTION_IN_PROGRESS",
+                    f"Broker release already in progress for {scrip}",
+                )
+            # Claim the broker release while ownership is still observed under
+            # the same lock. A concurrent subscribe must never slip between
+            # the last-owner decision and the remote release boundary.
+            self._pending_ws_unsubscribes.add(pending_key)
 
-            # SA-R8-3 note: Only call _websocket_unsubscribe for the last
-            # correlation_id. The ref count inside _websocket_unsubscribe is a
-            # secondary guard; is_last is the primary decision point because
-            # ref counts track unique WS subs (always 1), not correlation_ids.
-            if is_last:
-                need_ws_unsubscribe = True
+        try:
+            # Network I/O is deliberately outside the adapter state lock.
+            broker_result = self._websocket_unsubscribe(subscription)
+            if broker_result.get("status") != "success":
+                return broker_result
 
-        # Network I/O outside lock
-        if need_ws_unsubscribe:
-            self._websocket_unsubscribe(subscription)
+            with self.lock:
+                if correlation_id not in self.subscriptions:
+                    return self._create_error_response(
+                        "UNSUBSCRIPTION_RACE",
+                        f"Subscription ownership changed for {symbol}.{exchange}",
+                    )
+                scrip_to_clear = self._remove_subscription_locked(
+                    correlation_id, subscription
+                )
 
-        # Clear cache for removed scrip
-        if scrip_to_clear:
-            self.market_cache.clear(scrip_to_clear)
+            if scrip_to_clear:
+                self.market_cache.clear(scrip_to_clear)
 
-        return self._create_success_response(
-            f"Unsubscribed from {symbol}.{exchange}", symbol=symbol, exchange=exchange, mode=mode
-        )
+            return self._create_success_response(
+                f"Unsubscribed from {symbol}.{exchange}",
+                symbol=symbol,
+                exchange=exchange,
+                mode=mode,
+            )
+        finally:
+            with self.lock:
+                self._pending_ws_unsubscribes.discard(pending_key)
+
+    @staticmethod
+    def _ws_call_for_mode(mode: int) -> str | None:
+        if mode in (Config.MODE_LTP, Config.MODE_QUOTE):
+            return "touchline"
+        if mode == Config.MODE_DEPTH:
+            return "depth"
+        return None
+
+    def _remove_subscription_locked(
+        self, correlation_id: str, subscription: dict[str, Any]
+    ) -> str | None:
+        """Commit one local owner removal. Caller must hold ``self.lock``."""
+        self.subscriptions.pop(correlation_id, None)
+        scrip = subscription["scrip"]
+        cids = self._scrip_to_cids.get(scrip)
+        if cids is not None:
+            cids.discard(correlation_id)
+            if not cids:
+                self._scrip_to_cids.pop(scrip, None)
+
+        if scrip in self._scrip_to_cids:
+            return None
+
+        self.scrip_to_symbol.pop(scrip, None)
+        token = subscription["token"]
+        scrips_for_token = self._token_to_scrips.get(token)
+        if scrips_for_token is not None:
+            scrips_for_token.discard(scrip)
+            if not scrips_for_token:
+                self._token_to_scrips.pop(token, None)
+        return scrip
 
     def _validate_subscription_params(self, symbol: str, exchange: str, mode: int) -> bool:
         """Validate subscription parameters"""
@@ -806,59 +863,134 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 f"in adapter and will be re-sent on reconnect"
             )
 
-    def _websocket_unsubscribe(self, subscription: dict) -> None:
-        """Update ref counts and enqueue scrip into the unsubscribe batch.
-        Same leading-edge dispatch as _websocket_subscribe."""
+    def _websocket_unsubscribe(self, subscription: dict) -> dict[str, Any]:
+        """Release one WS reference transactionally at the send boundary.
+
+        Shared touchline/depth references are local-only decrements. The last
+        reference is queued and synchronously flushed; its ref remains intact
+        until the underlying socket send reports success. The caller owns the
+        matching in-flight release marker across this operation.
+        """
         scrip = subscription["scrip"]
         mode = subscription["mode"]
+        ws_call = self._ws_call_for_mode(mode)
+        if ws_call is None:
+            return self._create_error_response(
+                "INVALID_MODE", f"Unsupported subscription mode {mode}"
+            )
 
-        flush_now = False
         with self.lock:
-            if scrip not in self.ws_subscription_refs:
-                return
-
-            # SA-R7-9 fix: Only decrement if count > 0 to prevent negative counts
-            # when WS subscribe failed (rolled back) but subscription dict still has entry
-            ws_call = None
-            if mode in [Config.MODE_LTP, Config.MODE_QUOTE]:
-                current = self.ws_subscription_refs[scrip]["touchline_count"]
-                if current > 0:
-                    self.ws_subscription_refs[scrip]["touchline_count"] = current - 1
-                    if current - 1 == 0:
-                        ws_call = "touchline"
-            elif mode == Config.MODE_DEPTH:
-                current = self.ws_subscription_refs[scrip]["depth_count"]
-                if current > 0:
-                    self.ws_subscription_refs[scrip]["depth_count"] = current - 1
-                    if current - 1 == 0:
-                        ws_call = "depth"
-
-            # Clean up entry when both counts reach 0
             refs = self.ws_subscription_refs.get(scrip)
-            if refs and refs["touchline_count"] <= 0 and refs["depth_count"] <= 0:
-                del self.ws_subscription_refs[scrip]
+            count_key = f"{ws_call}_count"
+            current = refs.get(count_key, 0) if refs else 0
 
-            if ws_call:
-                self._unsub_queue.append((scrip, ws_call))
-                flush_now = self._schedule_unsub_flush_locked()
+            if current <= 0:
+                # A subscription established while disconnected never reached
+                # the broker and therefore needs no remote release.
+                if not self.connected or not self.ws_client:
+                    return self._create_success_response(
+                        f"No active broker reference for {scrip}"
+                    )
+                return self._create_error_response(
+                    "UNSUBSCRIPTION_STATE_ERROR",
+                    f"Missing broker reference for {scrip}",
+                )
 
-        if flush_now:
-            self._flush_unsubscription_batch()
+            if current > 1:
+                refs[count_key] = current - 1
+                return self._create_success_response(
+                    f"Released shared local reference for {scrip}"
+                )
 
-    def _flush_unsubscription_batch(self) -> None:
-        """Drain _unsub_queue and hand off to the WS-layer batched API."""
+            pending_key = (scrip, ws_call)
+            if pending_key not in self._unsub_queue:
+                self._unsub_queue.append(pending_key)
+            if self._unsub_batch_timer:
+                self._unsub_batch_timer.cancel()
+                self._unsub_batch_timer = None
+
+        result = self._flush_unsubscription_batch(required_entry=pending_key)
+        if result.get("status") != "success":
+            return result
+
+        with self.lock:
+            refs = self.ws_subscription_refs.get(scrip)
+            if refs:
+                refs[count_key] = max(0, refs.get(count_key, 0) - 1)
+                if (
+                    refs.get("touchline_count", 0) <= 0
+                    and refs.get("depth_count", 0) <= 0
+                ):
+                    self.ws_subscription_refs.pop(scrip, None)
+        return self._create_success_response(f"Broker release sent for {scrip}")
+
+    def _restore_unsubscription_queue(
+        self,
+        queue_snapshot: list[tuple[str, str]],
+        *,
+        insert_at: int | None = None,
+    ) -> None:
+        """Restore unacknowledged work at its prior queue boundary."""
+        with self.lock:
+            if insert_at is None:
+                self._unsub_queue = queue_snapshot + self._unsub_queue
+            else:
+                offset = min(max(0, insert_at), len(self._unsub_queue))
+                self._unsub_queue[offset:offset] = queue_snapshot
+
+    @staticmethod
+    def _send_unsubscription_batches(
+        ws: Any, ws_call: str, scrips: list[str]
+    ) -> bool:
+        """Send synchronously without exceeding the broker's frame bound."""
+        sender = (
+            ws.unsubscribe_touchline
+            if ws_call == "touchline"
+            else ws.unsubscribe_depth
+        )
+        try:
+            batch_size = max(1, int(getattr(ws, "MAX_SCRIPS_PER_BATCH", 100)))
+        except (TypeError, ValueError):
+            batch_size = 100
+
+        for offset in range(0, len(scrips), batch_size):
+            batch = scrips[offset : offset + batch_size]
+            if not sender("#".join(batch)):
+                return False
+        return True
+
+    def _flush_unsubscription_batch(
+        self, *, required_entry: tuple[str, str] | None = None
+    ) -> dict[str, Any]:
+        """Synchronously send queued work at one caller's result boundary."""
         with self.lock:
             self._unsub_batch_timer = None
             self._reconcile_queues_locked()
             if not self._unsub_queue:
-                return
-            queue_snapshot = self._unsub_queue
-            self._unsub_queue = []
+                return self._create_success_response("No broker releases pending")
+            restore_index: int | None = None
+            if required_entry is None:
+                queue_snapshot = list(self._unsub_queue)
+                self._unsub_queue = []
+            else:
+                try:
+                    restore_index = self._unsub_queue.index(required_entry)
+                except ValueError:
+                    return self._create_success_response(
+                        "No exact broker release pending"
+                    )
+                queue_snapshot = [self._unsub_queue.pop(restore_index)]
             self._last_unsub_flush_at = time.time()
             ws = self.ws_client
+            connected = self.connected
 
-        if not ws:
-            return
+        if not ws or not connected:
+            self._restore_unsubscription_queue(
+                queue_snapshot, insert_at=restore_index
+            )
+            return self._create_error_response(
+                "NOT_CONNECTED", "WebSocket not connected"
+            )
 
         touchline_scrips: list[str] = []
         depth_scrips: list[str] = []
@@ -878,14 +1010,27 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.info(
                     f"[BATCH_UNSUBSCRIBE] Sending {len(touchline_scrips)} touchline scrips"
                 )
-                ws.unsubscribe_touchline_scrips(touchline_scrips)
+                if not self._send_unsubscription_batches(
+                    ws, "touchline", touchline_scrips
+                ):
+                    raise RuntimeError("touchline broker send was not acknowledged")
             if depth_scrips:
                 self.logger.info(
                     f"[BATCH_UNSUBSCRIBE] Sending {len(depth_scrips)} depth scrips"
                 )
-                ws.unsubscribe_depth_scrips(depth_scrips)
+                if not self._send_unsubscription_batches(ws, "depth", depth_scrips):
+                    raise RuntimeError("depth broker send was not acknowledged")
         except Exception as e:
             self.logger.error(f"Error queueing batch unsubscription: {e}")
+            self._restore_unsubscription_queue(
+                queue_snapshot, insert_at=restore_index
+            )
+            return self._create_error_response("UNSUBSCRIPTION_ERROR", str(e))
+
+        return self._create_success_response(
+            "Broker unsubscription batch sent",
+            unsubscribed_count=len(queue_snapshot),
+        )
 
     # SA-1 fix: Don't reset _reconnecting here — let _attempt_reconnection own that flag
     # SA-7 fix: Move _resubscribe_all to background thread to avoid blocking WS message thread
@@ -1337,6 +1482,11 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if not self.connected or not self.ws_client:
                     self.logger.warning("Cannot unsubscribe_all: WebSocket not connected")
                     return self._create_error_response("NOT_CONNECTED", "WebSocket not connected")
+                if self._pending_ws_unsubscribes:
+                    return self._create_error_response(
+                        "UNSUBSCRIPTION_IN_PROGRESS",
+                        "An exact broker release is already in progress",
+                    )
 
                 # Collect all unique scrips for batch unsubscription
                 touchline_scrips = set()
@@ -1352,14 +1502,7 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     elif mode == Config.MODE_DEPTH:
                         depth_scrips.add(scrip)
 
-                # Clear all subscription tracking but keep WebSocket connection alive
                 subscription_count = len(self.subscriptions)
-                self.subscriptions.clear()
-                self.scrip_to_symbol.clear()
-                self.ws_subscription_refs.clear()
-                self._scrip_to_cids.clear()
-                self._token_to_scrips.clear()
-
                 # Snapshot ws_client reference under lock
                 ws = self.ws_client
 
@@ -1370,7 +1513,11 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if ws and touchline_scrips:
                 try:
                     self.logger.info(f"Unsubscribing from {len(touchline_scrips)} touchline scrips")
-                    ws.unsubscribe_touchline_scrips(list(touchline_scrips))
+                    sent = self._send_unsubscription_batches(
+                        ws, "touchline", sorted(touchline_scrips)
+                    )
+                    if not sent:
+                        raise RuntimeError("touchline broker send was not acknowledged")
                 except Exception as e:
                     self.logger.error(f"Error unsubscribing touchline: {e}")
                     unsub_errors.append(f"touchline: {e}")
@@ -1378,13 +1525,32 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if ws and depth_scrips:
                 try:
                     self.logger.info(f"Unsubscribing from {len(depth_scrips)} depth scrips")
-                    ws.unsubscribe_depth_scrips(list(depth_scrips))
+                    sent = self._send_unsubscription_batches(
+                        ws, "depth", sorted(depth_scrips)
+                    )
+                    if not sent:
+                        raise RuntimeError("depth broker send was not acknowledged")
                 except Exception as e:
                     self.logger.error(f"Error unsubscribing depth: {e}")
                     unsub_errors.append(f"depth: {e}")
 
             if unsub_errors:
                 self.logger.warning(f"Partial unsubscribe_all failure: {unsub_errors}")
+                return self._create_error_response(
+                    "UNSUBSCRIBE_ALL_ERROR", "; ".join(unsub_errors)
+                )
+
+            # Commit local ownership only after every broker call succeeds.
+            # The proxy disconnects the adapter if this method returns error,
+            # so a partial broker release cannot be presented as reusable.
+            with self.lock:
+                self.subscriptions.clear()
+                self.scrip_to_symbol.clear()
+                self.ws_subscription_refs.clear()
+                self._scrip_to_cids.clear()
+                self._token_to_scrips.clear()
+                self._sub_queue.clear()
+                self._unsub_queue.clear()
 
             # Clear market data cache
             self.market_cache.clear()
@@ -1394,10 +1560,7 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 f"WebSocket connection remains active for fast reconnection."
             )
 
-            # SA-R6-10 fix: Include warnings in response when partial failure occurs
             response_msg = f"Unsubscribed from all {subscription_count} subscriptions. Connection kept alive."
-            if unsub_errors:
-                response_msg += f" Warnings: {unsub_errors}"
 
             return self._create_success_response(
                 response_msg,
@@ -1436,6 +1599,7 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self._unsub_batch_timer = None
                 self._sub_queue.clear()
                 self._unsub_queue.clear()
+                self._pending_ws_unsubscribes.clear()
                 resub_to_join = self._resub_thread
                 ws_to_stop = self.ws_client
                 self.ws_client = None

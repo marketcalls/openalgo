@@ -56,6 +56,7 @@ import pytz
 from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from database import strategy_module_db as store
 from utils.logging import get_logger
@@ -77,6 +78,12 @@ JOB_DEFAULTS: dict[str, Any] = {
 #: Job ids are ``strategy:{id}:start`` / ``strategy:{id}:stop``. The prefix is
 #: what lets :func:`sync_all_jobs` recognise its own jobs and drop orphans.
 JOB_PREFIX = "strategy:"
+
+# One shared safety job, independent of per-strategy schedules. A broker push
+# frame can be dropped after a cancellation; polling every pending durable stop
+# lets that run self-heal without creating one timer or thread per run.
+PENDING_STOP_RECONCILE_JOB_ID = "strategy-pending-stop-reconcile"
+PENDING_STOP_RECONCILE_SECONDS = 5
 
 _DAY_TO_CRON = {
     "MON": "mon",
@@ -126,6 +133,16 @@ def start(paused: bool = False) -> BackgroundScheduler:
         # No jobstores argument: the default MemoryJobStore is the point. The
         # schedule is a projection of the database, rebuilt on every boot.
         _scheduler = BackgroundScheduler(timezone=IST, job_defaults=JOB_DEFAULTS)
+        _scheduler.add_job(
+            func=reconcile_pending_stops,
+            trigger=IntervalTrigger(
+                seconds=PENDING_STOP_RECONCILE_SECONDS,
+                timezone=IST,
+            ),
+            id=PENDING_STOP_RECONCILE_JOB_ID,
+            name="Strategy pending-stop reconciliation",
+            replace_existing=True,
+        )
         _scheduler.start(paused=paused)
         logger.info("Strategy module scheduler started (timezone %s, paused=%s)", IST, paused)
         return _scheduler
@@ -589,21 +606,86 @@ def run_scheduled_stop(strategy_id: int) -> None:
         if row.status != "running" or not row.current_run_id:
             logger.info("Scheduled stop skipped: strategy %s is not running", strategy_id)
             return
+        run_id = int(row.current_run_id)
+        user_id = str(row.user_id)
 
         from services.strategy_module import engine
 
-        result = engine.stop_run(row.current_run_id, row.user_id, reason="scheduler")
-        if isinstance(result, dict) and result.get("ok"):
+        result = engine.stop_run(run_id, user_id, reason="scheduler")
+        accepted = isinstance(result, dict) and bool(result.get("ok"))
+        pending = isinstance(result, dict) and bool(result.get("stop_pending"))
+        if accepted and pending:
+            logger.info(
+                "Scheduled square-off accepted for run %s of strategy %s; exit fills pending",
+                run_id,
+                strategy_id,
+            )
+        elif accepted:
             logger.info(
                 "Scheduled square-off closed run %s of strategy %s",
-                row.current_run_id,
+                run_id,
                 strategy_id,
+            )
+        elif pending:
+            error = result.get("error") if isinstance(result, dict) else result
+            logger.error(
+                "Scheduled square-off refused for strategy %s; stop remains pending and "
+                "retryable: %s",
+                strategy_id,
+                error,
             )
         else:
             error = result.get("error") if isinstance(result, dict) else result
             logger.error("Scheduled square-off of strategy %s failed: %s", strategy_id, error)
     except Exception:
         logger.exception("Scheduled stop failed for strategy %s", strategy_id)
+    finally:
+        from utils.db_sessions import remove_all_scoped_sessions
+
+        remove_all_scoped_sessions()
+
+
+def reconcile_pending_stops() -> dict[str, int]:
+    """Repair open-run acknowledgements, then retry every durable stop."""
+    result_counts = {"examined": 0, "pending": 0, "finalised": 0, "failed": 0}
+    try:
+        try:
+            from services.strategy_module import ack_reconciliation
+
+            # The same bounded job covers ordinary active runs. This keeps a
+            # lost acknowledgement/fill managed without adding a per-run
+            # timer, thread, sleep, or broker I/O under the scheduler lock.
+            ack_reconciliation.reconcile_open_runs()
+        except Exception:
+            logger.exception("Periodic open-run acknowledgement repair failed")
+
+        pending_runs = [
+            run.id
+            for run in store.list_open_runs()
+            if run.stop_requested_reason is not None
+        ]
+        from services.strategy_module import engine
+
+        for run_id in pending_runs:
+            result_counts["examined"] += 1
+            try:
+                outcome = engine.reconcile_pending_stop(run_id)
+            except Exception:
+                logger.exception("Pending-stop reconciliation failed for run %s", run_id)
+                result_counts["failed"] += 1
+                continue
+
+            if not isinstance(outcome, dict):
+                result_counts["failed"] += 1
+            elif outcome.get("stop_pending"):
+                result_counts["pending"] += 1
+                if not outcome.get("ok"):
+                    result_counts["failed"] += 1
+            elif outcome.get("ok"):
+                result_counts["finalised"] += 1
+            else:
+                result_counts["failed"] += 1
+        return result_counts
     finally:
         from utils.db_sessions import remove_all_scoped_sessions
 

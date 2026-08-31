@@ -955,12 +955,26 @@ upstream openalgo_websocket_${SANITIZED_NAME} {
 server {
     listen 80;
     server_name $DOMAIN;
+
+    # OPENALGO_WEBHOOK_LOG_GUARD: suppress URL-secret routes before redirect logs.
+    set \$openalgo_loggable 1;
+    if (\$uri ~ ^/(strategy|flow|chartink)/webhook/) {
+        set \$openalgo_loggable 0;
+    }
+    access_log /var/log/nginx/${DOMAIN}_access.log combined if=\$openalgo_loggable;
     return 301 https://\$host\$request_uri;
 }
 
 server {
     listen 443 ssl http2;
     server_name $DOMAIN;
+
+    # OPENALGO_WEBHOOK_LOG_GUARD: URL credentials never enter nginx access logs.
+    set \$openalgo_loggable 1;
+    if (\$uri ~ ^/(strategy|flow|chartink)/webhook/) {
+        set \$openalgo_loggable 0;
+    }
+    access_log /var/log/nginx/${DOMAIN}_access.log combined if=\$openalgo_loggable;
 
     ssl_certificate $SSL_DIR/fullchain.pem;
     ssl_certificate_key $SSL_DIR/privkey.pem;

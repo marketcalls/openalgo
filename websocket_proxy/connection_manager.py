@@ -15,7 +15,7 @@ import os
 import threading
 from collections import defaultdict
 from collections.abc import Callable
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import zmq
 
@@ -414,7 +414,7 @@ class ConnectionPool:
                 # - {"success": False, "error": "..."} (ConnectionPool format)
                 # - {"status": "error", "code": "...", "message": "..."} (Adapter format)
                 is_error = (
-                    (result and result.get("success") == False) or
+                    (result and result.get("success") is False) or
                     (result and result.get("status") == "error")
                 )
                 if is_error:
@@ -552,7 +552,7 @@ class ConnectionPool:
                     # - {"success": False, "error": "..."} (ConnectionPool format)
                     # - {"status": "error", "code": "...", "message": "..."} (Adapter format)
                     is_error = (
-                        (result and result.get("success") == False) or
+                        (result and result.get("success") is False) or
                         (result and result.get("status") == "error")
                     )
                     if is_error:
@@ -796,9 +796,53 @@ class ConnectionPool:
 
                     if mode > new_highest:
                         # DOWNGRADE: removed the highest mode, broker needs to switch down
-                        adapter.unsubscribe(symbol, exchange, mode)
-                        result = adapter.subscribe(symbol, exchange, new_highest, 5)
-                        if result.get("status") == "success":
+                        try:
+                            release_result = adapter.unsubscribe(symbol, exchange, mode)
+                        except Exception as release_error:
+                            release_result = {
+                                "status": "error",
+                                "message": str(release_error),
+                            }
+
+                        if (
+                            not isinstance(release_result, dict)
+                            or release_result.get("status") != "success"
+                        ):
+                            self.subscription_map[sub_key] = adapter_idx
+                            self.subscription_depths[sub_key] = old_depth
+                            release_message = (
+                                release_result.get("message", "broker release refused")
+                                if isinstance(release_result, dict)
+                                else "invalid broker release response"
+                            )
+                            return {
+                                "status": "error",
+                                "code": "DOWNGRADE_RELEASE_FAILED",
+                                "message": (
+                                    f"Could not release mode {mode} for "
+                                    f"{symbol}.{exchange}: {release_message}"
+                                ),
+                                "phase": "release_high_mode",
+                                "rollback": {"status": "not_required"},
+                                "reconciliation_required": False,
+                            }
+
+                        lower_key = (symbol, exchange, new_highest)
+                        lower_depth = self.subscription_depths.get(lower_key, 5)
+                        try:
+                            result = adapter.subscribe(
+                                symbol, exchange, new_highest, lower_depth
+                            )
+                        except Exception as subscribe_error:
+                            result = {
+                                "status": "error",
+                                "message": str(subscribe_error),
+                            }
+
+                        if (
+                            isinstance(result, dict)
+                            and result.get("status") == "success"
+                        ):
                             self.logger.info(
                                 f"[POOL] Downgraded {symbol}.{exchange} from mode {mode} "
                                 f"to mode {new_highest} on connection {adapter_idx + 1}"
@@ -806,21 +850,58 @@ class ConnectionPool:
                             return {
                                 "status": "success",
                                 "message": f"Unsubscribed mode {mode}, downgraded to mode {new_highest}",
+                                "phase": "complete",
+                                "release": {"status": "success", "mode": mode},
+                                "reconciliation_required": False,
                             }
                         else:
-                            # Re-subscribe failed — rollback: restore tracking and try to
-                            # re-subscribe at the old mode so the symbol isn't left dangling
+                            # Lower subscribe failed after a proven high release.
+                            # Restore desired ownership and report whether the
+                            # broker-side high-mode rollback also succeeded.
                             self.logger.error(
                                 f"[POOL] Failed to downgrade {symbol}.{exchange} to mode "
                                 f"{new_highest}, rolling back: {result}"
                             )
                             self.subscription_map[sub_key] = adapter_idx
                             self.subscription_depths[sub_key] = old_depth
-                            adapter.subscribe(symbol, exchange, mode, old_depth)
+                            try:
+                                rollback_result = adapter.subscribe(
+                                    symbol, exchange, mode, old_depth
+                                )
+                            except Exception as rollback_error:
+                                rollback_result = {
+                                    "status": "error",
+                                    "message": str(rollback_error),
+                                }
+
+                            rollback_ok = (
+                                isinstance(rollback_result, dict)
+                                and rollback_result.get("status") == "success"
+                            )
+                            rollback_summary = {
+                                "status": "success" if rollback_ok else "error",
+                                "mode": mode,
+                            }
+                            if not rollback_ok:
+                                rollback_summary["message"] = (
+                                    rollback_result.get(
+                                        "message", "broker rollback refused"
+                                    )
+                                    if isinstance(rollback_result, dict)
+                                    else "invalid broker rollback response"
+                                )
                             return {
                                 "status": "error",
-                                "code": "DOWNGRADE_FAILED",
+                                "code": (
+                                    "DOWNGRADE_FAILED"
+                                    if rollback_ok
+                                    else "DOWNGRADE_RECONCILIATION_REQUIRED"
+                                ),
                                 "message": f"Failed to downgrade {symbol}.{exchange} to mode {new_highest}",
+                                "phase": "subscribe_lower_mode",
+                                "release": {"status": "success", "mode": mode},
+                                "rollback": rollback_summary,
+                                "reconciliation_required": not rollback_ok,
                             }
                     else:
                         # Removed a lower mode — broker still has the higher mode active
@@ -843,7 +924,12 @@ class ConnectionPool:
                 return {"status": "error", "code": "UNSUBSCRIPTION_ERROR", "message": str(e)}
 
     def unsubscribe_all(self):
-        """Unsubscribe from all symbols across all connections"""
+        """Unsubscribe from all symbols across all connections.
+
+        Pool ownership is committed only when every child adapter explicitly
+        acknowledges the release.  A caller can then disconnect the pool when
+        any child refuses or returns an invalid response.
+        """
         with self.lock:
             # Log stats before clearing
             total_symbols = sum(self.adapter_symbol_counts) if self.adapter_symbol_counts else 0
@@ -860,15 +946,43 @@ class ConnectionPool:
                         )
                 self.logger.info("[POOL] ==========================================")
 
-            for adapter in self.adapters:
-                if hasattr(adapter, "unsubscribe_all"):
-                    adapter.unsubscribe_all()
+            errors = []
+            for index, adapter in enumerate(self.adapters):
+                if not hasattr(adapter, "unsubscribe_all"):
+                    errors.append(f"connection {index + 1}: unsupported")
+                    continue
+                try:
+                    response = adapter.unsubscribe_all()
+                except Exception as exc:
+                    self.logger.exception(
+                        "Error unsubscribing all on connection %s", index + 1
+                    )
+                    errors.append(f"connection {index + 1}: {exc}")
+                    continue
+                if not isinstance(response, dict) or response.get("status") != "success":
+                    message = (
+                        response.get("message")
+                        if isinstance(response, dict)
+                        else "invalid response"
+                    )
+                    errors.append(f"connection {index + 1}: {message}")
+
+            if errors:
+                return {
+                    "status": "error",
+                    "code": "UNSUBSCRIBE_ALL_ERROR",
+                    "message": "; ".join(errors),
+                }
 
             self.subscription_map.clear()
             self.subscription_depths.clear()
             self.adapter_symbol_counts = [0] * len(self.adapters)
 
             self.logger.info("[POOL] Unsubscribed from all symbols")
+            return {
+                "status": "success",
+                "message": "Unsubscribed from all symbols",
+            }
 
     def disconnect(self):
         """Disconnect all adapters and clean up"""
@@ -908,6 +1022,7 @@ class ConnectionPool:
             self.adapters.clear()
             self.adapter_symbol_counts.clear()
             self.subscription_map.clear()
+            self.subscription_depths.clear()
             self.connected = False
             self.initialized = False
 

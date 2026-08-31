@@ -6,6 +6,7 @@ from flask import g, has_request_context, request
 from database.traffic_db import TrafficLog, logs_session
 from utils.ip_helper import get_real_ip
 from utils.logging import get_logger
+from utils.url_redaction import redact_url_credentials
 
 logger = get_logger(__name__)
 
@@ -59,7 +60,7 @@ class TrafficLoggerMiddleware:
                 payload = {
                     "client_ip": get_real_ip(),
                     "method": request.method,
-                    "path": _redacted_path(request.path),
+                    "path": redact_url_credentials(request.path),
                     "status_code": status_code,
                     "duration_ms": duration_ms,
                     "host": request.host,
@@ -89,32 +90,6 @@ class TrafficLoggerMiddleware:
             except Exception as log_error:
                 logger.exception(f"Error logging exception: {log_error}")
             raise
-
-
-# Routes whose URL carries a credential in the path. The traffic log is kept
-# for 30 days and is readable at /traffic, so a token logged verbatim there is
-# a second, longer-lived copy of the credential: anyone who can read the log
-# can replay the webhook and place orders. The path is still useful with the
-# secret replaced, so the segment after the prefix is masked rather than the
-# request being dropped.
-_SECRET_PATH_PREFIXES = (
-    "/strategy/webhook/",
-    "/flow/webhook/",
-    "/chartink/webhook/",
-)
-
-
-def _redacted_path(path):
-    """The request path with any credential segment replaced."""
-    for prefix in _SECRET_PATH_PREFIXES:
-        if path.startswith(prefix):
-            rest = path[len(prefix) :]
-            # /flow/webhook/<token>/<symbol> keeps the symbol, which is not
-            # secret and is what makes the log worth reading.
-            tail = rest.split("/", 1)
-            suffix = f"/{tail[1]}" if len(tail) > 1 else ""
-            return f"{prefix}<redacted>{suffix}"
-    return path
 
 
 def init_traffic_logging(app):

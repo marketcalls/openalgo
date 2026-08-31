@@ -11,11 +11,13 @@ on the loop would test the sleep, not the write.
 """
 
 import time
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 from database import strategy_module_db as store
-from services.strategy_module import checkpoint, recovery, state
+from services.strategy_module import checkpoint, order_events, recovery, state
 
 USER = "recovery_test_user"
 CE = "NIFTY28MAY2624000CE"
@@ -101,6 +103,9 @@ def _order(
     qty=75,
     status="complete",
     avg=None,
+    filled_qty=None,
+    position_ref=None,
+    broker_order_id=None,
 ):
     row = store.record_order(
         run_id,
@@ -113,11 +118,28 @@ def _order(
             "qty": qty,
             "pricetype": "MARKET",
             "status": "open",
+            "position_ref": position_ref,
         },
     )
     assert row is not None
-    store.update_order(row.id, status=status, avg_fill_price=avg)
+    store.update_order(
+        row.id,
+        status=status,
+        broker_order_id=broker_order_id,
+        avg_fill_price=avg,
+        filled_qty=filled_qty,
+    )
     return row.id
+
+
+def _event(order_id, status="complete", avg=100.0, filled=None, rejection=""):
+    return SimpleNamespace(
+        orderid=order_id,
+        order_status=status,
+        average_price=avg,
+        filled_quantity=filled,
+        rejection_reason=rejection,
+    )
 
 
 def _cp_leg(leg_id=1, **overrides):
@@ -257,6 +279,88 @@ def test_a_run_with_no_checkpoint_recovers_from_its_orders_alone():
     assert leg["sl_pts"] == 20
 
 
+def test_restart_binds_an_accepted_ack_event_to_its_exact_pending_entry_row():
+    sid = _strategy()
+    run_id = _run(sid)
+    row_id = _order(
+        run_id,
+        1,
+        "entry",
+        status="pending",
+        position_ref="ack-restart-owner",
+    )
+    store.record_event(
+        sid,
+        USER,
+        "order_ack_unrecorded",
+        "Accepted acknowledgement is pending automatic reconciliation",
+        run_id=run_id,
+        leg_id=1,
+        severity="critical",
+        payload={
+            "version": 1,
+            "order_id": row_id,
+            "run_id": run_id,
+            "leg_id": 1,
+            "broker_order_id": "ACK-ENTRY-RESTART",
+            "accepted": True,
+            "status": "open",
+            "reject_reason": None,
+        },
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    durable = store.get_order(row_id)
+    assert durable.broker_order_id == "ACK-ENTRY-RESTART"
+    assert durable.status == "open"
+    live = state.get_run_state(run_id)
+    assert live is not None
+    assert live["legs"]["1"]["entry_order_id"] == row_id
+    assert live["legs"]["1"]["entry_status"] == "open"
+    assert store.get_run(run_id).stopped_at is None
+
+
+def test_legacy_unstructured_ack_event_keeps_possible_exposure_open_and_reserved():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(run_id, 1, "entry", status="pending")
+    store.record_event(
+        sid,
+        USER,
+        "order_ack_unrecorded",
+        "Legacy accepted broker acknowledgement without structured linkage",
+        run_id=run_id,
+        leg_id=1,
+        severity="critical",
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is False
+    assert recovered.finalised is False
+    assert "could not be linked" in str(recovered.error).lower()
+    assert store.get_run(run_id).stopped_at is None
+    assert store.get_strategy(sid, USER).current_run_id == run_id
+    assert state.get_run_state(run_id) is None
+
+
+def test_ack_witness_read_failure_cannot_be_misread_as_no_ambiguous_exposure():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(run_id, 1, "entry", status="pending")
+
+    with patch.object(store, "list_order_ack_events", return_value=None):
+        recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is False
+    assert recovered.finalised is False
+    assert store.get_run(run_id).stopped_at is None
+    assert store.get_strategy(sid, USER).current_run_id == run_id
+    assert state.get_run_state(run_id) is None
+
+
 def test_the_checkpoint_may_witness_a_fill_the_order_row_has_not_caught_up_with():
     # The checkpoint is written from the same fill engine.apply_fill applies to
     # live state, so it can see a fill before the row is updated. That upgrade
@@ -296,6 +400,86 @@ def test_a_rejected_entry_is_never_upgraded_by_a_checkpoint():
     assert leg["entry_avg"] == 0.0
     # It holds nothing, so it is not worth a subscription either.
     assert resumed[run_id] == {(PE, "NFO")}
+
+
+@pytest.mark.parametrize("ended", ["rejected", "cancelled"])
+def test_recovery_treats_terminal_partial_entry_fields_as_actual_exposure(ended):
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        1,
+        "entry",
+        action="SELL",
+        status=ended,
+        avg=101.5,
+        filled_qty=25,
+        position_ref="partial-entry",
+    )
+    assert store.request_run_stop(run_id, "scheduler") is True
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    live = state.get_run_state(run_id)
+    assert live is not None
+    assert live["stopping"] is True
+    leg = live["legs"]["1"]
+    assert leg["status"] == "open"
+    assert leg["entry_status"] == "complete"
+    assert leg["entry_avg"] == pytest.approx(101.5)
+    assert leg["qty"] == 25
+    assert leg["position_ref"] == "partial-entry"
+    assert store.get_run(run_id).stop_requested_reason == "scheduler"
+
+
+@pytest.mark.parametrize("ended", ["rejected", "cancelled"])
+def test_recovery_keeps_terminal_partial_entry_quantity_when_price_is_unavailable(ended):
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        1,
+        "entry",
+        action="SELL",
+        status=ended,
+        avg=0,
+        filled_qty=25,
+        position_ref="unpriced-partial-entry",
+    )
+    assert store.request_run_stop(run_id, "scheduler") is True
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    assert recovered.finalised is False
+    assert store.get_run(run_id).stopped_at is None
+    live = state.get_run_state(run_id)
+    assert live is not None
+    assert live["stopping"] is True
+    leg = live["legs"]["1"]
+    assert leg["status"] == "open"
+    assert leg["entry_status"] == "complete"
+    assert leg["entry_avg"] == 0.0
+    assert leg["qty"] == 25
+    assert leg["position_ref"] == "unpriced-partial-entry"
+
+
+def test_recovery_finalizes_zero_fill_pending_stop_with_persisted_reason_and_stop_event():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(run_id, 1, "entry", action="SELL", status="rejected", avg=0, filled_qty=0)
+    assert store.request_run_stop(run_id, "scheduler") is True
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.finalised is True
+    durable = store.get_run(run_id)
+    assert durable.stopped_at is not None
+    assert durable.stop_reason == "scheduler"
+    matching = [event for event in store.list_events(sid) if event["run_id"] == run_id]
+    assert [event["kind"] for event in matching].count("run_stopped") == 1
+    assert "scheduler" in matching[-1]["message"]
 
 
 def test_an_entry_still_working_holds_nothing_yet_but_is_still_watched():
@@ -356,6 +540,128 @@ def test_a_rejected_exit_leaves_the_leg_open_and_the_exit_retryable():
     assert leg["exit_kind"] is None
 
 
+@pytest.mark.parametrize(
+    ("exit_avg", "expected_realized"),
+    [(80.0, 500.0), (0.0, 0.0)],
+)
+def test_recovery_reduces_single_owner_by_terminal_partial_exit_quantity(
+    exit_avg, expected_realized
+):
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        1,
+        "entry",
+        action="SELL",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        filled_qty=75,
+        position_ref="single-owner",
+    )
+    _order(
+        run_id,
+        1,
+        "exit_close_all",
+        action="BUY",
+        qty=75,
+        status="cancelled",
+        avg=exit_avg,
+        filled_qty=25,
+        position_ref="single-owner",
+    )
+    assert store.request_run_stop(run_id, "manual") is True
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    assert recovered.finalised is False
+    assert store.get_run(run_id).stopped_at is None
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["status"] == "open"
+    assert leg["entry_status"] == "complete"
+    assert leg["qty"] == 50
+    assert leg["position_ref"] == "single-owner"
+    assert leg["exit_order_id"] is None
+    assert leg["exit_kind"] is None
+    assert leg["realized_pnl"] == pytest.approx(expected_realized)
+
+
+def test_recovery_preserves_pending_stop_and_exact_rejected_exit_owner():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        1,
+        "entry",
+        action="SELL",
+        status="complete",
+        avg=100.0,
+        position_ref="recover-pending-position",
+    )
+    _order(
+        run_id,
+        1,
+        "exit_close_all",
+        action="BUY",
+        status="rejected",
+        position_ref="recover-pending-position",
+    )
+    assert store.request_run_stop(run_id, "manual") is True
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    persisted = store.get_run(run_id)
+    assert persisted.stop_requested_reason == "manual"
+    assert persisted.stop_requested_at is not None
+    live = state.get_run_state(run_id)
+    assert live["signal_entry_claims"] == {}
+    leg = live["legs"]["1"]
+    assert leg["position_ref"] == "recover-pending-position"
+    assert leg["exit_order_id"] is None
+    assert leg["exit_claim_token"] is None
+    assert leg["exit_kind"] is None
+
+
+def test_recovery_snapshots_run_facts_before_session_cleanup():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        1,
+        "entry",
+        action="SELL",
+        status="complete",
+        avg=100.0,
+        filled_qty=75,
+        position_ref="detached-recovery-position",
+    )
+    assert store.request_run_stop(run_id, "manual") is True
+
+    list_orders = store.list_orders
+
+    def list_orders_then_remove_session(target_run_id):
+        rows = list_orders(target_run_id)
+        # Model a sibling store/event call that commits and clears the scoped
+        # session while recovery still owns the plain run facts it read first.
+        store.db_session.expire_all()
+        store.db_session.remove()
+        return rows
+
+    with patch.object(store, "list_orders", side_effect=list_orders_then_remove_session):
+        recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    assert recovered.finalised is False
+    assert recovered.strategy_id == sid
+    assert state.get_run_state(run_id)["stopping"] is True
+    durable = store.get_run(run_id)
+    assert durable.stopped_at is None
+    assert durable.stop_requested_reason == "manual"
+
+
 def test_an_exit_in_flight_comes_back_marked_so_it_is_not_sent_twice():
     sid = _strategy()
     run_id = _run(sid)
@@ -368,6 +674,1115 @@ def test_an_exit_in_flight_comes_back_marked_so_it_is_not_sent_twice():
     assert leg["status"] == "open"
     assert leg["exit_order_id"] == exit_id
     assert leg["exit_kind"] == "exit_sl"
+
+
+@pytest.mark.parametrize("outgoing_status", ["open", "rejected"])
+def test_recovery_restores_live_and_superseded_flip_positions(outgoing_status):
+    sid = _strategy()
+    run_id = _run(sid)
+    old_entry = _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        status="complete",
+        avg=100.0,
+        position_ref="old-position",
+    )
+    old_exit = _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        status=outgoing_status,
+        position_ref="old-position",
+    )
+    new_entry = _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        status="complete",
+        avg=102.0,
+        position_ref="new-position",
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["position_ref"] == "new-position"
+    assert leg["position"] == "S"
+    assert leg["entry_order_id"] == new_entry
+    assert leg["entry_avg"] == pytest.approx(102.0)
+    assert leg["qty"] == 75
+    outgoing = leg["superseded"]
+    assert outgoing["position_ref"] == "old-position"
+    assert outgoing["position"] == "B"
+    assert outgoing["entry_order_id"] == old_entry
+    assert outgoing["entry_avg"] == pytest.approx(100.0)
+    assert outgoing["qty"] == 75
+    assert outgoing["exit_order_id"] == (old_exit if outgoing_status == "open" else None)
+    assert outgoing["exit_kind"] == ("exit_signal" if outgoing_status == "open" else None)
+
+
+def test_recovery_folds_every_exit_attempt_before_arming_the_newest_retry():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        filled_qty=75,
+        position_ref="old-position",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="cancelled",
+        avg=120.0,
+        filled_qty=25,
+        position_ref="old-position",
+    )
+    new_entry = _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        qty=75,
+        status="complete",
+        avg=102.0,
+        position_ref="new-position",
+    )
+    retry = _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=50,
+        status="open",
+        position_ref="old-position",
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is True
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["position_ref"] == "new-position"
+    assert leg["entry_order_id"] == new_entry
+    assert leg["realized_pnl"] == pytest.approx(500.0)
+    assert leg["superseded"]["qty"] == 50
+    assert leg["superseded"]["exit_order_id"] == retry
+    assert leg["superseded"]["exit_kind"] == "exit_signal"
+
+
+def test_recovery_rejects_multiple_working_exits_before_any_cumulative_fill_fold():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref="one-owner",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="open",
+        avg=110.0,
+        filled_qty=25,
+        position_ref="one-owner",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=50,
+        status="open",
+        avg=111.0,
+        filled_qty=50,
+        position_ref="one-owner",
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is False
+    assert recovered.finalised is False
+    assert "multiple working exits" in (recovered.error or "").lower()
+    assert store.get_run(run_id).stopped_at is None
+    assert store.get_strategy(sid, USER).current_run_id == run_id
+    assert state.get_run_state(run_id) is None
+    event = next(event for event in store.list_events(sid) if event["kind"] == "recovery_failed")
+    assert event["severity"] == "critical"
+    assert "manual" in event["message"].lower()
+
+
+@pytest.mark.parametrize("with_replacement", [False, True])
+def test_recovered_working_partial_is_applied_once_when_its_terminal_cumulative_arrives(
+    with_replacement,
+):
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref="working-owner",
+    )
+    active_exit = _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="open",
+        avg=110.0,
+        filled_qty=25,
+        position_ref="working-owner",
+        broker_order_id="WORKING-EXIT",
+    )
+    replacement_entry = None
+    if with_replacement:
+        replacement_entry = _order(
+            run_id,
+            kind="entry",
+            action="SELL",
+            qty=75,
+            status="complete",
+            avg=102.0,
+            position_ref="replacement-owner",
+        )
+
+    assert recovery.recover_run(run_id).ok is True
+    before = state.get_run_state(run_id)["legs"]["1"]
+    owner_before = before["superseded"] if with_replacement else before
+    assert owner_before["qty"] == 50
+    assert owner_before["exit_order_id"] == active_exit
+    assert before["realized_pnl"] == pytest.approx(250.0)
+
+    order_events._apply_update(
+        "WORKING-EXIT",
+        _event("WORKING-EXIT", status="cancelled", avg=110.0, filled=50),
+    )
+
+    assert store.get_run(run_id).stopped_at is None
+    after = state.get_run_state(run_id)["legs"]["1"]
+    owner_after = after["superseded"] if with_replacement else after
+    assert owner_after is not None
+    assert owner_after["position_ref"] == "working-owner"
+    assert owner_after["qty"] == 25
+    assert owner_after["exit_order_id"] is None
+    assert owner_after["exit_kind"] is None
+    assert after["realized_pnl"] == pytest.approx(500.0)
+    if with_replacement:
+        assert after["position_ref"] == "replacement-owner"
+        assert after["entry_order_id"] == replacement_entry
+
+
+def test_recovery_applies_checkpoint_fields_only_to_the_matching_position_reference():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        status="complete",
+        avg=100.0,
+        position_ref="old-position",
+    )
+    old_exit = _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        status="open",
+        position_ref="old-position",
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        status="complete",
+        avg=102.0,
+        position_ref="new-position",
+    )
+    _checkpoint(
+        run_id,
+        {
+            "1": _cp_leg(
+                position="S",
+                position_ref="new-position",
+                entry_avg=999.0,
+                qty=1,
+                ltp=91.0,
+                effective_sl=122.0,
+                realized_pnl=321.0,
+                superseded={
+                    "position_ref": "old-position",
+                    "position": "B",
+                    "entry_order_id": -1,
+                    "entry_avg": 777.0,
+                    "qty": 1,
+                    "exit_order_id": old_exit,
+                    "exit_claim_token": "stale-claim",
+                    "exit_kind": "exit_signal",
+                },
+            )
+        },
+    )
+
+    assert recovery.recover_run(run_id).ok is True
+
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["entry_avg"] == pytest.approx(102.0)
+    assert leg["qty"] == 75
+    assert leg["ltp"] == pytest.approx(91.0)
+    assert leg["effective_sl"] == pytest.approx(122.0)
+    # Identity-matched checkpoint risk fields overlay, but a stale cumulative
+    # P&L cannot override complete durable coverage. Neither owner has a
+    # settled exit, so the exact realized result is break-even.
+    assert leg["realized_pnl"] == pytest.approx(0.0)
+    assert leg["superseded"]["entry_avg"] == pytest.approx(100.0)
+    assert leg["superseded"]["qty"] == 75
+    assert leg["superseded"]["exit_order_id"] == old_exit
+    assert leg["superseded"]["exit_claim_token"] is None
+
+
+def test_recovery_refuses_to_drop_a_third_held_position_reference():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        status="complete",
+        avg=100.0,
+        position_ref="one",
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        status="complete",
+        avg=101.0,
+        position_ref="two",
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        status="complete",
+        avg=102.0,
+        position_ref="three",
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is False
+    assert recovered.finalised is False
+    assert "more than two" in (recovered.error or "").lower()
+    assert store.get_run(run_id).stopped_at is None
+    strategy = store.get_strategy(sid, USER)
+    assert strategy.status == "running"
+    assert strategy.current_run_id == run_id
+    assert state.get_run_state(run_id) is None
+    failures = [event for event in store.list_events(sid) if event["kind"] == "recovery_failed"]
+    assert failures
+    assert failures[0]["severity"] == "critical"
+    assert "manual" in failures[0]["message"].lower()
+
+
+def test_mixed_legacy_and_referenced_positions_recover_without_cross_pairing():
+    sid = _strategy()
+    run_id = _run(sid)
+    old_entry = _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        status="complete",
+        avg=100.0,
+        position_ref=None,
+    )
+    new_entry = _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        status="complete",
+        avg=102.0,
+        position_ref="new-position",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        status="rejected",
+        position_ref=None,
+    )
+
+    assert recovery.recover_run(run_id).ok is True
+
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["position_ref"] == "new-position"
+    assert leg["entry_order_id"] == new_entry
+    assert leg["superseded"]["position_ref"] is None
+    assert leg["superseded"]["entry_order_id"] == old_entry
+    assert leg["superseded"]["position"] == "B"
+
+
+def test_mixed_referenced_history_refuses_multiple_legacy_entry_incarnations():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref=None,
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="complete",
+        avg=110.0,
+        position_ref=None,
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        qty=75,
+        status="complete",
+        avg=102.0,
+        position_ref=None,
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=104.0,
+        position_ref="referenced-owner",
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is False
+    assert recovered.finalised is False
+    assert "multiple legacy entry" in (recovered.error or "").lower()
+    assert store.get_run(run_id).stopped_at is None
+    assert store.get_strategy(sid, USER).current_run_id == run_id
+    assert state.get_run_state(run_id) is None
+
+
+def test_mixed_legacy_exit_without_a_legacy_entry_remains_managed_for_reconciliation():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        status="complete",
+        avg=100.0,
+        position_ref="referenced-position",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        status="rejected",
+        position_ref=None,
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is False
+    assert recovered.finalised is False
+    assert "ambiguous" in (recovered.error or "").lower()
+    assert store.get_run(run_id).stopped_at is None
+    assert store.get_strategy(sid, USER).current_run_id == run_id
+    assert state.get_run_state(run_id) is None
+
+
+def test_overlapping_referenced_positions_on_different_instruments_are_not_cross_managed():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        symbol=CE,
+        status="complete",
+        avg=100.0,
+        position_ref="old-position",
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        symbol=PE,
+        status="complete",
+        avg=102.0,
+        position_ref="new-position",
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.ok is False
+    assert recovered.finalised is False
+    assert "different instruments" in (recovered.error or "").lower()
+    assert store.get_run(run_id).stopped_at is None
+    assert state.get_run_state(run_id) is None
+
+
+def test_rejected_replacement_entry_restores_the_outgoing_owner_as_live_with_risk_config():
+    sid = _strategy()
+    run_id = _run(sid)
+    old_entry = _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        status="complete",
+        avg=100.0,
+        position_ref="old-position",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        status="rejected",
+        position_ref="old-position",
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        status="rejected",
+        filled_qty=0,
+        position_ref="new-position",
+    )
+    _checkpoint(
+        run_id,
+        {
+            "1": _cp_leg(
+                position="S",
+                position_ref="new-position",
+                status="rejected",
+                superseded={
+                    "position_ref": "old-position",
+                    "position": "B",
+                    "entry_order_id": old_entry,
+                    "entry_avg": 100.0,
+                    "qty": 75,
+                    "exit_order_id": None,
+                    "exit_claim_token": None,
+                },
+            )
+        },
+    )
+
+    assert recovery.recover_run(run_id).ok is True
+
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["position_ref"] == "old-position"
+    assert leg["entry_order_id"] == old_entry
+    assert leg["position"] == "B"
+    assert leg["status"] == "open"
+    assert leg["superseded"] is None
+    assert leg["sl_pts"] == pytest.approx(20.0)
+
+
+def test_post_recovery_fill_settles_only_the_exact_superseded_owner():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=25,
+        status="complete",
+        avg=100.0,
+        position_ref="old-position",
+    )
+    old_exit = _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=25,
+        status="open",
+        position_ref="old-position",
+        broker_order_id="OLD-EXIT",
+    )
+    new_entry = _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        qty=25,
+        status="complete",
+        avg=102.0,
+        position_ref="new-position",
+    )
+    assert recovery.recover_run(run_id).ok is True
+
+    order_events._apply_update(
+        "OLD-EXIT",
+        _event("OLD-EXIT", status="complete", avg=110.0, filled=25),
+    )
+
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["position_ref"] == "new-position"
+    assert leg["entry_order_id"] == new_entry
+    assert leg["status"] == "open"
+    assert leg["qty"] == 25
+    assert leg["superseded"] is None
+    assert leg["realized_pnl"] == pytest.approx(250.0)
+    persisted_exit = next(row for row in store.list_orders(run_id) if row["id"] == old_exit)
+    assert persisted_exit["status"] == "complete"
+
+
+def test_post_recovery_rejection_releases_the_exact_superseded_owner_for_retry():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        status="complete",
+        avg=100.0,
+        position_ref="old-position",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        status="open",
+        position_ref="old-position",
+        broker_order_id="OLD-EXIT",
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        status="complete",
+        avg=102.0,
+        position_ref="new-position",
+    )
+    assert recovery.recover_run(run_id).ok is True
+
+    order_events._apply_update(
+        "OLD-EXIT",
+        _event("OLD-EXIT", status="rejected", avg=0.0, filled=0, rejection="no"),
+    )
+
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["position_ref"] == "new-position"
+    assert leg["exit_order_id"] is None
+    assert leg["superseded"]["exit_order_id"] is None
+    assert leg["superseded"]["exit_kind"] is None
+    retry = state.claim_superseded_exit(run_id, 1, "B")
+    assert retry is not None
+    assert retry["position_ref"] == "old-position"
+    assert retry["quantity"] == 75
+
+
+def test_authoritative_legacy_leg_pnl_overrides_zero_checkpoint_when_recovery_is_flat():
+    """Legacy terminal prices are stronger than a checkpoint written before the exit."""
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="complete",
+        avg=110.0,
+    )
+    _checkpoint(
+        run_id,
+        {
+            "1": _cp_leg(
+                position="B",
+                status="closed",
+                exit_avg=110.0,
+                realized_pnl=0.0,
+            )
+        },
+        pnl_realized=0.0,
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.finalised is True
+    assert float(store.get_run(run_id).pnl_realized) == pytest.approx(750.0)
+
+
+def test_reference_group_pnl_overrides_a_stale_nonzero_checkpoint_when_recovery_is_flat():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref="settled-position",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="complete",
+        avg=110.0,
+        position_ref="settled-position",
+    )
+    _checkpoint(
+        run_id,
+        {
+            "1": _cp_leg(
+                position="B",
+                position_ref="settled-position",
+                status="closed",
+                exit_avg=110.0,
+                realized_pnl=25.0,
+            )
+        },
+        pnl_realized=25.0,
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.finalised is True
+    assert float(store.get_run(run_id).pnl_realized) == pytest.approx(750.0)
+
+
+def test_mixed_priced_and_unpriced_reference_groups_use_matching_checkpoint_cumulative_pnl():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=10,
+        status="complete",
+        avg=100.0,
+        position_ref="priced-owner",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=10,
+        status="complete",
+        avg=110.0,
+        position_ref="priced-owner",
+    )
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=10,
+        status="complete",
+        avg=100.0,
+        position_ref="unpriced-owner",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=10,
+        status="complete",
+        avg=0.0,
+        filled_qty=10,
+        position_ref="unpriced-owner",
+    )
+    _checkpoint(
+        run_id,
+        {
+            "1": _cp_leg(
+                position="B",
+                position_ref="unpriced-owner",
+                qty=10,
+                status="closed",
+                exit_avg=0.0,
+                realized_pnl=150.0,
+            )
+        },
+        pnl_realized=150.0,
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.finalised is True
+    assert float(store.get_run(run_id).pnl_realized) == pytest.approx(150.0)
+
+
+def test_exact_durable_break_even_overrides_stale_nonzero_checkpoint():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=10,
+        status="complete",
+        avg=100.0,
+        position_ref="break-even-owner",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=10,
+        status="complete",
+        avg=100.0,
+        position_ref="break-even-owner",
+    )
+    _checkpoint(
+        run_id,
+        {
+            "1": _cp_leg(
+                position="B",
+                position_ref="break-even-owner",
+                qty=10,
+                status="closed",
+                exit_avg=100.0,
+                realized_pnl=25.0,
+            )
+        },
+        pnl_realized=25.0,
+    )
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.finalised is True
+    assert float(store.get_run(run_id).pnl_realized) == pytest.approx(0.0)
+
+
+def test_mixed_legacy_closed_and_referenced_open_legs_have_authoritative_run_pnl():
+    sid = _strategy(legs=[_leg(1, "S"), _leg(2, "B")])
+    run_id = _run(sid)
+    _order(
+        run_id,
+        leg_id=1,
+        kind="entry",
+        action="SELL",
+        symbol=CE,
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref=None,
+    )
+    _order(
+        run_id,
+        leg_id=1,
+        kind="exit_signal",
+        action="BUY",
+        symbol=CE,
+        qty=75,
+        status="complete",
+        avg=80.0,
+        position_ref=None,
+    )
+    _order(
+        run_id,
+        leg_id=2,
+        kind="entry",
+        action="BUY",
+        symbol=PE,
+        qty=75,
+        status="complete",
+        avg=50.0,
+        position_ref="open-owner",
+    )
+
+    assert recovery.recover_run(run_id).ok is True
+
+    live = state.get_run_state(run_id)
+    assert live["legs"]["1"]["status"] == "closed"
+    assert live["legs"]["2"]["status"] == "open"
+    assert live["pnl_realized"] == pytest.approx(1500.0)
+    assert live["pnl_realized_authoritative"] is True
+
+
+def test_unpriced_reference_fill_without_checkpoint_surfaces_partial_pnl_authority():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref="unpriced-open-owner",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="cancelled",
+        avg=0.0,
+        filled_qty=25,
+        position_ref="unpriced-open-owner",
+    )
+
+    assert recovery.recover_run(run_id).ok is True
+
+    live = state.get_run_state(run_id)
+    assert live["pnl_realized"] == pytest.approx(0.0)
+    assert live["pnl_realized_authoritative"] is False
+    assert live["legs"]["1"]["qty"] == 50
+    events = [event for event in store.list_events(sid) if event["run_id"] == run_id]
+    assert any(
+        event["severity"] == "critical"
+        and "p&l" in event["message"].lower()
+        and "manual" in event["message"].lower()
+        for event in events
+    )
+
+
+@pytest.mark.parametrize("filled_qty", [25, 75], ids=["partial", "full"])
+@pytest.mark.parametrize("checkpoint_after_fill", [False, True], ids=["before", "after"])
+def test_unpriced_live_fill_trusts_checkpoint_pnl_only_when_owner_shape_observed_the_fill(
+    filled_qty,
+    checkpoint_after_fill,
+):
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref="live-owner",
+    )
+
+    def write_checkpoint(*, observed):
+        is_closed = observed and filled_qty == 75
+        remaining = 75 - filled_qty if observed and not is_closed else 75
+        _checkpoint(
+            run_id,
+            {
+                "1": _cp_leg(
+                    position="B",
+                    position_ref="live-owner",
+                    qty=remaining,
+                    status="closed" if is_closed else "open",
+                    realized_pnl=175.0,
+                )
+            },
+            pnl_realized=175.0,
+        )
+
+    if not checkpoint_after_fill:
+        write_checkpoint(observed=False)
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="cancelled",
+        avg=0.0,
+        filled_qty=filled_qty,
+        position_ref="live-owner",
+    )
+    if checkpoint_after_fill:
+        write_checkpoint(observed=True)
+
+    recovered = recovery.recover_run(run_id)
+
+    expected_pnl = 175.0 if checkpoint_after_fill else 0.0
+    if filled_qty == 75:
+        assert recovered.finalised is True
+        assert float(store.get_run(run_id).pnl_realized) == pytest.approx(expected_pnl)
+    else:
+        assert recovered.ok is True
+        live = state.get_run_state(run_id)
+        assert live["legs"]["1"]["qty"] == 50
+        assert live["pnl_realized"] == pytest.approx(expected_pnl)
+        assert live["pnl_realized_authoritative"] is checkpoint_after_fill
+
+    critical_pnl_events = [
+        event
+        for event in store.list_events(sid)
+        if event["severity"] == "critical"
+        and "p&l" in event["message"].lower()
+        and "manual" in event["message"].lower()
+    ]
+    assert bool(critical_pnl_events) is (not checkpoint_after_fill)
+
+
+@pytest.mark.parametrize("filled_qty", [25, 75], ids=["partial", "full"])
+@pytest.mark.parametrize("checkpoint_after_fill", [False, True], ids=["before", "after"])
+def test_unpriced_superseded_fill_trusts_checkpoint_pnl_only_when_owner_shape_observed_the_fill(
+    filled_qty,
+    checkpoint_after_fill,
+):
+    sid = _strategy()
+    run_id = _run(sid)
+    old_entry = _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref="outgoing-owner",
+    )
+    old_exit = _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="open",
+        avg=None,
+        position_ref="outgoing-owner",
+        broker_order_id="OUTGOING-EXIT",
+    )
+    new_entry = _order(
+        run_id,
+        kind="entry",
+        action="SELL",
+        qty=75,
+        status="complete",
+        avg=102.0,
+        position_ref="replacement-owner",
+    )
+
+    def write_checkpoint(*, observed):
+        superseded = None
+        if not observed or filled_qty < 75:
+            superseded = {
+                "position_ref": "outgoing-owner",
+                "position": "B",
+                "qty": 75 - filled_qty if observed else 75,
+                "entry_order_id": old_entry,
+                "entry_avg": 100.0,
+                "exit_order_id": None if observed else old_exit,
+                "exit_kind": None if observed else "exit_signal",
+            }
+        _checkpoint(
+            run_id,
+            {
+                "1": _cp_leg(
+                    position="S",
+                    position_ref="replacement-owner",
+                    entry_order_id=new_entry,
+                    entry_avg=102.0,
+                    qty=75,
+                    status="open",
+                    superseded=superseded,
+                    realized_pnl=275.0,
+                )
+            },
+            pnl_realized=275.0,
+        )
+
+    if not checkpoint_after_fill:
+        write_checkpoint(observed=False)
+    assert store.update_order(
+        old_exit,
+        status="cancelled",
+        avg_fill_price=0.0,
+        filled_qty=filled_qty,
+    )
+    if checkpoint_after_fill:
+        write_checkpoint(observed=True)
+
+    assert recovery.recover_run(run_id).ok is True
+
+    live = state.get_run_state(run_id)
+    leg = live["legs"]["1"]
+    assert leg["position_ref"] == "replacement-owner"
+    if filled_qty == 75:
+        assert leg["superseded"] is None
+    else:
+        assert leg["superseded"]["position_ref"] == "outgoing-owner"
+        assert leg["superseded"]["qty"] == 50
+    assert live["pnl_realized"] == pytest.approx(275.0 if checkpoint_after_fill else 0.0)
+    assert live["pnl_realized_authoritative"] is checkpoint_after_fill
+
+    critical_pnl_events = [
+        event
+        for event in store.list_events(sid)
+        if event["severity"] == "critical"
+        and "p&l" in event["message"].lower()
+        and "manual" in event["message"].lower()
+    ]
+    assert bool(critical_pnl_events) is (not checkpoint_after_fill)
+
+
+def test_unpriced_fill_never_trusts_a_different_owner_checkpoint_cumulative_pnl():
+    sid = _strategy()
+    run_id = _run(sid)
+    _order(
+        run_id,
+        kind="entry",
+        action="BUY",
+        qty=75,
+        status="complete",
+        avg=100.0,
+        position_ref="actual-owner",
+    )
+    _order(
+        run_id,
+        kind="exit_signal",
+        action="SELL",
+        qty=75,
+        status="cancelled",
+        avg=0.0,
+        filled_qty=25,
+        position_ref="actual-owner",
+    )
+    _checkpoint(
+        run_id,
+        {
+            "1": _cp_leg(
+                position="B",
+                position_ref="different-owner",
+                qty=50,
+                status="open",
+                realized_pnl=999.0,
+            )
+        },
+        pnl_realized=999.0,
+    )
+
+    assert recovery.recover_run(run_id).ok is True
+
+    live = state.get_run_state(run_id)
+    assert live["pnl_realized"] == pytest.approx(0.0)
+    assert live["pnl_realized_authoritative"] is False
+    assert live["legs"]["1"]["qty"] == 50
+    assert any(
+        event["severity"] == "critical"
+        and "p&l" in event["message"].lower()
+        and "manual" in event["message"].lower()
+        for event in store.list_events(sid)
+    )
 
 
 def test_a_run_whose_every_leg_has_closed_is_finished_rather_than_left_running():
@@ -387,6 +1802,45 @@ def test_a_run_whose_every_leg_has_closed_is_finished_rather_than_left_running()
     assert run["pnl_realized"] == pytest.approx(1500.0)
     assert store.get_strategy(sid, USER).status == "stopped"
     assert state.get_run_state(run_id) is None
+
+
+def test_recovery_atomic_finalise_loser_emits_nothing_and_keeps_live_ownership():
+    sid = _strategy()
+    run_id = _run(sid)
+    state.hydrate_run_state(
+        run_id,
+        {
+            "run_id": run_id,
+            "strategy_id": sid,
+            "stopping": True,
+            "signal_entry_claims": {},
+            "legs": {},
+        },
+    )
+
+    with (
+        patch.object(
+            store,
+            "finish_run_and_release_strategy",
+            return_value=False,
+            create=True,
+        ),
+        patch.object(recovery, "_record_event") as record_event,
+    ):
+        won = recovery._finalise(
+            run_id,
+            sid,
+            reason="manual",
+            kind="run_stopped",
+            severity="info",
+            message="Run stopped (manual)",
+        )
+
+    assert won is False
+    assert store.get_run(run_id).stopped_at is None
+    assert store.get_strategy(sid, USER).current_run_id == run_id
+    assert state.get_run_state(run_id) is not None
+    record_event.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -440,6 +1894,29 @@ def test_an_unrecognised_status_is_read_as_working_rather_than_dead():
 # ---------------------------------------------------------------------------
 # Failure and idempotence
 # ---------------------------------------------------------------------------
+
+
+def test_recovery_releases_an_empty_claim_when_a_process_dies_before_run_linkage():
+    """A crash after ``create_run`` but before linkage must not wedge a strategy.
+
+    No entry can be dispatched before the linkage write, so this exact
+    zero-order run is safe to finish.  The strategy claim has no
+    ``current_run_id`` yet, which is deliberately different from a detached
+    residual run belonging to an older activation.
+    """
+    sid = _strategy(name="Unlinked crash-window run")
+    assert store.claim_strategy_for_run(sid) is True
+    run = store.create_run(sid, "sandbox", "sandbox")
+    assert run is not None
+    run_id = int(run.id)
+
+    recovered = recovery.recover_run(run_id)
+
+    assert recovered.finalised is True
+    assert store.get_run(run_id).stopped_at is not None
+    strategy = store.get_strategy(sid, USER)
+    assert strategy.status == "stopped"
+    assert strategy.current_run_id is None
 
 
 def test_a_run_that_cannot_be_recovered_is_finalised_rather_than_wedging_the_boot():

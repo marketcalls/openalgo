@@ -26,14 +26,29 @@ Every `/api/v1/strategy/` route is a POST with the identifier in the JSON body. 
 
 The public webhook is **not** under `/api/v1` and takes no `apikey`. The URL token identifies the strategy.
 
-## Six Rules That Cost Money If You Get Them Wrong
+## Seven Rules That Cost Money If You Get Them Wrong
 
 1. **`mode` is required on `/start` and is never defaulted.** Omitting it is a 400, not a live order. The schema declares it `required=True` with no `load_default`, and no layer supplies a fallback.
 2. **Live is opt-in per strategy.** A strategy is created sandbox-only. `mode: "live"` is refused with a 409 until the operator enables live trading on the strategy page.
 3. **A strategy that is not yours returns 404, never 403.** The response is byte-identical to one for a strategy that does not exist, so the id space cannot be probed.
 4. **No endpoint returns a webhook token.** Only its SHA-256 digest is stored. The plaintext is shown once, at creation and at rotation, in the browser.
-5. **A `/stop` can answer `ok: false` with the run still open.** When the broker refuses the exit orders, the positions are still there, so the run stays live and managed rather than being closed on paper. Read the per-leg `ok` flags and retry; treating a 2xx envelope as "flat" is how a position ends up unmanaged.
-6. **`pnl_realized` on a just-stopped run is not final.** A stop does not wait for its fills. The figure is reconciled from the order rows as they arrive, so read it from [`/runs`](./runs.md) after the fills rather than in the same breath as the stop.
+5. **An accepted `/stop` is not necessarily flat.** A 200 response with
+   `stop_pending: true` means the stop request is durable and its exits were
+   accepted, but the run remains open, subscribed and managed until fills prove
+   every owned position is flat. A 409 can also carry `stop_pending: true` when
+   an unfilled entry or refused exit still needs management. Read that flag and
+   the per-leg outcomes; never infer flatness from the HTTP status.
+6. **`acknowledged: false` is not an order rejection.** The broker accepted the
+   entry, but its broker id and status could not be written back after a retry.
+   The durable pending intent and a structured critical `order_ack_unrecorded`
+   event remain. The dispatch call immediately binds only the exact named row;
+   a bounded shared open-run sweep retries and broker-polls it if needed.
+   Conflicts keep the run open and reserved.
+7. **Final P&L is written only after confirmed flatness.** Exact, priced order
+   reference groups are authoritative, including an exact zero. If durable
+   fills have no usable price and no checkpoint that witnessed the same owner
+   shape and quantities, recovery retains the known portion and records a
+   critical manual-reconciliation event instead of inventing a value.
 
 ## Authentication
 
@@ -96,7 +111,10 @@ On a schema validation failure, `message` is an object keyed by field name rathe
 
 The `/api/v1/strategy/` routes use `API_RATE_LIMIT`, the same budget as the rest of the v1 surface. The module default when the variable is unset is `10 per second`; `.sample.env` ships `100 per second`. See [rate limiting](../rate-limiting.md).
 
-The public webhook is limited by the route in front of the pipeline. `rate_limited` is a member of the result vocabulary and answers 429.
+The public webhook is limited by the route in front of the pipeline.
+`rate_limited` is a member of the result vocabulary and answers 429. Because
+that guard and the declared-size 413 run before the validation pipeline,
+neither preflight refusal writes a durable webhook audit row.
 
 ## Vocabularies
 
@@ -136,25 +154,30 @@ A run started through this API records `manual`: an API-key start is a person as
 
 ### Order kinds
 
-`entry`, `exit_sl`, `exit_target`, `exit_trail`, `exit_overall_sl`, `exit_overall_target`, `exit_lock_profit`, `exit_eod`, `exit_expiry`, `exit_daily_loss_limit`, `exit_close_all`, `exit_leg_manual`, `exit_recovery`
-
-Signal-mode exits are recorded as `exit_signal`, which the tuple now lists.
+`entry`, `exit_sl`, `exit_target`, `exit_trail`, `exit_overall_sl`, `exit_overall_target`, `exit_lock_profit`, `exit_eod`, `exit_expiry`, `exit_daily_loss_limit`, `exit_close_all`, `exit_leg_manual`, `exit_recovery`, `exit_signal`
 
 ### Event kinds an operator must not ignore
 
-The full list is in [`/events`](./events.md). Two of them mean something has to
-be acted on:
+The full list is in [`/events`](./events.md). These transitions are especially
+important to an operator:
+
+- **`run_stop_requested`** (`info`) - the request is durable and new signal
+  entries are gated. It is not proof that the broker is flat; wait for
+  `run_stopped` or inspect the pending outcomes.
 
 - **`run_stop_failed`** (`critical`) - the broker refused the exit orders of a
   stop. The run is still open and **still holding those positions**. It is the
   one lifecycle event that means the opposite of what a stop usually means.
 - **`order_ack_unrecorded`** (`critical`) - the broker accepted an order but
-  its acknowledgement could not be written, so the position exists and is not
-  attributable from the database. The message carries the broker order id;
-  reconcile by hand.
+  its acknowledgement could not be written. Structured exact-row metadata is
+  retained for immediate exact-row repair and the bounded shared open-run
+  sweep. A missing or conflicting link never auto-finalises possible exposure.
 - **`leg_expiry_fallback`** (`warn`) - the chain did not list the expiry rank
   the leg asked for, so a nearer one was used. A `next_week` leg trading the
   current week is a different trade from the one that was configured.
+- **`flip_outgoing_exit_rejected`** (`critical`) - the outgoing side of a
+  signal flip is still held. It remains an exact, managed owner and its exit is
+  retryable; the replacement side does not erase it.
 
 ### Quantity modes
 
@@ -184,9 +207,9 @@ Only. Neither a strategy nor a leg carries a price, so a `LIMIT`, `SL` or `SL-M`
 
 ### Event kinds
 
-Lifecycle: `strategy_created`, `strategy_updated`, `webhook_token_rotated`, `live_enabled`, `live_disabled`, `webhook_locked`, `webhook_unlocked`, `run_started`, `run_paused`, `run_resumed`, `run_stopped`, `close_all_manual`
+Lifecycle: `strategy_created`, `strategy_updated`, `webhook_token_rotated`, `live_enabled`, `live_disabled`, `webhook_locked`, `webhook_unlocked`, `run_started`, `run_paused`, `run_resumed`, `run_stop_requested`, `run_stopped`, `run_stop_failed`, `flip_outgoing_exit_rejected`, `close_all_manual`
 
-Entry and exit: `leg_entry_placed`, `leg_entry_filled`, `leg_entry_rejected`, `leg_exit_placed`, `leg_exit_filled`, `leg_exit_rejected`, `leg_close_manual`
+Entry and exit: `leg_entry_placed`, `leg_entry_filled`, `leg_entry_rejected`, `leg_exit_placed`, `leg_exit_filled`, `leg_exit_rejected`, `leg_close_manual`, `leg_expiry_fallback`, `order_ack_unrecorded`
 
 Per-leg risk: `leg_sl_hit`, `leg_target_hit`, `leg_trail_armed`, `leg_trail_advanced`
 

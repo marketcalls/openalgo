@@ -110,32 +110,73 @@ Each object in `data`:
 
 ### Event kinds
 
-Lifecycle: `strategy_created`, `strategy_updated`, `webhook_token_rotated`, `live_enabled`, `live_disabled`, `webhook_locked`, `webhook_unlocked`, `run_started`, `run_paused`, `run_resumed`, `run_stopped`, `run_stop_failed`, `close_all_manual`
+Lifecycle: `strategy_created`, `strategy_updated`, `webhook_token_rotated`, `live_enabled`, `live_disabled`, `webhook_locked`, `webhook_unlocked`, `run_started`, `run_paused`, `run_resumed`, `run_stop_requested`, `run_stopped`, `run_stop_failed`, `flip_outgoing_exit_rejected`, `close_all_manual`
 
-`run_stop_failed` is written at `critical` severity when the broker refused the exit orders of a stop. The run is still open and still holding those positions; it is the one lifecycle event that means the opposite of what a stop usually means.
+`run_stop_requested` says the stop intent is durable and new signal entries are
+gated; it is not proof of flatness. `run_stopped` is the terminal transition
+after the engine has confirmed that no owned position remains. `run_stop_failed`
+is critical whenever a pending stop could not make progress, including an
+unfilled entry, a refused order, or an asynchronous rejection/cancellation. The
+run remains open and managed for a retry.
 
-Entry and exit: `leg_entry_placed`, `leg_entry_filled`, `leg_entry_rejected`, `leg_exit_placed`, `leg_exit_filled`, `leg_exit_rejected`, `leg_close_manual`, `leg_expiry_fallback`
+`flip_outgoing_exit_rejected` is critical. It means the old side of a signal
+flip is still held under its exact `position_ref`, remains managed, and can be
+targeted by another exit even though the replacement side is also live.
+
+Entry and exit: `leg_entry_placed`, `leg_entry_filled`, `leg_entry_rejected`, `leg_exit_placed`, `leg_exit_filled`, `leg_exit_rejected`, `leg_close_manual`, `leg_expiry_fallback`, `order_ack_unrecorded`
+
+Manual close events describe accepted intent only. `close_all_manual` uses
+`Operator requested closure of all held legs`, and `leg_close_manual` uses
+`Operator requested closure of leg <leg_id>`. Completed wording is reserved
+for the later fill-confirmed `run_stopped` transition.
 
 `leg_expiry_fallback` is written at `warn` severity, before the entry goes out, when the chain did not list the expiry rank the leg asked for and a nearer one was used. A `next_week` leg trading the current week is a different trade from the one that was configured, so it is said out loud rather than inferred from the symbol afterwards.
+
+`order_ack_unrecorded` is critical. The acknowledgement write failed twice.
+Its structured `payload` carries versioned exact `order_id`, `run_id`, `leg_id`,
+`broker_order_id`, `accepted`, `status` and `reject_reason` facts. The dispatch
+call immediately uses those facts to bind only the named pending row. The
+shared five-second scheduler job also rotates through a bounded page of every
+ordinary open run, replays a held frame, and broker-polls an accepted working
+order when no frame remains. Recovery and pending-stop polling use the same
+idempotent repair. Later terminal facts are preserved; missing or conflicting
+linkage leaves the run open and reserved rather than asserting flatness.
+Rejected acknowledgements are repaired to `rejected` without creating
+exposure.
 
 Per-leg risk: `leg_sl_hit`, `leg_target_hit`, `leg_trail_armed`, `leg_trail_advanced`
 
 Strategy risk: `overall_sl_hit`, `overall_target_hit`, `lock_profit_armed`, `lock_profit_floor_advanced`, `lock_profit_triggered`, `trail_to_entry_activated`, `eod_squareoff`, `expiry_squareoff`
 
+For a synchronous combined-target exit, lifecycle order is meaningful:
+`overall_target_hit` records the marked breach, every accepted
+`leg_exit_placed` records dispatch, and only the later `run_stopped` event proves
+all exact owners filled flat. Terminal finalization preserves
+`stop_reason="overall_target"`; a synchronous fill cannot publish
+`run_stopped` ahead of the accepted placement that made the basket flat.
+
 Tick source: `tick_source_switched_to_polling`, `tick_source_switched_to_ws`, `tick_source_stale`
 
 Operational: `recovery_succeeded`, `recovery_failed`
+
+Operational severity carries meaning. `recovery_failed` can mean an ordinary
+malformed run with no proven exposure was finalised, or that proven exposure
+could not fit the live-plus-superseded state and was deliberately left database
+open and reserved for manual reconciliation. A `recovery_succeeded` event can
+also be critical when a run was recovered with only the known portion of P&L
+because one or more fills were unpriced and no matching checkpoint witnessed
+the same owners and quantities.
 
 ## Notes
 
 - Rows are ordered by timestamp, **newest first**.
 - **The trail is append-only.** Nothing updates or deletes an event row, so what you read is what the engine wrote at the time.
-- **`limit` is bounded rather than clamped.** A value below 1 or above 1000 is a 400, so a caller learns the value was refused. SQLite reads a negative `LIMIT` as "no limit", so an unbounded field would let `limit: -1` serialize every event the strategy has ever recorded. The engine writes an event per risk transition per leg, which is a whole trading day's worth.
+- **`limit` is bounded rather than clamped.** A value below 1 or above 1000 is a 400, so a caller learns the value was refused. SQLite reads a negative `LIMIT` as "no limit", so an unbounded field would let `limit: -1` serialize every event the strategy has ever recorded. The engine writes an event per risk transition per leg, which can be a whole platform session's worth.
 - **An out-of-vocabulary `kind` or `severity` is a 400**, not an empty list. Send a value from the lists above.
 - **A `run_id` belonging to another strategy matches nothing.** The query is scoped to this strategy before the run filter is applied.
 - Configuration-layer events share the table with runtime ones and carry `run_id: null`. Filtering by `run_id` therefore excludes them.
-- The `close_all_manual` event written by [`/close_all`](./close_all.md) appears here with the message `Closed all legs from the API`.
-- `payload` is free-form JSON and is `null` on most events: the engine puts its detail in `message`. A scheduler-started run is one of the few that carries one, `{"trigger_source": "scheduler", "mode": "sandbox"}`. Do not assume a fixed shape across kinds.
+- The `close_all_manual` event written by [`/close_all`](./close_all.md) records the request before broker exits settle; use `run_stopped` as confirmed-flat evidence.
+- `payload` is free-form JSON and is `null` on most events. A scheduler-started run carries `{"trigger_source": "scheduler", "mode": "sandbox"}`; `order_ack_unrecorded` carries the exact reconciliation fields documented above. Do not assume one shape across kinds.
 
 ## Use Cases
 

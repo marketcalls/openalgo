@@ -11,7 +11,7 @@ import time
 import uuid
 from collections.abc import Callable
 from queue import Queue
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import websockets
 from dotenv import load_dotenv
@@ -25,6 +25,30 @@ from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
+
+_MODE_LABELS = {1: "LTP", 2: "Quote", 3: "Depth"}
+_MODE_VALUES = {label.upper(): label for label in _MODE_LABELS.values()}
+
+
+def _canonical_mode(value: Any) -> str:
+    """Canonical client-side mode label without importing the proxy package.
+
+    Importing ``websocket_proxy.mode_utils`` executes that package's broad
+    ``__init__`` and eagerly imports every broker adapter.  This internal
+    client needs only the three stable public labels, so keep the normalization
+    local and side-effect free.
+    """
+    if isinstance(value, bool):
+        raise TypeError("Mode must be LTP, Quote, or Depth")
+    if isinstance(value, int):
+        if value in _MODE_LABELS:
+            return _MODE_LABELS[value]
+        raise ValueError("Mode must be 1 (LTP), 2 (Quote), or 3 (Depth)")
+    if isinstance(value, str):
+        label = _MODE_VALUES.get(value.strip().upper())
+        if label is not None:
+            return label
+    raise ValueError("Mode must be LTP, Quote, or Depth")
 
 
 class WebSocketClient:
@@ -182,6 +206,9 @@ class WebSocketClient:
 
         self.connected = False
         self.authenticated = False
+        with self.lock:
+            self.active_subscriptions.clear()
+            self.market_data_cache.clear()
         logger.info("Disconnected from WebSocket server")
 
     def _run_on_loop(self, coro, timeout: float):
@@ -268,11 +295,16 @@ class WebSocketClient:
             return {"status": "error", "message": "WebSocket connection not available"}
 
         try:
+            canonical_mode = _canonical_mode(mode)
+        except (TypeError, ValueError) as exc:
+            return {"status": "error", "message": str(exc)}
+
+        try:
             request_id = str(uuid.uuid4())
             subscription_msg = {
                 "action": "subscribe",
                 "symbols": symbols,
-                "mode": mode,
+                "mode": canonical_mode,
                 "request_id": request_id,
             }
             # Outer timeout slightly longer than the inner ack timeout so the
@@ -281,7 +313,7 @@ class WebSocketClient:
                 self._send_and_await_ack(subscription_msg, request_id, timeout=10),
                 timeout=12,
             )
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             logger.warning(
                 f"Subscribe timed out waiting for proxy ack (mode={mode}, "
                 f"symbols={len(symbols)})"
@@ -289,7 +321,7 @@ class WebSocketClient:
             return {
                 "status": "error",
                 "message": "Timed out waiting for proxy subscribe response",
-                "mode": mode,
+                "mode": canonical_mode,
             }
         except Exception as e:
             logger.exception(f"Error subscribing to symbols: {e}")
@@ -308,15 +340,61 @@ class WebSocketClient:
                 key = f"{exch}:{sym}"
                 if key not in self.active_subscriptions:
                     self.active_subscriptions[key] = set()
-                self.active_subscriptions[key].add(mode)
+                try:
+                    accepted_mode = _canonical_mode(
+                        entry.get("mode", canonical_mode)
+                    )
+                except (TypeError, ValueError):
+                    continue
+                self.active_subscriptions[key].add(accepted_mode)
 
         return {
             "status": ack.get("status", "success"),
             "message": ack.get("message", f"Subscribed to {len(symbols)} symbols"),
             "subscriptions": per_symbol,
             "broker": ack.get("broker"),
-            "mode": mode,
+            "mode": canonical_mode,
         }
+
+    def _remove_acknowledged_modes(
+        self,
+        successful: list[dict[str, Any]],
+        requested_modes: dict[tuple[str, str], set[str]],
+    ) -> None:
+        """Apply exact successful acks, conservatively supporting old proxies."""
+        removals: list[tuple[str, str, str]] = []
+        missing = object()
+        for entry in successful:
+            sym = entry.get("symbol")
+            exch = entry.get("exchange")
+            if not sym or not exch:
+                continue
+            candidates = requested_modes.get((exch, sym), set())
+            raw_mode = entry.get("mode", missing)
+            if raw_mode is missing:
+                # A legacy proxy did not identify which same-symbol mode it
+                # acknowledged.  One candidate is safe; two are ambiguous.
+                if len(candidates) != 1:
+                    continue
+                acknowledged_mode = next(iter(candidates))
+            else:
+                try:
+                    acknowledged_mode = _canonical_mode(raw_mode)
+                except (TypeError, ValueError):
+                    continue
+                if acknowledged_mode not in candidates:
+                    continue
+            removals.append((exch, sym, acknowledged_mode))
+
+        with self.lock:
+            for exch, sym, acknowledged_mode in removals:
+                key = f"{exch}:{sym}"
+                if key not in self.active_subscriptions:
+                    continue
+                self.active_subscriptions[key].discard(acknowledged_mode)
+                if not self.active_subscriptions[key]:
+                    del self.active_subscriptions[key]
+                    self.market_data_cache.pop(key, None)
 
     def unsubscribe(self, symbols: list[dict[str, str]], mode: str = "Quote") -> dict[str, Any]:
         """
@@ -337,18 +415,37 @@ class WebSocketClient:
             return {"status": "error", "message": "WebSocket connection not available"}
 
         try:
+            canonical_mode = _canonical_mode(mode)
+            wire_symbols = []
+            requested_modes: dict[tuple[str, str], set[str]] = {}
+            for symbol_info in symbols:
+                item_mode = _canonical_mode(
+                    symbol_info["mode"]
+                    if "mode" in symbol_info
+                    else canonical_mode
+                )
+                wire_symbol = {**symbol_info, "mode": item_mode}
+                wire_symbols.append(wire_symbol)
+                sym = wire_symbol.get("symbol")
+                exch = wire_symbol.get("exchange")
+                if sym and exch:
+                    requested_modes.setdefault((exch, sym), set()).add(item_mode)
+        except (TypeError, ValueError) as exc:
+            return {"status": "error", "message": str(exc)}
+
+        try:
             request_id = str(uuid.uuid4())
             unsubscription_msg = {
                 "action": "unsubscribe",
-                "symbols": symbols,
-                "mode": mode,
+                "symbols": wire_symbols,
+                "mode": canonical_mode,
                 "request_id": request_id,
             }
             ack = self._run_on_loop(
                 self._send_and_await_ack(unsubscription_msg, request_id, timeout=10),
                 timeout=12,
             )
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             logger.warning(
                 f"Unsubscribe timed out waiting for proxy ack (mode={mode}, "
                 f"symbols={len(symbols)})"
@@ -356,7 +453,7 @@ class WebSocketClient:
             return {
                 "status": "error",
                 "message": "Timed out waiting for proxy unsubscribe response",
-                "mode": mode,
+                "mode": canonical_mode,
             }
         except Exception as e:
             logger.exception(f"Error unsubscribing from symbols: {e}")
@@ -364,17 +461,7 @@ class WebSocketClient:
 
         # Update local tracking only for symbols the proxy confirmed.
         successful = ack.get("successful", []) or []
-        with self.lock:
-            for entry in successful:
-                sym = entry.get("symbol")
-                exch = entry.get("exchange")
-                if not sym or not exch:
-                    continue
-                key = f"{exch}:{sym}"
-                if key in self.active_subscriptions:
-                    self.active_subscriptions[key].discard(mode)
-                    if not self.active_subscriptions[key]:
-                        del self.active_subscriptions[key]
+        self._remove_acknowledged_modes(successful, requested_modes)
 
         return {
             "status": ack.get("status", "success"),
@@ -382,34 +469,53 @@ class WebSocketClient:
             "successful": successful,
             "failed": ack.get("failed", []),
             "broker": ack.get("broker"),
-            "mode": mode,
+            "mode": canonical_mode,
         }
 
     def unsubscribe_all(self) -> dict[str, Any]:
-        """Unsubscribe from all symbols"""
+        """Unsubscribe from all symbols, retaining any broker-refused owners."""
         if not self.connected or not self.authenticated:
             return {"status": "error", "message": "Not connected or authenticated"}
+        if not self.loop or not self.ws:
+            return {"status": "error", "message": "WebSocket connection not available"}
 
         try:
-            unsubscription_msg = {"action": "unsubscribe_all"}
+            with self.lock:
+                requested_modes: dict[tuple[str, str], set[str]] = {}
+                for symbol_key, modes in self.active_subscriptions.items():
+                    exchange, symbol = symbol_key.split(":", 1)
+                    canonical_modes = {
+                        _canonical_mode(item_mode) for item_mode in modes
+                    }
+                    requested_modes[(exchange, symbol)] = canonical_modes
 
-            # Send unsubscription request
-            if self.loop and self.ws:
-                self._run_on_loop(
-                    self.ws.send(json.dumps(unsubscription_msg)), timeout=5
-                )
-
-                # Clear all subscriptions
-                with self.lock:
-                    self.active_subscriptions.clear()
-
-                return {"status": "success", "message": "Unsubscribed from all symbols"}
-            else:
-                return {"status": "error", "message": "WebSocket connection not available"}
-
+            request_id = str(uuid.uuid4())
+            unsubscription_msg = {
+                "action": "unsubscribe_all",
+                "request_id": request_id,
+            }
+            ack = self._run_on_loop(
+                self._send_and_await_ack(unsubscription_msg, request_id, timeout=10),
+                timeout=12,
+            )
+        except TimeoutError:
+            return {
+                "status": "error",
+                "message": "Timed out waiting for proxy unsubscribe response",
+            }
         except Exception as e:
             logger.exception(f"Error unsubscribing from all symbols: {e}")
             return {"status": "error", "message": str(e)}
+
+        successful = ack.get("successful", []) or []
+        self._remove_acknowledged_modes(successful, requested_modes)
+        return {
+            "status": ack.get("status", "success"),
+            "message": ack.get("message", "Unsubscription processing complete"),
+            "successful": successful,
+            "failed": ack.get("failed", []),
+            "broker": ack.get("broker"),
+        }
 
     def get_subscriptions(self) -> dict[str, Any]:
         """Get current active subscriptions"""
@@ -596,10 +702,14 @@ class WebSocketClient:
                 exchange = data.get("exchange")
 
                 if symbol and exchange:
-                    # Cache the data
+                    # Subscription cleanup and cache ownership share this
+                    # real OS-thread lock. Whichever wins the race, a frame
+                    # arriving after the final acknowledged unsubscribe cannot
+                    # recreate a cache entry with no remaining owner.
                     with self.lock:
                         key = f"{exchange}:{symbol}"
-                        self.market_data_cache[key] = data
+                        if self.active_subscriptions.get(key):
+                            self.market_data_cache[key] = data
 
                     # Trigger market data callbacks
                     self._dispatch("market_data", data)

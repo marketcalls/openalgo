@@ -291,7 +291,10 @@ fi
 # Run migrations automatically on startup (idempotent - safe to run multiple times)
 if [ -f "/app/upgrade/migrate_all.py" ]; then
     echo "[OpenAlgo] Running database migrations..."
-    /app/.venv/bin/python /app/upgrade/migrate_all.py || echo "[OpenAlgo] Migration completed (some may have been skipped)"
+    if ! /app/.venv/bin/python /app/upgrade/migrate_all.py; then
+        echo "[OpenAlgo] Database migrations failed; startup aborted."
+        exit 1
+    fi
 else
     echo "[OpenAlgo] No migrations found, skipping..."
 fi

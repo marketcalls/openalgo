@@ -73,7 +73,7 @@ restx_api/strategy.py                API-key surface (lifecycle plus reads)
         |
         v
 services/strategy_module/
-  webhook.py        validation pipeline, every stage audited
+  webhook.py        admitted-request validation pipeline, every outcome audited
   signals.py        signal-mode vocabulary, one leg per alert
   engine.py         run lifecycle, tick evaluation, fills
   state.py          in-process run state, the lock every writer holds
@@ -111,7 +111,7 @@ Six tables, all `sm_` prefixed, in the main database: `sm_strategy`,
 ### FR2: Order Execution
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| FR2.1 | Every leg resolves to a contract before anything is claimed or placed | P0 |
+| FR2.1 | Batch start resolves every leg to a contract before the strategy or any leg is claimed or placed | P0 |
 | FR2.2 | Entries go BUY before SELL, so a spread is not refused for margin it would have had | P0 |
 | FR2.3 | The product is translated to what the leg's venue accepts | P0 |
 | FR2.4 | Exits are MARKET on every path | P0 |
@@ -119,6 +119,13 @@ Six tables, all `sm_` prefixed, in the main database: `sm_strategy`,
 | FR2.6 | Orders bypass the Action Center approval queue: a stop that waits for a human is not a stop | P0 |
 | FR2.7 | A run's mode decides its pipe, and the platform analyzer toggle cannot divert it | P0 |
 | FR2.8 | The product actually sent is recorded on the order row | P1 |
+| FR2.9 | Batch and signal paths write a durable pending intent before calling the broker | P0 |
+| FR2.10 | If intent persistence fails an entry is refused; an exit is still attempted and the lost audit row is reported at critical severity | P0 |
+| FR2.11 | A broker acknowledgement write is checked and retried once; persistent failure records structured exact row/run/leg, broker id and accepted/rejected facts in `order_ack_unrecorded`, immediately attempts idempotent exact-row repair, and is retried by a bounded shared open-run sweep with broker-status folding; conflicts keep possible exposure open and reserved | P0 |
+| FR2.12 | Every position incarnation has a durable `position_ref`; entry, exit and fill settle only the exact owner they name | P0 |
+| FR2.13 | An accepted but unfilled entry is never squared off at requested size; the stop stays open until a confirmed quantity exists | P0 |
+| FR2.14 | A stop request is durable before exits and finalises only after exact owner quantities confirm the run is flat | P0 |
+| FR2.15 | An accepted exit placement is audited before a replayed synchronous fill may produce the confirmed-flat `run_stopped` transition | P0 |
 
 ### FR3: Per-Leg Risk
 | ID | Requirement | Priority |
@@ -137,18 +144,21 @@ Six tables, all `sm_` prefixed, in the main database: `sm_strategy`,
 | FR4.3 | Trail every other leg to entry once one leg's stop fires | P1 |
 | FR4.4 | Daily loss limit measured across the session, not one run | P0 |
 | FR4.5 | The session boundary is the platform session reset, not midnight | P0 |
+| FR4.6 | Combined thresholds evaluate rolling latest-known marks after each one-symbol tick and trigger MARKET exits; final fill-derived P&L may differ, while the terminal reason preserves the rule that fired | P0 |
 
 ### FR5: Signals And The Public Webhook
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | FR5.1 | Token in the URL, stored only as a digest, shown once, rotatable | P0 |
-| FR5.2 | Ten-stage validation pipeline, every outcome audited | P0 |
+| FR5.2 | All admitted pipeline outcomes are audited; route-level rate limits and declared-size 413 preflight refusals happen before durable webhook-event audit | P0 |
 | FR5.3 | A signal that changes nothing answers success with a note, never a failure | P0 |
 | FR5.4 | Live is opt-in per strategy; a strategy is born sandbox-only | P0 |
 | FR5.5 | Kill switch that refuses inbound alerts while engaged | P0 |
 | FR5.6 | Optional CIDR allowlist, closed when non-empty | P1 |
 | FR5.7 | Duplicate suppression and a cooling-off window on batch starts | P1 |
 | FR5.8 | A leg may be named by id or by symbol and exchange | P1 |
+| FR5.9 | Signal entry claims the leg atomically before contract resolution, durable intent and dispatch; duplicate decision and stopping gate share that claim so one alert never opens two positions or enters after a stop request | P0 |
+| FR5.10 | A normal signal risk exit leaves the platform-session run open so later alerts share one session P&L and audit trail | P0 |
 
 ### FR6: Scheduling
 | ID | Requirement | Priority |
@@ -163,8 +173,13 @@ Six tables, all `sm_` prefixed, in the main database: `sm_strategy`,
 | FR7.1 | Continuous checkpoints of volatile risk state, pruned to a bound | P0 |
 | FR7.2 | Open runs recovered after a restart from order rows plus checkpoints | P0 |
 | FR7.3 | A rejected order is never upgraded by a checkpoint | P0 |
-| FR7.4 | A run that cannot be recovered is finalised rather than wedging startup | P0 |
-| FR7.5 | A stopped run's realized P&L reconciled from its order rows as fills arrive | P1 |
+| FR7.4 | Malformed state with no proven exposure is finalised as `recovery_failed`; proven but unrepresentable exposure remains database-open and reserves the strategy for manual reconciliation | P0 |
+| FR7.5 | Realized P&L is derived from exact priced reference groups and an exact durable zero overrides a stale checkpoint | P0 |
+| FR7.6 | A durable pending stop recovers its persisted reason, entry gate and retry behavior, and finalises only when recovery proves flatness | P0 |
+| FR7.7 | Recovery groups orders by `position_ref` and can represent one live plus one outgoing superseded owner per leg | P0 |
+| FR7.8 | More than two held references, overlapping instruments or ambiguous proven ownership remain open, unhydrated and critical for manual reconciliation | P0 |
+| FR7.9 | An unpriced fill may use checkpoint P&L only when the checkpoint witnessed the exact recovered owner shape and quantities; otherwise the known portion is retained and marked for manual reconciliation | P0 |
+| FR7.10 | Positive `filled_qty` proves exposure in every status, while missing price means valuation unavailable rather than zero | P0 |
 
 ### FR8: Observability
 | ID | Requirement | Priority |
@@ -173,28 +188,34 @@ Six tables, all `sm_` prefixed, in the main database: `sm_strategy`,
 | FR8.2 | Live frames pushed to the page over SocketIO, with a periodic read as fallback | P1 |
 | FR8.3 | Broker-backed orderbook, tradebook and positions filtered to the strategy | P1 |
 | FR8.4 | A refused stop recorded at critical severity with the run left open | P0 |
+| FR8.5 | Detail uses broker books as primary truth for the current/latest run and explicitly labelled local strategy rows as audit fallback; no run means not requested, not broker-empty | P1 |
+| FR8.6 | Missing, malformed or non-finite broker numerics render unavailable while a legitimate zero remains zero | P0 |
+| FR8.7 | Broker orders/trades reconcile unique ids, aggregate multiple fills, expose local-only/ambiguous/mismatch states and keep local rejection reasons visible | P1 |
+| FR8.8 | Shared account-level positions are not attributed to one strategy; strategy P&L comes from its own fills | P0 |
+| FR8.9 | Local position fallback preserves lifetime residual exposure, but live leg marks value it only when the frame and selected/current run ids match | P0 |
+| FR8.10 | Once stopped, Detail uses the newest finalized run for realized P&L, peak, trough, stop metadata and broker-book scope; stale live/checkpoint state cannot restore unrealized P&L | P0 |
 
 ## Non-Functional Requirements
 
 | ID | Requirement |
 |----|-------------|
-| NFR1 | No polling on the money path: fills arrive on the `order.update` bus, prices over the websocket, risk from the price hook |
+| NFR1 | Fills arrive on the `order.update` bus and prices normally arrive over the websocket; bounded REST polling may provide a safety fallback for prices and risk. No blocking or broker I/O is allowed while a run lock is held |
 | NFR2 | The risk core performs no I/O, so it is testable without a running platform and identical across consumers |
 | NFR3 | Order dispatch happens outside the run lock; a critical section holds in-memory bookkeeping only |
 | NFR4 | Nothing creates a database engine, thread, executor, socket or subprocess per call |
 | NFR5 | Caches are bounded and invalidated; registries have a matching removal |
 | NFR6 | Every schema change ships as an idempotent migration tested against a populated database |
-| NFR7 | The webhook token appears in no log, no audit payload and no API response |
+| NFR7 | Within OpenAlgo's boundary, URL webhook credentials are redacted from standard/JSON application logs and traffic rows, suppressed in every shipped nginx access log, absent from audit payloads and API responses; operators must protect external proxies/senders and rotate credentials that may have been logged previously |
 
 ## Database Schema
 
 | Table | Holds |
 |---|---|
 | `sm_strategy` | Configuration, legs, risk limits, schedule, webhook digest, live opt-in, kill switch |
-| `sm_strategy_run` | One execution: mode, broker, trigger source, stop reason, final P&L, resolved expiries |
-| `sm_strategy_order` | Every order placed, with the product and price type sent, fills and reject reasons |
+| `sm_strategy_run` | One execution: mode, broker, trigger source, durable pending-stop timestamp/reason, terminal stop reason, final P&L, resolved expiries |
+| `sm_strategy_order` | Every durable intent, with exact `position_ref`, broker acknowledgement, product and price type sent, fills and reject reasons |
 | `sm_strategy_checkpoint` | Volatile risk state, written continuously, pruned to a bound |
-| `sm_webhook_event` | Every inbound alert and its outcome; ownerless rows capped |
+| `sm_webhook_event` | Every request admitted to the webhook pipeline and its outcome; ownerless rows capped; route preflight refusals are not stored |
 | `sm_strategy_event` | Lifecycle and risk transitions with severity |
 
 ## API Endpoints
@@ -217,6 +238,8 @@ Six tables, all `sm_` prefixed, in the main database: `sm_strategy`,
 | Expiry ranks on a signal leg | A signal leg names its own contract. A base symbol is refused rather than resolved, so no order is placed for a symbol the master contract does not list |
 | Account-level risk caps across strategies | The core supports it; nothing aggregates across strategies yet |
 | Re-checking room ownership after a join | Ownership is checked on the join and not re-checked, so a socket connected before a logout keeps receiving until it disconnects. Low on a single-user deployment |
+| Webhook audit on the strategy page | The session endpoint can read audit rows, but Detail does not fetch or render them yet |
+| Webhook IP-allowlist editor | The backend field and enforcement exist, but the wizard currently creates `null` and exposes no editor |
 
 ## Related Documentation
 
@@ -244,6 +267,10 @@ Six tables, all `sm_` prefixed, in the main database: `sm_strategy`,
 |---|---|
 | A position is never held with nothing evaluating its stop | Zero occurrences |
 | A single alert never becomes two positions | Zero occurrences |
+| A stop never reports terminal flatness before every exact owner is confirmed flat | Zero occurrences |
+| Every flip/recovery fill settles the exact durable `position_ref` it belongs to | Zero cross-owner applications |
+| Proven exposure that cannot be represented is never released for reuse | Run remains database-open, strategy reserved, critical manual-reconciliation event |
+| Missing valuation evidence is never displayed or persisted as an invented zero | Unavailable or known partial value with explicit critical reconciliation context |
 | An order never goes out with a product its venue refuses | Zero occurrences |
 | An open run survives a restart and the session boundary | Recovered with side, entry and stop intact |
 | Risk rules agree between Python and the TypeScript copy | `test/risk/vectors.json` passes both |

@@ -474,6 +474,7 @@ echo [INFO] Running database migrations...
 docker exec -it %CONTAINER% /app/.venv/bin/python /app/upgrade/migrate_all.py
 if errorlevel 1 (
     echo [WARNING] Some migrations may have had issues. Check the output above.
+    exit /b 1
 ) else (
     echo [OK] Migrations completed successfully.
 )

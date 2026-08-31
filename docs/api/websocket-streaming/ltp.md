@@ -9,29 +9,29 @@ Local Host   :  ws://127.0.0.1:8765
 Custom Host  :  ws://<your-host>:8765
 ```
 
-## Subscribe to LTP
-
-### Subscribe Message
+## WebSocket Request
 
 ```json
 {
   "action": "subscribe",
-  "mode": "ltp",
-  "instruments": [
+  "mode": "LTP",
+  "symbols": [
     {"exchange": "NSE", "symbol": "RELIANCE"},
     {"exchange": "NSE", "symbol": "INFY"}
   ]
 }
 ```
 
-### LTP Update Message
+## Sample Response
 
 ```json
 {
-  "type": "ltp",
+  "type": "market_data",
+  "symbol": "RELIANCE",
+  "exchange": "NSE",
+  "mode": 1,
+  "broker": "zerodha",
   "data": {
-    "exchange": "NSE",
-    "symbol": "RELIANCE",
     "ltp": 1187.75,
     "timestamp": 1712572800000
   }
@@ -43,12 +43,19 @@ Custom Host  :  ws://<your-host>:8765
 ```json
 {
   "action": "unsubscribe",
-  "mode": "ltp",
-  "instruments": [
+  "mode": "LTP",
+  "symbols": [
     {"exchange": "NSE", "symbol": "RELIANCE"}
   ]
 }
 ```
+
+The unsubscribe acknowledgement lists exact outcomes in `successful` and
+`failed`. Mode-valid acknowledgement items carry the canonical `mode` value
+`"LTP"`; when mode validation itself fails, `mode` is `null`. A broker refusal
+leaves the final local owner registered so the request can be retried.
+Disconnect cleanup does not retain a dead client owner; any unresolved feed is
+reclaimed by the user's last-client adapter teardown.
 
 ## Python SDK Example
 
@@ -92,8 +99,8 @@ finally:
 | Field | Type | Description |
 |-------|------|-------------|
 | action | string | "subscribe" or "unsubscribe" |
-| mode | string | "ltp" |
-| instruments | array | Array of instrument objects |
+| mode | integer or string | `1` or case-insensitive `LTP` |
+| symbols | array | Array of symbol/exchange objects. Singular `symbol` plus `exchange` is a compatibility alias |
 
 ### Instrument Object
 
@@ -102,19 +109,21 @@ finally:
 | exchange | string | Exchange code (NSE, BSE, NFO, etc.) |
 | symbol | string | Trading symbol |
 
-### LTP Update Message
+### Market Data Update Message
 
 | Field | Type | Description |
 |-------|------|-------------|
-| type | string | "ltp" |
+| type | string | Always `market_data` |
+| symbol | string | Trading symbol |
+| exchange | string | Exchange code |
+| mode | integer | Numeric subscribed mode (`1`) |
+| broker | string | Broker that supplied the frame |
 | data | object | LTP data object |
 
 ### Data Object
 
 | Field | Type | Description |
 |-------|------|-------------|
-| exchange | string | Exchange code |
-| symbol | string | Trading symbol |
 | ltp | number | Last traded price |
 | timestamp | number | Update time (epoch milliseconds) |
 

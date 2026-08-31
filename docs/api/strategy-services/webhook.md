@@ -20,7 +20,7 @@ This endpoint is **not** under `/api/v1`, and it does **not** accept an `apikey`
 - Treat it as a credential. Anyone who can post to the URL can start or stop the strategy, subject to the strategy's own kill switch, IP allowlist and live opt-in.
 - Rotating invalidates the old token immediately.
 
-The token is never written to a log or to the audit table. A log line carries the first twelve characters of the stored digest instead, which is enough to correlate two events and useless to anyone who reads it. The inbound payload is redacted before it is stored, so a webhook URL pasted into an alert message does not end up in the database in plaintext.
+Within OpenAlgo's enforceable boundary, the token is redacted from standard and JSON application logs, the traffic database and every shipped nginx access log. An application line carries only the first twelve characters of the stored digest, which is enough to correlate two events and useless to anyone who reads it. The inbound payload is redacted before it is stored, so a webhook URL pasted into an alert message does not end up in the database in plaintext. External senders and proxies are outside that boundary and must protect the URL as a credential.
 
 ## Batch Strategies
 
@@ -84,15 +84,29 @@ curl -X POST http://127.0.0.1:5000/strategy/webhook/oaws_your_webhook_token_here
   "result": "ok",
   "message": "Strategy stop accepted",
   "strategy_id": 7,
-  "run_id": 42
+  "run_id": 42,
+  "stop_pending": true,
+  "exits": [
+    {
+      "leg_id": 1,
+      "ok": true,
+      "position_ref": "969bc536b1c14d15992f730c2c136d7a",
+      "exit_owner": "live",
+      "error": null
+    }
+  ]
 }
 ```
 
 `mode` is required on `start` and ignored on `stop`. A stop that carries a stray `mode` is not refused for it: the sender's extra field is not a reason to leave a position open.
 
+`Strategy stop accepted` means the durable request was handed to the engine; it
+does not mean the broker is flat. `stop_pending: true` keeps the run current,
+subscribed and managed until exact exit fills confirm every owner is flat.
+
 ## Signal Strategies
 
-A signal strategy moves one leg at a time. It accepts `long_entry`, `long_exit`, `short_entry` and `short_exit`, and nothing else. There is no `start` and no `mode`: the first signal of the day opens the run, and the mode comes from the strategy's own live opt-in.
+A signal strategy moves one leg at a time. It accepts `long_entry`, `long_exit`, `short_entry` and `short_exit`, and nothing else. There is no `start` and no `mode`: the first signal after the platform session boundary opens the run, and the mode comes from the strategy's own live opt-in.
 
 The leg is named either by `leg_id` or by `symbol` plus `exchange`. `leg_id` wins when both are given.
 
@@ -170,10 +184,12 @@ The body must be a JSON object. A JSON array, a bare string and a number are all
 | Field | Type | Description |
 |-------|------|-------------|
 | status | string | `success` or `error` |
-| result | string | The outcome label, always a member of the webhook result vocabulary |
+| result | string | The outcome label, always a member of the webhook result vocabulary. Absent on the declared-size 413 route preflight response |
 | message | string | What happened, in words |
 | strategy_id | integer | The strategy the token resolved to. Absent when the token resolved to nothing |
 | run_id | integer | The run the signal opened or affected. Absent when there is none |
+| stop_pending | boolean | Stop responses only. `true` means the durable stop still has exposure to fill, retry or reconcile; `false` means the stop confirmed flatness |
+| exits | array | Stop responses only, present with `stop_pending`; per-owner exit outcomes including `position_ref`, `exit_owner`, `ok` and rejection context |
 
 `status` and `result` answer different questions. A deduplicated retry has `status: "success"` because the caller's intent was already satisfied, and `result: "rejected_dedupe"` because the audit trail has to show that this particular delivery did nothing.
 
@@ -193,11 +209,24 @@ The body must be a JSON object. A JSON array, a bare string and a number are all
 | `rejected_engine_error` | 500 | The engine refused the signal or raised while acting on it |
 | `rate_limited` | 429 | The route's rate limiter refused the request |
 
-Every one of those outcomes, rejections included, writes a row to the webhook audit table. A webhook that was refused is exactly what an operator needs to see when an alert quietly stops working. Read them on the strategy's page at `/strategy`.
+Only requests admitted to the validation pipeline are audited. Every terminal
+outcome inside that pipeline, accepted or rejected, writes a row to the webhook
+audit table. The route's rate limiter and declared-size 413 run before durable
+webhook-event audit, so those preflight refusals do not create an audit row.
+The declared-size 413 response contains `status` and `message` but no `result`;
+the limiter's 429 response contains `result: "rate_limited"`.
+The session endpoint can read admitted events, but the `/strategy` page does
+not currently expose them. The page also does not provide an IP-allowlist
+editor; creation currently stores no allowlist. Configure/read these through
+the session API until those operator surfaces are built.
 
 ## Validation Order
 
-The order is part of the contract. Each stage writes its own audit row and stops the request.
+The order is part of the contract. Before this list, the route applies its
+caller/token rate limits and refuses a declared oversized body with 413 before
+reading it. Those route preflight guards do not enter the pipeline and do not
+write webhook audit rows. Once admitted, each terminal pipeline stage writes
+its own audit row and stops the request.
 
 1. The token resolves to a strategy, or `rejected_token`
 2. The strategy is not locked, or `rejected_locked`
@@ -224,7 +253,7 @@ The kill switch outranks the allowlist, and the allowlist outranks the payload, 
 - **Duplicate suppression, batch only.** Two identical `(strategy, action, mode)` deliveries inside 60 seconds are one signal. This exists because senders retry a delivery they believe failed. A delivery whose engine call then failed releases its claim, so a genuine retry is not swallowed as a duplicate of something that never happened.
 - **Cooling off, batch `start` only.** A strategy that stopped within the last 30 seconds refuses a `start`, so a misconfigured pair of alerts firing against each other cannot oscillate and pay the spread each time. A stop is never blocked by the window, and a stop against an already-stopped strategy does not arm it.
 - **The IP allowlist is a closed set when it is non-empty.** An empty or absent allowlist allows every address, which is how a strategy is created. Entries are CIDR ranges, and a bare address is read as its own `/32` or `/128`. A request that arrives with no address at all fails a non-empty allowlist. One malformed entry is skipped rather than failing the whole list closed.
-- **Body size cap: 16384 bytes.** An oversized `Content-Length` is refused with a 413 **before the body is read**, so an unauthenticated caller does not get to decide how much the worker reads; the pipeline's own cap then applies to what actually arrived. A TradingView alert is a few hundred bytes.
+- **Body size cap: 16384 bytes.** An oversized `Content-Length` is refused with a 413 **before the body is read or audited**, so an unauthenticated caller does not get to decide how much the worker reads. The admitted pipeline then applies its own byte cap to what actually arrived and audits that `rejected_payload` outcome. A TradingView alert is a few hundred bytes.
 - **The caller is identified by the real client address.** The proxy headers are honoured through `get_real_ip()`, so the IP allowlist and the audit trail name the sender rather than the reverse proxy most installs run behind.
 - **`action` and `mode` are trimmed and lower-cased** before matching, so `" START "` and `"Sandbox"` are accepted. Nothing else about the payload is normalised.
 - **Audit rows for an unrecognised token are capped at the newest 1000.** They name no strategy, so nothing displays them and nothing deleted them: anyone who could reach the URL could otherwise grow the database without limit, invisibly. They are kept rather than dropped, because a run of them is the first sign of somebody walking the token space.
@@ -232,7 +261,12 @@ The kill switch outranks the allowlist, and the allowlist outranks the payload, 
 
 ## Rate Limits
 
-The validation pipeline applies no rate limit of its own. The route in front of it does, and `rate_limited` is the result label that outcome carries, answering 429. The platform's webhook budget is `WEBHOOK_RATE_LIMIT` in `.env`, which `.sample.env` ships as `100 per minute` and which the other public webhook surfaces draw on. See [rate limiting](../rate-limiting.md).
+The validation pipeline applies no rate limit of its own. The route in front of
+it does, and `rate_limited` is the result label that outcome carries, answering
+429 before the pipeline and therefore before durable webhook-event audit. The
+platform's webhook budget is `WEBHOOK_RATE_LIMIT` in `.env`, which `.sample.env`
+ships as `100 per minute` and which the other public webhook surfaces draw on.
+See [rate limiting](../rate-limiting.md).
 
 Two limits share that budget, because neither subsumes the other. **By caller address** is the only key that can stop someone walking the token space: every guess carries a different token, so a token-keyed limit would score each against an empty bucket and never fire. **By token** bounds what one leaked token can do to the broker account however many addresses replay it, which matters because the token is the whole credential.
 
@@ -243,10 +277,12 @@ The token-keyed limit is keyed on the token's SHA-256 digest, not the token. The
 The URL token is the entire credential, so anywhere it is written down is a second copy of it.
 
 - **It is masked in the traffic log.** `/traffic` keeps 30 days of requests and shows the path; the credential segment of `/strategy/webhook/`, `/flow/webhook/` and `/chartink/webhook/` paths is replaced with `<redacted>` before the row is written. Anyone who could read that log could otherwise replay the webhook and place orders.
+- **It is masked in application logs.** The same path redactor runs over standard log messages and the request-path field in `log/errors.jsonl`.
+- **It is suppressed in shipped nginx access logs.** Direct, Docker, multi-instance, update and change-domain installers conditionally disable access logging for all three URL-secret webhook prefixes, including the HTTP-to-HTTPS redirect server.
 - **It never appears in an audit payload.** The stored `payload` is the body with anything token-shaped stripped, so a sender that echoes its own URL into the alert body does not persist it.
 - **No API response carries it.** Only the SHA-256 digest is stored; the plaintext is shown once, at creation and at rotation, in the browser.
 
-It will still be in your sender's own configuration and in any TLS-terminating proxy's access log. Rotate it (`/strategy/api/strategies/<id>/webhook/rotate`) if either is exposed; the old token stops working immediately.
+It will still be in your sender's own configuration and may be present in an external or previously installed/custom proxy that does not apply this guard. If credentials may previously have reached any access log or support bundle, rotate them from the strategy page (the session endpoint is `/strategy/api/strategies/<id>/webhook/rotate`); the old token stops working immediately. Apply equivalent redaction or access-log suppression at every external TLS terminator.
 
 ## Use Cases
 

@@ -10,7 +10,9 @@ repeats itself; answering a repeat as a failure invites a retry, and a retry on
 an order path is how one alert becomes two positions.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import time
+from threading import Event
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -19,7 +21,7 @@ import pytest
 # restx_api first: see the note in test_strategy_module_order_dispatch.py.
 import restx_api  # noqa: F401
 from database import strategy_module_db as store
-from services.strategy_module import engine, signals, state
+from services.strategy_module import engine, order_events, signals, state, webhook
 from services.strategy_module.order_dispatch import DispatchResult
 
 USER = "signal_test_user"
@@ -237,6 +239,20 @@ def test_a_long_signal_opens_a_long(placed):
     assert placed[0]["action"] == "BUY"
 
 
+def test_a_signal_entry_persists_the_live_position_reference(placed):
+    """The durable entry row and live position must name one incarnation."""
+    strategy = _make()
+
+    signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    run_id = store.get_strategy(strategy.id, USER).current_run_id
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    entry = store.list_orders(run_id)[0]
+    assert entry["position_ref"] is not None
+    assert len(entry["position_ref"]) == 32
+    assert leg.get("position_ref") == entry["position_ref"]
+
+
 def test_an_exit_covers_the_side_actually_held(placed):
     strategy = _make()
     signals.handle_signal(strategy, "short_entry", leg_id=1)
@@ -378,6 +394,148 @@ def test_the_first_signal_of_the_day_opens_the_run(placed):
     assert len(store.list_runs(strategy.id)) == 1
 
 
+def test_first_signal_does_not_dispatch_when_run_link_cannot_be_persisted(placed):
+    """The daily run must own the strategy before any signal can place an order."""
+    strategy = _make()
+
+    with patch.object(store, "set_strategy_status", return_value=False):
+        result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is False
+    assert "link" in str(result.error).lower()
+    assert placed == []
+    assert state.active_run_ids() == []
+    runs = store.list_runs(strategy.id)
+    assert len(runs) == 1
+    assert runs[0]["stopped_at"] is not None
+    assert runs[0]["stop_reason"] == "error"
+    durable = store.get_strategy(strategy.id, USER)
+    assert durable.status == "stopped"
+    assert durable.current_run_id is None
+
+
+def test_synchronous_signal_fill_does_not_reuse_detached_strategy_or_run_rows():
+    """Sandbox replay removes scoped sessions before the signal call returns."""
+    strategy = _make()
+    strategy_id = strategy.id
+
+    def fill_inside_dispatch(**_kwargs):
+        broker_order_id = "SYNC-SIGNAL-ENTRY"
+        order_events._apply_update(
+            broker_order_id,
+            SimpleNamespace(
+                orderid=broker_order_id,
+                order_status="complete",
+                average_price=101.5,
+                filled_quantity=100,
+                rejection_reason="",
+            ),
+        )
+        return DispatchResult(
+            ok=True,
+            broker_order_id=broker_order_id,
+            response={},
+        )
+
+    with (
+        patch.object(signals, "_api_key_for", return_value="test-key"),
+        patch.object(
+            signals.order_dispatch,
+            "dispatch_order",
+            side_effect=fill_inside_dispatch,
+        ),
+    ):
+        result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is True
+    run_id = result.run_id
+    assert run_id is not None
+    assert store.get_strategy(strategy_id, USER).current_run_id == run_id
+    durable = store.list_orders(run_id)[0]
+    assert durable["status"] == "complete"
+    assert durable["filled_qty"] == 100
+    assert durable["avg_fill_price"] == pytest.approx(101.5)
+    leg = state.get_run_state(run_id)["legs"]["1"]
+    assert leg["entry_status"] == "complete"
+    assert leg["entry_avg"] == pytest.approx(101.5)
+    assert [
+        event["kind"]
+        for event in store.list_events(strategy_id)
+        if event["kind"] == "leg_entry_placed"
+    ] == ["leg_entry_placed"]
+
+
+def test_day_run_session_cleanup_does_not_detach_signal_configuration():
+    """A rollover/stop may clean sessions before handle_signal enters the leg."""
+    strategy = _make()
+    strategy_id = strategy.id
+
+    def open_day_then_cleanup(strategy_snapshot):
+        run = store.create_run(strategy_id, "sandbox", "sandbox", trigger_source="webhook")
+        assert run is not None
+        run_id = run.id
+        assert store.set_strategy_status(strategy_id, "running", run_id)
+        state.init_run_state(run_id, strategy_id, [])
+        store.record_event(
+            strategy_id,
+            USER,
+            "run_started",
+            "day boundary",
+            run_id=run_id,
+        )
+        store.db_session.remove()
+        assert strategy_snapshot is not None
+        return run_id, None
+
+    with (
+        patch.object(signals, "_day_run", side_effect=open_day_then_cleanup),
+        patch.object(signals, "_api_key_for", return_value="test-key"),
+        patch.object(
+            signals.order_dispatch,
+            "dispatch_order",
+            return_value=DispatchResult(
+                ok=True,
+                broker_order_id="DAY-CLEANUP-ENTRY",
+                response={},
+            ),
+        ),
+    ):
+        result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is True
+    assert result.run_id is not None
+    assert store.list_orders(result.run_id)[0]["broker_order_id"] == "DAY-CLEANUP-ENTRY"
+
+
+def test_webhook_signal_audit_uses_plain_id_after_handler_session_cleanup():
+    strategy = _make()
+    strategy_id = strategy.id
+
+    def accepted_after_cleanup(*_args, **_kwargs):
+        store.record_event(strategy_id, USER, "leg_entry_placed", "signal accepted")
+        store.db_session.remove()
+        return signals.SignalResult(ok=True, run_id=91, leg_id=1)
+
+    with (
+        patch.object(signals, "handle_signal", side_effect=accepted_after_cleanup),
+        patch.object(webhook, "_audit", return_value=73) as audit,
+    ):
+        outcome = webhook._dispatch_signal(
+            strategy=strategy,
+            action="long_entry",
+            payload={"leg_id": 1},
+            safe_payload={"leg_id": 1},
+            ip="127.0.0.1",
+            user_agent="test",
+        )
+
+    assert outcome.ok is True
+    assert outcome.strategy_id == strategy_id
+    assert outcome.run_id == 91
+    assert outcome.webhook_event_id == 73
+    assert audit.call_args.kwargs["strategy_id"] == strategy_id
+
+
 def test_later_signals_reuse_the_same_run(placed):
     strategy = _make()
     signals.handle_signal(strategy, "long_entry", leg_id=1)
@@ -387,6 +545,199 @@ def test_later_signals_reuse_the_same_run(placed):
 
     assert store.get_strategy(strategy.id, USER).current_run_id == first
     assert len(store.list_runs(strategy.id)) == 1
+
+
+def test_signal_entry_is_refused_while_stop_pending_but_exit_retry_is_allowed(placed):
+    strategy = _make()
+    strategy_id = strategy.id
+    assert signals.handle_signal(strategy, "long_entry", leg_id=1).ok is True
+    run_id = _fill(strategy, 1)
+    assert store.request_run_stop(run_id, "manual") is True
+
+    blocked = signals.handle_signal(strategy, "long_entry", leg_id=2)
+
+    assert blocked.ok is False
+    assert blocked.note == "run_stopping"
+    assert blocked.run_id == run_id
+    assert len(placed) == 1
+
+    first_exit = signals.handle_signal(strategy, "long_exit", leg_id=1)
+    assert first_exit.ok is True
+    exit_row = max(store.list_orders(run_id), key=lambda row: row["id"])
+    order_events._apply_update(
+        exit_row["broker_order_id"],
+        SimpleNamespace(
+            orderid=exit_row["broker_order_id"],
+            order_status="rejected",
+            average_price=0,
+            filled_quantity=0,
+            rejection_reason="venue refused",
+        ),
+    )
+    strategy = store.get_strategy(strategy_id, USER)
+    orders_before_retry = len(placed)
+
+    retry = signals.handle_signal(strategy, "long_exit", leg_id=1)
+    assert retry.ok is True
+    assert len(placed) == orders_before_retry + 1
+    assert placed[-1]["action"] == "SELL"
+    assert placed[-1]["quantity"] == "100"
+
+
+def test_zero_fill_signal_entry_refusal_reconciles_a_stop_requested_during_dispatch(placed):
+    strategy = _make()
+    run_id, error = signals._day_run(strategy)
+    assert error is None
+    strategy = store.get_strategy(strategy.id, USER)
+
+    def refuse_after_stop_requested(**_kwargs):
+        assert store.request_run_stop(run_id, "manual") is True
+        assert state.mark_stopping(run_id) is True
+        return DispatchResult(ok=False, error="venue refused")
+
+    with patch.object(
+        signals.order_dispatch,
+        "dispatch_order",
+        side_effect=refuse_after_stop_requested,
+    ):
+        result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is False
+    assert placed == []
+    assert store.get_run(run_id).stopped_at is not None
+    assert state.get_run_state(run_id) is None
+    assert [event["kind"] for event in store.list_events(strategy.id)].count("run_stopped") == 1
+
+
+@pytest.mark.parametrize("seam", ["resolver", "api_key", "record_row", "install"])
+def test_every_pre_dispatch_entry_refusal_releases_claim_then_reconciles_pending_stop(
+    placed, monkeypatch, seam
+):
+    strategy = _make()
+    run_id, error = signals._day_run(strategy)
+    assert error is None
+    strategy = store.get_strategy(strategy.id, USER)
+
+    def make_stop_durable():
+        assert store.request_run_stop(run_id, "manual") is True
+        assert state.mark_stopping(run_id) is True
+
+    if seam == "resolver":
+
+        def refuse_resolver(_leg, _side):
+            make_stop_durable()
+            return None, "resolver refused"
+
+        monkeypatch.setattr(signals, "_resolve_signal_leg", refuse_resolver)
+    elif seam == "api_key":
+
+        def refuse_api_key(_user_id):
+            make_stop_durable()
+            return None
+
+        monkeypatch.setattr(signals, "_api_key_for", refuse_api_key)
+    elif seam == "record_row":
+
+        def refuse_record(*_args, **_kwargs):
+            make_stop_durable()
+            return None
+
+        monkeypatch.setattr(store, "record_order", refuse_record)
+    else:
+
+        def refuse_install(*_args, **_kwargs):
+            make_stop_durable()
+            return None
+
+        monkeypatch.setattr(state, "add_leg", refuse_install)
+
+    observed_claim_release = []
+    real_reconcile = engine.reconcile_pending_stop
+
+    def observe_reconcile(candidate_run_id):
+        snapshot = state.get_run_state(candidate_run_id)
+        observed_claim_release.append(snapshot is not None and not snapshot["signal_entry_claims"])
+        return real_reconcile(candidate_run_id)
+
+    terminal_attempts = []
+    real_finish = store.finish_run_and_release_strategy
+
+    def count_terminal_attempt(*args, **kwargs):
+        terminal_attempts.append(args[0])
+        return real_finish(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "reconcile_pending_stop", observe_reconcile)
+    monkeypatch.setattr(store, "finish_run_and_release_strategy", count_terminal_attempt)
+
+    result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is False
+    assert placed == []
+    assert observed_claim_release == [True]
+    assert store.get_run(run_id).stopped_at is not None
+    assert state.get_run_state(run_id) is None
+    assert terminal_attempts == [run_id]
+    assert real_reconcile(run_id) is None
+    assert terminal_attempts == [run_id]
+    assert [event["kind"] for event in store.list_events(strategy.id)].count("run_stopped") == 1
+
+
+def test_stop_cannot_finalize_while_a_claimed_signal_entry_is_between_check_and_dispatch(
+    placed, monkeypatch
+):
+    """A claimed entry is possible exposure until it is released.
+
+    Hold the signal after its in-memory claim, then hold stop after its
+    management decision.  The signal gets to try installing and dispatching
+    before stop returns, reproducing the exact interleaving that used to let
+    the run finalize underneath a new broker order.
+    """
+    strategy = _make()
+    run_id, error = signals._day_run(strategy)
+    assert error is None
+    strategy = store.get_strategy(strategy.id, USER)
+
+    entry_claimed = Event()
+    stop_checked_management = Event()
+    release_signal = Event()
+    signal_finished = Event()
+    real_resolve = signals._resolve_signal_leg
+    real_requires_management = engine._run_requires_management
+
+    def paused_resolve(leg, side):
+        entry_claimed.set()
+        assert release_signal.wait(timeout=5)
+        return real_resolve(leg, side)
+
+    def paused_management_check(run):
+        result = real_requires_management(run)
+        if not stop_checked_management.is_set():
+            stop_checked_management.set()
+            assert signal_finished.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(signals, "_resolve_signal_leg", paused_resolve)
+    monkeypatch.setattr(engine, "_run_requires_management", paused_management_check)
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        entry_future = workers.submit(signals.handle_signal, strategy, "long_entry", leg_id=1)
+        assert entry_claimed.wait(timeout=5)
+        stop_future = workers.submit(engine.stop_run, run_id, USER, "manual")
+        assert stop_checked_management.wait(timeout=5)
+        assert state.claim_signal_entry(run_id, 2, "B") == {"note": "run_stopping"}
+        release_signal.set()
+        entry_result = entry_future.result(timeout=10)
+        signal_finished.set()
+        stop_result = stop_future.result(timeout=10)
+
+    assert entry_result.ok is False
+    assert placed == []
+    # Once the blocked claim has released, the locked terminal recheck can
+    # prove flatness. Finalizing now is safe precisely because no dispatch
+    # crossed the stopping gate.
+    assert stop_result["stop_pending"] is False
+    assert store.get_run(run_id).stopped_at is not None
+    assert state.get_run_state(run_id) is None
 
 
 def test_a_run_is_sandbox_unless_the_strategy_opted_into_live(placed):
@@ -529,6 +880,77 @@ def _age_run(run_id, days):
     run = store.get_run(run_id)
     run.started_at = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days)
     store.db_session.commit()
+
+
+@pytest.mark.parametrize(
+    "management",
+    ["superseded", "working_entry", "configured_entry", "signal_claim", "unavailable_state"],
+)
+def test_stale_signal_rollover_uses_full_stop_management_before_replacement(placed, management):
+    strategy = _make()
+    run_id, error = signals._day_run(strategy)
+    assert error is None
+
+    if management in {"superseded", "working_entry", "configured_entry"}:
+        state.init_run_state(
+            run_id,
+            strategy.id,
+            [
+                {
+                    "leg_id": 1,
+                    "position": "B",
+                    "position_ref": "stale-live",
+                    "symbol": "RELIANCE",
+                    "exchange": "NSE",
+                    "quantity": 10,
+                }
+            ],
+        )
+        with state.run_state(run_id) as live:
+            leg = live["legs"]["1"]
+            if management == "superseded":
+                leg["entry_status"] = "rejected"
+                leg["status"] = "rejected"
+                leg["superseded"] = {
+                    "position_ref": "stale-old-long",
+                    "entry_order_id": 101,
+                    "exit_order_id": None,
+                    "exit_claim_token": None,
+                    "position": "B",
+                    "entry_avg": 100.0,
+                    "qty": 10,
+                }
+            elif management == "working_entry":
+                leg["entry_status"] = "open"
+                leg["status"] = "open"
+    elif management == "signal_claim":
+        claim = state.claim_signal_entry(run_id, 1, "B")
+        assert claim is not None and claim.get("claim_token")
+    else:
+        state.clear_run_state(run_id)
+
+    _age_run(run_id, days=3)
+
+    result = signals.handle_signal(
+        store.get_strategy(strategy.id, USER),
+        "long_entry",
+        leg_id=2,
+    )
+
+    assert result.ok is False
+    assert result.note == "run_stopping"
+    assert result.run_id == run_id
+    assert store.get_strategy(strategy.id, USER).current_run_id == run_id
+    assert len(store.list_runs(strategy.id)) == 1
+    durable = store.get_run(run_id)
+    assert durable.stopped_at is None
+    assert durable.stop_requested_reason == "eod"
+    if management == "superseded":
+        assert [(order["action"], order["quantity"]) for order in placed] == [("SELL", "10")]
+    else:
+        assert placed == []
+    if management != "unavailable_state":
+        assert state.get_run_state(run_id)["stopping"] is True
 
 
 def test_a_flat_run_from_an_earlier_day_is_rolled(placed):

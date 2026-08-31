@@ -5,6 +5,8 @@ import {
   derivePositions,
   deriveTrades,
   lotSizeFromRows,
+  reconcileBrokerOrders,
+  reconcileBrokerTrades,
 } from '@/api/strategy_module'
 import {
   convertLegKind,
@@ -41,6 +43,7 @@ function order(partial: Partial<Order> & Pick<Order, 'id'>): Order {
     leg_id: 1,
     kind: 'entry',
     broker_order_id: null,
+    position_ref: null,
     symbol: 'NIFTY28MAR2420800CE',
     exchange: 'NFO',
     action: 'BUY',
@@ -57,6 +60,207 @@ function order(partial: Partial<Order> & Pick<Order, 'id'>): Order {
     ...partial,
   }
 }
+
+describe('broker book reconciliation', () => {
+  it('keeps broker order truth and attaches exact strategy context with disagreements', () => {
+    const result = reconcileBrokerOrders(
+      [
+        {
+          orderid: 'A1',
+          symbol: 'NIFTY28MAR2420800CE',
+          exchange: 'NFO',
+          action: 'BUY',
+          quantity: 25,
+          price: 101,
+          trigger_price: 0,
+          pricetype: 'MARKET',
+          product: 'NRML',
+          order_status: 'complete',
+          timestamp: '28-May-2026 09:20:01',
+        },
+      ],
+      [
+        order({
+          id: 4,
+          run_id: 42,
+          leg_id: 7,
+          kind: 'exit_target',
+          broker_order_id: ' A1 ',
+          position_ref: 'position-a',
+          status: 'open',
+          qty: 50,
+          price: 99,
+        }),
+      ]
+    )
+
+    expect(result.confirmed).toHaveLength(1)
+    expect(result.confirmed[0]).toMatchObject({
+      order_status: 'complete',
+      quantity: 25,
+      price: 101,
+      run_id: 42,
+      leg_id: 7,
+      kind: 'exit_target',
+      local_status: 'open',
+      position_ref: 'position-a',
+      reconciliation: 'disagrees',
+    })
+    expect(result.confirmed[0].disagreements).toEqual(['quantity', 'price', 'status'])
+    expect(result.localOnly).toEqual([])
+  })
+
+  it('keeps rows without broker ids in the local audit records', () => {
+    const local = order({ id: 5, broker_order_id: null, status: 'rejected' })
+    const result = reconcileBrokerOrders([], [local])
+
+    expect(result.confirmed).toEqual([])
+    expect(result.localOnly).toEqual([local])
+  })
+
+  it('marks duplicate local identifiers ambiguous instead of guessing by symbol and quantity', () => {
+    const first = order({ id: 6, broker_order_id: 'DUP', leg_id: 1 })
+    const second = order({ id: 7, broker_order_id: 'DUP', leg_id: 2 })
+    const result = reconcileBrokerOrders(
+      [
+        {
+          orderid: 'DUP',
+          symbol: first.symbol,
+          exchange: first.exchange,
+          action: first.action,
+          quantity: first.qty,
+          price: first.price,
+          trigger_price: first.trigger_price,
+          pricetype: first.pricetype,
+          product: 'NRML',
+          order_status: 'complete',
+          timestamp: '28-May-2026 09:20:01',
+        },
+      ],
+      [first, second]
+    )
+
+    expect(result.confirmed[0]).toMatchObject({
+      reconciliation: 'ambiguous',
+      run_id: null,
+      leg_id: null,
+      kind: null,
+    })
+    expect(result.localOnly).toEqual([first, second])
+  })
+
+  it('does not cross-associate an unmatched broker row with a similar local order', () => {
+    const local = order({ id: 8, broker_order_id: 'LOCAL' })
+    const result = reconcileBrokerOrders(
+      [
+        {
+          orderid: 'BROKER',
+          symbol: local.symbol,
+          exchange: local.exchange,
+          action: local.action,
+          quantity: local.qty,
+          price: local.price,
+          trigger_price: local.trigger_price,
+          pricetype: local.pricetype,
+          product: 'NRML',
+          order_status: 'complete',
+          timestamp: '28-May-2026 09:20:01',
+        },
+      ],
+      [local]
+    )
+
+    expect(result.confirmed[0].reconciliation).toBe('unmatched')
+    expect(result.confirmed[0].leg_id).toBeNull()
+    expect(result.localOnly).toEqual([local])
+  })
+
+  it('attaches one exact local order to each broker trade fill without replacing fill truth', () => {
+    const local = order({
+      id: 9,
+      run_id: 12,
+      leg_id: 3,
+      broker_order_id: 'FILL-1',
+      filled_qty: 50,
+      avg_fill_price: 101.5,
+    })
+    const result = reconcileBrokerTrades(
+      [
+        {
+          orderid: 'FILL-1',
+          symbol: local.symbol,
+          exchange: local.exchange,
+          product: 'NRML',
+          action: local.action,
+          quantity: 25,
+          average_price: 101,
+          trade_value: 2525,
+          timestamp: '09:20:01',
+        },
+        {
+          orderid: 'FILL-1',
+          symbol: local.symbol,
+          exchange: local.exchange,
+          product: 'NRML',
+          action: local.action,
+          quantity: 25,
+          average_price: 102,
+          trade_value: 2550,
+          timestamp: '09:20:02',
+        },
+      ],
+      [local]
+    )
+
+    expect(result.confirmed).toHaveLength(2)
+    expect(result.confirmed[0]).toMatchObject({
+      quantity: 25,
+      average_price: 101,
+      run_id: 12,
+      leg_id: 3,
+      reconciliation: 'matched',
+    })
+    expect(result.confirmed[0].disagreements).toEqual([])
+    expect(result.confirmed[1].average_price).toBe(102)
+    expect(result.confirmed[1].reconciliation).toBe('matched')
+    expect(result.localOnly).toEqual([])
+  })
+
+  it('attaches exact context to a terminal partial fill whose local price is unavailable', () => {
+    const local = order({
+      id: 10,
+      broker_order_id: 'DEAD-PARTIAL',
+      status: 'rejected',
+      filled_qty: 25,
+      avg_fill_price: null,
+    })
+    const result = reconcileBrokerTrades(
+      [
+        {
+          orderid: 'DEAD-PARTIAL',
+          symbol: local.symbol,
+          exchange: local.exchange,
+          product: 'NRML',
+          action: local.action,
+          quantity: 25,
+          average_price: 103,
+          trade_value: 2575,
+          timestamp: '09:20:01',
+        },
+      ],
+      [local]
+    )
+
+    expect(result.confirmed[0]).toMatchObject({
+      leg_id: local.leg_id,
+      local_status: 'rejected',
+      reconciliation: 'matched',
+      disagreements: [],
+    })
+    expect(result.confirmed[0].average_price).toBe(103)
+    expect(result.localOnly).toEqual([])
+  })
+})
 
 describe('P&L formatting', () => {
   // The two rules differ on purpose. A list is scanned, so a strategy that has
@@ -193,6 +397,75 @@ describe('buildRoundTrips', () => {
 })
 
 describe('derivePositions', () => {
+  it('keeps explicit working exposure and does not reverse the net when its price is unavailable', () => {
+    const positions = derivePositions(
+      [
+        order({
+          id: 18,
+          status: 'open',
+          action: 'BUY',
+          qty: 50,
+          filled_qty: 25,
+          avg_fill_price: null,
+          filled_at: null,
+        }),
+        order({
+          id: 19,
+          kind: 'exit_manual',
+          status: 'complete',
+          action: 'SELL',
+          qty: 10,
+          filled_qty: 10,
+          avg_fill_price: 105,
+        }),
+      ],
+      'NRML'
+    )
+
+    expect(positions).toHaveLength(1)
+    expect(positions[0]).toMatchObject({
+      net_qty: 15,
+      side: 'long',
+      avg_entry_price: null,
+      unrealized_pnl: null,
+      realized_pnl_lifetime: null,
+    })
+  })
+
+  it('uses only explicit terminal partial quantity and keeps unpriced exposure unvalued', () => {
+    const priced = derivePositions(
+      [
+        order({
+          id: 20,
+          status: 'rejected',
+          qty: 50,
+          filled_qty: 25,
+          avg_fill_price: 100,
+        }),
+      ],
+      'NRML'
+    )
+    const unpriced = derivePositions(
+      [
+        order({
+          id: 21,
+          status: 'cancelled',
+          qty: 50,
+          filled_qty: 25,
+          avg_fill_price: null,
+        }),
+      ],
+      'NRML'
+    )
+
+    expect(priced[0]).toMatchObject({ net_qty: 25, avg_entry_price: 100 })
+    expect(unpriced[0]).toMatchObject({
+      net_qty: 25,
+      avg_entry_price: null,
+      unrealized_pnl: null,
+    })
+  })
+
   it('nets two legs on the same contract and averages only the open lots', () => {
     const positions = derivePositions(
       [
@@ -294,6 +567,30 @@ describe('derivePositions', () => {
 })
 
 describe('deriveTrades', () => {
+  it('treats explicit positive fill quantity as exposure for every status', () => {
+    const trades = deriveTrades([
+      order({ id: 30, status: 'open', filled_qty: 7, avg_fill_price: 101 }),
+      order({ id: 31, status: 'pending', filled_qty: 8, avg_fill_price: null }),
+      order({ id: 32, status: 'open', qty: 50, filled_qty: null, avg_fill_price: 101 }),
+      order({ id: 33, status: 'complete', qty: 9, filled_qty: null, avg_fill_price: 101 }),
+      order({ id: 34, status: 'complete', qty: 50, filled_qty: 0, avg_fill_price: 101 }),
+      order({
+        id: 35,
+        status: 'complete',
+        qty: 50,
+        filled_qty: Number.NaN,
+        avg_fill_price: 101,
+      }),
+    ])
+
+    expect(trades.map((trade) => [trade.order_id, trade.filled_qty])).toEqual([
+      [30, 7],
+      [31, 8],
+      [33, 9],
+    ])
+    expect(trades.find((trade) => trade.order_id === 31)?.avg_fill_price).toBeNull()
+  })
+
   it('keeps only fills and values each one at its executed price', () => {
     const trades = deriveTrades([
       order({ id: 1, avg_fill_price: 101.5, filled_qty: 50 }),
@@ -301,6 +598,51 @@ describe('deriveTrades', () => {
     ])
     expect(trades).toHaveLength(1)
     expect(trades[0].trade_value).toBeCloseTo(5075)
+  })
+
+  it('keeps priced and unpriced terminal partial fills without using requested quantity', () => {
+    const trades = deriveTrades([
+      order({
+        id: 3,
+        status: 'rejected',
+        qty: 50,
+        filled_qty: 25,
+        avg_fill_price: 103,
+      }),
+      order({
+        id: 4,
+        status: 'cancelled',
+        qty: 50,
+        filled_qty: 10,
+        avg_fill_price: null,
+      }),
+      order({
+        id: 5,
+        status: 'rejected',
+        qty: 50,
+        filled_qty: 0,
+        avg_fill_price: 103,
+      }),
+      order({
+        id: 6,
+        status: 'cancelled',
+        qty: 50,
+        filled_qty: null,
+        avg_fill_price: 103,
+      }),
+    ])
+
+    expect(trades.map((trade) => trade.order_id).sort()).toEqual([3, 4])
+    expect(trades.find((trade) => trade.order_id === 3)).toMatchObject({
+      filled_qty: 25,
+      avg_fill_price: 103,
+      trade_value: 2575,
+    })
+    expect(trades.find((trade) => trade.order_id === 4)).toMatchObject({
+      filled_qty: 10,
+      avg_fill_price: null,
+      trade_value: null,
+    })
   })
 })
 

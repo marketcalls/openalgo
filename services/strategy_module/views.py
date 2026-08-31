@@ -51,6 +51,7 @@ subprocess is created.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from database import strategy_module_db as store
@@ -82,11 +83,6 @@ _POSITION_TOTALS = {
     "total_unrealized_pnl": "unrealized_pnl",
     "total_today_realized_pnl": "today_realized_pnl",
 }
-
-# An order in one of these states never created a position, so its contract
-# must not pull a position row - possibly someone else's - into this view.
-_UNATTRIBUTABLE_STATUSES = frozenset({"rejected", "cancelled", "canceled"})
-
 
 # ---------------------------------------------------------------------------
 # Public views
@@ -198,19 +194,21 @@ def strategy_positions(strategy_id: int, api_key: str, run_id: int | None = None
         if mode is None:
             return {"status": "success", "data": []}
 
-        contracts = _traded_contracts(_order_rows(strategy_id, run_id))
         product = _strategy_product(strategy_id)
+        # The selected run owns the book mode, not the exposure boundary. A
+        # prior run can still own a position after a newer run starts.
+        local_owners = _unresolved_position_owners(
+            _order_rows(strategy_id, None), product
+        )
 
         ok, response = _fetch_positions(mode, api_key)
         if not ok:
             return _as_error(response, "Could not read the positions")
 
         payload = dict(response)
-        positions = [
-            position
-            for position in _rows(payload.get("data"))
-            if _matches_contract(position, contracts, product)
-        ]
+        positions = _overlay_broker_positions(
+            _rows(payload.get("data")), local_owners, product
+        )
         payload["data"] = positions
         for key, field in _POSITION_TOTALS.items():
             # Recomputed only where the service reported it, so the key set of
@@ -281,21 +279,201 @@ def _broker_order_ids(rows: list[dict[str, Any]]) -> set[str]:
 def _traded_contracts(rows: list[dict[str, Any]]) -> set[tuple[str, str]]:
     """The ``(symbol, exchange)`` pairs this strategy actually traded.
 
-    Only orders that reached the broker count, and not the ones it refused or
-    cancelled: neither ever created a position, and admitting their contract
-    would attribute someone else's position row to this strategy.
+    A complete order counts for legacy rows that predate fill-quantity capture.
+    For every other status only an explicit positive fill proves exposure: a
+    working order may already be partially filled and a rejection/cancellation
+    can apply only to its remainder.
     """
     contracts = set()
     for row in rows:
-        if not _text(row.get("broker_order_id")):
-            continue
-        if _text(row.get("status")).lower() in _UNATTRIBUTABLE_STATUSES:
-            continue
+        status = _text(row.get("status")).lower()
+        raw_fill = row.get("filled_qty")
+        try:
+            fill_qty = float(raw_fill)
+            explicit_fill = math.isfinite(fill_qty) and fill_qty > 0
+        except (TypeError, ValueError):
+            explicit_fill = False
+        if not explicit_fill:
+            # A complete row with no fill quantity is a legacy record. Broker
+            # acknowledgement plus a positive requested quantity is the only
+            # safe fallback. Explicit zero/invalid fill evidence must win.
+            legacy_complete = (
+                raw_fill is None
+                and status == "complete"
+                and bool(_text(row.get("broker_order_id")))
+                and _number(row.get("qty")) > 0
+            )
+            if not legacy_complete:
+                continue
         symbol = _text(row.get("symbol")).upper()
         exchange = _text(row.get("exchange")).upper()
         if symbol and exchange:
             contracts.add((symbol, exchange))
     return contracts
+
+
+def _filled_order_quantity(row: dict[str, Any]) -> int:
+    status = _text(row.get("status")).lower()
+    raw_fill = row.get("filled_qty")
+    try:
+        fill_qty = float(raw_fill)
+        if math.isfinite(fill_qty) and fill_qty > 0:
+            return int(fill_qty)
+    except (TypeError, ValueError):
+        pass
+    legacy_complete = (
+        raw_fill is None
+        and status == "complete"
+        and bool(_text(row.get("broker_order_id")))
+        and _number(row.get("qty")) > 0
+    )
+    return int(_number(row.get("qty"))) if legacy_complete else 0
+
+
+def _usable_price(value: Any) -> float | None:
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return None
+    return price if math.isfinite(price) and price > 0 else None
+
+
+def _position_contract_key(row: dict[str, Any], product: str) -> tuple[str, str, str]:
+    return (
+        _text(row.get("symbol")).upper(),
+        _text(row.get("exchange")).upper(),
+        _text(row.get("product")).upper() or product,
+    )
+
+
+def _unresolved_position_owners(
+    rows: list[dict[str, Any]], product: str
+) -> list[dict[str, Any]]:
+    """Lifetime local residuals, kept separate by durable position owner."""
+    groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for row in rows:
+        quantity = _filled_order_quantity(row)
+        action = _text(row.get("action")).upper()
+        contract = _position_contract_key(row, product)
+        if quantity <= 0 or action not in {"BUY", "SELL"} or not all(contract[:2]):
+            continue
+        position_ref = _text(row.get("position_ref")) or None
+        owner_key = (
+            row.get("run_id"),
+            row.get("leg_id"),
+            position_ref,
+            *contract,
+        )
+        groups.setdefault(owner_key, []).append({**row, "_filled_quantity": quantity})
+
+    residuals: list[dict[str, Any]] = []
+    for owner_key, owner_rows in groups.items():
+        lots: list[dict[str, Any]] = []
+        ordered = sorted(
+            owner_rows,
+            key=lambda row: (
+                _text(row.get("filled_at") or row.get("placed_at")),
+                int(row.get("id") or 0),
+            ),
+        )
+        for row in ordered:
+            side = 1 if _text(row.get("action")).upper() == "BUY" else -1
+            remaining = int(row["_filled_quantity"])
+            while remaining > 0 and lots and lots[0]["side"] != side:
+                matched = min(remaining, lots[0]["quantity"])
+                lots[0]["quantity"] -= matched
+                remaining -= matched
+                if lots[0]["quantity"] <= 0:
+                    lots.pop(0)
+            if remaining > 0:
+                lots.append(
+                    {
+                        "side": side,
+                        "quantity": remaining,
+                        "price": _usable_price(row.get("avg_fill_price")),
+                    }
+                )
+
+        net_quantity = sum(lot["side"] * lot["quantity"] for lot in lots)
+        if net_quantity == 0:
+            continue
+        gross_quantity = sum(lot["quantity"] for lot in lots)
+        priced = all(lot["price"] is not None for lot in lots)
+        average_price = (
+            sum(lot["quantity"] * lot["price"] for lot in lots) / gross_quantity
+            if priced and gross_quantity
+            else None
+        )
+        run_id, leg_id, position_ref, symbol, exchange, owner_product = owner_key
+        residuals.append(
+            {
+                "symbol": symbol,
+                "exchange": exchange,
+                "product": owner_product,
+                "quantity": net_quantity,
+                "average_price": average_price,
+                "ltp": None,
+                "pnl": None,
+                "source": "local/unreconciled",
+                "position_ref": position_ref,
+                "run_id": run_id,
+                "leg_id": leg_id,
+            }
+        )
+
+    return sorted(
+        residuals,
+        key=lambda row: (
+            row["symbol"],
+            row["exchange"],
+            row["product"],
+            int(row.get("run_id") or 0),
+            int(row.get("leg_id") or 0),
+            _text(row.get("position_ref")),
+        ),
+    )
+
+
+def _overlay_broker_positions(
+    broker_rows: list[dict[str, Any]],
+    local_owners: list[dict[str, Any]],
+    product: str,
+) -> list[dict[str, Any]]:
+    """Overlay attributable broker truth without erasing unmatched owners."""
+    owners_by_contract: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for owner in local_owners:
+        owners_by_contract.setdefault(_position_contract_key(owner, product), []).append(owner)
+
+    result: list[dict[str, Any]] = []
+    matched_contracts: set[tuple[str, str, str]] = set()
+    for broker_row in broker_rows:
+        contract = _position_contract_key(broker_row, product)
+        owners = owners_by_contract.get(contract, [])
+        if not owners:
+            continue
+        row_product = _text(broker_row.get("product")).upper()
+        if product and row_product and row_product != product:
+            continue
+        matched_contracts.add(contract)
+        if len(owners) == 1:
+            owner = owners[0]
+            result.append(
+                {
+                    **broker_row,
+                    "source": "broker",
+                    "position_ref": owner.get("position_ref"),
+                    "run_id": owner.get("run_id"),
+                    "leg_id": owner.get("leg_id"),
+                }
+            )
+        else:
+            # One contract row cannot be divided across multiple durable owners.
+            result.append({**broker_row, "source": "broker/shared"})
+
+    for contract, owners in owners_by_contract.items():
+        if contract not in matched_contracts or len(owners) > 1:
+            result.extend(owners)
+    return result
 
 
 def _strategy_product(strategy_id: int) -> str:

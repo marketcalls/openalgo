@@ -191,17 +191,56 @@ def test_stop_exits_the_current_run(client):
     assert stop.call_args[1]["reason"] == "manual"
 
 
+@pytest.mark.parametrize("route", ["stop", "close_all"])
+def test_stop_endpoints_report_accepted_but_still_pending_exits(client, route):
+    sid = _make(running_run_id=7)
+
+    with patch(
+        "services.strategy_module.engine.stop_run",
+        return_value={"ok": True, "stop_pending": True, "exits": [{"ok": True}]},
+    ):
+        response = client.post(f"/strategy/api/strategies/{sid}/{route}", json={})
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["stop_pending"] is True
+    assert body["exits"] == [{"ok": True}]
+
+
+@pytest.mark.parametrize("route", ["stop", "close_all"])
+def test_stop_endpoint_failures_preserve_pending_and_per_exit_detail(client, route):
+    sid = _make(running_run_id=7)
+    exits = [{"leg_id": 1, "ok": False, "error": "No API key"}]
+
+    with patch(
+        "services.strategy_module.engine.stop_run",
+        return_value={
+            "ok": False,
+            "stop_pending": True,
+            "error": "No API key is configured for this user",
+            "exits": exits,
+        },
+    ):
+        response = client.post(f"/strategy/api/strategies/{sid}/{route}", json={})
+
+    assert response.status_code == 409
+    body = response.get_json()
+    assert body["stop_pending"] is True
+    assert body["exits"] == exits
+
+
 def test_close_all_records_the_operator_intent_separately_from_the_stop(client):
-    # "The operator closed everything" reads differently from "the run stopped"
-    # when you are reconstructing a session afterwards.
+    # This event is recorded before the broker exits settle, so it must preserve
+    # operator intent without claiming that the account is already flat.
     sid = _make(running_run_id=7)
 
     with patch("services.strategy_module.engine.stop_run", return_value={"ok": True, "exits": []}):
         response = client.post(f"/strategy/api/strategies/{sid}/close_all", json={})
 
     assert response.status_code == 200
-    kinds = [event["kind"] for event in store.list_events(sid)]
-    assert "close_all_manual" in kinds
+    events = store.list_events(sid)
+    close_request = next(event for event in events if event["kind"] == "close_all_manual")
+    assert close_request["message"] == "Operator requested closure of all held legs"
 
 
 def test_closing_one_leg_reports_whether_the_run_is_now_flat(client):
@@ -250,6 +289,23 @@ def test_the_kill_switch_flattens_an_active_run_not_just_the_webhook(client):
     assert store.get_strategy(sid, USER).webhook_locked is True
 
 
+def test_the_kill_switch_does_not_report_stopped_while_exit_fills_are_pending(client):
+    sid = _make(running_run_id=7)
+
+    with patch(
+        "services.strategy_module.engine.stop_run",
+        return_value={"ok": True, "stop_pending": True, "exits": [{"ok": True}]},
+    ):
+        response = client.post(f"/strategy/api/strategies/{sid}/kill_switch", json={})
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["webhook_locked"] is True
+    assert body["run_stopped"] is False
+    assert body["stop_pending"] is True
+    assert "closed" not in body["message"].lower()
+
+
 def test_the_kill_switch_locks_even_when_there_is_nothing_to_flatten(client):
     sid = _make()
 
@@ -269,12 +325,16 @@ def test_the_kill_switch_still_locks_when_flattening_fails(client):
 
     with patch(
         "services.strategy_module.engine.stop_run",
-        return_value={"ok": False, "error": "Broker unreachable"},
+        return_value={"ok": False, "stop_pending": True, "error": "Broker unreachable"},
     ):
         response = client.post(f"/strategy/api/strategies/{sid}/kill_switch", json={})
 
     assert response.status_code == 200
     assert response.get_json()["run_stopped"] is False
+    assert response.get_json()["stop_pending"] is True
+    assert "exit fills pending" not in response.get_json()["message"].lower()
+    events = store.list_events(sid)
+    assert "exit fills pending" not in events[-1]["message"].lower()
     assert store.get_strategy(sid, USER).webhook_locked is True
 
 

@@ -9,12 +9,20 @@ These run against the configured database, like test_watchlist_db.py, and each
 test starts and ends with no rows for either test user.
 """
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from database import strategy_module_db as sm
 
 USER = "sm_test_user"
 OTHER = "sm_other_user"
+ORDER = {
+    "symbol": "NIFTY28MAY2624000CE",
+    "exchange": "NFO",
+    "action": "SELL",
+    "qty": 75,
+}
 
 
 def _config(name="Iron condor weekly", **overrides):
@@ -41,6 +49,54 @@ def _config(name="Iron condor weekly", **overrides):
     }
     config.update(overrides)
     return config
+
+
+def _run():
+    """Create a minimal run for persistence-focused tests."""
+    strategy, error = sm.create_strategy(USER, _config())
+    assert error is None
+    return sm.create_run(strategy["id"], "sandbox", "zerodha")
+
+
+def _filled_order(
+    run_id,
+    leg_id,
+    kind,
+    action,
+    *,
+    requested_qty,
+    status,
+    avg_price,
+    filled_qty,
+    position_ref="auto",
+    placed_at=None,
+):
+    """Persist one literal broker fill fact for reconciliation tests."""
+    row = sm.record_order(
+        run_id,
+        leg_id,
+        kind,
+        {
+            **ORDER,
+            "action": action,
+            "qty": requested_qty,
+            "position_ref": (
+                f"position-{leg_id}" if position_ref == "auto" else position_ref
+            ),
+            "status": "open",
+        },
+    )
+    assert row is not None
+    assert sm.update_order(
+        row.id,
+        status=status,
+        avg_fill_price=avg_price,
+        filled_qty=filled_qty,
+    )
+    if placed_at is not None:
+        row.placed_at = placed_at
+        sm.db_session.commit()
+    return row
 
 
 @pytest.fixture(autouse=True)
@@ -287,6 +343,573 @@ def test_the_kill_switch_can_be_engaged_while_running():
 # ---------------------------------------------------------------------------
 
 
+def test_order_round_trip_preserves_position_ref():
+    run = _run()
+
+    row = sm.record_order(run.id, 1, "entry", {**ORDER, "position_ref": "pos-a"})
+
+    assert sm.order_to_dict(row)["position_ref"] == "pos-a"
+
+
+def test_request_run_stop_is_pending_until_finish():
+    run = _run()
+
+    assert sm.request_run_stop(run.id, "manual")
+
+    pending = sm.run_to_dict(sm.get_run(run.id))
+    assert pending["stopped_at"] is None
+    assert pending["stop_requested_reason"] == "manual"
+    assert pending["stop_requested_at"] is not None
+
+    sm.finish_run(run.id, "manual")
+
+    complete = sm.run_to_dict(sm.get_run(run.id))
+    assert complete["stop_reason"] == "manual"
+    assert complete["stop_requested_reason"] is None
+
+
+def test_finish_and_release_is_one_atomic_owner_checked_transition():
+    created, error = sm.create_strategy(USER, _config())
+    assert error is None
+    run = sm.create_run(created["id"], "sandbox", "zerodha")
+    assert sm.set_strategy_status(created["id"], "running", run.id)
+
+    won = sm.finish_run_and_release_strategy(
+        run.id,
+        created["id"],
+        "manual",
+        pnl_realized=125.0,
+        pnl_peak=150.0,
+        pnl_trough=-10.0,
+    )
+
+    assert won is True
+    durable = sm.get_run(run.id)
+    assert durable.stopped_at is not None
+    assert float(durable.pnl_realized) == pytest.approx(125.0)
+    strategy = sm.get_strategy(created["id"], USER)
+    assert strategy.status == "stopped"
+    assert strategy.current_run_id is None
+
+    # The run and strategy have one terminal owner. A duplicate finalizer
+    # loses without changing either row a second time.
+    assert sm.finish_run_and_release_strategy(run.id, created["id"], "manual") is False
+
+
+def test_finish_and_release_rolls_back_run_when_strategy_owns_a_different_run():
+    created, error = sm.create_strategy(USER, _config())
+    assert error is None
+    first = sm.create_run(created["id"], "sandbox", "zerodha")
+    current = sm.create_run(created["id"], "sandbox", "zerodha")
+    assert sm.set_strategy_status(created["id"], "running", current.id)
+
+    won = sm.finish_run_and_release_strategy(first.id, created["id"], "manual")
+
+    assert won is False
+    assert sm.get_run(first.id).stopped_at is None
+    strategy = sm.get_strategy(created["id"], USER)
+    assert strategy.status == "running"
+    assert strategy.current_run_id == current.id
+
+
+def test_detached_finish_cannot_close_current_but_can_close_an_older_residual():
+    created, error = sm.create_strategy(USER, _config())
+    assert error is None
+    residual = sm.create_run(created["id"], "sandbox", "zerodha")
+    current = sm.create_run(created["id"], "sandbox", "zerodha")
+    assert residual is not None and current is not None
+    residual_id = residual.id
+    current_id = current.id
+    assert sm.set_strategy_status(created["id"], "running", current_id)
+
+    assert sm.finish_detached_run(current_id, created["id"], "manual") is False
+    assert sm.get_run(current_id).stopped_at is None
+
+    assert sm.finish_detached_run(
+        residual_id,
+        created["id"],
+        "manual",
+        pnl_realized=75.0,
+    ) is True
+    assert sm.get_run(residual_id).stopped_at is not None
+    assert float(sm.get_run(residual_id).pnl_realized) == pytest.approx(75.0)
+    strategy = sm.get_strategy(created["id"], USER)
+    assert strategy.current_run_id == current_id
+    assert strategy.status == "running"
+
+
+def test_unlinked_run_cleanup_releases_only_an_unlinked_strategy_claim():
+    created, error = sm.create_strategy(USER, _config())
+    assert error is None
+    strategy_id = created["id"]
+    assert sm.claim_strategy_for_run(strategy_id)
+    run = sm.create_run(strategy_id, "sandbox", "zerodha")
+    assert run is not None
+    run_id = run.id
+
+    assert sm.finish_unlinked_run_and_release_claim(run_id, strategy_id, "error") is True
+    assert sm.get_run(run_id).stopped_at is not None
+    strategy = sm.get_strategy(strategy_id, USER)
+    assert strategy.status == "stopped"
+    assert strategy.current_run_id is None
+
+    # A stale cleanup can close its own detached row, but it must not release
+    # a newer run that has since acquired exact strategy ownership.
+    assert sm.claim_strategy_for_run(strategy_id)
+    stale = sm.create_run(strategy_id, "sandbox", "zerodha")
+    current = sm.create_run(strategy_id, "sandbox", "zerodha")
+    assert stale is not None and current is not None
+    stale_id = stale.id
+    current_id = current.id
+    assert sm.set_strategy_status(strategy_id, "running", current_id)
+
+    assert sm.finish_unlinked_run_and_release_claim(stale_id, strategy_id, "error") is False
+    assert sm.get_run(stale_id).stopped_at is not None
+    assert sm.get_run(current_id).stopped_at is None
+    strategy = sm.get_strategy(strategy_id, USER)
+    assert strategy.status == "running"
+    assert strategy.current_run_id == current_id
+
+
+def test_ack_binding_is_idempotent_and_refuses_target_or_broker_id_conflicts():
+    run = _run()
+    target = sm.record_order(run.id, 1, "entry", {**ORDER, "status": "pending"})
+    other = sm.record_order(
+        run.id,
+        2,
+        "entry",
+        {**ORDER, "symbol": "NIFTY28MAY2624100CE", "status": "pending"},
+    )
+    assert target is not None and other is not None
+
+    assert (
+        sm.bind_order_acknowledgement(
+            target.id,
+            run.id,
+            1,
+            broker_order_id="ACK-EXACT",
+            status="open",
+            reject_reason=None,
+        )
+        == "repaired"
+    )
+    assert (
+        sm.bind_order_acknowledgement(
+            target.id,
+            run.id,
+            1,
+            broker_order_id="ACK-EXACT",
+            status="open",
+            reject_reason=None,
+        )
+        == "already_bound"
+    )
+
+    # Exact target row already owns another broker id: never overwrite it.
+    assert (
+        sm.bind_order_acknowledgement(
+            target.id,
+            run.id,
+            1,
+            broker_order_id="ACK-CONFLICT",
+            status="open",
+            reject_reason=None,
+        )
+        == "conflict"
+    )
+    assert sm.get_order(target.id).broker_order_id == "ACK-EXACT"
+
+    # A later terminal fact is stronger and must not be reopened by replaying
+    # the original accepted acknowledgement event.
+    assert sm.update_order(target.id, status="complete", filled_qty=75)
+    assert (
+        sm.bind_order_acknowledgement(
+            target.id,
+            run.id,
+            1,
+            broker_order_id="ACK-EXACT",
+            status="open",
+            reject_reason=None,
+        )
+        == "already_bound"
+    )
+    assert sm.get_order(target.id).status == "complete"
+
+    # A broker id already bound to another row cannot be attached here.
+    assert sm.update_order(other.id, broker_order_id="ACK-OTHER")
+    third = sm.record_order(
+        run.id,
+        3,
+        "entry",
+        {**ORDER, "symbol": "NIFTY28MAY2624200CE", "status": "pending"},
+    )
+    assert third is not None
+    assert (
+        sm.bind_order_acknowledgement(
+            third.id,
+            run.id,
+            3,
+            broker_order_id="ACK-OTHER",
+            status="open",
+            reject_reason=None,
+        )
+        == "conflict"
+    )
+    unchanged = sm.get_order(third.id)
+    assert unchanged.broker_order_id is None
+    assert unchanged.status == "pending"
+
+
+def test_rejected_ack_binding_can_terminally_repair_an_exact_pending_row_without_broker_id():
+    run = _run()
+    row = sm.record_order(run.id, 1, "entry", {**ORDER, "status": "pending"})
+    assert row is not None
+
+    assert (
+        sm.bind_order_acknowledgement(
+            row.id,
+            run.id,
+            1,
+            broker_order_id=None,
+            status="rejected",
+            reject_reason="margin refused",
+        )
+        == "repaired"
+    )
+    durable = sm.get_order(row.id)
+    assert durable.status == "rejected"
+    assert durable.broker_order_id is None
+    assert durable.reject_reason == "margin refused"
+
+
+@pytest.mark.parametrize(
+    ("entry_status", "exit_status", "entry_action", "exit_action", "expected"),
+    [
+        ("cancelled", "rejected", "BUY", "SELL", 12.0),
+        ("rejected", "cancelled", "SELL", "BUY", -12.0),
+    ],
+)
+def test_reconcile_run_pnl_uses_exact_terminal_partial_entry_and_exit_quantities(
+    entry_status,
+    exit_status,
+    entry_action,
+    exit_action,
+    expected,
+):
+    run = _run()
+    _filled_order(
+        run.id,
+        1,
+        "entry",
+        entry_action,
+        requested_qty=40,
+        status=entry_status,
+        avg_price=100.0,
+        filled_qty=4,
+    )
+    _filled_order(
+        run.id,
+        1,
+        "exit_close_all",
+        exit_action,
+        requested_qty=30,
+        status=exit_status,
+        avg_price=104.0,
+        filled_qty=3,
+    )
+
+    reconciled = sm.reconcile_run_pnl(run.id)
+
+    assert reconciled == pytest.approx(expected)
+    assert float(sm.get_run(run.id).pnl_realized) == pytest.approx(expected)
+
+
+def test_reconcile_run_pnl_keeps_complete_fills_without_inventing_dead_fill_facts():
+    run = _run()
+    # Existing complete-row behavior: a missing filled quantity means the
+    # broker completed the requested two units, for +10 on this long.
+    _filled_order(
+        run.id,
+        1,
+        "entry",
+        "BUY",
+        requested_qty=2,
+        status="complete",
+        avg_price=10.0,
+        filled_qty=None,
+    )
+    _filled_order(
+        run.id,
+        1,
+        "exit_close_all",
+        "SELL",
+        requested_qty=2,
+        status="complete",
+        avg_price=15.0,
+        filled_qty=None,
+    )
+    # A terminal zero-fill must not fall back to the requested 100 units.
+    _filled_order(
+        run.id,
+        2,
+        "entry",
+        "BUY",
+        requested_qty=100,
+        status="cancelled",
+        avg_price=20.0,
+        filled_qty=0,
+    )
+    _filled_order(
+        run.id,
+        2,
+        "exit_close_all",
+        "SELL",
+        requested_qty=100,
+        status="rejected",
+        avg_price=25.0,
+        filled_qty=0,
+    )
+    # Quantity without a usable terminal entry price proves exposure, but it
+    # cannot create valued P&L.
+    _filled_order(
+        run.id,
+        3,
+        "entry",
+        "BUY",
+        requested_qty=50,
+        status="rejected",
+        avg_price=0.0,
+        filled_qty=3,
+    )
+    _filled_order(
+        run.id,
+        3,
+        "exit_close_all",
+        "SELL",
+        requested_qty=50,
+        status="cancelled",
+        avg_price=25.0,
+        filled_qty=3,
+    )
+    # A usable entry plus an unpriced dead exit likewise cannot invent P&L.
+    _filled_order(
+        run.id,
+        4,
+        "entry",
+        "BUY",
+        requested_qty=4,
+        status="complete",
+        avg_price=30.0,
+        filled_qty=4,
+    )
+    _filled_order(
+        run.id,
+        4,
+        "exit_close_all",
+        "SELL",
+        requested_qty=40,
+        status="cancelled",
+        avg_price=0.0,
+        filled_qty=2,
+    )
+    # One priced dead partial closes exactly two requested-of-99 short units,
+    # adding +10 rather than +495.
+    _filled_order(
+        run.id,
+        5,
+        "entry",
+        "SELL",
+        requested_qty=99,
+        status="complete",
+        avg_price=50.0,
+        filled_qty=2,
+    )
+    _filled_order(
+        run.id,
+        5,
+        "exit_close_all",
+        "BUY",
+        requested_qty=99,
+        status="rejected",
+        avg_price=45.0,
+        filled_qty=2,
+    )
+
+    reconciled = sm.reconcile_run_pnl(run.id)
+
+    assert reconciled == pytest.approx(20.0)
+    assert float(sm.get_run(run.id).pnl_realized) == pytest.approx(20.0)
+
+
+def test_reconcile_run_pnl_separates_incarnations_and_caps_shuffled_exits():
+    run = _run()
+    base = datetime(2026, 8, 30, tzinfo=UTC).replace(tzinfo=None)
+
+    # Insert deliberately out of chronology. Reconciliation must use durable
+    # placement order inside each exact owner rather than query row order.
+    _filled_order(
+        run.id,
+        1,
+        "exit_signal",
+        "SELL",
+        requested_qty=4,
+        status="complete",
+        avg_price=110.0,
+        filled_qty=4,
+        position_ref="long-owner",
+        placed_at=base + timedelta(minutes=3),
+    )
+    _filled_order(
+        run.id,
+        1,
+        "exit_signal",
+        "BUY",
+        requested_qty=3,
+        status="complete",
+        avg_price=110.0,
+        filled_qty=3,
+        position_ref="short-owner",
+        placed_at=base + timedelta(minutes=5),
+    )
+    _filled_order(
+        run.id,
+        1,
+        "entry",
+        "BUY",
+        requested_qty=4,
+        status="complete",
+        avg_price=100.0,
+        filled_qty=4,
+        position_ref="long-owner",
+        placed_at=base + timedelta(minutes=1),
+    )
+    _filled_order(
+        run.id,
+        1,
+        "entry",
+        "SELL",
+        requested_qty=3,
+        status="complete",
+        avg_price=120.0,
+        filled_qty=3,
+        position_ref="short-owner",
+        placed_at=base + timedelta(minutes=4),
+    )
+    _filled_order(
+        run.id,
+        1,
+        "exit_signal",
+        "SELL",
+        requested_qty=2,
+        status="complete",
+        avg_price=105.0,
+        filled_qty=2,
+        position_ref="long-owner",
+        placed_at=base + timedelta(minutes=2),
+    )
+
+    reconciled = sm.reconcile_run_pnl(run.id)
+
+    # Long: 2 @ +5, then only the remaining 2 @ +10. Short: 3 @ +10.
+    assert reconciled == pytest.approx(60.0)
+    assert float(sm.get_run(run.id).pnl_realized) == pytest.approx(60.0)
+
+
+def test_reconcile_run_pnl_keeps_overlapping_opposite_referenced_owners_separate():
+    run = _run()
+    base = datetime(2026, 8, 30, tzinfo=UTC).replace(tzinfo=None)
+    facts = [
+        ("entry", "BUY", 100.0, "long-owner", 1),
+        ("entry", "SELL", 120.0, "short-owner", 2),
+        ("exit_signal", "BUY", 110.0, "short-owner", 3),
+        ("exit_signal", "SELL", 110.0, "long-owner", 4),
+    ]
+    for kind, action, price, position_ref, minute in facts:
+        _filled_order(
+            run.id,
+            1,
+            kind,
+            action,
+            requested_qty=1,
+            status="complete",
+            avg_price=price,
+            filled_qty=1,
+            position_ref=position_ref,
+            placed_at=base + timedelta(minutes=minute),
+        )
+
+    reconciled = sm.reconcile_run_pnl(run.id)
+
+    assert reconciled == pytest.approx(20.0)
+    assert float(sm.get_run(run.id).pnl_realized) == pytest.approx(20.0)
+
+
+def test_reconcile_run_pnl_uses_fifo_for_legacy_rows_without_crossing_references():
+    run = _run()
+    base = datetime(2026, 8, 30, tzinfo=UTC).replace(tzinfo=None)
+
+    facts = [
+        ("exit_signal", "SELL", 10, 25.0, None, 4),
+        ("entry", "BUY", 1, 100.0, "referenced-owner", 5),
+        ("entry", "BUY", 2, 10.0, None, 1),
+        ("exit_signal", "SELL", 1, 110.0, "referenced-owner", 6),
+        ("entry", "BUY", 2, 20.0, None, 3),
+        ("exit_signal", "SELL", 1, 12.0, None, 2),
+    ]
+    for kind, action, qty, price, position_ref, minute in facts:
+        _filled_order(
+            run.id,
+            1,
+            kind,
+            action,
+            requested_qty=qty,
+            status="complete",
+            avg_price=price,
+            filled_qty=qty,
+            position_ref=position_ref,
+            placed_at=base + timedelta(minutes=minute),
+        )
+
+    reconciled = sm.reconcile_run_pnl(run.id)
+
+    # Legacy FIFO: +2, then +15 and +10 (the exit is capped at three).
+    # The referenced owner is reconciled independently for +10.
+    assert reconciled == pytest.approx(37.0)
+
+
+def test_reconcile_run_pnl_preserves_authoritative_value_when_ownership_is_ambiguous():
+    run = _run()
+    base = datetime(2026, 8, 30, tzinfo=UTC).replace(tzinfo=None)
+    _filled_order(
+        run.id,
+        1,
+        "exit_signal",
+        "SELL",
+        requested_qty=1,
+        status="complete",
+        avg_price=110.0,
+        filled_qty=1,
+        position_ref="ambiguous-owner",
+        placed_at=base,
+    )
+    _filled_order(
+        run.id,
+        1,
+        "entry",
+        "BUY",
+        requested_qty=1,
+        status="complete",
+        avg_price=100.0,
+        filled_qty=1,
+        position_ref="ambiguous-owner",
+        placed_at=base + timedelta(minutes=1),
+    )
+    sm.finish_run(run.id, "manual", pnl_realized=73.0)
+
+    assert sm.reconcile_run_pnl(run.id) is None
+    assert float(sm.get_run(run.id).pnl_realized) == pytest.approx(73.0)
+
+
 def test_a_run_records_its_final_numbers_on_stop():
     created, _ = sm.create_strategy(USER, _config())
     run = sm.create_run(created["id"], "sandbox", "zerodha", trigger_source="manual")
@@ -301,6 +924,20 @@ def test_a_run_records_its_final_numbers_on_stop():
     assert stopped.stop_reason == "overall_target"
     assert float(stopped.pnl_realized) == 5230.0
     assert stopped.id not in [r.id for r in sm.list_open_runs()]
+
+
+def test_repeated_stop_request_preserves_the_first_cause_and_timestamp():
+    run = _run()
+
+    assert sm.request_run_stop(run.id, "overall_target") is True
+    first = sm.get_run(run.id)
+    first_requested_at = first.stop_requested_at
+
+    assert sm.request_run_stop(run.id, "manual") is True
+    repeated = sm.get_run(run.id)
+
+    assert repeated.stop_requested_at == first_requested_at
+    assert repeated.stop_requested_reason == "overall_target"
 
 
 def test_orders_are_recorded_at_placement_and_updated_on_fill():
@@ -338,6 +975,16 @@ def test_orders_are_recorded_at_placement_and_updated_on_fill():
     # filled_at is stamped by the store when status first reaches complete,
     # so recovery can tell a fill apart from an order still in flight.
     assert rows[0]["filled_at"] is not None
+
+
+def test_terminal_order_transition_has_one_winner():
+    run = _run()
+    order = sm.record_order(run.id, 1, "exit_signal", ORDER)
+    transition = getattr(sm, "transition_order_terminal", None)
+
+    assert callable(transition)
+    assert transition(order.id, "rejected", reject_reason="broker refused") is True
+    assert transition(order.id, "rejected", reject_reason="duplicate frame") is False
 
 
 def test_events_are_listed_newest_first_and_filter_by_kind():

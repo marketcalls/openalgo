@@ -12,6 +12,7 @@ missing timezones, missing job defaults, and an intraday strategy whose
 """
 
 from datetime import time as dt_time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -19,9 +20,10 @@ import pytest
 # restx_api first: see the note in test_strategy_module_order_dispatch.py.
 import restx_api  # noqa: F401
 from database import strategy_module_db as store
-from services.strategy_module import engine
+from services.strategy_module import ack_reconciliation, engine, recovery, state
 from services.strategy_module import scheduler as sched
 from services.strategy_module.engine import StartResult
+from services.strategy_module.order_dispatch import DispatchResult
 
 USER = "scheduler_test_user"
 
@@ -72,6 +74,8 @@ def _make(config=None):
 
 def _purge():
     for row in store.list_strategies(USER):
+        for run in store.list_runs(row["id"]):
+            state.clear_run_state(run["id"])
         store.set_strategy_status(row["id"], "stopped", None)
         store.delete_strategy(row["id"], USER)
     store.clear_strategy_module_cache()
@@ -124,6 +128,14 @@ def test_start_and_shutdown_are_idempotent():
     sched.shutdown()
     sched.shutdown()
     assert sched.get_scheduler() is None
+
+
+def test_start_installs_one_shared_pending_stop_reconciliation_job():
+    job = sched.get_scheduler().get_job(sched.PENDING_STOP_RECONCILE_JOB_ID)
+
+    assert job is not None
+    assert job.max_instances == 1
+    assert job.coalesce is True
 
 
 # ---------------------------------------------------------------------------
@@ -466,10 +478,81 @@ def test_the_stop_job_squares_off_the_current_run():
     sid = _make()
     store.set_strategy_status(sid, "running", 55)
 
-    with patch.object(engine, "stop_run", return_value={"ok": True}) as stop:
+    with (
+        patch.object(engine, "stop_run", return_value={"ok": True, "stop_pending": False}) as stop,
+        patch.object(sched.logger, "info") as info,
+    ):
         sched.run_scheduled_stop(sid)
 
     stop.assert_called_once_with(55, USER, reason="scheduler")
+    assert "closed" in info.call_args.args[0].lower()
+
+
+def test_the_stop_job_reports_accepted_pending_separately_from_confirmed_stopped():
+    sid = _make()
+    store.set_strategy_status(sid, "running", 56)
+
+    with (
+        patch.object(
+            engine,
+            "stop_run",
+            return_value={"ok": True, "stop_pending": True, "exits": [{"ok": True}]},
+        ),
+        patch.object(sched.logger, "info") as info,
+    ):
+        sched.run_scheduled_stop(sid)
+
+    rendered = " ".join(str(part) for part in info.call_args.args).lower()
+    assert "pending" in rendered
+    assert "closed" not in rendered
+
+
+def test_the_stop_job_logs_from_scalars_after_engine_session_cleanup():
+    sid = _make()
+    store.set_strategy_status(sid, "running", 58)
+
+    def stop_then_cleanup(*_args, **_kwargs):
+        store.record_event(sid, USER, "run_stopped", "scheduler completed")
+        store.db_session.remove()
+        return {"ok": True, "stop_pending": False, "exits": []}
+
+    with (
+        patch.object(engine, "stop_run", side_effect=stop_then_cleanup) as stop,
+        patch.object(sched.logger, "info") as info,
+        patch.object(sched.logger, "exception") as exception,
+    ):
+        sched.run_scheduled_stop(sid)
+
+    stop.assert_called_once_with(58, USER, reason="scheduler")
+    rendered = " ".join(str(part) for part in info.call_args.args).lower()
+    assert "closed" in rendered
+    assert 58 in info.call_args.args
+    exception.assert_not_called()
+
+
+def test_the_stop_job_reports_refused_pending_as_retryable_not_accepted():
+    sid = _make()
+    store.set_strategy_status(sid, "running", 57)
+
+    with (
+        patch.object(
+            engine,
+            "stop_run",
+            return_value={
+                "ok": False,
+                "stop_pending": True,
+                "error": "No API key",
+                "exits": [],
+            },
+        ),
+        patch.object(sched.logger, "error") as error,
+    ):
+        sched.run_scheduled_stop(sid)
+
+    rendered = " ".join(str(part) for part in error.call_args.args).lower()
+    assert "refused" in rendered
+    assert "pending" in rendered
+    assert "closed" not in rendered
 
 
 def test_the_stop_job_is_a_no_op_when_nothing_is_running():
@@ -479,6 +562,590 @@ def test_the_stop_job_is_a_no_op_when_nothing_is_running():
         sched.run_scheduled_stop(sid)
 
     stop.assert_not_called()
+
+
+def test_periodic_reconciliation_self_heals_a_dropped_terminal_update_after_restart():
+    """Recovery restores the working entry; the shared job polls its durable stop."""
+    sid = _make()
+    run = store.create_run(sid, "sandbox", "sandbox")
+    assert run is not None
+    assert store.set_strategy_status(sid, "running", run.id)
+    entry = store.record_order(
+        run.id,
+        1,
+        "entry",
+        {
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "SELL",
+            "qty": 75,
+            "product": "NRML",
+            "pricetype": "MARKET",
+            "status": "open",
+            "broker_order_id": "RECOVER-WORKING",
+            "position_ref": "restart-owner",
+        },
+    )
+    assert entry is not None
+    assert store.request_run_stop(run.id, "scheduler")
+
+    recovered = recovery.recover_run(run.id)
+    assert recovered.ok is True
+    assert state.get_run_state(run.id)["stopping"] is True
+
+    with (
+        patch.object(engine, "_api_key_for", return_value="scheduler-key"),
+        patch.object(
+            engine.order_dispatch,
+            "cancel_order",
+            return_value=DispatchResult(
+                ok=True, broker_order_id="RECOVER-WORKING", response={}
+            ),
+            create=True,
+        ) as cancel,
+        patch.object(
+            engine.order_dispatch,
+            "fetch_order_status",
+            return_value=SimpleNamespace(
+                ok=True,
+                order={
+                    "orderid": "RECOVER-WORKING",
+                    "order_status": "cancelled",
+                    "filled_quantity": 0,
+                    "average_price": 0,
+                    "rejection_reason": "",
+                },
+                error=None,
+            ),
+            create=True,
+        ) as poll,
+        patch.object(engine, "_unsubscribe_run"),
+    ):
+        result = sched.reconcile_pending_stops()
+
+    assert result == {"examined": 1, "pending": 0, "finalised": 1, "failed": 0}
+    cancel.assert_called_once_with(
+        mode="sandbox", api_key="scheduler-key", broker_order_id="RECOVER-WORKING"
+    )
+    poll.assert_called_once_with(
+        mode="sandbox", api_key="scheduler-key", broker_order_id="RECOVER-WORKING"
+    )
+    assert store.get_run(run.id).stopped_at is not None
+    assert state.get_run_state(run.id) is None
+
+
+def test_pending_stop_repairs_an_accepted_entry_ack_before_cancel_and_poll():
+    sid = _make()
+    run = store.create_run(sid, "sandbox", "sandbox")
+    assert run is not None
+    run_id = run.id
+    assert store.set_strategy_status(sid, "running", run_id)
+    entry = store.record_order(
+        run_id,
+        1,
+        "entry",
+        {
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "SELL",
+            "qty": 75,
+            "product": "NRML",
+            "pricetype": "MARKET",
+            "status": "pending",
+            "position_ref": "ack-entry-owner",
+        },
+    )
+    assert entry is not None
+    store.record_event(
+        sid,
+        USER,
+        "order_ack_unrecorded",
+        "Accepted acknowledgement is pending automatic reconciliation",
+        run_id=run_id,
+        leg_id=1,
+        severity="critical",
+        payload={
+            "version": 1,
+            "order_id": entry.id,
+            "run_id": run_id,
+            "leg_id": 1,
+            "broker_order_id": "ACK-PENDING-ENTRY",
+            "accepted": True,
+            "status": "open",
+            "reject_reason": None,
+        },
+    )
+    assert store.request_run_stop(run_id, "scheduler")
+    assert recovery.recover_run(run_id).ok is True
+
+    with (
+        patch.object(engine, "_api_key_for", return_value="scheduler-key"),
+        patch.object(
+            engine.order_dispatch,
+            "cancel_order",
+            return_value=DispatchResult(
+                ok=True,
+                broker_order_id="ACK-PENDING-ENTRY",
+                response={},
+            ),
+            create=True,
+        ) as cancel,
+        patch.object(
+            engine.order_dispatch,
+            "fetch_order_status",
+            return_value=SimpleNamespace(
+                ok=True,
+                order={
+                    "orderid": "ACK-PENDING-ENTRY",
+                    "order_status": "cancelled",
+                    "filled_quantity": 0,
+                    "average_price": 0,
+                    "rejection_reason": "",
+                },
+                error=None,
+            ),
+            create=True,
+        ) as poll,
+        patch.object(engine.order_dispatch, "dispatch_order") as duplicate_exit,
+        patch.object(engine, "_unsubscribe_run"),
+    ):
+        result = sched.reconcile_pending_stops()
+
+    assert result == {"examined": 1, "pending": 0, "finalised": 1, "failed": 0}
+    cancel.assert_called_once_with(
+        mode="sandbox",
+        api_key="scheduler-key",
+        broker_order_id="ACK-PENDING-ENTRY",
+    )
+    poll.assert_called_once_with(
+        mode="sandbox",
+        api_key="scheduler-key",
+        broker_order_id="ACK-PENDING-ENTRY",
+    )
+    duplicate_exit.assert_not_called()
+    assert store.get_order(entry.id).status == "cancelled"
+    assert store.get_run(run_id).stopped_at is not None
+
+
+def test_periodic_repair_manages_active_run_fill_after_ack_write_failure():
+    sid = _make()
+    run = store.create_run(sid, "sandbox", "sandbox")
+    assert run is not None
+    run_id = run.id
+    assert store.set_strategy_status(sid, "running", run_id)
+    state.init_run_state(
+        run_id,
+        sid,
+        [
+            {
+                "leg_id": 1,
+                "position": "S",
+                "symbol": "NIFTY28MAY2624000CE",
+                "exchange": "NFO",
+                "lots": 1,
+                "quantity": 75,
+                "position_ref": "active-ack-owner",
+            }
+        ],
+    )
+    entry = store.record_order(
+        run_id,
+        1,
+        "entry",
+        {
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "SELL",
+            "qty": 75,
+            "product": "NRML",
+            "pricetype": "MARKET",
+            "status": "pending",
+            "position_ref": "active-ack-owner",
+        },
+    )
+    assert entry is not None
+    with state.run_state(run_id) as live:
+        live["legs"]["1"]["entry_order_id"] = entry.id
+        live["legs"]["1"]["entry_status"] = "open"
+        live["legs"]["1"]["status"] = "open"
+    store.record_event(
+        sid,
+        USER,
+        "order_ack_unrecorded",
+        "Accepted acknowledgement is pending automatic reconciliation",
+        run_id=run_id,
+        leg_id=1,
+        severity="critical",
+        payload={
+            "version": 1,
+            "order_id": entry.id,
+            "run_id": run_id,
+            "leg_id": 1,
+            "broker_order_id": "ACTIVE-ACK-FILL",
+            "accepted": True,
+            "status": "open",
+            "reject_reason": None,
+        },
+    )
+
+    with (
+        patch.object(ack_reconciliation, "_api_key_for", return_value="scheduler-key"),
+        patch.object(
+            ack_reconciliation.order_dispatch,
+            "fetch_order_status",
+            return_value=SimpleNamespace(
+                ok=True,
+                order={
+                    "orderid": "ACTIVE-ACK-FILL",
+                    "order_status": "complete",
+                    "filled_quantity": 75,
+                    "average_price": 102.25,
+                    "rejection_reason": "",
+                },
+                error=None,
+            ),
+            create=True,
+        ) as poll,
+    ):
+        result = sched.reconcile_pending_stops()
+
+    assert result == {"examined": 0, "pending": 0, "finalised": 0, "failed": 0}
+    poll.assert_called_once_with(
+        mode="sandbox", api_key="scheduler-key", broker_order_id="ACTIVE-ACK-FILL"
+    )
+    durable = store.get_order(entry.id)
+    assert durable.broker_order_id == "ACTIVE-ACK-FILL"
+    assert durable.status == "complete"
+    assert durable.filled_qty == 75
+    live = state.get_run_state(run_id)["legs"]["1"]
+    assert live["entry_status"] == "complete"
+    assert live["entry_avg"] == pytest.approx(102.25)
+    assert live["qty"] == 75
+    assert store.get_run(run_id).stop_requested_reason is None
+
+
+def test_periodic_ack_repair_rotates_through_all_open_runs_with_a_bounded_batch():
+    order_ids = []
+    for index in range(3):
+        sid = _make(_config(name=f"Ack rotation {index}"))
+        run = store.create_run(sid, "sandbox", "sandbox")
+        assert run is not None
+        assert store.set_strategy_status(sid, "running", run.id)
+        entry = store.record_order(
+            run.id,
+            1,
+            "entry",
+            {
+                "symbol": "NIFTY28MAY2624000CE",
+                "exchange": "NFO",
+                "action": "SELL",
+                "qty": 75,
+                "product": "NRML",
+                "pricetype": "MARKET",
+                "status": "pending",
+            },
+        )
+        assert entry is not None
+        store.record_event(
+            sid,
+            USER,
+            "order_ack_unrecorded",
+            "Rejected acknowledgement is pending automatic reconciliation",
+            run_id=run.id,
+            leg_id=1,
+            severity="critical",
+            payload={
+                "version": 1,
+                "order_id": entry.id,
+                "run_id": run.id,
+                "leg_id": 1,
+                "broker_order_id": None,
+                "accepted": False,
+                "status": "rejected",
+                "reject_reason": "broker refused",
+            },
+        )
+        order_ids.append(entry.id)
+
+    ack_reconciliation._open_run_cursor = 0
+    observed = []
+    for _ in range(3):
+        summary = ack_reconciliation.reconcile_open_runs(
+            run_limit=1,
+            status_poll_limit=0,
+        )
+        observed.append(summary.examined)
+
+    assert observed == [1, 1, 1]
+    assert [store.get_order(order_id).status for order_id in order_ids] == [
+        "rejected",
+        "rejected",
+        "rejected",
+    ]
+
+
+def _pending_stop_with_working_exit(*, broker_order_id: str):
+    sid = _make()
+    run = store.create_run(sid, "sandbox", "sandbox")
+    assert run is not None
+    assert store.set_strategy_status(sid, "running", run.id)
+    position_ref = "working-exit-owner"
+    entry = store.record_order(
+        run.id,
+        1,
+        "entry",
+        {
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "SELL",
+            "qty": 75,
+            "product": "NRML",
+            "pricetype": "MARKET",
+            "status": "complete",
+            "avg_fill_price": 100.0,
+            "filled_qty": 75,
+            "broker_order_id": "ENTRY-COMPLETE",
+            "position_ref": position_ref,
+        },
+    )
+    assert entry is not None
+    exit_row = store.record_order(
+        run.id,
+        1,
+        "exit_overall_target",
+        {
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "BUY",
+            "qty": 75,
+            "product": "NRML",
+            "pricetype": "MARKET",
+            "status": "open",
+            "broker_order_id": broker_order_id,
+            "position_ref": position_ref,
+        },
+    )
+    assert exit_row is not None
+    state.init_run_state(
+        run.id,
+        sid,
+        [
+            {
+                "leg_id": 1,
+                "position": "S",
+                "position_ref": position_ref,
+                "symbol": "NIFTY28MAY2624000CE",
+                "exchange": "NFO",
+                "quantity": 75,
+            }
+        ],
+    )
+    with state.run_state(run.id) as live:
+        leg = live["legs"]["1"]
+        leg["entry_order_id"] = entry.id
+        leg["entry_status"] = "complete"
+        leg["entry_avg"] = 100.0
+        leg["status"] = "open"
+        leg["exit_order_id"] = exit_row.id
+        leg["exit_kind"] = "exit_overall_target"
+        live["stopping"] = True
+    assert store.request_run_stop(run.id, "overall_target")
+    return sid, run.id, exit_row.id
+
+
+def test_periodic_reconciliation_polls_a_working_exit_whose_terminal_frame_was_lost():
+    sid, run_id, exit_row_id = _pending_stop_with_working_exit(
+        broker_order_id="LOST-EXIT-COMPLETE"
+    )
+
+    with (
+        patch.object(engine, "_api_key_for", return_value="scheduler-key"),
+        patch.object(engine.order_dispatch, "cancel_order") as cancel,
+        patch.object(
+            engine.order_dispatch,
+            "fetch_order_status",
+            return_value=SimpleNamespace(
+                ok=True,
+                order={
+                    "orderid": "LOST-EXIT-COMPLETE",
+                    "order_status": "complete",
+                    "filled_quantity": 75,
+                    "average_price": 95.0,
+                    "rejection_reason": "",
+                },
+                error=None,
+            ),
+            create=True,
+        ) as poll,
+        patch.object(engine.order_dispatch, "dispatch_order") as duplicate_exit,
+        patch.object(engine, "_unsubscribe_run"),
+    ):
+        result = sched.reconcile_pending_stops()
+
+    assert result == {"examined": 1, "pending": 0, "finalised": 1, "failed": 0}
+    cancel.assert_not_called()
+    poll.assert_called_once_with(
+        mode="sandbox",
+        api_key="scheduler-key",
+        broker_order_id="LOST-EXIT-COMPLETE",
+    )
+    duplicate_exit.assert_not_called()
+    assert store.list_orders(run_id)[1]["id"] == exit_row_id
+    assert store.list_orders(run_id)[1]["status"] == "complete"
+    stopped = store.get_run(run_id)
+    assert stopped.stopped_at is not None
+    assert stopped.stop_reason == "overall_target"
+    assert float(stopped.pnl_realized) == pytest.approx(375.0)
+    assert store.get_strategy(sid, USER).status == "stopped"
+
+
+def test_pending_stop_repairs_an_accepted_exit_ack_before_polling_without_duplicate_exit():
+    sid = _make()
+    run = store.create_run(sid, "sandbox", "sandbox")
+    assert run is not None
+    run_id = run.id
+    assert store.set_strategy_status(sid, "running", run_id)
+    position_ref = "ack-exit-owner"
+    entry = store.record_order(
+        run_id,
+        1,
+        "entry",
+        {
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "SELL",
+            "qty": 75,
+            "product": "NRML",
+            "pricetype": "MARKET",
+            "status": "complete",
+            "avg_fill_price": 100.0,
+            "filled_qty": 75,
+            "broker_order_id": "ACK-EXIT-ENTRY",
+            "position_ref": position_ref,
+        },
+    )
+    exit_row = store.record_order(
+        run_id,
+        1,
+        "exit_overall_target",
+        {
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "BUY",
+            "qty": 75,
+            "product": "NRML",
+            "pricetype": "MARKET",
+            "status": "pending",
+            "position_ref": position_ref,
+        },
+    )
+    assert entry is not None and exit_row is not None
+    store.record_event(
+        sid,
+        USER,
+        "order_ack_unrecorded",
+        "Accepted acknowledgement is pending automatic reconciliation",
+        run_id=run_id,
+        leg_id=1,
+        severity="critical",
+        payload={
+            "version": 1,
+            "order_id": exit_row.id,
+            "run_id": run_id,
+            "leg_id": 1,
+            "broker_order_id": "ACK-PENDING-EXIT",
+            "accepted": True,
+            "status": "open",
+            "reject_reason": None,
+        },
+    )
+    assert store.request_run_stop(run_id, "overall_target")
+    assert recovery.recover_run(run_id).ok is True
+
+    with (
+        patch.object(engine, "_api_key_for", return_value="scheduler-key"),
+        patch.object(engine.order_dispatch, "cancel_order") as cancel,
+        patch.object(
+            engine.order_dispatch,
+            "fetch_order_status",
+            return_value=SimpleNamespace(
+                ok=True,
+                order={
+                    "orderid": "ACK-PENDING-EXIT",
+                    "order_status": "complete",
+                    "filled_quantity": 75,
+                    "average_price": 95.0,
+                    "rejection_reason": "",
+                },
+                error=None,
+            ),
+            create=True,
+        ) as poll,
+        patch.object(engine.order_dispatch, "dispatch_order") as duplicate_exit,
+        patch.object(engine, "_unsubscribe_run"),
+    ):
+        result = sched.reconcile_pending_stops()
+
+    assert result == {"examined": 1, "pending": 0, "finalised": 1, "failed": 0}
+    cancel.assert_not_called()
+    poll.assert_called_once_with(
+        mode="sandbox",
+        api_key="scheduler-key",
+        broker_order_id="ACK-PENDING-EXIT",
+    )
+    duplicate_exit.assert_not_called()
+    assert store.get_order(exit_row.id).status == "complete"
+    assert store.get_run(run_id).stopped_at is not None
+
+
+def test_periodic_reconciliation_retries_only_the_unfilled_exit_remainder():
+    _, run_id, _ = _pending_stop_with_working_exit(
+        broker_order_id="LOST-EXIT-PARTIAL"
+    )
+    placed = []
+
+    def accept_remainder(**kwargs):
+        placed.append(kwargs["order"])
+        return DispatchResult(
+            ok=True,
+            broker_order_id="REMAINDER-EXIT",
+            response={},
+        )
+
+    with (
+        patch.object(engine, "_api_key_for", return_value="scheduler-key"),
+        patch.object(
+            engine.order_dispatch,
+            "fetch_order_status",
+            return_value=SimpleNamespace(
+                ok=True,
+                order={
+                    "orderid": "LOST-EXIT-PARTIAL",
+                    "order_status": "cancelled",
+                    "filled_quantity": 25,
+                    "average_price": 95.0,
+                    "rejection_reason": "cancelled remainder",
+                },
+                error=None,
+            ),
+            create=True,
+        ),
+        patch.object(
+            engine.order_dispatch,
+            "dispatch_order",
+            side_effect=accept_remainder,
+        ),
+    ):
+        result = sched.reconcile_pending_stops()
+
+    assert result == {"examined": 1, "pending": 1, "finalised": 0, "failed": 0}
+    assert len(placed) == 1
+    assert placed[0]["quantity"] == "50"
+    durable = store.list_orders(run_id)
+    assert [
+        int(row["filled_qty"] or 0) for row in durable if row["kind"] != "entry"
+    ] == [25, 0]
+    assert state.get_run_state(run_id)["legs"]["1"]["qty"] == 50
 
 
 # ---------------------------------------------------------------------------

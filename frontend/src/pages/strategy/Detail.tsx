@@ -7,13 +7,14 @@ import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import {
   buildRoundTrips,
-  closeAll,
   closeLeg,
   type DerivedPosition,
   deleteStrategy,
   derivePositions,
   deriveTrades,
+  fetchStrategyOrderbook,
   fetchStrategyPositions,
+  fetchStrategyTradebook,
   getStrategy,
   killSwitch,
   LIVE_POLL_MS,
@@ -21,6 +22,8 @@ import {
   listOrders,
   listRuns,
   type RoundTrip,
+  reconcileBrokerOrders,
+  reconcileBrokerTrades,
   rotateWebhookToken,
   SAFETY_POLL_MS,
   type StrategyLiveState,
@@ -71,6 +74,8 @@ import {
   type Order,
   pnlToneClass,
   type QtyMode,
+  type ReconciledBrokerOrder,
+  type ReconciledBrokerTrade,
   type Run,
   type RunMode,
   type Strategy,
@@ -104,6 +109,10 @@ function orderStatusVariant(status: string): 'default' | 'secondary' | 'destruct
   if (status === 'rejected') return 'destructive'
   if (status === 'cancelled') return 'outline'
   return 'secondary'
+}
+
+function brokerNumber(value: number | null, fractionDigits = 2): string {
+  return value === null ? 'Unavailable' : value.toFixed(fractionDigits)
 }
 
 function severityClass(severity: string): string {
@@ -304,6 +313,7 @@ function LiveTab({
   onCloseLeg: (legId: number) => void
 }) {
   const isRunning = strategy.status === 'running'
+  const isStopped = strategy.status === 'stopped'
 
   // The REST fallback for a leg that has no live state yet. Scoped to the
   // current run: without that filter an exit from a previous run marks the leg
@@ -329,17 +339,22 @@ function LiveTab({
   for (const leg of live.legs) liveByLegId.set(Number(leg.leg_id), leg)
 
   const badge = liveStatusBadge(live.status)
-  const checkpoint = live.checkpoint
+  // A checkpoint is live authority only while the strategy is running. The
+  // checkpoint endpoint deliberately keeps the last sample after stop, so a
+  // stopped page can still retain the curve without presenting that sample as
+  // the final result.
+  const checkpoint = isStopped ? null : live.checkpoint
 
   // While a run is active the checkpoint is the truth. Once it stops, the run
   // row carries the finalised realized P&L, and unrealized is zero by
   // definition because nothing is open.
-  const showLast = !isRunning && checkpoint == null && lastRun != null
+  const showLast = isStopped && lastRun != null
   const pnlRealized = showLast ? lastRun.pnl_realized : (checkpoint?.pnl_realized ?? null)
   const pnlUnrealized = showLast ? 0 : (checkpoint?.pnl_unrealized ?? null)
   const pnlTotal = showLast ? lastRun.pnl_realized : (checkpoint?.pnl_total ?? null)
   const pnlPeak = showLast ? lastRun.pnl_peak : (checkpoint?.pnl_peak ?? null)
   const pnlTrough = showLast ? lastRun.pnl_trough : (checkpoint?.pnl_trough ?? null)
+  const formatCurrentPnl = showLast ? formatPnl : formatLivePnl
 
   return (
     <div className="space-y-4">
@@ -378,7 +393,7 @@ function LiveTab({
                     pnlToneClass(metric.value)
                   )}
                 >
-                  {formatLivePnl(metric.value)}
+                  {formatCurrentPnl(metric.value)}
                 </p>
               </div>
             ))}
@@ -386,10 +401,10 @@ function LiveTab({
           {(checkpoint || showLast) && (
             <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground sm:grid-cols-4">
               <span>
-                Peak: <span className="font-mono">{formatLivePnl(pnlPeak)}</span>
+                Peak: <span className="font-mono">{formatCurrentPnl(pnlPeak)}</span>
               </span>
               <span>
-                Trough: <span className="font-mono">{formatLivePnl(pnlTrough)}</span>
+                Trough: <span className="font-mono">{formatCurrentPnl(pnlTrough)}</span>
               </span>
               {checkpoint && (
                 <span>
@@ -726,28 +741,59 @@ function SetupTab({ strategy }: { strategy: Strategy }) {
 // Positions tab
 // ---------------------------------------------------------------------------
 
-function PositionsTab({
+function brokerBookRunId(
+  strategy: Strategy,
+  live: StrategyLiveState,
+  latestFinalizedRunId: number | null = null
+): number | null {
+  // A newly started run can be present in the strategy row before the first
+  // socket/checkpoint frame replaces the prior run. While running, the store's
+  // current owner wins so an old frame can never label the new broker book.
+  if (strategy.status === 'running' && strategy.current_run_id !== null) {
+    return strategy.current_run_id
+  }
+  // A stopped strategy has no current_run_id. Its newest durable run row is
+  // authoritative over a socket/checkpoint value retained from before stop.
+  if (strategy.status === 'stopped' && latestFinalizedRunId !== null) {
+    return latestFinalizedRunId
+  }
+  return live.runId ?? strategy.current_run_id
+}
+
+export function PositionsTab({
   strategy,
   orders,
   live,
   runs,
   loading,
+  active,
 }: {
   strategy: Strategy
   orders: Order[]
   live: StrategyLiveState
   runs: Run[]
   loading: boolean
+  active: boolean
 }) {
+  const stoppedRun = strategy.status === 'stopped' ? (runs[0] ?? null) : null
+  // Once stopped, the finalized run row outranks a checkpoint/frame that may
+  // still name the just-finished run (or an even older one during refetch).
+  const runId = brokerBookRunId(strategy, live, stoppedRun?.id ?? null)
+  // Orders stay lifetime-scoped on purpose: they retain a residual position
+  // stranded by an earlier run and the realized-lifetime column. Runtime legs
+  // are different—they are a mark frame owned by one exact run, so a stale
+  // frame must never value the authoritative run's local fallback.
   const derived = useMemo(
-    () => derivePositions(orders, strategy.product, live.legs),
-    [orders, strategy.product, live.legs]
+    () => derivePositions(orders, strategy.product, live.runId === runId ? live.legs : []),
+    [orders, strategy.product, live.runId, live.legs, runId]
   )
   const broker = useBrokerBook(
     strategy.id,
+    runId,
     'positions',
     fetchStrategyPositions,
-    strategy.status === 'running'
+    strategy.status === 'running',
+    active
   )
 
   // The broker's own position book when it answered, the derived view when it
@@ -756,40 +802,69 @@ function PositionsTab({
   // leaves the local rows wrong. Realized-lifetime stays derived either way: a
   // broker position row carries no history, and that column is strategy
   // attribution rather than broker truth.
-  const positions = useMemo(() => {
-    if (!broker.rows) return derived
+  const positions = useMemo<
+    (Omit<DerivedPosition, 'net_qty' | 'side'> & {
+      net_qty: number | null
+      side: DerivedPosition['side'] | null
+      source: 'broker' | 'broker/shared' | 'local/unreconciled'
+      position_ref?: string | null
+    })[]
+  >(() => {
+    if (!broker.rows) {
+      return derived.map((row) => ({ ...row, source: 'local/unreconciled' as const }))
+    }
     const realizedFor = new Map(
       derived.map((row) => [
         `${row.symbol}-${row.exchange}-${row.product}`,
         row.realized_pnl_lifetime,
       ])
     )
-    return broker.rows.map((row) => {
-      const quantity = Number(row.quantity ?? 0)
+    const brokerPositions = broker.rows.map((row) => {
+      const quantity = row.quantity
       const key = `${row.symbol}-${row.exchange}-${row.product}`
+      const side: DerivedPosition['side'] | null =
+        quantity === null ? null : quantity > 0 ? 'long' : quantity < 0 ? 'short' : 'flat'
       return {
-        symbol: String(row.symbol ?? ''),
-        exchange: String(row.exchange ?? ''),
-        product: String(row.product ?? ''),
-        side: quantity > 0 ? 'long' : quantity < 0 ? 'short' : 'flat',
+        symbol: row.symbol,
+        exchange: row.exchange,
+        product: row.product,
+        side,
         net_qty: quantity,
-        avg_entry_price: Number(row.average_price ?? 0),
-        ltp: Number(row.ltp ?? 0),
-        unrealized_pnl: Number(row.pnl ?? 0),
-        realized_pnl_lifetime: realizedFor.get(key) ?? 0,
-      } satisfies DerivedPosition
+        avg_entry_price: row.average_price,
+        ltp: row.ltp,
+        unrealized_pnl: row.pnl,
+        realized_pnl_lifetime: realizedFor.get(key) ?? null,
+        source: row.source ?? ('broker' as const),
+        position_ref: row.position_ref,
+      }
     })
+    const coveredContracts = new Set(
+      broker.rows.map((row) => `${row.symbol}-${row.exchange}-${row.product}`)
+    )
+    const omittedResiduals = derived
+      .filter(
+        (row) =>
+          row.net_qty !== 0 && !coveredContracts.has(`${row.symbol}-${row.exchange}-${row.product}`)
+      )
+      .map((row) => ({ ...row, source: 'local/unreconciled' as const }))
+    return [...brokerPositions, ...omittedResiduals]
   }, [broker.rows, derived])
 
-  const checkpoint = live.checkpoint
+  const checkpoint = strategy.status === 'running' && live.runId === runId ? live.checkpoint : null
   // Lifetime realized is the sum of every finalised run. The current run's
   // in-flight realized comes from the checkpoint, because its run row is not
   // written until the run ends.
   const historicalRealized = runs
-    .filter((run) => run.id !== live.runId)
+    .filter((run) => run.id !== runId)
     .reduce((sum, run) => sum + run.pnl_realized, 0)
-  const runRealized = checkpoint?.pnl_realized ?? 0
-  const cumulativeRealized = historicalRealized + runRealized
+  const runRealized = stoppedRun?.pnl_realized ?? checkpoint?.pnl_realized ?? null
+  const runUnrealized = stoppedRun ? 0 : (checkpoint?.pnl_unrealized ?? null)
+  const runTotal = stoppedRun?.pnl_realized ?? checkpoint?.pnl_total ?? null
+  // Historical runs are known, but the lifetime total is not: an active run
+  // with no checkpoint may already have realized P&L. Never add an invented
+  // zero contribution just to keep the tile numeric.
+  const cumulativeRealized = runRealized === null ? null : historicalRealized + runRealized
+  const formatCurrentPnl = stoppedRun ? formatPnl : formatLivePnl
 
   return (
     <div className="space-y-4">
@@ -798,14 +873,14 @@ function PositionsTab({
           <CardTitle>Strategy positions</CardTitle>
           <CardDescription>
             {broker.rows
-              ? "The broker's own position book, narrowed to the contracts this strategy traded. A position row is per contract, so if the same contract is also held from a manual order or another strategy the row is shared and cannot be divided: treat the quantity and unrealized figure as belonging to all of them."
+              ? 'Broker quantities are overlaid on every attributable unresolved owner across all runs. Rows marked local/unreconciled were omitted by the broker book or cannot be divided safely; broker/shared is the undivided contract aggregate.'
               : broker.unavailable
                 ? "The broker did not answer, so these are net positions derived from this strategy's filled orders."
                 : "Net positions derived from this strategy's filled orders."}
-            {live.runId !== null && (
+            {runId !== null && (
               <>
                 {' '}
-                Run <span className="font-mono">#{live.runId}</span>.
+                Run <span className="font-mono">#{runId}</span>.
               </>
             )}
           </CardDescription>
@@ -815,27 +890,25 @@ function PositionsTab({
             <div className="rounded-md border p-3">
               <div className="text-xs uppercase text-muted-foreground">Realized (this run)</div>
               <div className={cn('font-mono text-xl', pnlToneClass(runRealized))}>
-                {formatPnl(runRealized)}
+                {formatCurrentPnl(runRealized)}
               </div>
             </div>
             <div className="rounded-md border p-3">
               <div className="text-xs uppercase text-muted-foreground">Unrealized</div>
-              <div
-                className={cn('font-mono text-xl', pnlToneClass(checkpoint?.pnl_unrealized ?? 0))}
-              >
-                {formatPnl(checkpoint?.pnl_unrealized ?? 0)}
+              <div className={cn('font-mono text-xl', pnlToneClass(runUnrealized))}>
+                {formatCurrentPnl(runUnrealized)}
               </div>
             </div>
             <div className="rounded-md border p-3">
               <div className="text-xs uppercase text-muted-foreground">Run total</div>
-              <div className={cn('font-mono text-xl', pnlToneClass(checkpoint?.pnl_total ?? 0))}>
-                {formatPnl(checkpoint?.pnl_total ?? 0)}
+              <div className={cn('font-mono text-xl', pnlToneClass(runTotal))}>
+                {formatCurrentPnl(runTotal)}
               </div>
             </div>
             <div className="rounded-md border-2 p-3">
               <div className="text-xs uppercase text-muted-foreground">Cumulative realized</div>
               <div className={cn('font-mono text-xl font-bold', pnlToneClass(cumulativeRealized))}>
-                {formatPnl(cumulativeRealized)}
+                {formatLivePnl(cumulativeRealized)}
               </div>
               <div className="text-[10px] text-muted-foreground">Lifetime across all runs</div>
             </div>
@@ -855,6 +928,7 @@ function PositionsTab({
                     <TableHead>Symbol</TableHead>
                     <TableHead>Exchange</TableHead>
                     <TableHead>Product</TableHead>
+                    <TableHead>Source</TableHead>
                     <TableHead>Side</TableHead>
                     <TableHead className="text-right">Net Qty</TableHead>
                     <TableHead className="text-right">Avg Entry</TableHead>
@@ -864,13 +938,20 @@ function PositionsTab({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {positions.map((position) => (
-                    <TableRow key={`${position.symbol}-${position.exchange}-${position.product}`}>
+                  {positions.map((position, index) => (
+                    <TableRow
+                      key={`${position.symbol}-${position.exchange}-${position.product}-${position.source}-${position.position_ref ?? index}`}
+                    >
                       <TableCell className="font-mono font-medium">{position.symbol}</TableCell>
                       <TableCell className="font-mono text-xs">{position.exchange}</TableCell>
                       <TableCell>
                         <Badge variant="outline" className="text-xs">
                           {position.product}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="text-xs">
+                          {position.source}
                         </Badge>
                       </TableCell>
                       <TableCell>
@@ -880,19 +961,23 @@ function PositionsTab({
                               ? 'default'
                               : position.side === 'short'
                                 ? 'destructive'
-                                : 'secondary'
+                                : position.side === 'flat'
+                                  ? 'secondary'
+                                  : 'outline'
                           }
                           className="text-xs"
                         >
-                          {position.side}
+                          {position.side ?? 'Unavailable'}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right font-mono">{position.net_qty}</TableCell>
                       <TableCell className="text-right font-mono">
-                        {position.avg_entry_price.toFixed(2)}
+                        {brokerNumber(position.net_qty, 0)}
                       </TableCell>
                       <TableCell className="text-right font-mono">
-                        {formatPrice(position.ltp)}
+                        {brokerNumber(position.avg_entry_price)}
+                      </TableCell>
+                      <TableCell className="text-right font-mono">
+                        {brokerNumber(position.ltp)}
                       </TableCell>
                       <TableCell
                         className={cn(
@@ -900,7 +985,9 @@ function PositionsTab({
                           pnlToneClass(position.unrealized_pnl)
                         )}
                       >
-                        {formatPnl(position.unrealized_pnl)}
+                        {position.unrealized_pnl === null
+                          ? 'Unavailable'
+                          : formatPnl(position.unrealized_pnl)}
                       </TableCell>
                       <TableCell
                         className={cn(
@@ -909,7 +996,9 @@ function PositionsTab({
                         )}
                         title="Lifetime realized on this contract across all runs"
                       >
-                        {formatPnl(position.realized_pnl_lifetime)}
+                        {position.realized_pnl_lifetime === null
+                          ? 'Unavailable'
+                          : formatPnl(position.realized_pnl_lifetime)}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -927,24 +1016,15 @@ function PositionsTab({
 // Orders tab
 // ---------------------------------------------------------------------------
 
-function OrdersTab({ orders }: { orders: Order[] }) {
-  if (orders.length === 0) {
-    return (
-      <Card>
-        <CardContent className="py-12 text-center">
-          <p className="text-sm text-muted-foreground">
-            No orders yet. Start a run to see entries appear here.
-          </p>
-        </CardContent>
-      </Card>
-    )
-  }
+function LocalOrderAudit({ orders }: { orders: Order[] }) {
+  if (orders.length === 0) return null
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Strategy orderbook</CardTitle>
+        <CardTitle>Strategy audit records</CardTitle>
         <CardDescription>
-          Every order placed by this strategy across all runs. Audit-grade.
+          Recorded by the strategy engine. These rows are local audit history, not broker
+          confirmation.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -1001,15 +1081,16 @@ function OrdersTab({ orders }: { orders: Order[] }) {
 // Trades tab
 // ---------------------------------------------------------------------------
 
-function TradesTab({ orders, loading }: { orders: Order[]; loading: boolean }) {
+function LocalTradeAudit({ orders, loading }: { orders: Order[]; loading: boolean }) {
   const trades = useMemo(() => deriveTrades(orders), [orders])
+  if (orders.length === 0 && !loading) return null
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Strategy tradebook</CardTitle>
+        <CardTitle>Strategy audit records</CardTitle>
         <CardDescription>
-          Every filled order placed by this strategy. Executed price is the broker or sandbox
-          average fill price.
+          Filled rows recorded by the strategy engine. These are local audit history, not broker
+          confirmation.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -1058,10 +1139,10 @@ function TradesTab({ orders, loading }: { orders: Order[]; loading: boolean }) {
                     </TableCell>
                     <TableCell className="text-right font-mono">{trade.filled_qty}</TableCell>
                     <TableCell className="text-right font-mono font-medium">
-                      {trade.avg_fill_price.toFixed(2)}
+                      {formatPrice(trade.avg_fill_price)}
                     </TableCell>
                     <TableCell className="text-right font-mono">
-                      {trade.trade_value.toFixed(2)}
+                      {formatPrice(trade.trade_value)}
                     </TableCell>
                     <TableCell className="font-mono text-xs text-muted-foreground">
                       {trade.broker_order_id ?? '—'}
@@ -1074,6 +1155,327 @@ function TradesTab({ orders, loading }: { orders: Order[]; loading: boolean }) {
         )}
       </CardContent>
     </Card>
+  )
+}
+
+function reconciliationText(row: ReconciledBrokerOrder | ReconciledBrokerTrade): string {
+  if (row.reconciliation === 'disagrees') return `Disagrees: ${row.disagreements.join(', ')}`
+  if (row.reconciliation === 'ambiguous') return 'Ambiguous local identifier'
+  if (row.reconciliation === 'unmatched') return 'Unmatched broker row'
+  return 'Matched'
+}
+
+export function OrdersTab({
+  strategy,
+  orders,
+  live,
+  lastRunId = null,
+  loading,
+  active,
+}: {
+  strategy: Strategy
+  orders: Order[]
+  live: StrategyLiveState
+  lastRunId?: number | null
+  loading: boolean
+  active: boolean
+}) {
+  const runId = brokerBookRunId(strategy, live, lastRunId)
+  const broker = useBrokerBook(
+    strategy.id,
+    runId,
+    'orderbook',
+    fetchStrategyOrderbook,
+    strategy.status === 'running',
+    active
+  )
+  const currentOrders = useMemo(
+    () => orders.filter((order) => order.run_id === runId),
+    [orders, runId]
+  )
+  const historicalOrders = useMemo(
+    () => orders.filter((order) => order.run_id !== runId),
+    [orders, runId]
+  )
+  const reconciled = useMemo(
+    () =>
+      broker.rows
+        ? reconcileBrokerOrders(broker.rows.orders, currentOrders)
+        : { confirmed: [], localOnly: currentOrders },
+    [broker.rows, currentOrders]
+  )
+  const auditRows =
+    !broker.active || broker.unavailable ? orders : [...reconciled.localOnly, ...historicalOrders]
+
+  return (
+    <div className="space-y-4">
+      {runId === null ? (
+        <output className="block rounded-md border border-amber-500/50 p-3 text-sm">
+          Broker orderbook was not requested because no strategy run is available. Showing recorded
+          strategy audit data, which is not broker confirmation.
+        </output>
+      ) : broker.isLoading || loading ? (
+        <Card>
+          <CardContent className="py-12 text-center">
+            <p aria-live="polite" className="text-sm text-muted-foreground">
+              Loading broker orderbook...
+            </p>
+          </CardContent>
+        </Card>
+      ) : broker.unavailable ? (
+        <output className="block rounded-md border border-amber-500/50 p-3 text-sm">
+          Broker unavailable — showing recorded strategy audit, which may lag.
+        </output>
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle>Broker-confirmed orders</CardTitle>
+            <CardDescription>
+              Broker status, quantity and prices are primary. Strategy context is attached only by
+              an exact, unique broker order id. Run {runId ? `#${runId}` : 'not available'}.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {reconciled.confirmed.length === 0 ? (
+              <p aria-live="polite" className="py-6 text-center text-sm text-muted-foreground">
+                Broker reports no orders for run #{runId}.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Broker time</TableHead>
+                      <TableHead>Broker order id</TableHead>
+                      <TableHead>Run</TableHead>
+                      <TableHead>Leg</TableHead>
+                      <TableHead>Kind</TableHead>
+                      <TableHead>Symbol</TableHead>
+                      <TableHead>Exchange</TableHead>
+                      <TableHead>Action</TableHead>
+                      <TableHead>Product</TableHead>
+                      <TableHead className="text-right">Qty</TableHead>
+                      <TableHead className="text-right">Price</TableHead>
+                      <TableHead className="text-right">Trigger</TableHead>
+                      <TableHead>Broker status</TableHead>
+                      <TableHead>Local status/ref</TableHead>
+                      <TableHead>Local rejection</TableHead>
+                      <TableHead>Reconciliation</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {reconciled.confirmed.map((row, index) => (
+                      <TableRow key={`${row.orderid}-${index}`}>
+                        <TableCell className="whitespace-nowrap text-xs">
+                          {row.timestamp ?? 'Unavailable'}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{row.orderid}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {row.run_id === null ? 'Unavailable' : `#${row.run_id}`}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {row.leg_id === null ? 'Unavailable' : row.leg_id}
+                        </TableCell>
+                        <TableCell>
+                          {row.kind ? (
+                            <Badge variant="outline" className="font-mono text-[10px]">
+                              {row.kind}
+                            </Badge>
+                          ) : (
+                            'Unavailable'
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono">{row.symbol}</TableCell>
+                        <TableCell className="font-mono text-xs">{row.exchange}</TableCell>
+                        <TableCell>{row.action}</TableCell>
+                        <TableCell>{row.product}</TableCell>
+                        <TableCell className="text-right font-mono">
+                          {brokerNumber(row.quantity, 0)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {brokerNumber(row.price)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {brokerNumber(row.trigger_price)}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={orderStatusVariant(row.order_status)}>
+                            {row.order_status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {row.local_status ?? 'Unavailable'} / {row.position_ref ?? 'Unavailable'}
+                        </TableCell>
+                        <TableCell className="text-xs text-destructive">
+                          {row.reject_reason ?? ''}
+                        </TableCell>
+                        <TableCell className="text-xs">{reconciliationText(row)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+      {!broker.isLoading && !loading && <LocalOrderAudit orders={auditRows} />}
+    </div>
+  )
+}
+
+export function TradesTab({
+  strategy,
+  orders,
+  live,
+  lastRunId = null,
+  loading,
+  active,
+}: {
+  strategy: Strategy
+  orders: Order[]
+  live: StrategyLiveState
+  lastRunId?: number | null
+  loading: boolean
+  active: boolean
+}) {
+  const runId = brokerBookRunId(strategy, live, lastRunId)
+  const broker = useBrokerBook(
+    strategy.id,
+    runId,
+    'tradebook',
+    fetchStrategyTradebook,
+    strategy.status === 'running',
+    active
+  )
+  const currentTrades = useMemo(
+    () => orders.filter((order) => order.run_id === runId && deriveTrades([order]).length > 0),
+    [orders, runId]
+  )
+  const historicalTrades = useMemo(
+    () => orders.filter((order) => order.run_id !== runId && deriveTrades([order]).length > 0),
+    [orders, runId]
+  )
+  const reconciled = useMemo(
+    () =>
+      broker.rows
+        ? reconcileBrokerTrades(broker.rows, currentTrades)
+        : { confirmed: [], localOnly: currentTrades },
+    [broker.rows, currentTrades]
+  )
+  const auditRows =
+    !broker.active || broker.unavailable
+      ? [...currentTrades, ...historicalTrades]
+      : [...reconciled.localOnly, ...historicalTrades]
+
+  return (
+    <div className="space-y-4">
+      {runId === null ? (
+        <output className="block rounded-md border border-amber-500/50 p-3 text-sm">
+          Broker tradebook was not requested because no strategy run is available. Showing recorded
+          strategy audit data, which is not broker confirmation.
+        </output>
+      ) : broker.isLoading || loading ? (
+        <Card>
+          <CardContent className="py-12 text-center">
+            <p aria-live="polite" className="text-sm text-muted-foreground">
+              Loading broker tradebook...
+            </p>
+          </CardContent>
+        </Card>
+      ) : broker.unavailable ? (
+        <output className="block rounded-md border border-amber-500/50 p-3 text-sm">
+          Broker unavailable — showing recorded strategy audit, which may lag.
+        </output>
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle>Broker-confirmed trades</CardTitle>
+            <CardDescription>
+              Broker fill quantity, average price and trade value are primary. Run{' '}
+              {runId ? `#${runId}` : 'not available'}.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {reconciled.confirmed.length === 0 ? (
+              <p aria-live="polite" className="py-6 text-center text-sm text-muted-foreground">
+                Broker reports no trades for run #{runId}.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Broker time</TableHead>
+                      <TableHead>Broker order id</TableHead>
+                      <TableHead>Run</TableHead>
+                      <TableHead>Leg</TableHead>
+                      <TableHead>Kind</TableHead>
+                      <TableHead>Symbol</TableHead>
+                      <TableHead>Exchange</TableHead>
+                      <TableHead>Action</TableHead>
+                      <TableHead>Product</TableHead>
+                      <TableHead className="text-right">Qty</TableHead>
+                      <TableHead className="text-right">Average price</TableHead>
+                      <TableHead className="text-right">Trade value</TableHead>
+                      <TableHead>Local status/ref</TableHead>
+                      <TableHead>Local rejection</TableHead>
+                      <TableHead>Reconciliation</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {reconciled.confirmed.map((row, index) => (
+                      <TableRow key={`${row.orderid}-${row.timestamp ?? ''}-${index}`}>
+                        <TableCell className="whitespace-nowrap text-xs">
+                          {row.timestamp ?? 'Unavailable'}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{row.orderid}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {row.run_id === null ? 'Unavailable' : `#${row.run_id}`}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {row.leg_id === null ? 'Unavailable' : `Leg ${row.leg_id}`}
+                        </TableCell>
+                        <TableCell>
+                          {row.kind ? (
+                            <Badge variant="outline" className="font-mono text-[10px]">
+                              {row.kind}
+                            </Badge>
+                          ) : (
+                            'Unavailable'
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono">{row.symbol}</TableCell>
+                        <TableCell className="font-mono text-xs">{row.exchange}</TableCell>
+                        <TableCell>{row.action}</TableCell>
+                        <TableCell>{row.product}</TableCell>
+                        <TableCell className="text-right font-mono">
+                          {brokerNumber(row.quantity, 0)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {brokerNumber(row.average_price)}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">
+                          {brokerNumber(row.trade_value)}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {row.local_status ?? 'Unavailable'} / {row.position_ref ?? 'Unavailable'}
+                        </TableCell>
+                        <TableCell className="text-xs text-destructive">
+                          {row.reject_reason ?? ''}
+                        </TableCell>
+                        <TableCell className="text-xs">{reconciliationText(row)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+      {!broker.isLoading && !loading && <LocalTradeAudit orders={auditRows} loading={false} />}
+    </div>
   )
 }
 
@@ -1135,6 +1537,10 @@ function RiskTab({ strategy }: { strategy: Strategy }) {
       <Card>
         <CardHeader>
           <CardTitle>Strategy-level risk</CardTitle>
+          <CardDescription>
+            Overall SL and Overall Target trigger exits from LTP-based MTM. MARKET orders fill at
+            the available bid/ask, so final realized P&amp;L can differ from the trigger value.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <RiskRow
@@ -2022,7 +2428,6 @@ export default function StrategyDetail() {
   const queryClient = useQueryClient()
 
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [confirmCloseAll, setConfirmCloseAll] = useState(false)
   const [confirmKill, setConfirmKill] = useState(false)
   const [confirmStop, setConfirmStop] = useState(false)
   const [confirmEnableLive, setConfirmEnableLive] = useState(false)
@@ -2030,6 +2435,7 @@ export default function StrategyDetail() {
   const [startMode, setStartMode] = useState<RunMode>('sandbox')
   const [closingLegId, setClosingLegId] = useState<number | null>(null)
   const [rotatedToken, setRotatedToken] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState('live')
 
   const validId = Number.isFinite(numId) && numId > 0
 
@@ -2073,7 +2479,11 @@ export default function StrategyDetail() {
     mutationFn: (mode: RunMode) => startRun(numId, mode),
     onSuccess: (result) => {
       const rejected = result.legs.filter((leg) => leg.ok === false || leg.status === 'rejected')
-      if (rejected.length > 0) {
+      if (result.acknowledged === false) {
+        showToast.warning(
+          'Run started, but broker acknowledgement is pending. Check Events and Orders before relying on RMS.'
+        )
+      } else if (rejected.length > 0) {
         showToast.warning(
           `Run started, but ${rejected.length} leg(s) were rejected. See the Orders tab.`
         )
@@ -2088,29 +2498,25 @@ export default function StrategyDetail() {
 
   const stopMutation = useMutation({
     mutationFn: () => stopRun(numId),
-    onSuccess: () => {
-      showToast.success('Run stopped')
+    onSuccess: (result) => {
+      showToast.success(
+        result.run_stopped === true || result.stop_pending === false
+          ? 'Run stopped'
+          : 'Stop requested — exit orders are pending'
+      )
       setConfirmStop(false)
       invalidateAll()
     },
     onError: (err: Error) => showToast.error(err.message || 'Stop failed'),
   })
 
-  const closeAllMutation = useMutation({
-    mutationFn: () => closeAll(numId),
-    onSuccess: () => {
-      showToast.success('All open legs closed')
-      setConfirmCloseAll(false)
-      invalidateAll()
-    },
-    onError: (err: Error) => showToast.error(err.message || 'Close-all failed'),
-  })
-
   const closeLegMutation = useMutation({
     mutationFn: (legId: number) => closeLeg(numId, legId),
     onSuccess: (result) => {
       showToast.success(
-        result.run_stopped ? 'Leg closed — last open leg, run stopped' : 'Leg closed'
+        result.run_stopped
+          ? 'Leg closed — last open leg, run stopped'
+          : 'Leg close requested — exit order is pending'
       )
       setClosingLegId(null)
       invalidateAll()
@@ -2144,9 +2550,12 @@ export default function StrategyDetail() {
     mutationFn: () => killSwitch(numId),
     onSuccess: (result) => {
       showToast.warning(
-        result.run_stopped
-          ? 'Kill switch fired. Webhook locked and open legs closed.'
-          : 'Kill switch fired. Webhook locked.'
+        result.message?.trim() ||
+          (result.run_stopped
+            ? 'Webhook locked and open legs closed'
+            : result.stop_pending
+              ? 'Webhook locked; exit fills pending'
+              : 'Webhook locked; flattening was not confirmed')
       )
       setConfirmKill(false)
       invalidateAll()
@@ -2260,22 +2669,14 @@ export default function StrategyDetail() {
             <Button onClick={() => setStartDialogOpen(true)}>Start run</Button>
           )}
           {running && (
-            <>
-              <Button
-                variant="destructive"
-                disabled={closeAllMutation.isPending}
-                onClick={() => setConfirmCloseAll(true)}
-              >
-                {closeAllMutation.isPending ? 'Closing…' : 'Close All'}
-              </Button>
-              <Button
-                variant="outline"
-                disabled={stopMutation.isPending}
-                onClick={() => setConfirmStop(true)}
-              >
-                {stopMutation.isPending ? 'Stopping…' : 'Stop'}
-              </Button>
-            </>
+            <Button
+              variant="outline"
+              disabled={stopMutation.isPending}
+              onClick={() => setConfirmStop(true)}
+              title="Exit all held legs at MARKET and stop this run"
+            >
+              {stopMutation.isPending ? 'Stopping…' : 'Stop & Close Positions'}
+            </Button>
           )}
           {stopped && !strategy.live_enabled && (
             <Button
@@ -2327,7 +2728,7 @@ export default function StrategyDetail() {
         ) : null}
       </div>
 
-      <Tabs defaultValue="live">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="flex flex-wrap gap-1 bg-transparent">
           <TabsTrigger value="live">Live</TabsTrigger>
           <TabsTrigger value="setup">Setup</TabsTrigger>
@@ -2363,13 +2764,28 @@ export default function StrategyDetail() {
             live={live}
             runs={runs}
             loading={ordersQuery.isLoading}
+            active={activeTab === 'positions'}
           />
         </TabsContent>
         <TabsContent value="orders" className="mt-4">
-          <OrdersTab orders={orders} />
+          <OrdersTab
+            strategy={strategy}
+            orders={orders}
+            live={live}
+            lastRunId={runs[0]?.id ?? null}
+            loading={ordersQuery.isLoading}
+            active={activeTab === 'orders'}
+          />
         </TabsContent>
         <TabsContent value="trades" className="mt-4">
-          <TradesTab orders={orders} loading={ordersQuery.isLoading} />
+          <TradesTab
+            strategy={strategy}
+            orders={orders}
+            live={live}
+            lastRunId={runs[0]?.id ?? null}
+            loading={ordersQuery.isLoading}
+            active={activeTab === 'trades'}
+          />
         </TabsContent>
         <TabsContent value="events" className="mt-4">
           <EventsTab events={events} />
@@ -2454,22 +2870,11 @@ export default function StrategyDetail() {
       />
 
       <ConfirmDialog
-        open={confirmCloseAll}
-        onOpenChange={setConfirmCloseAll}
-        title="Close all open legs?"
-        description="Exits every open leg at MARKET and stops the run."
-        confirmLabel="Close all"
-        destructive
-        loading={closeAllMutation.isPending}
-        onConfirm={() => closeAllMutation.mutate()}
-      />
-
-      <ConfirmDialog
         open={confirmStop}
         onOpenChange={setConfirmStop}
-        title="Stop the run?"
-        description="Every open leg will be exited at MARKET and the run finalised. Realized P&L gets locked in; the strategy returns to a stopped state and stops accepting webhook signals until you start it again."
-        confirmLabel="Stop run"
+        title="Stop and close all positions?"
+        description="Requests MARKET exits for every open leg. The run is finalised only after broker fills confirm the strategy is flat; until then the stop remains pending and retryable."
+        confirmLabel="Stop & close positions"
         destructive
         loading={stopMutation.isPending}
         onConfirm={() => stopMutation.mutate()}
@@ -2490,7 +2895,7 @@ export default function StrategyDetail() {
         open={confirmKill}
         onOpenChange={setConfirmKill}
         title="Activate kill switch?"
-        description="This locks the webhook so external TradingView signals are refused, and flattens every open position at MARKET. The strategy stays stopped until you explicitly unlock and start it."
+        description="Immediately locks the webhook so external TradingView signals are refused, then requests MARKET exits for open positions. The run is finalised only after broker fills confirm the strategy is flat; pending or refused exits remain visible and retryable."
         confirmLabel="KILL"
         destructive
         loading={killSwitchMutation.isPending}

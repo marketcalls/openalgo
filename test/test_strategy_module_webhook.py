@@ -25,11 +25,12 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 from database import strategy_module_db as store
-from services.strategy_module import webhook
+from services.strategy_module import webhook, webhook_bridge
 
 TOKEN = store.WEBHOOK_TOKEN_PREFIX + "A" * 43
 OTHER_TOKEN = store.WEBHOOK_TOKEN_PREFIX + "B" * 43
@@ -261,6 +262,60 @@ def test_a_stop_reaches_the_engine(strategy, engine, audit):
     assert engine.calls[0]["stop_reason"] == "manual"
     assert audit.results == ["ok"]
     assert audit.last.mode is None
+
+
+def test_a_pending_stop_is_structured_in_webhook_result_and_does_not_arm_cooling_off(strategy):
+    strategy.status = "running"
+    exits = [{"leg_id": 1, "ok": True}]
+    engine = FakeEngine(result={"ok": True, "run_id": 88, "stop_pending": True, "exits": exits})
+
+    outcome = call(body={"action": "stop"}, engine=engine)
+
+    assert outcome.ok is True
+    assert outcome.stop_pending is True
+    assert outcome.exits == exits
+    assert outcome.body["stop_pending"] is True
+    assert outcome.body["exits"] == exits
+    assert webhook._cooling_off_remaining(strategy.id) == 0
+
+
+def test_a_refused_pending_stop_keeps_structured_retry_detail_in_webhook_response(strategy):
+    strategy.status = "running"
+    exits = [{"leg_id": 1, "ok": False, "error": "No API key"}]
+    engine = FakeEngine(
+        result={
+            "ok": False,
+            "run_id": 88,
+            "stop_pending": True,
+            "error": "No API key is configured for this user",
+            "exits": exits,
+        }
+    )
+
+    outcome = call(body={"action": "stop"}, engine=engine)
+
+    assert outcome.ok is False
+    assert outcome.stop_pending is True
+    assert outcome.exits == exits
+    assert outcome.body["stop_pending"] is True
+    assert outcome.body["exits"] == exits
+    assert webhook._cooling_off_remaining(strategy.id) == 0
+
+
+def test_webhook_bridge_forwards_pending_and_exit_detail():
+    strategy = SimpleNamespace(id=9, user_id="bridge-user", current_run_id=44)
+    exits = [{"leg_id": 1, "ok": True}]
+
+    with patch(
+        "services.strategy_module.engine.stop_run",
+        return_value={"ok": True, "stop_pending": True, "exits": exits},
+    ):
+        result = webhook_bridge.stop_run(strategy)
+
+    assert result.ok is True
+    assert result.run_id == 44
+    assert result.stop_pending is True
+    assert result.exits == exits
 
 
 def test_action_and_mode_are_read_case_insensitively(strategy, engine):

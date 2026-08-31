@@ -86,7 +86,11 @@ class FakeEngine:
         self.start_result = StartResult(
             ok=True, run_id=RUN_ID, legs=[{"leg_id": 1, "ok": True, "error": None}]
         )
-        self.stop_result = {"ok": True, "exits": [{"leg_id": 1, "ok": True, "error": None}]}
+        self.stop_result = {
+            "ok": True,
+            "stop_pending": True,
+            "exits": [{"leg_id": 1, "ok": True, "error": None}],
+        }
         self.close_leg_result = {
             "ok": True,
             "exits": [{"leg_id": 1, "ok": True, "error": None}],
@@ -386,19 +390,49 @@ def test_stop_resolves_the_run_from_the_strategy(client, engine):
     assert response.get_json() == {
         "status": "success",
         "run_id": RUN_ID,
+        "stop_pending": True,
         "exits": [{"leg_id": 1, "ok": True, "error": None}],
     }
     assert engine.calls == [("stop_run", RUN_ID, USER, "manual")]
 
 
-def test_close_all_records_the_intent_before_stopping(client, engine):
-    """Kept distinct from stop so the audit trail says what happened."""
+@pytest.mark.parametrize("route", ["stop", "close_all"])
+def test_stop_failures_preserve_pending_and_per_exit_detail(client, engine, route):
+    sid, _token = _make(running=True)
+    exits = [{"leg_id": 1, "ok": False, "error": "No API key"}]
+    engine.stop_result = {
+        "ok": False,
+        "stop_pending": True,
+        "error": "No API key is configured for this user",
+        "exits": exits,
+    }
+
+    response = post(client, route, strategy_id=sid)
+
+    assert response.status_code == 409
+    assert response.get_json() == {
+        "status": "error",
+        "message": "No API key is configured for this user",
+        "stop_pending": True,
+        "exits": exits,
+    }
+
+
+def test_restx_close_all_event_matches_the_browser_intent_contract(client, engine):
+    """Both API surfaces record a request, never pre-fill closure."""
     sid, _token = _make(running=True)
 
-    assert post(client, "close_all", strategy_id=sid).status_code == 200
+    response = post(client, "close_all", strategy_id=sid)
+    assert response.status_code == 200
+    assert response.get_json()["stop_pending"] is True
 
-    kinds = [event["kind"] for event in store.list_events(sid)]
-    assert "close_all_manual" in kinds
+    event = next(
+        event
+        for event in store.list_events(sid)
+        if event["kind"] == "close_all_manual"
+    )
+    assert event["message"] == "Operator requested closure of all held legs"
+    assert "closed" not in event["message"].lower()
     assert engine.calls == [("stop_run", RUN_ID, USER, "manual")]
 
 

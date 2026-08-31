@@ -44,6 +44,7 @@ from flask_socketio import join_room, leave_room
 from database import strategy_module_db as store
 from extensions import socketio
 from limiter import limiter
+from services.strategy_module.audit_messages import CLOSE_ALL_REQUESTED_MESSAGE
 from utils.ip_helper import get_real_ip
 from utils.logging import get_logger
 from utils.session import check_session_validity
@@ -908,8 +909,11 @@ def _ok(payload: dict | None = None, code: int = 200):
     return jsonify(body), code
 
 
-def _error(message: str, code: int):
-    return jsonify({"status": "error", "message": message}), code
+def _error(message: str, code: int, payload: dict | None = None):
+    body = {"status": "error", "message": message}
+    if payload:
+        body.update(payload)
+    return jsonify(body), code
 
 
 def _store_error(message: str | None):
@@ -1234,12 +1238,18 @@ def engage_kill_switch(sid):
     # a signal arriving mid-flatten cannot re-enter behind it.
     run_id = row.current_run_id
     stopped = False
+    stop_pending = False
+    exits = []
+    accepted = False
     if run_id:
         from services.strategy_module import engine
 
         result = engine.stop_run(run_id, username, reason="manual")
-        stopped = bool(result.get("ok"))
-        if not stopped:
+        accepted = bool(result.get("ok"))
+        stop_pending = bool(result.get("stop_pending", False))
+        exits = result.get("exits", [])
+        stopped = accepted and not stop_pending
+        if not accepted:
             logger.error(
                 "Kill switch on strategy %s locked the webhook but could not flatten run %s: %s",
                 sid,
@@ -1247,11 +1257,19 @@ def engage_kill_switch(sid):
                 result.get("error"),
             )
 
+    if stopped:
+        flatten_message = " and open legs closed"
+    elif accepted and stop_pending:
+        flatten_message = "; exit fills pending"
+    elif stop_pending:
+        flatten_message = "; flatten refused, stop remains pending and retryable"
+    else:
+        flatten_message = ""
     store.record_event(
         sid,
         username,
         "webhook_locked",
-        "Kill switch engaged" + (" and open legs closed" if stopped else ""),
+        "Kill switch engaged" + flatten_message,
         run_id=run_id,
         severity="critical",
     )
@@ -1260,7 +1278,9 @@ def engage_kill_switch(sid):
         {
             "webhook_locked": True,
             "run_stopped": stopped,
-            "message": "Webhook locked" + (" and open legs closed" if stopped else ""),
+            "stop_pending": stop_pending,
+            "exits": exits,
+            "message": "Webhook locked" + flatten_message,
         }
     )
 
@@ -1322,11 +1342,11 @@ def stop_strategy(sid):
 @check_session_validity
 @_api_limit
 def close_all(sid):
-    """Same effect as stop, named for what the operator is doing.
+    """Same effect as stop, named for what the operator requested.
 
     Kept as its own route rather than an alias so the audit trail records the
-    intent: "the operator closed everything" reads differently from "the run
-    was stopped" when you are reconstructing a session afterwards.
+    intent without claiming the broker is already flat.  Confirmed-flat
+    finalisation is recorded separately when the exit orders settle.
     """
     return _stop_run_for(sid, reason="manual", event="close_all_manual")
 
@@ -1343,13 +1363,32 @@ def _stop_run_for(sid: int, reason: str, event: str | None = None):
     from services.strategy_module import engine
 
     if event:
-        store.record_event(sid, username, event, "Operator closed all legs", run_id=run_id)
+        store.record_event(
+            sid,
+            username,
+            event,
+            CLOSE_ALL_REQUESTED_MESSAGE,
+            run_id=run_id,
+        )
 
     result = engine.stop_run(run_id, username, reason=reason)
     if not result.get("ok"):
-        return _error(result.get("error") or "Could not stop the run", 409)
+        return _error(
+            result.get("error") or "Could not stop the run",
+            409,
+            {
+                "stop_pending": result.get("stop_pending", False),
+                "exits": result.get("exits", []),
+            },
+        )
 
-    return _ok({"run_id": run_id, "exits": result.get("exits", [])})
+    return _ok(
+        {
+            "run_id": run_id,
+            "stop_pending": result.get("stop_pending", False),
+            "exits": result.get("exits", []),
+        }
+    )
 
 
 @strategy_module_bp.route("/api/strategies/<int:sid>/legs/<leg_id>/close", methods=["POST"])

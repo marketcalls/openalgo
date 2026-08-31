@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -49,6 +50,7 @@ from sqlalchemy import (
     Text,
     Time,
     UniqueConstraint,
+    exists,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -141,6 +143,31 @@ ORDER_KINDS = (
 
 ORDER_STATUSES = ("pending", "open", "complete", "cancelled", "rejected")
 
+_TERMINAL_ORDER_STATUSES = frozenset({"complete", "cancelled", "rejected"})
+
+
+@dataclass(frozen=True, slots=True)
+class OrderFactFold:
+    """The durable result of folding one cumulative broker order frame."""
+
+    order_id: int
+    previous_status: str
+    status: str
+    previous_filled_qty: int
+    cumulative_filled_qty: int
+    fill_delta: int
+    previous_average_fill_price: float | None
+    average_fill_price: float | None
+    changed: bool
+
+    @property
+    def terminal(self) -> bool:
+        return self.status in _TERMINAL_ORDER_STATUSES
+
+    @property
+    def was_terminal(self) -> bool:
+        return self.previous_status in _TERMINAL_ORDER_STATUSES
+
 EVENT_SEVERITIES = ("info", "warn", "critical")
 
 EVENT_KINDS = (
@@ -155,8 +182,10 @@ EVENT_KINDS = (
     "run_started",
     "run_paused",
     "run_resumed",
+    "run_stop_requested",
     "run_stopped",
     "run_stop_failed",
+    "flip_outgoing_exit_rejected",
     "close_all_manual",
     # Entry and exit
     "leg_entry_placed",
@@ -317,6 +346,8 @@ class SmStrategyRun(Base):
     )
     stopped_at = Column(DateTime, nullable=True)
     stop_reason = Column(String(30), nullable=True)
+    stop_requested_at = Column(DateTime, nullable=True)
+    stop_requested_reason = Column(String(30), nullable=True)
 
     # Final realized P&L, written on stop. While the run is live the authority
     # is in-process state plus the checkpoint rows, not this column.
@@ -349,6 +380,9 @@ class SmStrategyOrder(Base):
     )
     leg_id = Column(Integer, nullable=False)
     kind = Column(String(30), nullable=False)
+    # A leg can represent an outgoing and replacement position during a signal
+    # flip. This durable reference lets fills settle the position they belong to.
+    position_ref = Column(String(32), nullable=True)
 
     # Broker reference. Live runs carry the broker's own id; sandbox runs carry
     # the sandbox engine's, which is date-prefixed and numeric rather than
@@ -376,7 +410,10 @@ class SmStrategyOrder(Base):
     filled_qty = Column(Integer, nullable=True)
     reject_reason = Column(Text, nullable=True)
 
-    __table_args__ = (Index("ix_sm_order_run_placed", "run_id", "placed_at"),)
+    __table_args__ = (
+        Index("ix_sm_order_run_placed", "run_id", "placed_at"),
+        Index("ix_sm_order_run_leg_position", "run_id", "leg_id", "position_ref"),
+    )
 
 
 class SmStrategyCheckpoint(Base):
@@ -588,6 +625,8 @@ def run_to_dict(row: SmStrategyRun) -> dict:
         "started_at": _iso(row.started_at),
         "stopped_at": _iso(row.stopped_at),
         "stop_reason": row.stop_reason,
+        "stop_requested_at": _iso(row.stop_requested_at),
+        "stop_requested_reason": row.stop_requested_reason,
         "pnl_realized": _num(row.pnl_realized),
         "pnl_peak": _num(row.pnl_peak),
         "pnl_trough": _num(row.pnl_trough),
@@ -603,6 +642,7 @@ def order_to_dict(row: SmStrategyOrder) -> dict:
         "run_id": row.run_id,
         "leg_id": row.leg_id,
         "kind": row.kind,
+        "position_ref": row.position_ref,
         "broker_order_id": row.broker_order_id,
         "symbol": row.symbol,
         "exchange": row.exchange,
@@ -1056,22 +1096,405 @@ def finish_run(
     pnl_peak: float = 0.0,
     pnl_trough: float = 0.0,
 ) -> bool:
-    """Close a run and write its final numbers."""
+    """Close an active run exactly once and write its final numbers."""
     try:
-        row = db_session.query(SmStrategyRun).filter_by(id=run_id).first()
-        if not row:
+        strategy_id = (
+            db_session.query(SmStrategyRun.strategy_id).filter(SmStrategyRun.id == run_id).scalar()
+        )
+        if strategy_id is None:
             return False
-        row.stopped_at = utcnow()
-        row.stop_reason = stop_reason
-        row.pnl_realized = pnl_realized
-        row.pnl_peak = pnl_peak
-        row.pnl_trough = pnl_trough
+        updated = (
+            db_session.query(SmStrategyRun)
+            .filter(
+                SmStrategyRun.id == run_id,
+                SmStrategyRun.stopped_at.is_(None),
+            )
+            .update(
+                {
+                    "stopped_at": utcnow(),
+                    "stop_reason": stop_reason,
+                    "stop_requested_at": None,
+                    "stop_requested_reason": None,
+                    "pnl_realized": pnl_realized,
+                    "pnl_peak": pnl_peak,
+                    "pnl_trough": pnl_trough,
+                },
+                synchronize_session=False,
+            )
+        )
         db_session.commit()
-        _forget_session_pnl(row.strategy_id)
-        return True
+        db_session.expire_all()
+        if updated == 1:
+            _forget_session_pnl(strategy_id)
+            return True
+        return False
     except Exception:
         db_session.rollback()
         logger.exception("Could not finish run %s", run_id)
+        return False
+
+
+def finish_run_and_release_strategy(
+    run_id: int,
+    strategy_id: int,
+    stop_reason: str,
+    pnl_realized: float = 0.0,
+    pnl_peak: float = 0.0,
+    pnl_trough: float = 0.0,
+) -> bool:
+    """Atomically finish one active run and release only its current strategy.
+
+    The two conditional updates share one transaction. If the run was already
+    finished, or the strategy now points at another run, neither row changes.
+    The single True caller owns terminal events and in-process cleanup.
+    """
+    try:
+        finished = (
+            db_session.query(SmStrategyRun)
+            .filter(
+                SmStrategyRun.id == run_id,
+                SmStrategyRun.strategy_id == strategy_id,
+                SmStrategyRun.stopped_at.is_(None),
+            )
+            .update(
+                {
+                    "stopped_at": utcnow(),
+                    "stop_reason": stop_reason,
+                    "stop_requested_at": None,
+                    "stop_requested_reason": None,
+                    "pnl_realized": pnl_realized,
+                    "pnl_peak": pnl_peak,
+                    "pnl_trough": pnl_trough,
+                },
+                synchronize_session=False,
+            )
+        )
+        if finished != 1:
+            db_session.rollback()
+            return False
+
+        released = (
+            db_session.query(SmStrategy)
+            .filter(
+                SmStrategy.id == strategy_id,
+                SmStrategy.current_run_id == run_id,
+            )
+            .update(
+                {"status": "stopped", "current_run_id": None},
+                synchronize_session=False,
+            )
+        )
+        if released != 1:
+            db_session.rollback()
+            db_session.expire_all()
+            return False
+
+        db_session.commit()
+        db_session.expire_all()
+        _forget_session_pnl(strategy_id)
+        return True
+    except Exception:
+        db_session.rollback()
+        logger.exception(
+            "Could not atomically finish run %s and release strategy %s",
+            run_id,
+            strategy_id,
+        )
+        return False
+
+
+def finish_detached_run(
+    run_id: int,
+    strategy_id: int,
+    stop_reason: str,
+    pnl_realized: float = 0.0,
+    pnl_peak: float = 0.0,
+    pnl_trough: float = 0.0,
+) -> bool:
+    """Finish one residual run only when it is not the strategy's current run.
+
+    A late broker correction can reopen an older run while a newer run owns
+    the strategy pointer. That residual still needs an exact terminal CAS, but
+    must never release or relabel the newer run. The ``NOT EXISTS`` guard is
+    part of the same UPDATE as ``stopped_at IS NULL`` so there is no read/write
+    gap in which current-run ownership can be confused.
+    """
+    try:
+        current_owner = exists().where(
+            SmStrategy.id == strategy_id,
+            SmStrategy.current_run_id == run_id,
+        )
+        finished = (
+            db_session.query(SmStrategyRun)
+            .filter(
+                SmStrategyRun.id == run_id,
+                SmStrategyRun.strategy_id == strategy_id,
+                SmStrategyRun.stopped_at.is_(None),
+                ~current_owner,
+            )
+            .update(
+                {
+                    "stopped_at": utcnow(),
+                    "stop_reason": stop_reason,
+                    "stop_requested_at": None,
+                    "stop_requested_reason": None,
+                    "pnl_realized": pnl_realized,
+                    "pnl_peak": pnl_peak,
+                    "pnl_trough": pnl_trough,
+                },
+                synchronize_session=False,
+            )
+        )
+        if finished != 1:
+            db_session.rollback()
+            db_session.expire_all()
+            return False
+        db_session.commit()
+        db_session.expire_all()
+        _forget_session_pnl(strategy_id)
+        return True
+    except Exception:
+        db_session.rollback()
+        logger.exception(
+            "Could not atomically finish detached run %s for strategy %s",
+            run_id,
+            strategy_id,
+        )
+        return False
+
+
+def finish_empty_unlinked_run_and_release_claim(
+    run_id: int,
+    strategy_id: int,
+    stop_reason: str,
+    pnl_realized: float = 0.0,
+    pnl_peak: float = 0.0,
+    pnl_trough: float = 0.0,
+) -> bool:
+    """Atomically finish the exact crash window between run creation and linkage.
+
+    Entry dispatch is sequenced after ``set_strategy_status``. Therefore the
+    only safe unlinked recovery shape is an open, zero-order run whose strategy
+    still carries the empty ``running/current_run_id=NULL`` claim. Both rows
+    are conditional updates in one transaction, so an older detached run or a
+    newer owner cannot be closed or released by this cleanup.
+    """
+    try:
+        empty_claim = exists().where(
+            SmStrategy.id == strategy_id,
+            SmStrategy.status == "running",
+            SmStrategy.current_run_id.is_(None),
+        )
+        no_orders = ~exists().where(SmStrategyOrder.run_id == run_id)
+        finished = (
+            db_session.query(SmStrategyRun)
+            .filter(
+                SmStrategyRun.id == run_id,
+                SmStrategyRun.strategy_id == strategy_id,
+                SmStrategyRun.stopped_at.is_(None),
+                empty_claim,
+                no_orders,
+            )
+            .update(
+                {
+                    "stopped_at": utcnow(),
+                    "stop_reason": stop_reason,
+                    "stop_requested_at": None,
+                    "stop_requested_reason": None,
+                    "pnl_realized": pnl_realized,
+                    "pnl_peak": pnl_peak,
+                    "pnl_trough": pnl_trough,
+                },
+                synchronize_session=False,
+            )
+        )
+        if finished != 1:
+            db_session.rollback()
+            return False
+
+        released = (
+            db_session.query(SmStrategy)
+            .filter(
+                SmStrategy.id == strategy_id,
+                SmStrategy.status == "running",
+                SmStrategy.current_run_id.is_(None),
+            )
+            .update(
+                {"status": "stopped", "current_run_id": None},
+                synchronize_session=False,
+            )
+        )
+        if released != 1:
+            db_session.rollback()
+            db_session.expire_all()
+            return False
+
+        db_session.commit()
+        db_session.expire_all()
+        _forget_session_pnl(strategy_id)
+        return True
+    except Exception:
+        db_session.rollback()
+        logger.exception(
+            "Could not atomically finish empty unlinked run %s and release strategy %s",
+            run_id,
+            strategy_id,
+        )
+        return False
+
+
+def finish_unlinked_run_and_release_claim(
+    run_id: int,
+    strategy_id: int,
+    stop_reason: str,
+) -> bool:
+    """Close a never-linked run, then release only its empty strategy claim.
+
+    Run creation and strategy linkage are separate durable writes. If linkage
+    fails, no order may be dispatched, but the already-created run still has
+    to become terminal. ``finish_detached_run`` refuses to close a run that is
+    current, and the second CAS refuses to release a strategy that now points
+    at any run. A newer owner therefore survives a delayed cleanup intact.
+
+    The close intentionally commits first. If releasing the empty claim then
+    fails, the strategy remains fail-closed as ``running`` with no current run
+    rather than leaving an open orphan that recovery could mistake for
+    exposure.
+    """
+    if not finish_detached_run(run_id, strategy_id, stop_reason):
+        return False
+
+    try:
+        released = (
+            db_session.query(SmStrategy)
+            .filter(
+                SmStrategy.id == strategy_id,
+                SmStrategy.status == "running",
+                SmStrategy.current_run_id.is_(None),
+            )
+            .update(
+                {"status": "stopped", "current_run_id": None},
+                synchronize_session=False,
+            )
+        )
+        db_session.commit()
+        db_session.expire_all()
+        return released == 1
+    except Exception:
+        db_session.rollback()
+        logger.exception(
+            "Could not release the empty run claim for strategy %s after closing run %s",
+            strategy_id,
+            run_id,
+        )
+        return False
+
+
+def request_run_stop(run_id: int, reason: str) -> bool:
+    """Persist a stop request while leaving the run active until it is flat."""
+    try:
+        updated = (
+            db_session.query(SmStrategyRun)
+            .filter(
+                SmStrategyRun.id == run_id,
+                SmStrategyRun.stopped_at.is_(None),
+                SmStrategyRun.stop_requested_at.is_(None),
+                SmStrategyRun.stop_requested_reason.is_(None),
+            )
+            .update(
+                {
+                    "stop_requested_at": utcnow(),
+                    "stop_requested_reason": reason,
+                },
+                synchronize_session=False,
+            )
+        )
+        db_session.commit()
+        db_session.expire_all()
+        if updated == 1:
+            return True
+        existing = (
+            db_session.query(SmStrategyRun.id)
+            .filter(
+                SmStrategyRun.id == run_id,
+                SmStrategyRun.stopped_at.is_(None),
+                SmStrategyRun.stop_requested_at.is_not(None),
+                SmStrategyRun.stop_requested_reason.is_not(None),
+            )
+            .first()
+        )
+        return existing is not None
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not request stop for run %s", run_id)
+        return False
+
+
+def reopen_run_for_late_entry_fill(run_id: int) -> bool:
+    """Reopen a terminal run after stronger durable entry-fill evidence.
+
+    A broker may first report ``cancelled, filled=0`` and later correct that
+    terminal fact to ``complete`` with a higher cumulative quantity. The
+    original stop was allowed to finish on the zero fact, so this conditional
+    repair restores its pending-stop reason. If the strategy is still free it
+    also regains ordinary current-run ownership; if a newer run owns it, the
+    old run remains an independently managed residual and the shared pending
+    stop reconciler still services it.
+    """
+    try:
+        db_session.expire_all()
+        run = db_session.query(SmStrategyRun).filter_by(id=run_id).first()
+        if run is None:
+            return False
+        if run.stopped_at is None:
+            return run.stop_requested_reason is not None
+
+        stopped_at = run.stopped_at
+        strategy_id = run.strategy_id
+        reason = run.stop_reason or "manual"
+        reopened = (
+            db_session.query(SmStrategyRun)
+            .filter(
+                SmStrategyRun.id == run_id,
+                SmStrategyRun.stopped_at == stopped_at,
+            )
+            .update(
+                {
+                    "stopped_at": None,
+                    "stop_reason": None,
+                    "stop_requested_at": utcnow(),
+                    "stop_requested_reason": reason,
+                },
+                synchronize_session=False,
+            )
+        )
+        if reopened != 1:
+            db_session.rollback()
+            db_session.expire_all()
+            current = db_session.query(SmStrategyRun).filter_by(id=run_id).first()
+            return bool(
+                current is not None
+                and current.stopped_at is None
+                and current.stop_requested_reason is not None
+            )
+
+        # Claim the ordinary UI/current-run pointer only when nobody newer owns
+        # it. This conditional update races safely with a fresh start.
+        db_session.query(SmStrategy).filter(
+            SmStrategy.id == strategy_id,
+            SmStrategy.current_run_id.is_(None),
+            SmStrategy.status == "stopped",
+        ).update(
+            {"status": "running", "current_run_id": run_id},
+            synchronize_session=False,
+        )
+        db_session.commit()
+        db_session.expire_all()
+        _forget_session_pnl(strategy_id)
+        return True
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not reopen run %s after a late entry fill", run_id)
         return False
 
 
@@ -1133,54 +1556,143 @@ def realized_pnl_since(
         return 0.0
 
 
+@dataclass(frozen=True, slots=True)
+class _PnlFillFact:
+    order_id: int
+    placed_at: datetime
+    kind: str
+    action: str
+    quantity: int
+    price: float | None
+
+
+def _pnl_fill_fact(order: SmStrategyOrder) -> _PnlFillFact | None:
+    status = (order.status or "").lower()
+    terminal_partial = status in {"cancelled", "rejected"}
+    if status != "complete" and not terminal_partial:
+        return None
+    if terminal_partial:
+        # A dead remainder does not erase the portion that traded. Zero means
+        # nothing traded and must never fall back to the requested quantity.
+        quantity = int(order.filled_qty or 0)
+    else:
+        # Some brokers omit filled_qty after confirming the whole request.
+        quantity = int(order.filled_qty or order.qty or 0)
+    if quantity <= 0:
+        return None
+    raw_price = float(order.avg_fill_price) if order.avg_fill_price is not None else 0.0
+    return _PnlFillFact(
+        order_id=int(order.id),
+        placed_at=order.placed_at,
+        kind=order.kind,
+        action=(order.action or "").upper(),
+        quantity=quantity,
+        price=raw_price if raw_price > 0 else None,
+    )
+
+
+def _fold_owner_pnl(
+    facts: list[_PnlFillFact], *, referenced: bool
+) -> tuple[float, int] | None:
+    """FIFO one provable owner; ``None`` means its ownership is ambiguous."""
+    # A positive but unpriced fact leaves checkpoint/live P&L authoritative for
+    # this owner. Do not manufacture a partial owner valuation from later rows.
+    if any(fact.price is None for fact in facts):
+        return 0.0, 0
+
+    lots: list[dict[str, Any]] = []
+    owner_action: str | None = None
+    realized = 0.0
+    settled = 0
+    for fact in sorted(facts, key=lambda item: (item.placed_at, item.order_id)):
+        if fact.kind == "entry":
+            if fact.action not in {"BUY", "SELL"}:
+                return None
+            open_actions = {lot["action"] for lot in lots if lot["remaining"] > 0}
+            if referenced:
+                if owner_action is not None and fact.action != owner_action:
+                    return None
+                owner_action = fact.action
+            elif open_actions and fact.action not in open_actions:
+                # NULL references can only be associated safely in chronological
+                # FIFO order. Overlapping opposite positions are unknowable.
+                return None
+            lots.append(
+                {
+                    "action": fact.action,
+                    "price": fact.price,
+                    "remaining": fact.quantity,
+                }
+            )
+            continue
+
+        remaining_lots = [lot for lot in lots if lot["remaining"] > 0]
+        if not remaining_lots:
+            # An exit placed before any attributable entry cannot be paired with
+            # an entry that happens to appear later in durable history.
+            return None
+        expected_exit = "SELL" if remaining_lots[0]["action"] == "BUY" else "BUY"
+        if fact.action != expected_exit:
+            return None
+
+        quantity_left = fact.quantity
+        matched = 0
+        for lot in remaining_lots:
+            lot_exit = "SELL" if lot["action"] == "BUY" else "BUY"
+            if fact.action != lot_exit:
+                return None
+            applied = min(quantity_left, int(lot["remaining"]))
+            sign = 1.0 if lot["action"] == "BUY" else -1.0
+            realized += (float(fact.price) - float(lot["price"])) * applied * sign
+            lot["remaining"] -= applied
+            quantity_left -= applied
+            matched += applied
+            if quantity_left <= 0:
+                break
+        # Broker evidence can exceed the locally provable owner quantity. Cap
+        # it here; never let it consume another position-reference group.
+        if matched:
+            settled += 1
+
+    return realized, settled
+
+
 def reconcile_run_pnl(run_id: int) -> float | None:
-    """Recompute a run's realized P&L from its own order rows, and store it.
+    """Recompute provable realized P&L from durable position-owner facts.
 
-    stop_run places the exits and finalises in the next statement rather than
-    waiting for the fills, because the position is on its way out and nothing
-    should be blocked on the broker. That left pnl_realized at whatever live
-    state held at that instant, which is zero because no leg had closed yet,
-    and clearing the state meant the fill arriving a moment later had nothing
-    to be applied to. The figure was then computed nowhere: a run that made
-    1500 recorded 0, unrecoverably.
-
-    The order rows carry everything needed, so the fill that arrives after
-    finalisation reconciles the row instead of being dropped. Returns the
-    figure written, or None when there is nothing to say.
+    Runs normally remain managed until fill-confirmed flatness. This repair is
+    for a late broker correction that arrives after live state was detached (or
+    during recovery): referenced owners are reconciled independently, while
+    legacy NULL rows use chronological FIFO within their leg. The stored value
+    is left untouched if ownership is ambiguous or no priced round trip exists.
     """
     try:
         row = db_session.query(SmStrategyRun).filter_by(id=run_id).first()
         if row is None:
             return None
 
-        per_leg: dict[Any, dict[str, Any]] = {}
+        owner_facts: dict[tuple[Any, ...], list[_PnlFillFact]] = {}
         for order in db_session.query(SmStrategyOrder).filter_by(run_id=run_id).all():
-            if order.status != "complete" or order.avg_fill_price is None:
+            fact = _pnl_fill_fact(order)
+            if fact is None:
                 continue
-            price = float(order.avg_fill_price)
-            if price <= 0:
-                # An entry of zero means the leg never traded, so nothing can
-                # be derived from it. Same rule the engine applies live.
-                continue
-            quantity = int(order.filled_qty or order.qty or 0)
-            leg = per_leg.setdefault(order.leg_id, {"entry": None, "action": None, "exits": []})
-            if order.kind == "entry":
-                leg["entry"] = price
-                leg["action"] = (order.action or "").upper()
-                leg["qty"] = quantity
+            if order.position_ref:
+                owner_key = ("referenced", order.leg_id, order.position_ref)
             else:
-                leg["exits"].append((price, quantity))
+                # Legacy rows are deliberately isolated from every referenced
+                # owner, even when their leg IDs are identical.
+                owner_key = ("legacy", order.leg_id)
+            owner_facts.setdefault(owner_key, []).append(fact)
 
         realized = 0.0
         settled = 0
-        for leg in per_leg.values():
-            entry = leg.get("entry")
-            if not entry:
-                continue
-            sign = 1.0 if leg.get("action") == "BUY" else -1.0
-            for price, quantity in leg["exits"]:
-                realized += (price - entry) * quantity * sign
-                settled += 1
+        for owner_key, facts in owner_facts.items():
+            folded = _fold_owner_pnl(facts, referenced=owner_key[0] == "referenced")
+            if folded is None:
+                return None
+            owner_realized, owner_settled = folded
+            realized += owner_realized
+            settled += owner_settled
 
         if not settled:
             # No round trip is recorded on any order row, so this cannot speak
@@ -1223,6 +1735,26 @@ def list_open_runs() -> list[SmStrategyRun]:
         return []
 
 
+def list_open_run_ids_after(after_id: int, limit: int) -> list[int]:
+    """A bounded ascending page of open run ids for background safety sweeps."""
+    try:
+        page_size = max(1, min(int(limit), 100))
+        rows = (
+            db_session.query(SmStrategyRun.id)
+            .filter(
+                SmStrategyRun.stopped_at.is_(None),
+                SmStrategyRun.id > max(0, int(after_id)),
+            )
+            .order_by(SmStrategyRun.id.asc())
+            .limit(page_size)
+            .all()
+        )
+        return [int(row[0]) for row in rows]
+    except Exception:
+        logger.exception("Could not page open runs after %s", after_id)
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Orders
 # ---------------------------------------------------------------------------
@@ -1240,6 +1772,7 @@ def record_order(run_id: int, leg_id: int, kind: str, order: dict) -> SmStrategy
             run_id=run_id,
             leg_id=leg_id,
             kind=kind,
+            position_ref=order.get("position_ref"),
             broker_order_id=order.get("broker_order_id"),
             symbol=order["symbol"],
             exchange=order["exchange"],
@@ -1258,6 +1791,134 @@ def record_order(run_id: int, leg_id: int, kind: str, order: dict) -> SmStrategy
         db_session.rollback()
         logger.exception("Could not record an order for run %s leg %s", run_id, leg_id)
         return None
+
+
+def fold_order_broker_frame(
+    order_id: int,
+    *,
+    status: str,
+    avg_fill_price: float | None,
+    filled_qty: int | None,
+    reject_reason: str | None = None,
+) -> OrderFactFold | None:
+    """Atomically fold one cumulative broker frame into an order row.
+
+    Broker updates can arrive concurrently and out of order. Quantity evidence
+    is cumulative, so only a positive increase produces a state-layer delta.
+    A working frame may add later fill evidence but can never reopen a terminal
+    row. A later ``complete`` frame upgrades a dead row only when it brings a
+    strictly higher cumulative quantity.
+
+    The conditional update includes the status and quantity observed by this
+    transaction. A losing worker retries from the winner's facts instead of
+    overwriting them with its stale snapshot.
+    """
+    incoming_status = str(status or "").strip().lower()
+    if incoming_status not in {"open", "complete", "cancelled", "rejected"}:
+        incoming_status = "open"
+
+    try:
+        incoming_qty = max(0, int(filled_qty or 0))
+    except (TypeError, ValueError):
+        incoming_qty = 0
+
+    for _attempt in range(8):
+        try:
+            db_session.expire_all()
+            row = db_session.query(SmStrategyOrder).filter_by(id=order_id).first()
+            if row is None:
+                return None
+
+            raw_previous_status = row.status
+            previous_status = str(raw_previous_status or "pending").strip().lower()
+            raw_previous_qty = row.filled_qty
+            try:
+                previous_qty = max(0, int(raw_previous_qty or 0))
+            except (TypeError, ValueError):
+                previous_qty = 0
+            previous_price = _num(row.avg_fill_price)
+
+            evidence_qty = incoming_qty
+            if incoming_status == "complete" and evidence_qty <= 0:
+                # A complete order with an omitted/zero broker quantity means
+                # the whole requested amount traded. Dead/working zeroes do
+                # not carry that implication.
+                evidence_qty = max(0, int(row.qty or 0))
+            cumulative_qty = max(previous_qty, evidence_qty)
+            fill_delta = cumulative_qty - previous_qty
+
+            if previous_status == "complete":
+                next_status = "complete"
+            elif previous_status in {"cancelled", "rejected"}:
+                if incoming_status == "complete" and fill_delta > 0:
+                    next_status = "complete"
+                else:
+                    next_status = previous_status
+            elif incoming_status in _TERMINAL_ORDER_STATUSES:
+                next_status = incoming_status
+            else:
+                next_status = "open"
+
+            status_changed = next_status != previous_status
+            changed = status_changed or fill_delta > 0
+            if not changed:
+                return OrderFactFold(
+                    order_id=order_id,
+                    previous_status=previous_status,
+                    status=previous_status,
+                    previous_filled_qty=previous_qty,
+                    cumulative_filled_qty=previous_qty,
+                    fill_delta=0,
+                    previous_average_fill_price=previous_price,
+                    average_fill_price=previous_price,
+                    changed=False,
+                )
+
+            fields: dict[str, Any] = {"status": next_status}
+            if fill_delta > 0:
+                fields["filled_qty"] = cumulative_qty
+                # None is intentional here. Retaining an older average after
+                # a larger unpriced cumulative fact would let reconciliation
+                # value quantity the broker never priced.
+                fields["avg_fill_price"] = avg_fill_price
+            if next_status == "complete" and previous_status != "complete":
+                fields["filled_at"] = utcnow()
+            if reject_reason is not None and next_status in {"cancelled", "rejected"}:
+                fields["reject_reason"] = reject_reason
+
+            query = db_session.query(SmStrategyOrder).filter(
+                SmStrategyOrder.id == order_id,
+                SmStrategyOrder.status == raw_previous_status,
+            )
+            if raw_previous_qty is None:
+                query = query.filter(SmStrategyOrder.filled_qty.is_(None))
+            else:
+                query = query.filter(SmStrategyOrder.filled_qty == raw_previous_qty)
+            updated = query.update(fields, synchronize_session=False)
+            if updated != 1:
+                db_session.rollback()
+                continue
+
+            db_session.commit()
+            db_session.expire_all()
+            return OrderFactFold(
+                order_id=order_id,
+                previous_status=previous_status,
+                status=next_status,
+                previous_filled_qty=previous_qty,
+                cumulative_filled_qty=cumulative_qty,
+                fill_delta=fill_delta,
+                previous_average_fill_price=previous_price,
+                average_fill_price=avg_fill_price if fill_delta > 0 else previous_price,
+                changed=True,
+            )
+        except Exception:
+            db_session.rollback()
+            logger.exception("Could not fold broker facts for order %s", order_id)
+            return None
+
+    logger.error("Could not fold broker facts for order %s after concurrent updates", order_id)
+    return None
 
 
 def update_order(
@@ -1293,6 +1954,47 @@ def update_order(
         return False
 
 
+def transition_order_terminal(
+    order_id: int,
+    status: str,
+    avg_fill_price: float | None = None,
+    filled_qty: int | None = None,
+    reject_reason: str | None = None,
+) -> bool:
+    """Atomically move one non-terminal order into a terminal status.
+
+    Returns True only to the worker whose conditional UPDATE won. Duplicate
+    terminal frames return False and must not mutate run state.
+    """
+    if status not in {"complete", "cancelled", "rejected"}:
+        return False
+    fields: dict[str, Any] = {"status": status}
+    if status == "complete":
+        fields["filled_at"] = utcnow()
+    if avg_fill_price is not None:
+        fields["avg_fill_price"] = avg_fill_price
+    if filled_qty is not None:
+        fields["filled_qty"] = filled_qty
+    if reject_reason is not None:
+        fields["reject_reason"] = reject_reason
+    try:
+        updated = (
+            db_session.query(SmStrategyOrder)
+            .filter(
+                SmStrategyOrder.id == order_id,
+                SmStrategyOrder.status.notin_(("complete", "cancelled", "rejected")),
+            )
+            .update(fields, synchronize_session=False)
+        )
+        db_session.commit()
+        db_session.expire_all()
+        return updated == 1
+    except Exception:
+        db_session.rollback()
+        logger.exception("Could not transition order %s to %s", order_id, status)
+        return False
+
+
 def get_order_by_broker_id(broker_order_id: str) -> SmStrategyOrder | None:
     """The strategy order carrying this broker reference, if any.
 
@@ -1311,6 +2013,128 @@ def get_order_by_broker_id(broker_order_id: str) -> SmStrategyOrder | None:
     except Exception:
         logger.exception("Could not look up strategy order %s", broker_order_id)
         return None
+
+
+def get_order(order_id: int) -> SmStrategyOrder | None:
+    """Read one strategy order by its durable row id."""
+    try:
+        return db_session.query(SmStrategyOrder).filter_by(id=order_id).first()
+    except Exception:
+        logger.exception("Could not read strategy order row %s", order_id)
+        return None
+
+
+def bind_order_acknowledgement(
+    order_id: int,
+    run_id: int,
+    leg_id: int,
+    *,
+    broker_order_id: str | None,
+    status: str,
+    reject_reason: str | None,
+) -> str:
+    """Repair one exact pre-dispatch row from its durable ack event.
+
+    Returns ``repaired``, ``already_bound``, ``conflict`` or ``missing``.
+    Only the exact pending row identified by id/run/leg may move. An existing
+    different broker id is never overwritten, and the statement also refuses
+    a broker id already carried by another strategy order. Replays preserve a
+    later terminal broker fact rather than reopening it.
+    """
+    desired_status = str(status or "").strip().lower()
+    if desired_status not in {"open", "rejected"}:
+        return "conflict"
+    desired_broker_id = str(broker_order_id).strip() if broker_order_id else None
+    if desired_status == "open" and not desired_broker_id:
+        return "conflict"
+
+    for _attempt in range(4):
+        try:
+            db_session.expire_all()
+            row = (
+                db_session.query(SmStrategyOrder)
+                .filter(
+                    SmStrategyOrder.id == order_id,
+                    SmStrategyOrder.run_id == run_id,
+                    SmStrategyOrder.leg_id == leg_id,
+                )
+                .first()
+            )
+            if row is None:
+                return "missing"
+
+            raw_status = row.status
+            current_status = str(raw_status or "pending").strip().lower()
+            raw_broker_id = row.broker_order_id
+            current_broker_id = str(raw_broker_id).strip() if raw_broker_id else None
+            if current_broker_id and current_broker_id != desired_broker_id:
+                return "conflict"
+
+            if desired_broker_id:
+                collision = (
+                    db_session.query(SmStrategyOrder.id)
+                    .filter(
+                        SmStrategyOrder.id != order_id,
+                        SmStrategyOrder.broker_order_id == desired_broker_id,
+                    )
+                    .first()
+                )
+                if collision is not None:
+                    return "conflict"
+
+            if current_status != "pending":
+                if desired_status == "open" and current_broker_id == desired_broker_id:
+                    # Open or a later terminal fact with the exact id is
+                    # stronger than the lost initial acknowledgement.
+                    return "already_bound"
+                if (
+                    desired_status == "rejected"
+                    and current_status == "rejected"
+                    and current_broker_id == desired_broker_id
+                ):
+                    return "already_bound"
+                return "conflict"
+
+            fields: dict[str, Any] = {"status": desired_status}
+            if desired_broker_id:
+                fields["broker_order_id"] = desired_broker_id
+            if desired_status == "rejected":
+                fields["reject_reason"] = reject_reason
+
+            query = db_session.query(SmStrategyOrder).filter(
+                SmStrategyOrder.id == order_id,
+                SmStrategyOrder.run_id == run_id,
+                SmStrategyOrder.leg_id == leg_id,
+                SmStrategyOrder.status == raw_status,
+            )
+            if raw_broker_id is None:
+                query = query.filter(SmStrategyOrder.broker_order_id.is_(None))
+            else:
+                query = query.filter(SmStrategyOrder.broker_order_id == raw_broker_id)
+            if desired_broker_id:
+                other_owner = exists().where(
+                    (SmStrategyOrder.id != order_id)
+                    & (SmStrategyOrder.broker_order_id == desired_broker_id)
+                )
+                query = query.filter(~other_owner)
+
+            updated = query.update(fields, synchronize_session=False)
+            if updated != 1:
+                db_session.rollback()
+                continue
+            db_session.commit()
+            db_session.expire_all()
+            return "repaired"
+        except Exception:
+            db_session.rollback()
+            logger.exception(
+                "Could not bind acknowledgement for order row %s on run %s",
+                order_id,
+                run_id,
+            )
+            return "conflict"
+
+    return "conflict"
 
 
 def list_orders(run_id: int) -> list[dict]:
@@ -1347,6 +2171,26 @@ def list_orders_for_strategy(strategy_id: int, run_id: int | None = None) -> lis
 # ---------------------------------------------------------------------------
 # Events
 # ---------------------------------------------------------------------------
+
+
+def list_order_ack_events(run_id: int) -> list[dict] | None:
+    """All append-only lost-ack witnesses for one run, oldest first."""
+    try:
+        rows = (
+            db_session.query(SmStrategyEvent)
+            .filter(
+                SmStrategyEvent.run_id == run_id,
+                SmStrategyEvent.kind == "order_ack_unrecorded",
+            )
+            .order_by(SmStrategyEvent.id.asc())
+            .all()
+        )
+        return [event_to_dict(row) for row in rows]
+    except Exception:
+        logger.exception("Could not list unrecorded acknowledgements for run %s", run_id)
+        # Empty means "there are no witnesses". None means the safety query
+        # itself failed and callers must keep the run reserved.
+        return None
 
 
 def record_event(

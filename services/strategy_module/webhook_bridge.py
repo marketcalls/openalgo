@@ -67,4 +67,6 @@ def stop_run(
         ok=bool(result.get("ok")),
         run_id=run_id,
         error=result.get("error"),
+        stop_pending=(bool(result.get("stop_pending")) if "stop_pending" in result else None),
+        exits=list(result.get("exits") or []),
     )

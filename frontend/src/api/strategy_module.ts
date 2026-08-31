@@ -17,10 +17,16 @@ import { useSocketContext } from '@/components/socket/SocketProvider'
 import { normalizeExpiryCode } from '@/lib/strategyContracts'
 import { useAuthStore } from '@/stores/authStore'
 import type {
+  BrokerOrder,
+  BrokerPosition,
+  BrokerStrategyContext,
+  BrokerTrade,
   Checkpoint,
   LegPosition,
   LegState,
   Order,
+  ReconciledBrokerOrder,
+  ReconciledBrokerTrade,
   Run,
   RunMode,
   Strategy,
@@ -54,8 +60,8 @@ export const strategyQueryKeys = {
   // The broker's own books, narrowed to this strategy. Keyed separately from
   // the local order rows because they answer a different question: what the
   // broker says happened, rather than what the engine asked for.
-  brokerBook: (id: number, book: string) =>
-    [...strategyQueryKeys.strategy(id), 'broker-book', book] as const,
+  brokerBook: (id: number, runId: number, book: string) =>
+    [...strategyQueryKeys.strategy(id), 'broker-book', runId, book] as const,
 }
 
 /**
@@ -136,6 +142,8 @@ export async function deleteStrategy(id: number): Promise<void> {
 export interface StartedRun {
   run_id: number
   mode: RunMode
+  /** False means a broker order may exist but its durable acknowledgement is pending repair. */
+  acknowledged?: boolean
   /** Per-leg outcome, so a caller can say which leg failed and why. */
   legs: Array<{
     leg_id?: number | null
@@ -156,6 +164,10 @@ export async function startRun(id: number, mode: RunMode): Promise<StartedRun> {
 export interface ExitOutcome {
   run_id: number
   exits: Array<Record<string, unknown>>
+  /** True while accepted exit orders still own exposure. */
+  stop_pending: boolean
+  /** Present only on response surfaces that can prove confirmed-flat finalisation. */
+  run_stopped?: boolean
 }
 
 export async function stopRun(id: number): Promise<ExitOutcome> {
@@ -168,8 +180,9 @@ export async function closeAll(id: number): Promise<ExitOutcome> {
   return response.data
 }
 
-export interface LegCloseOutcome extends ExitOutcome {
+export interface LegCloseOutcome extends Omit<ExitOutcome, 'stop_pending'> {
   leg_id: number | string
+  stop_pending?: boolean
   /** True when that leg was the last one open and the run finalised with it. */
   run_stopped: boolean
 }
@@ -201,6 +214,8 @@ export async function setLiveEnabled(id: number, enabled: boolean): Promise<bool
 export interface KillSwitchOutcome {
   webhook_locked: boolean
   run_stopped: boolean
+  /** True while accepted exit orders still own exposure. */
+  stop_pending: boolean
   message?: string
 }
 
@@ -235,22 +250,44 @@ export async function listOrders(id: number, runId?: number): Promise<Order[]> {
  */
 export function useBrokerBook<T>(
   strategyId: number | null,
+  runId: number | null,
   book: 'orderbook' | 'tradebook' | 'positions',
-  fetcher: (id: number, runId?: number) => Promise<T | null>,
-  isRunning: boolean
+  fetcher: (id: number, runId?: number, signal?: AbortSignal) => Promise<T | null>,
+  isRunning: boolean,
+  enabled = true
 ) {
+  const queryClient = useQueryClient()
+  const active =
+    enabled &&
+    strategyId !== null &&
+    Number.isFinite(strategyId) &&
+    strategyId > 0 &&
+    runId !== null &&
+    Number.isFinite(runId) &&
+    runId > 0
+  const queryKey = strategyQueryKeys.brokerBook(strategyId ?? 0, runId ?? 0, book)
   const query = useQuery({
-    queryKey: strategyQueryKeys.brokerBook(strategyId ?? 0, book),
-    queryFn: () => fetcher(strategyId as number),
-    enabled: strategyId !== null,
-    refetchInterval: strategyId !== null && isRunning ? LIVE_POLL_MS : false,
+    queryKey,
+    queryFn: ({ signal }) => fetcher(strategyId as number, runId as number, signal),
+    enabled: active,
+    refetchInterval: active && isRunning ? LIVE_POLL_MS : false,
+    retry: false,
   })
+  useEffect(() => {
+    if (!active) {
+      void queryClient.cancelQueries({
+        queryKey: strategyQueryKeys.brokerBook(strategyId ?? 0, runId ?? 0, book),
+        exact: true,
+      })
+    }
+  }, [active, book, queryClient, runId, strategyId])
   return {
-    rows: query.data ?? null,
-    isLoading: query.isLoading,
+    rows: active ? (query.data ?? null) : null,
+    isLoading: active && query.isLoading,
+    active,
     // A null payload is the broker refusing, which the fetcher already turned
     // into a value rather than a throw.
-    unavailable: !query.isLoading && query.data === null,
+    unavailable: active && !query.isLoading && query.data === null,
   }
 }
 
@@ -268,57 +305,336 @@ export function useBrokerBook<T>(
  * failing tab must not take out the detail page.
  */
 export interface BrokerOrderbook {
-  orders: Record<string, unknown>[]
+  orders: BrokerOrder[]
   statistics: Record<string, unknown> | null
+}
+
+interface BrokerBookSuccessEnvelope {
+  status: 'success'
+  data?: unknown
+}
+
+interface BrokerBookErrorEnvelope {
+  status: 'error'
+  message?: string
+}
+
+type BrokerBookEnvelope = BrokerBookSuccessEnvelope | BrokerBookErrorEnvelope
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function text(value: unknown): string {
+  return value === null || value === undefined ? '' : String(value).trim()
+}
+
+function numberOrNull(value: unknown): number | null {
+  if (typeof value !== 'number' && typeof value !== 'string') return null
+  if (typeof value === 'string' && value.trim() === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function normalizeBrokerOrder(value: unknown): BrokerOrder | null {
+  const row = record(value)
+  if (!row) return null
+  return {
+    ...row,
+    orderid: text(row.orderid),
+    symbol: text(row.symbol),
+    exchange: text(row.exchange),
+    action: text(row.action).toUpperCase(),
+    quantity: numberOrNull(row.quantity),
+    price: numberOrNull(row.price),
+    trigger_price: numberOrNull(row.trigger_price),
+    pricetype: text(row.pricetype),
+    product: text(row.product),
+    order_status: text(row.order_status).toLowerCase(),
+    timestamp: text(row.timestamp) || null,
+  }
+}
+
+function normalizeBrokerTrade(value: unknown): BrokerTrade | null {
+  const row = record(value)
+  if (!row) return null
+  return {
+    ...row,
+    orderid: text(row.orderid),
+    symbol: text(row.symbol),
+    exchange: text(row.exchange),
+    product: text(row.product),
+    action: text(row.action).toUpperCase(),
+    quantity: numberOrNull(row.quantity),
+    average_price: numberOrNull(row.average_price),
+    trade_value: numberOrNull(row.trade_value),
+    timestamp: text(row.timestamp) || null,
+  }
+}
+
+function normalizeBrokerPosition(value: unknown): BrokerPosition | null {
+  const row = record(value)
+  if (!row) return null
+  return {
+    ...row,
+    symbol: text(row.symbol),
+    exchange: text(row.exchange),
+    product: text(row.product),
+    quantity: numberOrNull(row.quantity),
+    average_price: numberOrNull(row.average_price),
+    ltp: numberOrNull(row.ltp),
+    pnl: numberOrNull(row.pnl),
+  }
 }
 
 async function readBook<T>(
   id: number,
   path: string,
   runId: number | undefined,
-  pick: (payload: Record<string, unknown>) => T
+  pick: (payload: BrokerBookSuccessEnvelope) => T,
+  signal?: AbortSignal
 ): Promise<T | null> {
   try {
-    const response = await webClient.get<Record<string, unknown>>(
-      `${BASE}/strategies/${id}/${path}`,
-      { params: runId ? { run_id: runId } : {} }
-    )
-    if (response.data?.status !== 'success') return null
-    return pick(response.data)
-  } catch {
+    const response = await webClient.get<BrokerBookEnvelope>(`${BASE}/strategies/${id}/${path}`, {
+      params: runId !== undefined ? { run_id: runId } : {},
+      signal,
+    })
+    const payload = record(response.data) as BrokerBookEnvelope | null
+    if (payload?.status !== 'success') return null
+    return pick(payload)
+  } catch (error) {
+    // TanStack aborts the previous request when a run/tab changes. Preserve
+    // that cancellation so an old run cannot publish a late fallback frame.
+    if (signal?.aborted) throw error
     return null
   }
 }
 
 export function fetchStrategyOrderbook(
   id: number,
-  runId?: number
+  runId?: number,
+  signal?: AbortSignal
 ): Promise<BrokerOrderbook | null> {
-  return readBook(id, 'orderbook', runId, (payload) => {
-    const data = (payload.data ?? {}) as Record<string, unknown>
-    return {
-      orders: Array.isArray(data.orders) ? (data.orders as Record<string, unknown>[]) : [],
-      statistics: (data.statistics ?? null) as Record<string, unknown> | null,
-    }
-  })
+  return readBook(
+    id,
+    'orderbook',
+    runId,
+    (payload) => {
+      const data = record(payload.data) ?? {}
+      return {
+        orders: Array.isArray(data.orders)
+          ? data.orders.map(normalizeBrokerOrder).filter((row): row is BrokerOrder => row !== null)
+          : [],
+        statistics: record(data.statistics),
+      }
+    },
+    signal
+  )
 }
 
 export function fetchStrategyTradebook(
   id: number,
-  runId?: number
-): Promise<Record<string, unknown>[] | null> {
-  return readBook(id, 'tradebook', runId, (payload) =>
-    Array.isArray(payload.data) ? (payload.data as Record<string, unknown>[]) : []
+  runId?: number,
+  signal?: AbortSignal
+): Promise<BrokerTrade[] | null> {
+  return readBook(
+    id,
+    'tradebook',
+    runId,
+    (payload) =>
+      Array.isArray(payload.data)
+        ? payload.data.map(normalizeBrokerTrade).filter((row): row is BrokerTrade => row !== null)
+        : [],
+    signal
   )
 }
 
 export function fetchStrategyPositions(
   id: number,
-  runId?: number
-): Promise<Record<string, unknown>[] | null> {
-  return readBook(id, 'positions', runId, (payload) =>
-    Array.isArray(payload.data) ? (payload.data as Record<string, unknown>[]) : []
+  runId?: number,
+  signal?: AbortSignal
+): Promise<BrokerPosition[] | null> {
+  return readBook(
+    id,
+    'positions',
+    runId,
+    (payload) =>
+      Array.isArray(payload.data)
+        ? payload.data
+            .map(normalizeBrokerPosition)
+            .filter((row): row is BrokerPosition => row !== null)
+        : [],
+    signal
   )
+}
+
+function canonicalStatus(value: string): string {
+  const normalized = value.trim().toLowerCase().replaceAll('_', ' ')
+  return normalized === 'canceled' ? 'cancelled' : normalized
+}
+
+function sameText(left: unknown, right: unknown): boolean {
+  return text(left).toUpperCase() === text(right).toUpperCase()
+}
+
+function localByBrokerId(orders: Order[]): Map<string, Order[]> {
+  const grouped = new Map<string, Order[]>()
+  for (const order of orders) {
+    const id = text(order.broker_order_id)
+    if (!id) continue
+    const rows = grouped.get(id) ?? []
+    rows.push(order)
+    grouped.set(id, rows)
+  }
+  return grouped
+}
+
+function strategyContext(
+  order: Order | null,
+  reconciliation: BrokerStrategyContext['reconciliation'],
+  disagreements: string[] = []
+): BrokerStrategyContext {
+  return {
+    run_id: order?.run_id ?? null,
+    leg_id: order?.leg_id ?? null,
+    kind: order?.kind ?? null,
+    local_status: order?.status ?? null,
+    position_ref: order?.position_ref ?? null,
+    reject_reason: order?.reject_reason ?? null,
+    reconciliation,
+    disagreements,
+  }
+}
+
+export interface ReconciledBrokerBook<T> {
+  confirmed: T[]
+  localOnly: Order[]
+}
+
+/** Join only on a unique broker order id; resemblance is never ownership. */
+export function reconcileBrokerOrders(
+  brokerRows: BrokerOrder[],
+  localOrders: Order[]
+): ReconciledBrokerBook<ReconciledBrokerOrder> {
+  const locals = localByBrokerId(localOrders)
+  const brokerIdCounts = new Map<string, number>()
+  for (const row of brokerRows) {
+    const id = text(row.orderid)
+    brokerIdCounts.set(id, (brokerIdCounts.get(id) ?? 0) + 1)
+  }
+  const matchedLocalIds = new Set<number>()
+  const confirmed = brokerRows.map((row) => {
+    const id = text(row.orderid)
+    const candidates = id ? (locals.get(id) ?? []) : []
+    if (candidates.length > 1 || (brokerIdCounts.get(id) ?? 0) > 1) {
+      return { ...row, ...strategyContext(null, 'ambiguous') }
+    }
+    const local = candidates[0] ?? null
+    if (!local) return { ...row, ...strategyContext(null, 'unmatched') }
+
+    matchedLocalIds.add(local.id)
+    const disagreements: string[] = []
+    if (row.quantity !== null && row.quantity !== local.qty) disagreements.push('quantity')
+    if (row.price !== null && row.price !== local.price) disagreements.push('price')
+    if (canonicalStatus(row.order_status) !== canonicalStatus(local.status)) {
+      disagreements.push('status')
+    }
+    if (!sameText(row.symbol, local.symbol)) disagreements.push('symbol')
+    if (!sameText(row.exchange, local.exchange)) disagreements.push('exchange')
+    if (!sameText(row.action, local.action)) disagreements.push('action')
+    return {
+      ...row,
+      ...strategyContext(local, disagreements.length > 0 ? 'disagrees' : 'matched', disagreements),
+    }
+  })
+  return {
+    confirmed,
+    localOnly: localOrders.filter((order) => !matchedLocalIds.has(order.id)),
+  }
+}
+
+/** A broker order may legitimately have several fills; duplicate local IDs may not be guessed. */
+export function reconcileBrokerTrades(
+  brokerRows: BrokerTrade[],
+  localOrders: Order[]
+): ReconciledBrokerBook<ReconciledBrokerTrade> {
+  const locals = localByBrokerId(localOrders.filter(hasTradeFill))
+  const brokerTotals = new Map<
+    string,
+    {
+      quantity: number
+      quantityKnown: boolean
+      weightedValue: number
+      pricedQuantity: number
+      priceKnown: boolean
+    }
+  >()
+  for (const row of brokerRows) {
+    const id = text(row.orderid)
+    const total = brokerTotals.get(id) ?? {
+      quantity: 0,
+      quantityKnown: true,
+      weightedValue: 0,
+      pricedQuantity: 0,
+      priceKnown: true,
+    }
+    if (row.quantity === null) {
+      total.quantityKnown = false
+      total.priceKnown = false
+    } else {
+      total.quantity += row.quantity
+    }
+    if (row.quantity !== null && row.quantity > 0 && row.average_price !== null) {
+      total.weightedValue += row.quantity * row.average_price
+      total.pricedQuantity += row.quantity
+    } else if (row.quantity !== null && row.quantity > 0) {
+      total.priceKnown = false
+    }
+    brokerTotals.set(id, total)
+  }
+  const matchedLocalIds = new Set<number>()
+  const confirmed = brokerRows.map((row) => {
+    const id = text(row.orderid)
+    const candidates = id ? (locals.get(id) ?? []) : []
+    if (candidates.length > 1) return { ...row, ...strategyContext(null, 'ambiguous') }
+    const local = candidates[0] ?? null
+    if (!local) return { ...row, ...strategyContext(null, 'unmatched') }
+
+    matchedLocalIds.add(local.id)
+    const disagreements: string[] = []
+    const total = brokerTotals.get(id)
+    const localQuantity = filledQuantity(local)
+    if (total?.quantityKnown && Math.abs(total.quantity - localQuantity) > 1e-9) {
+      disagreements.push('quantity')
+    }
+    const localPrice = usableFillPrice(local)
+    const brokerAverage =
+      total?.quantityKnown && total.priceKnown && total.pricedQuantity > 0
+        ? total.weightedValue / total.pricedQuantity
+        : null
+    // Missing local valuation is unknown, not a contradiction. The broker's
+    // priced fill remains primary and no zero price is invented for comparison.
+    if (
+      localPrice !== null &&
+      brokerAverage !== null &&
+      Math.abs(brokerAverage - localPrice) > 1e-9
+    ) {
+      disagreements.push('average price')
+    }
+    if (!sameText(row.symbol, local.symbol)) disagreements.push('symbol')
+    if (!sameText(row.exchange, local.exchange)) disagreements.push('exchange')
+    if (!sameText(row.action, local.action)) disagreements.push('action')
+    return {
+      ...row,
+      ...strategyContext(local, disagreements.length > 0 ? 'disagrees' : 'matched', disagreements),
+    }
+  })
+  return {
+    confirmed,
+    localOnly: localOrders.filter((order) => !matchedLocalIds.has(order.id)),
+  }
 }
 
 export async function listEvents(id: number, limit = 500): Promise<StrategyEvent[]> {
@@ -836,9 +1152,9 @@ export function useStrategyListPnl(rows: StrategySummary[]): Map<number, Strateg
 // ---------------------------------------------------------------------------
 // Derivations
 //
-// Positions and the tradebook have no endpoints of their own: both are views of
-// the order history, and deriving them here keeps one definition of what a fill
-// means rather than one per tab.
+// Local position/trade audit fallbacks are views of the order history. The
+// broker-backed tabs use the endpoints above as primary truth and retain these
+// derivations for history and explicit unavailable-broker fallback.
 // ---------------------------------------------------------------------------
 
 /** One completed entry-and-exit pair on a leg. */
@@ -857,11 +1173,28 @@ export interface RoundTrip {
   pnl: number
 }
 
+function filledQuantity(order: Order): number {
+  const status = canonicalStatus(order.status)
+  // A positive executed quantity is evidence regardless of the order's final
+  // state: a working order may already be partially filled and a rejection can
+  // reject only the remainder. Requested quantity is a legacy fallback only
+  // for a complete row whose executed quantity was never recorded.
+  const raw = order.filled_qty !== null ? order.filled_qty : status === 'complete' ? order.qty : 0
+  const qty = Number(raw ?? 0)
+  return Number.isFinite(qty) && qty > 0 ? qty : 0
+}
+
+function usableFillPrice(order: Order): number | null {
+  const price = Number(order.avg_fill_price)
+  return Number.isFinite(price) && price > 0 ? price : null
+}
+
+function hasTradeFill(order: Order): boolean {
+  return filledQuantity(order) > 0
+}
+
 function isFilled(order: Order): boolean {
-  if ((order.status || '').toLowerCase() !== 'complete') return false
-  const qty = Number(order.filled_qty ?? order.qty ?? 0)
-  const price = Number(order.avg_fill_price ?? 0)
-  return qty > 0 && price > 0
+  return hasTradeFill(order) && usableFillPrice(order) !== null
 }
 
 function orderTime(order: Order): string {
@@ -950,11 +1283,11 @@ export interface DerivedPosition {
   product: string
   net_qty: number
   side: 'long' | 'short' | 'flat'
-  avg_entry_price: number
+  avg_entry_price: number | null
   ltp: number | null
-  unrealized_pnl: number
+  unrealized_pnl: number | null
   /** Realized on this contract across every run of the strategy. */
-  realized_pnl_lifetime: number
+  realized_pnl_lifetime: number | null
 }
 
 /**
@@ -979,7 +1312,7 @@ export function derivePositions(
 
   const byContract = new Map<string, Order[]>()
   for (const order of orders) {
-    if (!isFilled(order)) continue
+    if (!hasTradeFill(order)) continue
     const key = `${order.symbol}|${order.exchange}`
     const list = byContract.get(key)
     if (list) list.push(order)
@@ -994,20 +1327,25 @@ export function derivePositions(
     interface Lot {
       side: 1 | -1
       qty: number
-      price: number
+      price: number | null
     }
     const open: Lot[] = []
     let realized = 0
+    let realizedKnown = true
 
     for (const order of list) {
       const side: 1 | -1 = (order.action || '').toUpperCase() === 'BUY' ? 1 : -1
-      let remaining = Number(order.filled_qty ?? order.qty ?? 0)
-      const price = Number(order.avg_fill_price ?? 0)
+      let remaining = filledQuantity(order)
+      const price = usableFillPrice(order)
 
       while (remaining > 0 && open.length > 0 && open[0].side !== side) {
         const lot = open[0]
         const matched = Math.min(remaining, lot.qty)
-        realized += (price - lot.price) * matched * lot.side
+        if (price === null || lot.price === null) {
+          realizedKnown = false
+        } else {
+          realized += (price - lot.price) * matched * lot.side
+        }
         lot.qty -= matched
         remaining -= matched
         if (lot.qty <= 0) open.shift()
@@ -1017,13 +1355,20 @@ export function derivePositions(
 
     const netQty = open.reduce((sum, lot) => sum + lot.qty * lot.side, 0)
     const grossQty = open.reduce((sum, lot) => sum + lot.qty, 0)
+    const openValuationKnown = open.every((lot) => lot.price !== null)
     const avgEntry =
-      grossQty > 0 ? open.reduce((sum, lot) => sum + lot.qty * lot.price, 0) / grossQty : 0
+      grossQty > 0 && openValuationKnown
+        ? open.reduce((sum, lot) => sum + lot.qty * (lot.price as number), 0) / grossQty
+        : null
 
     const live = liveByContract.get(`${symbol.toUpperCase()}|${exchange.toUpperCase()}`)
     const ltp = live?.ltp ?? null
     const unrealized =
-      ltp != null && netQty !== 0 ? (ltp - avgEntry) * Math.abs(netQty) * (netQty > 0 ? 1 : -1) : 0
+      netQty === 0
+        ? 0
+        : ltp != null && avgEntry !== null
+          ? (ltp - avgEntry) * Math.abs(netQty) * (netQty > 0 ? 1 : -1)
+          : null
 
     positions.push({
       symbol,
@@ -1034,7 +1379,7 @@ export function derivePositions(
       avg_entry_price: avgEntry,
       ltp,
       unrealized_pnl: unrealized,
-      realized_pnl_lifetime: realized,
+      realized_pnl_lifetime: realizedKnown ? realized : null,
     })
   }
 
@@ -1051,8 +1396,8 @@ export interface DerivedTrade {
   exchange: string
   action: string
   filled_qty: number
-  avg_fill_price: number
-  trade_value: number
+  avg_fill_price: number | null
+  trade_value: number | null
   broker_order_id: string | null
   filled_at: string
 }
@@ -1060,10 +1405,10 @@ export interface DerivedTrade {
 /** Every fill this strategy produced, newest first. */
 export function deriveTrades(orders: Order[]): DerivedTrade[] {
   return orders
-    .filter(isFilled)
+    .filter(hasTradeFill)
     .map((order) => {
-      const qty = Number(order.filled_qty ?? order.qty ?? 0)
-      const price = Number(order.avg_fill_price ?? 0)
+      const qty = filledQuantity(order)
+      const price = usableFillPrice(order)
       return {
         order_id: order.id,
         run_id: order.run_id,
@@ -1074,7 +1419,7 @@ export function deriveTrades(orders: Order[]): DerivedTrade[] {
         action: order.action,
         filled_qty: qty,
         avg_fill_price: price,
-        trade_value: qty * price,
+        trade_value: price === null ? null : qty * price,
         broker_order_id: order.broker_order_id,
         filled_at: orderTime(order),
       }

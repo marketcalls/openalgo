@@ -69,6 +69,33 @@ ADDED_COLUMNS = (
         "product",
         "VARCHAR(10)",
     ),
+    (
+        "sm_strategy_order",
+        "position_ref",
+        "VARCHAR(32)",
+    ),
+    (
+        "sm_strategy_run",
+        "stop_requested_at",
+        "DATETIME",
+    ),
+    (
+        "sm_strategy_run",
+        "stop_requested_reason",
+        "VARCHAR(30)",
+    ),
+)
+
+
+# Indexes added after the original tables shipped. An index must be applied
+# separately because create_all() does not alter a table it finds already present.
+ADDED_INDEXES = (
+    (
+        "sm_strategy_order",
+        "ix_sm_order_run_leg_position",
+        "CREATE INDEX ix_sm_order_run_leg_position "
+        "ON sm_strategy_order (run_id, leg_id, position_ref)",
+    ),
 )
 
 
@@ -107,6 +134,36 @@ def add_missing_columns(engine):
             print(f"  [OK] Added {table}.{column}")
         except Exception as exc:
             print(f"  [FAIL] Could not add {table}.{column}: {exc}")
+            return False
+    return True
+
+
+def missing_indexes(engine):
+    """Which of ADDED_INDEXES are not on their table yet."""
+    inspector = inspect(engine)
+    present_tables = set(inspector.get_table_names())
+    missing = []
+    for table, index, ddl in ADDED_INDEXES:
+        if table not in present_tables:
+            continue
+        names = {item["name"] for item in inspector.get_indexes(table)}
+        if index not in names:
+            missing.append((table, index, ddl))
+    return missing
+
+
+def add_missing_indexes(engine):
+    """Create each missing index after its nullable columns exist."""
+    missing = missing_indexes(engine)
+    if not missing:
+        return True
+    for table, index, ddl in missing:
+        try:
+            with engine.begin() as connection:
+                connection.exec_driver_sql(ddl)
+            print(f"  [OK] Added {table}.{index}")
+        except Exception as exc:
+            print(f"  [FAIL] Could not add {table}.{index}: {exc}")
             return False
     return True
 
@@ -168,10 +225,13 @@ def status(engine):
 
     absent = [t for t in TABLES if t not in present]
     columns = missing_columns(engine)
+    indexes = missing_indexes(engine)
     for table, column, _ddl in columns:
         print(f"  {table}.{column:<19} MISSING")
+    for table, index, _ddl in indexes:
+        print(f"  {table}.{index:<19} MISSING")
 
-    if not absent and not columns:
+    if not absent and not columns and not indexes:
         print("Up to date. Nothing to do.")
         return True
 
@@ -183,6 +243,10 @@ def status(engine):
         print(f"Migration needed. Would add {len(columns)} column(s):")
         for table, column, _ddl in columns:
             print(f"  {table}.{column}")
+    if indexes:
+        print(f"Migration needed. Would add {len(indexes)} index(es):")
+        for table, index, _ddl in indexes:
+            print(f"  {table}.{index}")
     return False
 
 
@@ -194,7 +258,7 @@ def apply(engine):
         # Not "nothing to do": a table that exists is skipped by create_all,
         # so a column added after the table first shipped only ever arrives
         # through this path.
-        return add_missing_columns(engine)
+        return add_missing_columns(engine) and add_missing_indexes(engine)
 
     metadata = load_metadata()
     # checkfirst=True is what makes this safe to re-run: a table that already
@@ -213,7 +277,7 @@ def apply(engine):
     # A partially applied migration can leave some tables present and some
     # absent, so the columns still have to be checked on the ones that were
     # already there.
-    return add_missing_columns(engine)
+    return add_missing_columns(engine) and add_missing_indexes(engine)
 
 
 def main():

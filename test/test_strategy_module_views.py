@@ -53,6 +53,7 @@ def _order_rows():
             "leg_id": 1,
             "kind": "entry",
             "status": "complete",
+            "qty": 75,
         },
         {
             "broker_order_id": OURS_TWO,
@@ -61,8 +62,36 @@ def _order_rows():
             "leg_id": 2,
             "kind": "entry",
             "status": "complete",
+            "qty": 75,
         },
     ]
+
+
+def _position_order(
+    *,
+    run_id,
+    position_ref,
+    symbol,
+    action="BUY",
+    filled_qty=25,
+    leg_id=1,
+):
+    return {
+        "run_id": run_id,
+        "leg_id": leg_id,
+        "position_ref": position_ref,
+        "broker_order_id": f"{run_id}-{position_ref}-{action}",
+        "symbol": symbol,
+        "exchange": "NFO",
+        "product": "NRML",
+        "kind": "entry" if action == "BUY" else "exit_signal",
+        "action": action,
+        "status": "complete",
+        "qty": filled_qty,
+        "filled_qty": filled_qty,
+        "avg_fill_price": 100.0 if action == "BUY" else 110.0,
+        "placed_at": f"2026-05-28T03:{50 if action == 'BUY' else 51}:00+00:00",
+    }
 
 
 @contextmanager
@@ -70,6 +99,19 @@ def a_store(rows=None, mode="live", product="NRML", run="default", runs="default
     """Patch the store this module reads, and hand back the mocks."""
     if rows is None:
         rows = _order_rows()
+    rows = [
+        {
+            "run_id": RUN_ID,
+            "leg_id": index,
+            "kind": "entry",
+            "position_ref": f"fixture-owner-{index}",
+            "action": "BUY",
+            "product": product,
+            "placed_at": f"2026-05-28T03:{40 + index}:00+00:00",
+            **row,
+        }
+        for index, row in enumerate(rows, start=1)
+    ]
     if run == "default":
         run = SimpleNamespace(id=RUN_ID, strategy_id=STRATEGY_ID, mode=mode)
     if runs == "default":
@@ -395,6 +437,210 @@ def test_a_contract_whose_only_order_was_rejected_is_not_claimed():
     assert result["data"] == []
 
 
+@pytest.mark.parametrize("status", ["pending", "open", "rejected", "cancelled"])
+def test_any_status_with_explicit_positive_fill_claims_its_position(status):
+    rows = [
+        {
+            "broker_order_id": OURS_ONE,
+            "symbol": CE,
+            "exchange": "NFO",
+            "status": status,
+            "filled_qty": 25,
+        }
+    ]
+    with a_store(rows=rows), live_books():
+        result = views.strategy_positions(STRATEGY_ID, API_KEY)
+
+    assert [row["symbol"] for row in result["data"]] == [CE]
+
+
+@pytest.mark.parametrize("status", ["pending", "open", "rejected", "cancelled"])
+@pytest.mark.parametrize("filled_qty", [None, 0, "invalid"])
+def test_noncomplete_without_explicit_positive_fill_claims_no_position(status, filled_qty):
+    rows = [
+        {
+            "broker_order_id": OURS_ONE,
+            "symbol": CE,
+            "exchange": "NFO",
+            "status": status,
+            "filled_qty": filled_qty,
+        }
+    ]
+    with a_store(rows=rows), live_books():
+        result = views.strategy_positions(STRATEGY_ID, API_KEY)
+
+    assert result["data"] == []
+
+
+def test_a_complete_order_without_fill_quantity_retains_legacy_position_attribution():
+    rows = [
+        {
+            "broker_order_id": OURS_ONE,
+            "symbol": CE,
+            "exchange": "NFO",
+            "status": "complete",
+            "filled_qty": None,
+            "qty": 75,
+        }
+    ]
+    with a_store(rows=rows), live_books():
+        result = views.strategy_positions(STRATEGY_ID, API_KEY)
+
+    assert [row["symbol"] for row in result["data"]] == [CE]
+
+
+@pytest.mark.parametrize("filled_qty", [0, -1, "invalid"])
+def test_a_complete_order_with_nonpositive_or_invalid_explicit_fill_claims_no_position(
+    filled_qty,
+):
+    rows = [
+        {
+            "broker_order_id": OURS_ONE,
+            "symbol": CE,
+            "exchange": "NFO",
+            "status": "complete",
+            "filled_qty": filled_qty,
+            "qty": 75,
+        }
+    ]
+    with a_store(rows=rows), live_books():
+        result = views.strategy_positions(STRATEGY_ID, API_KEY)
+
+    assert result["data"] == []
+
+
+def test_explicit_positive_fill_is_position_evidence_even_when_ack_id_was_not_persisted():
+    rows = [
+        {
+            "broker_order_id": None,
+            "symbol": CE,
+            "exchange": "NFO",
+            "status": "open",
+            "filled_qty": 25,
+            "qty": 75,
+        }
+    ]
+    with a_store(rows=rows), live_books():
+        result = views.strategy_positions(STRATEGY_ID, API_KEY)
+
+    assert [row["symbol"] for row in result["data"]] == [CE]
+
+
+def test_healthy_empty_broker_book_retains_a_prior_run_residual_owner():
+    prior = "NIFTY28MAY2625000CE"
+    rows = [
+        _position_order(
+            run_id=41, position_ref="prior-owner", symbol=prior, filled_qty=75
+        ),
+        _position_order(
+            run_id=41,
+            position_ref="prior-owner",
+            symbol=prior,
+            action="SELL",
+            filled_qty=50,
+        ),
+    ]
+    with a_store(rows=rows), live_books(positionbook={"status": "success", "data": []}):
+        result = views.strategy_positions(STRATEGY_ID, API_KEY, RUN_ID)
+
+    assert result["data"] == [
+        pytest.approx(
+            {
+                "symbol": prior,
+                "exchange": "NFO",
+                "product": "NRML",
+                "quantity": 25,
+                "average_price": 100.0,
+                "ltp": None,
+                "pnl": None,
+                "source": "local/unreconciled",
+                "position_ref": "prior-owner",
+                "run_id": 41,
+                "leg_id": 1,
+            }
+        )
+    ]
+
+
+def test_broker_overlay_keeps_omitted_prior_owner_beside_current_contract_truth():
+    prior = "NIFTY28MAY2625000CE"
+    current = "NIFTY28MAY2626000CE"
+    rows = [
+        _position_order(run_id=41, position_ref="prior", symbol=prior),
+        _position_order(run_id=43, position_ref="current", symbol=current),
+    ]
+    book = {
+        "status": "success",
+        "data": [
+            {
+                "symbol": current,
+                "exchange": "NFO",
+                "product": "NRML",
+                "quantity": 7,
+                "average_price": 123.0,
+                "ltp": 125.0,
+                "pnl": 14.0,
+            },
+            {
+                "symbol": "RELIANCE",
+                "exchange": "NSE",
+                "product": "MIS",
+                "quantity": 1,
+            },
+        ],
+    }
+    with a_store(rows=rows), live_books(positionbook=book):
+        result = views.strategy_positions(STRATEGY_ID, API_KEY, RUN_ID)
+
+    by_symbol = {row["symbol"]: row for row in result["data"]}
+    assert set(by_symbol) == {prior, current}
+    assert by_symbol[current]["quantity"] == 7
+    assert by_symbol[current]["source"] == "broker"
+    assert by_symbol[current]["position_ref"] == "current"
+    assert by_symbol[prior]["quantity"] == 25
+    assert by_symbol[prior]["source"] == "local/unreconciled"
+
+
+def test_shared_contract_keeps_each_local_owner_beside_the_broker_aggregate():
+    shared = "NIFTY28MAY2625000CE"
+    rows = [
+        _position_order(run_id=41, position_ref="owner-a", symbol=shared, filled_qty=25),
+        _position_order(
+            run_id=43,
+            position_ref="owner-b",
+            symbol=shared,
+            filled_qty=25,
+            leg_id=2,
+        ),
+    ]
+    book = {
+        "status": "success",
+        "data": [
+            {
+                "symbol": shared,
+                "exchange": "NFO",
+                "product": "NRML",
+                "quantity": 50,
+                "average_price": 100.0,
+                "ltp": 101.0,
+                "pnl": 50.0,
+            }
+        ],
+    }
+    with a_store(rows=rows), live_books(positionbook=book):
+        result = views.strategy_positions(STRATEGY_ID, API_KEY, RUN_ID)
+
+    assert [row["source"] for row in result["data"]] == [
+        "broker/shared",
+        "local/unreconciled",
+        "local/unreconciled",
+    ]
+    assert {row.get("position_ref") for row in result["data"][1:]} == {
+        "owner-a",
+        "owner-b",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Recomputed aggregates
 # ---------------------------------------------------------------------------
@@ -444,7 +690,8 @@ def test_position_totals_are_re_summed_over_the_filtered_rows():
     with a_store(mode="sandbox"), sandbox_books():
         result = views.strategy_positions(STRATEGY_ID, API_KEY)
 
-    assert [row["symbol"] for row in result["data"]] == [CE]
+    assert [row["symbol"] for row in result["data"]] == [CE, PE]
+    assert result["data"][1]["source"] == "local/unreconciled"
     assert result["total_pnl"] == 787.5
     assert result["total_unrealized_pnl"] == 700.0
     assert result["total_today_realized_pnl"] == 87.5
@@ -490,7 +737,8 @@ def test_the_positions_envelope_has_the_same_keys_as_the_global_service():
         result = views.strategy_positions(STRATEGY_ID, API_KEY)
 
     assert set(result) == set(reference)
-    assert set(result["data"][0]) == set(reference["data"][0])
+    assert set(reference["data"][0]).issubset(result["data"][0])
+    assert result["data"][0]["source"] == "broker"
 
 
 def test_a_sandbox_envelope_keeps_the_mode_marker_the_service_sent():

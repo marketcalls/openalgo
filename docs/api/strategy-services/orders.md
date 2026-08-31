@@ -42,11 +42,13 @@ curl -X POST http://127.0.0.1:5000/api/v1/strategy/orders \
       "run_id": 42,
       "leg_id": 1,
       "kind": "entry",
+      "position_ref": "969bc536b1c14d15992f730c2c136d7a",
       "broker_order_id": "26083004118201",
       "symbol": "NIFTY04SEP2624500CE",
       "exchange": "NFO",
       "action": "SELL",
       "qty": 75,
+      "product": "NRML",
       "pricetype": "MARKET",
       "price": 0.0,
       "trigger_price": 0.0,
@@ -62,11 +64,13 @@ curl -X POST http://127.0.0.1:5000/api/v1/strategy/orders \
       "run_id": 42,
       "leg_id": 1,
       "kind": "exit_sl",
+      "position_ref": "969bc536b1c14d15992f730c2c136d7a",
       "broker_order_id": "26083006214088",
       "symbol": "NIFTY04SEP2624500CE",
       "exchange": "NFO",
       "action": "BUY",
       "qty": 75,
+      "product": "NRML",
       "pricetype": "MARKET",
       "price": 0.0,
       "trigger_price": 0.0,
@@ -104,6 +108,7 @@ Each object in `data`:
 | run_id | integer | Run the order belongs to |
 | leg_id | integer | Leg within the strategy |
 | kind | string | Why the order was placed |
+| position_ref | string or null | Durable owner identity. A signal flip can keep an outgoing owner under `superseded` while the replacement owner is live; fills and exits settle the exact reference they name |
 | broker_order_id | string or null | Order reference: the broker's id on a live run, the sandbox engine's id on a sandbox run, `null` before the order path answered |
 | symbol | string | OpenAlgo symbol |
 | exchange | string | Exchange code |
@@ -122,15 +127,22 @@ Each object in `data`:
 
 ### Order kinds
 
-`entry`, `exit_sl`, `exit_target`, `exit_trail`, `exit_overall_sl`, `exit_overall_target`, `exit_lock_profit`, `exit_eod`, `exit_expiry`, `exit_daily_loss_limit`, `exit_close_all`, `exit_leg_manual`, `exit_recovery`
-
-Signal-mode strategies additionally record their exits as `exit_signal`, which the store's order-kind tuple does not currently list. Match on the value, not on the tuple, if you are filtering signal-mode history.
+`entry`, `exit_sl`, `exit_target`, `exit_trail`, `exit_overall_sl`, `exit_overall_target`, `exit_lock_profit`, `exit_eod`, `exit_expiry`, `exit_daily_loss_limit`, `exit_close_all`, `exit_leg_manual`, `exit_recovery`, `exit_signal`
 
 ## Notes
 
 - Rows are ordered by placement time, **oldest first**, so an entry always precedes its exit in the list. This is the opposite ordering to [`/runs`](./runs.md) and [`/events`](./events.md).
 - **A `run_id` belonging to another strategy matches nothing** rather than leaking its orders. The store joins through this strategy's runs, so the filter cannot be used to read across strategies.
 - The row is written **before** the broker answers, so an order can appear here with `status: "pending"` and a `null` `broker_order_id`. That is deliberate: an order that reached the broker but was never recorded would be invisible to crash recovery.
+- A positive `filled_qty` proves exposure in every status, including `open`,
+  `cancelled` and `rejected`; a working order may partially fill before its
+  terminal update. Only `complete` may fall back to the requested `qty` when a
+  broker omitted `filled_qty`. Missing or unusable `avg_fill_price` means the
+  exposure is real but its valuation is unavailable, not zero.
+- `position_ref` is the ownership key for entry, exits, fills and recovery. At
+  most a live and one outgoing `superseded` owner can be represented by a leg.
+  Proven additional owners leave the run database-open and reserved for manual
+  reconciliation rather than being declared flat.
 - These rows are the engine's record of what it **asked for**. For money, the broker is the authority. The `/strategy` Detail page in the browser reads the broker's own orderbook and uses these rows only to decide which of the broker's rows belong to this strategy.
 - There is no `limit` on this endpoint. Narrow with `run_id` when a strategy has a long history.
 - Sandbox orders are placed against the sandbox engine and never reach a broker. Their `broker_order_id` is the sandbox engine's own reference, so it is not resolvable at the broker.

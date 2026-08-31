@@ -54,7 +54,7 @@ import re
 import threading
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from cachetools import TTLCache
@@ -221,6 +221,8 @@ class EngineResult:
     ok: bool
     run_id: int | None = None
     error: str | None = None
+    stop_pending: bool | None = None
+    exits: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,6 +242,8 @@ class WebhookOutcome:
     strategy_id: int | None = None
     run_id: int | None = None
     webhook_event_id: int | None = None
+    stop_pending: bool | None = None
+    exits: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def body(self) -> dict[str, Any]:
@@ -253,6 +257,9 @@ class WebhookOutcome:
             payload["strategy_id"] = self.strategy_id
         if self.run_id is not None:
             payload["run_id"] = self.run_id
+        if self.stop_pending is not None:
+            payload["stop_pending"] = self.stop_pending
+            payload["exits"] = self.exits
         return payload
 
     def as_response(self) -> tuple[dict[str, Any], int]:
@@ -328,6 +335,8 @@ def _coerce_engine_result(value: Any) -> EngineResult:
             ok=bool(value.get("ok", True)),
             run_id=value.get("run_id"),
             error=value.get("error"),
+            stop_pending=(bool(value.get("stop_pending")) if "stop_pending" in value else None),
+            exits=list(value.get("exits") or []),
         )
     ok = getattr(value, "ok", None)
     if ok is not None:
@@ -335,6 +344,8 @@ def _coerce_engine_result(value: Any) -> EngineResult:
             ok=bool(ok),
             run_id=getattr(value, "run_id", None),
             error=getattr(value, "error", None),
+            stop_pending=getattr(value, "stop_pending", None),
+            exits=list(getattr(value, "exits", None) or []),
         )
     return EngineResult(ok=True)
 
@@ -562,6 +573,8 @@ def _outcome(
     strategy_id: int | None = None,
     run_id: int | None = None,
     webhook_event_id: int | None = None,
+    stop_pending: bool | None = None,
+    exits: list[dict[str, Any]] | None = None,
 ) -> WebhookOutcome:
     return WebhookOutcome(
         ok=ok,
@@ -571,6 +584,8 @@ def _outcome(
         strategy_id=strategy_id,
         run_id=run_id,
         webhook_event_id=webhook_event_id,
+        stop_pending=stop_pending,
+        exits=list(exits or []),
     )
 
 
@@ -930,16 +945,20 @@ def _dispatch_signal(
     leg_id = payload.get("leg_id")
     symbol = payload.get("symbol")
     exchange = payload.get("exchange")
+    # Signal handling may synchronously replay a sandbox fill and remove every
+    # scoped session on this thread. The webhook audit needs only the stable
+    # scalar identity after that boundary.
+    strategy_id = int(strategy.id)
 
     try:
         result = signal_mode.handle_signal(
             strategy, action, leg_id=leg_id, symbol=symbol, exchange=exchange
         )
     except Exception as exc:
-        logger.exception("Signal engine failed on %s for strategy %s", action, strategy.id)
+        logger.exception("Signal engine failed on %s for strategy %s", action, strategy_id)
         event_id = _audit(
             "rejected_engine_error",
-            strategy_id=strategy.id,
+            strategy_id=strategy_id,
             action=action,
             payload=safe_payload,
             ip=ip,
@@ -949,7 +968,7 @@ def _dispatch_signal(
         return _outcome(
             "rejected_engine_error",
             "The engine could not act on the signal",
-            strategy_id=strategy.id,
+            strategy_id=strategy_id,
             webhook_event_id=event_id,
         )
 
@@ -958,7 +977,7 @@ def _dispatch_signal(
         # wrong side for this leg, or a leg the signal does not name.
         event_id = _audit(
             "rejected_invalid_action",
-            strategy_id=strategy.id,
+            strategy_id=strategy_id,
             action=action,
             payload=safe_payload,
             ip=ip,
@@ -968,13 +987,13 @@ def _dispatch_signal(
         return _outcome(
             "rejected_invalid_action",
             result.error or "The signal was refused",
-            strategy_id=strategy.id,
+            strategy_id=strategy_id,
             webhook_event_id=event_id,
         )
 
     event_id = _audit(
         "ok",
-        strategy_id=strategy.id,
+        strategy_id=strategy_id,
         action=action,
         payload=safe_payload,
         ip=ip,
@@ -986,7 +1005,7 @@ def _dispatch_signal(
         "ok",
         message,
         ok=True,
-        strategy_id=strategy.id,
+        strategy_id=strategy_id,
         run_id=result.run_id,
         webhook_event_id=event_id,
     )
@@ -1048,10 +1067,13 @@ def _dispatch(
             "rejected_engine_error",
             outcome.error or "The engine could not act on the signal",
             strategy_id=strategy_id,
+            run_id=outcome.run_id,
             webhook_event_id=error_id,
+            stop_pending=outcome.stop_pending,
+            exits=outcome.exits,
         )
 
-    if action == "stop" and was_live:
+    if action == "stop" and was_live and not outcome.stop_pending:
         # Only a stop that stopped something arms the window. A stop against an
         # already-stopped strategy is a no-op, and letting it block the next
         # start would turn a stray alert into an outage.
@@ -1071,4 +1093,6 @@ def _dispatch(
         strategy_id=strategy_id,
         run_id=outcome.run_id,
         webhook_event_id=event_id,
+        stop_pending=outcome.stop_pending,
+        exits=outcome.exits,
     )
