@@ -487,6 +487,7 @@ def _resolve_all_legs(
                 "sl_pts": leg.get("sl_pts"),
                 "target_pts": leg.get("target_pts"),
                 "trail": leg.get("trail") or {},
+                "risk_unit": leg.get("risk_unit") or "points",
             }
         )
 

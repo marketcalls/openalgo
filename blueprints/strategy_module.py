@@ -177,6 +177,15 @@ ATM_OFFSETS = (
 )
 
 LOCK_PROFIT_MODES = ("lock", "lock_and_trail")
+
+# How a leg's stop, target and trail are expressed. Points is the default and
+# is what every strategy written before this existed carries, so an absent
+# value means points and no stored configuration has to change.
+#
+# One toggle covers all three deliberately: a leg whose stop is a percentage of
+# entry and whose target is an absolute point distance is far more likely to be
+# a mistake than an intention.
+RISK_UNITS = ("points", "percent")
 SCHEDULER_DAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
 
 LEG_FIELDS = (
@@ -192,6 +201,7 @@ LEG_FIELDS = (
     "sl_pts",
     "target_pts",
     "trail",
+    "risk_unit",
 )
 #: A signal leg is a different shape from a batch leg, not a superset of it.
 #: It names its own instrument and its own absolute quantity, and it carries no
@@ -212,6 +222,7 @@ SIGNAL_LEG_FIELDS = (
     "sl_pts",
     "target_pts",
     "trail",
+    "risk_unit",
 )
 
 #: Which signals a leg accepts. Not the side it is currently held - that is
@@ -439,19 +450,34 @@ def _gain_amount(value: Any, label: str) -> float | int | None:
 # ---------------------------------------------------------------------------
 
 
-def _validate_trail(raw: Any, label: str) -> dict | None:
-    """``{x, y}``: advance the stop by y for every x points of favourable move.
+def _risk_max(risk_unit: str) -> float | None:
+    """The ceiling for a risk number in this unit.
+
+    A percentage above 100 is not a wider stop, it is a number that cannot mean
+    what it says: 150% of entry below a long's entry price is negative. Points
+    keep their existing open ceiling, because a point distance is bounded by
+    the instrument, not by arithmetic.
+    """
+    return 100.0 if risk_unit == "percent" else None
+
+
+def _validate_trail(raw: Any, label: str, risk_unit: str = "points") -> dict | None:
+    """``{x, y}``: advance the stop by y for every x of favourable move.
 
     Both halves are required together. A trail with only one of them configured
     is not a partially configured trail, it is one that never moves.
+
+    x and y are read in the leg's own risk unit, so a percent leg trails in
+    percent of entry and a points leg in points.
     """
     if raw is None:
         return None
     data = _mapping(raw, label)
     _reject_unknown(data, TRAIL_FIELDS, label)
+    ceiling = _risk_max(risk_unit)
     return {
-        "x": _number(_required(data, "x", label), f"{label}.x", minimum=0),
-        "y": _number(_required(data, "y", label), f"{label}.y", minimum=0),
+        "x": _number(_required(data, "x", label), f"{label}.x", minimum=0, maximum=ceiling),
+        "y": _number(_required(data, "y", label), f"{label}.y", minimum=0, maximum=ceiling),
     }
 
 
@@ -519,13 +545,21 @@ def _validate_signal_leg(raw: Any, index: int) -> dict:
 
     # Optional per-leg risk, in the same shape and with the same helper the
     # batch leg uses, so a signal leg is evaluated by exactly the same rules.
+    risk_unit = _choice(leg.get("risk_unit") or "points", RISK_UNITS, f"{label}.risk_unit")
     if leg.get("sl_pts") is not None:
-        clean["sl_pts"] = _number(leg["sl_pts"], f"{label}.sl_pts", minimum=0)
+        clean["sl_pts"] = _number(
+            leg["sl_pts"], f"{label}.sl_pts", minimum=0, maximum=_risk_max(risk_unit)
+        )
     if leg.get("target_pts") is not None:
-        clean["target_pts"] = _number(leg["target_pts"], f"{label}.target_pts", minimum=0)
-    trail = _validate_trail(leg.get("trail"), label)
+        clean["target_pts"] = _number(
+            leg["target_pts"], f"{label}.target_pts", minimum=0, maximum=_risk_max(risk_unit)
+        )
+    trail = _validate_trail(leg.get("trail"), label, risk_unit)
     if trail is not None:
         clean["trail"] = trail
+    # Stored on every leg, including the default, so nothing downstream has to
+    # decide what an absent value meant.
+    clean["risk_unit"] = risk_unit
 
     # A derivative trades in whole lots. The broker refuses anything else at
     # order time, so catching it here turns a rejected order into a message the
@@ -627,13 +661,19 @@ def _validate_leg(raw: Any, index: int) -> dict:
     else:
         clean["expiry"] = _choice(_required(leg, "expiry", label), LEG_EXPIRIES, f"{label}.expiry")
 
+    risk_unit = _choice(leg.get("risk_unit") or "points", RISK_UNITS, f"{label}.risk_unit")
     if leg.get("sl_pts") is not None:
-        clean["sl_pts"] = _number(leg["sl_pts"], f"{label}.sl_pts", minimum=0)
+        clean["sl_pts"] = _number(
+            leg["sl_pts"], f"{label}.sl_pts", minimum=0, maximum=_risk_max(risk_unit)
+        )
     if leg.get("target_pts") is not None:
-        clean["target_pts"] = _number(leg["target_pts"], f"{label}.target_pts", minimum=0)
-    trail = _validate_trail(leg.get("trail"), f"{label}.trail")
+        clean["target_pts"] = _number(
+            leg["target_pts"], f"{label}.target_pts", minimum=0, maximum=_risk_max(risk_unit)
+        )
+    trail = _validate_trail(leg.get("trail"), f"{label}.trail", risk_unit)
     if trail is not None:
         clean["trail"] = trail
+    clean["risk_unit"] = risk_unit
 
     return clean
 

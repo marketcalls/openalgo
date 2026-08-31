@@ -461,13 +461,42 @@ function LegCard({
 
         <Separator />
 
+        <div className="mb-3 flex items-center gap-2">
+          <Label className="text-xs uppercase text-muted-foreground">Risk measured in</Label>
+          <div className="inline-flex overflow-hidden rounded-md border">
+            {(['points', 'percent'] as const).map((unit) => (
+              <button
+                key={unit}
+                type="button"
+                onClick={() => update('risk_unit', unit)}
+                className={cn(
+                  'px-3 py-1 text-xs transition-colors',
+                  (leg.risk_unit ?? 'points') === unit
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-background hover:bg-muted'
+                )}
+              >
+                {unit === 'points' ? 'Points' : '% of entry'}
+              </button>
+            ))}
+          </div>
+          <span className="text-xs text-muted-foreground">
+            {(leg.risk_unit ?? 'points') === 'percent'
+              ? 'Stop, target and trail are a percentage of the entry price.'
+              : 'Stop, target and trail are absolute point distances.'}
+          </span>
+        </div>
+
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="space-y-1.5">
-            <Label className="text-xs uppercase">Stop Loss (pts)</Label>
+            <Label className="text-xs uppercase">
+              Stop Loss ({(leg.risk_unit ?? 'points') === 'percent' ? '%' : 'pts'})
+            </Label>
             <Input
               type="number"
               step={0.01}
               min={0}
+              max={(leg.risk_unit ?? 'points') === 'percent' ? 100 : undefined}
               value={leg.sl_pts ?? ''}
               placeholder="0 = off"
               onChange={(event) =>
@@ -477,11 +506,14 @@ function LegCard({
             />
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs uppercase">Target (pts)</Label>
+            <Label className="text-xs uppercase">
+              Target ({(leg.risk_unit ?? 'points') === 'percent' ? '%' : 'pts'})
+            </Label>
             <Input
               type="number"
               step={0.01}
               min={0}
+              max={(leg.risk_unit ?? 'points') === 'percent' ? 100 : undefined}
               value={leg.target_pts ?? ''}
               placeholder="0 = off"
               onChange={(event) =>
@@ -806,13 +838,42 @@ function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: Signa
 
         <Separator />
 
+        <div className="mb-3 flex items-center gap-2">
+          <Label className="text-xs uppercase text-muted-foreground">Risk measured in</Label>
+          <div className="inline-flex overflow-hidden rounded-md border">
+            {(['points', 'percent'] as const).map((unit) => (
+              <button
+                key={unit}
+                type="button"
+                onClick={() => update('risk_unit', unit)}
+                className={cn(
+                  'px-3 py-1 text-xs transition-colors',
+                  (leg.risk_unit ?? 'points') === unit
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-background hover:bg-muted'
+                )}
+              >
+                {unit === 'points' ? 'Points' : '% of entry'}
+              </button>
+            ))}
+          </div>
+          <span className="text-xs text-muted-foreground">
+            {(leg.risk_unit ?? 'points') === 'percent'
+              ? 'Stop, target and trail are a percentage of the entry price.'
+              : 'Stop, target and trail are absolute point distances.'}
+          </span>
+        </div>
+
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <div className="space-y-1.5">
-            <Label className="text-xs uppercase">Stop Loss (pts)</Label>
+            <Label className="text-xs uppercase">
+              Stop Loss ({(leg.risk_unit ?? 'points') === 'percent' ? '%' : 'pts'})
+            </Label>
             <Input
               type="number"
               step={0.01}
               min={0}
+              max={(leg.risk_unit ?? 'points') === 'percent' ? 100 : undefined}
               value={leg.sl_pts ?? ''}
               placeholder="0 = off"
               onChange={(event) =>
@@ -822,11 +883,14 @@ function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: Signa
             />
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs uppercase">Target (pts)</Label>
+            <Label className="text-xs uppercase">
+              Target ({(leg.risk_unit ?? 'points') === 'percent' ? '%' : 'pts'})
+            </Label>
             <Input
               type="number"
               step={0.01}
               min={0}
+              max={(leg.risk_unit ?? 'points') === 'percent' ? 100 : undefined}
               value={leg.target_pts ?? ''}
               placeholder="0 = off"
               onChange={(event) =>

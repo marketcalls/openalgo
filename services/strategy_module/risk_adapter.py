@@ -65,6 +65,38 @@ def _side(position: str) -> Side:
     raise ValueError(f"Unusable leg position: {position!r}")
 
 
+#: How a leg's risk numbers are expressed. Points is the default and the only
+#: value a strategy written before this existed can have.
+RISK_UNITS = ("points", "percent")
+
+
+def _points_per_unit(leg: dict[str, Any], entry: float) -> float:
+    """What one configured unit is worth in points for this leg.
+
+    1.0 for a points leg. For a percent leg it is one percent of the entry
+    price, so 2 becomes 2% of entry expressed in points.
+
+    An entry of zero returns 0.0, which makes every derived level fall away
+    rather than collapse onto the entry itself. A percent of nothing is not a
+    stop at the entry price, it is a stop that cannot be computed yet, and the
+    leg has no confirmed fill in that state anyway.
+    """
+    if str(leg.get("risk_unit") or "points").lower() != "percent":
+        return 1.0
+    return entry / 100.0 if entry > 0 else 0.0
+
+
+def _in_points(value: Any, scale: float) -> float | None:
+    """One configured risk number in points, or None when it is not set."""
+    if value is None:
+        return None
+    try:
+        converted = float(value) * scale
+    except (TypeError, ValueError):
+        return None
+    return converted if converted > 0 else None
+
+
 def leg_to_position_risk(leg: dict[str, Any]) -> PositionRisk:
     """One leg's state as the core's input type.
 
@@ -77,13 +109,19 @@ def leg_to_position_risk(leg: dict[str, Any]) -> PositionRisk:
     side = _side(leg.get("position"))
     entry = float(leg.get("entry_avg") or 0.0)
 
-    sl_pts = leg.get("sl_pts")
-    target_pts = leg.get("target_pts")
-    initial_stop = stop_from_points(side, entry, float(sl_pts)) if sl_pts else None
-    configured_target = target_from_points(side, entry, float(target_pts)) if target_pts else None
+    # A leg configured in percent is converted to points here and nowhere else.
+    # services/risk/ speaks one language, points from entry, and translating
+    # into it is the adapter's whole job: a second unit inside the core would
+    # mean two ways to express the same stop and two places to get it wrong.
+    scale = _points_per_unit(leg, entry)
 
-    trail_x = float(leg.get("trail_x") or 0.0)
-    trail_y = float(leg.get("trail_y") or 0.0)
+    sl_pts = _in_points(leg.get("sl_pts"), scale)
+    target_pts = _in_points(leg.get("target_pts"), scale)
+    initial_stop = stop_from_points(side, entry, sl_pts) if sl_pts else None
+    configured_target = target_from_points(side, entry, target_pts) if target_pts else None
+
+    trail_x = _in_points(leg.get("trail_x"), scale) or 0.0
+    trail_y = _in_points(leg.get("trail_y"), scale) or 0.0
 
     return PositionRisk(
         identifier=str(leg.get("leg_id")),

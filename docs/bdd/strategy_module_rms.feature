@@ -55,7 +55,7 @@ Feature: Strategy module and risk management
     Then subsequent live exits still reach the broker
     And a sandbox run still uses the sandbox book and execution pipe
 
-  # Source: services/strategy_module/engine.py:496, test/test_strategy_module_engine.py:304, test/test_strategy_module_scheduler.py:730
+  # Source: services/strategy_module/engine.py:497, test/test_strategy_module_engine.py:304, test/test_strategy_module_scheduler.py:730
   Scenario: Durable intent and acknowledgement surround every broker call
     Given the engine is about to place an entry or exit
     When it dispatches the order
@@ -139,7 +139,7 @@ Feature: Strategy module and risk management
     Then the platform-session run remains open
     And a later alert reuses its P&L, peak, trough and audit history
 
-  # Source: services/strategy_module/risk_adapter.py:136, services/strategy_module/risk_adapter.py:225
+  # Source: services/strategy_module/risk_adapter.py:100, services/strategy_module/risk_adapter.py:216
   Scenario: Every strategy risk decision comes from the shared core
     Given a held leg and run have configured stops, targets and trailing rules
     When a usable market price reaches the engine

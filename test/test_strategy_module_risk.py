@@ -434,3 +434,84 @@ def test_a_leg_that_never_traded_contributes_nothing():
 
     assert realized == 0.0
     assert unrealized == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Points or percent
+#
+# The unit is a property of the leg, and risk_adapter is the only place that
+# knows about it: services/risk/ speaks points from entry and nothing else, so
+# a percent leg is translated on the way in rather than the core learning a
+# second language.
+# ---------------------------------------------------------------------------
+
+
+def _unit_leg(**over):
+    leg = {
+        "leg_id": 1,
+        "position": "S",
+        "entry_avg": 2500.0,
+        "qty": 75,
+        "sl_pts": 2,
+        "target_pts": 4,
+    }
+    leg.update(over)
+    return leg
+
+
+def test_a_percent_leg_is_measured_against_its_own_entry():
+    """2 percent of a 2500 entry is 50 points, not 2."""
+    risk = ra.leg_to_position_risk(_unit_leg(risk_unit="percent"))
+
+    # Short: the stop sits above entry, the target below.
+    assert risk.stop_price == pytest.approx(2550.0)
+    assert risk.target_price == pytest.approx(2400.0)
+
+
+def test_a_points_leg_is_unchanged_by_the_unit_existing():
+    risk = ra.leg_to_position_risk(_unit_leg(risk_unit="points"))
+
+    assert risk.stop_price == pytest.approx(2502.0)
+    assert risk.target_price == pytest.approx(2496.0)
+
+
+def test_a_leg_written_before_the_unit_existed_is_read_as_points():
+    """Every stored strategy predates this field. None of them may move."""
+    without = ra.leg_to_position_risk(_unit_leg())
+    explicit = ra.leg_to_position_risk(_unit_leg(risk_unit="points"))
+
+    assert without.stop_price == explicit.stop_price
+    assert without.target_price == explicit.target_price
+
+
+def test_a_long_percent_leg_stops_below_and_targets_above():
+    risk = ra.leg_to_position_risk(
+        _unit_leg(position="B", entry_avg=1000.0, sl_pts=10, target_pts=25, risk_unit="percent")
+    )
+
+    assert risk.stop_price == pytest.approx(900.0)
+    assert risk.target_price == pytest.approx(1250.0)
+
+
+def test_a_percent_trail_advances_in_percent_of_entry():
+    risk = ra.leg_to_position_risk(
+        _unit_leg(entry_avg=1000.0, trail_x=5, trail_y=2, risk_unit="percent")
+    )
+
+    assert risk.trail_trigger == pytest.approx(50.0)
+    assert risk.trail_step == pytest.approx(20.0)
+    assert risk.trailing_enabled is True
+
+
+def test_a_percent_leg_with_no_confirmed_entry_gets_no_levels():
+    """A percent of nothing is not a stop at the entry price.
+
+    The leg has no fill yet, so there is no price to measure a percentage
+    against. Deriving one from zero would put the stop on top of the entry and
+    fire it on the first tick.
+    """
+    risk = ra.leg_to_position_risk(_unit_leg(entry_avg=0.0, risk_unit="percent"))
+
+    assert risk.stop_price is None
+    assert risk.target_price is None
+    assert risk.trailing_enabled is False

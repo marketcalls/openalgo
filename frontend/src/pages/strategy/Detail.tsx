@@ -76,6 +76,7 @@ import {
   type QtyMode,
   type ReconciledBrokerOrder,
   type ReconciledBrokerTrade,
+  type RiskUnit,
   type Run,
   type RunMode,
   type Strategy,
@@ -1531,6 +1532,18 @@ function EventsTab({ events }: { events: StrategyEvent[] }) {
 // Risk tab
 // ---------------------------------------------------------------------------
 
+/**
+ * One configured risk number with its unit attached.
+ *
+ * The unit is never left implicit here: "2" beside a stop loss means something
+ * very different at 2 points and at 2 percent of a 2500 entry, and the Risk tab
+ * is where an operator goes to confirm which one they chose.
+ */
+function formatRiskValue(value: number | null | undefined, unit: RiskUnit | null | undefined) {
+  if (value === null || value === undefined) return '—'
+  return unit === 'percent' ? `${value}%` : `${value} pts`
+}
+
 function RiskTab({ strategy }: { strategy: Strategy }) {
   return (
     <div className="space-y-4">
@@ -1605,8 +1618,9 @@ function RiskTab({ strategy }: { strategy: Strategy }) {
                 <tr>
                   <th className="px-2 py-1 text-left">#</th>
                   <th className="px-2 py-1 text-left">Type</th>
-                  <th className="px-2 py-1 text-right">SL pts</th>
-                  <th className="px-2 py-1 text-right">Target pts</th>
+                  <th className="px-2 py-1 text-left">Measured in</th>
+                  <th className="px-2 py-1 text-right">Stop loss</th>
+                  <th className="px-2 py-1 text-right">Target</th>
                   <th className="px-2 py-1 text-right">Trail X / Y</th>
                 </tr>
               </thead>
@@ -1620,10 +1634,27 @@ function RiskTab({ strategy }: { strategy: Strategy }) {
                         {leg.option_type ? ` · ${leg.option_type}` : ''}
                       </Badge>
                     </td>
-                    <td className="px-2 py-1.5 text-right font-mono">{leg.sl_pts ?? '—'}</td>
-                    <td className="px-2 py-1.5 text-right font-mono">{leg.target_pts ?? '—'}</td>
+                    <td className="px-2 py-1.5">
+                      <Badge
+                        variant={leg.risk_unit === 'percent' ? 'default' : 'secondary'}
+                        className="text-xs"
+                      >
+                        {leg.risk_unit === 'percent' ? '% of entry' : 'points'}
+                      </Badge>
+                    </td>
                     <td className="px-2 py-1.5 text-right font-mono">
-                      {leg.trail ? `${leg.trail.x} / ${leg.trail.y}` : '— / —'}
+                      {formatRiskValue(leg.sl_pts, leg.risk_unit)}
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-mono">
+                      {formatRiskValue(leg.target_pts, leg.risk_unit)}
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-mono">
+                      {leg.trail
+                        ? `${formatRiskValue(leg.trail.x, leg.risk_unit)} / ${formatRiskValue(
+                            leg.trail.y,
+                            leg.risk_unit
+                          )}`
+                        : '— / —'}
                     </td>
                   </tr>
                 ))}

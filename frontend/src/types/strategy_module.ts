@@ -61,6 +61,9 @@ export type ExpiryRank = 'weekly' | 'next_week' | 'monthly' | 'next_month' | 'cu
 export type Weekday = 'MON' | 'TUE' | 'WED' | 'THU' | 'FRI' | 'SAT' | 'SUN'
 export type LockProfitMode = 'lock' | 'lock_and_trail'
 
+/** Per-leg risk numbers are either absolute points or a percentage of entry. */
+export type RiskUnit = 'points' | 'percent'
+
 export type OrderStatus = 'pending' | 'open' | 'complete' | 'cancelled' | 'rejected'
 export type EventSeverity = 'info' | 'warn' | 'critical'
 
@@ -141,6 +144,14 @@ export interface Leg {
   sl_pts?: number | null
   target_pts?: number | null
   trail?: TrailConfig | null
+  /**
+   * How sl_pts, target_pts and trail are expressed for this leg.
+   *
+   * Absent means points: every leg written before this field existed is a
+   * points leg, and the field names keep saying "pts" so the wire format did
+   * not change.
+   */
+  risk_unit?: RiskUnit | null
 }
 
 export interface LockProfitConfig {

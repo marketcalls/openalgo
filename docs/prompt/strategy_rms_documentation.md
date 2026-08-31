@@ -121,6 +121,38 @@ figure vanish the moment the next entry was placed, so a daily loss limit reset
 on every flat moment and could never be reached. A position that never closed
 carries zero there, so nothing else changes.
 
+### Points or percent
+
+Each leg carries `risk_unit`, either `points` (the default) or `percent`, and it
+governs `sl_pts`, `target_pts` and both halves of `trail` together. A leg with
+no `risk_unit` is a points leg, which is every leg written before the field
+existed, so nothing stored has to change and legs remain JSON with no migration.
+
+One toggle covers all three on purpose: a leg whose stop is a percentage of
+entry and whose target is an absolute distance is far more likely to be a
+mistake than an intention.
+
+**The conversion happens in `risk_adapter` and nowhere else.** `services/risk/`
+speaks one language, points from entry, and translating into it is the adapter's
+whole job. A second unit inside the core would mean two ways to express the same
+stop and two places to get it wrong, which is the rule the module already
+follows for every other decision: consumers translate, they do not decide.
+
+A percentage is measured against the leg's own entry price, so 2% on a short
+filled at 2500 is a stop at 2550 and a 4% target is 2400. Percentages are capped
+at 100 in the validator, because 150% of entry below a long's entry price is not
+a wider stop, it is a negative price.
+
+**A percent leg with no confirmed fill gets no levels at all.** A percentage of
+an entry of zero is not a stop at the entry price, it is a stop that cannot be
+computed yet, and inventing one would put it on top of the entry and fire it on
+the first tick. The leg has no confirmed position in that state anyway.
+
+The field names keep saying `pts` in both the wire format and the database. They
+are wrong for a percent leg and they are kept anyway, because renaming them
+would break every stored strategy and every existing caller for a cosmetic gain.
+The unit is displayed beside the number everywhere an operator reads it.
+
 ### risk_adapter public surface
 
 ```python

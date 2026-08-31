@@ -186,6 +186,9 @@ def _new_leg_state(leg: dict) -> dict[str, Any]:
         "status": "configured",
         "tick_source": "ws",
         # Risk levels, filled in on the first tick from the leg's configuration
+        # Points or percent. Read by risk_adapter, which is the only place
+        # that converts, so the core never sees a unit at all.
+        "risk_unit": leg.get("risk_unit") or "points",
         "sl_pts": leg.get("sl_pts"),
         "target_pts": leg.get("target_pts"),
         "trail_x": (leg.get("trail") or {}).get("x") or 0,

@@ -530,6 +530,7 @@ def _resolve_signal_leg(leg: dict, side: str) -> tuple[dict | None, str | None]:
         "sl_pts": leg.get("sl_pts"),
         "target_pts": leg.get("target_pts"),
         "trail": leg.get("trail") or {},
+        "risk_unit": leg.get("risk_unit") or "points",
     }, None
 
 
