@@ -651,8 +651,9 @@ describe('strategy Positions broker truth', () => {
           localOrder({
             id: 10,
             run_id: 41,
+            qty: 75,
             status: 'complete',
-            filled_qty: 50,
+            filled_qty: 75,
             avg_fill_price: 100,
             filled_at: '2026-05-28T03:50:00+00:00',
           }),
@@ -685,8 +686,9 @@ describe('strategy Positions broker truth', () => {
     expect(await screen.findByText(/broker did not answer/i)).toBeInTheDocument()
     const row = screen.getByText('NIFTY28MAY2625000CE').closest('tr')
     expect(row).not.toBeNull()
-    expect(within(row as HTMLTableRowElement).getByText('25')).toBeInTheDocument()
-    expect(within(row as HTMLTableRowElement).getByText('120.00')).toBeInTheDocument()
+    expect(within(row as HTMLTableRowElement).getByText('long')).toBeInTheDocument()
+    expect(within(row as HTMLTableRowElement).getByText('50')).toBeInTheDocument()
+    expect(within(row as HTMLTableRowElement).getByText('110.00')).toBeInTheDocument()
     expect(within(row as HTMLTableRowElement).getByText('+500.00')).toBeInTheDocument()
   })
 })
