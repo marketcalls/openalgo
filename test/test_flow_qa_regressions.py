@@ -1158,11 +1158,31 @@ def test_embedded_expiry_is_the_option_node_fallback_when_no_expiry_is_supplied(
 
 @pytest.fixture
 def flow_database():
-    """The test database, initialised once, with a workflow per test."""
+    """The test database, initialised once, with a workflow per test.
+
+    Everything a test creates here is deleted again on teardown. Without that
+    the rows outlive the run: one pass through this file leaves seven
+    workflows and their executions behind, and eight passes left fifty-six of
+    them sitting in the operator's Flow Editor, every card reading "running"
+    because the fixtures never complete an execution. Isolating the database
+    (test/conftest.py) stops those rows landing in real data; cleaning up here
+    means the file leaves nothing behind even when pointed somewhere it
+    should not have been.
+
+    Cleanup is by difference rather than by tracking each call, so a workflow
+    created through any path is still removed. delete_workflow cascades to the
+    executions.
+    """
     import database.flow_db as flow_db
 
     flow_db.init_db()
-    return flow_db
+    pre_existing = {workflow.id for workflow in flow_db.get_all_workflows()}
+
+    yield flow_db
+
+    for workflow in flow_db.get_all_workflows():
+        if workflow.id not in pre_existing:
+            flow_db.delete_workflow(workflow.id)
 
 
 def test_execution_records_its_start_time(flow_database):
