@@ -336,7 +336,23 @@ def master_contract_download():
         delete_upstox_temp_data(input_path, output_path)
         # token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
 
-        # token_df = token_df.drop_duplicates(subset='symbol', keep='first')
+        # Upstox's contract file can list more than one row for the same
+        # (symbol, exchange) — an equity's rights-entitlement or NCD/debt
+        # tranche sharing the underlying's display symbol (confirmed live for
+        # MOTHERSON, CHOLAFIN, AARTISURF, ELECTCAST on NSE: an EQ row plus a
+        # D1/P1/W1 row). Left unresolved, symbol/token lookups elsewhere
+        # (get_token_dbquery, the in-memory symbol cache) silently pick
+        # whichever row happens to load last — for MOTHERSON that meant the
+        # WS feed subscribed to a dead debt instrument (zero ticks, no error)
+        # instead of the actual equity. A bare drop_duplicates(subset='symbol')
+        # (previously here, commented out) ignored exchange entirely and would
+        # have wrongly collapsed the same symbol name across different
+        # exchanges (e.g. RELIANCE on NSE vs BSE) into one row. Scope the
+        # dedup to (symbol, exchange) and prefer instrumenttype='EQ' so the
+        # cash-equity instrument always wins a collision, not an arbitrary row.
+        token_df = token_df.sort_values(
+            "instrumenttype", key=lambda s: s.ne("EQ")
+        ).drop_duplicates(subset=["symbol", "exchange"], keep="first")
 
         delete_symtoken_table()  # Consider the implications of this action
         copy_from_dataframe(token_df)
