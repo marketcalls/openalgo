@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir uv && \
     uv venv .venv && \
     uv pip install --upgrade pip && \
     uv sync && \
-    uv pip install "gunicorn>=25.0,<26" eventlet && \
+    uv pip install "gunicorn>=25.0,<26" "eventlet==0.41.2" && \
     rm -rf /root/.cache
 
 # ------------------------------ Frontend Builder Stage --------------------- #
