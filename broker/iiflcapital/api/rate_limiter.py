@@ -9,12 +9,16 @@ Order placement/modification/cancellation is 10 req/sec (20 registered);
 Order Book/Trade Book/Cancel-All are 3 req/sec; Limits (funds) and
 Pre-order Margin/SPAN Exposure are 10 req/sec (20 registered). OpenAlgo does
 not currently track a user's registration tier, so this module paces every
-IIFL call against a single shared, conservative floor -- the tightest
-documented cap (10 req/sec) with headroom, rather than maximizing per-category
-throughput. A future refinement could split data/order/funds into separate
-limiter instances if that throughput ceiling becomes a real constraint; for
-the bug this fixes (silent OI data loss from an unthrottled concurrent burst)
-one shared limiter is the correct, low-risk fix.
+IIFL call against a single shared, conservative floor sized for the common
+10 req/sec cap, rather than maximizing per-category throughput.
+
+The one class that floor does not cover is Order Book/Trade Book/Cancel-All at
+3 req/sec, which apply_account_rate_limit() paces separately on top of the
+shared floor. A future refinement could split data/order/funds into separate
+limiter instances if the shared ceiling becomes a real constraint; for the bug
+this module was written to fix (silent OI data loss from an unthrottled
+concurrent burst) one shared limiter plus the account-class pacer is the
+correct, low-risk arrangement.
 
 `broker/iiflcapital/api/data.py`, `order_api.py`, and `funds.py` each build
 their own httpx request internally rather than sharing one call site, and
@@ -37,10 +41,19 @@ import time
 _lock = threading.Lock()
 _last_call_time = 0.0
 
-# Tightest documented cap across categories is 10 req/sec; pace at ~8 req/sec
-# (0.125s) to leave headroom for clock jitter and for data/order/funds calls
-# sharing the same process-wide pacer concurrently.
+# Most categories cap at 10 req/sec; pace at ~8 req/sec (0.125s) to leave
+# headroom for clock jitter and for data/order/funds calls sharing the same
+# process-wide pacer concurrently.
 MIN_INTERVAL = 0.125
+
+_account_lock = threading.Lock()
+_account_last_call_time = 0.0
+
+# Order Book, Trade Book and Cancel-All are capped at 3 req/sec, well below the
+# 10 req/sec that MIN_INTERVAL is sized for. Pacing them at ~2.85 req/sec
+# (0.35s) keeps them inside their own class instead of relying on the 429 retry
+# path to absorb the overshoot.
+ACCOUNT_MIN_INTERVAL = 0.35
 
 MAX_RETRIES = 3
 BASE_BACKOFF = 1.0  # seconds; exponential fallback when no Retry-After header: 1, 2, 4
@@ -60,6 +73,24 @@ def apply_rate_limit():
         elapsed = now - _last_call_time
         sleep_time = MIN_INTERVAL - elapsed if elapsed < MIN_INTERVAL else 0
         _last_call_time = now + sleep_time
+
+    if sleep_time > 0:
+        time.sleep(sleep_time)
+
+
+def apply_account_rate_limit():
+    """Extra pacing for IIFL's 3 req/sec class (Order Book, Trade Book, Cancel-All).
+
+    Call AFTER apply_rate_limit(), not instead of it: the two locks are taken
+    sequentially and never held at once, so this stacks the tighter account
+    budget on top of the shared floor without any nesting or deadlock risk.
+    """
+    global _account_last_call_time
+    with _account_lock:
+        now = time.time()
+        elapsed = now - _account_last_call_time
+        sleep_time = ACCOUNT_MIN_INTERVAL - elapsed if elapsed < ACCOUNT_MIN_INTERVAL else 0
+        _account_last_call_time = now + sleep_time
 
     if sleep_time > 0:
         time.sleep(sleep_time)
