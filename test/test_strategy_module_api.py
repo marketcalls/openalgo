@@ -795,6 +795,34 @@ class TestLiveAndKillSwitch:
 
 
 class TestListing:
+    def test_a_stopped_row_exposes_its_finalized_pnl_not_a_stale_checkpoint(self, client):
+        """The list must not label pre-close MTM as exposure after the run is flat."""
+        sid = create(client)["data"]["id"]
+        run = store.create_run(sid, "sandbox", "")
+        store.write_checkpoint(
+            run.id,
+            {
+                "pnl_realized": 0,
+                "pnl_unrealized": -19.5,
+                "pnl_total": -19.5,
+                "pnl_peak": 0,
+                "pnl_trough": -19.5,
+            },
+        )
+        assert store.finish_run(
+            run.id,
+            "manual",
+            pnl_realized=-52,
+            pnl_peak=0,
+            pnl_trough=-52,
+        )
+
+        row = client.get("/strategy/api/strategies").get_json()["data"][0]
+
+        assert row["last_finalized_run"]["id"] == run.id
+        assert row["last_finalized_run"]["pnl_realized"] == -52.0
+        assert row["last_finalized_run"]["stopped_at"] is not None
+
     def test_the_status_filter_is_checked(self, client):
         response = client.get("/strategy/api/strategies?status=galloping")
 

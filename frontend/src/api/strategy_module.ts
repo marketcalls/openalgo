@@ -1110,26 +1110,24 @@ export interface StrategyPnl {
   realized: number
   unrealized: number
   total: number
+  /** True when all values are the durable final result of a stopped run. */
+  finalized: boolean
 }
 
 /**
  * P&L for the list, one row at a time.
  *
- * The list endpoint carries configuration only, so the figures come from each
- * strategy's latest checkpoint: live for a running strategy, and the last run's
- * closing snapshot for a stopped one, which is exactly what the list claims to
- * show. Only running rows poll; a stopped row is fetched once and then sits in
- * the cache, so the fan-out costs one request per strategy on first paint and
- * nothing afterwards.
- *
- * A single summary endpoint would be cheaper, and this hook is where to delete
- * when one exists.
+ * A checkpoint is authoritative only while a run is active. Once it has
+ * stopped, the list response carries the durable final P&L and an unrealised
+ * value of zero, so no pre-close market mark can be presented as current
+ * exposure. Stopped rows do not request checkpoints at all.
  */
 export function useStrategyListPnl(rows: StrategySummary[]): Map<number, StrategyPnl> {
   const results = useQueries({
     queries: rows.map((row) => ({
       queryKey: strategyQueryKeys.checkpoints(row.id),
       queryFn: () => listCheckpoints(row.id),
+      enabled: row.status !== 'stopped',
       refetchInterval: row.status === 'running' ? (LIVE_POLL_MS as number | false) : false,
       staleTime: 30_000,
     })),
@@ -1137,6 +1135,18 @@ export function useStrategyListPnl(rows: StrategySummary[]): Map<number, Strateg
 
   const byId = new Map<number, StrategyPnl>()
   rows.forEach((row, index) => {
+    if (row.status === 'stopped') {
+      const lastRun = row.last_finalized_run
+      if (lastRun) {
+        byId.set(row.id, {
+          realized: lastRun.pnl_realized,
+          unrealized: 0,
+          total: lastRun.pnl_realized,
+          finalized: true,
+        })
+      }
+      return
+    }
     const page = results[index]?.data
     if (!page || page.data.length === 0) return
     const latest = page.data[page.data.length - 1]
@@ -1144,6 +1154,7 @@ export function useStrategyListPnl(rows: StrategySummary[]): Map<number, Strateg
       realized: latest.pnl_realized,
       unrealized: latest.pnl_unrealized,
       total: latest.pnl_total,
+      finalized: false,
     })
   })
   return byId

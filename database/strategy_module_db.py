@@ -762,15 +762,49 @@ def create_strategy(user_id: str, config: dict) -> tuple[dict | None, str | None
 
 
 def list_strategies(user_id: str, status: str | None = None, q: str | None = None) -> list[dict]:
-    """Every strategy for a user, newest first."""
+    """Every strategy for a user, newest first, with its last finalised run.
+
+    A checkpoint is an in-flight measurement and can precede a filled exit.
+    The list needs the durable run value for a stopped strategy, so join its
+    most recently finalised run here rather than making the browser guess from
+    the final checkpoint of every row.
+    """
     try:
-        query = db_session.query(SmStrategy).filter_by(user_id=user_id)
+        latest_finalized_run_id = (
+            db_session.query(SmStrategyRun.id)
+            .filter(
+                SmStrategyRun.strategy_id == SmStrategy.id,
+                SmStrategyRun.stopped_at.is_not(None),
+            )
+            .order_by(SmStrategyRun.stopped_at.desc(), SmStrategyRun.id.desc())
+            .limit(1)
+            .correlate(SmStrategy)
+            .scalar_subquery()
+        )
+        query = (
+            db_session.query(SmStrategy, SmStrategyRun)
+            .outerjoin(SmStrategyRun, SmStrategyRun.id == latest_finalized_run_id)
+            .filter(SmStrategy.user_id == user_id)
+        )
         if status:
             query = query.filter(SmStrategy.status == status)
         if q:
             query = query.filter(SmStrategy.name.ilike(f"%{q}%"))
         rows = query.order_by(SmStrategy.created_at.desc()).all()
-        return [strategy_to_dict(r, include_legs=False) for r in rows]
+        listed = []
+        for strategy, last_run in rows:
+            data = strategy_to_dict(strategy, include_legs=False)
+            data["last_finalized_run"] = (
+                None
+                if last_run is None
+                else {
+                    "id": last_run.id,
+                    "pnl_realized": _num(last_run.pnl_realized),
+                    "stopped_at": _iso(last_run.stopped_at),
+                }
+            )
+            listed.append(data)
+        return listed
     except Exception:
         logger.exception("Could not list strategies for %s", user_id)
         return []

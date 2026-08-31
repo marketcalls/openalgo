@@ -169,6 +169,13 @@ export interface SchedulerConfig {
   default_mode: RunMode
 }
 
+/** The durable P&L authority for a strategy whose latest run has ended. */
+export interface FinalizedRunSummary {
+  id: number
+  pnl_realized: number
+  stopped_at: string
+}
+
 /** A strategy as the list endpoint returns it: everything but the legs. */
 export interface StrategySummary {
   id: number
@@ -196,6 +203,8 @@ export interface StrategySummary {
   current_run_id: number | null
   created_at: string
   updated_at: string
+  /** Present on list rows; never use a checkpoint after this run has ended. */
+  last_finalized_run?: FinalizedRunSummary | null
 }
 
 /** A strategy as the detail endpoint returns it. */

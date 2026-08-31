@@ -33,6 +33,7 @@ import { cn } from '@/lib/utils'
 import {
   formatIst,
   formatListPnl,
+  formatPnl,
   pnlToneClass,
   type StrategyStatus,
   universeTabLabel,
@@ -161,12 +162,14 @@ export default function StrategyList() {
                         <TableCell
                           className={cn('text-right font-mono', pnlToneClass(pnl?.realized))}
                         >
-                          {formatListPnl(pnl?.realized)}
+                          {pnl?.finalized ? formatPnl(pnl.realized) : formatListPnl(pnl?.realized)}
                         </TableCell>
                         <TableCell
                           className={cn('text-right font-mono', pnlToneClass(pnl?.unrealized))}
                         >
-                          {formatListPnl(pnl?.unrealized)}
+                          {pnl?.finalized
+                            ? formatPnl(pnl.unrealized)
+                            : formatListPnl(pnl?.unrealized)}
                         </TableCell>
                         <TableCell
                           className={cn(
@@ -174,7 +177,7 @@ export default function StrategyList() {
                             pnlToneClass(pnl?.total)
                           )}
                         >
-                          {formatListPnl(pnl?.total)}
+                          {pnl?.finalized ? formatPnl(pnl.total) : formatListPnl(pnl?.total)}
                         </TableCell>
                         <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
                           {formatIst(row.updated_at, false)}

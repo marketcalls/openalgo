@@ -70,7 +70,12 @@ curl -X POST http://127.0.0.1:5000/api/v1/strategy/list \
       "status": "running",
       "current_run_id": 42,
       "created_at": "2026-08-24T04:11:52.104883+00:00",
-      "updated_at": "2026-08-30T03:50:11.482913+00:00"
+      "updated_at": "2026-08-30T03:50:11.482913+00:00",
+      "last_finalized_run": {
+        "id": 41,
+        "pnl_realized": 1250.0,
+        "stopped_at": "2026-08-29T09:40:11.482913+00:00"
+      }
     },
     {
       "id": 4,
@@ -97,7 +102,12 @@ curl -X POST http://127.0.0.1:5000/api/v1/strategy/list \
       "status": "stopped",
       "current_run_id": null,
       "created_at": "2026-08-18T06:02:19.775410+00:00",
-      "updated_at": "2026-08-18T06:02:19.775410+00:00"
+      "updated_at": "2026-08-18T06:02:19.775410+00:00",
+      "last_finalized_run": {
+        "id": 16,
+        "pnl_realized": -52.0,
+        "stopped_at": "2026-08-18T06:02:19.775410+00:00"
+      }
     }
   ]
 }
@@ -158,6 +168,7 @@ Each object in `data`:
 | current_run_id | integer or null | The run this strategy is executing, if any |
 | created_at | string | ISO 8601 UTC |
 | updated_at | string | ISO 8601 UTC |
+| last_finalized_run | object or null | Most recently finalised run: `{id, pnl_realized, stopped_at}`. For a stopped strategy, `pnl_realized` is the durable final P&L and unrealised P&L is zero; do not infer final P&L from an earlier checkpoint |
 
 ## Notes
 
@@ -167,6 +178,7 @@ Each object in `data`:
 - No response here or anywhere else on this surface carries a webhook token. Only its SHA-256 digest is stored, so there is nothing to return.
 - An out-of-vocabulary `status` is a 400, not an empty list.
 - `status` and `q` may be sent as `null` explicitly; that is the same as omitting them.
+- A checkpoint is a live mark only. After a run stops, use `last_finalized_run.pnl_realized` as the final total; its unrealised P&L is `0.00` because the run has confirmed flatness.
 
 ## Use Cases
 
