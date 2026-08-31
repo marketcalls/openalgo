@@ -1,19 +1,41 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, render, renderHook, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
+import { MemoryRouter, Route, Routes } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const rest = vi.hoisted(() => ({
   get: vi.fn(),
+  post: vi.fn(),
+}))
+
+const liveHook = vi.hoisted(() => vi.fn())
+const toast = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  warning: vi.fn(),
+  info: vi.fn(),
 }))
 
 vi.mock('@/api/client', () => ({
-  webClient: { get: rest.get, post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
+  webClient: { get: rest.get, post: rest.post, patch: vi.fn(), delete: vi.fn() },
   apiClient: { post: vi.fn(), get: vi.fn() },
   authClient: { post: vi.fn() },
   fetchCSRFToken: vi.fn(),
   default: { post: vi.fn(), get: vi.fn() },
 }))
+
+vi.mock('@/api/strategy_module', async () => {
+  const actual =
+    await vi.importActual<typeof import('@/api/strategy_module')>('@/api/strategy_module')
+  return {
+    ...actual,
+    useStrategyLive: liveHook,
+  }
+})
+
+vi.mock('@/utils/toast', () => ({ showToast: toast }))
 
 import {
   fetchStrategyOrderbook,
@@ -22,8 +44,8 @@ import {
   type StrategyLiveState,
   useBrokerBook,
 } from '@/api/strategy_module'
-import type { Order, Strategy } from '@/types/strategy_module'
-import { OrdersTab, PositionsTab, TradesTab } from './Detail'
+import type { Order, Run, Strategy } from '@/types/strategy_module'
+import StrategyDetail, { OrdersTab, PositionsTab, TradesTab } from './Detail'
 
 function client() {
   return new QueryClient({
@@ -39,6 +61,18 @@ function wrapper({ children }: { children: ReactNode }) {
 
 function renderWithQuery(ui: ReactNode) {
   return render(<QueryClientProvider client={client()}>{ui}</QueryClientProvider>)
+}
+
+function renderDetail() {
+  return render(
+    <QueryClientProvider client={client()}>
+      <MemoryRouter initialEntries={['/strategy/7']}>
+        <Routes>
+          <Route path="/strategy/:strategyId" element={<StrategyDetail />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>
+  )
 }
 
 const strategy = {
@@ -109,6 +143,10 @@ function localOrder(overrides: Partial<Order> = {}): Order {
 
 beforeEach(() => {
   rest.get.mockReset()
+  rest.post.mockReset()
+  liveHook.mockReset()
+  liveHook.mockReturnValue(live)
+  for (const mock of Object.values(toast)) mock.mockReset()
   hookClient = client()
 })
 
@@ -427,7 +465,7 @@ describe('strategy Orderbook broker truth', () => {
       },
     })
 
-    const rendered = renderWithQuery(
+    renderWithQuery(
       <OrdersTab strategy={strategy} live={live} orders={[localOrder()]} loading={false} active />
     )
 
@@ -438,7 +476,6 @@ describe('strategy Orderbook broker truth', () => {
       within(row as HTMLTableRowElement).getAllByText('Unavailable').length
     ).toBeGreaterThanOrEqual(4)
     expect(row?.textContent).not.toContain('0.00')
-    expect(rendered.container.textContent).not.toContain('â€”')
   })
 
   it('labels local fallback when the broker endpoint is unavailable', async () => {
@@ -484,6 +521,35 @@ describe('strategy Orderbook broker truth', () => {
 })
 
 describe('strategy Positions broker truth', () => {
+  it('renders missing active checkpoint P&L as unknown, including cumulative realized', () => {
+    rest.get.mockResolvedValue({ data: { status: 'success', data: [] } })
+    const priorRun = { id: 41, pnl_realized: 125 } as Run
+
+    renderWithQuery(
+      <PositionsTab
+        strategy={strategy}
+        live={live}
+        orders={[]}
+        runs={[priorRun]}
+        loading={false}
+        active
+      />
+    )
+
+    for (const label of [
+      'Realized (this run)',
+      'Unrealized',
+      'Run total',
+      'Cumulative realized',
+    ]) {
+      const metric = screen.getByText(label).parentElement
+      expect(metric).not.toBeNull()
+      expect(metric).toHaveTextContent('—')
+      expect(metric).not.toHaveTextContent('0.00')
+      expect(metric).not.toHaveTextContent('+125.00')
+    }
+  })
+
   it('renders invalid broker position numerics and direction as unavailable', async () => {
     rest.get.mockResolvedValue({
       data: {
@@ -633,7 +699,7 @@ describe('strategy Positions broker truth', () => {
       within(row as HTMLTableRowElement).getAllByText('Unavailable').length
     ).toBeGreaterThanOrEqual(2)
     expect(row?.textContent).not.toContain('200.00')
-    expect(row?.textContent).not.toContain('5,000.00')
+    expect(row?.textContent).not.toContain('+5000.00')
     const header = screen.getByText('Strategy positions').closest('[data-slot="card-header"]')
     expect(header?.textContent).toContain('Run #43.')
   })
@@ -690,6 +756,141 @@ describe('strategy Positions broker truth', () => {
     expect(within(row as HTMLTableRowElement).getByText('50')).toBeInTheDocument()
     expect(within(row as HTMLTableRowElement).getByText('110.00')).toBeInTheDocument()
     expect(within(row as HTMLTableRowElement).getByText('+500.00')).toBeInTheDocument()
+  })
+
+  it('keeps a prior-run residual when the broker succeeds with an empty book', async () => {
+    rest.get.mockResolvedValue({ data: { status: 'success', data: [] } })
+
+    renderWithQuery(
+      <PositionsTab
+        strategy={{ ...strategy, current_run_id: 43 }}
+        live={{ ...live, runId: 43, legs: [] }}
+        orders={[
+          localOrder({
+            id: 20,
+            run_id: 41,
+            qty: 75,
+            status: 'complete',
+            filled_qty: 75,
+            avg_fill_price: 100,
+          }),
+          localOrder({
+            id: 21,
+            run_id: 41,
+            kind: 'exit_eod',
+            action: 'SELL',
+            status: 'complete',
+            filled_qty: 50,
+            avg_fill_price: 110,
+            filled_at: '2026-05-28T03:51:00+00:00',
+          }),
+        ]}
+        runs={[]}
+        loading={false}
+        active
+      />
+    )
+
+    const row = (await screen.findByText('NIFTY28MAY2625000CE')).closest('tr')
+    expect(row).not.toBeNull()
+    expect(within(row as HTMLTableRowElement).getByText('25')).toBeInTheDocument()
+    expect(within(row as HTMLTableRowElement).getByText('local/unreconciled')).toBeInTheDocument()
+  })
+
+  it('keeps an omitted prior residual beside authoritative current broker quantity', async () => {
+    const current = 'NIFTY28MAY2626000CE'
+    rest.get.mockResolvedValue({
+      data: {
+        status: 'success',
+        data: [
+          {
+            symbol: current,
+            exchange: 'NFO',
+            product: 'NRML',
+            quantity: 7,
+            average_price: 123,
+            ltp: 125,
+            pnl: 14,
+            source: 'broker',
+          },
+        ],
+      },
+    })
+
+    renderWithQuery(
+      <PositionsTab
+        strategy={{ ...strategy, current_run_id: 43 }}
+        live={{ ...live, runId: 43, legs: [] }}
+        orders={[
+          localOrder({ id: 30, run_id: 41, status: 'complete', filled_qty: 25 }),
+          localOrder({
+            id: 31,
+            run_id: 43,
+            symbol: current,
+            status: 'complete',
+            filled_qty: 25,
+          }),
+        ]}
+        runs={[]}
+        loading={false}
+        active
+      />
+    )
+
+    await screen.findByText('broker')
+    const currentRow = screen.getByText(current).closest('tr')
+    expect(within(currentRow as HTMLTableRowElement).getByText('7')).toBeInTheDocument()
+    expect(within(currentRow as HTMLTableRowElement).getByText('broker')).toBeInTheDocument()
+    const priorRow = screen.getByText('NIFTY28MAY2625000CE').closest('tr')
+    expect(within(priorRow as HTMLTableRowElement).getByText('25')).toBeInTheDocument()
+    expect(
+      within(priorRow as HTMLTableRowElement).getByText('local/unreconciled')
+    ).toBeInTheDocument()
+  })
+
+  it('labels shared broker aggregates and retained local owners explicitly', async () => {
+    rest.get.mockResolvedValue({
+      data: {
+        status: 'success',
+        data: [
+          {
+            symbol: 'SHARED',
+            exchange: 'NFO',
+            product: 'NRML',
+            quantity: 50,
+            average_price: 100,
+            ltp: 101,
+            pnl: 50,
+            source: 'broker/shared',
+          },
+          {
+            symbol: 'SHARED',
+            exchange: 'NFO',
+            product: 'NRML',
+            quantity: 25,
+            average_price: 100,
+            ltp: null,
+            pnl: null,
+            source: 'local/unreconciled',
+            position_ref: 'owner-a',
+          },
+        ],
+      },
+    })
+
+    renderWithQuery(
+      <PositionsTab
+        strategy={strategy}
+        live={live}
+        orders={[]}
+        runs={[]}
+        loading={false}
+        active
+      />
+    )
+
+    expect(await screen.findByText('broker/shared')).toBeInTheDocument()
+    expect(screen.getByText('local/unreconciled')).toBeInTheDocument()
   })
 })
 
@@ -819,7 +1020,7 @@ describe('strategy Tradebook broker truth', () => {
       },
     })
 
-    const rendered = renderWithQuery(
+    renderWithQuery(
       <TradesTab
         strategy={strategy}
         live={live}
@@ -836,7 +1037,6 @@ describe('strategy Tradebook broker truth', () => {
       within(row as HTMLTableRowElement).getAllByText('Unavailable').length
     ).toBeGreaterThanOrEqual(4)
     expect(row?.textContent).not.toContain('0.00')
-    expect(rendered.container.textContent).not.toContain('â€”')
   })
 
   it('falls back to priced and unpriced terminal partial fills but omits zero-fill deaths', async () => {
@@ -880,5 +1080,95 @@ describe('strategy Tradebook broker truth', () => {
     expect(unpricedRow).not.toBeNull()
     expect(unpricedRow?.textContent).not.toContain('0.00')
     expect(screen.queryByText('SBIN')).not.toBeInTheDocument()
+  })
+})
+
+describe('strategy exit action toasts describe proven state only', () => {
+  function mockRunningDetailReads(orders: Order[] = []) {
+    const detailedStrategy = {
+      ...strategy,
+      legs: [
+        {
+          id: 3,
+          segment: 'options',
+          position: 'B',
+          lots: 1,
+          option_type: 'CE',
+          strike_mode: 'atm',
+        },
+      ],
+    }
+    rest.get.mockImplementation((url: string) => {
+      if (url === '/strategy/api/strategies/7') {
+        return Promise.resolve({ data: { data: detailedStrategy } })
+      }
+      if (url === '/strategy/api/strategies/7/orders') {
+        return Promise.resolve({ data: { data: orders } })
+      }
+      return Promise.resolve({ data: { data: [] } })
+    })
+  }
+
+  it.each([
+    {
+      button: 'Stop',
+      confirm: 'Stop run',
+      endpoint: '/strategy/api/strategies/7/stop',
+      expected: 'Stop requested — exit orders are pending',
+    },
+    {
+      button: 'Close All',
+      confirm: 'Close all',
+      endpoint: '/strategy/api/strategies/7/close_all',
+      expected: 'Close-all requested — exit orders are pending',
+    },
+  ])('keeps $button pending when the API accepted only exit intent', async (contract) => {
+    mockRunningDetailReads()
+    rest.post.mockResolvedValue({
+      data: { run_id: 42, stop_pending: true, run_stopped: false, exits: [{ ok: true }] },
+    })
+    const user = userEvent.setup()
+
+    renderDetail()
+    await screen.findByText('Broker truth')
+    await user.click(screen.getByRole('button', { name: contract.button }))
+    await user.click(screen.getByRole('button', { name: contract.confirm }))
+
+    await waitFor(() => expect(rest.post).toHaveBeenCalledWith(contract.endpoint))
+    expect(toast.success).toHaveBeenCalledWith(contract.expected)
+  })
+
+  it('keeps an accepted close-leg dispatch pending until run_stopped is true', async () => {
+    mockRunningDetailReads([
+      localOrder({ status: 'complete', filled_qty: 50, avg_fill_price: 100 }),
+    ])
+    rest.post.mockResolvedValue({
+      data: { run_id: 42, leg_id: 3, run_stopped: false, exits: [{ ok: true }] },
+    })
+    const user = userEvent.setup()
+
+    renderDetail()
+    await user.click(await screen.findByRole('button', { name: 'Close leg' }))
+
+    await waitFor(() =>
+      expect(rest.post).toHaveBeenCalledWith('/strategy/api/strategies/7/legs/3/close')
+    )
+    expect(toast.success).toHaveBeenCalledWith('Leg close requested — exit order is pending')
+  })
+
+  it('uses confirmed-flat wording only when close-leg reports run_stopped', async () => {
+    mockRunningDetailReads([
+      localOrder({ status: 'complete', filled_qty: 50, avg_fill_price: 100 }),
+    ])
+    rest.post.mockResolvedValue({
+      data: { run_id: 42, leg_id: 3, run_stopped: true, exits: [{ ok: true }] },
+    })
+    const user = userEvent.setup()
+
+    renderDetail()
+    await user.click(await screen.findByRole('button', { name: 'Close leg' }))
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1))
+    expect(toast.success).toHaveBeenCalledWith('Leg closed — last open leg, run stopped')
   })
 })

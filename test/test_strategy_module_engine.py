@@ -618,6 +618,34 @@ def test_the_run_finalises_when_the_last_exit_fills_not_when_it_is_placed(api_ke
     assert runs[0]["pnl_realized"] == pytest.approx((80.0 - 100.0) * 75 * -1)
 
 
+def test_close_leg_event_is_request_only_for_browser_and_restx_until_fill(api_key):
+    """Both HTTP surfaces delegate here, so this is their shared audit truth."""
+    sid = _make()
+    run_id = _start(sid).run_id
+    engine.apply_fill(run_id, 1, 100.0, is_entry=True)
+
+    with patch.object(
+        engine.order_dispatch,
+        "dispatch_order",
+        return_value=DispatchResult(ok=True, broker_order_id="EXIT-1", response={}),
+    ):
+        result = engine.close_leg(run_id, 1, USER)
+
+    assert result["ok"] is True
+    assert result["run_stopped"] is False
+    manual = [
+        event
+        for event in store.list_events(sid)
+        if event["kind"] == "leg_close_manual"
+    ]
+    assert [event["message"] for event in manual] == [
+        "Operator requested closure of leg 1"
+    ]
+    assert not any(
+        event["kind"] == "run_stopped" for event in store.list_events(sid)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tick path
 # ---------------------------------------------------------------------------
@@ -842,6 +870,42 @@ def test_late_exit_fill_reconciles_durable_pnl_only_after_detached_run_lock_rele
     assert applied is False
     reconcile.assert_called_once_with(run.id)
     assert lock_was_free == [True]
+
+
+def test_late_exit_fill_reconciles_each_durable_position_incarnation(api_key):
+    sid = _make()
+    run = store.create_run(sid, "sandbox", "sandbox")
+    assert run is not None
+
+    facts = [
+        ("old-long", "entry", "BUY", 100.0),
+        ("old-long", "exit_signal", "SELL", 105.0),
+        ("new-short", "entry", "SELL", 120.0),
+        ("new-short", "exit_signal", "BUY", 110.0),
+    ]
+    for position_ref, kind, action, price in facts:
+        order = store.record_order(
+            run.id,
+            1,
+            kind,
+            {
+                "symbol": "NIFTY28MAY2624000CE",
+                "exchange": "NFO",
+                "action": action,
+                "qty": 1,
+                "position_ref": position_ref,
+                "status": "open",
+            },
+        )
+        assert order is not None
+        assert store.update_order(
+            order.id, status="complete", avg_fill_price=price, filled_qty=1
+        )
+
+    # No live state remains, which takes the same detached-state repair path as
+    # a late broker correction after finalisation/restart.
+    assert engine.apply_fill(run.id, 1, 110.0, is_entry=False) is False
+    assert float(store.get_run(run.id).pnl_realized) == pytest.approx(15.0)
 
 
 # ---------------------------------------------------------------------------

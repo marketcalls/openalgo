@@ -125,6 +125,11 @@ targeted by another exit even though the replacement side is also live.
 
 Entry and exit: `leg_entry_placed`, `leg_entry_filled`, `leg_entry_rejected`, `leg_exit_placed`, `leg_exit_filled`, `leg_exit_rejected`, `leg_close_manual`, `leg_expiry_fallback`, `order_ack_unrecorded`
 
+Manual close events describe accepted intent only. `close_all_manual` uses
+`Operator requested closure of all held legs`, and `leg_close_manual` uses
+`Operator requested closure of leg <leg_id>`. Completed wording is reserved
+for the later fill-confirmed `run_stopped` transition.
+
 `leg_expiry_fallback` is written at `warn` severity, before the entry goes out, when the chain did not list the expiry rank the leg asked for and a nearer one was used. A `next_week` leg trading the current week is a different trade from the one that was configured, so it is said out loud rather than inferred from the symbol afterwards.
 
 `order_ack_unrecorded` is critical. The broker accepted the order, but the
@@ -155,7 +160,7 @@ the same owners and quantities.
 - **An out-of-vocabulary `kind` or `severity` is a 400**, not an empty list. Send a value from the lists above.
 - **A `run_id` belonging to another strategy matches nothing.** The query is scoped to this strategy before the run filter is applied.
 - Configuration-layer events share the table with runtime ones and carry `run_id: null`. Filtering by `run_id` therefore excludes them.
-- The `close_all_manual` event written by [`/close_all`](./close_all.md) appears here with the message `Closed all legs from the API`.
+- The `close_all_manual` event written by [`/close_all`](./close_all.md) records the request before broker exits settle; use `run_stopped` as confirmed-flat evidence.
 - `payload` is free-form JSON and is `null` on most events: the engine puts its detail in `message`. A scheduler-started run is one of the few that carries one, `{"trigger_source": "scheduler", "mode": "sandbox"}`. Do not assume a fixed shape across kinds.
 
 ## Use Cases

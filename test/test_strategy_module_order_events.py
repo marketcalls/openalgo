@@ -12,7 +12,7 @@ assertions are deterministic rather than racing a worker.
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -107,6 +107,61 @@ def _install_pending_entry(order):
         leg["entry_order_id"] = order.order_id
         leg["entry_status"] = "open"
         leg["status"] = "open"
+
+
+def _install_live_exit(
+    order,
+    *,
+    broker_order_id="BRK-MONOTONIC-EXIT",
+    position_ref="monotonic-owner",
+    quantity=75,
+):
+    """Install one priced position and its exact working exit row."""
+    assert store.update_order(
+        order.order_id,
+        status="complete",
+        avg_fill_price=100.0,
+        filled_qty=quantity,
+    )
+    assert store.set_strategy_status(order.strategy_id, "running", order.run_id)
+    state.init_run_state(
+        order.run_id,
+        order.strategy_id,
+        [
+            {
+                "leg_id": 1,
+                "position": "B",
+                "position_ref": position_ref,
+                "symbol": "NIFTY28MAY2624000CE",
+                "exchange": "NFO",
+                "quantity": quantity,
+            }
+        ],
+    )
+    exit_row = store.record_order(
+        order.run_id,
+        1,
+        "exit_close_all",
+        {
+            "position_ref": position_ref,
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "SELL",
+            "qty": quantity,
+            "broker_order_id": broker_order_id,
+            "status": "open",
+        },
+    )
+    assert exit_row is not None
+    with state.run_state(order.run_id) as run:
+        leg = run["legs"]["1"]
+        leg["entry_order_id"] = order.order_id
+        leg["entry_status"] = "complete"
+        leg["entry_avg"] = 100.0
+        leg["status"] = "open"
+        leg["exit_order_id"] = exit_row.id
+        leg["exit_kind"] = "exit_close_all"
+    return exit_row
 
 
 # ---------------------------------------------------------------------------
@@ -324,16 +379,175 @@ def test_entry_fill_after_initial_unfilled_stop_is_immediately_kept_managed_and_
     assert store.get_run(order.run_id).stopped_at is None
 
 
-def test_a_rejection_cannot_be_talked_back_into_a_fill(order):
-    # A rejection is a fact. A late, out-of-order "complete" for the same
-    # reference must not resurrect it into a position the account never held.
-    order_events._apply_update("BRK-1", _event("BRK-1", status="rejected", avg=0))
+def test_higher_complete_evidence_after_rejection_is_applied_as_one_positive_delta(order):
+    _install_pending_entry(order)
+    order_events._apply_update(
+        "BRK-1", _event("BRK-1", status="rejected", avg=0, filled=0)
+    )
 
-    with patch("services.strategy_module.engine.apply_fill") as apply_fill:
-        order_events._apply_update("BRK-1", _event("BRK-1", status="complete", avg=101.5))
+    order_events._apply_update(
+        "BRK-1", _event("BRK-1", status="complete", avg=101.5, filled=50)
+    )
 
-    assert store.list_orders(order.run_id)[0]["status"] == "rejected"
-    assert apply_fill.call_count == 0
+    durable = store.list_orders(order.run_id)[0]
+    leg = state.get_run_state(order.run_id)["legs"]["1"]
+    assert durable["status"] == "complete"
+    assert durable["filled_qty"] == 50
+    assert leg["status"] == "open"
+    assert leg["qty"] == 50
+    assert leg["entry_avg"] == pytest.approx(101.5)
+
+
+def test_working_entry_fill_then_lower_cancellation_keeps_the_larger_cumulative_fact(order):
+    _install_pending_entry(order)
+
+    order_events._apply_update("BRK-1", _event("BRK-1", status="open", avg=101.5, filled=50))
+    order_events._apply_update(
+        "BRK-1", _event("BRK-1", status="cancelled", avg=99.0, filled=25)
+    )
+
+    durable = store.list_orders(order.run_id)[0]
+    leg = state.get_run_state(order.run_id)["legs"]["1"]
+    assert durable["status"] == "cancelled"
+    assert durable["filled_qty"] == 50
+    assert durable["avg_fill_price"] == pytest.approx(101.5)
+    assert leg["status"] == "open"
+    assert leg["qty"] == 50
+    assert leg["entry_avg"] == pytest.approx(101.5)
+
+
+@pytest.mark.parametrize("late_status", ["open", "complete"])
+def test_higher_exit_correction_after_cancellation_reduces_exposure_once(order, late_status):
+    exit_row = _install_live_exit(order)
+
+    order_events._apply_update(
+        "BRK-MONOTONIC-EXIT",
+        _event("BRK-MONOTONIC-EXIT", status="cancelled", avg=0, filled=0),
+    )
+    order_events._apply_update(
+        "BRK-MONOTONIC-EXIT",
+        _event("BRK-MONOTONIC-EXIT", status=late_status, avg=110.0, filled=50),
+    )
+    order_events._apply_update(
+        "BRK-MONOTONIC-EXIT",
+        _event("BRK-MONOTONIC-EXIT", status="cancelled", avg=90.0, filled=25),
+    )
+    order_events._apply_update(
+        "BRK-MONOTONIC-EXIT",
+        _event("BRK-MONOTONIC-EXIT", status="complete", avg=110.0, filled=50),
+    )
+
+    durable = next(row for row in store.list_orders(order.run_id) if row["id"] == exit_row.id)
+    leg = state.get_run_state(order.run_id)["legs"]["1"]
+    expected_status = "complete" if late_status == "complete" else "cancelled"
+    assert durable["status"] == expected_status
+    assert durable["filled_qty"] == 50
+    assert durable["avg_fill_price"] == pytest.approx(110.0)
+    assert leg["status"] == "open"
+    assert leg["qty"] == 25
+    assert leg["realized_pnl"] == pytest.approx((110.0 - 100.0) * 50)
+
+
+def test_working_exit_fill_then_lower_cancellation_applies_only_the_working_delta(order):
+    _install_live_exit(order)
+
+    order_events._apply_update(
+        "BRK-MONOTONIC-EXIT",
+        _event("BRK-MONOTONIC-EXIT", status="open", avg=110.0, filled=50),
+    )
+    order_events._apply_update(
+        "BRK-MONOTONIC-EXIT",
+        _event("BRK-MONOTONIC-EXIT", status="cancelled", avg=105.0, filled=25),
+    )
+
+    leg = state.get_run_state(order.run_id)["legs"]["1"]
+    durable = store.get_order_by_broker_id("BRK-MONOTONIC-EXIT")
+    assert durable.status == "cancelled"
+    assert durable.filled_qty == 50
+    assert float(durable.avg_fill_price) == pytest.approx(110.0)
+    assert leg["qty"] == 25
+    assert leg["realized_pnl"] == pytest.approx((110.0 - 100.0) * 50)
+    assert leg["exit_order_id"] is None
+
+
+def test_late_correction_cancels_and_replaces_an_already_working_retry(order, monkeypatch):
+    original = _install_live_exit(order, broker_order_id="BRK-ORIGINAL")
+    order_events._apply_update(
+        "BRK-ORIGINAL",
+        _event("BRK-ORIGINAL", status="cancelled", avg=110.0, filled=25),
+    )
+    retry = store.record_order(
+        order.run_id,
+        1,
+        "exit_close_all",
+        {
+            "position_ref": "monotonic-owner",
+            "symbol": "NIFTY28MAY2624000CE",
+            "exchange": "NFO",
+            "action": "SELL",
+            "qty": 50,
+            "broker_order_id": "BRK-RETRY",
+            "status": "open",
+        },
+    )
+    assert retry is not None
+    retry_id = retry.id
+    original_id = original.id
+    with state.run_state(order.run_id) as run:
+        leg = run["legs"]["1"]
+        leg["exit_order_id"] = retry_id
+        leg["exit_kind"] = "exit_close_all"
+
+    cancel = Mock(return_value=DispatchResult(ok=True, broker_order_id="BRK-RETRY"))
+    monkeypatch.setattr(
+        engine.order_dispatch,
+        "cancel_exit_order",
+        cancel,
+        raising=False,
+    )
+    with patch.object(engine, "_api_key_for", return_value="test-key"):
+        order_events._apply_update(
+            "BRK-ORIGINAL",
+            _event("BRK-ORIGINAL", status="complete", avg=110.0, filled=50),
+        )
+
+    leg = state.get_run_state(order.run_id)["legs"]["1"]
+    durable_retry = store.get_order_by_broker_id("BRK-RETRY")
+    assert leg["qty"] == 25
+    assert leg["exit_order_id"] == retry_id
+    assert durable_retry.qty == 50
+    cancel.assert_called_once()
+    assert cancel.call_args.kwargs["broker_order_id"] == "BRK-RETRY"
+
+    order_events._apply_update(
+        "BRK-RETRY", _event("BRK-RETRY", status="cancelled", avg=0, filled=0)
+    )
+    assert state.get_run_state(order.run_id)["legs"]["1"]["exit_order_id"] is None
+
+    replacement_orders = []
+
+    def accept_replacement(**kwargs):
+        replacement_orders.append(kwargs["order"])
+        return DispatchResult(ok=True, broker_order_id="BRK-SAFE-REPLACEMENT", response={})
+
+    with (
+        patch.object(engine, "_api_key_for", return_value="test-key"),
+        patch.object(engine.order_dispatch, "dispatch_order", side_effect=accept_replacement),
+    ):
+        result = engine.stop_run(order.run_id, USER, reason="manual")
+
+    assert result["stop_pending"] is True
+    assert replacement_orders[0]["quantity"] == "25"
+
+    with patch.object(engine, "_unsubscribe_run"):
+        order_events._apply_update(
+            "BRK-SAFE-REPLACEMENT",
+            _event("BRK-SAFE-REPLACEMENT", status="complete", avg=111.0, filled=25),
+        )
+    assert store.get_run(order.run_id).stopped_at is not None
+    assert state.get_run_state(order.run_id) is None
+    assert store.get_order_by_broker_id("BRK-ORIGINAL").filled_qty == 50
+    assert original_id != retry_id
 
 
 def test_live_flip_rejection_is_retryable_not_reported_as_closed(order):
@@ -868,8 +1082,15 @@ def _apply_two_updates_after_both_read(
     monkeypatch: pytest.MonkeyPatch, broker_order_id: str, event
 ) -> None:
     """Hold two update workers after their identical pre-terminal read."""
+    _apply_updates_after_both_read(monkeypatch, broker_order_id, [event, event])
+
+
+def _apply_updates_after_both_read(
+    monkeypatch: pytest.MonkeyPatch, broker_order_id: str, events
+) -> None:
+    """Hold update workers after their identical pre-fold order lookup."""
     real_lookup = store.get_order_by_broker_id
-    both_read = Barrier(2)
+    both_read = Barrier(len(events))
 
     def synchronized_lookup(candidate_order_id):
         row = real_lookup(candidate_order_id)
@@ -877,9 +1098,9 @@ def _apply_two_updates_after_both_read(
         return row
 
     monkeypatch.setattr(store, "get_order_by_broker_id", synchronized_lookup)
-    with ThreadPoolExecutor(max_workers=2) as workers:
+    with ThreadPoolExecutor(max_workers=len(events)) as workers:
         futures = [
-            workers.submit(order_events._apply_update, broker_order_id, event) for _ in range(2)
+            workers.submit(order_events._apply_update, broker_order_id, event) for event in events
         ]
         for future in futures:
             future.result(timeout=10)
@@ -890,6 +1111,24 @@ def test_concurrent_terminal_fills_have_exactly_one_state_winner(order, monkeypa
         _apply_two_updates_after_both_read(monkeypatch, "BRK-1", _event("BRK-1"))
 
     assert apply_fill.call_count == 1
+
+
+def test_concurrent_working_and_terminal_frames_keep_terminal_status_and_largest_fill(
+    order, monkeypatch
+):
+    events = [
+        _event("BRK-1", status="open", avg=101.5, filled=50),
+        _event("BRK-1", status="cancelled", avg=99.0, filled=25),
+    ]
+    with patch("services.strategy_module.engine.apply_fill") as apply_fill:
+        _apply_updates_after_both_read(monkeypatch, "BRK-1", events)
+
+    durable = next(row for row in store.list_orders(order.run_id) if row["broker_order_id"] == "BRK-1")
+    applied = sum(call.kwargs.get("filled_qty") or 0 for call in apply_fill.call_args_list)
+    assert durable["status"] == "cancelled"
+    assert durable["filled_qty"] == 50
+    assert durable["avg_fill_price"] == pytest.approx(101.5)
+    assert applied == 50
 
 
 def test_duplicate_outgoing_rejection_does_not_clear_an_unrelated_live_exit(order, monkeypatch):
@@ -1019,9 +1258,11 @@ def test_legacy_rejection_releases_only_its_exact_live_exit_row(order):
     assert leg["exit_kind"] == "exit_signal"
 
 
-def test_a_working_status_is_recorded_but_changes_nothing_the_engine_acts_on(order):
+def test_a_zero_fill_working_status_is_recorded_but_changes_no_exposure(order):
     with patch("services.strategy_module.engine.apply_fill") as apply_fill:
-        order_events._apply_update("BRK-1", _event("BRK-1", status="trigger pending", avg=0))
+        order_events._apply_update(
+            "BRK-1", _event("BRK-1", status="trigger pending", avg=0, filled=0)
+        )
 
     assert store.list_orders(order.run_id)[0]["status"] == "open"
     assert apply_fill.call_count == 0

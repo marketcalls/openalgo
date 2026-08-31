@@ -162,6 +162,10 @@ export async function startRun(id: number, mode: RunMode): Promise<StartedRun> {
 export interface ExitOutcome {
   run_id: number
   exits: Array<Record<string, unknown>>
+  /** True while accepted exit orders still own exposure. */
+  stop_pending: boolean
+  /** Present only on response surfaces that can prove confirmed-flat finalisation. */
+  run_stopped?: boolean
 }
 
 export async function stopRun(id: number): Promise<ExitOutcome> {
@@ -174,8 +178,9 @@ export async function closeAll(id: number): Promise<ExitOutcome> {
   return response.data
 }
 
-export interface LegCloseOutcome extends ExitOutcome {
+export interface LegCloseOutcome extends Omit<ExitOutcome, 'stop_pending'> {
   leg_id: number | string
+  stop_pending?: boolean
   /** True when that leg was the last one open and the run finalised with it. */
   run_stopped: boolean
 }

@@ -9,6 +9,8 @@ These run against the configured database, like test_watchlist_db.py, and each
 test starts and ends with no rows for either test user.
 """
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 
 from database import strategy_module_db as sm
@@ -66,6 +68,8 @@ def _filled_order(
     status,
     avg_price,
     filled_qty,
+    position_ref="auto",
+    placed_at=None,
 ):
     """Persist one literal broker fill fact for reconciliation tests."""
     row = sm.record_order(
@@ -76,7 +80,9 @@ def _filled_order(
             **ORDER,
             "action": action,
             "qty": requested_qty,
-            "position_ref": f"position-{leg_id}",
+            "position_ref": (
+                f"position-{leg_id}" if position_ref == "auto" else position_ref
+            ),
             "status": "open",
         },
     )
@@ -87,6 +93,10 @@ def _filled_order(
         avg_fill_price=avg_price,
         filled_qty=filled_qty,
     )
+    if placed_at is not None:
+        row.placed_at = placed_at
+        sm.db_session.commit()
+    return row
 
 
 @pytest.fixture(autouse=True)
@@ -559,6 +569,175 @@ def test_reconcile_run_pnl_keeps_complete_fills_without_inventing_dead_fill_fact
 
     assert reconciled == pytest.approx(20.0)
     assert float(sm.get_run(run.id).pnl_realized) == pytest.approx(20.0)
+
+
+def test_reconcile_run_pnl_separates_incarnations_and_caps_shuffled_exits():
+    run = _run()
+    base = datetime(2026, 8, 30, tzinfo=UTC).replace(tzinfo=None)
+
+    # Insert deliberately out of chronology. Reconciliation must use durable
+    # placement order inside each exact owner rather than query row order.
+    _filled_order(
+        run.id,
+        1,
+        "exit_signal",
+        "SELL",
+        requested_qty=4,
+        status="complete",
+        avg_price=110.0,
+        filled_qty=4,
+        position_ref="long-owner",
+        placed_at=base + timedelta(minutes=3),
+    )
+    _filled_order(
+        run.id,
+        1,
+        "exit_signal",
+        "BUY",
+        requested_qty=3,
+        status="complete",
+        avg_price=110.0,
+        filled_qty=3,
+        position_ref="short-owner",
+        placed_at=base + timedelta(minutes=5),
+    )
+    _filled_order(
+        run.id,
+        1,
+        "entry",
+        "BUY",
+        requested_qty=4,
+        status="complete",
+        avg_price=100.0,
+        filled_qty=4,
+        position_ref="long-owner",
+        placed_at=base + timedelta(minutes=1),
+    )
+    _filled_order(
+        run.id,
+        1,
+        "entry",
+        "SELL",
+        requested_qty=3,
+        status="complete",
+        avg_price=120.0,
+        filled_qty=3,
+        position_ref="short-owner",
+        placed_at=base + timedelta(minutes=4),
+    )
+    _filled_order(
+        run.id,
+        1,
+        "exit_signal",
+        "SELL",
+        requested_qty=2,
+        status="complete",
+        avg_price=105.0,
+        filled_qty=2,
+        position_ref="long-owner",
+        placed_at=base + timedelta(minutes=2),
+    )
+
+    reconciled = sm.reconcile_run_pnl(run.id)
+
+    # Long: 2 @ +5, then only the remaining 2 @ +10. Short: 3 @ +10.
+    assert reconciled == pytest.approx(60.0)
+    assert float(sm.get_run(run.id).pnl_realized) == pytest.approx(60.0)
+
+
+def test_reconcile_run_pnl_keeps_overlapping_opposite_referenced_owners_separate():
+    run = _run()
+    base = datetime(2026, 8, 30, tzinfo=UTC).replace(tzinfo=None)
+    facts = [
+        ("entry", "BUY", 100.0, "long-owner", 1),
+        ("entry", "SELL", 120.0, "short-owner", 2),
+        ("exit_signal", "BUY", 110.0, "short-owner", 3),
+        ("exit_signal", "SELL", 110.0, "long-owner", 4),
+    ]
+    for kind, action, price, position_ref, minute in facts:
+        _filled_order(
+            run.id,
+            1,
+            kind,
+            action,
+            requested_qty=1,
+            status="complete",
+            avg_price=price,
+            filled_qty=1,
+            position_ref=position_ref,
+            placed_at=base + timedelta(minutes=minute),
+        )
+
+    reconciled = sm.reconcile_run_pnl(run.id)
+
+    assert reconciled == pytest.approx(20.0)
+    assert float(sm.get_run(run.id).pnl_realized) == pytest.approx(20.0)
+
+
+def test_reconcile_run_pnl_uses_fifo_for_legacy_rows_without_crossing_references():
+    run = _run()
+    base = datetime(2026, 8, 30, tzinfo=UTC).replace(tzinfo=None)
+
+    facts = [
+        ("exit_signal", "SELL", 10, 25.0, None, 4),
+        ("entry", "BUY", 1, 100.0, "referenced-owner", 5),
+        ("entry", "BUY", 2, 10.0, None, 1),
+        ("exit_signal", "SELL", 1, 110.0, "referenced-owner", 6),
+        ("entry", "BUY", 2, 20.0, None, 3),
+        ("exit_signal", "SELL", 1, 12.0, None, 2),
+    ]
+    for kind, action, qty, price, position_ref, minute in facts:
+        _filled_order(
+            run.id,
+            1,
+            kind,
+            action,
+            requested_qty=qty,
+            status="complete",
+            avg_price=price,
+            filled_qty=qty,
+            position_ref=position_ref,
+            placed_at=base + timedelta(minutes=minute),
+        )
+
+    reconciled = sm.reconcile_run_pnl(run.id)
+
+    # Legacy FIFO: +2, then +15 and +10 (the exit is capped at three).
+    # The referenced owner is reconciled independently for +10.
+    assert reconciled == pytest.approx(37.0)
+
+
+def test_reconcile_run_pnl_preserves_authoritative_value_when_ownership_is_ambiguous():
+    run = _run()
+    base = datetime(2026, 8, 30, tzinfo=UTC).replace(tzinfo=None)
+    _filled_order(
+        run.id,
+        1,
+        "exit_signal",
+        "SELL",
+        requested_qty=1,
+        status="complete",
+        avg_price=110.0,
+        filled_qty=1,
+        position_ref="ambiguous-owner",
+        placed_at=base,
+    )
+    _filled_order(
+        run.id,
+        1,
+        "entry",
+        "BUY",
+        requested_qty=1,
+        status="complete",
+        avg_price=100.0,
+        filled_qty=1,
+        position_ref="ambiguous-owner",
+        placed_at=base + timedelta(minutes=1),
+    )
+    sm.finish_run(run.id, "manual", pnl_realized=73.0)
+
+    assert sm.reconcile_run_pnl(run.id) is None
+    assert float(sm.get_run(run.id).pnl_realized) == pytest.approx(73.0)
 
 
 def test_a_run_records_its_final_numbers_on_stop():

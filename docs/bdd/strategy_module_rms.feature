@@ -48,14 +48,14 @@ Feature: Strategy module and risk management
     And carry is NRML on derivatives and CNC on cash
     And the literal product sent is persisted with the order
 
-  # Source: test/test_strategy_module_order_dispatch.py:199
+  # Source: test/test_strategy_module_order_dispatch.py:234
   Scenario: A run mode cannot be diverted by the analyzer toggle
     Given a live run is holding broker positions
     When the platform analyzer toggle changes
     Then subsequent live exits still reach the broker
     And a sandbox run still uses the sandbox book and execution pipe
 
-  # Source: services/strategy_module/engine.py:456, test/test_strategy_module_qa_edges.py:1926
+  # Source: services/strategy_module/engine.py:459, test/test_strategy_module_qa_edges.py:1926
   Scenario: Durable intent and acknowledgement surround every broker call
     Given the engine is about to place an entry or exit
     When it dispatches the order
@@ -63,7 +63,7 @@ Feature: Strategy module and risk management
     And the broker acknowledgement write is checked and retried once
     And persistent acknowledgement failure emits order_ack_unrecorded with the broker id
 
-  # Source: test/test_strategy_module_order_events.py:142
+  # Source: test/test_strategy_module_order_events.py:197
   Scenario: Each fill is applied once to the exact order it names
     Given the same completed fill arrives from more than one broker channel
     When the order-update subscriber applies those events
@@ -100,7 +100,7 @@ Feature: Strategy module and risk management
     And one run_stopped event is emitted
     And the pending-stop fields are cleared
 
-  # Source: test/test_strategy_module_order_events.py:199
+  # Source: test/test_strategy_module_order_events.py:254
   Scenario: A terminal partial entry is real exposure
     Given an entry partially filled before it was cancelled or rejected
     When the terminal update arrives during a pending stop
@@ -108,14 +108,14 @@ Feature: Strategy module and risk management
     And only that exact quantity is exited
     And requested quantity is never used to open the opposite side
 
-  # Source: test/test_strategy_module_order_events.py:251
+  # Source: test/test_strategy_module_order_events.py:306
   Scenario: Unpriced exposure remains managed and visibly unavailable
     Given a terminal partial fill has positive quantity but no usable price
     When it reaches the engine and operator views
     Then the exact position quantity remains managed
     And average price and P&L are unavailable rather than fabricated as zero
 
-  # Source: test/test_strategy_module_order_events.py:394
+  # Source: test/test_strategy_module_order_events.py:608
   Scenario: An asynchronous rejected stop exit remains retryable
     Given a stop exit was accepted and later rejected or cancelled
     When its terminal update arrives
@@ -209,14 +209,14 @@ Feature: Strategy module and risk management
     Then periodic reads resume
     And fresh REST state replaces the stale frame and run id
 
-  # Source: test/test_strategy_module_views.py:624
+  # Source: test/test_strategy_module_views.py:765
   Scenario: Broker books follow the run mode rather than analyzer state
     Given a current or selected strategy run
     When its orderbook, tradebook or positions are requested
     Then a live run reads the broker and a sandbox run reads sandbox
     And account rows are narrowed to the strategy's durable orders or contracts
 
-  # Source: frontend/src/pages/strategy/Detail.test.tsx:326
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:364
   Scenario: No run means broker truth was not requested
     Given a strategy has no current or historical run
     When an operator opens a broker-backed tab
@@ -230,7 +230,7 @@ Feature: Strategy module and risk management
     Then real zero remains zero
     And every unusable quantity, price and P&L value renders unavailable
 
-  # Source: frontend/src/pages/strategy/Detail.test.tsx:723, frontend/src/pages/strategy/strategy_module.test.ts:121
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:924, frontend/src/pages/strategy/strategy_module.test.ts:121
   Scenario: Broker order and trade truth keeps local reconciliation context
     Given broker rows and recorded strategy orders can match, differ or be ambiguous
     When the page reconciles them by broker order id
@@ -238,7 +238,7 @@ Feature: Strategy module and risk management
     And multiple trade fills aggregate quantity and weighted price before comparison
     And local-only, ambiguous, mismatch and rejection context remain visible
 
-  # Source: frontend/src/pages/strategy/Detail.test.tsx:578, frontend/src/pages/strategy/Detail.test.tsx:641, frontend/src/pages/strategy/strategy_module.test.ts:400, test/test_strategy_module_views.py:363
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:619, frontend/src/pages/strategy/Detail.test.tsx:707, frontend/src/pages/strategy/strategy_module.test.ts:400, test/test_strategy_module_views.py:441
   Scenario: Position fallback preserves exposure without inventing valuation
     Given local audit has explicit positive fills in working or terminal statuses
     When the broker positionbook is unavailable

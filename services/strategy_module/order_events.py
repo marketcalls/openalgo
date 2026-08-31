@@ -317,6 +317,98 @@ def _exit_owner_still_held(
         return False
 
 
+def _incremental_fill_price(fold: store.OrderFactFold) -> float | None:
+    """Derive the price of only the newly reported cumulative fill delta."""
+    if fold.fill_delta <= 0:
+        return None
+    cumulative_price = _usable_price(fold.average_fill_price)
+    if cumulative_price is None:
+        return None
+    previous_price = _usable_price(fold.previous_average_fill_price)
+    if fold.previous_filled_qty <= 0 or previous_price is None:
+        return cumulative_price
+    incremental_notional = (
+        cumulative_price * fold.cumulative_filled_qty
+        - previous_price * fold.previous_filled_qty
+    )
+    return _usable_price(incremental_notional / fold.fill_delta)
+
+
+def _working_retry_for_position(
+    run_id: int,
+    leg_id: Any,
+    position_ref: str | None,
+    source_order_id: int,
+) -> int | None:
+    """Return a different in-flight exit row now owning this position."""
+    if position_ref is None:
+        return None
+    from services.strategy_module import state
+
+    snapshot = state.get_run_state(run_id)
+    leg = (snapshot.get("legs") or {}).get(str(leg_id)) if snapshot else None
+    if leg is None:
+        return None
+    owners = [leg, leg.get("superseded")]
+    for owner in owners:
+        if not owner or owner.get("position_ref") != position_ref:
+            continue
+        retry_id = owner.get("exit_order_id")
+        if retry_id is not None and retry_id != source_order_id:
+            return int(retry_id)
+    return None
+
+
+def _cancel_working_retry(run_id: int, retry_order_id: int) -> bool:
+    """Cancel a retry made unsafe by a higher fill correction.
+
+    All database, credential and broker work happens after the state snapshot
+    and therefore outside the run lock. Ownership remains armed until the
+    broker's terminal cancellation frame arrives.
+    """
+    retry = store.get_order(retry_order_id)
+    run = store.get_run(run_id)
+    if retry is None or run is None or not retry.broker_order_id:
+        return False
+    strategy = store.get_strategy_unscoped(run.strategy_id)
+    if strategy is None:
+        return False
+
+    from services.strategy_module import engine
+
+    api_key = engine._api_key_for(strategy.user_id)
+    if not api_key:
+        result = None
+        error = "the OpenAlgo API key is unavailable"
+    else:
+        result = engine.order_dispatch.cancel_exit_order(
+            mode=run.mode,
+            api_key=api_key,
+            broker_order_id=retry.broker_order_id,
+        )
+        error = result.error or "the broker refused cancellation"
+    if result is not None and result.ok:
+        return True
+
+    try:
+        store.record_event(
+            run.strategy_id,
+            strategy.user_id,
+            "run_stop_failed" if run.stop_requested_reason else "leg_exit_rejected",
+            (
+                f"A higher fill correction made retry order {retry.broker_order_id} too large, "
+                f"but it could not be cancelled because {error}. Its position remains managed; "
+                "verify the broker order immediately to prevent reversal."
+            ),
+            run_id=run_id,
+            leg_id=retry.leg_id,
+            severity="critical",
+        )
+    except Exception:
+        logger.exception("Could not record failed correction cancellation for run %s", run_id)
+    return False
+
+
 def _on_order_update(event: Any) -> None:
     """Bus callback. Returns immediately; the work happens on the pool.
 
@@ -370,220 +462,152 @@ def _apply_update(order_id: str, event: Any) -> None:
             _pending_updates[order_id] = event
             return
 
-        status = _normalise(getattr(event, "order_status", ""))
-        filled_qty = getattr(event, "filled_quantity", None)
-        avg_price = getattr(event, "average_price", None)
+        broker_status = _normalise(getattr(event, "order_status", ""))
+        if broker_status in _FILLED:
+            canonical_status = "complete"
+        elif broker_status in _CANCELLED:
+            canonical_status = "cancelled"
+        elif broker_status in _DEAD:
+            canonical_status = "rejected"
+        else:
+            canonical_status = "open"
+        incoming_qty = _whole_qty(getattr(event, "filled_quantity", None))
+        incoming_price = _usable_price(getattr(event, "average_price", None))
         rejection = getattr(event, "rejection_reason", "") or None
 
-        # Read the row's current state before writing, so the transition can be
-        # detected. Anything already terminal is left alone: a fill applied
-        # twice would add its realized profit to the run a second time.
-        already_terminal = _normalise(row.status) in _FILLED or _normalise(row.status) in _DEAD
         run_id = row.run_id
         leg_id = row.leg_id
         is_entry = row.kind == "entry"
+        row_id = row.id
+        position_ref = row.position_ref
+        broker_order_id = row.broker_order_id
 
-        if status in _FILLED:
-            if already_terminal:
-                logger.debug("Ignoring a repeat fill for order %s", order_id)
-                return
-            if not store.transition_order_terminal(
-                row.id,
-                status="complete",
-                avg_fill_price=avg_price,
-                filled_qty=filled_qty,
-            ):
-                return
-            price = _usable_price(avg_price)
-            quantity = _whole_qty(filled_qty)
-            if price is not None or quantity is not None:
-                from services.strategy_module import engine
-
-                fill_identity = {"position_ref": row.position_ref} if row.position_ref else {}
-                engine.apply_fill(
-                    run_id,
-                    leg_id,
-                    price,
-                    is_entry=is_entry,
-                    filled_qty=quantity,
-                    # New rows name the position incarnation directly. The
-                    # row id remains the fallback for legacy NULL references.
-                    order_row_id=row.id,
-                    **fill_identity,
-                )
-                if price is None and quantity is not None:
-                    _report_unpriced_fill(
-                        run_id,
-                        leg_id,
-                        order_id,
-                        quantity,
-                        is_entry=is_entry,
-                    )
-            else:
-                # Neither price nor quantity supplied a usable fill fact.
-                logger.warning(
-                    "Order %s reported filled without usable quantity or average price %r; "
-                    "leg %s not marked",
-                    order_id,
-                    avg_price,
-                    leg_id,
-                )
-
-            # A fill is a one-off: no later frame carries it, so both go out
-            # regardless of the delta throttle. Sent for a priceless fill too,
-            # because the order row still changed and the page should show it.
-            _push_fill(run_id, store.order_to_dict(store.get_order_by_broker_id(order_id)))
+        fold = store.fold_order_broker_frame(
+            row_id,
+            status=canonical_status,
+            avg_fill_price=incoming_price,
+            filled_qty=incoming_qty,
+            reject_reason=rejection,
+        )
+        if fold is None or not fold.changed:
             return
 
-        if status in _DEAD:
-            if already_terminal:
-                return
-            # A cancel is not a rejection. store.ORDER_STATUSES carries both
-            # and recovery.normalise_order_status already distinguishes them,
-            # so collapsing them here only loses audit accuracy.
-            ended = "cancelled" if status in _CANCELLED else "rejected"
-            terminal_qty = None
-            terminal_price = None
-            durable_qty = filled_qty
-            durable_price = avg_price
-            # Terminal frames commonly send zeroes for fields already
-            # reported by an earlier partial update. Preserve the durable
-            # positive facts rather than overwriting real exposure or a real
-            # reduction with the dead remainder's zero values.
-            terminal_qty = _whole_qty(filled_qty) or _whole_qty(row.filled_qty)
-            terminal_price = _usable_price(avg_price) or _usable_price(row.avg_fill_price)
-            if terminal_qty is not None:
-                durable_qty = terminal_qty
-            if terminal_price is not None:
-                durable_price = terminal_price
-            if not store.transition_order_terminal(
-                row.id,
-                status=ended,
-                avg_fill_price=durable_price,
-                filled_qty=durable_qty,
-                reject_reason=rejection,
-            ):
-                return
-            logger.warning("Strategy order %s ended as %s", order_id, status)
+        from services.strategy_module import engine, state
 
-            # An order that dies after the dispatch returned has to undo what
-            # the dispatch claimed, or the leg is stranded. The synchronous
-            # refusal path already does this; nothing did it for a rejection or
-            # cancellation that arrived later.
-            from services.strategy_module import state
+        exit_owner = (
+            None
+            if is_entry
+            else _exit_owner_for_row(run_id, leg_id, row_id, position_ref)
+        )
+        should_apply = fold.fill_delta > 0 or (
+            fold.terminal and fold.cumulative_filled_qty > 0
+        )
+        if should_apply:
+            price = (
+                _usable_price(fold.average_fill_price)
+                if is_entry
+                else _incremental_fill_price(fold)
+            )
+            fill_identity = {"position_ref": position_ref} if position_ref else {}
+            fill_options: dict[str, Any] = {}
+            if is_entry and (not fold.terminal or fold.previous_filled_qty > 0):
+                fill_options["cumulative_filled_qty"] = fold.cumulative_filled_qty
+            if not fold.terminal:
+                fill_options["order_terminal"] = False
+            if fold.was_terminal:
+                fill_options["allow_prior_order_correction"] = True
+            engine.apply_fill(
+                run_id,
+                leg_id,
+                price,
+                is_entry=is_entry,
+                filled_qty=fold.fill_delta,
+                order_row_id=row_id,
+                **fill_identity,
+                **fill_options,
+            )
+            if fold.fill_delta > 0 and price is None:
+                _report_unpriced_fill(
+                    run_id,
+                    leg_id,
+                    order_id,
+                    fold.cumulative_filled_qty,
+                    is_entry=is_entry,
+                )
 
-            if is_entry:
-                if terminal_qty is not None:
-                    # A cancelled/rejected remainder does not erase what
-                    # already traded. Quantity alone proves exposure; price is
-                    # optional valuation metadata. Install the actual fill,
-                    # then let pending-stop reconciliation claim that quantity.
-                    from services.strategy_module import engine
+            if not is_entry and fold.was_terminal and fold.fill_delta > 0:
+                retry_id = _working_retry_for_position(
+                    run_id,
+                    leg_id,
+                    position_ref,
+                    row_id,
+                )
+                if retry_id is not None:
+                    _cancel_working_retry(run_id, retry_id)
 
-                    fill_identity = {"position_ref": row.position_ref} if row.position_ref else {}
-                    engine.apply_fill(
-                        run_id,
-                        leg_id,
-                        terminal_price,
-                        is_entry=True,
-                        filled_qty=terminal_qty,
-                        order_row_id=row.id,
-                        **fill_identity,
+        incoming_dead_transition = canonical_status in {"cancelled", "rejected"} and (
+            not fold.was_terminal
+        )
+        if incoming_dead_transition:
+            ended = canonical_status
+            logger.warning("Strategy order %s ended as %s", order_id, ended)
+            if is_entry and fold.cumulative_filled_qty <= 0:
+                # Zero fill: the entry will never become a position. Mark it
+                # flat under the state lock, then reconcile the pending stop
+                # only after releasing the lock.
+                with state.run_state(run_id) as run:
+                    leg = run["legs"].get(str(leg_id)) if run else None
+                    owns_entry = leg is not None and (
+                        position_ref is None or leg.get("position_ref") == position_ref
                     )
-                    if terminal_price is None:
-                        _report_unpriced_fill(
-                            run_id,
-                            leg_id,
-                            order_id,
-                            terminal_qty,
-                            is_entry=True,
-                        )
-                else:
-                    # Zero fill: the entry will never become a position. Mark
-                    # it flat under the state lock, then reconcile a pending
-                    # stop after releasing the lock so its terminal CAS can run.
-                    with state.run_state(run_id) as run:
-                        leg = run["legs"].get(str(leg_id)) if run else None
-                        owns_entry = leg is not None and (
-                            row.position_ref is None or leg.get("position_ref") == row.position_ref
-                        )
-                        if owns_entry and leg.get("entry_status") != "complete":
-                            leg["entry_status"] = ended
-                            leg["status"] = "rejected"
-
-                    from services.strategy_module import engine
-
-                    engine.reconcile_pending_stop(run_id)
-            else:
-                exit_owner = _exit_owner_for_row(run_id, leg_id, row.id, row.position_ref)
-                if terminal_qty is not None:
-                    from services.strategy_module import engine
-
-                    fill_identity = {"position_ref": row.position_ref} if row.position_ref else {}
-                    engine.apply_fill(
-                        run_id,
-                        leg_id,
-                        terminal_price,
-                        is_entry=False,
-                        filled_qty=terminal_qty,
-                        order_row_id=row.id,
-                        **fill_identity,
-                    )
-                    if terminal_price is None:
-                        _report_unpriced_fill(
-                            run_id,
-                            leg_id,
-                            order_id,
-                            terminal_qty,
-                            is_entry=False,
-                        )
-                else:
+                    if owns_entry and leg.get("entry_status") != "complete":
+                        leg["entry_status"] = ended
+                        leg["status"] = "rejected"
+                engine.reconcile_pending_stop(run_id)
+            elif not is_entry:
+                if not should_apply:
                     exit_owner = state.release_order_exit(
                         run_id,
                         leg_id,
-                        row.id,
-                        row.position_ref,
+                        row_id,
+                        position_ref,
                     )
                 owner_still_held = _exit_owner_still_held(
                     run_id,
                     leg_id,
                     exit_owner,
-                    row.position_ref,
+                    position_ref,
                 )
                 if exit_owner == "superseded" and owner_still_held:
-                    # This closed the outgoing side of a flip, and it was
-                    # refused. Both sides are on the book now: the leg
-                    # describes the new one, and the old one is held with its
-                    # exit dead. Cleared so it can be retried and said out loud.
                     logger.warning(
                         "The exit for the outgoing side of a flip on leg %s was %s; that "
                         "position is still held",
                         leg_id,
                         ended,
                     )
-                    report_flip_outgoing_exit_rejected(run_id, leg_id, ended, row.broker_order_id)
+                    report_flip_outgoing_exit_rejected(
+                        run_id,
+                        leg_id,
+                        ended,
+                        broker_order_id,
+                    )
                 if owner_still_held:
-                    report_pending_stop_exit_failed(run_id, leg_id, ended, row.broker_order_id)
+                    report_pending_stop_exit_failed(
+                        run_id,
+                        leg_id,
+                        ended,
+                        broker_order_id,
+                    )
                 if (
-                    terminal_qty is None
+                    fold.cumulative_filled_qty <= 0
                     and exit_owner is None
                     and state.get_run_state(run_id) is None
                 ):
-                    # The run has already finalised. There is nothing left to
-                    # release and nothing still managing this leg, so the
-                    # position is real and invisible unless said out loud.
                     _report_stranded_exit(run_id, leg_id, row, ended)
-            return
 
-        # Anything else is still working. Recorded so the audit trail follows
-        # the order, but it changes nothing the engine acts on.
-        if not already_terminal and status:
-            store.update_order(
-                row.id,
-                status="open",
-                avg_fill_price=avg_price,
-                filled_qty=filled_qty,
-            )
+        if fold.fill_delta > 0 or fold.terminal:
+            durable = store.get_order_by_broker_id(order_id)
+            _push_fill(run_id, store.order_to_dict(durable) if durable is not None else None)
     except Exception:
         logger.exception("Could not apply order update %s", order_id)
     finally:

@@ -44,6 +44,7 @@ from flask_socketio import join_room, leave_room
 from database import strategy_module_db as store
 from extensions import socketio
 from limiter import limiter
+from services.strategy_module.audit_messages import CLOSE_ALL_REQUESTED_MESSAGE
 from utils.ip_helper import get_real_ip
 from utils.logging import get_logger
 from utils.session import check_session_validity
@@ -1366,7 +1367,7 @@ def _stop_run_for(sid: int, reason: str, event: str | None = None):
             sid,
             username,
             event,
-            "Operator requested closure of all held legs",
+            CLOSE_ALL_REQUESTED_MESSAGE,
             run_id=run_id,
         )
 

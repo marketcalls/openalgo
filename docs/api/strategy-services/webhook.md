@@ -20,7 +20,7 @@ This endpoint is **not** under `/api/v1`, and it does **not** accept an `apikey`
 - Treat it as a credential. Anyone who can post to the URL can start or stop the strategy, subject to the strategy's own kill switch, IP allowlist and live opt-in.
 - Rotating invalidates the old token immediately.
 
-The token is never written to a log or to the audit table. A log line carries the first twelve characters of the stored digest instead, which is enough to correlate two events and useless to anyone who reads it. The inbound payload is redacted before it is stored, so a webhook URL pasted into an alert message does not end up in the database in plaintext.
+Within OpenAlgo's enforceable boundary, the token is redacted from standard and JSON application logs, the traffic database and every shipped nginx access log. An application line carries only the first twelve characters of the stored digest, which is enough to correlate two events and useless to anyone who reads it. The inbound payload is redacted before it is stored, so a webhook URL pasted into an alert message does not end up in the database in plaintext. External senders and proxies are outside that boundary and must protect the URL as a credential.
 
 ## Batch Strategies
 
@@ -277,10 +277,12 @@ The token-keyed limit is keyed on the token's SHA-256 digest, not the token. The
 The URL token is the entire credential, so anywhere it is written down is a second copy of it.
 
 - **It is masked in the traffic log.** `/traffic` keeps 30 days of requests and shows the path; the credential segment of `/strategy/webhook/`, `/flow/webhook/` and `/chartink/webhook/` paths is replaced with `<redacted>` before the row is written. Anyone who could read that log could otherwise replay the webhook and place orders.
+- **It is masked in application logs.** The same path redactor runs over standard log messages and the request-path field in `log/errors.jsonl`.
+- **It is suppressed in shipped nginx access logs.** Direct, Docker, multi-instance, update and change-domain installers conditionally disable access logging for all three URL-secret webhook prefixes, including the HTTP-to-HTTPS redirect server.
 - **It never appears in an audit payload.** The stored `payload` is the body with anything token-shaped stripped, so a sender that echoes its own URL into the alert body does not persist it.
 - **No API response carries it.** Only the SHA-256 digest is stored; the plaintext is shown once, at creation and at rotation, in the browser.
 
-It will still be in your sender's own configuration and in any TLS-terminating proxy's access log. Rotate it (`/strategy/api/strategies/<id>/webhook/rotate`) if either is exposed; the old token stops working immediately.
+It will still be in your sender's own configuration and may be present in an external or previously installed/custom proxy that does not apply this guard. If credentials may previously have reached any access log or support bundle, rotate them from the strategy page (the session endpoint is `/strategy/api/strategies/<id>/webhook/rotate`); the old token stops working immediately. Apply equivalent redaction or access-log suppression at every external TLS terminator.
 
 ## Use Cases
 

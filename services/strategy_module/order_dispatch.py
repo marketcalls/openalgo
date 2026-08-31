@@ -182,6 +182,79 @@ def dispatch_order(
     return DispatchResult(ok=False, error=f"Unknown run mode: {mode!r}")
 
 
+def cancel_exit_order(
+    *,
+    mode: str,
+    api_key: str,
+    broker_order_id: str,
+) -> DispatchResult:
+    """Cancel a stale strategy retry through the run's own execution pipe.
+
+    A late cumulative correction can make an already-working retry too large.
+    Cancelling that retry before replacing it is the only safe response; merely
+    shrinking local state would leave the broker free to reverse the position.
+    Like placement, this bypasses the platform analyzer toggle because ``mode``
+    was fixed durably when the run started.
+    """
+    if not broker_order_id:
+        return DispatchResult(ok=False, error="Broker order id is unavailable")
+    if mode == "sandbox":
+        from services.sandbox_service import sandbox_cancel_order
+
+        request = {"orderid": broker_order_id}
+        original = {**request, "apikey": api_key}
+        try:
+            ok, response, _status = sandbox_cancel_order(request, api_key, original)
+        except Exception:
+            logger.exception("Sandbox retry cancellation raised for %s", broker_order_id)
+            return DispatchResult(
+                ok=False,
+                broker_order_id=broker_order_id,
+                error="Sandbox retry cancellation failed",
+            )
+        result = _normalise(ok, response)
+        return DispatchResult(
+            ok=result.ok,
+            broker_order_id=result.broker_order_id or broker_order_id,
+            response=result.response,
+            error=result.error,
+        )
+    if mode != "live":
+        return DispatchResult(ok=False, error=f"Unknown run mode: {mode!r}")
+
+    auth_token, broker, error = resolve_live_auth(api_key)
+    if error:
+        return DispatchResult(ok=False, broker_order_id=broker_order_id, error=error)
+
+    from services.cancel_order_service import import_broker_module
+
+    broker_module = import_broker_module(broker)
+    if broker_module is None:
+        return DispatchResult(
+            ok=False,
+            broker_order_id=broker_order_id,
+            error="Broker-specific cancellation module is unavailable",
+        )
+    try:
+        response, status_code = broker_module.cancel_order(broker_order_id, auth_token)
+    except Exception:
+        logger.exception("Live retry cancellation raised for %s", broker_order_id)
+        return DispatchResult(
+            ok=False,
+            broker_order_id=broker_order_id,
+            error="Live retry cancellation failed",
+        )
+    payload = response if isinstance(response, dict) else {}
+    if status_code == 200:
+        return DispatchResult(ok=True, broker_order_id=broker_order_id, response=payload)
+    return DispatchResult(
+        ok=False,
+        broker_order_id=broker_order_id,
+        response=payload,
+        error=payload.get("message") or "Broker refused retry cancellation",
+    )
+
+
 def _dispatch_sandbox(api_key: str, order: dict[str, Any]) -> DispatchResult:
     from services.sandbox_service import sandbox_place_order
 

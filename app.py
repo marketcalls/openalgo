@@ -556,7 +556,11 @@ def create_app():
 
         error_description = str(error)
 
-        logger.warning(f"CSRF Error on {request.path}: {error_description}")
+        from utils.url_redaction import redact_url_credentials
+
+        logger.warning(
+            f"CSRF Error on {redact_url_credentials(request.path)}: {error_description}"
+        )
 
         # Check if it's a CSRF error
         if "CSRF" in error_description or "csrf" in error_description.lower():
@@ -582,7 +586,9 @@ def create_app():
         from utils.ip_helper import get_real_ip
 
         client_ip = get_real_ip()
-        path = request.path
+        from utils.url_redaction import redact_url_credentials
+
+        path = redact_url_credentials(request.path)
 
         # Skip 404 tracking for authenticated users (prevents self-ban during
         # login flows, broker OAuth callbacks, or normal navigation to
@@ -639,7 +645,12 @@ def create_app():
         from flask import redirect, request
 
         # Log rate limit hit
-        logger.warning(f"Rate limit exceeded for {request.remote_addr}: {request.path}")
+        from utils.url_redaction import redact_url_credentials
+
+        logger.warning(
+            f"Rate limit exceeded for {request.remote_addr}: "
+            f"{redact_url_credentials(request.path)}"
+        )
 
         # For API requests, return JSON response
         if request.path.startswith("/api/"):

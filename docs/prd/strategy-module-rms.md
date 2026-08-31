@@ -202,7 +202,7 @@ Six tables, all `sm_` prefixed, in the main database: `sm_strategy`,
 | NFR4 | Nothing creates a database engine, thread, executor, socket or subprocess per call |
 | NFR5 | Caches are bounded and invalidated; registries have a matching removal |
 | NFR6 | Every schema change ships as an idempotent migration tested against a populated database |
-| NFR7 | The webhook token appears in no log, no audit payload and no API response |
+| NFR7 | Within OpenAlgo's boundary, URL webhook credentials are redacted from standard/JSON application logs and traffic rows, suppressed in every shipped nginx access log, absent from audit payloads and API responses; operators must protect external proxies/senders and rotate credentials that may have been logged previously |
 
 ## Database Schema
 

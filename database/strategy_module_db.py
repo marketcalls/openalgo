@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -140,6 +141,31 @@ ORDER_KINDS = (
 )
 
 ORDER_STATUSES = ("pending", "open", "complete", "cancelled", "rejected")
+
+_TERMINAL_ORDER_STATUSES = frozenset({"complete", "cancelled", "rejected"})
+
+
+@dataclass(frozen=True, slots=True)
+class OrderFactFold:
+    """The durable result of folding one cumulative broker order frame."""
+
+    order_id: int
+    previous_status: str
+    status: str
+    previous_filled_qty: int
+    cumulative_filled_qty: int
+    fill_delta: int
+    previous_average_fill_price: float | None
+    average_fill_price: float | None
+    changed: bool
+
+    @property
+    def terminal(self) -> bool:
+        return self.status in _TERMINAL_ORDER_STATUSES
+
+    @property
+    def was_terminal(self) -> bool:
+        return self.previous_status in _TERMINAL_ORDER_STATUSES
 
 EVENT_SEVERITIES = ("info", "warn", "critical")
 
@@ -1257,68 +1283,143 @@ def realized_pnl_since(
         return 0.0
 
 
+@dataclass(frozen=True, slots=True)
+class _PnlFillFact:
+    order_id: int
+    placed_at: datetime
+    kind: str
+    action: str
+    quantity: int
+    price: float | None
+
+
+def _pnl_fill_fact(order: SmStrategyOrder) -> _PnlFillFact | None:
+    status = (order.status or "").lower()
+    terminal_partial = status in {"cancelled", "rejected"}
+    if status != "complete" and not terminal_partial:
+        return None
+    if terminal_partial:
+        # A dead remainder does not erase the portion that traded. Zero means
+        # nothing traded and must never fall back to the requested quantity.
+        quantity = int(order.filled_qty or 0)
+    else:
+        # Some brokers omit filled_qty after confirming the whole request.
+        quantity = int(order.filled_qty or order.qty or 0)
+    if quantity <= 0:
+        return None
+    raw_price = float(order.avg_fill_price) if order.avg_fill_price is not None else 0.0
+    return _PnlFillFact(
+        order_id=int(order.id),
+        placed_at=order.placed_at,
+        kind=order.kind,
+        action=(order.action or "").upper(),
+        quantity=quantity,
+        price=raw_price if raw_price > 0 else None,
+    )
+
+
+def _fold_owner_pnl(
+    facts: list[_PnlFillFact], *, referenced: bool
+) -> tuple[float, int] | None:
+    """FIFO one provable owner; ``None`` means its ownership is ambiguous."""
+    # A positive but unpriced fact leaves checkpoint/live P&L authoritative for
+    # this owner. Do not manufacture a partial owner valuation from later rows.
+    if any(fact.price is None for fact in facts):
+        return 0.0, 0
+
+    lots: list[dict[str, Any]] = []
+    owner_action: str | None = None
+    realized = 0.0
+    settled = 0
+    for fact in sorted(facts, key=lambda item: (item.placed_at, item.order_id)):
+        if fact.kind == "entry":
+            if fact.action not in {"BUY", "SELL"}:
+                return None
+            open_actions = {lot["action"] for lot in lots if lot["remaining"] > 0}
+            if referenced:
+                if owner_action is not None and fact.action != owner_action:
+                    return None
+                owner_action = fact.action
+            elif open_actions and fact.action not in open_actions:
+                # NULL references can only be associated safely in chronological
+                # FIFO order. Overlapping opposite positions are unknowable.
+                return None
+            lots.append(
+                {
+                    "action": fact.action,
+                    "price": fact.price,
+                    "remaining": fact.quantity,
+                }
+            )
+            continue
+
+        remaining_lots = [lot for lot in lots if lot["remaining"] > 0]
+        if not remaining_lots:
+            # An exit placed before any attributable entry cannot be paired with
+            # an entry that happens to appear later in durable history.
+            return None
+        expected_exit = "SELL" if remaining_lots[0]["action"] == "BUY" else "BUY"
+        if fact.action != expected_exit:
+            return None
+
+        quantity_left = fact.quantity
+        matched = 0
+        for lot in remaining_lots:
+            lot_exit = "SELL" if lot["action"] == "BUY" else "BUY"
+            if fact.action != lot_exit:
+                return None
+            applied = min(quantity_left, int(lot["remaining"]))
+            sign = 1.0 if lot["action"] == "BUY" else -1.0
+            realized += (float(fact.price) - float(lot["price"])) * applied * sign
+            lot["remaining"] -= applied
+            quantity_left -= applied
+            matched += applied
+            if quantity_left <= 0:
+                break
+        # Broker evidence can exceed the locally provable owner quantity. Cap
+        # it here; never let it consume another position-reference group.
+        if matched:
+            settled += 1
+
+    return realized, settled
+
+
 def reconcile_run_pnl(run_id: int) -> float | None:
-    """Recompute a run's realized P&L from its own order rows, and store it.
+    """Recompute provable realized P&L from durable position-owner facts.
 
-    stop_run places the exits and finalises in the next statement rather than
-    waiting for the fills, because the position is on its way out and nothing
-    should be blocked on the broker. That left pnl_realized at whatever live
-    state held at that instant, which is zero because no leg had closed yet,
-    and clearing the state meant the fill arriving a moment later had nothing
-    to be applied to. The figure was then computed nowhere: a run that made
-    1500 recorded 0, unrecoverably.
-
-    The order rows carry everything needed, so the fill that arrives after
-    finalisation reconciles the row instead of being dropped. Returns the
-    figure written, or None when there is nothing to say.
+    Runs normally remain managed until fill-confirmed flatness. This repair is
+    for a late broker correction that arrives after live state was detached (or
+    during recovery): referenced owners are reconciled independently, while
+    legacy NULL rows use chronological FIFO within their leg. The stored value
+    is left untouched if ownership is ambiguous or no priced round trip exists.
     """
     try:
         row = db_session.query(SmStrategyRun).filter_by(id=run_id).first()
         if row is None:
             return None
 
-        per_leg: dict[Any, dict[str, Any]] = {}
+        owner_facts: dict[tuple[Any, ...], list[_PnlFillFact]] = {}
         for order in db_session.query(SmStrategyOrder).filter_by(run_id=run_id).all():
-            status = (order.status or "").lower()
-            terminal_partial = status in {"cancelled", "rejected"}
-            if status != "complete" and not terminal_partial:
+            fact = _pnl_fill_fact(order)
+            if fact is None:
                 continue
-            if order.avg_fill_price is None:
-                continue
-            price = float(order.avg_fill_price)
-            if price <= 0:
-                # An entry of zero means the leg never traded, so nothing can
-                # be derived from it. Same rule the engine applies live.
-                continue
-            if terminal_partial:
-                # A dead remainder does not erase the portion that traded, but
-                # zero means nothing traded and must never fall back to the
-                # requested quantity. This applies equally to entries and exits.
-                quantity = int(order.filled_qty or 0)
-                if quantity <= 0:
-                    continue
+            if order.position_ref:
+                owner_key = ("referenced", order.leg_id, order.position_ref)
             else:
-                # Preserve the established complete-order fallback for brokers
-                # that omit filled_qty after confirming the whole request.
-                quantity = int(order.filled_qty or order.qty or 0)
-            leg = per_leg.setdefault(order.leg_id, {"entry": None, "action": None, "exits": []})
-            if order.kind == "entry":
-                leg["entry"] = price
-                leg["action"] = (order.action or "").upper()
-                leg["qty"] = quantity
-            else:
-                leg["exits"].append((price, quantity))
+                # Legacy rows are deliberately isolated from every referenced
+                # owner, even when their leg IDs are identical.
+                owner_key = ("legacy", order.leg_id)
+            owner_facts.setdefault(owner_key, []).append(fact)
 
         realized = 0.0
         settled = 0
-        for leg in per_leg.values():
-            entry = leg.get("entry")
-            if not entry:
-                continue
-            sign = 1.0 if leg.get("action") == "BUY" else -1.0
-            for price, quantity in leg["exits"]:
-                realized += (price - entry) * quantity * sign
-                settled += 1
+        for owner_key, facts in owner_facts.items():
+            folded = _fold_owner_pnl(facts, referenced=owner_key[0] == "referenced")
+            if folded is None:
+                return None
+            owner_realized, owner_settled = folded
+            realized += owner_realized
+            settled += owner_settled
 
         if not settled:
             # No round trip is recorded on any order row, so this cannot speak
@@ -1397,6 +1498,134 @@ def record_order(run_id: int, leg_id: int, kind: str, order: dict) -> SmStrategy
         db_session.rollback()
         logger.exception("Could not record an order for run %s leg %s", run_id, leg_id)
         return None
+
+
+def fold_order_broker_frame(
+    order_id: int,
+    *,
+    status: str,
+    avg_fill_price: float | None,
+    filled_qty: int | None,
+    reject_reason: str | None = None,
+) -> OrderFactFold | None:
+    """Atomically fold one cumulative broker frame into an order row.
+
+    Broker updates can arrive concurrently and out of order. Quantity evidence
+    is cumulative, so only a positive increase produces a state-layer delta.
+    A working frame may add later fill evidence but can never reopen a terminal
+    row. A later ``complete`` frame upgrades a dead row only when it brings a
+    strictly higher cumulative quantity.
+
+    The conditional update includes the status and quantity observed by this
+    transaction. A losing worker retries from the winner's facts instead of
+    overwriting them with its stale snapshot.
+    """
+    incoming_status = str(status or "").strip().lower()
+    if incoming_status not in {"open", "complete", "cancelled", "rejected"}:
+        incoming_status = "open"
+
+    try:
+        incoming_qty = max(0, int(filled_qty or 0))
+    except (TypeError, ValueError):
+        incoming_qty = 0
+
+    for _attempt in range(8):
+        try:
+            db_session.expire_all()
+            row = db_session.query(SmStrategyOrder).filter_by(id=order_id).first()
+            if row is None:
+                return None
+
+            raw_previous_status = row.status
+            previous_status = str(raw_previous_status or "pending").strip().lower()
+            raw_previous_qty = row.filled_qty
+            try:
+                previous_qty = max(0, int(raw_previous_qty or 0))
+            except (TypeError, ValueError):
+                previous_qty = 0
+            previous_price = _num(row.avg_fill_price)
+
+            evidence_qty = incoming_qty
+            if incoming_status == "complete" and evidence_qty <= 0:
+                # A complete order with an omitted/zero broker quantity means
+                # the whole requested amount traded. Dead/working zeroes do
+                # not carry that implication.
+                evidence_qty = max(0, int(row.qty or 0))
+            cumulative_qty = max(previous_qty, evidence_qty)
+            fill_delta = cumulative_qty - previous_qty
+
+            if previous_status == "complete":
+                next_status = "complete"
+            elif previous_status in {"cancelled", "rejected"}:
+                if incoming_status == "complete" and fill_delta > 0:
+                    next_status = "complete"
+                else:
+                    next_status = previous_status
+            elif incoming_status in _TERMINAL_ORDER_STATUSES:
+                next_status = incoming_status
+            else:
+                next_status = "open"
+
+            status_changed = next_status != previous_status
+            changed = status_changed or fill_delta > 0
+            if not changed:
+                return OrderFactFold(
+                    order_id=order_id,
+                    previous_status=previous_status,
+                    status=previous_status,
+                    previous_filled_qty=previous_qty,
+                    cumulative_filled_qty=previous_qty,
+                    fill_delta=0,
+                    previous_average_fill_price=previous_price,
+                    average_fill_price=previous_price,
+                    changed=False,
+                )
+
+            fields: dict[str, Any] = {"status": next_status}
+            if fill_delta > 0:
+                fields["filled_qty"] = cumulative_qty
+                # None is intentional here. Retaining an older average after
+                # a larger unpriced cumulative fact would let reconciliation
+                # value quantity the broker never priced.
+                fields["avg_fill_price"] = avg_fill_price
+            if next_status == "complete" and previous_status != "complete":
+                fields["filled_at"] = utcnow()
+            if reject_reason is not None and next_status in {"cancelled", "rejected"}:
+                fields["reject_reason"] = reject_reason
+
+            query = db_session.query(SmStrategyOrder).filter(
+                SmStrategyOrder.id == order_id,
+                SmStrategyOrder.status == raw_previous_status,
+            )
+            if raw_previous_qty is None:
+                query = query.filter(SmStrategyOrder.filled_qty.is_(None))
+            else:
+                query = query.filter(SmStrategyOrder.filled_qty == raw_previous_qty)
+            updated = query.update(fields, synchronize_session=False)
+            if updated != 1:
+                db_session.rollback()
+                continue
+
+            db_session.commit()
+            db_session.expire_all()
+            return OrderFactFold(
+                order_id=order_id,
+                previous_status=previous_status,
+                status=next_status,
+                previous_filled_qty=previous_qty,
+                cumulative_filled_qty=cumulative_qty,
+                fill_delta=fill_delta,
+                previous_average_fill_price=previous_price,
+                average_fill_price=avg_fill_price if fill_delta > 0 else previous_price,
+                changed=True,
+            )
+        except Exception:
+            db_session.rollback()
+            logger.exception("Could not fold broker facts for order %s", order_id)
+            return None
+
+    logger.error("Could not fold broker facts for order %s after concurrent updates", order_id)
+    return None
 
 
 def update_order(
@@ -1490,6 +1719,15 @@ def get_order_by_broker_id(broker_order_id: str) -> SmStrategyOrder | None:
         )
     except Exception:
         logger.exception("Could not look up strategy order %s", broker_order_id)
+        return None
+
+
+def get_order(order_id: int) -> SmStrategyOrder | None:
+    """Read one strategy order by its durable row id."""
+    try:
+        return db_session.query(SmStrategyOrder).filter_by(id=order_id).first()
+    except Exception:
+        logger.exception("Could not read strategy order row %s", order_id)
         return None
 
 

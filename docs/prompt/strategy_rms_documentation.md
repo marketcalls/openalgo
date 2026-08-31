@@ -667,6 +667,12 @@ reset_state() -> None
 
 Five properties the token being the whole credential makes necessary:
 
+- **The token is removed at every shipped logging boundary.** One shared path
+  redactor covers standard and JSON application logs plus `logs.db`; every
+  shipped nginx direct, Docker, multi-instance, update and change-domain
+  template suppresses those paths from access logs. External senders and
+  proxies remain the operator's boundary: apply the same control there and
+  rotate any credential that may have been logged previously.
 - **The token never reaches `logs.db`.** `utils/traffic_logger.py` masks the
   credential segment of `/strategy/webhook/`, `/flow/webhook/` and
   `/chartink/webhook/` paths. The traffic log keeps 30 days and is readable at

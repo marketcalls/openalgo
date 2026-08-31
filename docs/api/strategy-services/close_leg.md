@@ -135,6 +135,9 @@ Each object in `exits`:
   market order can fill synchronously and return `true` in the same call.
 - This endpoint deliberately has no whole-run pending-stop field. It closes one
   exact owner without creating a durable whole-run stop request.
+- The accepted-dispatch audit event says `Operator requested closure of leg
+  <leg_id>`. It does not say the leg closed; only the later confirmed fill can
+  support completed wording or a terminal `run_stopped` event.
 - **A refused exit is reported as a failure, not as a close.** A non-empty `exits` array is not success on its own; the per-leg `ok` flags carry whether the broker took the order. Telling an operator a leg has closed while the position is still on the book is worse than telling them nothing.
 - **A refused exit stays retryable.** The leg is not marked as having an exit in flight, so its stop loss, its target and the scheduler's square-off can all still reach it.
 - **Closing a leg by hand does not trigger trail-to-entry.** That rule answers the market moving against the book; an operator closing a leg is an override, and treating it as a signal would tighten every other leg's stop without being asked.

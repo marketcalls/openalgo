@@ -148,7 +148,9 @@ def _create_http_client() -> httpx.Client:
     def log_request(request):
         """Hook called before request is sent"""
         request.extensions["start_time"] = time.time()
-        logger.debug(f"Starting request to {request.url}")
+        from utils.url_redaction import redact_url_credentials
+
+        logger.debug(f"Starting request to {redact_url_credentials(request.url)}")
 
     def log_response(response):
         """Hook called after response is received"""

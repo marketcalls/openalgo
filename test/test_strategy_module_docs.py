@@ -355,6 +355,35 @@ def test_webhook_docs_distinguish_route_preflight_from_audited_pipeline() -> Non
     assert "Route preflight refusals are not durable webhook audit rows" in feature
 
 
+def test_webhook_log_claims_name_the_enforced_boundary_and_rotation_duty() -> None:
+    webhook_doc = _read(STRATEGY_API / "webhook.md")
+    prd = _read("docs/prd/strategy-module-rms.md")
+    prompt = _read("docs/prompt/strategy_rms_documentation.md")
+
+    for text in (webhook_doc, prd, prompt):
+        lower = text.lower()
+        assert "application logs" in lower
+        assert "shipped nginx" in lower
+        assert "external" in lower
+        assert "rotate" in lower
+    assert "previously" in webhook_doc.lower()
+
+
+def test_manual_close_docs_reserve_completed_wording_for_fill_confirmed_events() -> None:
+    events = _read(STRATEGY_API / "events.md")
+    close_all = _read(STRATEGY_API / "close_all.md")
+    close_leg = _read(STRATEGY_API / "close_leg.md")
+
+    assert "Operator requested closure of all held legs" in events
+    assert "Operator requested closure of leg" in events
+    assert "Closed all legs from the API" not in events
+    assert "closed manually" not in events
+    for page in (close_all, close_leg):
+        assert "request" in page.lower()
+        assert "run_stopped" in page
+        assert "confirmed" in page.lower()
+
+
 def test_strategy_prd_scopes_ordering_polling_and_signal_quantities_exactly() -> None:
     prd = _read("docs/prd/strategy-module-rms.md")
     prompt = _read("docs/prompt/strategy_rms_documentation.md")

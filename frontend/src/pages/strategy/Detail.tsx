@@ -789,30 +789,49 @@ export function PositionsTab({
     (Omit<DerivedPosition, 'net_qty' | 'side'> & {
       net_qty: number | null
       side: DerivedPosition['side'] | null
+      source: 'broker' | 'broker/shared' | 'local/unreconciled'
+      position_ref?: string | null
     })[]
   >(() => {
-    if (!broker.rows) return derived
+    if (!broker.rows) {
+      return derived.map((row) => ({ ...row, source: 'local/unreconciled' as const }))
+    }
     const realizedFor = new Map(
       derived.map((row) => [
         `${row.symbol}-${row.exchange}-${row.product}`,
         row.realized_pnl_lifetime,
       ])
     )
-    return broker.rows.map((row) => {
+    const brokerPositions = broker.rows.map((row) => {
       const quantity = row.quantity
       const key = `${row.symbol}-${row.exchange}-${row.product}`
+      const side: DerivedPosition['side'] | null =
+        quantity === null ? null : quantity > 0 ? 'long' : quantity < 0 ? 'short' : 'flat'
       return {
         symbol: row.symbol,
         exchange: row.exchange,
         product: row.product,
-        side: quantity === null ? null : quantity > 0 ? 'long' : quantity < 0 ? 'short' : 'flat',
+        side,
         net_qty: quantity,
         avg_entry_price: row.average_price,
         ltp: row.ltp,
         unrealized_pnl: row.pnl,
         realized_pnl_lifetime: realizedFor.get(key) ?? null,
+        source: row.source ?? ('broker' as const),
+        position_ref: row.position_ref,
       }
     })
+    const coveredContracts = new Set(
+      broker.rows.map((row) => `${row.symbol}-${row.exchange}-${row.product}`)
+    )
+    const omittedResiduals = derived
+      .filter(
+        (row) =>
+          row.net_qty !== 0 &&
+          !coveredContracts.has(`${row.symbol}-${row.exchange}-${row.product}`)
+      )
+      .map((row) => ({ ...row, source: 'local/unreconciled' as const }))
+    return [...brokerPositions, ...omittedResiduals]
   }, [broker.rows, derived])
 
   const checkpoint = live.runId === runId ? live.checkpoint : null
@@ -822,8 +841,12 @@ export function PositionsTab({
   const historicalRealized = runs
     .filter((run) => run.id !== runId)
     .reduce((sum, run) => sum + run.pnl_realized, 0)
-  const runRealized = checkpoint?.pnl_realized ?? 0
-  const cumulativeRealized = historicalRealized + runRealized
+  const runRealized = checkpoint?.pnl_realized ?? null
+  // Historical runs are known, but the lifetime total is not: an active run
+  // with no checkpoint may already have realized P&L. Never add an invented
+  // zero contribution just to keep the tile numeric.
+  const cumulativeRealized =
+    runRealized === null ? null : historicalRealized + runRealized
 
   return (
     <div className="space-y-4">
@@ -832,7 +855,7 @@ export function PositionsTab({
           <CardTitle>Strategy positions</CardTitle>
           <CardDescription>
             {broker.rows
-              ? "The broker's own position book, narrowed to the contracts this strategy traded. A position row is per contract, so if the same contract is also held from a manual order or another strategy the row is shared and cannot be divided: treat the quantity and unrealized figure as belonging to all of them."
+              ? "Broker quantities are overlaid on every attributable unresolved owner across all runs. Rows marked local/unreconciled were omitted by the broker book or cannot be divided safely; broker/shared is the undivided contract aggregate."
               : broker.unavailable
                 ? "The broker did not answer, so these are net positions derived from this strategy's filled orders."
                 : "Net positions derived from this strategy's filled orders."}
@@ -849,27 +872,27 @@ export function PositionsTab({
             <div className="rounded-md border p-3">
               <div className="text-xs uppercase text-muted-foreground">Realized (this run)</div>
               <div className={cn('font-mono text-xl', pnlToneClass(runRealized))}>
-                {formatPnl(runRealized)}
+                {formatLivePnl(runRealized)}
               </div>
             </div>
             <div className="rounded-md border p-3">
               <div className="text-xs uppercase text-muted-foreground">Unrealized</div>
               <div
-                className={cn('font-mono text-xl', pnlToneClass(checkpoint?.pnl_unrealized ?? 0))}
+                className={cn('font-mono text-xl', pnlToneClass(checkpoint?.pnl_unrealized))}
               >
-                {formatPnl(checkpoint?.pnl_unrealized ?? 0)}
+                {formatLivePnl(checkpoint?.pnl_unrealized)}
               </div>
             </div>
             <div className="rounded-md border p-3">
               <div className="text-xs uppercase text-muted-foreground">Run total</div>
-              <div className={cn('font-mono text-xl', pnlToneClass(checkpoint?.pnl_total ?? 0))}>
-                {formatPnl(checkpoint?.pnl_total ?? 0)}
+              <div className={cn('font-mono text-xl', pnlToneClass(checkpoint?.pnl_total))}>
+                {formatLivePnl(checkpoint?.pnl_total)}
               </div>
             </div>
             <div className="rounded-md border-2 p-3">
               <div className="text-xs uppercase text-muted-foreground">Cumulative realized</div>
               <div className={cn('font-mono text-xl font-bold', pnlToneClass(cumulativeRealized))}>
-                {formatPnl(cumulativeRealized)}
+                {formatLivePnl(cumulativeRealized)}
               </div>
               <div className="text-[10px] text-muted-foreground">Lifetime across all runs</div>
             </div>
@@ -889,6 +912,7 @@ export function PositionsTab({
                     <TableHead>Symbol</TableHead>
                     <TableHead>Exchange</TableHead>
                     <TableHead>Product</TableHead>
+                    <TableHead>Source</TableHead>
                     <TableHead>Side</TableHead>
                     <TableHead className="text-right">Net Qty</TableHead>
                     <TableHead className="text-right">Avg Entry</TableHead>
@@ -898,13 +922,20 @@ export function PositionsTab({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {positions.map((position) => (
-                    <TableRow key={`${position.symbol}-${position.exchange}-${position.product}`}>
+                  {positions.map((position, index) => (
+                    <TableRow
+                      key={`${position.symbol}-${position.exchange}-${position.product}-${position.source}-${position.position_ref ?? index}`}
+                    >
                       <TableCell className="font-mono font-medium">{position.symbol}</TableCell>
                       <TableCell className="font-mono text-xs">{position.exchange}</TableCell>
                       <TableCell>
                         <Badge variant="outline" className="text-xs">
                           {position.product}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="text-xs">
+                          {position.source}
                         </Badge>
                       </TableCell>
                       <TableCell>
@@ -2440,8 +2471,12 @@ export default function StrategyDetail() {
 
   const stopMutation = useMutation({
     mutationFn: () => stopRun(numId),
-    onSuccess: () => {
-      showToast.success('Run stopped')
+    onSuccess: (result) => {
+      showToast.success(
+        result.run_stopped === true || result.stop_pending === false
+          ? 'Run stopped'
+          : 'Stop requested — exit orders are pending'
+      )
       setConfirmStop(false)
       invalidateAll()
     },
@@ -2450,8 +2485,12 @@ export default function StrategyDetail() {
 
   const closeAllMutation = useMutation({
     mutationFn: () => closeAll(numId),
-    onSuccess: () => {
-      showToast.success('All open legs closed')
+    onSuccess: (result) => {
+      showToast.success(
+        result.run_stopped === true || result.stop_pending === false
+          ? 'All open legs closed — run stopped'
+          : 'Close-all requested — exit orders are pending'
+      )
       setConfirmCloseAll(false)
       invalidateAll()
     },
@@ -2462,7 +2501,9 @@ export default function StrategyDetail() {
     mutationFn: (legId: number) => closeLeg(numId, legId),
     onSuccess: (result) => {
       showToast.success(
-        result.run_stopped ? 'Leg closed — last open leg, run stopped' : 'Leg closed'
+        result.run_stopped
+          ? 'Leg closed — last open leg, run stopped'
+          : 'Leg close requested — exit order is pending'
       )
       setClosingLegId(null)
       invalidateAll()

@@ -115,6 +115,7 @@ Each object in `exits`:
   `close_all_manual` event is written before the stop persistence and broker
   results. It proves an operator requested/attempted a close-all; it is not
   proof that the broker became flat. `run_stopped` is that terminal evidence.
+  Its message is `Operator requested closure of all held legs`.
 - The run id is resolved from the strategy, never supplied by the caller.
 - Everything else, including pending-stop recovery, exact-owner exits and the
   409 behaviour, is identical to `/stop`.

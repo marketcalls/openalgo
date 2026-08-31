@@ -299,6 +299,8 @@ export interface BrokerTrade {
 }
 
 /** A normalized contract row from the broker's position book. */
+export type PositionTruthSource = 'broker' | 'broker/shared' | 'local/unreconciled'
+
 export interface BrokerPosition {
   symbol: string
   exchange: string
@@ -307,6 +309,10 @@ export interface BrokerPosition {
   average_price: number | null
   ltp: number | null
   pnl: number | null
+  source?: PositionTruthSource
+  position_ref?: string | null
+  run_id?: number | null
+  leg_id?: number | null
   [field: string]: unknown
 }
 

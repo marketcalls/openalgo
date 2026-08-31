@@ -173,6 +173,7 @@ def _new_leg_state(leg: dict) -> dict[str, Any]:
         "position_ref": leg.get("position_ref"),
         "entry_order_id": None,
         "entry_status": "pending",
+        "entry_filled_qty": 0,
         "entry_avg": 0.0,
         "exit_order_id": None,
         "exit_claim_token": None,

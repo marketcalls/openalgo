@@ -6,17 +6,22 @@ were found defeating the Bearer rule in different ways, so the shapes that
 matter are pinned here.
 """
 
+import json
+import logging
 import os
 import re
 import sys
 
 import pytest
+from flask import Flask
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.logging import SENSITIVE_PATTERNS, SensitiveDataFilter  # noqa: E402
+from utils.logging import SENSITIVE_PATTERNS, JSONErrorFormatter, SensitiveDataFilter  # noqa: E402
+from utils.url_redaction import redact_url_credentials  # noqa: E402
 
 SECRET = "SEKRETVALUE"
+URL_CREDENTIAL = "SENTINEL_URL_CREDENTIAL"
 
 
 def redact(text: str) -> str:
@@ -123,3 +128,50 @@ def test_a_record_whose_arguments_do_not_match_is_still_emitted():
 
     assert SECRET not in out
     assert "stray" in out
+
+
+@pytest.mark.parametrize(
+    ("path", "visible_tail"),
+    [
+        (f"/strategy/webhook/{URL_CREDENTIAL}", None),
+        (f"/flow/webhook/{URL_CREDENTIAL}/NIFTY", "NIFTY"),
+        (f"/chartink/webhook/{URL_CREDENTIAL}", None),
+    ],
+)
+def test_shared_url_redactor_masks_every_shipped_url_secret_route(path, visible_tail):
+    redacted = redact_url_credentials(f"https://openalgo.example{path}?source=test")
+
+    assert URL_CREDENTIAL not in redacted
+    assert "<redacted>" in redacted
+    assert "source=test" in redacted
+    if visible_tail:
+        assert visible_tail in redacted
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        f"/strategy/webhook/{URL_CREDENTIAL}",
+        f"/flow/webhook/{URL_CREDENTIAL}/NIFTY",
+        f"/chartink/webhook/{URL_CREDENTIAL}",
+    ],
+)
+def test_json_error_formatter_never_emits_a_request_url_credential(path):
+    app = Flask(__name__)
+    record = logging.LogRecord("t", logging.ERROR, __file__, 1, "failed", (), None)
+
+    with app.test_request_context(path, method="POST"):
+        output = JSONErrorFormatter().format(record)
+
+    assert URL_CREDENTIAL not in output
+    assert json.loads(output)["request"]["path"].count("<redacted>") == 1
+
+
+def test_standard_log_filter_masks_a_webhook_url_in_the_message():
+    output = _emit(
+        f"Request failed at https://openalgo.example/strategy/webhook/{URL_CREDENTIAL}",
+        (),
+    )
+
+    assert URL_CREDENTIAL not in output
+    assert "<redacted>" in output

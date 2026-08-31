@@ -31,6 +31,7 @@ from typing import Any
 
 from database import strategy_module_db as store
 from services.strategy_module import order_dispatch, risk_adapter, session, state
+from services.strategy_module.audit_messages import leg_close_requested_message
 from services.strategy_module.symbol_resolver import resolve_leg
 from utils.logging import get_logger
 
@@ -210,6 +211,8 @@ def _exit_fill_quantities(filled_qty: int | None, held_qty: Any) -> tuple[int, i
 def _leg_requires_management(leg: dict[str, Any]) -> bool:
     """Whether a leg still owns exposure or an entry that may become exposure."""
     if leg.get("superseded") is not None:
+        return True
+    if leg.get("exit_order_id") is not None or leg.get("exit_claim_token") is not None:
         return True
     if leg.get("status") == "open":
         return True
@@ -694,6 +697,9 @@ def apply_fill(
     filled_qty: int | None = None,
     order_row_id: int | None = None,
     position_ref: str | None = None,
+    cumulative_filled_qty: int | None = None,
+    order_terminal: bool = True,
+    allow_prior_order_correction: bool = False,
 ) -> bool:
     """Record a fill, logging position mismatches after the run lock releases."""
     deferred_warnings: list[tuple[str, tuple[Any, ...]]] = []
@@ -706,6 +712,9 @@ def apply_fill(
             filled_qty,
             order_row_id,
             position_ref,
+            cumulative_filled_qty,
+            order_terminal,
+            allow_prior_order_correction,
             deferred_warnings,
         )
     except _PositionRefMismatch as mismatch:
@@ -732,6 +741,9 @@ def _apply_fill(
     filled_qty: int | None = None,
     order_row_id: int | None = None,
     position_ref: str | None = None,
+    cumulative_filled_qty: int | None = None,
+    order_terminal: bool = True,
+    allow_prior_order_correction: bool = False,
     deferred_warnings: list[tuple[str, tuple[Any, ...]]] | None = None,
 ) -> bool:
     """Record a fill against a leg. Returns whether the run went flat.
@@ -800,11 +812,14 @@ def _apply_fill(
                 leg["realized_pnl"] = float(leg.get("realized_pnl") or 0.0) + (
                     (float(avg_price) - entry) * applied_qty * sign
                 )
-            if remaining_qty > 0:
+            owns_current_order = order_row_id is None or superseded.get("exit_order_id") == order_row_id
+            release_current_order = order_terminal and owns_current_order
+            if remaining_qty > 0 or not release_current_order:
                 superseded["qty"] = remaining_qty
-                superseded["exit_order_id"] = None
-                superseded["exit_claim_token"] = None
-                superseded["exit_kind"] = None
+                if release_current_order:
+                    superseded["exit_order_id"] = None
+                    superseded["exit_claim_token"] = None
+                    superseded["exit_kind"] = None
             else:
                 leg["superseded"] = None
         else:
@@ -816,7 +831,11 @@ def _apply_fill(
             # close or re-price the position that is live now.
             if order_row_id is not None:
                 expected = leg.get("entry_order_id") if is_entry else leg.get("exit_order_id")
-                if expected is not None and expected != order_row_id:
+                if (
+                    expected is not None
+                    and expected != order_row_id
+                    and not allow_prior_order_correction
+                ):
                     deferred_warnings.append(
                         (
                             "Ignoring a fill for order %s on leg %s: the leg is waiting on %s",
@@ -830,6 +849,7 @@ def _apply_fill(
                 and order_row_id is not None
                 and leg.get("exit_kind") is None
                 and leg.get("exit_order_id") is None
+                and not allow_prior_order_correction
             ):
                 # A fill from the order stream naming an exit this leg never
                 # placed cannot be closing the position that is live now.
@@ -855,17 +875,24 @@ def _apply_fill(
                 # Reconcile the size with what actually traded. A partial fill
                 # whose remainder was cancelled is ordinary on an illiquid
                 # strike; every later exit must use what actually filled.
-                if filled_qty is not None and filled_qty != leg.get("qty"):
+                managed_entry_qty = (
+                    cumulative_filled_qty
+                    if cumulative_filled_qty is not None
+                    else filled_qty
+                )
+                if managed_entry_qty is not None and managed_entry_qty != leg.get("qty"):
                     deferred_warnings.append(
                         (
                             "Leg %s on run %s filled %s of %s; managing the filled size",
-                            (leg_id, run_id, filled_qty, leg.get("qty")),
+                            (leg_id, run_id, managed_entry_qty, leg.get("qty")),
                         )
                     )
-                    leg["qty"] = filled_qty
-                leg["entry_status"] = "complete"
+                    leg["qty"] = managed_entry_qty
+                if cumulative_filled_qty is not None:
+                    leg["entry_filled_qty"] = cumulative_filled_qty
+                leg["entry_status"] = "complete" if order_terminal else "open"
                 leg["status"] = "open"
-                entry_applied = True
+                entry_applied = order_terminal
             else:
                 if avg_price is not None:
                     leg["exit_avg"] = float(avg_price)
@@ -875,11 +902,11 @@ def _apply_fill(
                     leg.get("qty"),
                 )
                 sign = 1.0 if leg.get("position") == "B" else -1.0
-                if entry > 0.0 and avg_price is not None:
+                if applied_qty > 0 and entry > 0.0 and avg_price is not None:
                     leg["realized_pnl"] = float(leg.get("realized_pnl") or 0.0) + (
                         (float(avg_price) - entry) * applied_qty * sign
                     )
-                else:
+                elif applied_qty > 0:
                     # An entry price of zero means this incarnation contributes
                     # no valued round trip. An unavailable exit price likewise
                     # cannot be invented. Prior signal-session P&L remains intact.
@@ -891,15 +918,19 @@ def _apply_fill(
                         )
                     )
                     leg["realized_pnl"] = float(leg.get("realized_pnl") or 0.0)
+                owns_current_order = order_row_id is None or leg.get("exit_order_id") == order_row_id
+                release_current_order = order_terminal and owns_current_order
                 if remaining_qty > 0:
                     leg["qty"] = remaining_qty
                     leg["status"] = "open"
                 else:
+                    leg["qty"] = 0
                     leg["status"] = "closed"
                     leg["mtm"] = 0.0
-                leg["exit_order_id"] = None
-                leg["exit_claim_token"] = None
-                leg["exit_kind"] = None
+                if release_current_order:
+                    leg["exit_order_id"] = None
+                    leg["exit_claim_token"] = None
+                    leg["exit_kind"] = None
 
         # Recompute the run totals now, while the lock is held, so the figures
         # finalise writes are the ones this fill produced.
@@ -1453,7 +1484,7 @@ def close_leg(run_id: int, leg_id: Any, user_id: str) -> dict[str, Any]:
         run_row.strategy_id,
         user_id,
         "leg_close_manual",
-        f"Leg {leg_id} closed manually",
+        leg_close_requested_message(leg_id),
         run_id=run_id,
         leg_id=leg_id,
     )

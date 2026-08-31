@@ -26,11 +26,16 @@ class _Adapter:
         self,
         outcomes: list[Any] | None = None,
         *,
+        subscribe_outcomes: list[Any] | None = None,
         unsubscribe_all_outcomes: list[Any] | None = None,
         disconnect_outcomes: list[Any] | None = None,
     ) -> None:
         self.calls: list[tuple[str, str, int]] = []
         self.outcomes = list(outcomes or [{"status": "success"}])
+        self.subscribe_calls: list[tuple[str, str, int, int]] = []
+        self.subscribe_outcomes = list(
+            subscribe_outcomes or [{"status": "success"}]
+        )
         self.unsubscribe_all_calls = 0
         self.unsubscribe_all_outcomes = list(
             unsubscribe_all_outcomes or [{"status": "success"}]
@@ -41,6 +46,15 @@ class _Adapter:
     def unsubscribe(self, symbol: str, exchange: str, mode: int) -> Any:
         self.calls.append((symbol, exchange, mode))
         outcome = self.outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    def subscribe(
+        self, symbol: str, exchange: str, mode: int, depth: int
+    ) -> Any:
+        self.subscribe_calls.append((symbol, exchange, mode, depth))
+        outcome = self.subscribe_outcomes.pop(0)
         if isinstance(outcome, BaseException):
             raise outcome
         return outcome
@@ -519,7 +533,13 @@ def test_shoonya_unsubscribe_all_reports_broker_failure_and_retains_tracking() -
     from broker.shoonya.streaming.shoonya_adapter import ShoonyaWebSocketAdapter
 
     class _FailingSocket:
-        def unsubscribe_touchline_scrips(self, _scrips: list[str]) -> None:
+        MAX_SCRIPS_PER_BATCH = 100
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def unsubscribe_touchline(self, scrips: str) -> bool:
+            self.calls.append(scrips)
             raise RuntimeError("broker refused batch")
 
     class _Cache:
@@ -530,10 +550,11 @@ def test_shoonya_unsubscribe_all_reports_broker_failure_and_retains_tracking() -
             self.clear_calls += 1
 
     adapter = ShoonyaWebSocketAdapter.__new__(ShoonyaWebSocketAdapter)
-    adapter.lock = threading.RLock()
+    adapter.lock = threading.Lock()
     adapter.logger = logging.getLogger("test.websocket.shoonya")
     adapter.connected = True
-    adapter.ws_client = _FailingSocket()
+    socket = _FailingSocket()
+    adapter.ws_client = socket
     adapter.subscriptions = {
         "NSE|2885": {"scrip": "NSE|2885", "mode": 1}
     }
@@ -541,6 +562,7 @@ def test_shoonya_unsubscribe_all_reports_broker_failure_and_retains_tracking() -
     adapter.ws_subscription_refs = {"NSE|2885": {"NSE:RELIANCE"}}
     adapter._scrip_to_cids = {"NSE|2885": {1}}
     adapter._token_to_scrips = {"2885": {"NSE|2885"}}
+    adapter._pending_ws_unsubscribes = set()
     adapter.market_cache = _Cache()
     adapter.cleanup = lambda: None
 
@@ -555,6 +577,367 @@ def test_shoonya_unsubscribe_all_reports_broker_failure_and_retains_tracking() -
     assert adapter._scrip_to_cids == {"NSE|2885": {1}}
     assert adapter._token_to_scrips == {"2885": {"NSE|2885"}}
     assert adapter.market_cache.clear_calls == 0
+    assert socket.calls == ["NSE|2885"]
+
+
+class _ShoonyaSocket:
+    MAX_SCRIPS_PER_BATCH = 2
+
+    def __init__(self, touchline_outcomes: list[Any]) -> None:
+        self.touchline_outcomes = list(touchline_outcomes)
+        self.touchline_calls: list[str] = []
+        self.depth_calls: list[str] = []
+        self.adapter_lock: threading.Lock | None = None
+        self.lock_available_during_send: list[tuple[str, bool]] = []
+        self.stop_calls = 0
+
+    def _record_lock_availability(self, ws_call: str) -> None:
+        if self.adapter_lock is None:
+            return
+        acquired = self.adapter_lock.acquire(blocking=False)
+        self.lock_available_during_send.append((ws_call, acquired))
+        if acquired:
+            self.adapter_lock.release()
+
+    def unsubscribe_touchline(self, scrips: str) -> bool:
+        self._record_lock_availability("touchline")
+        self.touchline_calls.append(scrips)
+        outcome = self.touchline_outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return bool(outcome)
+
+    def unsubscribe_depth(self, scrips: str) -> bool:
+        self._record_lock_availability("depth")
+        self.depth_calls.append(scrips)
+        return True
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+
+
+class _RecordingCache:
+    def __init__(self) -> None:
+        self.clear_calls: list[str | None] = []
+
+    def clear(self, scrip: str | None = None) -> None:
+        self.clear_calls.append(scrip)
+
+
+def _shoonya_exact_adapter(
+    ws: _ShoonyaSocket | None,
+) -> Any:
+    from broker.shoonya.streaming.shoonya_adapter import ShoonyaWebSocketAdapter
+
+    adapter = ShoonyaWebSocketAdapter.__new__(ShoonyaWebSocketAdapter)
+    adapter.lock = threading.Lock()
+    if ws is not None:
+        ws.adapter_lock = adapter.lock
+    adapter.logger = logging.getLogger("test.websocket.shoonya.exact")
+    adapter.connected = ws is not None
+    adapter.ws_client = ws
+    adapter.subscriptions = {
+        "RELIANCE_NSE_1_deadbeef": {
+            "symbol": "RELIANCE",
+            "exchange": "NSE",
+            "mode": 1,
+            "depth_level": 5,
+            "token": "2885",
+            "scrip": "NSE|2885",
+        }
+    }
+    adapter.scrip_to_symbol = {"NSE|2885": ("RELIANCE", "NSE")}
+    adapter.ws_subscription_refs = {
+        "NSE|2885": {"touchline_count": 1, "depth_count": 0}
+    }
+    adapter._scrip_to_cids = {"NSE|2885": {"RELIANCE_NSE_1_deadbeef"}}
+    adapter._token_to_scrips = {"2885": {"NSE|2885"}}
+    adapter._sub_queue = []
+    adapter._unsub_queue = [("NSE|9999", "depth")]
+    adapter._sub_batch_timer = None
+    adapter._unsub_batch_timer = None
+    adapter._reconnect_timer = None
+    adapter._resub_thread = None
+    adapter._reconnecting = False
+    adapter.running = False
+    adapter.reconnect_attempts = 0
+    adapter._last_sub_flush_at = 0.0
+    adapter._last_unsub_flush_at = 0.0
+    adapter._batch_delay = 0.5
+    adapter._pending_ws_unsubscribes = set()
+    adapter.market_cache = _RecordingCache()
+    adapter.cleanup_zmq = lambda: None
+    return adapter
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [False, RuntimeError("socket send failed")],
+)
+def test_shoonya_exact_unsubscribe_real_flush_failure_retains_every_owner_and_queue(
+    outcome: Any,
+) -> None:
+    ws = _ShoonyaSocket([outcome])
+    adapter = _shoonya_exact_adapter(ws)
+
+    result = adapter.unsubscribe("RELIANCE", "NSE", 1)
+
+    assert result["status"] == "error"
+    assert result["code"] == "UNSUBSCRIPTION_ERROR"
+    assert adapter.subscriptions == {
+        "RELIANCE_NSE_1_deadbeef": {
+            "symbol": "RELIANCE",
+            "exchange": "NSE",
+            "mode": 1,
+            "depth_level": 5,
+            "token": "2885",
+            "scrip": "NSE|2885",
+        }
+    }
+    assert adapter.scrip_to_symbol == {"NSE|2885": ("RELIANCE", "NSE")}
+    assert adapter.ws_subscription_refs == {
+        "NSE|2885": {"touchline_count": 1, "depth_count": 0}
+    }
+    assert adapter._scrip_to_cids == {
+        "NSE|2885": {"RELIANCE_NSE_1_deadbeef"}
+    }
+    assert adapter._token_to_scrips == {"2885": {"NSE|2885"}}
+    assert adapter._unsub_queue == [
+        ("NSE|9999", "depth"),
+        ("NSE|2885", "touchline"),
+    ]
+    assert adapter._pending_ws_unsubscribes == set()
+    assert adapter.market_cache.clear_calls == []
+
+
+def test_shoonya_exact_unsubscribe_absent_client_is_retryable_then_commits_once() -> None:
+    adapter = _shoonya_exact_adapter(None)
+
+    first = adapter.unsubscribe("RELIANCE", "NSE", 1)
+
+    assert first["status"] == "error"
+    assert first["code"] == "NOT_CONNECTED"
+    assert "RELIANCE_NSE_1_deadbeef" in adapter.subscriptions
+    assert adapter.ws_subscription_refs["NSE|2885"]["touchline_count"] == 1
+    assert adapter._unsub_queue[-1] == ("NSE|2885", "touchline")
+
+    ws = _ShoonyaSocket([True])
+    ws.adapter_lock = adapter.lock
+    adapter.ws_client = ws
+    adapter.connected = True
+    second = adapter.unsubscribe("RELIANCE", "NSE", 1)
+
+    assert second["status"] == "success"
+    assert ws.touchline_calls == ["NSE|2885"]
+    assert ws.depth_calls == []
+    assert ws.lock_available_during_send == [("touchline", True)]
+    assert adapter.subscriptions == {}
+    assert adapter.scrip_to_symbol == {}
+    assert adapter.ws_subscription_refs == {}
+    assert adapter._scrip_to_cids == {}
+    assert adapter._token_to_scrips == {}
+    # Another caller's retained release is not silently acknowledged by this
+    # exact request. It remains queued for its own retry/result boundary.
+    assert adapter._unsub_queue == [("NSE|9999", "depth")]
+    assert adapter.market_cache.clear_calls == ["NSE|2885"]
+
+
+def test_shoonya_claims_release_before_exposing_the_subscribe_race_window() -> None:
+    ws = _ShoonyaSocket([True])
+    adapter = _shoonya_exact_adapter(ws)
+    entered_broker_path = threading.Event()
+    continue_broker_path = threading.Event()
+    original = adapter._websocket_unsubscribe
+    result: dict[str, Any] = {}
+
+    def paused_broker_path(subscription: dict[str, Any]) -> dict[str, Any]:
+        entered_broker_path.set()
+        assert continue_broker_path.wait(timeout=5)
+        return original(subscription)
+
+    adapter._websocket_unsubscribe = paused_broker_path
+    worker = threading.Thread(
+        target=lambda: result.update(adapter.unsubscribe("RELIANCE", "NSE", 1))
+    )
+    worker.start()
+    assert entered_broker_path.wait(timeout=5)
+    try:
+        with adapter.lock:
+            assert adapter._pending_ws_unsubscribes == {
+                ("NSE|2885", "touchline")
+            }
+    finally:
+        continue_broker_path.set()
+        worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert result["status"] == "success"
+
+
+def test_shoonya_synchronous_unsubscribe_preserves_broker_batch_bound() -> None:
+    ws = _ShoonyaSocket([True, True])
+    adapter = _shoonya_exact_adapter(ws)
+    adapter._unsub_queue = [
+        ("NSE|1", "touchline"),
+        ("NSE|2", "touchline"),
+        ("NSE|3", "touchline"),
+    ]
+
+    result = adapter._flush_unsubscription_batch()
+
+    assert result["status"] == "success"
+    assert ws.touchline_calls == ["NSE|1#NSE|2", "NSE|3"]
+    assert adapter._unsub_queue == []
+
+
+def test_shoonya_repeated_failed_unsubscribe_keeps_retry_state_bounded() -> None:
+    ws = _ShoonyaSocket([False] * 100)
+    adapter = _shoonya_exact_adapter(ws)
+
+    for _ in range(100):
+        result = adapter.unsubscribe("RELIANCE", "NSE", 1)
+        assert result["status"] == "error"
+
+    assert adapter._unsub_queue == [
+        ("NSE|9999", "depth"),
+        ("NSE|2885", "touchline"),
+    ]
+    assert adapter._pending_ws_unsubscribes == set()
+    assert len(adapter.subscriptions) == 1
+    assert len(adapter.ws_subscription_refs) == 1
+
+
+def test_shoonya_disconnect_clears_every_exact_unsubscribe_ownership_layer() -> None:
+    ws = _ShoonyaSocket([True])
+    adapter = _shoonya_exact_adapter(ws)
+    adapter.running = True
+    adapter._reconnecting = False
+    adapter._reconnect_timer = None
+    adapter._resub_thread = None
+    adapter._sub_queue.append(("NSE|2885", "touchline"))
+    adapter._pending_ws_unsubscribes.add(("NSE|2885", "touchline"))
+    cleanup_calls: list[bool] = []
+    adapter.cleanup_zmq = lambda: cleanup_calls.append(True)
+
+    adapter.disconnect()
+
+    assert adapter.ws_client is None
+    assert adapter.subscriptions == {}
+    assert adapter.scrip_to_symbol == {}
+    assert adapter.ws_subscription_refs == {}
+    assert adapter._scrip_to_cids == {}
+    assert adapter._token_to_scrips == {}
+    assert adapter._sub_queue == []
+    assert adapter._unsub_queue == []
+    assert adapter._pending_ws_unsubscribes == set()
+    assert ws.stop_calls == 1
+    assert adapter.market_cache.clear_calls == [None]
+    assert cleanup_calls == [True]
+
+
+def _connection_pool_for_downgrade(adapter: _Adapter) -> ConnectionPool:
+    pool = _connection_pool_with_adapter(adapter)
+    pool.subscription_map = {
+        ("RELIANCE", "NSE", 1): 0,
+        ("RELIANCE", "NSE", 3): 0,
+    }
+    pool.subscription_depths = {
+        ("RELIANCE", "NSE", 1): 5,
+        ("RELIANCE", "NSE", 3): 50,
+    }
+    return pool
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        {"status": "error", "message": "high feed still live"},
+        RuntimeError("high release exploded"),
+    ],
+)
+def test_pool_downgrade_requires_high_mode_release_before_lower_subscribe(
+    outcome: Any,
+) -> None:
+    adapter = _Adapter([outcome])
+    pool = _connection_pool_for_downgrade(adapter)
+
+    result = pool.unsubscribe("RELIANCE", "NSE", 3)
+
+    assert result["status"] == "error"
+    assert result["code"] == "DOWNGRADE_RELEASE_FAILED"
+    assert result["phase"] == "release_high_mode"
+    assert result["reconciliation_required"] is False
+    assert adapter.calls == [("RELIANCE", "NSE", 3)]
+    assert adapter.subscribe_calls == []
+    assert pool.subscription_map == {
+        ("RELIANCE", "NSE", 1): 0,
+        ("RELIANCE", "NSE", 3): 0,
+    }
+    assert pool.subscription_depths[("RELIANCE", "NSE", 3)] == 50
+    assert pool.adapter_symbol_counts == [1]
+
+
+@pytest.mark.parametrize("rollback_succeeds", [True, False])
+def test_pool_downgrade_lower_failure_reports_exact_rollback_outcome(
+    rollback_succeeds: bool,
+) -> None:
+    adapter = _Adapter(
+        [{"status": "success"}],
+        subscribe_outcomes=[
+            {"status": "error", "message": "lower subscribe failed"},
+            (
+                {"status": "success"}
+                if rollback_succeeds
+                else {"status": "error", "message": "high restore failed"}
+            ),
+        ],
+    )
+    pool = _connection_pool_for_downgrade(adapter)
+
+    result = pool.unsubscribe("RELIANCE", "NSE", 3)
+
+    assert result["status"] == "error"
+    assert result["code"] == (
+        "DOWNGRADE_FAILED"
+        if rollback_succeeds
+        else "DOWNGRADE_RECONCILIATION_REQUIRED"
+    )
+    assert result["phase"] == "subscribe_lower_mode"
+    assert result["rollback"]["status"] == (
+        "success" if rollback_succeeds else "error"
+    )
+    assert result["reconciliation_required"] is (not rollback_succeeds)
+    assert adapter.calls == [("RELIANCE", "NSE", 3)]
+    assert adapter.subscribe_calls == [
+        ("RELIANCE", "NSE", 1, 5),
+        ("RELIANCE", "NSE", 3, 50),
+    ]
+    assert pool.subscription_map == {
+        ("RELIANCE", "NSE", 1): 0,
+        ("RELIANCE", "NSE", 3): 0,
+    }
+    assert pool.subscription_depths[("RELIANCE", "NSE", 3)] == 50
+    assert pool.adapter_symbol_counts == [1]
+
+
+def test_pool_disconnect_clears_depth_and_mode_ownership_after_child_failure() -> None:
+    adapter = _Adapter(disconnect_outcomes=[RuntimeError("disconnect failed")])
+    pool = _connection_pool_for_downgrade(adapter)
+    pool.connected = True
+    pool.initialized = True
+    pool.peak_total_symbols = 1
+    pool.peak_connections_used = 1
+    pool.peak_symbol_counts = [1]
+
+    pool.disconnect()
+
+    assert adapter.disconnect_calls == 1
+    assert pool.adapters == []
+    assert pool.adapter_symbol_counts == []
+    assert pool.subscription_map == {}
+    assert pool.subscription_depths == {}
+    assert pool.connected is False
+    assert pool.initialized is False
 
 
 def test_internal_client_sends_explicit_item_modes_and_cleans_only_acknowledged_modes() -> None:

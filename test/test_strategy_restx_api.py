@@ -418,16 +418,21 @@ def test_stop_failures_preserve_pending_and_per_exit_detail(client, engine, rout
     }
 
 
-def test_close_all_records_the_intent_before_stopping(client, engine):
-    """Kept distinct from stop so the audit trail says what happened."""
+def test_restx_close_all_event_matches_the_browser_intent_contract(client, engine):
+    """Both API surfaces record a request, never pre-fill closure."""
     sid, _token = _make(running=True)
 
     response = post(client, "close_all", strategy_id=sid)
     assert response.status_code == 200
     assert response.get_json()["stop_pending"] is True
 
-    kinds = [event["kind"] for event in store.list_events(sid)]
-    assert "close_all_manual" in kinds
+    event = next(
+        event
+        for event in store.list_events(sid)
+        if event["kind"] == "close_all_manual"
+    )
+    assert event["message"] == "Operator requested closure of all held legs"
+    assert "closed" not in event["message"].lower()
     assert engine.calls == [("stop_run", RUN_ID, USER, "manual")]
 
 

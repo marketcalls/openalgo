@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from utils import real_threading as _real_threading
+from utils.url_redaction import redact_url_credentials
 
 
 def _create_real_lock(self) -> None:
@@ -195,6 +196,7 @@ class WebSocketHandshakeFilter(logging.Filter):
 
 def redact_text(text: str) -> str:
     """Apply every sensitive pattern to a piece of text."""
+    text = redact_url_credentials(text)
     for pattern, replacement in SENSITIVE_PATTERNS:
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     return text
@@ -404,7 +406,7 @@ class JSONErrorFormatter(logging.Formatter):
             if has_request_context():
                 entry["request"] = {
                     "method": request.method,
-                    "path": request.path,
+                    "path": redact_url_credentials(request.path),
                     "ip": request.remote_addr,
                 }
         except Exception:

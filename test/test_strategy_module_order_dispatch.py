@@ -20,6 +20,7 @@ import pytest
 # point of that cycle fails with a partially initialised module. The app never
 # hits it because restx_api is always loaded first; this mirrors that order.
 import restx_api  # noqa: F401
+import services.cancel_order_service  # noqa: F401
 import services.place_order_service  # noqa: F401
 import services.sandbox_service  # noqa: F401
 from services.strategy_module import order_dispatch as od
@@ -72,6 +73,21 @@ def test_a_sandbox_run_goes_to_the_sandbox_pipe():
     assert sandbox.call_count == 1
 
 
+def test_a_sandbox_retry_cancel_uses_the_run_pipe_not_the_global_toggle():
+    with patch("services.sandbox_service.sandbox_cancel_order") as sandbox:
+        sandbox.return_value = (True, {"status": "success", "orderid": "SB-RETRY"}, 200)
+
+        result = od.cancel_exit_order(
+            mode="sandbox",
+            api_key="k",
+            broker_order_id="SB-RETRY",
+        )
+
+    assert result.ok is True
+    assert result.broker_order_id == "SB-RETRY"
+    assert sandbox.call_args.args[0] == {"orderid": "SB-RETRY"}
+
+
 def test_a_live_run_goes_to_the_broker_pipe_with_resolved_auth():
     with (
         patch("database.auth_db.get_auth_token_broker", return_value=("tok", "zerodha")),
@@ -86,6 +102,25 @@ def test_a_live_run_goes_to_the_broker_pipe_with_resolved_auth():
     args = live.call_args[0]
     assert args[1] == "tok"
     assert args[2] == "zerodha"
+
+
+def test_a_live_retry_cancel_calls_the_resolved_broker_directly():
+    with (
+        patch("database.auth_db.get_auth_token_broker", return_value=("tok", "zerodha")),
+        patch("services.cancel_order_service.import_broker_module") as import_broker,
+    ):
+        broker_module = import_broker.return_value
+        broker_module.cancel_order.return_value = ({"status": "success"}, 200)
+
+        result = od.cancel_exit_order(
+            mode="live",
+            api_key="k",
+            broker_order_id="LIVE-RETRY",
+        )
+
+    assert result.ok is True
+    assert result.broker_order_id == "LIVE-RETRY"
+    broker_module.cancel_order.assert_called_once_with("LIVE-RETRY", "tok")
 
 
 def test_an_unknown_mode_is_refused_rather_than_defaulted():

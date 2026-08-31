@@ -52,6 +52,7 @@ from restx_api.strategy_schema import (
     StrategyRunsSchema,
     StrategyStartSchema,
 )
+from services.strategy_module.audit_messages import CLOSE_ALL_REQUESTED_MESSAGE
 from utils.logging import get_logger
 
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
@@ -147,7 +148,13 @@ def _stop_current_run(row, user_id: str, *, event: str | None = None):
         return _failure(NOT_RUNNING, 409)
 
     if event:
-        store.record_event(row.id, user_id, event, "Closed all legs from the API", run_id=run_id)
+        store.record_event(
+            row.id,
+            user_id,
+            event,
+            CLOSE_ALL_REQUESTED_MESSAGE,
+            run_id=run_id,
+        )
 
     result = _engine().stop_run(run_id, user_id, reason="manual")
     if not result.get("ok"):

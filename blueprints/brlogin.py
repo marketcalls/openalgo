@@ -272,7 +272,9 @@ def broker_callback(broker, para=None):
 
     elif broker == "icici":
         full_url = request.full_path
-        logger.debug(f"ICICI broker - Full URL: {full_url}")
+        from utils.url_redaction import redact_url_credentials
+
+        logger.debug(f"ICICI broker - Full URL: {redact_url_credentials(full_url)}")
         code = request.args.get("apisession")
         logger.debug(f"ICICI broker - The code is {code}")
         auth_token, error_message = auth_function(code)
@@ -379,8 +381,15 @@ def broker_callback(broker, para=None):
             # Handle OAuth callback with tokenId
             # Log all incoming parameters to debug
             logger.info(f"Dhan callback - GET parameters: {dict(request.args)}")
-            logger.info(f"Dhan callback - Full URL: {request.url}")
-            logger.info(f"Dhan callback - Request path: {request.path}")
+            from utils.url_redaction import redact_url_credentials
+
+            logger.info(
+                f"Dhan callback - Full URL: {redact_url_credentials(request.url)}"
+            )
+            logger.info(
+                "Dhan callback - Request path: "
+                f"{redact_url_credentials(request.path)}"
+            )
             logger.info(f"Dhan callback - Query string: {request.query_string.decode()}")
 
             # Log if we're coming from a redirect
