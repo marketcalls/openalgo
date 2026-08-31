@@ -896,7 +896,7 @@ class FyersHSMWebSocket:
                     on_close=self._on_ws_close,
                     on_ping=self._on_ws_ping,
                     on_pong=self._on_ws_pong,
-                    header={"Authorization": self.access_token, "User-Agent": f"{self.source}/1.0"},
+                    header={"User-Agent": f"{self.source}/1.0"},
                 )
 
                 # Run until disconnection. Enable protocol ping/pong keepalive so
