@@ -830,8 +830,11 @@ class BrokerData:
 
             response_candles = []
             chunk_start = start_ts
+            attempted_chunks = 0
+            failed_chunks = 0
             while chunk_start <= end_ts:
                 chunk_end = min(chunk_start + chunk_seconds, end_ts)
+                attempted_chunks += 1
                 if interval == "D":
                     payload = {
                         "sym": f"{exchange}:{eod_symbol}",
@@ -856,6 +859,7 @@ class BrokerData:
                     logger.error(
                         f"{endpoint} chunk request failed ({chunk_start}-{chunk_end}): {e}"
                     )
+                    failed_chunks += 1
                     chunk_start = chunk_end + 1
                     continue
 
@@ -865,10 +869,19 @@ class BrokerData:
                 # and crashed trying to json.loads("stat")).
                 if isinstance(chunk_response, dict):
                     emsg = chunk_response.get("emsg") or chunk_response.get("message") or "unknown"
+                    # A session-level failure is fatal for every chunk: raising
+                    # here (like get_quotes does) beats returning an empty
+                    # frame that the API layer would report as success (#1944).
+                    if any(
+                        marker in str(emsg).lower()
+                        for marker in ("session expired", "invalid session key", "not logged in")
+                    ):
+                        raise Exception(f"Error from Shoonya API: {emsg}")
                     logger.warning(
                         f"{endpoint} returned error for chunk {chunk_start}-{chunk_end}: "
                         f"stat={chunk_response.get('stat')} emsg={emsg}"
                     )
+                    failed_chunks += 1
                     chunk_start = chunk_end + 1
                     continue
 
@@ -877,11 +890,20 @@ class BrokerData:
                         f"Unexpected {endpoint} response type {type(chunk_response).__name__}: "
                         f"{str(chunk_response)[:200]}"
                     )
+                    failed_chunks += 1
                     chunk_start = chunk_end + 1
                     continue
 
                 response_candles.extend(chunk_response)
                 chunk_start = chunk_end + 1
+
+            if attempted_chunks and failed_chunks == attempted_chunks:
+                # Every chunk failed — do not let a fully failed request
+                # masquerade as an empty-but-successful response (#1944).
+                raise Exception(
+                    f"All {attempted_chunks} {endpoint} chunk requests failed for "
+                    f"{symbol}/{oa_exchange} between {start_ts} and {end_ts}"
+                )
 
             if interval == "D" and not response_candles:
                 # An unknown index name resolves to an empty list rather than
