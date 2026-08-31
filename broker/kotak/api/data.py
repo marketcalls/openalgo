@@ -393,7 +393,11 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            BATCH_SIZE = 50  # Conservative limit for URL length (GET request)
+            # Kotak Neo's /quotes/neosymbol endpoint rejects a batch of 50 with
+            # HTTP 400 "Please set the Neo symbol max value to 50." -- confirmed
+            # live with a batch of exactly 50 bse_fo symbols. The real cap is
+            # below 50, so batch well under it.
+            BATCH_SIZE = 25
             RATE_LIMIT_DELAY = 0.2  # 5 requests/sec = 250 symbols/sec (under 500 limit)
 
             # If symbols exceed batch size, process in batches
