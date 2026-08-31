@@ -245,9 +245,11 @@ def broker_callback(broker, para=None):
             # print(f'User ID is {user_id}')
             forward_url = "broker.html"
 
-        except Exception as e:
-            # print(f"Error in compositedge callback: {str(e)}")
-            return jsonify({"error": f"Error processing request: {str(e)}"}), 500
+        except Exception as exc:
+            # Broker SDK exceptions can quote the entire session payload. Keep
+            # the response and application log to non-secret classification.
+            logger.error("Could not process Compositedge callback (%s)", type(exc).__name__)
+            return jsonify({"error": "Could not process broker callback"}), 500
 
     elif broker == "fyers":
         code = request.args.get("auth_code")

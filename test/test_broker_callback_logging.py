@@ -155,3 +155,28 @@ def test_compositedge_malformed_session_is_not_reflected_to_the_client() -> None
     body = response.get_data(as_text=True)
     assert SENTINEL not in body
     assert "raw_data" not in body
+
+
+def test_compositedge_auth_exception_does_not_reflect_a_valid_session_token() -> None:
+    """Adapter exceptions can quote the request, so their text is not client-safe."""
+    app = Flask(__name__)
+    app.secret_key = "test-only"
+
+    def raising_auth(*_args):
+        raise RuntimeError(f"upstream echoed {SENTINEL}")
+
+    app.broker_auth_functions = {"compositedge_auth": raising_auth}
+    callback = inspect.unwrap(brlogin.broker_callback)
+
+    with app.test_request_context(
+        "/compositedge/callback",
+        method="POST",
+        json={"accessToken": SENTINEL},
+    ):
+        session["user"] = "alice"
+        response, status = callback("compositedge")
+
+    assert status == 500
+    body = response.get_data(as_text=True)
+    assert SENTINEL not in body
+    assert "upstream echoed" not in body
