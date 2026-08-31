@@ -272,6 +272,7 @@ def test_websocket_depth_and_partial_error_examples_have_the_exact_wire_shape() 
 
 def test_websocket_unsubscribe_ack_identifies_the_exact_canonical_mode() -> None:
     prompt = _read("docs/prompt/websockets-format.md")
+    server = _read("websocket_proxy/server.py")
     unsubscribe = _json_blocks(_section(prompt, "### Unsubscription"))
     assert len(unsubscribe) == 2
     request, ack = unsubscribe
@@ -295,6 +296,10 @@ def test_websocket_unsubscribe_ack_identifies_the_exact_canonical_mode() -> None
         }
     ]
     assert ack["failed"] == []
+    assert "For mode-valid requests" in prompt
+    assert "`mode` is `null`" in prompt
+    assert "on every successful or failed item" not in prompt
+    assert server.count('"mode": None') >= 2
 
     assert "A socket disconnect is terminal for that client session" in prompt
     assert "last-client adapter teardown" in prompt
@@ -304,6 +309,9 @@ def test_websocket_unsubscribe_ack_identifies_the_exact_canonical_mode() -> None
         page = _read(Path("docs/api/websocket-streaming") / name)
         assert "canonical `mode`" in page
         assert re.search(r"`successful`\s+and\s+`failed`", page)
+        assert "Mode-valid acknowledgement items" in page
+        assert "`mode` is `null`" in page
+        assert "every item carries" not in page
 
 
 def test_websocket_heartbeat_and_reconnect_docs_match_session_ownership() -> None:

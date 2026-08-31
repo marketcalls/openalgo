@@ -114,8 +114,9 @@ To unsubscribe from a stream:
 
 For an array request, a `mode` on an individual symbol wins; otherwise the
 top-level `mode` applies, and only a request with neither defaults to `Quote`.
-The acknowledgement identifies the exact canonical mode on every successful or
-failed item:
+For mode-valid requests, the acknowledgement identifies the exact canonical
+mode on each successful or failed item. When mode validation itself fails, the
+failed item cannot have a canonical label, so its `mode` is `null`:
 
 ```json
 {
