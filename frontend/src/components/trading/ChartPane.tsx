@@ -304,6 +304,10 @@ export function ChartPane({
   // Null whenever the chart is live. The transport bar renders only while
   // replay owns the data, so there is nothing to hide when it does not.
   const [replay, setReplay] = useState<ReplayState | null>(null)
+  /** True while a start bar is being chosen, before replay owns the data. */
+  const [picking, setPicking] = useState(false)
+  /** The confirm shown on leaving: the playhead is the only record of the walk. */
+  const [confirmLeave, setConfirmLeave] = useState(false)
 
   /* ── boot this pane's terminal once ───────────────────────────────────── */
   useEffect(() => {
@@ -339,7 +343,12 @@ export function ChartPane({
       onIndicatorsChange: (list) => aliveRef.current && setIndicators(list),
       onIndicatorSettings: (req) => aliveRef.current && setIndSettings(req),
       onDrawSelect: (sel) => aliveRef.current && setDrawSel(sel),
-      onReplayChange: (state) => aliveRef.current && setReplay(state),
+      onReplayChange: (state) => {
+        if (!aliveRef.current) return
+        setReplay(state)
+        setPicking(terminalRef.current?.replayPickingBar() ?? false)
+        if (state === null) setConfirmLeave(false)
+      },
       onDrawTextEdit: (r) => {
         if (!aliveRef.current) return
         // The ref, not the local: `terminal` is still unassigned while this
@@ -665,10 +674,19 @@ export function ChartPane({
         <Button
           variant="outline"
           size="sm"
-          className={cn('h-8 shrink-0 gap-1', replay && 'border-primary text-primary')}
-          onClick={() => terminalRef.current?.startReplay()}
-          disabled={!!replay}
-          title={replay ? 'Replay is running' : 'Replay this session'}
+          className={cn('h-8 shrink-0 gap-1', (replay || picking) && 'border-primary text-primary')}
+          onClick={() => {
+            if (replay) setConfirmLeave(true)
+            else if (picking) terminalRef.current?.cancelReplayPick()
+            else terminalRef.current?.startReplay()
+          }}
+          title={
+            replay
+              ? 'Leave replay'
+              : picking
+                ? 'Cancel bar selection'
+                : 'Replay this session from a bar you pick'
+          }
         >
           <ReplayIcon className="h-4 w-4" />
           <span className="hidden sm:inline">Replay</span>
@@ -801,12 +819,64 @@ export function ChartPane({
           replay owns the chart's data: `replay` is null the moment we are live
           again, which is also the signal that Exit has done its work.
         */}
+        {/*
+          Step one of replay. The bar you start from is the whole premise of the
+          exercise, so it is picked rather than guessed at from the viewport, and
+          everything to its right is greyed while it is being picked: choosing a
+          start with the next twenty bars readable is choosing on hindsight.
+        */}
+        {picking && (
+          <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-border bg-popover/95 px-3 py-2 text-xs shadow-lg backdrop-blur">
+            <span>
+              <span className="font-medium">Select a bar</span>{' '}
+              <span className="text-muted-foreground">to replay from</span>
+            </span>
+            <button
+              type="button"
+              className="rounded border border-border px-2 py-1 hover:bg-accent"
+              onClick={() => terminalRef.current?.cancelReplayPick()}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {confirmLeave && (
+          <div className="pointer-events-auto absolute inset-0 z-30 flex items-center justify-center bg-black/45">
+            <div className="w-[340px] rounded-lg border border-border bg-popover p-4 shadow-xl">
+              <h4 className="mb-2 text-sm font-medium">Leave replay?</h4>
+              <p className="mb-4 text-xs leading-relaxed text-muted-foreground">
+                The chart goes back to the live session and the playhead is lost.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded border border-border px-3 py-1.5 text-xs hover:bg-accent"
+                  onClick={() => setConfirmLeave(false)}
+                >
+                  Stay
+                </button>
+                <button
+                  type="button"
+                  className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
+                  onClick={() => {
+                    setConfirmLeave(false)
+                    terminalRef.current?.stopReplay()
+                  }}
+                >
+                  Leave
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {replay && (
           <div className="pointer-events-auto absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-border bg-popover/95 px-2 py-1.5 shadow-lg backdrop-blur">
             <button
               type="button"
               className="rounded px-2 py-1 text-xs hover:bg-accent"
-              title="Step back one bar"
+              title={`Step back ${replay.subSteps > 1 ? 'one step of the forming bar' : 'one bar'}`}
               onClick={() => terminalRef.current?.replayStepBack()}
             >
               Prev
@@ -826,7 +896,7 @@ export function ChartPane({
             <button
               type="button"
               className="rounded px-2 py-1 text-xs hover:bg-accent"
-              title="Step forward one bar"
+              title={`Step forward ${replay.subSteps > 1 ? 'one step of the forming bar' : 'one bar'}`}
               onClick={() => terminalRef.current?.replayStep()}
             >
               Next
@@ -845,6 +915,13 @@ export function ChartPane({
             <span className="tabular-nums text-[11px] text-muted-foreground">
               {replay.index + 1} / {replay.total}
             </span>
+            {/* Only while a bar actually forms over several steps, so a plain
+                whole-bar replay does not carry a permanent "1/1". */}
+            {replay.subSteps > 1 && (
+              <span className="tabular-nums text-[11px] text-primary">
+                {replay.subIndex + 1}/{replay.subSteps}
+              </span>
+            )}
 
             <select
               className="rounded border border-border bg-background px-1 py-0.5 text-[11px]"
@@ -863,7 +940,7 @@ export function ChartPane({
               type="button"
               className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
               title="Leave replay and return to the live chart"
-              onClick={() => terminalRef.current?.stopReplay()}
+              onClick={() => setConfirmLeave(true)}
             >
               Exit
             </button>
