@@ -393,13 +393,21 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            BATCH_SIZE = 50  # Conservative limit for URL length (GET request)
-            RATE_LIMIT_DELAY = 0.2  # 5 requests/sec = 250 symbols/sec (under 500 limit)
+            # Kotak Neo's quotes endpoint rejects a request carrying 50 symbols with
+            # HTTP 400 "Please set the Neo symbol max value to 50.", so the effective
+            # server-side cap is below 50 even though the docs state no limit at all.
+            # Observed against the live endpoint: 42 symbols returns 200, 50 returns
+            # 400, so the cap sits somewhere in 42-49. 25 keeps a wide margin; URL
+            # length is not the constraint (25 entries is roughly 350 characters).
+            BATCH_SIZE = 25
+            RATE_LIMIT_DELAY = 0.2  # 5 requests/sec = 125 symbols/sec (under 500 limit)
 
             # If symbols exceed batch size, process in batches
             if len(symbols) > BATCH_SIZE:
+                total_batches = (len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE
                 logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
                 all_results = []
+                failed_batches = 0
 
                 # Split symbols into batches
                 for i in range(0, len(symbols), BATCH_SIZE):
@@ -408,17 +416,42 @@ class BrokerData:
                         f"Processing batch {i // BATCH_SIZE + 1}: symbols {i + 1} to {min(i + BATCH_SIZE, len(symbols))}"
                     )
 
-                    # Process this batch
-                    batch_results = self._process_quotes_batch(batch)
-                    all_results.extend(batch_results)
+                    # Process this batch. A sub-batch that fails must not discard the
+                    # batches that already succeeded - callers such as the option chain
+                    # can still work from a partial set, and every symbol in the failed
+                    # batch is reported with an error entry.
+                    try:
+                        batch_results = self._process_quotes_batch(batch)
+                        all_results.extend(batch_results)
+                    except Exception as e:
+                        failed_batches += 1
+                        logger.warning(f"Batch {i // BATCH_SIZE + 1}/{total_batches} failed: {e}")
+                        all_results.extend(
+                            {
+                                "symbol": item["symbol"],
+                                "exchange": item["exchange"],
+                                "error": str(e),
+                            }
+                            for item in batch
+                        )
 
                     # Rate limit delay between batches
                     if i + BATCH_SIZE < len(symbols):
                         time.sleep(RATE_LIMIT_DELAY)
 
-                logger.info(
-                    f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches"
-                )
+                # Only a total wipe-out is worth failing the whole call for
+                if failed_batches == total_batches:
+                    raise Exception(f"All {total_batches} quote batches failed")
+
+                if failed_batches:
+                    logger.warning(
+                        f"Processed {len(all_results)} quotes in {total_batches} batches "
+                        f"({failed_batches} failed)"
+                    )
+                else:
+                    logger.info(
+                        f"Successfully processed {len(all_results)} quotes in {total_batches} batches"
+                    )
                 return all_results
             else:
                 # Single batch processing
@@ -432,7 +465,7 @@ class BrokerData:
         """
         Process a single batch of symbols (internal method)
         Args:
-            symbols: List of dicts with 'symbol' and 'exchange' keys (max 50)
+            symbols: List of dicts with 'symbol' and 'exchange' keys (max 25)
         Returns:
             list: List of quote data for the batch
         """
