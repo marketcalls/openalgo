@@ -2,10 +2,11 @@
 
 import json
 import os
+import time
 
 import httpx
 
-from broker.flattrade.api.rate_limit import DATA_LIMITER
+from broker.flattrade.api.rate_limit import DATA_LIMITER, clamp_from_response
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -30,7 +31,11 @@ def calculate_pnl(entry):
     return realized_pnl, unrealized_pnl
 
 
-def fetch_data(endpoint, payload, headers, client):
+MAX_RATE_LIMIT_RETRIES = 3
+RATE_LIMIT_BASE_DELAY = 2.0
+
+
+def fetch_data(endpoint, payload, headers, client, retry_count=0):
     """Send a POST request and return the parsed JSON response using httpx."""
     # Limits/PositionBook are non-order endpoints and share the data window with
     # data.py and order_api.py — get_margin_data is called on every dashboard
@@ -38,7 +43,21 @@ def fetch_data(endpoint, payload, headers, client):
     DATA_LIMITER.acquire()
     url = f"https://piconnect.flattrade.in{endpoint}"
     response = client.post(url, content=payload, headers=headers)
-    return response.json()
+    parsed = response.json()
+
+    # A funds call can be the first request to meet a lower ceiling. Without
+    # this it returns a rejection that get_margin_data reads as empty funds and
+    # zero PnL, while the cap stays too high for every later call.
+    if clamp_from_response(parsed, DATA_LIMITER) and retry_count < MAX_RATE_LIMIT_RETRIES:
+        delay = RATE_LIMIT_BASE_DELAY * (2**retry_count)
+        logger.warning(
+            f"Flattrade rate limit hit on {endpoint} ({parsed.get('emsg')}). "
+            f"Retrying in {delay}s (attempt {retry_count + 1}/{MAX_RATE_LIMIT_RETRIES})"
+        )
+        time.sleep(delay)
+        return fetch_data(endpoint, payload, headers, client, retry_count + 1)
+
+    return parsed
 
 
 def get_margin_data(auth_token):

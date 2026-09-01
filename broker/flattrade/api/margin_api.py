@@ -1,7 +1,7 @@
 import json
 import os
 
-from broker.flattrade.api.rate_limit import DATA_LIMITER
+from broker.flattrade.api.rate_limit import DATA_LIMITER, clamp_from_response
 from broker.flattrade.mapping.margin_data import parse_margin_response, transform_margin_positions
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -75,6 +75,10 @@ def calculate_margin_api(positions, auth):
 
         try:
             response_data = response.json()
+            # Learn a lower ceiling from the rejection. Not retried: a basket
+            # margin preview is user-initiated, so a stale retry is worse than
+            # surfacing the error.
+            clamp_from_response(response_data, DATA_LIMITER)
         except json.JSONDecodeError:
             logger.error(f"Failed to parse JSON response: {response.text}")
             error_response = {"status": "error", "message": "Invalid response from broker API"}

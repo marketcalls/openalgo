@@ -363,26 +363,54 @@ class FlattradeWebSocket:
             return None
         data = error.data or b""
         if len(data) < 2:
-            # RFC 6455 permits a close frame with no status code.
+            # RFC 6455 permits a close frame with no status code. It is still a
+            # close, so the caller must route it to on_close - hence the
+            # separate _is_close_frame() predicate; only the CODE is unknown.
             return None
         return (data[0] << 8) | data[1]
 
+    @staticmethod
+    def _is_close_frame(error) -> bool:
+        """True for any close frame, with or without a status code."""
+        return (
+            isinstance(error, websocket.ABNF)
+            and error.opcode == websocket.ABNF.OPCODE_CLOSE
+        )
+
     def _on_error(self, ws, error) -> None:
         """Handle WebSocket connection errors"""
-        status = self._close_frame_status(error)
-        if status is not None:
+        if self._is_close_frame(error):
+            status = self._close_frame_status(error)
             # A close handshake, not a fault. Stash the decoded code for
             # _on_close (websocket-client is about to call it with (None, None))
             # rather than invoking _on_close here — teardown must run exactly
             # once, or _stop_heartbeat() pays its join timeout twice.
             reason = (error.data or b"")[2:].decode("utf-8", errors="replace")
             self._pending_close_status = (status, reason or None)
+
+            # A close whose reason names an auth failure ("Invalid Session",
+            # 403, ...) must arm the adapter's bounded token-refresh path. The
+            # early return below would otherwise skip _is_fatal_auth_error and
+            # leave it on the generic reconnect loop, retrying a dead token.
+            if reason and not self.auth_failed and self._is_fatal_auth_error(reason):
+                self.auth_failed = True
+                self.auth_failure_message = reason
+                self.logger.error(
+                    f"Flattrade closed the socket with an auth failure: {reason}"
+                )
+                return
+
             if status == 1000:
                 self.logger.warning(
                     f"Flattrade closed the market-data socket cleanly (code {status} "
                     "normal closure). PiConnect allows one session per uid/accesstoken, "
                     "so this is normally the broker evicting us because another "
                     f"connection authenticated with the same credentials.{f' Reason: {reason}' if reason else ''}"
+                )
+            elif status is None:
+                self.logger.warning(
+                    "Flattrade closed the market-data socket with no status code"
+                    f"{f' ({reason})' if reason else ''}"
                 )
             else:
                 self.logger.error(

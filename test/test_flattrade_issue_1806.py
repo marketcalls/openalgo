@@ -507,22 +507,52 @@ def test_documented_message_types_match_the_client_constants() -> None:
     assert FlattradeWebSocket.MSG_TYPE_HEARTBEAT_ACK == "hk"
 
 
-def test_defaults_match_observed_enforcement_not_the_published_table() -> None:
+def test_defaults_match_observed_enforcement_not_the_published_table(monkeypatch) -> None:
     """The published table (40/sec, 200/min non-order) is a higher provisioning
-    tier. A live account was rejected at 10/sec and 120/min on 2026-09-01 —
+    tier. A live account was rejected at 10/sec and 120/min on 2026-09-01 -
     the same figures TradeSmart publishes for the same Noren backend.
 
-    Defaulting to the published numbers made the clamp discover this by being
-    rejected, and because the clamp is process-local every restart paid that
-    rejection again (observed: "lowering the local cap from 38 to 10" at 11:13
-    and again at 11:22 after a restart). Start at the real ceiling instead.
+    Asserts on _env_int with the environment cleared rather than on the
+    module-level singletons: those are bound at import time from
+    FLATTRADE_MAX_PER_SECOND / FLATTRADE_MAX_PER_MINUTE, which this same change
+    tells higher-tier accounts to set. Reading the singletons would make the
+    test fail on a correctly-configured machine even though the defaults are
+    right.
     """
-    assert rl.DATA_LIMITER.max_per_second <= 10
-    assert rl.DATA_LIMITER.max_per_minute <= 120
-    # Order limits are published as 10/sec + 40/min and the per-second figure
-    # agrees with what was observed, so those stay as documented.
+    for name in (
+        "FLATTRADE_MAX_PER_SECOND",
+        "FLATTRADE_MAX_PER_MINUTE",
+        "FLATTRADE_ORDER_MAX_PER_SECOND",
+        "FLATTRADE_ORDER_MAX_PER_MINUTE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    assert rl._env_int("FLATTRADE_MAX_PER_SECOND", 9, ceiling=40) == 9
+    assert rl._env_int("FLATTRADE_MAX_PER_MINUTE", 110, ceiling=200) == 110
+    assert rl._env_int("FLATTRADE_ORDER_MAX_PER_SECOND", 9, ceiling=10) == 9
+    assert rl._env_int("FLATTRADE_ORDER_MAX_PER_MINUTE", 38, ceiling=40) == 38
+
+
+def test_whatever_the_environment_says_the_caps_stay_within_the_published_table() -> None:
+    """Environment-independent invariant: however the singletons were
+    configured, they can never exceed what Flattrade publishes."""
+    assert rl.DATA_LIMITER.max_per_second <= 40
+    assert rl.DATA_LIMITER.max_per_minute <= 200
     assert rl.ORDER_LIMITER.max_per_second <= 10
     assert rl.ORDER_LIMITER.max_per_minute <= 40
+
+
+@pytest.mark.parametrize(
+    ("value", "ceiling", "expected"),
+    [("3800", 40, 40), ("41", 40, 40), ("38", 40, 38), ("2000", 200, 200)],
+)
+def test_an_override_above_the_published_ceiling_is_clamped(
+    monkeypatch, value, ceiling, expected
+) -> None:
+    """A stray zero in FLATTRADE_MAX_PER_SECOND would otherwise disable the
+    pacing this module exists to provide."""
+    monkeypatch.setenv("FLATTRADE_MAX_PER_SECOND", value)
+    assert rl._env_int("FLATTRADE_MAX_PER_SECOND", 9, ceiling=ceiling) == expected
 
 
 def test_a_higher_tier_account_can_raise_the_caps(monkeypatch) -> None:
@@ -535,8 +565,8 @@ def test_a_higher_tier_account_can_raise_the_caps(monkeypatch) -> None:
     """
     monkeypatch.setenv("FLATTRADE_MAX_PER_SECOND", "38")
     monkeypatch.setenv("FLATTRADE_MAX_PER_MINUTE", "190")
-    assert rl._env_int("FLATTRADE_MAX_PER_SECOND", 9) == 38
-    assert rl._env_int("FLATTRADE_MAX_PER_MINUTE", 110) == 190
+    assert rl._env_int("FLATTRADE_MAX_PER_SECOND", 9, ceiling=40) == 38
+    assert rl._env_int("FLATTRADE_MAX_PER_MINUTE", 110, ceiling=200) == 190
 
     # ...and the clamp still protects a raised cap.
     raised = rl.SlidingWindowLimiter("t", max_per_second=38, max_per_minute=190)
@@ -550,12 +580,12 @@ def test_a_higher_tier_account_can_raise_the_caps(monkeypatch) -> None:
 @pytest.mark.parametrize("junk", ["0", "-5", "abc", "  ", ""])
 def test_a_nonsense_env_override_falls_back_to_the_default(monkeypatch, junk) -> None:
     monkeypatch.setenv("FLATTRADE_MAX_PER_SECOND", junk)
-    assert rl._env_int("FLATTRADE_MAX_PER_SECOND", 9) == 9
+    assert rl._env_int("FLATTRADE_MAX_PER_SECOND", 9, ceiling=40) == 9
 
 
 def test_an_absent_env_override_uses_the_default(monkeypatch) -> None:
     monkeypatch.delenv("FLATTRADE_MAX_PER_SECOND", raising=False)
-    assert rl._env_int("FLATTRADE_MAX_PER_SECOND", 9) == 9
+    assert rl._env_int("FLATTRADE_MAX_PER_SECOND", 9, ceiling=40) == 9
 
 
 def test_multiquote_batching_does_not_add_its_own_fixed_delay() -> None:
@@ -568,3 +598,180 @@ def test_multiquote_batching_does_not_add_its_own_fixed_delay() -> None:
     src = inspect.getsource(data.BrokerData.get_multiquotes)
     assert "RATE_LIMIT_DELAY" not in src
     assert "time.sleep" not in src
+
+
+# --------------------------------------------------------------------------
+# 6. Review follow-ups (cubic, 2026-09-01)
+# --------------------------------------------------------------------------
+
+
+def test_every_paced_entry_point_also_learns_from_a_rejection() -> None:
+    """Pacing without clamping is the defect this file exists to fix, half-done:
+    a module that acquires a slot but ignores the rejection keeps re-offering a
+    rate the account was never provisioned for. Every paced module must import
+    the clamp, not just the limiter."""
+    import inspect
+
+    from broker.flattrade.api import data, funds, margin_api, order_api
+
+    for mod in (data, order_api, funds, margin_api):
+        src = inspect.getsource(mod)
+        assert "_LIMITER.acquire()" in src or "_apply_rate_limit" in src, mod.__name__
+        assert (
+            "clamp_from_response" in src or "note_rate_limit_rejection" in src
+        ), f"{mod.__name__} paces requests but never adapts the cap"
+
+
+def test_clamp_from_response_reports_whether_it_was_a_rate_limit() -> None:
+    limiter = rl.SlidingWindowLimiter("t", max_per_second=38, max_per_minute=190)
+    assert rl.clamp_from_response({"stat": "Ok", "values": []}, limiter) is False
+    assert limiter.max_per_second == 38
+
+    assert (
+        rl.clamp_from_response(
+            {"stat": "Not_Ok", "emsg": "Recieved 11 in a current second exceeds Limit 10"},
+            limiter,
+        )
+        is True
+    )
+    assert limiter.max_per_second == 10
+
+
+def test_order_endpoints_clamp_but_never_auto_retry() -> None:
+    """A PlaceOrder rejected for rate cannot be told apart from one accepted
+    with a lost response, so retrying risks a duplicate order. Clamp only."""
+    import inspect
+
+    from broker.flattrade.api import order_api
+
+    for fn in (order_api.place_order_api, order_api.cancel_order, order_api.modify_order):
+        src = inspect.getsource(fn)
+        assert "clamp_from_response" in src, fn.__name__
+        assert "ORDER_LIMITER" in src, fn.__name__
+        # No recursive retry on an order path.
+        assert f"return {fn.__name__}(" not in src, fn.__name__
+
+
+def test_read_endpoints_do_retry_after_clamping() -> None:
+    """Read-only paths are safe to retry, and must, or the first rejection is
+    surfaced to the UI as empty data."""
+    import inspect
+
+    from broker.flattrade.api import funds, order_api
+
+    assert "return get_api_response(" in inspect.getsource(order_api.get_api_response)
+    assert "return fetch_data(" in inspect.getsource(funds.fetch_data)
+
+
+# -- partial fills over the polling path ----------------------------------
+
+
+def _orderbook_row(qty: str, fillshares: str | None, status: str = "OPEN") -> dict:
+    row = {
+        "norenordno": "2509010000001",
+        "tsym": "SBIN-EQ",
+        "exch": "NSE",
+        "trantype": "B",
+        "qty": qty,
+        "prc": "1044.60",
+        "prctyp": "LMT",
+        "prd": "I",
+        "status": status,
+        "norentm": "11:22:33 01-09-2026",
+        "avgprc": "1044.50",
+    }
+    if fillshares is not None:
+        row["fillshares"] = fillshares
+    return row
+
+
+def test_orderbook_mapping_exposes_fill_state() -> None:
+    """PollingOrderUpdateAdapter diffs (order_status, filled_quantity). With
+    filled_quantity missing it read 0 forever, so a partial fill on an order
+    that stayed OPEN published no update at all."""
+    from broker.flattrade.mapping.order_data import transform_order_data
+
+    [row] = transform_order_data([_orderbook_row(qty="100", fillshares="40")])
+    assert row["filled_quantity"] == 40
+    assert row["pending_quantity"] == 60
+    assert row["average_price"] == 1044.50
+    assert row["order_status"] == "open"
+
+
+def test_a_partial_fill_changes_the_polled_snapshot() -> None:
+    """The exact tuple the poller diffs on must move when a fill lands."""
+    from broker.flattrade.mapping.order_data import transform_order_data
+
+    def snapshot(fillshares):
+        [row] = transform_order_data([_orderbook_row("100", fillshares)])
+        return (row["order_status"], int(row["filled_quantity"] or 0))
+
+    assert snapshot(None) == ("open", 0)
+    assert snapshot("40") != snapshot(None)  # partial fill is now visible
+    assert snapshot("40") != snapshot("70")  # and each further fill too
+
+
+@pytest.mark.parametrize(
+    ("qty", "fillshares", "filled", "pending"),
+    [
+        ("100", None, 0, 100),  # never traded — Noren omits the field
+        ("100", "", 0, 100),
+        ("100", "0", 0, 100),
+        ("100", "100", 100, 0),  # fully filled
+        ("100", "120", 120, 0),  # never negative
+        ("bad", "40", 40, 0),  # unparseable qty must not raise
+    ],
+)
+def test_fill_coercion_is_total(qty, fillshares, filled, pending) -> None:
+    """Noren sends these as strings and omits them on an untraded order."""
+    from broker.flattrade.mapping.order_data import transform_order_data
+
+    [row] = transform_order_data([_orderbook_row(qty, fillshares)])
+    assert row["filled_quantity"] == filled
+    assert row["pending_quantity"] == pending
+
+
+# -- close frames ---------------------------------------------------------
+
+
+def test_a_close_frame_without_a_status_code_is_still_a_close() -> None:
+    """RFC 6455 allows a bodiless close. Branching on the decoded code sent it
+    down the error path instead of reporting it as a close."""
+    client = _client()
+    errors: list = []
+    closes: list = []
+    client.on_error = lambda *a: errors.append(a)
+    client.on_close = lambda ws, code, msg: closes.append((code, msg))
+
+    client._on_error(None, _close_frame(b""))
+    assert errors == []  # not a fault
+
+    client._on_close(None, None, None)
+    assert closes == [(None, None)]  # reported as a close, code genuinely unknown
+
+
+def test_an_auth_failure_in_the_close_reason_arms_the_bounded_retry() -> None:
+    """Flattrade can reject a session via the close reason. Returning early
+    skipped _is_fatal_auth_error and left the adapter on the generic reconnect
+    loop, retrying a token that will never work."""
+    client = _client()
+    client._on_error(None, _close_frame(b"\x03\xe8Invalid Session"))
+    assert client.auth_failed is True
+    assert "Invalid Session" in client.auth_failure_message
+
+
+@pytest.mark.parametrize("reason", [b"", b"going away", b"server restart"])
+def test_an_ordinary_close_reason_does_not_claim_an_auth_failure(reason) -> None:
+    client = _client()
+    client._on_error(None, _close_frame(b"\x03\xe8" + reason))
+    assert client.auth_failed is False
+
+
+def test_is_close_frame_discriminates() -> None:
+    assert FlattradeWebSocket._is_close_frame(_close_frame(b"")) is True
+    assert FlattradeWebSocket._is_close_frame(_close_frame(b"\x03\xe8")) is True
+    assert FlattradeWebSocket._is_close_frame(Exception("boom")) is False
+    assert (
+        FlattradeWebSocket._is_close_frame(websocket.ABNF(fin=1, opcode=1, data=b"hi"))
+        is False
+    )

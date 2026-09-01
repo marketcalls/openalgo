@@ -8,8 +8,7 @@ import httpx
 from broker.flattrade.api.rate_limit import (
     DATA_LIMITER,
     ORDER_LIMITER,
-    is_rate_limit_error,
-    note_rate_limit_rejection,
+    clamp_from_response,
 )
 from broker.flattrade.mapping.order_data import normalize_order_status
 from broker.flattrade.mapping.transform_data import (
@@ -26,7 +25,11 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def get_api_response(endpoint, auth, method="GET", payload=""):
+MAX_RATE_LIMIT_RETRIES = 3
+RATE_LIMIT_BASE_DELAY = 2.0  # seconds; doubled per attempt
+
+
+def get_api_response(endpoint, auth, method="GET", payload="", retry_count=0):
     # OrderBook/TradeBook/PositionBook/Holdings are non-order endpoints, but
     # they are polled continuously by the UI and by the order-update poller, so
     # they have to be counted against the same window data.py uses. Leaving them
@@ -56,9 +59,22 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
     url = f"https://piconnect.flattrade.in{endpoint}"
     response = client.request(method, url, content=payload, headers=headers)
-    data = response.text
+    parsed = json.loads(response.text)
 
-    return json.loads(data)
+    # Pacing alone is not enough: an account provisioned below the configured
+    # cap only reveals its real ceiling in the rejection text, so learn from it
+    # and retry. Without this the limiter keeps re-offering the rejected rate
+    # and every later poll fails the same way (issue #1806).
+    if clamp_from_response(parsed, DATA_LIMITER) and retry_count < MAX_RATE_LIMIT_RETRIES:
+        delay = RATE_LIMIT_BASE_DELAY * (2**retry_count)
+        logger.warning(
+            f"Flattrade rate limit hit on {endpoint} ({parsed.get('emsg')}). "
+            f"Retrying in {delay}s (attempt {retry_count + 1}/{MAX_RATE_LIMIT_RETRIES})"
+        )
+        time.sleep(delay)
+        return get_api_response(endpoint, auth, method, payload, retry_count + 1)
+
+    return parsed
 
 
 def get_order_book(auth):
@@ -182,6 +198,10 @@ def place_order_api(data, auth):
     url = "https://piconnect.flattrade.in/PiConnectAPI/PlaceOrder"
     res = client.post(url, content=payload, headers=headers)
     response_data = res.json()
+    # Clamp on a rate-limit rejection, but never auto-retry an order: this
+    # cannot tell "rejected for rate" from "accepted, response lost", and a
+    # duplicate order is far worse than a failed one. Surface it instead.
+    clamp_from_response(response_data, ORDER_LIMITER)
 
     # Add status attribute for backward compatibility
     res.status = res.status_code
@@ -355,6 +375,7 @@ def cancel_order(orderid, auth):
     url = "https://piconnect.flattrade.in/PiConnectAPI/CancelOrder"
     res = client.post(url, content=payload, headers=headers)
     data = res.json()
+    clamp_from_response(data, ORDER_LIMITER)  # clamp only, never retry an order
     logger.debug(f"{data}")
 
     # Check if the request was successful
@@ -395,6 +416,7 @@ def modify_order(data, auth):
     url = "https://piconnect.flattrade.in/PiConnectAPI/ModifyOrder"
     res = client.post(url, content=payload, headers=headers)
     response = res.json()
+    clamp_from_response(response, ORDER_LIMITER)  # clamp only, never retry an order
 
     logger.debug(f"Modify Order Response: {response}")
     logger.debug(f"Modify Order Status Code: {res.status_code}")

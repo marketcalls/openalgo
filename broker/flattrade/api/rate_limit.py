@@ -47,8 +47,16 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def _env_int(name: str, default: int) -> int:
-    """Read a positive int from the environment, falling back on anything odd."""
+def _env_int(name: str, default: int, ceiling: int) -> int:
+    """Read a positive int from the environment, bounded by `ceiling`.
+
+    `ceiling` is the highest figure Flattrade publishes for that window
+    (14-rate-limits.md). An override exists so a higher-tier account is not
+    pinned to the conservative default, but nothing legitimate sits above the
+    published table, and an override that does is a typo (a stray zero on
+    "380") that would silently disable the pacing this module exists to
+    provide. Clamp rather than trust, and say so.
+    """
     raw = os.getenv(name)
     if raw is None:
         return default
@@ -60,6 +68,13 @@ def _env_int(name: str, default: int) -> int:
     if value < 1:
         logger.warning(f"{name}={value} must be >= 1; using {default}")
         return default
+    if value > ceiling:
+        logger.warning(
+            f"{name}={value} is above Flattrade's published ceiling of {ceiling}; "
+            f"using {ceiling}. Nothing is provisioned above the published table, "
+            "so this is almost certainly a typo."
+        )
+        return ceiling
     return value
 
 
@@ -202,8 +217,8 @@ class SlidingWindowLimiter:
 # is still protected by it.
 DATA_LIMITER = SlidingWindowLimiter(
     "data",
-    max_per_second=_env_int("FLATTRADE_MAX_PER_SECOND", 9),
-    max_per_minute=_env_int("FLATTRADE_MAX_PER_MINUTE", 110),
+    max_per_second=_env_int("FLATTRADE_MAX_PER_SECOND", 9, ceiling=40),
+    max_per_minute=_env_int("FLATTRADE_MAX_PER_MINUTE", 110, ceiling=200),
 )
 
 # Documented order ceiling is 10/sec and 40/min, which matches the observed
@@ -211,8 +226,8 @@ DATA_LIMITER = SlidingWindowLimiter(
 # same margin.
 ORDER_LIMITER = SlidingWindowLimiter(
     "order",
-    max_per_second=_env_int("FLATTRADE_ORDER_MAX_PER_SECOND", 9),
-    max_per_minute=_env_int("FLATTRADE_ORDER_MAX_PER_MINUTE", 38),
+    max_per_second=_env_int("FLATTRADE_ORDER_MAX_PER_SECOND", 9, ceiling=10),
+    max_per_minute=_env_int("FLATTRADE_ORDER_MAX_PER_MINUTE", 38, ceiling=40),
 )
 
 
@@ -224,6 +239,26 @@ def is_rate_limit_error(response) -> bool:
         return False
     emsg = str(response.get("emsg", ""))
     return "exceeds limit" in emsg.lower()
+
+
+def clamp_from_response(response, limiter: SlidingWindowLimiter) -> bool:
+    """Learn from `response` if it is a rate-limit rejection.
+
+    Returns True when it was one, so the caller can decide whether to retry.
+    Combines the detect-then-clamp pair every Flattrade entry point needs, so a
+    call site cannot pace its requests but forget to adapt (which is exactly
+    what order_api.py, funds.py and margin_api.py did).
+
+    Note for order endpoints: clamp, but do NOT auto-retry. A PlaceOrder that
+    was rejected for rate is safe to retry, but this code cannot distinguish
+    that from a response lost after the broker accepted it, and a duplicate
+    order is far worse than a failed one. Read-only endpoints retry; order
+    endpoints surface the error.
+    """
+    if not is_rate_limit_error(response):
+        return False
+    note_rate_limit_rejection(response, limiter)
+    return True
 
 
 def note_rate_limit_rejection(response, limiter: SlidingWindowLimiter) -> None:
