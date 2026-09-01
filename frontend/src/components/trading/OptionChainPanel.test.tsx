@@ -3,13 +3,31 @@ import { render, screen, userEvent, waitFor } from '@/test/test-utils'
 import type { OptionChainResponse } from '@/types/option-chain'
 import { OptionChainPanel } from './OptionChainPanel'
 
-const getOptionChain = vi.fn()
+const useOptionChainLive = vi.fn()
 const getAllUnderlyings = vi.fn()
 const getExpiry = vi.fn()
+const refetch = vi.fn()
 
-vi.mock('@/api/option-chain', () => ({
-  optionChainApi: { getOptionChain: (...a: unknown[]) => getOptionChain(...a) },
+// The panel streams through this hook rather than polling the REST endpoint,
+// so the hook is the seam these tests drive. Fetching, request identity and
+// the websocket merge are the hook's own concern and are covered by
+// hooks/useOptionChainPolling.test.tsx and hooks/useOptionChainLive.test.tsx.
+vi.mock('@/hooks/useOptionChainLive', () => ({
+  useOptionChainLive: (...a: unknown[]) => useOptionChainLive(...a),
 }))
+
+/** The hook's return shape, with only the fields this panel reads. */
+function live(over: Record<string, unknown> = {}) {
+  return {
+    data: chain(),
+    isLoading: false,
+    isStreaming: true,
+    error: null,
+    lastUpdate: new Date(),
+    refetch,
+    ...over,
+  }
+}
 
 vi.mock('@/api/scalping', () => ({
   scalpingApi: {
@@ -110,20 +128,33 @@ function renderPanel(onPick = vi.fn()) {
 describe('OptionChainPanel', () => {
   beforeEach(() => {
     localStorage.clear()
-    getOptionChain.mockReset()
+    useOptionChainLive.mockReset()
     getAllUnderlyings.mockReset()
     getExpiry.mockReset()
+    refetch.mockReset()
     getAllUnderlyings.mockResolvedValue({ status: 'success', data: ['NIFTY', 'BANKNIFTY'] })
     getExpiry.mockResolvedValue({ status: 'success', data: ['01SEP26', '08SEP26'] })
-    getOptionChain.mockResolvedValue(chain())
+    useOptionChainLive.mockReturnValue(live())
   })
 
-  it('asks for greeks, so IV and delta cost no extra broker call', async () => {
+  it('streams the chain rather than polling it, and asks for the shared cadence', async () => {
     renderPanel()
-    await waitFor(() => expect(getOptionChain).toHaveBeenCalled())
+    await waitFor(() => expect(useOptionChainLive).toHaveBeenCalled())
 
-    const options = getOptionChain.mock.calls[0].at(-1)
-    expect(options).toEqual({ withGreeks: true })
+    // Greeks are no longer a flag on a REST call: the hook recomputes them
+    // client-side on every tick batch, so they cost no broker call at all.
+    //
+    // The LAST call, not the first: the underlying and expiry arrive async, so
+    // the first render asks with enabled false and nothing loaded.
+    await waitFor(() => {
+      const args = useOptionChainLive.mock.calls.at(-1) as unknown[]
+      expect(args[6]).toMatchObject({ enabled: true, pauseWhenHidden: true })
+    })
+    const args = useOptionChainLive.mock.calls.at(-1) as unknown[]
+    expect(args[1]).toBe('NIFTY')
+    expect(args[2]).toBe('NFO')
+    // Underlying and options are quoted on the same segment here.
+    expect(args[3]).toBe('NFO')
   })
 
   it('charts the leg that was clicked', async () => {
@@ -155,8 +186,8 @@ describe('OptionChainPanel', () => {
   })
 
   it('shows a dash for a leg with no implied volatility rather than a zero', async () => {
-    getOptionChain.mockResolvedValue(
-      chain({
+    useOptionChainLive.mockReturnValue(
+      live({ data: chain({
         chain: [
           {
             strike: 24200,
@@ -180,7 +211,7 @@ describe('OptionChainPanel', () => {
             pe: null,
           },
         ],
-      })
+      }) })
     )
     renderPanel()
     // A zero would read as a real measurement of zero volatility.
@@ -189,36 +220,25 @@ describe('OptionChainPanel', () => {
     expect(screen.getAllByText('-').length).toBeGreaterThan(0)
   })
 
-  it('drops a response belonging to a contract the user has already left', async () => {
-    // The guard that keeps a slow response from painting one instrument's
-    // strikes under another instrument's name.
-    let resolveFirst: (v: OptionChainResponse) => void = () => {}
-    getOptionChain
-      .mockImplementationOnce(
-        () =>
-          new Promise<OptionChainResponse>((resolve) => {
-            resolveFirst = resolve
-          })
-      )
-      .mockResolvedValue(chain({ underlying: 'BANKNIFTY', atm_strike: 57500 }))
-
+  it('re-requests the chain when the contract changes', async () => {
+    // Dropping a response from a contract the user has already left is the
+    // hook's job now, and is covered in hooks/useOptionChainPolling.test.tsx
+    // under 'request identity'. What the panel still owns is asking for the
+    // right contract in the first place.
     renderPanel()
-    await waitFor(() => expect(getOptionChain).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(useOptionChainLive).toHaveBeenCalled())
 
-    // Switch expiry, which starts a second load and invalidates the first.
-    // The trigger, not its inner span: the span is pointer-events:none.
     const expiry = screen.getAllByRole('combobox').find((el) => el.textContent === '01SEP26')
     await userEvent.click(expiry as HTMLElement)
     await userEvent.click(await screen.findByRole('option', { name: '08SEP26' }))
-    await waitFor(() => expect(getOptionChain).toHaveBeenCalledTimes(2))
 
-    // The stale first response lands last and must be ignored.
-    resolveFirst(chain({ atm_strike: 99999 }))
-    await waitFor(() => expect(screen.queryByText('99999')).not.toBeInTheDocument())
+    await waitFor(() =>
+      expect(useOptionChainLive.mock.calls.some((c) => c[4] === '08SEP26')).toBe(true)
+    )
   })
 
   it('does not paint the spot red when there is no previous close', async () => {
-    getOptionChain.mockResolvedValue(chain({ underlying_prev_close: 0 }))
+    useOptionChainLive.mockReturnValue(live({ data: chain({ underlying_prev_close: 0 }) }))
     renderPanel()
 
     const spot = await screen.findByText('24175.65')
@@ -261,7 +281,7 @@ describe('OptionChainPanel', () => {
   })
 
   it('reports a failed load as an error with a retry, not as a missing contract', async () => {
-    getOptionChain.mockRejectedValue(new Error('network down'))
+    useOptionChainLive.mockReturnValue(live({ data: null, error: 'network down' }))
     renderPanel()
 
     expect(await screen.findByText('network down')).toBeInTheDocument()
