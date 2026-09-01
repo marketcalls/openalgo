@@ -22,8 +22,9 @@
  */
 
 import { Check, ChevronsUpDown, RefreshCw } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { optionChainApi } from '@/api/option-chain'
+import { useEffect, useMemo, useState } from 'react'
+
+import { useOptionChainLive } from '@/hooks/useOptionChainLive'
 import { scalpingApi } from '@/api/scalping'
 import { Button } from '@/components/ui/button'
 import {
@@ -48,7 +49,7 @@ import { useMarketStatus } from '@/hooks/useMarketStatus'
 import { needsPreviousClose } from '@/lib/trading/previousClose'
 import type { SearchRow } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
-import type { OptionChainResponse, OptionData } from '@/types/option-chain'
+import type { OptionData } from '@/types/option-chain'
 import { PlaceOrderDialog } from './PlaceOrderDialog'
 import { PANEL_HEADER, PanelShell } from './panelShell'
 
@@ -94,18 +95,6 @@ const METRIC_GROUPS = ['Price', 'Greeks'] as const
 
 /** Strikes either side of ATM. Twenty rows is about one panel-height of scroll. */
 const STRIKE_COUNT = 10
-
-/** While the market is open. Fast enough to track a moving chain. */
-const POLL_OPEN_MS = 5000
-
-/**
- * While it is closed.
- *
- * At the open rate an overnight tab would make 720 broker calls an hour for a
- * chain that cannot move. The panel still refreshes, just at a rate that
- * matches how often a closed chain changes.
- */
-const POLL_CLOSED_MS = 60000
 
 /** The row and its column header share this, so the two cannot drift apart. */
 const ROW_GRID = 'grid grid-cols-[1fr_64px_1fr]'
@@ -237,9 +226,7 @@ export function OptionChainPanel({ apiKey, onPick, activeSymbol }: Props) {
   const [prefs, setPrefs] = useState<Prefs>(readPrefs)
   const [underlyings, setUnderlyings] = useState<string[]>([])
   const [expiries, setExpiries] = useState<string[]>([])
-  const [chain, setChain] = useState<OptionChainResponse | null>(null)
   const [metric, setMetric] = useState<Metric>('ltp')
-  const [loading, setLoading] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
   /**
    * One slot per loader, not one shared between them.
@@ -250,19 +237,9 @@ export function OptionChainPanel({ apiKey, onPick, activeSymbol }: Props) {
    * combobox reading "No underlying found", no error and no retry, which is
    * exactly the reading these states exist to prevent.
    */
-  const [chainError, setChainError] = useState<string | null>(null)
   const [underlyingError, setUnderlyingError] = useState<string | null>(null)
   const [expiryError, setExpiryError] = useState<string | null>(null)
 
-  /**
-   * When the chain last loaded, and whether the background poll is failing.
-   *
-   * The poll is silent by design (a toast every five seconds would be worse
-   * than the problem), but silence alone let a chain that stopped updating an
-   * hour ago keep looking live.
-   */
-  const [lastGoodAt, setLastGoodAt] = useState<number | null>(null)
-  const [pollFailing, setPollFailing] = useState(false)
   /** Bumped to re-run the loaders after a Retry. */
   const [attempt, setAttempt] = useState(0)
 
@@ -279,16 +256,6 @@ export function OptionChainPanel({ apiKey, onPick, activeSymbol }: Props) {
   } | null>(null)
 
   const { isMarketOpen } = useMarketStatus()
-
-  /**
-   * Identifies the contract a response belongs to.
-   *
-   * Two loads can be in flight across a fast underlying switch, and without
-   * this the slower one wins: the panel then shows one instrument's strikes
-   * under another's name, and clicking a leg charts a contract the user has
-   * already navigated away from.
-   */
-  const requestRef = useRef(0)
 
   useEffect(() => {
     localStorage.setItem(PREFS_KEY, JSON.stringify(prefs))
@@ -353,73 +320,45 @@ export function OptionChainPanel({ apiKey, onPick, activeSymbol }: Props) {
   }, [prefs.underlying, prefs.exchange, attempt])
 
   /* ── the chain itself ─────────────────────────────────────────────────── */
-  const load = useCallback(
-    async (showSpinner: boolean) => {
-      if (!prefs.underlying || !prefs.expiry) return
-      const ticket = ++requestRef.current
-      if (showSpinner) setLoading(true)
-      try {
-        const res = await optionChainApi.getOptionChain(
-          apiKey,
-          prefs.underlying,
-          prefs.exchange,
-          prefs.expiry,
-          STRIKE_COUNT,
-          { withGreeks: true }
-        )
-        // A response from a contract the user has already left is dropped
-        // rather than painted.
-        if (ticket !== requestRef.current) return
-        if (res.status === 'success') {
-          setChain(res)
-          setChainError(null)
-          setLastGoodAt(Date.now())
-          setPollFailing(false)
-        } else if (showSpinner) {
-          setChainError(res.message || 'Could not load the option chain')
-        } else {
-          // A silent poll failure still has to reach the footer, or a chain
-          // that stopped an hour ago goes on looking live.
-          setPollFailing(true)
-        }
-      } catch (err) {
-        if (ticket !== requestRef.current) return
-        if (showSpinner) {
-          setChainError((err as Error)?.message || 'Could not load the option chain')
-        } else {
-          setPollFailing(true)
-        }
-      } finally {
-        if (ticket === requestRef.current && showSpinner) setLoading(false)
-      }
-    },
-    [apiKey, prefs.underlying, prefs.exchange, prefs.expiry]
+  /**
+   * The same stream `/optionchain` runs on.
+   *
+   * This panel used to fetch the whole chain over REST on a five second timer,
+   * which is why it lagged the dedicated page so badly: every quote was up to
+   * five seconds old, and each refresh was a full broker round trip for eighty
+   * legs. `useOptionChainLive` polls only the structural columns (open interest,
+   * volume) on a slow interval and takes every price off the websocket, then
+   * recomputes the Greeks client-side on each tick batch. Prices move as they
+   * happen and the broker sees a fraction of the calls.
+   *
+   * `exchange` and `optionExchange` are the same segment here, as they are on
+   * the dedicated page: the panel only lists derivative segments, so the
+   * underlying and its options are quoted on the one the user picked.
+   */
+  const {
+    data: chain,
+    isLoading: loading,
+    isStreaming,
+    error: chainError,
+    lastUpdate,
+    refetch,
+  } = useOptionChainLive(
+    apiKey,
+    prefs.underlying,
+    prefs.exchange,
+    prefs.exchange,
+    prefs.expiry,
+    STRIKE_COUNT,
+    { enabled: Boolean(prefs.underlying && prefs.expiry), oiRefreshInterval: 30000, pauseWhenHidden: true }
   )
 
   const marketOpen = isMarketOpen(prefs.exchange)
 
-  useEffect(() => {
-    // Clear first. Leaving the previous contract's strikes on screen under the
-    // new contract's name is worse than an empty panel, because it looks live.
-    setChain(null)
-    void load(true)
-    const timer = window.setInterval(
-      () => {
-        // The panel is on screen but the tab is not: skip rather than pay for a
-        // chain nobody is reading.
-        if (document.visibilityState === 'visible') void load(false)
-      },
-      marketOpen ? POLL_OPEN_MS : POLL_CLOSED_MS
-    )
-    return () => window.clearInterval(timer)
-  }, [load, marketOpen])
-
   const retry = () => {
-    setChainError(null)
     setUnderlyingError(null)
     setExpiryError(null)
     setAttempt((n) => n + 1)
-    void load(true)
+    refetch()
   }
 
   /* ── derived ──────────────────────────────────────────────────────────── */
@@ -544,7 +483,7 @@ export function OptionChainPanel({ apiKey, onPick, activeSymbol }: Props) {
           variant="ghost"
           size="icon"
           className="h-8 w-8 shrink-0"
-          onClick={() => void load(true)}
+          onClick={() => refetch()}
           title="Refresh"
           aria-label="Refresh option chain"
         >
@@ -810,9 +749,16 @@ export function OptionChainPanel({ apiKey, onPick, activeSymbol }: Props) {
           poll is silent by design, so this line is the only thing that says
           the numbers above have stopped moving. */}
       {rows.length > 0 &&
-        ((pollFailing || chainError) && lastGoodAt ? (
+        (chainError && lastUpdate ? (
           <p className="shrink-0 border-t px-2 py-1 text-[10px] text-amber-600 dark:text-amber-400">
-            Not updating. Last loaded {new Date(lastGoodAt).toLocaleTimeString()}
+            Not updating. Last loaded {lastUpdate.toLocaleTimeString()}
+          </p>
+        ) : marketOpen && !isStreaming && lastUpdate ? (
+          // Streaming is the point of this panel. If the socket is not up the
+          // numbers are still refreshed by the structural poll, just far more
+          // slowly, and saying so beats letting them read as live.
+          <p className="shrink-0 border-t px-2 py-1 text-[10px] text-amber-600 dark:text-amber-400">
+            Not streaming. Last update {lastUpdate.toLocaleTimeString()}
           </p>
         ) : !marketOpen ? (
           // The panel already backs the poll off to a minute when the market is
