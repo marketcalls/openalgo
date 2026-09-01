@@ -2186,67 +2186,112 @@ export class TradingTerminal {
     }
   }
 
+  /**
+   * Reconcile now rather than on the next cycle.
+   *
+   * The periodic pass is deliberately slow and jittered, which is right for
+   * steady state and wrong for the moment a gap appears. Coming back from a
+   * dropped socket or a hidden tab, the missing buckets are known immediately,
+   * so re-arming the timer with no delay closes the hole at once and keeps a
+   * single code path doing the work.
+   */
+  private reconcileNow(): void {
+    if (this.reconcileTimer) clearTimeout(this.reconcileTimer)
+    this.reconcileTimer = setTimeout(() => this.runReconcile(), 0)
+  }
+
   /* periodic history reconcile: snap completed bars to broker OHLC/volume */
   private scheduleReconcile() {
     if (this.reconcileTimer) clearTimeout(this.reconcileTimer)
-    this.reconcileTimer = setTimeout(
-      async () => {
-        try {
-          if (this.sym && this.rest) {
-            const to = nowSec()
-            const fresh = await this.rest.getBars({
-              symbol: this.sym.symbol,
-              exchange: this.sym.exchange,
-              interval: this.interval,
-              from: to - Math.min(3, lookbackDays(this.interval)) * 86400,
-              to,
-            })
-            const byTime = new Map(fresh.map((b) => [b.time, b]))
-            let changed = false
-            for (let i = 0; i < this.rawBars.length; i++) {
-              const f = byTime.get(this.rawBars[i].time)
-              if (f && (this.liveBucket == null || f.time < this.liveBucket)) {
-                this.rawBars[i] = f
+    this.reconcileTimer = setTimeout(() => this.runReconcile(), 25000 + Math.random() * 10000)
+  }
+
+  private async runReconcile(): Promise<void> {
+    try {
+      if (this.sym && this.rest) {
+        const to = nowSec()
+        const fresh = await this.rest.getBars({
+          symbol: this.sym.symbol,
+          exchange: this.sym.exchange,
+          interval: this.interval,
+          from: to - Math.min(3, lookbackDays(this.interval)) * 86400,
+          to,
+        })
+        const byTime = new Map(fresh.map((b) => [b.time, b]))
+        let changed = false
+        for (let i = 0; i < this.rawBars.length; i++) {
+          const f = byTime.get(this.rawBars[i].time)
+          if (f && (this.liveBucket == null || f.time < this.liveBucket)) {
+            this.rawBars[i] = f
+            changed = true
+          }
+        }
+
+        // Insert the bars we never built at all.
+        //
+        // The loop above only snaps bars already on the chart, so a bucket
+        // the client missed outright stayed missing until a reload. It goes
+        // missing whenever the tick stream is not running for a whole
+        // interval: the socket drops, the feed pauses because the tab was
+        // hidden, or the machine sleeps. The candles either side are fine,
+        // so the chart shows a clean hole and the OHLC legend disagrees with
+        // the broker for those buckets.
+        //
+        // `fresh` already holds them, and this is the one place that has
+        // both sides to compare. Only closed buckets are filled: the
+        // forming bar belongs to the tick stream, which is fresher than a
+        // poll and must never be overwritten by it.
+        if (this.rawBars.length > 0) {
+          const known = new Set(this.rawBars.map((b) => b.time))
+          const earliest = this.rawBars[0].time
+          const missing = fresh.filter(
+            (b) =>
+              b.time > earliest &&
+              !known.has(b.time) &&
+              (this.liveBucket == null || b.time < this.liveBucket)
+          )
+          if (missing.length > 0) {
+            // Merge and re-sort rather than splice at a found index: a
+            // history page landing between the fetch and this line would
+            // invalidate any index computed before the await.
+            this.rawBars = [...this.rawBars, ...missing].sort((a, b) => a.time - b.time)
+            changed = true
+          }
+        }
+        // The forming bar's volume cannot come from the tick stream. A
+        // tradeable's only subscription is Depth, and a depth payload
+        // carries ltp but no last-traded-qty, so 'ltq-sum' has nothing to
+        // accumulate and the live bar reads 0 on a symbol visibly trading.
+        // History is the only source that has it, so take it from there --
+        // and take only it. OHLC stays with the ticks, which are fresher
+        // than a 30-second poll and must not jump backwards to it.
+        if (this.builder && this.liveBucket != null) {
+          const f = byTime.get(this.liveBucket)
+          const cur = this.builder.current()
+          if (f && cur && cur.time === this.liveBucket) {
+            // Volume inside a bar only ever grows, so the higher of the two
+            // is the later reading. It also keeps the histogram monotonic
+            // when a poll lands mid-print and briefly reports less.
+            const vol = Math.max(f.volume ?? 0, cur.volume ?? 0)
+            if (vol !== (cur.volume ?? 0)) {
+              // Re-seed rather than patch rawBars alone: the builder folds
+              // the next tick into its own copy of the bar, which would
+              // write the stale volume straight back over this.
+              this.builder.seed({ ...cur, volume: vol })
+              const last = this.rawBars[this.rawBars.length - 1]
+              if (last && last.time === this.liveBucket) {
+                this.rawBars[this.rawBars.length - 1] = { ...last, volume: vol }
                 changed = true
               }
             }
-            // The forming bar's volume cannot come from the tick stream. A
-            // tradeable's only subscription is Depth, and a depth payload
-            // carries ltp but no last-traded-qty, so 'ltq-sum' has nothing to
-            // accumulate and the live bar reads 0 on a symbol visibly trading.
-            // History is the only source that has it, so take it from there --
-            // and take only it. OHLC stays with the ticks, which are fresher
-            // than a 30-second poll and must not jump backwards to it.
-            if (this.builder && this.liveBucket != null) {
-              const f = byTime.get(this.liveBucket)
-              const cur = this.builder.current()
-              if (f && cur && cur.time === this.liveBucket) {
-                // Volume inside a bar only ever grows, so the higher of the two
-                // is the later reading. It also keeps the histogram monotonic
-                // when a poll lands mid-print and briefly reports less.
-                const vol = Math.max(f.volume ?? 0, cur.volume ?? 0)
-                if (vol !== (cur.volume ?? 0)) {
-                  // Re-seed rather than patch rawBars alone: the builder folds
-                  // the next tick into its own copy of the bar, which would
-                  // write the stale volume straight back over this.
-                  this.builder.seed({ ...cur, volume: vol })
-                  const last = this.rawBars[this.rawBars.length - 1]
-                  if (last && last.time === this.liveBucket) {
-                    this.rawBars[this.rawBars.length - 1] = { ...last, volume: vol }
-                    changed = true
-                  }
-                }
-              }
-            }
-            if (changed) this.setPriceData()
           }
-        } catch {
-          /* next cycle retries */
         }
-        this.scheduleReconcile()
-      },
-      25000 + Math.random() * 10000
-    )
+        if (changed) this.setPriceData()
+      }
+    } catch {
+      /* next cycle retries */
+    }
+    this.scheduleReconcile()
   }
 
   /** Monotonic id for the most recent loadSymbol; older loads abandon. */
@@ -2616,6 +2661,10 @@ export class TradingTerminal {
     this.ws.onState((s) => {
       this.cb.onWsState(s)
       if (s === 'closed' || s === 'error' || s === 'reconnecting') this.startLtpFallback()
+      // Back on the wire after a break: whatever closed between the drop and
+      // now was never built from ticks, so reconcile at once instead of waiting
+      // out the rest of the 25 to 35 second cycle staring at the hole.
+      if (s === 'open') this.reconcileNow()
     })
     this.ws.onControl((m) => {
       if (m.type === 'auth' && m.status !== 'success') this.cb.onWsState('auth failed')
