@@ -313,8 +313,27 @@ export function ChartPane({
   const [fullscreen, setFullscreen] = useState(false)
   const [gridSub, setGridSub] = useState(false)
   const [volumeOn, setVolumeOn] = useState(true)
-  /** The snapshot menu: saving and pasting are both wanted, so the camera asks. */
+  /**
+   * The snapshot menu: saving and pasting are both wanted, so the camera asks.
+   *
+   * Held as viewport coordinates rather than opened as an absolutely positioned
+   * child, because the toolbar row scrolls horizontally: `overflow-x: auto`
+   * forces the other axis to `auto` as well, and the row is only 111px tall, so
+   * an absolute child was clipped to a three-pixel sliver. Nothing inside a
+   * scrolling strip can hang below it.
+   */
   const [snapOpen, setSnapOpen] = useState(false)
+  const [snapAt, setSnapAt] = useState<{ top: number; right: number } | null>(null)
+  const snapBtnRef = useRef<HTMLButtonElement>(null)
+
+  const openSnapMenu = useCallback(() => {
+    const r = snapBtnRef.current?.getBoundingClientRect()
+    if (!r) return
+    // Right-aligned to the button, so the menu opens inward and cannot run off
+    // the window edge the camera sits near.
+    setSnapAt({ top: Math.round(r.bottom + 6), right: Math.round(window.innerWidth - r.right) })
+    setSnapOpen(true)
+  }, [])
   const [drawSel, setDrawSel] = useState<DrawSelection | null>(null)
   const [indSettings, setIndSettings] = useState<IndicatorSettingsRequest | null>(null)
   // Read from the chart each time the gear is clicked rather than held: the
@@ -773,10 +792,12 @@ export function ChartPane({
             variant="ghost"
             size="icon"
             className={cn('h-8 w-8', snapOpen && 'text-primary')}
+            ref={snapBtnRef}
             onClick={(e) => {
               // Shift skips the menu and saves, for anyone who only ever saves.
               if (e.shiftKey) { void terminalRef.current?.screenshot(); return }
-              setSnapOpen((v) => !v)
+              if (snapOpen) setSnapOpen(false)
+              else openSnapMenu()
             }}
             title="Chart snapshot"
             aria-label="Chart snapshot"
@@ -789,7 +810,10 @@ export function ChartPane({
                   outside press without a document listener that would also
                   swallow the press that opened it. */}
               <div className="fixed inset-0 z-40" onClick={() => setSnapOpen(false)} />
-              <div className="absolute right-0 top-full z-50 mt-1 w-56 rounded-md border bg-popover p-1 shadow-lg">
+              <div
+                className="fixed z-50 w-56 rounded-md border bg-popover p-1 shadow-lg"
+                style={{ top: snapAt?.top ?? 0, right: snapAt?.right ?? 0 }}
+              >
                 <div className="px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
                   Chart snapshot
                 </div>
