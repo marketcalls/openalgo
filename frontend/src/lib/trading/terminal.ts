@@ -81,13 +81,10 @@ import {
 } from './intervals'
 import {
   buildChartLegend,
-  DN,
   type LegendRun,
-  LTP_NEUTRAL,
   legendHtml,
   legendToneStyle,
   lotInfoText,
-  UP,
 } from './legend'
 
 export type OrderSide = 'BUY' | 'SELL'
@@ -369,6 +366,8 @@ export function dedupeIndicators<T extends { indicatorId: string; settings: unkn
 }
 const STRATEGY = 'chart-trading'
 const VISIBLE_BARS = 120
+/** Empty bars kept between the newest candle and the price axis. */
+const RIGHT_PAD_BARS = 4
 
 /**
  * Where the exported PNG paints the OHLC readout, in CSS px. These mirror the
@@ -453,7 +452,6 @@ export class TradingTerminal {
         shiftKey?: boolean
       }) => string | null)
     | null = null
-  private ltpLine: PriceLine | null = null
   private posLine: PriceLine | null = null
   private tradeBtns: BuySellButtonsInstance | null = null
   /** The bar the OHLC readout is currently showing; replayed into the export. */
@@ -521,7 +519,6 @@ export class TradingTerminal {
   private shownCount = 0
   private liveBucket: number | null = null
   private lastLtp: number | null = null
-  private prevClose: number | null = null
   private sym: SymbolView | null = null
   private position: PositionState | null = null
   private readonly orderLines = new Map<string, OrderLineRec>()
@@ -721,6 +718,24 @@ export class TradingTerminal {
   }
 
   /* ── legend (imperative; high-frequency, kept off React state) ────────── */
+  /**
+   * Close of the element before `bar` in whatever series is on screen.
+   *
+   * Read from `shownBars`, not `rawBars`: on a transformed chart type a drawn
+   * element is not one raw bar, so measuring a Renko brick against the raw
+   * candle behind it would report a change the chart never drew. Matched on
+   * time, because the crosshair hands back the element it is over rather than
+   * its index.
+   */
+  private closeBefore(bar: Bar | null): number | null {
+    if (!bar) return null
+    const bars = this.shownBars
+    for (let i = bars.length - 1; i >= 0; i--) {
+      if (bars[i].time === bar.time) return i > 0 ? bars[i - 1].close : null
+    }
+    return null
+  }
+
   private setLegend(bar: Bar | null) {
     this.legendBar = bar
     if (!this.sym) {
@@ -744,11 +759,7 @@ export class TradingTerminal {
       exchange: sym.exchange,
       lotsize: sym.lots ? sym.lotsize : null,
       bar,
-      ltp: this.lastLtp,
-      changePct:
-        this.lastLtp != null && this.prevClose
-          ? ((this.lastLtp - this.prevClose) / this.prevClose) * 100
-          : null,
+      prevClose: this.closeBefore(bar),
       fmt: (n) => this.fmt(n),
       fmtVolume: compactVolume,
     })
@@ -1039,28 +1050,26 @@ export class TradingTerminal {
     this.joinLink()
     this.setPriceData()
 
-    // Default zoom: a FIXED number of recent bars, so the visible price range
-    // (and cursor→price mapping) is the same on every screen width.
-    if (this.shownCount > VISIBLE_BARS) {
-      const to = this.shownCount - 1 + 4
-      this.chart.timeScale.setVisibleLogicalRange({ from: to - VISIBLE_BARS, to })
-    } else if (this.chart.timeScale.barSpacing > 14) {
-      this.chart.timeScale.setBarSpacing(14)
-    }
+    this.applyDefaultViewport()
 
+    // No LTP price line of our own. The engine already draws one for the price
+    // series: a dashed line across the plot and a filled axis tag, coloured by
+    // the forming candle's direction, at the same price. Adding a second put two
+    // tags on the same pixel row, which is what made the axis read "24058.65"
+    // twice, one printed through the other.
+    //
+    // The engine's is the one to keep. It reserves its band before the tick
+    // ladder is drawn, so the prices either side yield to it instead of being
+    // painted over, and it carries the countdown to the bar close. A price line
+    // takes part in none of that: its tag is drawn straight onto the strip.
+    //
+    // The price itself is still needed: the Buy/Sell panel marks it.
     const lp =
       this.lastLtp != null
         ? this.lastLtp
         : this.rawBars.length
           ? this.rawBars[this.rawBars.length - 1].close
           : null
-    this.ltpLine =
-      lp != null
-        ? this.chart.addPriceLine(
-            { price: lp, color: this.ltpColor(lp), lineWidth: 1, dashed: true, id: 'ltp' },
-            0
-          )
-        : null
 
     // Mini brand mark, bottom-left. On pane 0 now that volume is an overlay
     // there rather than a pane of its own — pane 1 only exists once an
@@ -2095,17 +2104,6 @@ export class TradingTerminal {
     }
   }
 
-  /**
-   * Colour for the last-price line: the direction of the bar it sits in, so it
-   * matches that candle and the OHLC legend. Amber only until a bar exists to
-   * compare against.
-   */
-  private ltpColor(price: number): string {
-    const bar = this.rawBars.length ? this.rawBars[this.rawBars.length - 1] : null
-    if (!bar) return LTP_NEUTRAL
-    return price >= bar.open ? UP : DN
-  }
-
   /* single tick path shared by WS pushes and the REST fallback */
   private onTick(e: { symbol?: string; ltp: number; ltq?: number; timeSec?: number }) {
     if (!this.sym || (e.symbol && e.symbol !== this.sym.symbol)) return
@@ -2113,7 +2111,6 @@ export class TradingTerminal {
     this.cb.onLtp(e.ltp)
     // Recolour with the price: the line belongs to the forming candle, so it
     // follows that candle's direction rather than sitting amber forever.
-    if (this.ltpLine) this.ltpLine.setOptions({ price: e.ltp, color: this.ltpColor(e.ltp) })
     if (this.position && this.posLine) this.posLine.setLeftLabel(this.posLabel())
     if (this.tradeBtns && !this.depthActive) this.tradeBtns.setMark(e.ltp)
     if (this.builder) {
@@ -2339,7 +2336,6 @@ export class TradingTerminal {
     // history
     const to = this.gridNow()
     this.lastLtp = null
-    this.prevClose = null
     this.liveBucket = null
     this.noMoreHistory = false
     try {
@@ -2363,10 +2359,6 @@ export class TradingTerminal {
         this.toast(`no history for ${this.sym.symbol} ${this.sym.exchange} ${this.interval}`, 'err')
       return false
     }
-    this.prevClose =
-      this.rawBars.length > 1
-        ? this.rawBars[this.rawBars.length - 2].close
-        : this.rawBars[this.rawBars.length - 1].open
     this.lastLtp = this.rawBars[this.rawBars.length - 1].close
     this.buildChart()
     this.cb.onLtp(this.lastLtp)
@@ -2410,8 +2402,40 @@ export class TradingTerminal {
     if (this.chart && this.rawBars.length) this.buildChart()
   }
 
+  /**
+   * The zoom the chart opens at: a FIXED number of recent bars, so the visible
+   * price range, and the cursor to price mapping, are the same on every screen
+   * width.
+   *
+   * The trailing pad is what keeps the newest candle off the price axis. It is
+   * measured in bars, which is the reason it has to be applied together with the
+   * bar count and not on its own: four bars is a comfortable margin at this
+   * zoom and three pixels once a month of five-minute history is squeezed into
+   * one screen.
+   */
+  private applyDefaultViewport(): void {
+    if (!this.chart) return
+    if (this.shownCount > VISIBLE_BARS) {
+      const to = this.shownCount - 1 + RIGHT_PAD_BARS
+      this.chart.timeScale.setVisibleLogicalRange({ from: to - VISIBLE_BARS, to })
+    } else if (this.chart.timeScale.barSpacing > 14) {
+      this.chart.timeScale.setBarSpacing(14)
+    }
+  }
+
+  /**
+   * Reset returns to the view the chart opened at, not to the whole of history.
+   *
+   * `chart.resetScale()` alone re-enables price autoscale and then fits every
+   * loaded bar, which on a month of five-minute history is roughly 1900 candles
+   * across 1400 px: sub-pixel bars, and a trailing gap of three pixels because
+   * that gap is counted in bars too. A reference terminal returns to a readable
+   * window instead, which is also what this chart did when it loaded.
+   */
   resetScale() {
-    this.chart?.resetScale()
+    if (!this.chart) return
+    this.chart.resetScale()
+    this.applyDefaultViewport()
   }
 
   /* ── PNG export ───────────────────────────────────────────────────────── */
