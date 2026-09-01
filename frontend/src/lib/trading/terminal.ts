@@ -2749,18 +2749,51 @@ export class TradingTerminal {
    * detach the interaction-only overlays, take the composite, paint the readout
    * onto it, restore. Filename convention and canvas theme are unchanged.
    */
+  /** `SYMBOL-interval-timestamp.png`, so a folder of these sorts usefully. */
+  private screenshotName(): string {
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-')
+    return `${this.sym?.symbol ?? 'chart'}-${this.interval}-${stamp}.png`
+  }
+
+  /** Save the chart as a PNG. */
   async screenshot(): Promise<void> {
     const chart = this.chart
     if (!chart || !this.sym) return
-    const stamp = new Date().toISOString().slice(0, 16).replace(/[T:]/g, '-')
-    const filename = `${this.sym.symbol}-${this.interval}-${stamp}.png`
     try {
       const canvas = await this.captureCanvas(chart)
       if (!canvas) return
       const a = document.createElement('a')
       a.href = canvas.toDataURL('image/png')
-      a.download = filename
+      a.download = this.screenshotName()
       a.click()
+      this.toast('Chart saved', 'ok')
+    } catch (e) {
+      this.toast(this.cleanError(e), 'err')
+    }
+  }
+
+  /**
+   * Put the chart on the clipboard as an image, ready to paste.
+   *
+   * The image clipboard is the only form that pastes into a post composer or a
+   * chat, which is what people do with a chart far more often than they file it.
+   * It needs a secure context and a user gesture: a click on the menu item is
+   * the gesture, and 127.0.0.1 counts as secure alongside https, so a local
+   * OpenAlgo qualifies. Anything else is reported rather than failing silently.
+   */
+  async copyScreenshot(): Promise<void> {
+    const chart = this.chart
+    if (!chart || !this.sym) return
+    try {
+      if (!navigator.clipboard || typeof ClipboardItem === 'undefined') {
+        throw new Error('Copying images needs https or localhost')
+      }
+      const canvas = await this.captureCanvas(chart)
+      if (!canvas) return
+      const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/png'))
+      if (!blob) throw new Error('The chart produced no image')
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+      this.toast('Chart copied, paste it anywhere', 'ok')
     } catch (e) {
       this.toast(this.cleanError(e), 'err')
     }
