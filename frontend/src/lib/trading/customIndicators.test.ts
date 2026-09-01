@@ -3,7 +3,7 @@
  *
  * Two jobs, both tested here. It must isolate: a user's indicator file is code
  * the app has never seen, fetched from disk at runtime, and it must never take
- * the other 91 indicators down with it. And it must validate: the chart runtime
+ * the other 102 indicators down with it. And it must validate: the chart runtime
  * swallows a short column or a mismatched plot key, drawing nothing and raising
  * nothing, so a trader with no build step needs the loader itself to say what is
  * wrong.

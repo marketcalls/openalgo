@@ -3,7 +3,7 @@
 Write your own indicators for the `/trading` charting terminal.
 
 Drop a `.js` file into `strategies/indicators/`, open the indicator picker, and
-it is there alongside the 91 built-ins. No build step, no Node.js, no restart of
+it is there alongside the 102 built-ins. No build step, no Node.js, no restart of
 OpenAlgo, no page reload.
 
 ## Only add indicators you have read
@@ -55,7 +55,7 @@ The chart loads your files over HTTP at runtime rather than compiling them in:
 
 ```
 /trading  ->  terminal.ts loadIndicators()
-                 1. import 'openalgo-charts/indicators'      (the 91 built-ins)
+                 1. import 'openalgo-charts/indicators'      (the 102 built-ins)
                  2. GET /custom-indicators/index.json        (your file list)
                  3. import each /custom-indicators/<file>.js
                  4. call its default export with the charting API

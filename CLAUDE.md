@@ -278,7 +278,7 @@ User indicators live in `strategies/indicators/*.js` (gitignored, mirroring
 (`frontend/src/lib/trading/customIndicators.ts`).
 
 - **Never bundle them.** `frontend/dist/` is built by CI from what is committed, so a bundled indicator would need committing first and the next `git pull` would erase it. Runtime loading keeps them outside the build: no Node.js, no rebuild, untouched by upgrades.
-- **They register after the built-ins**, so a custom id that collides with one of the 91 built-ins overrides it.
+- **They register after the built-ins**, so a custom id that collides with one of the 102 built-ins overrides it.
 - **They are not sandboxed.** An indicator runs on the app origin with the logged-in session and can reach `/api/v1/`. That matches the trust model of the Python strategy host, which already runs arbitrary user code, but it means an indicator from an untrusted source is as dangerous as any script.
 - Use the **`chart-indicator`** skill to write one. It validates against the real library and refuses to install a file that errors.
 

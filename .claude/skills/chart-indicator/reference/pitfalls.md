@@ -206,8 +206,19 @@ never draws.
 ## 13. Reusing a built-in id overrides it
 
 Custom modules register after the built-in tier, so a duplicate id replaces the
-built-in for the whole app. There are 91 of them; `sma`, `rsi`, `macd`,
+built-in for the whole app. There are 102 of them; `sma`, `rsi`, `macd`,
 `supertrend`, `vwap`, `range-analysis` are all taken.
+
+**The catalogue grew from 91 to 102 in 1.8.3, so a file written before that can
+shadow a built-in that did not exist when it was named.** The ids added were
+`t3`, `hull-suite`, `consolidation-breakout`, `smma`, `net-volume`,
+`linreg-slope`, `ma-channel`, `chaikin-volatility`, `standard-deviation`,
+`standard-error` and `standard-error-bands`. The loader now reports a collision
+against a built-in at load time, so an accidental one shows up in the chart's
+problem list rather than as an indicator that quietly draws the wrong thing.
+
+Overriding on purpose is still allowed and still works; the report is a warning,
+not a refusal.
 
 *Validator: WARNING.*
 

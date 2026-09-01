@@ -53,6 +53,28 @@ fix connectivity, or install without the pre-flight check and rely on the
 chart's own validation, which reports the same structural problems as toasts
 when the indicator loads. Do not silently skip validation.
 
+## Recent changes worth knowing
+
+The descriptor contract has not changed, so an existing indicator keeps working.
+Three things did:
+
+- **1.8.4: `calc` runs once per animation frame, not once per tick.** A data
+  update marks the indicators stale and the flush happens before the paint, so a
+  burst of ticks collapses into one call. `calc` must therefore be a pure
+  function of `(bars, settings)`. It always had to be, but running per tick used
+  to hide an indicator that counted its own calls or accumulated into `store`.
+  Reading `chart.indicators()` or an instance's `values()` flushes first, so a
+  read-after-update in the same turn still sees fresh numbers.
+- **1.8.4: `calcTail` is rarely worth it now.** The tick-rate problem it existed
+  to solve is gone. It only pays when one pass over the loaded history is itself
+  slow, which means deep history, not a fast feed.
+- **1.8.3: the catalogue went from 91 to 102 built-ins**, so a file written
+  earlier can shadow an id that did not exist when it was named. The new ids are
+  listed in `reference/pitfalls.md` under the collision entry. That release also
+  corrected nine built-ins and moved ten defaults, so an indicator that compares
+  itself against a built-in may need its expectations re-derived rather than
+  assumed unchanged.
+
 ## Workflow
 
 1. **Read the request.** If it is a study from another platform, read it fully
@@ -61,7 +83,7 @@ when the indicator loads. Do not silently skip validation.
    resets per day or per session.
 2. **Before writing a formula, check `reference/cookbook.md`.** Every
    author-facing call is demonstrated there, and the first section is the one
-   that saves the most work: the 91 built-ins are descriptors, so
+   that saves the most work: the 102 built-ins are descriptors, so
    `getIndicator('macd').calc(bars, settings, {})` gives you MACD's own columns
    rather than a reimplementation that can drift from the chart's.
 3. **Load the context you need.** `reference/contract.md` for the descriptor
@@ -165,7 +187,7 @@ export default function ({ registerIndicator, sourceValues, sma, nulls }) {
 A `bar` is `{ time, open, high, low, close, volume }` with `time` in **UTC
 seconds**.
 
-## What the library gives you (1.8.1)
+## What the library gives you
 
 The descriptor is much wider than the plot-plus-calc it started as. Before
 hand-rolling anything, check whether one of these already covers it:

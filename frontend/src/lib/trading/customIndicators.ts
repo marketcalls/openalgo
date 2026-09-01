@@ -72,6 +72,21 @@ const PLACEMENTS = new Set(['onchart', 'pane'])
  */
 const processed = new Set<string>()
 
+/**
+ * Ids present before any user module ran, captured once.
+ *
+ * A custom indicator that reuses a built-in id silently replaces it for the
+ * whole app. That is a legitimate way to override one, but it is far more often
+ * an accident: the catalogue has grown to 102, and ids like `t3`, `smma`,
+ * `net-volume` and `standard-deviation` arrived recently enough that a user file
+ * written before them can shadow one without either side knowing.
+ *
+ * Snapshotted before the first user module registers, never after, so a file
+ * that is edited and re-loaded is not reported against its own earlier
+ * registration.
+ */
+let builtinIds: ReadonlySet<string> | null = null
+
 function isModuleList(value: unknown): value is CustomModule[] {
   return (
     Array.isArray(value) &&
@@ -223,7 +238,7 @@ function guardCalc(
  * Fetch, import and run every user module that has not been seen yet.
  *
  * Never throws. A missing folder, a logged-out session and a syntax error in one
- * user file all have to leave the other 91 indicators working, so the index is
+ * user file all have to leave the other 102 indicators working, so the index is
  * treated as optional and each module is isolated from the next.
  */
 export async function loadCustomIndicators(
@@ -261,6 +276,12 @@ export async function loadCustomIndicators(
   const core = await import('openalgo-charts')
   const api = { ...core, ...(await import('openalgo-charts/indicators')) }
 
+  // After the tier import so every built-in has registered, and before the first
+  // user module runs so the snapshot holds built-ins only.
+  if (builtinIds === null) {
+    builtinIds = new Set(core.registeredIndicators().map((d) => d.id))
+  }
+
   for (const mod of fresh) {
     processed.add(`${mod.file}@${mod.mtime}`)
     try {
@@ -282,6 +303,15 @@ export async function loadCustomIndicators(
           }
           const problems = descriptorErrors(descriptor)
           if (problems.length > 0) throw new Error(problems.join('; '))
+          // A warning, not an error: overriding a built-in is allowed on
+          // purpose, and refusing would break a file that has been doing it
+          // deliberately since before the id existed upstream.
+          const id = descriptor.id
+          if (typeof id === 'string' && builtinIds?.has(id)) {
+            onProblem(
+              `${mod.file}: id "${id}" replaces the built-in indicator of the same name for the whole app. Rename it unless that override is intended.`
+            )
+          }
           registeredAny = true
           core.registerIndicator(guardCalc(descriptor, mod.file, onProblem) as never)
         },

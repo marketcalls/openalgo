@@ -146,6 +146,22 @@ it.
 
 ## `calc` and how its output is consumed
 
+**When it runs (changed in 1.8.4).** A data update marks the indicators stale and
+schedules a frame; `calc` runs in that frame, before the paint. So it is called
+**once per frame, not once per tick**, and a burst of ticks between two frames
+collapses into a single call. Reading `chart.indicators()`, or an instance's
+`values()`, flushes any pending recompute first, so a caller that updates a bar
+and reads a value back in the same turn still gets the fresh number.
+
+Two consequences for a descriptor:
+
+- **`calc` must be a pure function of `(bars, settings)`.** It always had to be,
+  but before 1.8.4 it happened to run on every tick, so an indicator that counted
+  its own calls or accumulated into `store` could look like it worked. It no
+  longer will: the number of calls is now a property of the frame rate.
+- Do not use `calc` as a tick hook. If you need per-tick work, that is what
+  `attach` and its own subscription are for.
+
 The runtime does this, per plot, every recompute:
 
 ```js
@@ -302,10 +318,19 @@ Called **instead of** `calc` when only the tail changed. The runtime uses it whe
 by a tick). Return values for `[fromIndex, bars.length)`, which the runtime
 splices onto the previous result, or `null` to fall back to a full `calc`.
 
-Without it every tick costs a full recompute: a few hundred microseconds over
-50k bars, so it only matters in a busy live pane. **If you also implement
-`markers`, skip `calcTail`** — markers re-run in full after every recompute, so
-it saves nothing.
+Without it a recompute is a full pass over every bar. **Since 1.8.4 that is paid
+once per animation frame, not once per tick**: the engine marks the indicators
+stale on a data update and flushes them before the next paint, so a burst of
+ticks between two frames costs one recompute rather than one per tick. That
+removed the tick-rate problem, so `calcTail` now only matters when a single pass
+over the loaded history is itself too slow, which means deep history rather than
+a fast feed.
+
+No built-in implements `calcTail` today. Reach for it when your `calc` is heavy
+and the chart carries tens of thousands of bars, not by default.
+
+**If you also implement `markers`, skip `calcTail`**: markers re-run in full
+after every recompute, so it saves nothing.
 
 A `calcTail` that disagrees with `calc` makes the live chart differ from what a
 reload shows. The validator checks the two agree at the boundary index.

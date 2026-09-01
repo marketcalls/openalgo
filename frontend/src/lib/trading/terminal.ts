@@ -659,6 +659,43 @@ export class TradingTerminal {
     this.shownCount = this.shownBars.length
   }
 
+  /**
+   * Push one bar into the live series without rebuilding either of them.
+   *
+   * `setPriceData` replaces both series wholesale and allocates a fresh volume
+   * bar for every bar in history. On a tick that is the dominant cost of the
+   * update, paid before a single indicator runs, and it grows with the history
+   * loaded rather than with what changed. A one-bar update is O(1) and the chart
+   * splices it.
+   *
+   * Only valid without a transform. Renko, Range, Point and Figure and Kagi
+   * re-derive their whole series from the raw bars, so one new raw bar can
+   * change the count and the shape of the output and the transform has to run
+   * again. Those fall back to the full path.
+   *
+   * Returns false when the caller must rebuild instead.
+   */
+  private updateLiveBar(bar: Bar): boolean {
+    if (!this.price || !this.volume) return false
+    const cfg = CHART_TYPES[this.ctype] || CHART_TYPES.candlestick
+    if (cfg.transform) return false
+    // `update` appends or replaces by time on its own, which is exactly the
+    // append-or-replace the caller has already applied to `rawBars`.
+    this.price.update(bar)
+    this.volume.update({
+      time: bar.time,
+      open: 0,
+      high: bar.volume || 0,
+      low: 0,
+      close: bar.volume || 0,
+    })
+    // Untransformed, the shown series *is* rawBars, which the caller mutated in
+    // place, so only the count can have moved.
+    this.shownBars = this.rawBars
+    this.shownCount = this.rawBars.length
+    return true
+  }
+
   private bucketVolume(tbars: Bar[]): Bar[] {
     const out: Bar[] = []
     let ri = 0
@@ -1794,11 +1831,40 @@ export class TradingTerminal {
     await this.loadIndicators()
     if (!this.chart) return
     try {
-      this.chart.addIndicator(indicatorId, {})
+      const inst = this.chart.addIndicator(indicatorId, {})
       this.syncIndicators()
+      this.warnIfStarved(inst)
     } catch (e) {
       this.toast(this.cleanError(e), 'err')
     }
+  }
+
+  /**
+   * Tell the user when an indicator drew nothing because the chart is too short.
+   *
+   * Every indicator needs a warmup before it can print, and a few need a long
+   * one: Special K sums rates of change out to 530 bars and only starts at 725,
+   * and openalgo-charts 1.8.3 lengthened several warmups by correcting how they
+   * seed. On an intraday chart holding a few hundred bars those studies now draw
+   * an empty pane, which is the correct answer and looks exactly like a broken
+   * indicator. Saying so once, at the moment it is added, is the difference.
+   *
+   * Reading `values()` is safe here: the engine flushes any pending recompute on
+   * that call, so this sees the result of the add rather than the frame before.
+   */
+  private warnIfStarved(inst: { name: string; values(): Record<string, unknown> }): void {
+    const loaded = this.rawBars.length
+    if (!loaded) return
+    const cols = Object.values(inst.values()).filter(Array.isArray) as unknown[][]
+    if (cols.length === 0) return
+    const anyFinite = cols.some((col) =>
+      col.some((v) => typeof v === 'number' && Number.isFinite(v))
+    )
+    if (anyFinite) return
+    this.toast(
+      `${inst.name} needs more history than the ${loaded} bars loaded, so it has nothing to draw yet. Widen the range or pick a longer interval.`,
+      ''
+    )
   }
 
   removeIndicatorById(instanceId: string): void {
@@ -2060,7 +2126,8 @@ export class TradingTerminal {
         const last = this.rawBars[this.rawBars.length - 1]
         if (last && last.time === u.bar.time) this.rawBars[this.rawBars.length - 1] = u.bar
         else this.rawBars.push(u.bar)
-        this.setPriceData()
+        // One bar in, one bar out. Only a transformed chart has to rebuild.
+        if (!this.updateLiveBar(u.bar)) this.setPriceData()
       }
     }
     this.setLegend(this.rawBars.length ? this.rawBars[this.rawBars.length - 1] : null)
