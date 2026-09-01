@@ -300,6 +300,14 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
   useEffect(() => {
     localStorage.setItem(SORT_KEY, JSON.stringify(sort))
   }, [sort])
+  // Hiding the sorted column would otherwise leave the list sorted by
+  // something with no header left to show the arrow or clear it from --
+  // stuck sorted by an invisible column until the user re-shows it.
+  useEffect(() => {
+    if (sort && sort.id !== 'symbol' && !display.columns.includes(sort.id)) {
+      setSort(null)
+    }
+  }, [display.columns, sort])
   const toggleSort = (id: Sort['id']) =>
     setSort((prev) => {
       if (!prev || prev.id !== id) return { id, dir: 'asc' }
