@@ -1,6 +1,7 @@
 import json
 import os
 
+from broker.flattrade.api.rate_limit import DATA_LIMITER
 from broker.flattrade.mapping.margin_data import parse_margin_response, transform_margin_positions
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -58,6 +59,10 @@ def calculate_margin_api(positions, auth):
     logger.info(f"Flattrade basket margin payload: {safe_payload}")
 
     client = get_httpx_client()
+
+    # GetBasketMargin is a non-order endpoint but is called per basket preview,
+    # so it shares the data window with the rest of the Flattrade client.
+    DATA_LIMITER.acquire()
 
     try:
         response = client.post(

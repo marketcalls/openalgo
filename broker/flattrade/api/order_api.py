@@ -1,10 +1,16 @@
 import json
 import os
-
-import httpx
 import threading
 import time
 
+import httpx
+
+from broker.flattrade.api.rate_limit import (
+    DATA_LIMITER,
+    ORDER_LIMITER,
+    is_rate_limit_error,
+    note_rate_limit_rejection,
+)
 from broker.flattrade.mapping.order_data import normalize_order_status
 from broker.flattrade.mapping.transform_data import (
     map_product_type,
@@ -21,6 +27,13 @@ logger = get_logger(__name__)
 
 
 def get_api_response(endpoint, auth, method="GET", payload=""):
+    # OrderBook/TradeBook/PositionBook/Holdings are non-order endpoints, but
+    # they are polled continuously by the UI and by the order-update poller, so
+    # they have to be counted against the same window data.py uses. Leaving them
+    # unpaced is what let ordinary dashboard polling trip the account's ceiling
+    # (issue #1806).
+    DATA_LIMITER.acquire()
+
     AUTH_TOKEN = auth
 
     full_api_key = os.getenv("BROKER_API_KEY")
@@ -163,6 +176,9 @@ def place_order_api(data, auth):
     # Get the shared httpx client
     client = get_httpx_client()
 
+    # Order endpoints have their own, four-times-tighter ceiling
+    # (10/sec, 40/min) — paced separately from the data window.
+    ORDER_LIMITER.acquire()
     url = "https://piconnect.flattrade.in/PiConnectAPI/PlaceOrder"
     res = client.post(url, content=payload, headers=headers)
     response_data = res.json()
@@ -333,6 +349,9 @@ def cancel_order(orderid, auth):
     # Get the shared httpx client and send the request
     client = get_httpx_client()
 
+    # Order endpoints have their own, four-times-tighter ceiling
+    # (10/sec, 40/min) — paced separately from the data window.
+    ORDER_LIMITER.acquire()
     url = "https://piconnect.flattrade.in/PiConnectAPI/CancelOrder"
     res = client.post(url, content=payload, headers=headers)
     data = res.json()
@@ -370,6 +389,9 @@ def modify_order(data, auth):
     # Get the shared httpx client
     client = get_httpx_client()
 
+    # Order endpoints have their own, four-times-tighter ceiling
+    # (10/sec, 40/min) — paced separately from the data window.
+    ORDER_LIMITER.acquire()
     url = "https://piconnect.flattrade.in/PiConnectAPI/ModifyOrder"
     res = client.post(url, content=payload, headers=headers)
     response = res.json()

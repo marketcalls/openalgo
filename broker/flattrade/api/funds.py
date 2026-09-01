@@ -5,6 +5,7 @@ import os
 
 import httpx
 
+from broker.flattrade.api.rate_limit import DATA_LIMITER
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -31,6 +32,10 @@ def calculate_pnl(entry):
 
 def fetch_data(endpoint, payload, headers, client):
     """Send a POST request and return the parsed JSON response using httpx."""
+    # Limits/PositionBook are non-order endpoints and share the data window with
+    # data.py and order_api.py — get_margin_data is called on every dashboard
+    # refresh, so it has to be counted (issue #1806).
+    DATA_LIMITER.acquire()
     url = f"https://piconnect.flattrade.in{endpoint}"
     response = client.post(url, content=payload, headers=headers)
     return response.json()
