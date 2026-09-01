@@ -9,6 +9,7 @@ from broker.flattrade.api.rate_limit import (
     DATA_LIMITER,
     ORDER_LIMITER,
     clamp_from_response,
+    rate_limit_retry_delay,
 )
 from broker.flattrade.mapping.order_data import normalize_order_status
 from broker.flattrade.mapping.transform_data import (
@@ -23,10 +24,6 @@ from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
-
-
-MAX_RATE_LIMIT_RETRIES = 3
-RATE_LIMIT_BASE_DELAY = 2.0  # seconds; doubled per attempt
 
 
 def get_api_response(endpoint, auth, method="GET", payload="", retry_count=0):
@@ -65,12 +62,8 @@ def get_api_response(endpoint, auth, method="GET", payload="", retry_count=0):
     # cap only reveals its real ceiling in the rejection text, so learn from it
     # and retry. Without this the limiter keeps re-offering the rejected rate
     # and every later poll fails the same way (issue #1806).
-    if clamp_from_response(parsed, DATA_LIMITER) and retry_count < MAX_RATE_LIMIT_RETRIES:
-        delay = RATE_LIMIT_BASE_DELAY * (2**retry_count)
-        logger.warning(
-            f"Flattrade rate limit hit on {endpoint} ({parsed.get('emsg')}). "
-            f"Retrying in {delay}s (attempt {retry_count + 1}/{MAX_RATE_LIMIT_RETRIES})"
-        )
+    delay = rate_limit_retry_delay(parsed, DATA_LIMITER, retry_count, endpoint)
+    if delay is not None:
         time.sleep(delay)
         return get_api_response(endpoint, auth, method, payload, retry_count + 1)
 

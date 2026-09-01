@@ -12,7 +12,7 @@ import pandas as pd
 from broker.flattrade.api.rate_limit import (
     DATA_LIMITER,
     is_rate_limit_error,
-    note_rate_limit_rejection,
+    rate_limit_retry_delay,
 )
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
@@ -49,9 +49,6 @@ def get_api_response(endpoint, auth, method="POST", payload=None, retry_count=0)
     Common function to make API calls to Flattrade using httpx with connection pooling.
     Applies global rate limiting and retries with exponential backoff on rate-limit errors.
     """
-    MAX_RETRIES = 3
-    RETRY_DELAY = 2.0  # base seconds for exponential backoff
-
     # Apply rate limiting before making the request
     _apply_rate_limit()
 
@@ -87,17 +84,11 @@ def get_api_response(endpoint, auth, method="POST", payload=None, retry_count=0)
         logger.info(f"Response data: {data}")
         raise
 
-    # Retry on rate-limit error with exponential backoff
-    if _is_rate_limit_error(parsed) and retry_count < MAX_RETRIES:
-        # Lower the local cap to whatever ceiling the rejection names, so the
-        # retry is not just a slower repeat of a request this account was never
-        # provisioned to make.
-        note_rate_limit_rejection(parsed, DATA_LIMITER)
-        retry_delay = RETRY_DELAY * (2**retry_count)
-        logger.warning(
-            f"Flattrade rate limit hit ({parsed.get('emsg')}). "
-            f"Retrying in {retry_delay}s (attempt {retry_count + 1}/{MAX_RETRIES})"
-        )
+    # Clamp to whatever ceiling the rejection names, then retry, so the retry is
+    # not just a slower repeat of a request this account was never provisioned
+    # to make.
+    retry_delay = rate_limit_retry_delay(parsed, DATA_LIMITER, retry_count, endpoint)
+    if retry_delay is not None:
         time.sleep(retry_delay)
         return get_api_response(endpoint, auth, method, payload, retry_count + 1)
 
@@ -236,9 +227,6 @@ class BrokerData:
         Fetch quote for a single symbol synchronously (for ThreadPoolExecutor).
         Honors the global rate limiter and retries with exponential backoff on rate-limit errors.
         """
-        MAX_RETRIES = 3
-        RETRY_DELAY = 2.0
-
         try:
             # Serialize through the shared rate limiter
             _apply_rate_limit()
@@ -259,13 +247,10 @@ class BrokerData:
 
             if response.get("stat") != "Ok":
                 # Retry on rate-limit error
-                if _is_rate_limit_error(response) and retry_count < MAX_RETRIES:
-                    note_rate_limit_rejection(response, DATA_LIMITER)
-                    retry_delay = RETRY_DELAY * (2**retry_count)
-                    logger.warning(
-                        f"Flattrade rate limit hit for {symbol}@{exchange}. "
-                        f"Retrying in {retry_delay}s (attempt {retry_count + 1}/{MAX_RETRIES})"
-                    )
+                retry_delay = rate_limit_retry_delay(
+                    response, DATA_LIMITER, retry_count, f"{symbol}@{exchange}"
+                )
+                if retry_delay is not None:
                     time.sleep(retry_delay)
                     return self._fetch_single_quote_sync(
                         symbol, exchange, api_exchange, token, api_key, retry_count + 1
@@ -310,9 +295,6 @@ class BrokerData:
         Fetch quote for a single symbol asynchronously.
         Honors the global rate limiter and retries with exponential backoff on rate-limit errors.
         """
-        MAX_RETRIES = 3
-        RETRY_DELAY = 2.0
-
         try:
             # Serialize through the shared rate limiter (async-safe sleep)
             await _apply_rate_limit_async()
@@ -329,13 +311,10 @@ class BrokerData:
 
             if response.get("stat") != "Ok":
                 # Retry on rate-limit error
-                if _is_rate_limit_error(response) and retry_count < MAX_RETRIES:
-                    note_rate_limit_rejection(response, DATA_LIMITER)
-                    retry_delay = RETRY_DELAY * (2**retry_count)
-                    logger.warning(
-                        f"Flattrade rate limit hit for {symbol}@{exchange}. "
-                        f"Retrying in {retry_delay}s (attempt {retry_count + 1}/{MAX_RETRIES})"
-                    )
+                retry_delay = rate_limit_retry_delay(
+                    response, DATA_LIMITER, retry_count, f"{symbol}@{exchange}"
+                )
+                if retry_delay is not None:
                     await asyncio.sleep(retry_delay)
                     return await self._fetch_single_quote_async(
                         client, symbol, exchange, api_exchange, token, api_key, retry_count + 1

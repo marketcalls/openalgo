@@ -241,6 +241,49 @@ def is_rate_limit_error(response) -> bool:
     return "exceeds limit" in emsg.lower()
 
 
+MAX_RATE_LIMIT_RETRIES = 3
+RATE_LIMIT_BASE_DELAY = 2.0  # seconds, doubled per attempt: 2, 4, 8
+
+
+def rate_limit_retry_delay(
+    response,
+    limiter: SlidingWindowLimiter,
+    retry_count: int,
+    context: str = "",
+) -> float | None:
+    """Clamp from a rejection and return how long to wait before retrying.
+
+    Returns None when the response was not a rate-limit rejection, or when the
+    retry budget is spent — in both cases the caller returns the response.
+
+    The recursive re-issue stays at the call site because each one has a
+    different signature and one of them is async; everything that was actually
+    duplicated (detection, clamping, the attempt count, the backoff curve and
+    the warning) lives here. Retry policy is now changed in one place instead
+    of the five copies this replaced.
+
+    Order endpoints deliberately do not use this: see clamp_from_response.
+    """
+    if not clamp_from_response(response, limiter):
+        return None
+    if retry_count >= MAX_RATE_LIMIT_RETRIES:
+        logger.warning(
+            f"Flattrade rate limit still hit after {MAX_RATE_LIMIT_RETRIES} "
+            f"retries{f' on {context}' if context else ''}; giving up. "
+            f"The {limiter.name} cap is now {limiter.max_per_second}/sec, "
+            f"{limiter.max_per_minute}/min."
+        )
+        return None
+
+    delay = RATE_LIMIT_BASE_DELAY * (2**retry_count)
+    emsg = response.get("emsg") if isinstance(response, dict) else None
+    logger.warning(
+        f"Flattrade rate limit hit{f' on {context}' if context else ''} ({emsg}). "
+        f"Retrying in {delay}s (attempt {retry_count + 1}/{MAX_RATE_LIMIT_RETRIES})"
+    )
+    return delay
+
+
 def clamp_from_response(response, limiter: SlidingWindowLimiter) -> bool:
     """Learn from `response` if it is a rate-limit rejection.
 

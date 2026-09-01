@@ -588,16 +588,37 @@ def test_an_absent_env_override_uses_the_default(monkeypatch) -> None:
     assert rl._env_int("FLATTRADE_MAX_PER_SECOND", 9, ceiling=40) == 9
 
 
-def test_multiquote_batching_does_not_add_its_own_fixed_delay() -> None:
-    """The per-invocation 1.1s inter-batch sleep could not see concurrent
-    option-chain fetches; DATA_LIMITER's rolling window can, and does."""
-    import inspect
+def test_multiquote_batching_does_not_add_its_own_fixed_delay(monkeypatch) -> None:
+    """Behavioural: chunking must not impose wall-clock delay of its own.
+
+    The old code slept a fixed 1.1s between chunks. Being per-invocation it
+    could not see the concurrent option-chain fetches the live log shows
+    (three 42-symbol fetches starting at 11:16:41, :44 and :49 before any
+    finished), while DATA_LIMITER's rolling window bounds them together. All
+    the sleep bought was ~4.4s of latency per call.
+
+    Measures elapsed time with the batch worker stubbed out, so it is immune to
+    how the chunking is written.
+    """
+    import time as _time
 
     from broker.flattrade.api import data
 
-    src = inspect.getsource(data.BrokerData.get_multiquotes)
-    assert "RATE_LIMIT_DELAY" not in src
-    assert "time.sleep" not in src
+    bd = data.BrokerData("tok")
+    batches = []
+    monkeypatch.setattr(
+        data.BrokerData, "_process_quotes_batch", lambda self, b: batches.append(b) or []
+    )
+
+    symbols = [{"symbol": f"S{i}", "exchange": "NFO"} for i in range(42)]
+    started = _time.monotonic()
+    bd.get_multiquotes(symbols)
+    elapsed = _time.monotonic() - started
+
+    assert len(batches) == 5  # still chunked
+    # Five chunks under the old code cost 4 x 1.1s of sleep. Nothing but the
+    # limiter (stubbed away here) may add delay.
+    assert elapsed < 0.5, f"batching added {elapsed:.2f}s of its own delay"
 
 
 # --------------------------------------------------------------------------
@@ -605,62 +626,167 @@ def test_multiquote_batching_does_not_add_its_own_fixed_delay() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_every_paced_entry_point_also_learns_from_a_rejection() -> None:
-    """Pacing without clamping is the defect this file exists to fix, half-done:
-    a module that acquires a slot but ignores the rejection keeps re-offering a
-    rate the account was never provisioned for. Every paced module must import
-    the clamp, not just the limiter."""
-    import inspect
+_REJECTION = {
+    "stat": "Not_Ok",
+    "emsg": "Invalid Input :  Order Recieved 11 in a current second exceeds Limit 10 for user",
+}
+_OK = {"stat": "Ok", "values": []}
+
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+        self.text = json.dumps(payload)
+        self.status_code = 200
+
+    def json(self):
+        return self._payload
+
+
+class _FakeClient:
+    """Replays a queued list of payloads and counts the calls made."""
+
+    def __init__(self, payloads):
+        self.payloads = list(payloads)
+        self.calls = 0
+
+    def _next(self):
+        self.calls += 1
+        return _FakeResponse(
+            self.payloads.pop(0) if self.payloads else _OK
+        )
+
+    def request(self, *a, **k):
+        return self._next()
+
+    def post(self, *a, **k):
+        return self._next()
+
+
+@pytest.fixture
+def fresh_limiters(monkeypatch):
+    """Swap the module singletons for throwaway limiters.
+
+    The real ones are process-wide and ratchet down permanently, so clamping
+    them in a test would silently tighten every later test in the session.
+    """
+    data_lim = rl.SlidingWindowLimiter("data", max_per_second=38, max_per_minute=190)
+    order_lim = rl.SlidingWindowLimiter("order", max_per_second=9, max_per_minute=38)
 
     from broker.flattrade.api import data, funds, margin_api, order_api
 
     for mod in (data, order_api, funds, margin_api):
-        src = inspect.getsource(mod)
-        assert "_LIMITER.acquire()" in src or "_apply_rate_limit" in src, mod.__name__
-        assert (
-            "clamp_from_response" in src or "note_rate_limit_rejection" in src
-        ), f"{mod.__name__} paces requests but never adapts the cap"
+        if hasattr(mod, "DATA_LIMITER"):
+            monkeypatch.setattr(mod, "DATA_LIMITER", data_lim)
+        if hasattr(mod, "ORDER_LIMITER"):
+            monkeypatch.setattr(mod, "ORDER_LIMITER", order_lim)
+    monkeypatch.setattr(rl.time, "sleep", lambda _s: None)  # no real backoff waits
+    return data_lim, order_lim
 
 
-def test_clamp_from_response_reports_whether_it_was_a_rate_limit() -> None:
-    limiter = rl.SlidingWindowLimiter("t", max_per_second=38, max_per_minute=190)
-    assert rl.clamp_from_response({"stat": "Ok", "values": []}, limiter) is False
-    assert limiter.max_per_second == 38
-
-    assert (
-        rl.clamp_from_response(
-            {"stat": "Not_Ok", "emsg": "Recieved 11 in a current second exceeds Limit 10"},
-            limiter,
-        )
-        is True
-    )
-    assert limiter.max_per_second == 10
-
-
-def test_order_endpoints_clamp_but_never_auto_retry() -> None:
-    """A PlaceOrder rejected for rate cannot be told apart from one accepted
-    with a lost response, so retrying risks a duplicate order. Clamp only."""
-    import inspect
-
+def test_a_read_endpoint_clamps_and_retries(monkeypatch, fresh_limiters) -> None:
+    """Behavioural: a rejection must lower the cap AND be retried, or the first
+    one surfaces to the UI as empty data."""
+    data_lim, _ = fresh_limiters
     from broker.flattrade.api import order_api
 
-    for fn in (order_api.place_order_api, order_api.cancel_order, order_api.modify_order):
-        src = inspect.getsource(fn)
-        assert "clamp_from_response" in src, fn.__name__
-        assert "ORDER_LIMITER" in src, fn.__name__
-        # No recursive retry on an order path.
-        assert f"return {fn.__name__}(" not in src, fn.__name__
+    client = _FakeClient([_REJECTION, _OK])
+    monkeypatch.setattr(order_api, "get_httpx_client", lambda: client)
+    monkeypatch.setattr(order_api.time, "sleep", lambda _s: None)
+    monkeypatch.setenv("BROKER_API_KEY", "FZ06120:::secret")
+
+    result = order_api.get_api_response("/PiConnectAPI/OrderBook", "tok", method="POST")
+
+    assert data_lim.max_per_second == 10  # learned from the rejection
+    assert client.calls == 2  # and retried
+    assert result == _OK  # caller sees the good response, not the rejection
 
 
-def test_read_endpoints_do_retry_after_clamping() -> None:
-    """Read-only paths are safe to retry, and must, or the first rejection is
-    surfaced to the UI as empty data."""
-    import inspect
+def test_a_read_endpoint_gives_up_after_the_retry_budget(monkeypatch, fresh_limiters) -> None:
+    """It must not retry forever; the caller gets the rejection to handle."""
+    from broker.flattrade.api import order_api
 
-    from broker.flattrade.api import funds, order_api
+    client = _FakeClient([_REJECTION] * 10)
+    monkeypatch.setattr(order_api, "get_httpx_client", lambda: client)
+    monkeypatch.setattr(order_api.time, "sleep", lambda _s: None)
+    monkeypatch.setenv("BROKER_API_KEY", "FZ06120:::secret")
 
-    assert "return get_api_response(" in inspect.getsource(order_api.get_api_response)
-    assert "return fetch_data(" in inspect.getsource(funds.fetch_data)
+    result = order_api.get_api_response("/PiConnectAPI/OrderBook", "tok", method="POST")
+
+    assert client.calls == rl.MAX_RATE_LIMIT_RETRIES + 1
+    assert result["stat"] == "Not_Ok"
+
+
+def test_a_successful_read_is_not_retried(monkeypatch, fresh_limiters) -> None:
+    data_lim, _ = fresh_limiters
+    from broker.flattrade.api import order_api
+
+    client = _FakeClient([_OK])
+    monkeypatch.setattr(order_api, "get_httpx_client", lambda: client)
+    monkeypatch.setenv("BROKER_API_KEY", "FZ06120:::secret")
+
+    order_api.get_api_response("/PiConnectAPI/OrderBook", "tok", method="POST")
+
+    assert client.calls == 1
+    assert data_lim.max_per_second == 38  # untouched
+
+
+def test_cancel_order_clamps_but_is_never_retried(monkeypatch, fresh_limiters) -> None:
+    """An order rejected for rate cannot be told apart from one accepted with a
+    lost response, so a retry risks a duplicate. Clamp, then surface it."""
+    _, order_lim = fresh_limiters
+    from broker.flattrade.api import order_api
+
+    # Names a limit genuinely below the order default of 9 — the clamp only
+    # ratchets downward, so a rejection quoting 10 would correctly be a no-op
+    # here and would not prove the wiring.
+    tight = {
+        "stat": "Not_Ok",
+        "emsg": "Recieved 6 in a current second exceeds Limit 5 for user",
+    }
+    client = _FakeClient([tight, _OK])
+    monkeypatch.setattr(order_api, "get_httpx_client", lambda: client)
+    monkeypatch.setenv("BROKER_API_KEY", "FZ06120:::secret")
+
+    response, _status = order_api.cancel_order("2509010000001", "tok")
+
+    assert order_lim.max_per_second == 5  # learned
+    assert client.calls == 1  # exactly one order request, never two
+    assert response["status"] == "error"  # surfaced, not silently retried
+
+
+def test_funds_clamps_and_retries(monkeypatch, fresh_limiters) -> None:
+    """A funds rejection used to read as empty funds and zero PnL while the cap
+    stayed too high for every later call."""
+    data_lim, _ = fresh_limiters
+    from broker.flattrade.api import funds
+
+    client = _FakeClient([_REJECTION, {"stat": "Ok", "cash": "100"}])
+    monkeypatch.setattr(funds.time, "sleep", lambda _s: None)
+
+    result = funds.fetch_data("/PiConnectAPI/Limits", "payload", {}, client)
+
+    assert data_lim.max_per_second == 10
+    assert client.calls == 2
+    assert result["cash"] == "100"
+
+
+def test_the_retry_helper_is_the_single_place_backoff_is_decided() -> None:
+    """Behavioural contract for the helper the four entry points share."""
+    lim = rl.SlidingWindowLimiter("t", max_per_second=38, max_per_minute=190)
+
+    # Not a rejection -> no retry, no clamp.
+    assert rl.rate_limit_retry_delay(_OK, lim, 0) is None
+    assert lim.max_per_second == 38
+
+    # A rejection -> clamp, and an exponential backoff curve.
+    assert rl.rate_limit_retry_delay(_REJECTION, lim, 0) == 2.0
+    assert lim.max_per_second == 10
+    assert rl.rate_limit_retry_delay(_REJECTION, lim, 1) == 4.0
+    assert rl.rate_limit_retry_delay(_REJECTION, lim, 2) == 8.0
+
+    # Budget spent -> stop retrying, but the clamp still applied.
+    assert rl.rate_limit_retry_delay(_REJECTION, lim, rl.MAX_RATE_LIMIT_RETRIES) is None
 
 
 # -- partial fills over the polling path ----------------------------------
