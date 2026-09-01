@@ -142,15 +142,25 @@ const COLUMNS: readonly Column[] = [
 ] as const
 type ColumnId = string
 
-/** Raw numeric value behind each column, for sorting rather than display. */
+/**
+ * Raw numeric value behind each column, for sorting rather than display.
+ *
+ * Volume, high, low and open all render "-" for a zero (compact() and the
+ * column's own `get` both treat 0 as "no value", since a real Vol/High/Low/
+ * Open is never legitimately zero -- it means the snapshot hasn't carried
+ * one yet). Sorting must agree: leaving the raw 0 here would rank an
+ * unavailable row first on an ascending sort instead of last with the rest
+ * of the unknowns. Change/changePercent are exempt -- an unchanged price is
+ * a real, displayed 0.00, not a missing value.
+ */
 const SORT_VALUE: Record<ColumnId, (q: Quote) => number | null | undefined> = {
   last: (q) => q.ltp,
   change: (q) => q.change,
   changePercent: (q) => q.changePercent,
-  volume: (q) => q.volume,
-  high: (q) => q.high,
-  low: (q) => q.low,
-  open: (q) => q.open,
+  volume: (q) => q.volume || null,
+  high: (q) => q.high || null,
+  low: (q) => q.low || null,
+  open: (q) => q.open || null,
 }
 
 /** Which column the list is sorted by. Null means the user's own drag order. */
@@ -164,7 +174,11 @@ const SORT_KEY = 'oa-trading-watchlist-sort'
 function readSort(): Sort | null {
   try {
     const saved = JSON.parse(localStorage.getItem(SORT_KEY) || 'null')
-    return saved && typeof saved.id === 'string' && (saved.dir === 'asc' || saved.dir === 'desc')
+    const validIds = new Set<string>(['symbol', ...COLUMNS.map((c) => c.id)])
+    return saved &&
+      typeof saved.id === 'string' &&
+      validIds.has(saved.id) &&
+      (saved.dir === 'asc' || saved.dir === 'desc')
       ? saved
       : null
   } catch {
