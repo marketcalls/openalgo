@@ -203,6 +203,7 @@ hand-rolling anything, check whether one of these already covers it:
 | Candles or bars as a plot | `plot.ohlc: { open, high, low, close }` |
 | Know the bar state, symbol, interval, clock | the 4th `calc` argument |
 | The instrument's tick size | `ctx.tickSize`, never an input for it |
+| The decimals your plots print at | Nothing: it follows the pane, see below |
 | Parse a session window | `parseSessionSpec`, `inSessionAt`, `sessionFlags` |
 | Reason about the timeframe | `intervalParts`, `isIntradayInterval`, ... |
 | A colour ramp or alpha | `fromGradient`, `withAlpha` |
@@ -234,7 +235,16 @@ Full list in `reference/pitfalls.md`. These four account for most failures:
   plot's `style`. Your own width input becomes a second control that disagrees.
 - Reuse a built-in id unless overriding it is the actual intent. Custom modules
   register last, so they win. The validator warns on this.
-- Add an input for the tick size. `ctx.tickSize` carries it since 1.8.2, and an
+- Add a precision or decimals input. Precision follows the pane, not the
+  descriptor, so there is nothing to declare and an override would only let a
+  plot disagree with the axis it is drawn against. An `onchart` plot is a price
+  and prints at the instrument's tick (Supertrend on a 0.05 tick reads
+  `1339.70`); a plot on its own pane prints at that pane's own span with a floor
+  of two decimals (an RSI reads `70.00`, a percentage study `0.61`). A study pane
+  is not quoted in the instrument's tick, because an RSI is a dimensionless
+  0..100 band. If a plot of yours really is a price, put it on the candles with
+  `overlay: true` rather than reaching for a precision knob.
+- Add an input for the tick size. `ctx.tickSize` carries it, and an
   input is a second source of truth that disagrees with the axis. Point value is
   the exception: the chart does not know it, so that one is an input at 1.
 - Assume the browser's local time. Use `zonedDayIndex` /

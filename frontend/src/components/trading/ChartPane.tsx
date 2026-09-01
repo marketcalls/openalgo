@@ -343,6 +343,9 @@ export function ChartPane({
       onIndicatorsChange: (list) => aliveRef.current && setIndicators(list),
       onIndicatorSettings: (req) => aliveRef.current && setIndSettings(req),
       onDrawSelect: (sel) => aliveRef.current && setDrawSel(sel),
+      // The legend readout is a second switch for the same thing as the context
+      // menu row, so the menu label has to follow it.
+      onVolumeChange: (on) => aliveRef.current && setVolumeOn(on),
       onReplayChange: (state) => {
         if (!aliveRef.current) return
         setReplay(state)

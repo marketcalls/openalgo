@@ -170,6 +170,8 @@ export interface TerminalCallbacks {
    * chart is live again, which is the transport bar's cue to hide itself.
    */
   onReplayChange?(state: ReplayState | null): void
+  /** The volume histogram was switched from the legend readout. */
+  onVolumeChange?(on: boolean): void
   /**
    * A text-bearing drawing needs its content. The engine renders `style.text`
    * but has no DOM to collect it with, so the host prompts.
@@ -548,6 +550,7 @@ export class TradingTerminal {
     this.wsUrl = opts.wsUrl
     this.container = opts.container
     this.legendEl = opts.legendEl
+    this.wireLegendActions()
     this.getTheme = opts.getTheme
     this.cb = opts.callbacks
     this.sk = opts.storageKey || 'oa-trading'
@@ -756,6 +759,29 @@ export class TradingTerminal {
   }
 
   /**
+   * The legend is rewritten on every crosshair move, so its controls are bound
+   * by delegation on the container that survives. Binding per render would leak
+   * a listener a frame.
+   */
+  private wireLegendActions(): void {
+    const act = (e: Event): void => {
+      const el = (e.target as HTMLElement | null)?.closest?.("[data-legend-action]")
+      if (!el) return
+      if (el.getAttribute("data-legend-action") !== "volume") return
+      e.preventDefault()
+      e.stopPropagation()
+      this.setVolumeVisible(!this.volumeOn)
+      this.setLegend(this.legendBar)
+      this.cb.onVolumeChange?.(this.volumeOn)
+    }
+    this.legendEl.addEventListener("click", act)
+    this.legendEl.addEventListener("keydown", (e) => {
+      const k = (e as KeyboardEvent).key
+      if (k === "Enter" || k === " ") act(e)
+    })
+  }
+
+  /**
    * The readout's content, independent of how it is drawn. The DOM overlay and
    * the PNG export both render this, which is what stops the saved image from
    * quoting different numbers than the screen it was taken from.
@@ -772,6 +798,7 @@ export class TradingTerminal {
       prevClose: this.closeBefore(bar),
       fmt: (n) => this.fmt(n),
       fmtVolume: compactVolume,
+      volumeHidden: !this.volumeOn,
     })
   }
 

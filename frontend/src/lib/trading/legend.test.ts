@@ -157,3 +157,63 @@ describe('lotInfoText', () => {
     expect(lotInfoText(null, 1)).toBe('')
   })
 })
+
+/**
+ * The volume readout is also the switch for the bars it reads.
+ *
+ * A toggle existed all along, in the right-click menu, which is a place you
+ * have to already suspect it to find: it was reported as "no provision to turn
+ * off the volume". Splitting the volume off the OHLC run is what lets it carry
+ * a control, so the two must stay separate.
+ */
+describe('volume is its own legend run', () => {
+  const input = (over: Partial<Parameters<typeof buildChartLegend>[0]> = {}) => ({
+    symbol: 'RELIANCE',
+    interval: '5m',
+    exchange: 'NSE',
+    lotsize: null,
+    bar: { open: 100, high: 104, low: 99, close: 103, volume: 126_300 },
+    prevClose: 99,
+    fmt: (n: number) => n.toFixed(2),
+    fmtVolume: () => '126.30K',
+    ...over,
+  })
+
+  it('does not fuse the volume into the OHLC run', () => {
+    const runs = buildChartLegend(input() as Parameters<typeof buildChartLegend>[0])
+    const ohlc = runs.find((r) => r.text.startsWith('O '))
+    expect(ohlc?.text).not.toContain('V ')
+    const vol = runs.find((r) => r.action === 'volume')
+    expect(vol?.text).toBe('V 126.30K')
+  })
+
+  it('renders the volume run as a control, and the others as plain text', () => {
+    const html = legendHtml(buildChartLegend(input() as Parameters<typeof buildChartLegend>[0]))
+    expect(html).toContain('data-legend-action="volume"')
+    expect(html).toContain('Hide volume')
+    // One control only: the readout must not become a row of buttons.
+    expect(html.match(/data-legend-action/g)).toHaveLength(1)
+  })
+
+  it('says which way the switch is set when the bars are off', () => {
+    const runs = buildChartLegend(
+      input({ volumeHidden: true }) as Parameters<typeof buildChartLegend>[0]
+    )
+    expect(runs.find((r) => r.action === 'volume')?.dim).toBe(true)
+    const html = legendHtml(runs)
+    expect(html).toContain('line-through')
+    expect(html).toContain('Show volume')
+  })
+
+  it('emits no volume run at all on a transformed chart type', () => {
+    // Renko and point-and-figure elements are not one bar each, so there is no
+    // volume to read and nothing to switch.
+    const runs = buildChartLegend(
+      input({ bar: { open: 100, high: 104, low: 99, close: 103 } }) as Parameters<
+        typeof buildChartLegend
+      >[0]
+    )
+    expect(runs.some((r) => r.action === 'volume')).toBe(false)
+    expect(legendHtml(runs)).not.toContain('data-legend-action')
+  })
+})

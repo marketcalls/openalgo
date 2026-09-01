@@ -27,6 +27,20 @@ export type LegendTone = 'symbol' | 'meta' | 'up' | 'down' | 'ltp'
 export interface LegendRun {
   text: string
   tone: LegendTone
+  /**
+   * Makes this run a control in the HTML legend, addressed by this name.
+   *
+   * The volume readout is the only one so far. A toggle for it existed all
+   * along, in the right-click menu, which is a place you have to already
+   * suspect it to find: it was reported as "no provision to turn off the
+   * volume". The readout is where the eye already is when the question comes
+   * up, so it is where the switch belongs.
+   *
+   * Ignored by the canvas exporter, which paints a picture and has no clicks.
+   */
+  action?: 'volume'
+  /** Drawn at reduced strength: the thing this run describes is switched off. */
+  dim?: boolean
 }
 
 /** The bar the readout describes (the crosshair bar, else the latest one). */
@@ -64,6 +78,8 @@ export interface LegendInput {
   fmt(value: number): string
   /** Compact volume formatter (e.g. 1.20M). */
   fmtVolume(value: number): string
+  /** The bars are switched off, so their readout says so rather than lying. */
+  volumeHidden?: boolean
 }
 
 /**
@@ -85,12 +101,20 @@ export function buildChartLegend(input: LegendInput): LegendRun[] {
     let text =
       `O ${input.fmt(bar.open)} H ${input.fmt(bar.high)} ` +
       `L ${input.fmt(bar.low)} C ${input.fmt(bar.close)}`
+    const tone = bar.close >= bar.open ? 'up' : 'down'
+    runs.push({ text, tone })
     // Volume is absent on the transformed chart types (renko, point-and-figure),
     // whose elements are not one bar each, so it is shown only when it is real.
+    // Split into its own run rather than concatenated, so it can carry the
+    // switch for the bars it is reading.
     if (typeof bar.volume === 'number' && Number.isFinite(bar.volume) && bar.volume > 0) {
-      text += ` V ${input.fmtVolume(bar.volume)}`
+      runs.push({
+        text: `V ${input.fmtVolume(bar.volume)}`,
+        tone,
+        action: 'volume',
+        dim: input.volumeHidden === true,
+      })
     }
-    runs.push({ text, tone: bar.close >= bar.open ? 'up' : 'down' })
   }
 
   // The bar's own change, against the close before it. Absolute first, percent
@@ -144,6 +168,28 @@ export function legendHtml(runs: readonly LegendRun[]): string {
   return runs
     .map((run) => {
       const style = HTML_TONE_STYLE[run.tone]
+      if (run.action !== undefined) {
+        // Underlined on hover rather than boxed: it sits inside a line of
+        // readout text, and a button there would read as chrome the rest of the
+        // line does not have. Struck through when off, which says which way the
+        // switch is set without a second glyph.
+        const off = run.dim === true
+        const bits = [
+          style ?? '',
+          'cursor:pointer',
+          'text-decoration:' + (off ? 'line-through' : 'none'),
+          'text-underline-offset:3px',
+          off ? 'opacity:.5' : '',
+        ].filter(Boolean).join(';')
+        const title = off ? 'Show volume' : 'Hide volume'
+        return (
+          `<span data-legend-action="${run.action}" role="button" tabindex="0"` +
+          ` title="${title}" aria-label="${title}" style="${bits}"` +
+          ` onmouseover="this.style.textDecoration='underline'${off ? " + ' line-through'" : ''}"` +
+          ` onmouseout="this.style.textDecoration='${off ? 'line-through' : 'none'}'"` +
+          `>${esc(run.text)}</span>`
+        )
+      }
       const attr = style ? ` style="${style}"` : ''
       const tag = run.tone === 'symbol' ? 'b' : 'span'
       return `<${tag}${attr}>${esc(run.text)}</${tag}>`
