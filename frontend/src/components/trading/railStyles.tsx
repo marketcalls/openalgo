@@ -13,8 +13,18 @@ import { cn } from '@/lib/utils'
 export const RAIL_BTN =
   'flex h-8 w-8 items-center justify-center rounded-md border border-transparent text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-30'
 
-/** Layered onto RAIL_BTN when the tool is armed or the panel is open. */
-export const RAIL_BTN_ON = 'border-primary/40 bg-primary/15 text-primary'
+/**
+ * Layered onto RAIL_BTN when the tool is armed or the panel is open.
+ *
+ * Reported as not differentiated at all. It was applied correctly, but a 15%
+ * tint of the accent behind a muted glyph is a shade of grey on a dark ground:
+ * the armed tool and the ten resting ones beside it read the same at a glance,
+ * which is the only distance this ever gets looked at. A quarter-strength fill,
+ * a solid-enough border and the accent on the glyph itself carry it, and the
+ * glyphs already stroke with currentColor so the last one costs nothing.
+ */
+export const RAIL_BTN_ON =
+  'border-primary/70 bg-primary/25 text-primary hover:bg-primary/30 hover:text-primary'
 
 /**
  * The stroke weight for a lucide glyph in a rail.

@@ -1,6 +1,7 @@
 import re
 
 from marshmallow import Schema, ValidationError, fields, validate
+from utils.constants import SUPPORTED_INTERVALS
 
 from utils.constants import VALID_EXCHANGES
 
@@ -61,37 +62,7 @@ class HistorySchema(Schema):
     exchange = fields.Str(required=True, validate=validate.OneOf(VALID_EXCHANGES))  # Exchange (e.g., NSE, BSE)
     interval = fields.Str(
         required=True,
-        validate=validate.OneOf(
-            [
-                # Seconds intervals
-                "1s",
-                "5s",
-                "10s",
-                "15s",
-                "30s",
-                "45s",
-                # Minutes intervals
-                "1m",
-                "2m",
-                "3m",
-                "5m",
-                "10m",
-                "15m",
-                "20m",
-                "30m",
-                # Hours intervals
-                "1h",
-                "2h",
-                "3h",
-                "4h",
-                # Daily, Weekly, Monthly, Quarterly, Yearly intervals
-                "D",
-                "W",
-                "M",
-                "Q",
-                "Y",
-            ]
-        ),
+        validate=validate.OneOf(SUPPORTED_INTERVALS),
     )
     start_date = fields.Date(required=True, format="%Y-%m-%d")  # YYYY-MM-DD
     end_date = fields.Date(required=True, format="%Y-%m-%d")  # YYYY-MM-DD
