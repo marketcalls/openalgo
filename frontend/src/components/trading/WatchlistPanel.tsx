@@ -13,6 +13,8 @@
  */
 
 import {
+  ArrowDown,
+  ArrowUp,
   ChevronDown,
   GripVertical,
   MoreHorizontal,
@@ -140,6 +142,36 @@ const COLUMNS: readonly Column[] = [
 ] as const
 type ColumnId = string
 
+/** Raw numeric value behind each column, for sorting rather than display. */
+const SORT_VALUE: Record<ColumnId, (q: Quote) => number | null | undefined> = {
+  last: (q) => q.ltp,
+  change: (q) => q.change,
+  changePercent: (q) => q.changePercent,
+  volume: (q) => q.volume,
+  high: (q) => q.high,
+  low: (q) => q.low,
+  open: (q) => q.open,
+}
+
+/** Which column the list is sorted by. Null means the user's own drag order. */
+interface Sort {
+  id: ColumnId | 'symbol'
+  dir: 'asc' | 'desc'
+}
+
+const SORT_KEY = 'oa-trading-watchlist-sort'
+
+function readSort(): Sort | null {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SORT_KEY) || 'null')
+    return saved && typeof saved.id === 'string' && (saved.dir === 'asc' || saved.dir === 'desc')
+      ? saved
+      : null
+  } catch {
+    return null
+  }
+}
+
 /** Lakhs and crores: raw volume does not fit a 58px column. */
 function compact(value: number | undefined): string {
   if (typeof value !== 'number' || !Number.isFinite(value) || value === 0) return '-'
@@ -244,6 +276,22 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
   useEffect(() => {
     localStorage.setItem(DISPLAY_KEY, JSON.stringify(display))
   }, [display])
+
+  /**
+   * Column-header sort, TradingView-style: click cycles ascending, descending,
+   * then back to the list's own drag order (null). Persisted per browser like
+   * the other display prefs, since it is a "how I like this list" choice.
+   */
+  const [sort, setSort] = useState<Sort | null>(readSort)
+  useEffect(() => {
+    localStorage.setItem(SORT_KEY, JSON.stringify(sort))
+  }, [sort])
+  const toggleSort = (id: Sort['id']) =>
+    setSort((prev) => {
+      if (!prev || prev.id !== id) return { id, dir: 'asc' }
+      if (prev.dir === 'asc') return { id, dir: 'desc' }
+      return null
+    })
 
   /** The chosen columns, in the canonical order rather than click order. */
   const shownColumns = useMemo(
@@ -428,6 +476,30 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
     }
     return next
   }, [priced, multiQuotes, resolvedCloses])
+
+  /**
+   * Rows in display order: the list's own drag order when unsorted, or by the
+   * clicked column otherwise. A row with no quote yet (or a column with no
+   * value for it, e.g. no previous close) sorts to the bottom regardless of
+   * direction -- matching TradingView rather than treating "unknown" as zero,
+   * which would park it among the biggest losers.
+   */
+  const sortedItems = useMemo(() => {
+    if (!sort) return items
+    const dir = sort.dir === 'asc' ? 1 : -1
+    return [...items].sort((a, b) => {
+      if (sort.id === 'symbol') return dir * a.symbol.localeCompare(b.symbol)
+      const accessor = SORT_VALUE[sort.id]
+      const av = accessor?.(quotes[`${a.exchange}:${a.symbol}`] ?? ({} as Quote))
+      const bv = accessor?.(quotes[`${b.exchange}:${b.symbol}`] ?? ({} as Quote))
+      const aNum = typeof av === 'number' && Number.isFinite(av) ? av : null
+      const bNum = typeof bv === 'number' && Number.isFinite(bv) ? bv : null
+      if (aNum == null && bNum == null) return 0
+      if (aNum == null) return 1
+      if (bNum == null) return -1
+      return dir * (aNum - bNum)
+    })
+  }, [items, sort, quotes])
 
   // One request per instrument per trading day, and only for the ones that
   // need it, so a broker whose quote already carries a real previous close
@@ -812,16 +884,41 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
         </DropdownMenu>
       </div>
 
-      {/* Column header, built from the same selection as the rows below */}
+      {/* Column header, built from the same selection as the rows below.
+          Each cell is a sort toggle, TradingView-style: click cycles
+          ascending, descending, then back to the list's own drag order. */}
       <div
         className="grid shrink-0 gap-x-1.5 border-b px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70"
         style={{ gridTemplateColumns: gridTemplate }}
       >
-        <span>Symbol</span>
+        <button
+          type="button"
+          onClick={() => toggleSort('symbol')}
+          className="flex items-center gap-0.5 text-left hover:text-foreground"
+        >
+          Symbol
+          {sort?.id === 'symbol' &&
+            (sort.dir === 'asc' ? (
+              <ArrowUp className="h-2.5 w-2.5" />
+            ) : (
+              <ArrowDown className="h-2.5 w-2.5" />
+            ))}
+        </button>
         {shownColumns.map((column) => (
-          <span key={column.id} className="text-right">
+          <button
+            key={column.id}
+            type="button"
+            onClick={() => toggleSort(column.id)}
+            className="flex items-center justify-end gap-0.5 text-right hover:text-foreground"
+          >
             {column.label}
-          </span>
+            {sort?.id === column.id &&
+              (sort.dir === 'asc' ? (
+                <ArrowUp className="h-2.5 w-2.5" />
+              ) : (
+                <ArrowDown className="h-2.5 w-2.5" />
+              ))}
+          </button>
         ))}
         <span />
       </div>
@@ -851,7 +948,7 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
             </Button>
           </div>
         ) : (
-          items.map((item, index) => {
+          sortedItems.map((item, index) => {
             const key = `${item.exchange}:${item.symbol}`
             const quote = quotes[key]
             // Three states, not two: no previous close means no direction.
@@ -862,11 +959,17 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
             // downward drag lands BELOW the row it was dropped on; drawing
             // the line above it both times told the user the wrong thing.
             const dropBelow = dragId != null && items.findIndex((i) => i.id === dragId) < index
+            // Dragging to reorder only makes sense against the list's own
+            // order. While a column sort is active, the row's position on
+            // screen no longer matches its position in `items`, so a drop
+            // here would silently reorder the wrong pair of instruments.
+            const draggableRow = sort === null
             return (
               <div
                 key={item.id}
-                draggable
+                draggable={draggableRow}
                 onDragStart={(e) => {
+                  if (!draggableRow) return
                   // Firefox refuses to begin a drag unless dataTransfer carries
                   // something, so this is what makes reordering work there.
                   e.dataTransfer.effectAllowed = 'move'
@@ -874,12 +977,13 @@ export function WatchlistPanel({ apiKey, onPick, search, activeSymbol }: Props) 
                   setDragId(item.id)
                 }}
                 onDragOver={(e) => {
+                  if (!draggableRow) return
                   e.preventDefault()
                   e.dataTransfer.dropEffect = 'move'
                   setOverId(item.id)
                 }}
                 onDragLeave={() => setOverId((id) => (id === item.id ? null : id))}
-                onDrop={() => void dropOn(item.id)}
+                onDrop={() => draggableRow && void dropOn(item.id)}
                 onDragEnd={() => {
                   setDragId(null)
                   setOverId(null)
