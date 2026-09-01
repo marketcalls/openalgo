@@ -926,6 +926,7 @@ export class TradingTerminal {
   }
 
   private async placeFromMenu(side: OrderSide, type: OrderType) {
+    if (this.refuseWhileReplaying()) return
     if (!this.sym || !this.trade) {
       this.toast('search a symbol first')
       return
@@ -970,6 +971,7 @@ export class TradingTerminal {
   }
 
   async exitPosition() {
+    if (this.refuseWhileReplaying()) return
     if (!this.trade || !this.position || !this.sym) return
     const qty = Math.abs(this.position.net)
     const side: OrderSide = this.position.net > 0 ? 'SELL' : 'BUY'
@@ -1175,6 +1177,8 @@ export class TradingTerminal {
     this.chart.subscribeDrag(
       (id, p) => {
         if (!id.startsWith('order:') || id.endsWith('::close')) return
+        // Silent: a refusal toast on every pointer sample would be a wall of them.
+        if (this.tradingLocked()) return
         const rec = this.orderLines.get(id.slice(6))
         if (!rec) return
         if (rec.dragFrom == null) {
@@ -1185,6 +1189,8 @@ export class TradingTerminal {
       },
       (id, p) => {
         if (!id.startsWith('order:') || id.endsWith('::close')) return
+        // The release is the modify, so this is the one that must refuse.
+        if (this.refuseWhileReplaying()) return
         const oid = id.slice(6)
         const rec = this.orderLines.get(oid)
         if (!rec) return
@@ -1213,6 +1219,7 @@ export class TradingTerminal {
       if (id === 'trade:sell') return void this.placeFromMenu('SELL', 'MARKET')
       if (id === 'position::close') return void this.exitPosition()
       if (id.startsWith('order:') && id.endsWith('::close')) {
+        if (this.refuseWhileReplaying()) return
         const oid = id.slice(6, -7)
         this.trade!.cancel(oid)
           .then(() => {
@@ -2062,6 +2069,33 @@ export class TradingTerminal {
     return this.replay !== null
   }
 
+  /**
+   * Order entry is closed while the chart is replaying, or while a start bar is
+   * being picked.
+   *
+   * A replayed chart is a simulation, and an order placed from one is not: it
+   * goes to the broker, at the live price, against a chart showing a session
+   * that finished weeks ago. The two things a trader reads before pressing Buy,
+   * the candles and the button's own price, disagree by however far back the
+   * playhead is, and neither of them says so.
+   *
+   * Guarded here rather than only on the buttons, because every route into an
+   * order has to close: the on-chart Buy and Sell, the context menu, a bracket,
+   * dragging an order line to a new price, cancelling one, and closing a
+   * position. A guard on the visible control is a guard on the route somebody
+   * did not use.
+   */
+  private tradingLocked(): boolean {
+    return this.replay !== null || this.replayPicking
+  }
+
+  /** Says no once, in the words of the reason, rather than doing nothing. */
+  private refuseWhileReplaying(): boolean {
+    if (!this.tradingLocked()) return false
+    this.toast('Replay is a simulation. Leave replay to trade.', 'err')
+    return true
+  }
+
   replayState(): ReplayState | null {
     return this.replay?.state() ?? null
   }
@@ -2095,6 +2129,7 @@ export class TradingTerminal {
     this.replayPicking = true
     this.replayPickIndex = Math.floor(this.shownBars.length / 4)
     this.setReplayShade(this.replayPickIndex)
+    this.showTradeButtons(false)
     this.cb.onReplayChange?.(null)
   }
 
@@ -2126,6 +2161,7 @@ export class TradingTerminal {
     this.replayPicking = false
     this.replayPickIndex = null
     this.setReplayShade(null)
+    this.showTradeButtons(true)
     this.cb.onReplayChange?.(null)
   }
 
@@ -2180,6 +2216,7 @@ export class TradingTerminal {
       onFrame: (state) => this.cb.onReplayChange?.(state),
     })
     this.showReplayMark(true)
+    this.showTradeButtons(false)
     // Entering replay truncates the series to a prefix, but leaves the viewport
     // and the price range where the user had them -- which is at the right edge
     // on the newest bars, hundreds of bars past the end of that prefix and at a
@@ -2239,6 +2276,20 @@ export class TradingTerminal {
    * today, and reading a live decision off history is the mistake this prevents,
    * so it goes on with replay and comes off with it.
    */
+  /**
+   * Take the Buy and Sell buttons off the chart, or put them back.
+   *
+   * Removing rather than grey-ing: the panel quotes a live price, and a live
+   * price sitting over a replayed session is the confusion this exists to
+   * remove, whether or not it can be pressed. `removePrimitive` only marks the
+   * pane dirty, so the chart repaints them away on the next frame.
+   */
+  private showTradeButtons(on: boolean): void {
+    if (!this.chart || !this.tradeBtns) return
+    if (on) this.chart.addPrimitive(this.tradeBtns, 0)
+    else this.chart.removePrimitive(this.tradeBtns)
+  }
+
   private showReplayMark(on: boolean): void {
     if (!this.chart) return
     if (on) {
@@ -2260,6 +2311,7 @@ export class TradingTerminal {
     this.replay.stop()
     this.replay = null
     this.showReplayMark(false)
+    this.showTradeButtons(true)
     if (!this.replayAutoScale) this.chart?.setAutoScale(false)
     // The session kept accumulating in rawBars while replay held the series, so
     // the live chart comes back caught up rather than frozen at the moment
