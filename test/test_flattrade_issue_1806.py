@@ -588,37 +588,58 @@ def test_an_absent_env_override_uses_the_default(monkeypatch) -> None:
     assert rl._env_int("FLATTRADE_MAX_PER_SECOND", 9, ceiling=40) == 9
 
 
-def test_multiquote_batching_does_not_add_its_own_fixed_delay(monkeypatch) -> None:
-    """Behavioural: chunking must not impose wall-clock delay of its own.
+def test_multiquote_batching_imposes_no_delay_of_its_own(monkeypatch) -> None:
+    """Chunking must not sleep. Pacing belongs to DATA_LIMITER.
 
     The old code slept a fixed 1.1s between chunks. Being per-invocation it
-    could not see the concurrent option-chain fetches the live log shows
-    (three 42-symbol fetches starting at 11:16:41, :44 and :49 before any
-    finished), while DATA_LIMITER's rolling window bounds them together. All
-    the sleep bought was ~4.4s of latency per call.
+    could not see the concurrent option-chain fetches the live log shows (three
+    42-symbol fetches starting at 11:16:41, :44 and :49 before any finished),
+    while the limiter's rolling window bounds them together. All the sleep
+    bought was ~4.4s of latency per call, which pushed each response out far
+    enough for the next refresh to land on top of it.
 
-    Measures elapsed time with the batch worker stubbed out, so it is immune to
-    how the chunking is written.
+    Asserts that sleep is never called rather than timing the call: a wall-clock
+    threshold would flake under CI load, and would also pass on a sleep short
+    enough to hide under it. Recording the calls catches a reintroduced sleep of
+    any duration, and reports how long it would have been.
     """
-    import time as _time
-
     from broker.flattrade.api import data
 
-    bd = data.BrokerData("tok")
-    batches = []
+    slept: list[float] = []
+    monkeypatch.setattr(data.time, "sleep", lambda seconds: slept.append(seconds))
+
+    batches: list[list] = []
     monkeypatch.setattr(
         data.BrokerData, "_process_quotes_batch", lambda self, b: batches.append(b) or []
     )
 
     symbols = [{"symbol": f"S{i}", "exchange": "NFO"} for i in range(42)]
-    started = _time.monotonic()
-    bd.get_multiquotes(symbols)
-    elapsed = _time.monotonic() - started
+    data.BrokerData("tok").get_multiquotes(symbols)
 
-    assert len(batches) == 5  # still chunked
-    # Five chunks under the old code cost 4 x 1.1s of sleep. Nothing but the
-    # limiter (stubbed away here) may add delay.
-    assert elapsed < 0.5, f"batching added {elapsed:.2f}s of its own delay"
+    assert slept == [], f"batching slept {sum(slept)}s across {len(slept)} calls"
+    # Still chunked, and every symbol still dispatched exactly once.
+    assert sum(len(b) for b in batches) == len(symbols)
+    assert len(batches) == (len(symbols) + 9) // 10
+    assert max(len(b) for b in batches) <= 10
+
+
+def test_a_single_batch_needs_no_chunking_and_still_never_sleeps(monkeypatch) -> None:
+    """The <= BATCH_SIZE path is a separate branch; it must not sleep either."""
+    from broker.flattrade.api import data
+
+    slept: list[float] = []
+    monkeypatch.setattr(data.time, "sleep", lambda seconds: slept.append(seconds))
+    batches: list[list] = []
+    monkeypatch.setattr(
+        data.BrokerData, "_process_quotes_batch", lambda self, b: batches.append(b) or []
+    )
+
+    data.BrokerData("tok").get_multiquotes(
+        [{"symbol": "SBIN", "exchange": "NSE"}, {"symbol": "INFY", "exchange": "NSE"}]
+    )
+
+    assert slept == []
+    assert len(batches) == 1
 
 
 # --------------------------------------------------------------------------
