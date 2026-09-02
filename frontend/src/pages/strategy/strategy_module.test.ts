@@ -12,9 +12,9 @@ import {
   allowedProductsForLegs,
   batchQuantityLabelFor,
   convertLegKind,
+  DIRECTION_ACCEPTS,
   defaultQtyMode,
   derivativeExchangeFor,
-  DIRECTION_ACCEPTS,
   favorablePeakPoints,
   filterStrikes,
   formatIst,
@@ -37,9 +37,9 @@ import {
   type QtyMode,
   resolvedQuantity,
   resolveExpiryRank,
-  segmentSuitsExchange,
   SIGNAL_LEG_SEGMENTS,
   SIGNAL_MODE_TABS,
+  segmentSuitsExchange,
   signalSegmentsForTab,
   sortExpiries,
   TAB_SEGMENTS,
@@ -931,13 +931,7 @@ describe('legToPayload, batch', () => {
       'batch'
     )
     expect(payload).not.toHaveProperty('expiry')
-    expect(Object.keys(payload).sort()).toEqual([
-      'id',
-      'lots',
-      'position',
-      'risk_unit',
-      'segment',
-    ])
+    expect(Object.keys(payload).sort()).toEqual(['id', 'lots', 'position', 'risk_unit', 'segment'])
   })
 })
 
@@ -1283,9 +1277,9 @@ describe('legToPayload, quantity mode', () => {
 })
 
 describe('withQtyMode', () => {
-  // Decided: the number is kept and reinterpreted, never converted. Converting
-  // would silently rewrite what the user typed, and could only work one way.
-  it('keeps the number the user typed rather than converting it', () => {
+  // With no lot size there is nothing to convert by, so the number is kept and
+  // reinterpreted. That is the older behaviour and it still holds here.
+  it('keeps the number when no lot size is known', () => {
     const asUnits = withQtyMode(NIFTY_FUT_LEG, 'units')
     expect(asUnits.qty).toBe(5)
     expect(asUnits.qty_mode).toBe('units')
@@ -1446,7 +1440,9 @@ describe('the product a mixed basket is allowed to carry', () => {
     expect(productHintForLegs([cash, option], 'NRML')).toBe(
       'Carried: the derivative legs are sent as NRML and the cash legs as CNC.'
     )
-    expect(productHintForLegs([cash], 'CNC')).toBe('Cash equity: CNC takes delivery, MIS is intraday.')
+    expect(productHintForLegs([cash], 'CNC')).toBe(
+      'Cash equity: CNC takes delivery, MIS is intraday.'
+    )
     expect(productHintForLegs([option], 'MIS')).toBe(
       'Intraday on every leg, squared off the same day.'
     )
@@ -1481,5 +1477,44 @@ describe('the stocks tab trades any listed equity, on either venue', () => {
   it('keeps the stocks universe open, so a typed symbol is accepted', () => {
     expect(TAB_UNDERLYING_IS_CLOSED_SET.stocks_fno).toBe(false)
     expect(TAB_UNDERLYING_IS_CLOSED_SET.weekly_monthly).toBe(true)
+  })
+})
+
+describe('withQtyMode converts once the lot size is known', () => {
+  it('turns lots into the shares they stand for', () => {
+    // One lot of RELIANCE is 500 shares. Leaving "1" on the toggle offered a
+    // quantity that cannot be traded and read as though nothing happened.
+    const leg: Leg = { id: 1, segment: 'futures', exchange: 'NFO', qty: 1, qty_mode: 'lots' }
+    expect(withQtyMode(leg, 'units', 500).qty).toBe(500)
+  })
+
+  it('scales a multi-lot quantity', () => {
+    const leg: Leg = { id: 1, segment: 'futures', exchange: 'NFO', qty: 3, qty_mode: 'lots' }
+    expect(withQtyMode(leg, 'units', 500).qty).toBe(1500)
+  })
+
+  it('divides on the way back, floored to whole lots', () => {
+    const leg: Leg = { id: 1, segment: 'futures', exchange: 'NFO', qty: 1500, qty_mode: 'units' }
+    expect(withQtyMode(leg, 'lots', 500).qty).toBe(3)
+  })
+
+  it('never floors a part lot to zero', () => {
+    const leg: Leg = { id: 1, segment: 'futures', exchange: 'NFO', qty: 300, qty_mode: 'units' }
+    expect(withQtyMode(leg, 'lots', 500).qty).toBe(1)
+  })
+
+  it('does not convert when the mode is unchanged', () => {
+    const leg: Leg = { id: 1, segment: 'futures', exchange: 'NFO', qty: 2, qty_mode: 'lots' }
+    expect(withQtyMode(leg, 'lots', 500).qty).toBe(2)
+  })
+
+  it('leaves a cash leg alone, because lots is refused there', () => {
+    const leg: Leg = { id: 1, segment: 'cash', exchange: 'NSE', qty: 137, qty_mode: 'units' }
+    expect(withQtyMode(leg, 'lots', 500)).toEqual(leg)
+  })
+
+  it('still keeps the number when the lot size is unknown', () => {
+    const leg: Leg = { id: 1, segment: 'futures', exchange: 'NFO', qty: 4, qty_mode: 'lots' }
+    expect(withQtyMode(leg, 'units', null).qty).toBe(4)
   })
 })

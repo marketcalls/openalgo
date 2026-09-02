@@ -630,10 +630,12 @@ function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: Signa
   const partLot = qtyMode === 'units' && derivative && !isWholeLots(qty, lot.lotSize)
 
   const quantityLabel =
-    qtyMode === 'lots' ? 'Lots' : leg.segment === 'cash' ? 'Quantity (shares)' : 'Quantity (units)'
+    qtyMode === 'lots' ? 'Lots' : derivative ? 'Quantity (units)' : 'Quantity (shares)'
 
   const setQtyMode = (mode: QtyMode) => {
-    if (mode !== qtyMode) onChange(withQtyMode(leg, mode))
+    // The lot size the card has already resolved, so the toggle converts
+    // rather than reinterpreting: one lot of RELIANCE becomes 500 shares.
+    if (mode !== qtyMode) onChange(withQtyMode(leg, mode, lot.lotSize))
   }
 
   return (
@@ -686,7 +688,7 @@ function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: Signa
                   expiry: nextSegment === 'futures' ? (leg.expiry ?? 'monthly') : null,
                   // Lots on a cash venue is refused outright, so moving to one
                   // moves the leg to units rather than leaving it unsavable.
-                  qty_mode: isDerivativeExchange(nextVenue) ? (leg.qty_mode ?? 'lots') : 'units',
+                  qty_mode: defaultQtyMode(nextVenue),
                 })
               }}
               className={`${SELECT_CLASS_SM} font-mono`}
@@ -716,7 +718,7 @@ function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: Signa
                   // rather than left for the payload to strip.
                   expiry: segment === 'futures' ? (leg.expiry ?? 'monthly') : null,
                   exchange: nextVenue,
-                  qty_mode: isDerivativeExchange(nextVenue) ? (leg.qty_mode ?? 'lots') : 'units',
+                  qty_mode: defaultQtyMode(nextVenue),
                 })
               }}
               className={SELECT_CLASS_SM}
@@ -791,7 +793,7 @@ function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: Signa
                     onClick={() => setQtyMode(mode)}
                     title={
                       mode === 'lots' && !derivative
-                        ? `${venue} has no lot size to multiply by, so cash is counted in units.`
+                        ? `${venue} has no lot size to multiply by, so cash is counted in shares.`
                         : undefined
                     }
                     className={cn(
@@ -802,7 +804,9 @@ function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: Signa
                       mode === 'lots' && !derivative && 'cursor-not-allowed opacity-40'
                     )}
                   >
-                    {mode}
+                    {/* On a derivative "units" is contracts. On cash it is
+                        shares, which is the word the instrument actually uses. */}
+                    {mode === 'units' && !derivative ? 'shares' : mode}
                   </button>
                 ))}
               </div>
@@ -856,7 +860,7 @@ function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: Signa
               </p>
             ) : (
               <p className="text-[10px] text-muted-foreground">
-                {leg.segment === 'cash' ? 'Shares, sent as-is.' : 'Units, sent as-is.'}
+                {derivative ? 'Units, sent as-is.' : 'Shares, sent as-is.'}
               </p>
             )}
           </div>

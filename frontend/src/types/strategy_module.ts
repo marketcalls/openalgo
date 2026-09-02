@@ -758,23 +758,37 @@ export function resolvedQuantity(
 /**
  * The leg that results from switching to another quantity mode.
  *
- * The number is kept and reinterpreted, never converted. Rewriting 5 lots into
- * 325 units would silently edit what the user typed, and the reverse only
- * works when the lot size is known and divides exactly - so a converting
- * toggle would sometimes convert and sometimes not, which is harder to trust
- * than one that never does. A number that is wrong in the new mode fails
- * visibly: the card says so, and the server refuses a part lot by name.
+ * The number is converted when the lot size is known, because the same digit
+ * means two different trades either side of the toggle. One lot of RELIANCE is
+ * 500 shares, so leaving "1" on screen after a switch to units offers a
+ * quantity that cannot be traded at all, and reads as though the toggle did
+ * nothing. Switching back divides, floored to whole lots and never below one,
+ * so a part-lot number resolves to the lots it covers rather than to nonsense.
+ *
+ * With no lot size the number is kept and reinterpreted, which is the older
+ * behaviour: there is nothing to convert by, and inventing a factor would be
+ * worse than leaving a figure the card already flags. A units quantity off a
+ * lot boundary is still called out by `isWholeLots`, and the server refuses a
+ * part lot by name.
  *
  * Lots on a cash venue is refused outright by the validator, so the switch is
  * a no-op there rather than something to be undone on save.
  */
-export function withQtyMode(leg: Leg, mode: QtyMode): Leg {
+export function withQtyMode(leg: Leg, mode: QtyMode, lotSize?: number | null): Leg {
   if (mode === 'lots' && !isDerivativeExchange(leg.exchange)) return leg
+
+  const current = leg.qty ?? 1
+  const size = lotSize && lotSize > 0 ? lotSize : null
+  let converted = current
+  if (size && mode !== (leg.qty_mode ?? defaultQtyMode(leg.exchange))) {
+    converted = mode === 'units' ? current * size : Math.max(1, Math.floor(current / size))
+  }
+
   return {
     ...leg,
     qty_mode: mode,
-    // Only the cap changes with the mode: 10,000 lots against 1,000,000 units.
-    qty: Math.min(maxQtyFor(mode), leg.qty ?? 1),
+    // The cap changes with the mode too: 10,000 lots against 1,000,000 units.
+    qty: Math.min(maxQtyFor(mode), Math.max(1, converted)),
   }
 }
 
