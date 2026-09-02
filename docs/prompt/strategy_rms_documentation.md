@@ -498,7 +498,7 @@ resolve_live_auth(api_key) -> (auth_token, broker, error)
 dispatch_order(*, mode, api_key, order) -> DispatchResult(ok, broker_order_id, response, error)
 ```
 
-Three departures from how the rest of the product places orders:
+Five departures from how the rest of the product places orders:
 
 - **Mode is per run, not global.** The analyzer setting is one platform-wide
   switch and `place_order` consults it, but two runs may disagree. This module
@@ -512,7 +512,12 @@ Three departures from how the rest of the product places orders:
   every leg. `build_order` reads it as the intent rather than the literal: MIS
   is intraday everywhere, anything else means carry, which is NRML on a
   derivatives venue and CNC on cash. A basket mixing a cash leg and an option
-  leg therefore works, and no leg is ever sent a product its venue refuses.
+  leg therefore works, and no leg is ever sent a product its venue refuses. One
+  combination is refused rather than translated: a short cash leg under a
+  carrying product, because cash cannot be held short overnight and anything
+  that is not MIS would reach the venue as a naked short delivery. A batch leg
+  is refused at save; a signal leg at signal time, when the side being opened
+  is known rather than the sides it accepts.
 - **Entries are MARKET.** Neither the strategy nor a leg carries a price, so a
   LIMIT, SL or SL-M entry would go out priced at zero. Exits are MARKET on every
   path regardless: a stop that cannot fill is not a stop.
@@ -844,7 +849,7 @@ resolve_leg(leg, underlying, underlying_exchange, strategy_type=None, *,
             api_key=None, underlying_ltp=None) -> ResolvedLeg
 derivatives_exchange(exchange) -> str
 lot_size_for(symbol, exchange) -> int | None
-quantity_is_whole_lots(quantity, lot_size) -> bool
+quantity_is_whole_lots(quantity, symbol, exchange) -> (whole, lot_size)
 resolve_quantity(value, qty_mode, symbol, exchange) -> (quantity, lot_size, error)
 contract_exists(symbol, exchange) -> bool
 ```
@@ -861,12 +866,14 @@ unanchored prefix let `GOLD` match `GOLDM` and `GOLDPETAL`, so a base with no
 contract of its own was handed a neighbour's lot size and the user's lot count
 was multiplied by it.
 
-`contract_exists` is what a **signal** leg is checked against. A signal leg
-names its own instrument, so nothing resolves it from an underlying and a rank,
-and a futures leg configured as the base symbol went to the broker verbatim
-with a quantity that looked entirely plausible. It answers True when the master
-contract has no rows for that venue at all, so a strategy is not blocked merely
-because the contract has not been downloaded yet.
+`contract_exists` is what a **signal** leg is checked against, on every venue
+including cash. A signal leg names its own instrument, so nothing resolves it
+from an underlying and a rank: a futures leg configured as the base symbol went
+to the broker verbatim with a quantity that looked entirely plausible, and a
+misspelled equity on a cash venue went the same way, because a cash leg is not
+resolved from an underlying either. It answers True when the master contract
+has no rows for that venue at all, so a strategy is not blocked merely because
+the contract has not been downloaded yet.
 
 Delegates every piece of market knowledge it can to
 `services/option_symbol_service.py`, including the rule that an MCX commodity
@@ -924,6 +931,18 @@ strategy scheduler failed is worse than one that boots without it.
 
 Both enforce the same properties:
 
+- **Configuration vocabularies are not all in the store.** `universe_tab`, a
+  leg's `segment`, `product`, `pricetype` and `qty_mode` are validated in
+  `blueprints/strategy_module.py`, because the store has no opinion on a leg's
+  shape: legs are a JSON column. `UNIVERSE_TABS` and `TAB_SEGMENTS` are the
+  pair that matters, because the tab decides which segments can resolve against
+  the underlying, and cash resolves on `stocks_fno` only. A configuration that
+  names no tab has one derived from its own legs rather than defaulted.
+- **`strategy_kind` is settable at create and never updatable.** It sits
+  outside `UPDATABLE_FIELDS`, and `update_strategy` refuses a request to change
+  it by name rather than dropping it silently, which would have read as
+  success. The two kinds do not share a leg shape, so a flip would leave every
+  stored leg describing the other kind's contract in an opaque JSON column.
 - `mode` is required on start and has no default anywhere in the chain.
 - Live is opt-in per strategy.
 - A strategy that is not yours answers **404, never 403**, identical to one that

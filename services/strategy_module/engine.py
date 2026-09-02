@@ -363,7 +363,19 @@ def start_run(
                     ),
                     legs=placed,
                 )
-            return StartResult(ok=False, error="Every entry order was rejected", legs=placed)
+            # The run id and the broker's own words come back with the refusal.
+            # Without them the caller was told only that every entry was
+            # rejected, with no run to open and no reason to read, while the
+            # cause sat on the order rows all along: "MIS orders cannot be
+            # placed after square-off time", "insufficient funds", whatever the
+            # venue actually said. The finalised run is still the place those
+            # rows live, so naming it is what makes the refusal actionable.
+            return StartResult(
+                ok=False,
+                run_id=run_id,
+                error=_rejection_summary(placed),
+                legs=placed,
+            )
 
         return StartResult(ok=True, run_id=run_id, legs=placed)
     except Exception:
@@ -593,6 +605,31 @@ def _replay_order_update(broker_order_id: str | None) -> None:
         order_events.replay_for(broker_order_id)
     except Exception:
         logger.exception("Could not replay a held order update for %s", broker_order_id)
+
+
+def _rejection_summary(placed: list[dict[str, Any]]) -> str:
+    """Why every entry was refused, in the venue's own words.
+
+    Each leg already carries the dispatch error; only the caller never saw it.
+    One distinct reason is reported as itself, because a basket refused for one
+    cause has one thing to fix. Several are listed per leg so a mixed refusal
+    does not hide the leg that failed for a different reason.
+    """
+    reasons: dict[str, list[Any]] = {}
+    for leg in placed:
+        reason = str(leg.get("error") or "").strip()
+        if reason:
+            reasons.setdefault(reason, []).append(leg.get("leg_id"))
+
+    if not reasons:
+        return "Every entry order was rejected"
+    if len(reasons) == 1:
+        return f"Every entry order was rejected: {next(iter(reasons))}"
+    detail = "; ".join(
+        f"leg {', '.join(str(leg_id) for leg_id in legs)}: {reason}"
+        for reason, legs in reasons.items()
+    )
+    return f"Every entry order was rejected. {detail}"
 
 
 def _place_entries(
@@ -943,7 +980,9 @@ def _apply_fill(
                 leg["realized_pnl"] = float(leg.get("realized_pnl") or 0.0) + (
                     (float(avg_price) - entry) * applied_qty * sign
                 )
-            owns_current_order = order_row_id is None or superseded.get("exit_order_id") == order_row_id
+            owns_current_order = (
+                order_row_id is None or superseded.get("exit_order_id") == order_row_id
+            )
             release_current_order = order_terminal and owns_current_order
             if remaining_qty > 0 or not release_current_order:
                 superseded["qty"] = remaining_qty
@@ -1007,9 +1046,7 @@ def _apply_fill(
                 # whose remainder was cancelled is ordinary on an illiquid
                 # strike; every later exit must use what actually filled.
                 managed_entry_qty = (
-                    cumulative_filled_qty
-                    if cumulative_filled_qty is not None
-                    else filled_qty
+                    cumulative_filled_qty if cumulative_filled_qty is not None else filled_qty
                 )
                 if managed_entry_qty is not None and managed_entry_qty != leg.get("qty"):
                     deferred_warnings.append(
@@ -1049,7 +1086,9 @@ def _apply_fill(
                         )
                     )
                     leg["realized_pnl"] = float(leg.get("realized_pnl") or 0.0)
-                owns_current_order = order_row_id is None or leg.get("exit_order_id") == order_row_id
+                owns_current_order = (
+                    order_row_id is None or leg.get("exit_order_id") == order_row_id
+                )
                 release_current_order = order_terminal and owns_current_order
                 if remaining_qty > 0:
                     leg["qty"] = remaining_qty
@@ -1105,10 +1144,7 @@ def _apply_fill(
     # audit trail that is supposed to describe the day. A signal run is closed
     # by the scheduler's square-off, by an explicit stop, or by the session
     # boundary when the next day's first signal arrives.
-    if (
-        requested_reason is None
-        and strategy_kind == "signal"
-    ):
+    if requested_reason is None and strategy_kind == "signal":
         logger.debug("Run %s is flat but signal-mode; leaving it open for the session", run_id)
         return True
 
@@ -1811,9 +1847,7 @@ def close_leg(run_id: int, leg_id: Any, user_id: str) -> dict[str, Any]:
     if not api_key:
         return {"ok": False, "error": "No API key is configured for this user"}
 
-    exits = _exit_legs(
-        run_id, strategy, [leg_id], "exit_leg_manual", run_mode, api_key, user_id
-    )
+    exits = _exit_legs(run_id, strategy, [leg_id], "exit_leg_manual", run_mode, api_key, user_id)
     if not exits:
         return {"ok": False, "error": "That leg is not open"}
 
@@ -2126,11 +2160,7 @@ def _process_tick_for_run(run_id: int, symbol: str, exchange: str, ltp: float) -
                     {
                         "symbol": str(leg.get("symbol") or ""),
                         "exchange": str(leg.get("exchange") or ""),
-                        "ltp": (
-                            float(leg["ltp"])
-                            if leg.get("ltp") is not None
-                            else None
-                        ),
+                        "ltp": (float(leg["ltp"]) if leg.get("ltp") is not None else None),
                         "mtm": round(float(leg.get("mtm") or 0.0), 2),
                         "tick_source": str(leg.get("tick_source") or ""),
                         "qty": int(leg.get("qty") or 0),
