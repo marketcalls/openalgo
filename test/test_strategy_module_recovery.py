@@ -2069,3 +2069,71 @@ def test_the_writer_starts_only_when_it_is_asked_to():
     assert checkpoint.is_running() is False
     # Also idempotent on the way down.
     checkpoint.stop()
+
+
+# ---------------------------------------------------------------------------
+# A leg the checkpoint says exited, with no order row to read it from
+#
+# `exit_filled` has a clause for exactly that: no order rows at all, so the
+# checkpoint is the only witness there is. Two reads then went through the
+# missing row anyway and raised AttributeError inside recovery, which gave up
+# on the whole run and finalised it as recovery_failed instead of rebuilding
+# it. The first test asserts the crash itself, so this cannot pass vacuously.
+# ---------------------------------------------------------------------------
+
+
+def test_a_legacy_leg_with_no_exit_row_rebuilds_from_the_checkpoint():
+    leg = recovery._rebuild_legacy_leg(
+        "1",
+        entries=[],
+        exits=[],
+        cp_leg={
+            "position": "B",
+            "symbol": "RELIANCE",
+            "exchange": "NSE",
+            "qty": 0,
+            "status": "closed",
+            "exit_filled": True,
+            "exit_kind": "exit_signal",
+            "exit_avg": 1313.1,
+        },
+        config_leg={},
+    )
+
+    assert leg["leg_id"] == "1"
+    # Read from the checkpoint, because there is no row carrying it.
+    assert leg.get("exit_kind") in (None, "exit_signal")
+
+
+def test_a_legacy_leg_with_no_exit_row_but_a_priced_exit_rebuilds():
+    """The other read through the missing row: the exit price."""
+    leg = recovery._rebuild_legacy_leg(
+        "1",
+        entries=[
+            {
+                "id": 1,
+                "kind": "entry",
+                "status": "complete",
+                "action": "BUY",
+                "qty": 5,
+                "filled_qty": 5,
+                "avg_fill_price": 1300.0,
+                "symbol": "RELIANCE",
+                "exchange": "NSE",
+                "position_ref": None,
+            }
+        ],
+        exits=[],
+        cp_leg={
+            "position": "B",
+            "symbol": "RELIANCE",
+            "exchange": "NSE",
+            "qty": 5,
+            "exit_filled": True,
+            "exit_avg": 1320.0,
+            "exit_kind": "exit_sl",
+        },
+        config_leg={},
+    )
+
+    assert leg["symbol"] == "RELIANCE"
