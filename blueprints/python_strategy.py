@@ -61,6 +61,13 @@ IST = pytz.timezone("Asia/Kolkata")
 # Global storage with thread locks for safety
 RUNNING_STRATEGIES = {}  # {strategy_id: {'process': subprocess.Popen, 'started_at': datetime}}
 STRATEGY_CONFIGS = {}  # {strategy_id: config_dict}
+# Strategies whose process is being terminated right now. stop_strategy_process
+# waits outside PROCESS_LOCK, so between claiming a strategy and writing its
+# bookkeeping back it is in neither RUNNING_STRATEGIES nor finished. Without a
+# marker for that window a start arriving mid-wait sees the id as absent and
+# launches a replacement, whose config the finishing stop then overwrites with
+# is_running=False, leaving a live trading process nothing will stop.
+STOPPING_STRATEGIES = set()
 SCHEDULER = None
 PROCESS_LOCK = threading.RLock()  # Reentrant lock for nested process operations
 
@@ -425,6 +432,12 @@ def start_strategy_process(strategy_id):
         if strategy_id in RUNNING_STRATEGIES:
             return False, "Strategy already running"
 
+        # A stop is mid-flight and its process may still be alive. Starting a
+        # replacement now would leave two processes for one strategy, and the
+        # finishing stop would then clear the new one's config.
+        if strategy_id in STOPPING_STRATEGIES:
+            return False, "Strategy is still stopping, try again in a moment"
+
         config = STRATEGY_CONFIGS.get(strategy_id)
         if not config:
             return False, "Strategy configuration not found"
@@ -612,13 +625,22 @@ def stop_strategy_process(strategy_id):
     process-wide lock across that stalls every other caller of it, which is
     every start, stop, restart and status read on the page.
 
-    Claiming means popping the entry, so a second stop arriving during the wait
-    is told the strategy is not running rather than sending a second signal to
-    the same PID. If termination fails the entry goes back, because the process
-    is still alive and something has to still be tracking it.
+    Claiming removes the entry and records the id in STOPPING_STRATEGIES, which
+    is what makes the window safe. A second stop is told the strategy is already
+    stopping rather than sending another signal to the same PID, and a start is
+    refused rather than launching a replacement whose config this call would go
+    on to clear. If termination fails the entry goes back, because the process is
+    still alive and something has to still be tracking it.
+
+    Callers must not hold PROCESS_LOCK. It is reentrant, so doing so does not
+    deadlock, it silently reinstates the very stall this function exists to
+    avoid.
     """
     # --- Claim, under the lock -------------------------------------------------
     with PROCESS_LOCK:
+        if strategy_id in STOPPING_STRATEGIES:
+            return False, "Strategy is already stopping"
+
         strategy_info = RUNNING_STRATEGIES.pop(strategy_id, None)
         orphan_pid = None
 
@@ -632,65 +654,83 @@ def stop_strategy_process(strategy_id):
             if orphan_pid is None:
                 return False, "Strategy not running"
 
-    # --- Terminate and wait, outside the lock ---------------------------------
-    if orphan_pid is not None:
-        try:
-            terminate_process_cross_platform(orphan_pid)
-        except Exception as e:
-            logger.exception(f"Failed to stop orphaned strategy {strategy_id}: {e}")
-            return False, f"Failed to stop strategy: {str(e)}"
+        STOPPING_STRATEGIES.add(strategy_id)
 
+    try:
+        # --- Terminate and wait, outside the lock -----------------------------
+        if orphan_pid is not None:
+            try:
+                terminate_process_cross_platform(orphan_pid)
+            except Exception as e:
+                logger.exception(f"Failed to stop orphaned strategy {strategy_id}: {e}")
+                return False, f"Failed to stop strategy: {str(e)}"
+
+            # terminate_process_cross_platform swallows its own errors, so a
+            # clean return is not evidence the process is gone. Clearing the
+            # config on a survivor would strand a live process with nothing
+            # tracking it.
+            if check_process_status(orphan_pid):
+                return False, f"Failed to stop strategy PID {orphan_pid}"
+
+            with PROCESS_LOCK:
+                config = STRATEGY_CONFIGS.get(strategy_id)
+                if config is not None:
+                    config["is_running"] = False
+                    config["pid"] = None
+                    config["last_stopped"] = get_ist_time().isoformat()
+                    save_configs()
+            return True, "Strategy stopped"
+
+        process = strategy_info.get("process")
+        pid = strategy_info.get("pid")
+
+        try:
+            if isinstance(process, subprocess.Popen):
+                stopped = terminate_popen_safely(process, pid, terminate_timeout=5, kill_timeout=2)
+            elif hasattr(process, "terminate"):
+                # Restored strategies are tracked as psutil.Process objects.
+                # Do not call psutil.Process.wait(timeout): under
+                # gunicorn-eventlet on Linux, psutil's pidfd wait path needs
+                # select.poll(), which eventlet removes from the patched
+                # select module.
+                stopped = terminate_psutil_process_safely(
+                    process, terminate_timeout=5, kill_timeout=2
+                )
+            else:
+                # Fallback: use PID directly
+                terminate_process_cross_platform(pid)
+                stopped = not (pid and check_process_status(pid))
+        except Exception as e:
+            logger.exception(f"Failed to stop strategy {strategy_id}: {e}")
+            stopped = False
+
+        if not stopped:
+            # The process outlived both signals, so it is still out there. Put
+            # the entry back rather than dropping the only record of it.
+            with PROCESS_LOCK:
+                RUNNING_STRATEGIES.setdefault(strategy_id, strategy_info)
+            return False, f"Failed to stop strategy PID {pid}"
+
+        # --- Bookkeeping, under the lock --------------------------------------
+        # The entry is claimed, so the log handle is ours alone to close.
+        close_log_handle_safely(strategy_info)
+
+        ist_now = get_ist_time()
+        status = status_message = None
         with PROCESS_LOCK:
             config = STRATEGY_CONFIGS.get(strategy_id)
             if config is not None:
                 config["is_running"] = False
+                config["last_stopped"] = ist_now.isoformat()
                 config["pid"] = None
-                config["last_stopped"] = get_ist_time().isoformat()
                 save_configs()
-        return True, "Strategy stopped"
-
-    process = strategy_info.get("process")
-    pid = strategy_info.get("pid")
-
-    try:
-        if isinstance(process, subprocess.Popen):
-            stopped = terminate_popen_safely(process, pid, terminate_timeout=5, kill_timeout=2)
-        elif hasattr(process, "terminate"):
-            # Restored strategies are tracked as psutil.Process objects.
-            # Do not call psutil.Process.wait(timeout): under
-            # gunicorn-eventlet on Linux, psutil's pidfd wait path needs
-            # select.poll(), which eventlet removes from the patched
-            # select module.
-            stopped = terminate_psutil_process_safely(process, terminate_timeout=5, kill_timeout=2)
-        else:
-            # Fallback: use PID directly
-            terminate_process_cross_platform(pid)
-            stopped = True
-    except Exception as e:
-        logger.exception(f"Failed to stop strategy {strategy_id}: {e}")
-        stopped = False
-
-    if not stopped:
-        # The process outlived both signals, so it is still out there. Put the
-        # entry back rather than dropping the only record of it.
+                status, status_message = get_schedule_status(config)
+    finally:
+        # Released on every path, including the two early returns above, or the
+        # strategy can never be started or stopped again for the life of the
+        # process.
         with PROCESS_LOCK:
-            RUNNING_STRATEGIES.setdefault(strategy_id, strategy_info)
-        return False, f"Failed to stop strategy PID {pid}"
-
-    # --- Bookkeeping, under the lock ------------------------------------------
-    # The entry is already claimed, so the log handle is ours alone to close.
-    close_log_handle_safely(strategy_info)
-
-    ist_now = get_ist_time()
-    status = status_message = None
-    with PROCESS_LOCK:
-        config = STRATEGY_CONFIGS.get(strategy_id)
-        if config is not None:
-            config["is_running"] = False
-            config["last_stopped"] = ist_now.isoformat()
-            config["pid"] = None
-            save_configs()
-            status, status_message = get_schedule_status(config)
+            STOPPING_STRATEGIES.discard(strategy_id)
 
     if status is not None:
         broadcast_status_update(strategy_id, status, status_message)
@@ -820,12 +860,21 @@ def terminate_popen_safely(process, pid, terminate_timeout=5, kill_timeout=2):
             if wait_for_popen_exit(process, terminate_timeout):
                 return True
 
-            # Still alive: taskkill takes the whole tree, which terminate() does not.
-            subprocess.run(
+            # Still alive: taskkill takes the whole tree, which terminate() does
+            # not. Spawned rather than subprocess.run: run() waits synchronously
+            # for taskkill to finish, which is the same blocking-wait problem one
+            # level down. Poll it cooperatively instead and reap it either way.
+            killer = subprocess.Popen(
                 ["taskkill", "/F", "/T", "/PID", str(pid)],
-                capture_output=True,
-                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
+            try:
+                wait_for_popen_exit(killer, kill_timeout)
+            finally:
+                if killer.poll() is None:
+                    killer.kill()
+                    killer.poll()
             return wait_for_popen_exit(process, kill_timeout)
 
         # Unix-like: signal the process group so the strategy's own children go too.
@@ -2042,13 +2091,19 @@ def delete_strategy(strategy_id):
     if not is_owner:
         return error_response
 
-    with PROCESS_LOCK:  # Thread-safe operation
-        # Stop if running
-        if strategy_id in RUNNING_STRATEGIES or (
+    # Stop first, and outside PROCESS_LOCK. stop_strategy_process waits for the
+    # process to die and takes the lock itself; calling it from inside a held
+    # lock is reentrant, so it would not deadlock, it would just hold the lock
+    # across the wait and stall every other caller, which is what that function
+    # exists to avoid.
+    with PROCESS_LOCK:
+        needs_stop = strategy_id in RUNNING_STRATEGIES or (
             strategy_id in STRATEGY_CONFIGS and STRATEGY_CONFIGS[strategy_id].get("is_running")
-        ):
-            stop_strategy_process(strategy_id)
+        )
+    if needs_stop:
+        stop_strategy_process(strategy_id)
 
+    with PROCESS_LOCK:  # Thread-safe operation
         # Unschedule if scheduled
         if STRATEGY_CONFIGS.get(strategy_id, {}).get("is_scheduled"):
             unschedule_strategy(strategy_id)
@@ -2845,12 +2900,16 @@ def save_strategy(strategy_id):
 def cleanup_on_exit():
     """Clean up all running processes on application exit"""
     logger.info("Cleaning up running strategies...")
+    # Snapshot under the lock, stop outside it: stop_strategy_process takes the
+    # lock itself and waits for each process, so holding it across the loop
+    # would serialise shutdown behind every termination in turn.
     with PROCESS_LOCK:
-        for strategy_id in list(RUNNING_STRATEGIES.keys()):
-            try:
-                stop_strategy_process(strategy_id)
-            except Exception:
-                pass
+        strategy_ids = list(RUNNING_STRATEGIES.keys())
+    for strategy_id in strategy_ids:
+        try:
+            stop_strategy_process(strategy_id)
+        except Exception:
+            pass
     logger.info("Cleanup complete")
 
 

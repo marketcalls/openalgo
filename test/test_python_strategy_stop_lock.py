@@ -24,6 +24,7 @@ throughout.
 Reported as issue #1737.
 """
 
+import os
 import subprocess
 import sys
 import threading
@@ -32,6 +33,8 @@ import time
 import pytest
 
 from blueprints import python_strategy as ps
+
+IS_WINDOWS = os.name == "nt"
 
 
 class FakePopen(subprocess.Popen):
@@ -85,11 +88,14 @@ def clean_registries():
     """Leave the module-level registries as they were found."""
     running = dict(ps.RUNNING_STRATEGIES)
     configs = dict(ps.STRATEGY_CONFIGS)
+    stopping = set(ps.STOPPING_STRATEGIES)
     yield
     ps.RUNNING_STRATEGIES.clear()
     ps.RUNNING_STRATEGIES.update(running)
     ps.STRATEGY_CONFIGS.clear()
     ps.STRATEGY_CONFIGS.update(configs)
+    ps.STOPPING_STRATEGIES.clear()
+    ps.STOPPING_STRATEGIES.update(stopping)
 
 
 @pytest.fixture
@@ -143,13 +149,13 @@ def test_lock_is_free_while_the_process_is_dying(quiet_stop):
     _register("sid-lock", process)
 
     lock_was_free = threading.Event()
-    stop_finished = threading.Event()
 
     def observer():
-        # Give the stop time to reach its wait, then try to take the lock.
+        # Give the stop time to reach its wait, then try to take the lock. The
+        # process stays alive for 1.0s and the elapsed assertion below proves
+        # the stop was still waiting at this point, so no completion guard is
+        # needed here.
         time.sleep(0.3)
-        if stop_finished.is_set():
-            return  # Stop already returned; the window was never observed.
         if ps.PROCESS_LOCK.acquire(timeout=0.2):
             try:
                 lock_was_free.set()
@@ -191,25 +197,123 @@ def test_a_process_that_refuses_to_die_is_still_tracked(quiet_stop, monkeypatch)
     assert "sid-immortal" in ps.RUNNING_STRATEGIES
 
 
-def test_a_second_stop_during_the_wait_does_not_signal_twice(quiet_stop):
-    """Claiming under the lock means only one caller owns the termination."""
-    process = FakePopen(alive_for=0.8)
+def test_a_second_stop_during_the_wait_does_not_signal_twice(quiet_stop, monkeypatch):
+    """Claiming means only one caller owns the termination.
+
+    The config keeps a live-looking PID, so without the stopping marker the
+    second stop falls through to the orphan branch, finds `check_process_status`
+    true and signals the same process again. Pinned by asserting the second
+    caller is refused *and* that only one signal was sent.
+    """
+    process = FakePopen(alive_for=1.0)
     _register("sid-double", process)
 
+    # The orphan branch is reached by PID, so make that PID look alive and
+    # record any attempt to terminate it by that route.
+    orphan_kills = []
+    monkeypatch.setattr(ps, "check_process_status", lambda pid: True)
+    monkeypatch.setattr(ps, "terminate_process_cross_platform", lambda pid: orphan_kills.append(pid))
+
     results = {}
+    second_started = threading.Event()
 
     def second_stop():
-        time.sleep(0.2)  # while the first stop is still waiting
+        second_started.set()
         results["second"] = ps.stop_strategy_process("sid-double")
 
     other = threading.Thread(target=second_stop, daemon=True)
-    other.start()
+
+    def launch_second():
+        # Fire once the first stop is definitely inside its wait.
+        time.sleep(0.2)
+        other.start()
+
+    threading.Thread(target=launch_second, daemon=True).start()
     results["first"] = ps.stop_strategy_process("sid-double")
+    assert second_started.wait(timeout=3), "the second stop never ran"
     other.join(timeout=3)
 
     assert results["first"][0] is True
     assert results["second"][0] is False
+    assert "stopping" in results["second"][1].lower()
     assert process.terminate_calls == 1, "the process was signalled more than once"
+    assert orphan_kills == [], f"the second stop reached the orphan path: {orphan_kills}"
+
+
+def test_a_start_during_the_wait_is_refused(quiet_stop, monkeypatch):
+    """A start arriving mid-termination must not launch a replacement.
+
+    Without the stopping marker the strategy is in neither registry during the
+    wait, so start sees it as absent, spawns a second process, and the finishing
+    stop then writes is_running=False over the new one's config, leaving a live
+    trading process nothing will stop.
+    """
+    process = FakePopen(alive_for=1.0)
+    _register("sid-restart", process)
+
+    spawned = []
+    monkeypatch.setattr(ps, "check_process_status", lambda pid: False)
+
+    results = {}
+    start_ran = threading.Event()
+
+    def try_start():
+        time.sleep(0.2)  # while the stop is still waiting
+        results["start"] = ps.start_strategy_process("sid-restart")
+        start_ran.set()
+
+    threading.Thread(target=try_start, daemon=True).start()
+    results["stop"] = ps.stop_strategy_process("sid-restart")
+    assert start_ran.wait(timeout=3), "the start never ran"
+
+    assert results["stop"][0] is True
+    assert results["start"][0] is False
+    assert "stopping" in results["start"][1].lower()
+    assert spawned == []
+
+
+def test_the_stopping_claim_is_released_when_termination_fails(quiet_stop, monkeypatch):
+    """A failed stop must not leave the strategy permanently unstoppable."""
+    monkeypatch.setattr(ps, "terminate_popen_safely", lambda *a, **k: False)
+
+    process = FakePopen(alive_for=99.0)
+    _register("sid-release", process)
+
+    ok, _ = ps.stop_strategy_process("sid-release")
+
+    assert ok is False
+    assert "sid-release" not in ps.STOPPING_STRATEGIES, (
+        "the claim was never released, so this strategy can never be started "
+        "or stopped again for the life of the process"
+    )
+    assert "sid-release" in ps.RUNNING_STRATEGIES
+
+
+def test_an_orphan_that_survives_termination_is_not_reported_stopped(quiet_stop, monkeypatch):
+    """terminate_process_cross_platform swallows its own errors.
+
+    A clean return from it is therefore not evidence the process died, so the
+    config must not be cleared on a survivor: doing so leaves a live trading
+    process with nothing tracking it and no route to stop it.
+    """
+    monkeypatch.setattr(ps, "terminate_process_cross_platform", lambda pid: None)
+    monkeypatch.setattr(ps, "check_process_status", lambda pid: True)  # never dies
+
+    ps.STRATEGY_CONFIGS["sid-orphan"] = {
+        "id": "sid-orphan",
+        "name": "sid-orphan",
+        "is_running": True,
+        "pid": 987654,
+    }
+
+    ok, message = ps.stop_strategy_process("sid-orphan")
+
+    assert ok is False
+    assert "987654" in message
+    config = ps.STRATEGY_CONFIGS["sid-orphan"]
+    assert config["is_running"] is True, "a surviving process was marked stopped"
+    assert config["pid"] == 987654, "the PID was cleared while the process was alive"
+    assert "sid-orphan" not in ps.STOPPING_STRATEGIES
 
 
 def test_wait_for_popen_exit_returns_on_a_live_process():
@@ -240,6 +344,11 @@ def test_stops_a_real_subprocess():
         [sys.executable, "-c", "import time; time.sleep(60)"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        # Its own session, exactly as the production spawn does. On Linux
+        # terminate_popen_safely signals the process GROUP, so a child sharing
+        # the pytest runner's group would take SIGTERM and then SIGKILL out to
+        # the whole test run.
+        start_new_session=not IS_WINDOWS,
     )
     try:
         assert process.poll() is None
