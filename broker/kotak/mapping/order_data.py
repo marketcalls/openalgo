@@ -249,6 +249,7 @@ def transform_positions_data(positions_data):
         }
         buy_qty = float(position.get("flBuyQty", 0))
         sell_qty = float(position.get("flSellQty", 0))
+        cf_buy_qty = float(position.get("cfBuyQty", 0))
 
         if transformed_position["quantity"] > 0 and buy_qty > 0:
             transformed_position["average_price"] = round(
@@ -260,6 +261,18 @@ def transform_positions_data(positions_data):
             )
         elif transformed_position["quantity"] != 0:
             transformed_position["average_price"] = 0.0
+        elif buy_qty + cf_buy_qty > 0:
+            # Fully closed (net quantity 0, but there was a real round trip
+            # today or carried forward) - Kotak never returns a pnl field
+            # for positions at all (transform_holdings_data two functions
+            # below does; this function didn't). Kotak's own Positions.md
+            # ("Profit N Loss" formula) reduces to sellAmt - buyAmt once Net
+            # Qty is 0; cfBuyAmt/cfSellAmt are included so a leg carried
+            # forward and closed today still gets its full realized P&L,
+            # not just today's fresh-leg portion. See openalgo issue #1970.
+            total_buy_amt = float(position.get("cfBuyAmt", 0)) + float(position.get("buyAmt", 0))
+            total_sell_amt = float(position.get("cfSellAmt", 0)) + float(position.get("sellAmt", 0))
+            transformed_position["pnl"] = round(total_sell_amt - total_buy_amt, 2)
 
         transformed_data.append(transformed_position)
 
