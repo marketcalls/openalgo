@@ -725,23 +725,27 @@ def stop_strategy_process(strategy_id):
                 config["pid"] = None
                 save_configs()
                 status, status_message = get_schedule_status(config)
+
+        # Inside the claim, deliberately. Released first, a start could begin,
+        # broadcast "running", and then be overwritten by this call's "stopped",
+        # leaving every watching page showing the wrong state for a strategy
+        # that is actually running.
+        if status is not None:
+            broadcast_status_update(strategy_id, status, status_message)
+
+        logger.info(f"Stopped strategy {strategy_id} at {ist_now.strftime('%H:%M:%S IST')}")
+
+        # Cleanup old log files based on configured limits
+        try:
+            cleanup_strategy_logs(strategy_id)
+        except Exception as cleanup_err:
+            logger.warning(f"Log cleanup failed for {strategy_id}: {cleanup_err}")
     finally:
-        # Released on every path, including the two early returns above, or the
+        # Released on every path, including the early returns above, or the
         # strategy can never be started or stopped again for the life of the
         # process.
         with PROCESS_LOCK:
             STOPPING_STRATEGIES.discard(strategy_id)
-
-    if status is not None:
-        broadcast_status_update(strategy_id, status, status_message)
-
-    logger.info(f"Stopped strategy {strategy_id} at {ist_now.strftime('%H:%M:%S IST')}")
-
-    # Cleanup old log files based on configured limits
-    try:
-        cleanup_strategy_logs(strategy_id)
-    except Exception as cleanup_err:
-        logger.warning(f"Log cleanup failed for {strategy_id}: {cleanup_err}")
 
     return True, f"Strategy stopped at {ist_now.strftime('%H:%M:%S IST')}"
 
@@ -2101,7 +2105,20 @@ def delete_strategy(strategy_id):
             strategy_id in STRATEGY_CONFIGS and STRATEGY_CONFIGS[strategy_id].get("is_running")
         )
     if needs_stop:
-        stop_strategy_process(strategy_id)
+        stopped, stop_message = stop_strategy_process(strategy_id)
+        if not stopped:
+            # Deleting now would take the config and the file with it while the
+            # process is still running, leaving a live strategy with nothing
+            # tracking it and no route to stop it. Two ways to get here: the
+            # process outlived both signals, or another stop is already in
+            # flight and owns the claim.
+            logger.warning(f"Refusing to delete strategy {strategy_id}: {stop_message}")
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": f"Could not stop the strategy, so it was not deleted. {stop_message}",
+                }
+            ), 409
 
     with PROCESS_LOCK:  # Thread-safe operation
         # Unschedule if scheduled

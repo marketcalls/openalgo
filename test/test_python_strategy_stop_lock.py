@@ -240,7 +240,7 @@ def test_a_second_stop_during_the_wait_does_not_signal_twice(quiet_stop, monkeyp
     assert orphan_kills == [], f"the second stop reached the orphan path: {orphan_kills}"
 
 
-def test_a_start_during_the_wait_is_refused(quiet_stop, monkeypatch):
+def test_a_start_during_the_wait_is_refused(quiet_stop, monkeypatch, tmp_path):
     """A start arriving mid-termination must not launch a replacement.
 
     Without the stopping marker the strategy is in neither registry during the
@@ -251,8 +251,33 @@ def test_a_start_during_the_wait_is_refused(quiet_stop, monkeypatch):
     process = FakePopen(alive_for=1.0)
     _register("sid-restart", process)
 
+    # Give the start everything it needs to succeed, so the only thing that can
+    # stop it is the stopping claim. Without a real file it would fail on
+    # "Strategy file not found" and the test would pass for the wrong reason.
+    script = tmp_path / "sid_restart.py"
+    script.write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
+    ps.STRATEGY_CONFIGS["sid-restart"]["file_path"] = str(script)
+
+    # Spy on the spawn path itself: the assertion that matters is that no second
+    # process was created, not merely that the call returned False.
+    # create_subprocess_args is used only by start_strategy_process and runs
+    # immediately before subprocess.Popen, so reaching it means a spawn was
+    # about to happen. Patching subprocess.Popen directly is not an option here:
+    # stop_strategy_process branches on isinstance(process, subprocess.Popen),
+    # which a non-class stand-in breaks.
     spawned = []
+
+    def _spy_args():
+        spawned.append("start reached the spawn path")
+        raise AssertionError("start_strategy_process tried to spawn a replacement")
+
+    monkeypatch.setattr(ps, "create_subprocess_args", _spy_args)
     monkeypatch.setattr(ps, "check_process_status", lambda pid: False)
+    # Clear the gates that would otherwise refuse the start before it ever
+    # reaches the spawn, so the spy above is genuinely reachable and the
+    # assertion is not vacuous. Verified: with the stopping guard removed, this
+    # test fails on the spy, not on one of these.
+    monkeypatch.setattr(ps, "check_master_contract_ready", lambda: (True, "ready"))
 
     results = {}
     start_ran = threading.Event()
@@ -266,10 +291,16 @@ def test_a_start_during_the_wait_is_refused(quiet_stop, monkeypatch):
     results["stop"] = ps.stop_strategy_process("sid-restart")
     assert start_ran.wait(timeout=3), "the start never ran"
 
+    # Asserted first: this is the consequence that matters. Without the claim a
+    # second process is spawned, and the failing message below is only how that
+    # surfaces.
+    assert spawned == [], (
+        "start reached the spawn path while a stop was in flight, so a second "
+        "process would have been created for one strategy"
+    )
     assert results["stop"][0] is True
     assert results["start"][0] is False
     assert "stopping" in results["start"][1].lower()
-    assert spawned == []
 
 
 def test_the_stopping_claim_is_released_when_termination_fails(quiet_stop, monkeypatch):
