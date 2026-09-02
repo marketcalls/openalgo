@@ -450,7 +450,7 @@ export const UNIVERSE_TAB_LABELS: Record<UniverseTab, string> = {
 export const UNIVERSE_TAB_HINT: Record<UniverseTab, string> = {
   weekly_monthly: 'NIFTY, SENSEX',
   monthly_only: 'MIDCPNIFTY, BANKNIFTY, FINNIFTY, BANKEX',
-  stocks_fno: 'All NIFTY 500 stocks',
+  stocks_fno: 'Any NSE or BSE stock',
   mcx: 'CRUDEOIL, NATURALGAS, GOLD, SILVER, …',
 }
 
@@ -532,6 +532,22 @@ export const TAB_UNDERLYING_IS_CLOSED_SET: Record<UniverseTab, boolean> = {
   monthly_only: true,
   stocks_fno: false,
   mcx: false,
+}
+
+/**
+ * Exchanges a tab's underlying may be quoted on.
+ *
+ * Only the stocks tab has a choice to offer. An index tab's exchange follows
+ * the index the user picked, and MCX lists on one venue. Cash resolves against
+ * whichever of these the strategy carries, and a derivative leg on the same
+ * underlying maps from it (NSE to NFO, BSE to BFO), so this is the strategy's
+ * exchange rather than the cash leg's.
+ */
+export const TAB_UNDERLYING_EXCHANGES: Record<UniverseTab, string[]> = {
+  weekly_monthly: ['NSE_INDEX', 'BSE_INDEX'],
+  monthly_only: ['NSE_INDEX', 'BSE_INDEX'],
+  stocks_fno: ['NSE', 'BSE'],
+  mcx: ['MCX'],
 }
 
 /** The exchange a typed underlying defaults to on an open-universe tab. */

@@ -82,6 +82,7 @@ import {
   TAB_DEFAULT_UNDERLYINGS,
   TAB_INTRADAY_DEFAULTS,
   TAB_SEGMENTS,
+  TAB_UNDERLYING_EXCHANGES,
   TAB_UNDERLYING_IS_CLOSED_SET,
   UNIVERSE_TAB_HINT,
   UNIVERSE_TAB_LABELS,
@@ -1080,6 +1081,9 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
 
   const [tab, setTab] = useState<UniverseTab>(initialTab)
   const [name, setName] = useState(editing?.name ?? '')
+  const [chosenExchange, setChosenExchange] = useState<string | null>(
+    editing?.underlying_exchange ?? null
+  )
   const [underlying, setUnderlying] = useState(
     editing?.underlying ?? TAB_DEFAULT_UNDERLYINGS[initialTab][0].symbol
   )
@@ -1143,12 +1147,18 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
 
   // On a closed-universe tab the exchange comes from the seed entry; on an open
   // one every underlying on the tab is listed on the same exchange.
+  // On a closed-universe tab the exchange follows the index that was picked.
+  // On an open one the operator chooses it, because the same typed symbol can
+  // be listed on either venue: RELIANCE trades on NSE and on BSE.
   const underlyingExchange = useMemo(
     () =>
       seededUnderlyings.find((choice) => choice.symbol === underlying)?.exchange ??
+      chosenExchange ??
       TAB_DEFAULT_EXCHANGE[tab],
-    [underlying, seededUnderlyings, tab]
+    [underlying, seededUnderlyings, tab, chosenExchange]
   )
+
+  const exchangeChoices = TAB_UNDERLYING_EXCHANGES[tab]
 
   // Expiry lists are per (underlying, instrument), not per leg: ten legs on one
   // underlying ask the platform once. Only fetched for the instrument types the
@@ -1201,6 +1211,7 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
   const onTabChange = (next: UniverseTab) => {
     setTab(next)
     setUnderlying(TAB_DEFAULT_UNDERLYINGS[next][0].symbol)
+    setChosenExchange(TAB_DEFAULT_EXCHANGE[next])
     const seeded = [freshLegFor(1, next, kind)]
     setLegs(seeded)
     setEntryTime(TAB_INTRADAY_DEFAULTS[next].entry)
@@ -1587,13 +1598,33 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
                     id="underlying"
                     value={underlying}
                     onChange={setUnderlying}
-                    searchExchange={derivativeExchangeFor(underlyingExchange)}
+                    searchExchange={underlyingExchange}
                     placeholder={`Search ${seededUnderlyings[0]?.symbol ?? 'symbol'}…`}
                   />
                 )}
-                <p className="text-xs text-muted-foreground">
-                  Exchange: <span className="font-mono">{underlyingExchange}</span>
-                </p>
+                {exchangeChoices.length > 1 && !closedUniverse ? (
+                  <div className="flex items-center gap-2 pt-0.5">
+                    <Label htmlFor="underlying-exchange" className="text-xs text-muted-foreground">
+                      Exchange
+                    </Label>
+                    <select
+                      id="underlying-exchange"
+                      value={underlyingExchange}
+                      onChange={(event) => setChosenExchange(event.target.value)}
+                      className={`${SELECT_CLASS_SM} w-28 font-mono`}
+                    >
+                      {exchangeChoices.map((venue) => (
+                        <option key={venue} value={venue}>
+                          {venue}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Exchange: <span className="font-mono">{underlyingExchange}</span>
+                  </p>
+                )}
               </div>
             )}
           </div>

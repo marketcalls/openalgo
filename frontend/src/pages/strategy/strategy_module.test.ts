@@ -43,6 +43,9 @@ import {
   signalSegmentsForTab,
   sortExpiries,
   TAB_SEGMENTS,
+  TAB_UNDERLYING_EXCHANGES,
+  TAB_UNDERLYING_IS_CLOSED_SET,
+  UNIVERSE_TAB_HINT,
   withQtyMode,
 } from '@/types/strategy_module'
 
@@ -1459,5 +1462,24 @@ describe('a direction and a leg side cannot contradict each other', () => {
     expect(DIRECTION_ACCEPTS.long_only).toEqual(['long', 'both'])
     expect(DIRECTION_ACCEPTS.short_only).toEqual(['short', 'both'])
     expect(DIRECTION_ACCEPTS.both).toEqual(['long', 'short', 'both'])
+  })
+})
+
+describe('the stocks tab trades any listed equity, on either venue', () => {
+  it('offers NSE and BSE on the stocks tab and one venue elsewhere', () => {
+    expect(TAB_UNDERLYING_EXCHANGES.stocks_fno).toEqual(['NSE', 'BSE'])
+    expect(TAB_UNDERLYING_EXCHANGES.mcx).toEqual(['MCX'])
+  })
+
+  it('does not promise a NIFTY 500 universe it does not enforce', () => {
+    // The engine resolves any listed equity, so the hint said something the
+    // product does not do. It was inherited from a stocks list built out of
+    // NFO futures contracts, which this one is not.
+    expect(UNIVERSE_TAB_HINT.stocks_fno).toBe('Any NSE or BSE stock')
+  })
+
+  it('keeps the stocks universe open, so a typed symbol is accepted', () => {
+    expect(TAB_UNDERLYING_IS_CLOSED_SET.stocks_fno).toBe(false)
+    expect(TAB_UNDERLYING_IS_CLOSED_SET.weekly_monthly).toBe(true)
   })
 })
