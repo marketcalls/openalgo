@@ -33,7 +33,7 @@ Feature: Strategy module and risk management
     Then a single conditional update claims it
     And only one set of entry orders reaches the broker
 
-  # Source: test/test_strategy_module_engine.py:127
+  # Source: test/test_strategy_module_engine.py:143
   Scenario: Every batch leg resolves before anything is claimed
     Given one configured leg cannot resolve to a listed contract
     When the batch strategy starts
@@ -55,7 +55,7 @@ Feature: Strategy module and risk management
     Then subsequent live exits still reach the broker
     And a sandbox run still uses the sandbox book and execution pipe
 
-  # Source: services/strategy_module/engine.py:509, test/test_strategy_module_engine.py:304, test/test_strategy_module_scheduler.py:730
+  # Source: services/strategy_module/engine.py:524, test/test_strategy_module_engine.py:318, test/test_strategy_module_scheduler.py:730
   Scenario: Durable intent and acknowledgement surround every broker call
     Given the engine is about to place an entry or exit
     When it dispatches the order
@@ -79,7 +79,7 @@ Feature: Strategy module and risk management
     Then only the superseded position_ref is reduced
     And the replacement remains open and evaluated for risk
 
-  # Source: test/test_strategy_module_engine.py:703
+  # Source: test/test_strategy_module_engine.py:717
   Scenario: One exact owner cannot be sent two covering exits
     Given an open position owner
     When two risk rules fire before the first exit returns
@@ -242,7 +242,7 @@ Feature: Strategy module and risk management
     Then real zero remains zero
     And every unusable quantity, price and P&L value renders unavailable
 
-  # Source: frontend/src/pages/strategy/Detail.test.tsx:1085, frontend/src/pages/strategy/strategy_module.test.ts:130
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:1085, frontend/src/pages/strategy/strategy_module.test.ts:133
   Scenario: Broker order and trade truth keeps local reconciliation context
     Given broker rows and recorded strategy orders can match, differ or be ambiguous
     When the page reconciles them by broker order id
@@ -250,7 +250,7 @@ Feature: Strategy module and risk management
     And multiple trade fills aggregate quantity and weighted price before comparison
     And local-only, ambiguous, mismatch and rejection context remain visible
 
-  # Source: frontend/src/pages/strategy/Detail.test.tsx:787, frontend/src/pages/strategy/Detail.test.tsx:875, frontend/src/pages/strategy/strategy_module.test.ts:409, test/test_strategy_module_views.py:441
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:787, frontend/src/pages/strategy/Detail.test.tsx:875, frontend/src/pages/strategy/strategy_module.test.ts:412, test/test_strategy_module_views.py:441
   Scenario: Position fallback preserves exposure without inventing valuation
     Given local audit has explicit positive fills in working or terminal statuses
     When the broker positionbook is unavailable

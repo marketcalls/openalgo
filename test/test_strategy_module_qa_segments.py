@@ -2303,3 +2303,69 @@ def test_a_signal_cash_leg_naming_a_symbol_that_is_not_listed_places_nothing(mar
     assert result.ok is False
     assert "RELAINCE is not a contract on NSE" in (result.error or "")
     assert broker == []
+
+
+# ---------------------------------------------------------------------------
+# A signal strategy has no start
+#
+# Its run is opened by the first signal after the session boundary. Running the
+# batch lifecycle over signal legs reached run-state construction and raised,
+# because a signal leg carries the side it accepts and not a position to be
+# entered at, and the failure then left the run open and the strategy claimed
+# with no live state for any later stop to work from.
+# ---------------------------------------------------------------------------
+
+
+def test_starting_a_signal_strategy_is_refused_by_name(market, broker):
+    strategy = _signal_strategy(
+        [{"id": 1, "symbol": "RELIANCE", "exchange": "NSE", "qty": 10, "segment": "cash"}]
+    )
+
+    result = engine.start_run(strategy.id, USER, "sandbox")
+
+    assert result.ok is False
+    assert "has no start" in (result.error or "")
+    assert broker == []
+
+
+def test_a_refused_start_leaves_the_signal_strategy_startable_by_signal(market, broker):
+    """It must not strand the strategy the way the batch lifecycle did."""
+    strategy = _signal_strategy(
+        [{"id": 1, "symbol": "RELIANCE", "exchange": "NSE", "qty": 10, "segment": "cash"}]
+    )
+
+    engine.start_run(strategy.id, USER, "sandbox")
+
+    row = store.get_strategy(strategy.id, USER)
+    assert row.status == "stopped", "the refused start claimed the strategy"
+    assert row.current_run_id is None, "the refused start left a run behind"
+
+    # And the real entry point still works.
+    result = signals.handle_signal(row, "long_entry", leg_id=1)
+    assert result.ok is True, result.error
+
+
+def test_a_start_that_fails_before_any_dispatch_finalises_its_run(market, broker):
+    """Nothing sent is provable flatness, even with no run state to inspect.
+
+    `dispatch_attempted` is written immediately before each dispatch, so an
+    empty set proves no order left. The run must close rather than stay open
+    with a strategy stuck reading "running".
+    """
+    sid = _make(_config("RELIANCE", "NSE", [_cash_leg()], product="MIS"))
+
+    with patch(
+        "services.strategy_module.state.init_run_state",
+        side_effect=ValueError("run state could not be built"),
+    ):
+        result = engine.start_run(sid, USER, "sandbox")
+
+    assert result.ok is False
+    assert broker == [], "nothing should have been dispatched"
+
+    row = store.get_strategy(sid, USER)
+    assert row.status == "stopped", "the strategy is still claimed by a dead run"
+    assert row.current_run_id is None
+
+    runs = store.list_runs(sid)
+    assert runs and runs[0]["stopped_at"] is not None, "the run was left open"

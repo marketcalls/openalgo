@@ -2735,8 +2735,21 @@ export default function StrategyDetail() {
               {unlockMutation.isPending ? 'Unlocking…' : 'Unlock webhook'}
             </Button>
           )}
-          {stopped && !strategy.webhook_locked && (
+          {/* Batch only. A signal strategy's run is opened by its first
+              long_entry or short_entry after the session boundary, so there is
+              nothing for a Start button to do: pressing it ran the batch
+              lifecycle over legs that carry an accepted side rather than a
+              position to enter at. */}
+          {stopped && !strategy.webhook_locked && strategy.strategy_kind !== 'signal' && (
             <Button onClick={() => setStartDialogOpen(true)}>Start run</Button>
+          )}
+          {stopped && !strategy.webhook_locked && strategy.strategy_kind === 'signal' && (
+            <span
+              className="text-xs text-muted-foreground"
+              title="A signal strategy has no start. Send a long_entry or short_entry to its webhook."
+            >
+              Starts on its first signal
+            </span>
           )}
           {running && (
             <Button

@@ -251,6 +251,21 @@ def start_run(
     if mode not in store.RUN_MODES:
         return StartResult(ok=False, error=f"Unknown run mode: {mode!r}")
 
+    # Batch only, which the public reference already states. A signal strategy
+    # has no start: its run is opened by the first signal after the session
+    # boundary, in signals._day_run. Running the batch lifecycle over signal
+    # legs got as far as building run state and then raised, because a signal
+    # leg carries the side it accepts and not a position to be entered at, and
+    # the failure left the run open and the strategy claimed.
+    if (strategy_row.strategy_kind or "batch") == "signal":
+        return StartResult(
+            ok=False,
+            error=(
+                "A signal strategy has no start. Its run opens on the first "
+                "long_entry or short_entry signal after the session boundary."
+            ),
+        )
+
     # Live is opt-in per strategy. Checked here as well as at every caller,
     # because this is the last point before real orders.
     if mode == "live" and not strategy_row.live_enabled:
@@ -815,6 +830,18 @@ def _manage_failed_start(
             state.reject_entry_intent(run_id, leg["leg_id"], leg.get("position_ref"))
 
     snapshot = state.get_run_state(run_id)
+
+    # No dispatch was ever attempted, so nothing can be held. `dispatch_attempted`
+    # is written immediately before each call precisely so a raise mid-send is
+    # kept as possible exposure; an empty set is therefore proof of flatness,
+    # and it holds even when run state was never built. Without this, a start
+    # that failed while constructing that state left the run open and the
+    # strategy stuck reading "running", with no live state for any later stop
+    # to work from and nothing to reconcile against.
+    if not attempted:
+        _finalise(run_id, strategy_id, user_id, "error", "Start failed before any entry dispatch")
+        return StartResult(ok=False, run_id=run_id, error="Could not start the strategy")
+
     if snapshot is not None and not _run_requires_management(snapshot):
         _finalise(run_id, strategy_id, user_id, "error", "Start failed before any entry dispatch")
         return StartResult(ok=False, run_id=run_id, error="Could not start the strategy")
