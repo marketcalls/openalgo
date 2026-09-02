@@ -10,24 +10,28 @@ def transform_data(data, token):
     """
     Transforms the new API request structure to the current expected structure.
     """
+    order_type = map_order_type(data["pricetype"])
+
+    # Upstox rejects a non-zero price on MARKET/SL-M (UDAPI1040 "Price not
+    # required") and a non-zero trigger_price on MARKET/LIMIT, so zero out the
+    # field that does not apply to the order type instead of passing it through.
+    price = data.get("price", "0") if order_type in ("LIMIT", "SL") else "0"
+    trigger_price = data.get("trigger_price", "0") if order_type in ("SL", "SL-M") else "0"
+
     # Basic mapping
     transformed = {
         "quantity": data["quantity"],
         "product": map_product_type(data["product"]),
         "validity": "DAY",
-        "price": data.get("price", "0"),
-        "tag": "string",
+        "price": price,
+        "tag": "openalgo",
         "instrument_token": token,
-        "order_type": map_order_type(data["pricetype"]),
+        "order_type": order_type,
         "transaction_type": data["action"].upper(),
         "disclosed_quantity": data.get("disclosed_quantity", "0"),
-        "trigger_price": data.get("trigger_price", "0"),
+        "trigger_price": trigger_price,
         "is_amo": "false",  # Assuming false as default; you might need logic to handle this if it can vary
     }
-
-    # Extended mapping for fields that might need conditional logic or additional processing
-    transformed["disclosed_quantity"] = data.get("disclosed_quantity", "0")
-    transformed["trigger_price"] = data.get("trigger_price", "0")
 
     return transformed
 
