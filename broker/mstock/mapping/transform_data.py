@@ -139,12 +139,17 @@ def map_order_type(pricetype):
     """
     Maps OpenAlgo pricetype to mStock Type B order type.
 
-    mStock Type B order types: MARKET, LIMIT, STOP_LOSS, STOPLOSS_MARKET
+    mStock Type B order types: MARKET, LIMIT, STOPLOSS_LIMIT, STOPLOSS_MARKET
+
+    Note: the mStock docs are self-contradictory here. The Orders glossary lists
+    STOPLOSS_LIMIT/STOPLOSS_MARKET while the place/modify field tables list
+    STOP_LOSS/STOP_LOSS_MARKET. The glossary values are used, as they match the
+    Angel-style convention the Type B API is derived from.
     """
     order_type_mapping = {
         "MARKET": "MARKET",
         "LIMIT": "LIMIT",
-        "SL": "STOP_LOSS",
+        "SL": "STOPLOSS_LIMIT",
         "SL-M": "STOPLOSS_MARKET",
     }
     return order_type_mapping.get(pricetype, "MARKET")

@@ -4,6 +4,7 @@ Synchronous mstock WebSocket client using websocket-client library.
 Uses sync websocket-client instead of async websockets to avoid asyncio
 event loop conflicts with eventlet in gunicorn+eventlet deployments.
 """
+
 import json
 import os
 import ssl
@@ -70,9 +71,7 @@ class MstockWebSocket:
             self.auth_token = fresh_token
             self.ws_url = self._build_ws_url()
         else:
-            logger.warning(
-                "mstock token_provider returned no token; keeping existing access token"
-            )
+            logger.warning("mstock token_provider returned no token; keeping existing access token")
 
     @staticmethod
     def parse_binary_packet(data: bytes) -> dict | None:
@@ -93,13 +92,24 @@ class MstockWebSocket:
                     "sequence_number": struct.unpack("<Q", data[27:35])[0],
                     "exchange_timestamp": struct.unpack("<Q", data[35:43])[0],
                     "ltp": struct.unpack("<Q", data[43:51])[0] / 100.0,
-                    "last_traded_qty": 0, "avg_price": 0, "volume": 0,
-                    "total_buy_qty": 0, "total_sell_qty": 0,
-                    "open": 0, "high": 0, "low": 0, "close": 0,
-                    "last_traded_timestamp": 0, "oi": 0, "oi_percent": 0,
-                    "upper_circuit": 0, "lower_circuit": 0,
-                    "week_52_high": 0, "week_52_low": 0,
-                    "bids": [], "asks": [],
+                    "last_traded_qty": 0,
+                    "avg_price": 0,
+                    "volume": 0,
+                    "total_buy_qty": 0,
+                    "total_sell_qty": 0,
+                    "open": 0,
+                    "high": 0,
+                    "low": 0,
+                    "close": 0,
+                    "last_traded_timestamp": 0,
+                    "oi": 0,
+                    "oi_percent": 0,
+                    "upper_circuit": 0,
+                    "lower_circuit": 0,
+                    "week_52_high": 0,
+                    "week_52_low": 0,
+                    "bids": [],
+                    "asks": [],
                 }
                 return quote
 
@@ -120,19 +130,24 @@ class MstockWebSocket:
                     "high": struct.unpack("<Q", data[99:107])[0] / 100.0,
                     "low": struct.unpack("<Q", data[107:115])[0] / 100.0,
                     "close": struct.unpack("<Q", data[115:123])[0] / 100.0,
-                    "last_traded_timestamp": 0, "oi": 0, "oi_percent": 0,
-                    "upper_circuit": 0, "lower_circuit": 0,
-                    "week_52_high": 0, "week_52_low": 0,
-                    "bids": [], "asks": [],
+                    "last_traded_timestamp": 0,
+                    "oi": 0,
+                    "oi_percent": 0,
+                    "upper_circuit": 0,
+                    "lower_circuit": 0,
+                    "week_52_high": 0,
+                    "week_52_low": 0,
+                    "bids": [],
+                    "asks": [],
                 }
                 return quote
 
             elif len(data) == 379:
                 packet = data
             elif len(data) >= 383:
-                num_packets = struct.unpack("<H", data[0:2])[0]
-                packet_size = struct.unpack("<H", data[2:4])[0]
-                packet = data[4:4 + 379]
+                # Header-prefixed frame; parse_binary_message splits multi-packet
+                # frames, so only the first packet is read here.
+                packet = data[4 : 4 + 379]
             else:
                 logger.error(f"Invalid packet size: {len(data)} bytes")
                 return None
@@ -171,9 +186,14 @@ class MstockWebSocket:
             for i in range(5):
                 bid_offset = i * 20
                 try:
-                    qty = struct.unpack("<Q", depth_data[bid_offset + 2:bid_offset + 10])[0]
-                    price = struct.unpack("<Q", depth_data[bid_offset + 10:bid_offset + 18])[0] / 100.0
-                    num_orders = struct.unpack("<H", depth_data[bid_offset + 18:bid_offset + 20])[0]
+                    qty = struct.unpack("<Q", depth_data[bid_offset + 2 : bid_offset + 10])[0]
+                    price = (
+                        struct.unpack("<Q", depth_data[bid_offset + 10 : bid_offset + 18])[0]
+                        / 100.0
+                    )
+                    num_orders = struct.unpack("<H", depth_data[bid_offset + 18 : bid_offset + 20])[
+                        0
+                    ]
                     quote["bids"].append({"price": price, "quantity": qty, "orders": num_orders})
                 except Exception:
                     quote["bids"].append({"price": 0, "quantity": 0, "orders": 0})
@@ -181,9 +201,14 @@ class MstockWebSocket:
             for i in range(5):
                 ask_offset = 100 + (i * 20)
                 try:
-                    qty = struct.unpack("<Q", depth_data[ask_offset + 2:ask_offset + 10])[0]
-                    price = struct.unpack("<Q", depth_data[ask_offset + 10:ask_offset + 18])[0] / 100.0
-                    num_orders = struct.unpack("<H", depth_data[ask_offset + 18:ask_offset + 20])[0]
+                    qty = struct.unpack("<Q", depth_data[ask_offset + 2 : ask_offset + 10])[0]
+                    price = (
+                        struct.unpack("<Q", depth_data[ask_offset + 10 : ask_offset + 18])[0]
+                        / 100.0
+                    )
+                    num_orders = struct.unpack("<H", depth_data[ask_offset + 18 : ask_offset + 20])[
+                        0
+                    ]
                     quote["asks"].append({"price": price, "quantity": qty, "orders": num_orders})
                 except Exception:
                     quote["asks"].append({"price": 0, "quantity": 0, "orders": 0})
@@ -193,6 +218,56 @@ class MstockWebSocket:
         except Exception as e:
             logger.error(f"Error parsing binary packet: {str(e)}")
             return None
+
+    @staticmethod
+    def parse_binary_message(data: bytes) -> list:
+        """
+        Parse a binary WebSocket frame into a list of quote dicts.
+
+        A header-prefixed frame carries a 2-byte packet count and a 2-byte
+        packet size, and may batch several tokens' packets into one frame.
+        Bare frames (51/123/379 bytes) carry a single packet.
+
+        Args:
+            data: Raw binary frame received from the WebSocket
+
+        Returns:
+            list: Parsed quote dicts, empty when nothing could be parsed
+        """
+        if len(data) < 383:
+            quote = MstockWebSocket.parse_binary_packet(data)
+            return [quote] if quote else []
+
+        try:
+            num_packets = struct.unpack("<H", data[0:2])[0]
+            packet_size = struct.unpack("<H", data[2:4])[0]
+        except Exception as e:
+            logger.error(f"Error parsing binary frame header: {str(e)}")
+            return []
+
+        # Fall back to the documented 379-byte quote packet when the header
+        # reports a size that cannot be right.
+        if packet_size <= 0 or packet_size > len(data) - 4:
+            logger.warning(f"Unexpected packet size {packet_size} in frame header; assuming 379")
+            packet_size = 379
+
+        available = (len(data) - 4) // packet_size
+        if num_packets < 1 or num_packets > available:
+            if num_packets != available:
+                logger.warning(
+                    f"Frame header reports {num_packets} packets but {available} fit "
+                    f"in {len(data)} bytes; parsing {available}"
+                )
+            num_packets = available
+
+        quotes = []
+        for i in range(num_packets):
+            start = 4 + (i * packet_size)
+            quote = MstockWebSocket.parse_binary_packet(data[start : start + packet_size])
+            if quote:
+                quotes.append(quote)
+
+        return quotes
 
     # ==================== Streaming Mode Methods ====================
 
@@ -247,9 +322,17 @@ class MstockWebSocket:
                 logger.error("Max reconnect attempts reached")
                 break
 
-            delay = min(2 * (1.5 ** self._reconnect_attempts), 60)
+            delay = min(2 * (1.5**self._reconnect_attempts), 60)
             logger.info(f"Reconnecting in {delay:.0f}s (attempt {self._reconnect_attempts})...")
             time.sleep(delay)
+
+            # disconnect_stream() may have run during the backoff. Without this
+            # check the dying thread would still overwrite self.ws, and if a
+            # connect_stream() had followed, it would clobber the live client's
+            # WebSocketApp and orphan that socket beyond the reach of the next
+            # disconnect_stream().
+            if not self.running:
+                break
 
             # Re-read a fresh access token before reconnecting so a reconnect
             # after the daily token rollover uses a live token. Both self.ws_url
@@ -279,11 +362,11 @@ class MstockWebSocket:
     def _on_ws_message(self, ws, message):
         """Called for both binary and text messages"""
         if isinstance(message, bytes):
-            # Parse binary packet
+            # Parse binary packet(s) — a header-prefixed frame may batch several
             if len(message) in [51, 123, 379] or len(message) >= 383:
-                quote_data = self.parse_binary_packet(message)
-                if quote_data and self.data_callback:
-                    self.data_callback(quote_data)
+                for quote_data in self.parse_binary_message(message):
+                    if self.data_callback:
+                        self.data_callback(quote_data)
         elif isinstance(message, str):
             logger.debug(f"Received string message: {message}")
             # Mark as logged in after receiving login response
@@ -307,17 +390,104 @@ class MstockWebSocket:
         self._logged_in = False
 
     def _resubscribe_all(self):
-        """Re-subscribe to all tracked subscriptions after reconnection"""
-        for correlation_id, sub in list(self.subscriptions.items()):
-            try:
-                self.subscribe_stream(correlation_id, sub["token"], sub["exchange_type"], sub["mode"])
-                logger.info(f"Re-subscribed to {sub['token']} mode {sub['mode']}")
-            except Exception as e:
-                logger.error(f"Error re-subscribing to {sub['token']}: {e}")
-
-    def subscribe_stream(self, correlation_id: str, token: str, exchange_type: int, mode: int) -> bool:
         """
-        Subscribe to a symbol on the persistent WebSocket connection.
+        Re-subscribe to all tracked subscriptions after reconnection.
+
+        Grouped by mode so a reconnect with a large book costs a handful of
+        frames instead of one per token.
+        """
+        with_mode = {}
+        for correlation_id, sub in list(self.subscriptions.items()):
+            with_mode.setdefault(sub["mode"], []).append(
+                {
+                    "correlation_id": correlation_id,
+                    "token": sub["token"],
+                    "exchange_type": sub["exchange_type"],
+                }
+            )
+
+        for mode, subs in with_mode.items():
+            try:
+                self.subscribe_batch(subs, mode)
+                logger.info(f"Re-subscribed {len(subs)} token(s) in mode {mode}")
+            except Exception as e:
+                logger.error(f"Error re-subscribing {len(subs)} token(s) in mode {mode}: {e}")
+
+    @staticmethod
+    def build_token_list(subs: list) -> list:
+        """
+        Group subscription entries into the wire tokenList shape.
+
+        mStock accepts several tokens per exchangeType and several
+        exchangeType groups per message (see the subscribe example in the
+        Market Data WebSocket docs), so a whole batch fits in one frame.
+
+        Args:
+            subs: Entries carrying "token" and "exchange_type"
+
+        Returns:
+            list: [{"exchangeType": int, "tokens": [str, ...]}, ...]
+        """
+        groups = {}
+        for sub in subs:
+            groups.setdefault(int(sub["exchange_type"]), []).append(str(sub["token"]))
+        return [
+            {"exchangeType": exchange_type, "tokens": tokens}
+            for exchange_type, tokens in groups.items()
+        ]
+
+    def subscribe_batch(self, subs: list, mode: int) -> bool:
+        """
+        Subscribe to many tokens sharing one mode in a single frame.
+
+        Each token is still registered under its own correlation_id, so
+        unsubscribe_stream() and the reconnect path keep working per-token;
+        only the wire message is batched.
+
+        Args:
+            subs: Entries with "correlation_id", "token" and "exchange_type"
+            mode: Subscription mode shared by every entry
+
+        Returns:
+            bool: True when the frame was sent
+        """
+        if not subs:
+            return True
+
+        if not self._connected or not self.ws:
+            logger.error("WebSocket not connected")
+            return False
+
+        try:
+            token_list = self.build_token_list(subs)
+            subscribe_msg = {
+                "action": 1,
+                "params": {"mode": mode, "tokenList": token_list},
+            }
+
+            self.ws.send(json.dumps(subscribe_msg))
+            logger.info(
+                f"Subscribed {len(subs)} token(s) in mode {mode} "
+                f"across {len(token_list)} exchange-type group(s)"
+            )
+
+            for sub in subs:
+                self.subscriptions[sub["correlation_id"]] = {
+                    "token": sub["token"],
+                    "exchange_type": sub["exchange_type"],
+                    "mode": mode,
+                }
+            return True
+
+        except Exception as e:
+            logger.error(f"Error subscribing batch of {len(subs)}: {str(e)}")
+            return False
+
+    def subscribe_stream(
+        self, correlation_id: str, token: str, exchange_type: int, mode: int
+    ) -> bool:
+        """
+        Subscribe to a single symbol on the persistent WebSocket connection.
 
         Args:
             correlation_id: Unique ID for this subscription
@@ -325,66 +495,74 @@ class MstockWebSocket:
             exchange_type: Exchange type code
             mode: Subscription mode
         """
-        if not self._connected or not self.ws:
-            logger.error("WebSocket not connected")
-            return False
+        return self.subscribe_batch(
+            [
+                {
+                    "correlation_id": correlation_id,
+                    "token": token,
+                    "exchange_type": exchange_type,
+                }
+            ],
+            mode,
+        )
 
-        try:
-            subscribe_msg = {
-                "action": 1,
-                "params": {
-                    "mode": mode,
-                    "tokenList": [{"exchangeType": exchange_type, "tokens": [str(token)]}],
-                },
-            }
+    def unsubscribe_batch(self, correlation_ids: list) -> bool:
+        """
+        Unsubscribe many tracked subscriptions, one frame per mode.
 
-            self.ws.send(json.dumps(subscribe_msg))
-            logger.info(f"Subscribed to token {token} on exchange {exchange_type} with mode {mode}")
+        Args:
+            correlation_ids: Correlation IDs to drop; unknown IDs are skipped
 
-            self.subscriptions[correlation_id] = {
-                "token": token,
-                "exchange_type": exchange_type,
-                "mode": mode,
-            }
+        Returns:
+            bool: True when every known ID was dropped
+        """
+        if not correlation_ids:
             return True
 
-        except Exception as e:
-            logger.error(f"Error subscribing: {str(e)}")
+        if not self._connected or not self.ws:
             return False
+
+        by_mode = {}
+        for correlation_id in correlation_ids:
+            sub = self.subscriptions.get(correlation_id)
+            if sub is None:
+                continue
+            by_mode.setdefault(sub["mode"], []).append((correlation_id, sub))
+
+        if not by_mode:
+            return False
+
+        sent_all = True
+        for mode, entries in by_mode.items():
+            try:
+                token_list = self.build_token_list([sub for _, sub in entries])
+                unsubscribe_msg = {
+                    "action": 0,
+                    "params": {"mode": mode, "tokenList": token_list},
+                }
+
+                self.ws.send(json.dumps(unsubscribe_msg))
+                logger.info(f"Unsubscribed {len(entries)} token(s) in mode {mode}")
+
+                for correlation_id, _ in entries:
+                    self.subscriptions.pop(correlation_id, None)
+
+            except Exception as e:
+                logger.error(f"Error unsubscribing batch in mode {mode}: {str(e)}")
+                sent_all = False
+
+        return sent_all
 
     def unsubscribe_stream(self, correlation_id: str) -> bool:
         """
-        Unsubscribe from a symbol on the persistent WebSocket connection.
+        Unsubscribe from a single symbol on the persistent WebSocket connection.
 
         Args:
             correlation_id: Unique ID of the subscription to remove
         """
-        if not self._connected or not self.ws:
+        if correlation_id not in self.subscriptions:
             return False
-
-        try:
-            if correlation_id not in self.subscriptions:
-                return False
-
-            sub = self.subscriptions[correlation_id]
-
-            unsubscribe_msg = {
-                "action": 0,
-                "params": {
-                    "mode": sub["mode"],
-                    "tokenList": [{"exchangeType": sub["exchange_type"], "tokens": [str(sub["token"])]}],
-                },
-            }
-
-            self.ws.send(json.dumps(unsubscribe_msg))
-            logger.info(f"Unsubscribed from token {sub['token']}")
-
-            del self.subscriptions[correlation_id]
-            return True
-
-        except Exception as e:
-            logger.error(f"Error unsubscribing: {str(e)}")
-            return False
+        return self.unsubscribe_batch([correlation_id])
 
     def disconnect_stream(self):
         """Disconnect the persistent WebSocket connection"""
@@ -412,8 +590,16 @@ class MstockWebSocket:
         Fetch a single quote synchronously using a temporary WebSocket connection.
         Uses websocket-client's create_connection for a simple request-response.
         """
+        # The socket is closed in a finally, not after each return: a send that
+        # fails mid-call (connection reset, broken pipe, timeout) used to jump
+        # straight to the handler below and leak the descriptor. This runs per
+        # depth request in a worker that never restarts, so a broker-side
+        # disconnect leaked one descriptor per call until the process hit its
+        # open-file limit.
+        ws = None
         try:
             import websocket as ws_module
+
             ws = ws_module.create_connection(
                 self.ws_url,
                 sslopt={"cert_reqs": ssl.CERT_NONE},
@@ -445,16 +631,23 @@ class MstockWebSocket:
                     response = ws.recv()
                     if isinstance(response, bytes):
                         if len(response) in [51, 123, 379] or len(response) >= 383:
-                            quote = self.parse_binary_packet(response)
-                            if quote:
-                                ws.close()
-                                return quote
+                            quotes = self.parse_binary_message(response)
+                            if quotes:
+                                return quotes[0]
                 except Exception:
                     break
 
-            ws.close()
             return None
 
         except Exception as e:
             logger.error(f"Error fetching quote: {e}")
             return None
+
+        finally:
+            if ws is not None:
+                try:
+                    ws.close()
+                except Exception as close_err:
+                    # Closing an already-broken socket can raise; swallow it so
+                    # this never replaces the value the caller is returning.
+                    logger.debug(f"Error closing one-off quote socket: {close_err}")
