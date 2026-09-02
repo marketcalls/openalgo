@@ -212,7 +212,9 @@ def test_a_second_stop_during_the_wait_does_not_signal_twice(quiet_stop, monkeyp
     # record any attempt to terminate it by that route.
     orphan_kills = []
     monkeypatch.setattr(ps, "check_process_status", lambda pid: True)
-    monkeypatch.setattr(ps, "terminate_process_cross_platform", lambda pid: orphan_kills.append(pid))
+    monkeypatch.setattr(
+        ps, "terminate_process_cross_platform", lambda pid: orphan_kills.append(pid)
+    )
 
     results = {}
     second_started = threading.Event()
@@ -389,3 +391,64 @@ def test_stops_a_real_subprocess():
         if process.poll() is None:  # pragma: no cover - safety net
             process.kill()
             process.wait(timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# Deleting a strategy must abort on a live process, but not on stale metadata.
+#
+# delete_strategy now refuses when the stop fails, so that a running process is
+# never left with its config and file deleted underneath it. `is_running` in the
+# config goes stale whenever the app exits without running cleanup, though, and
+# the stop for one of those returns "Strategy not running". Refusing on that
+# made the strategy permanently undeletable: every later attempt took the same
+# path and failed the same way.
+# ---------------------------------------------------------------------------
+
+
+def test_stale_running_metadata_does_not_block_deletion(quiet_stop, monkeypatch):
+    """A dead PID left behind by an unclean shutdown must still be deletable."""
+    monkeypatch.setattr(ps, "check_process_status", lambda pid: False)
+
+    ps.STRATEGY_CONFIGS["sid-stale"] = {
+        "id": "sid-stale",
+        "name": "sid-stale",
+        "is_running": True,  # stale: the app died without clearing it
+        "pid": 999999,  # long gone
+    }
+
+    stopped, message = ps.stop_strategy_process("sid-stale")
+    assert stopped is False
+    assert message == "Strategy not running"
+
+    # The guard delete_strategy consults must not treat this as protectable.
+    assert ps._strategy_may_still_be_running("sid-stale") is False
+
+
+def test_a_live_process_still_blocks_deletion(quiet_stop, monkeypatch):
+    """The protection itself must survive the fix above."""
+    monkeypatch.setattr(ps, "check_process_status", lambda pid: True)
+
+    ps.STRATEGY_CONFIGS["sid-live"] = {
+        "id": "sid-live",
+        "name": "sid-live",
+        "is_running": True,
+        "pid": 4242,
+    }
+
+    assert ps._strategy_may_still_be_running("sid-live") is True
+
+
+def test_a_tracked_or_stopping_strategy_blocks_deletion(quiet_stop, monkeypatch):
+    """Tracked, or mid-stop, both count as still running."""
+    monkeypatch.setattr(ps, "check_process_status", lambda pid: False)
+
+    process = FakePopen(alive_for=0.0)
+    _register("sid-tracked", process)
+    assert ps._strategy_may_still_be_running("sid-tracked") is True
+
+    ps.RUNNING_STRATEGIES.pop("sid-tracked", None)
+    ps.STRATEGY_CONFIGS["sid-tracked"]["pid"] = None
+    assert ps._strategy_may_still_be_running("sid-tracked") is False
+
+    ps.STOPPING_STRATEGIES.add("sid-tracked")
+    assert ps._strategy_may_still_be_running("sid-tracked") is True
