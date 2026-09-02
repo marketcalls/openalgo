@@ -632,6 +632,13 @@ function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: Signa
   const quantityLabel =
     qtyMode === 'lots' ? 'Lots' : derivative ? 'Quantity (units)' : 'Quantity (shares)'
 
+  // The spinner should move by a tradeable amount. In units mode on a
+  // derivative that is one lot, so 500 goes to 1000 rather than to 501, which
+  // is not a quantity the exchange accepts. Typing is untouched: an arbitrary
+  // number is still allowed, and a part lot is still flagged below and refused
+  // by the server. Shares and lot counts both step by one.
+  const qtyStep = qtyMode === 'units' && derivative && lot.lotSize ? lot.lotSize : 1
+
   const setQtyMode = (mode: QtyMode) => {
     // The lot size the card has already resolved, so the toggle converts
     // rather than reinterpreting: one lot of RELIANCE becomes 500 shares.
@@ -813,9 +820,9 @@ function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: Signa
             </div>
             <Input
               type="number"
-              min={1}
+              min={qtyStep}
               max={qtyMode === 'lots' ? MAX_SIGNAL_LOTS : MAX_SIGNAL_QTY}
-              step={1}
+              step={qtyStep}
               value={qty}
               onChange={(event) =>
                 update(
