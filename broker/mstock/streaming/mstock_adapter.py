@@ -383,6 +383,22 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         for sub in pending:
             latest[str(sub["token"])] = sub
 
+        # Revalidate against current state before sending: a token unsubscribed
+        # after being queued must not be subscribed at the broker. unsubscribe()
+        # already prunes the queue, so this only catches an unsubscribe that
+        # landed between the drain above and here.
+        with self.lock:
+            live_tokens = {str(sub["token"]) for sub in self.subscriptions.values()}
+        dropped = [token for token in latest if token not in live_tokens]
+        for token in dropped:
+            del latest[token]
+        if dropped:
+            self.logger.info(
+                f"Skipping {len(dropped)} queued subscription(s) unsubscribed before the flush"
+            )
+        if not latest:
+            return
+
         try:
             stale = [
                 sub["old_correlation_id"]
@@ -443,6 +459,16 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             for sub in self.subscriptions.values():
                 if sub["token"] == token:
                     max_mode_for_token = max(max_mode_for_token, sub["mode"])
+
+            # Drop any entry still waiting in the coalescing window. Without
+            # this, a subscribe followed by an unsubscribe inside the 500ms
+            # window clears local state but leaves the queued entry, so the
+            # flush would still subscribe the token at mStock and every tick
+            # would arrive for a token this adapter no longer tracks.
+            if max_mode_for_token == 0:
+                self.subscription_queue = [
+                    queued for queued in self.subscription_queue if queued["token"] != token
+                ]
 
             current_mstock_mode = self.token_modes.get(token, 0)
             if max_mode_for_token < current_mstock_mode:

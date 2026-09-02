@@ -47,6 +47,11 @@ class MstockWebSocket:
         self._ws_thread: threading.Thread | None = None
         self._logged_in = False
         self._login_event = threading.Event()
+        # Bumped by every connect_stream(). A reconnect thread carries the
+        # generation it was started for and exits as soon as that no longer
+        # matches, so a stop/start during backoff cannot leave the old thread
+        # driving or overwriting the new connection's WebSocketApp.
+        self._generation = 0
 
     def _build_ws_url(self) -> str:
         """Build the WebSocket URL with the current API key and access token."""
@@ -234,9 +239,17 @@ class MstockWebSocket:
         Returns:
             list: Parsed quote dicts, empty when nothing could be parsed
         """
-        if len(data) < 383:
+        # Branch on the exact bare packet sizes rather than a length threshold.
+        # A header-prefixed LTP or Quote frame (4 + 51 = 55, 4 + 123 = 127, and
+        # multiples when batched) is shorter than a bare snap quote, so a
+        # "< 383 means bare" test dropped those frames entirely.
+        if len(data) in (51, 123, 379):
             quote = MstockWebSocket.parse_binary_packet(data)
             return [quote] if quote else []
+
+        if len(data) < 4:
+            logger.error(f"Invalid frame size: {len(data)} bytes")
+            return []
 
         try:
             num_packets = struct.unpack("<H", data[0:2])[0]
@@ -245,11 +258,15 @@ class MstockWebSocket:
             logger.error(f"Error parsing binary frame header: {str(e)}")
             return []
 
-        # Fall back to the documented 379-byte quote packet when the header
-        # reports a size that cannot be right.
+        # When the header reports a size that cannot be right, treat the frame
+        # as one packet filling the remaining bytes. Assuming 379 here would
+        # discard a shorter LTP or Quote frame outright.
         if packet_size <= 0 or packet_size > len(data) - 4:
-            logger.warning(f"Unexpected packet size {packet_size} in frame header; assuming 379")
-            packet_size = 379
+            fallback = len(data) - 4
+            logger.warning(
+                f"Unexpected packet size {packet_size} in frame header; assuming {fallback}"
+            )
+            packet_size = fallback
 
         available = (len(data) - 4) // packet_size
         if num_packets < 1 or num_packets > available:
@@ -284,26 +301,50 @@ class MstockWebSocket:
         self._logged_in = False
         self._login_event.clear()
 
-        self.ws = websocket.WebSocketApp(
+        # Close any socket left from a previous generation. Without this, a
+        # thread still blocked in run_forever would hold that socket open
+        # indefinitely once self.ws stopped pointing at it.
+        previous = self.ws
+        if previous is not None:
+            try:
+                previous.close()
+            except Exception as close_err:
+                logger.debug(f"Error closing previous WebSocket: {close_err}")
+
+        self._generation += 1
+        generation = self._generation
+
+        app = websocket.WebSocketApp(
             self.ws_url,
             on_open=self._on_ws_open,
             on_message=self._on_ws_message,
             on_error=self._on_ws_error,
             on_close=self._on_ws_close,
         )
+        self.ws = app
 
-        self._ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
+        # The thread owns its own app reference: reading self.ws inside the loop
+        # would let one generation drive another's connection.
+        self._ws_thread = threading.Thread(
+            target=self._run_websocket, args=(generation, app), daemon=True
+        )
         self._ws_thread.start()
-        logger.info("mstock WebSocket connection thread started")
+        logger.info(f"mstock WebSocket connection thread started (generation {generation})")
 
-    def _run_websocket(self):
-        """Run the WebSocket connection with reconnection"""
+    def _run_websocket(self, generation: int, app):
+        """
+        Run the WebSocket connection with reconnection.
+
+        Args:
+            generation: The connect_stream() generation this thread serves
+            app: The WebSocketApp this thread owns
+        """
         self._reconnect_attempts = 0
         max_attempts = 10
 
-        while self.running:
+        while self.running and generation == self._generation:
             try:
-                self.ws.run_forever(
+                app.run_forever(
                     sslopt={"cert_reqs": ssl.CERT_NONE},
                     ping_interval=20,
                     ping_timeout=10,
@@ -314,7 +355,7 @@ class MstockWebSocket:
             self._connected = False
             self._logged_in = False
 
-            if not self.running:
+            if not self.running or generation != self._generation:
                 break
 
             self._reconnect_attempts += 1
@@ -326,12 +367,12 @@ class MstockWebSocket:
             logger.info(f"Reconnecting in {delay:.0f}s (attempt {self._reconnect_attempts})...")
             time.sleep(delay)
 
-            # disconnect_stream() may have run during the backoff. Without this
-            # check the dying thread would still overwrite self.ws, and if a
-            # connect_stream() had followed, it would clobber the live client's
-            # WebSocketApp and orphan that socket beyond the reach of the next
-            # disconnect_stream().
-            if not self.running:
+            # disconnect_stream(), or a stop/start pair, may have run during the
+            # backoff. Testing self.running alone is not enough: a restart sets
+            # it back to True, and this thread would then resume and overwrite
+            # the new connection's WebSocketApp. The generation pins it to the
+            # connect_stream() call that started it.
+            if not self.running or generation != self._generation:
                 break
 
             # Re-read a fresh access token before reconnecting so a reconnect
@@ -340,13 +381,16 @@ class MstockWebSocket:
             self._refresh_auth_token()
 
             # Recreate WebSocketApp for reconnection
-            self.ws = websocket.WebSocketApp(
+            app = websocket.WebSocketApp(
                 self.ws_url,
                 on_open=self._on_ws_open,
                 on_message=self._on_ws_message,
                 on_error=self._on_ws_error,
                 on_close=self._on_ws_close,
             )
+            if not self.running or generation != self._generation:
+                break
+            self.ws = app
 
     def _on_ws_open(self, ws):
         """Called when WebSocket connection is opened"""
@@ -363,7 +407,10 @@ class MstockWebSocket:
         """Called for both binary and text messages"""
         if isinstance(message, bytes):
             # Parse binary packet(s) — a header-prefixed frame may batch several
-            if len(message) in [51, 123, 379] or len(message) >= 383:
+            # parse_binary_message decides what is parseable; gating on a fixed
+            # set of sizes here dropped header-prefixed LTP/Quote frames before
+            # the parser ever saw them.
+            if message:
                 for quote_data in self.parse_binary_message(message):
                     if self.data_callback:
                         self.data_callback(quote_data)
@@ -629,11 +676,10 @@ class MstockWebSocket:
             for _ in range(3):
                 try:
                     response = ws.recv()
-                    if isinstance(response, bytes):
-                        if len(response) in [51, 123, 379] or len(response) >= 383:
-                            quotes = self.parse_binary_message(response)
-                            if quotes:
-                                return quotes[0]
+                    if isinstance(response, bytes) and response:
+                        quotes = self.parse_binary_message(response)
+                        if quotes:
+                            return quotes[0]
                 except Exception:
                     break
 

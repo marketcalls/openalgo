@@ -204,7 +204,17 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
     logger.info(
         f"Looking for position: symboltoken={token}, exchange={exchange}, producttype={producttype}"
     )
-    logger.info(f"Positions data: {positions_data}")
+    # Summary at INFO, full payload at DEBUG: with the default LOG_LEVEL=INFO
+    # this runs on every smart order, and the raw response carries the whole
+    # portfolio - every holding's symbol and quantity - which does not belong
+    # in normal logs and grows with the account.
+    if isinstance(positions_data, dict):
+        logger.info(
+            "Positions response: status=%s count=%s",
+            positions_data.get("status"),
+            len(positions_data.get("data") or []),
+        )
+    logger.debug(f"Positions data: {positions_data}")
 
     net_qty = "0"
 
