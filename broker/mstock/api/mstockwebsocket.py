@@ -326,6 +326,14 @@ class MstockWebSocket:
             logger.info(f"Reconnecting in {delay:.0f}s (attempt {self._reconnect_attempts})...")
             time.sleep(delay)
 
+            # disconnect_stream() may have run during the backoff. Without this
+            # check the dying thread would still overwrite self.ws, and if a
+            # connect_stream() had followed, it would clobber the live client's
+            # WebSocketApp and orphan that socket beyond the reach of the next
+            # disconnect_stream().
+            if not self.running:
+                break
+
             # Re-read a fresh access token before reconnecting so a reconnect
             # after the daily token rollover uses a live token. Both self.ws_url
             # and the LOGIN payload in _on_ws_open derive from self.auth_token.
@@ -582,6 +590,13 @@ class MstockWebSocket:
         Fetch a single quote synchronously using a temporary WebSocket connection.
         Uses websocket-client's create_connection for a simple request-response.
         """
+        # The socket is closed in a finally, not after each return: a send that
+        # fails mid-call (connection reset, broken pipe, timeout) used to jump
+        # straight to the handler below and leak the descriptor. This runs per
+        # depth request in a worker that never restarts, so a broker-side
+        # disconnect leaked one descriptor per call until the process hit its
+        # open-file limit.
+        ws = None
         try:
             import websocket as ws_module
 
@@ -618,14 +633,21 @@ class MstockWebSocket:
                         if len(response) in [51, 123, 379] or len(response) >= 383:
                             quotes = self.parse_binary_message(response)
                             if quotes:
-                                ws.close()
                                 return quotes[0]
                 except Exception:
                     break
 
-            ws.close()
             return None
 
         except Exception as e:
             logger.error(f"Error fetching quote: {e}")
             return None
+
+        finally:
+            if ws is not None:
+                try:
+                    ws.close()
+                except Exception as close_err:
+                    # Closing an already-broken socket can raise; swallow it so
+                    # this never replaces the value the caller is returning.
+                    logger.debug(f"Error closing one-off quote socket: {close_err}")
