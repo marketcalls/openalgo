@@ -168,6 +168,7 @@ class OrderFactFold:
     def was_terminal(self) -> bool:
         return self.previous_status in _TERMINAL_ORDER_STATUSES
 
+
 EVENT_SEVERITIES = ("info", "warn", "critical")
 
 EVENT_KINDS = (
@@ -842,10 +843,17 @@ def get_strategy_unscoped(strategy_id: int) -> SmStrategy | None:
 # Fields a PATCH is allowed to touch. An allowlist, not a denylist: it is the
 # only thing standing between a mass-assignment and a caller setting
 # webhook_token_hash, user_id or current_run_id directly.
+#
+# strategy_kind is deliberately absent. The two kinds do not share a leg shape:
+# a batch leg carries a segment, a position and a lot count resolved from the
+# strategy's underlying, while a signal leg names its own instrument, side and
+# absolute quantity. Flipping the kind leaves every stored leg describing the
+# other kind's contract, and the legs are an opaque JSON column, so nothing
+# downstream notices until a run tries to resolve them. The wizard already
+# refuses to send it; this is the half that a caller cannot route around.
 UPDATABLE_FIELDS = frozenset(
     {
         "name",
-        "strategy_kind",
         "direction",
         "universe_tab",
         "underlying",
@@ -877,6 +885,17 @@ def update_strategy(
             return None, "Strategy not found"
         if row.status == "running":
             return None, "Stop the strategy before editing it"
+
+        # Said rather than silently dropped. strategy_kind is outside
+        # UPDATABLE_FIELDS, so a caller asking to change it would otherwise get
+        # a 200 and a strategy that did not change, which reads as success.
+        requested_kind = changes.get("strategy_kind")
+        if requested_kind is not None and requested_kind != row.strategy_kind:
+            return None, (
+                "A strategy cannot change between batch and signal. The two kinds do not "
+                "share a leg shape, so every leg would describe the wrong kind of contract. "
+                "Create a new strategy instead."
+            )
 
         for field, value in changes.items():
             if field in UPDATABLE_FIELDS:
@@ -1625,9 +1644,7 @@ def _pnl_fill_fact(order: SmStrategyOrder) -> _PnlFillFact | None:
     )
 
 
-def _fold_owner_pnl(
-    facts: list[_PnlFillFact], *, referenced: bool
-) -> tuple[float, int] | None:
+def _fold_owner_pnl(facts: list[_PnlFillFact], *, referenced: bool) -> tuple[float, int] | None:
     """FIFO one provable owner; ``None`` means its ownership is ambiguous."""
     # A positive but unpriced fact leaves checkpoint/live P&L authoritative for
     # this owner. Do not manufacture a partial owner valuation from later rows.

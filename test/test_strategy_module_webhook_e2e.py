@@ -157,6 +157,10 @@ def _signal_strategy():
             "strategy_kind": "signal",
             "direction": "both",
             "strategy_type": "positional",
+            # Intraday, because these legs are cash and they short. Cash cannot
+            # be carried short, so a carry product would have every short_entry
+            # refused before it reached the broker.
+            "product": "MIS",
             "legs": [
                 {
                     "id": 1,

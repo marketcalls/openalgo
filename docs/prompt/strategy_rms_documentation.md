@@ -228,7 +228,7 @@ is the protocol, the leg shape and the run lifecycle.
 | Trigger | `start` enters every leg, `stop` exits every leg | one alert moves one leg |
 | Leg shape | segment, position, lots, option type, strike mode, offset, expiry | symbol, exchange, side, qty, segment, expiry |
 | Options | relative option legs and spreads | an exact option contract may be named, but there is no `options` segment, expiry-rank or strike resolution; spreads stay in batch mode |
-| Quantity | derivative lots multiplied by the exact `SymToken` lot size; cash uses the configured count as units | derivatives accept `qty_mode=lots` (multiplied by the exact `SymToken` lot size) or `qty_mode=units` (absolute quantity on a whole-lot boundary); cash is units only and uses the exact quantity |
+| Quantity | the configured count multiplied by the exact `SymToken` lot size, on every segment including cash. A cash row's lot size is 1, so the count is a share count, but the multiplication is unconditional and nothing asserts the 1 | derivatives accept `qty_mode=lots` (multiplied by the exact `SymToken` lot size) or `qty_mode=units` (absolute quantity on a whole-lot boundary); cash is units only and uses the exact quantity |
 | Run | one per start-to-stop cycle | one per platform session, opened by the first signal |
 | Webhook actions | `start`, `stop` | `long_entry`, `long_exit`, `short_entry`, `short_exit` |
 | Legs at run start | all entered together | inactive until a signal opens one |

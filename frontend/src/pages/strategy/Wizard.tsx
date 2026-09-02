@@ -33,7 +33,9 @@ import { cn } from '@/lib/utils'
 import {
   ATM_OFFSETS,
   allowedProductsForLegs,
+  batchQuantityLabelFor,
   convertLegKind,
+  DIRECTION_ACCEPTS,
   defaultProductForLegs,
   defaultQtyMode,
   derivativeExchangeFor,
@@ -52,17 +54,18 @@ import {
   type LockProfitMode,
   legToPayload,
   MAX_LEGS,
-  MAX_LOTS,
   MAX_NAME_LENGTH,
   MAX_SIGNAL_LOTS,
   MAX_SIGNAL_QTY,
+  maxBatchQuantityFor,
   maxQtyFor,
   type OptionType,
   type Product,
+  productHintForLegs,
   type QtyMode,
   resolvedQuantity,
   type Segment,
-  SIGNAL_LEG_SEGMENTS,
+  SIGNAL_LEG_EXCHANGES,
   SIGNAL_MODE_TABS,
   STRATEGY_DIRECTION_LABELS,
   STRATEGY_KIND_HINT,
@@ -73,6 +76,8 @@ import {
   type StrategyKind,
   type StrategyType,
   type StrategyUpdatePayload,
+  segmentSuitsExchange,
+  signalSegmentsForTab,
   TAB_DEFAULT_EXCHANGE,
   TAB_DEFAULT_UNDERLYINGS,
   TAB_INTRADAY_DEFAULTS,
@@ -334,17 +339,26 @@ function LegCard({
           )}
 
           <div className="space-y-1.5">
-            <Label className="text-xs uppercase">Lots</Label>
+            <Label className="text-xs uppercase">{batchQuantityLabelFor(leg.segment)}</Label>
             <Input
               type="number"
               min={1}
-              max={MAX_LOTS}
+              max={maxBatchQuantityFor(leg.segment)}
               value={leg.lots ?? 1}
               onChange={(event) =>
-                update('lots', Math.max(1, Number.parseInt(event.target.value || '1', 10)))
+                update(
+                  'lots',
+                  Math.min(
+                    maxBatchQuantityFor(leg.segment),
+                    Math.max(1, Number.parseInt(event.target.value || '1', 10))
+                  )
+                )
               }
               className="h-9"
             />
+            {leg.segment === 'cash' && (
+              <p className="text-[10px] text-muted-foreground">Shares, sent as-is.</p>
+            )}
           </div>
 
           <div className="space-y-1.5">
@@ -655,22 +669,33 @@ function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: Signa
 
           <div className="space-y-1.5">
             <Label className="text-xs uppercase">Exchange</Label>
-            <Input
-              value={leg.exchange ?? ''}
+            <select
+              value={leg.exchange || venueFor(leg.segment)}
               onChange={(event) => {
                 const nextVenue = event.target.value.toUpperCase()
+                // The segment follows the venue rather than being left to
+                // contradict it. A leg marked cash on NFO validated and the
+                // segment was then ignored, so the leg traded whatever the
+                // symbol happened to be.
+                const nextSegment: Segment = isDerivativeExchange(nextVenue) ? 'futures' : 'cash'
                 onChange({
                   ...leg,
                   exchange: nextVenue,
-                  // Lots on a cash venue is refused outright, so typing one in
+                  segment: nextSegment,
+                  expiry: nextSegment === 'futures' ? (leg.expiry ?? 'monthly') : null,
+                  // Lots on a cash venue is refused outright, so moving to one
                   // moves the leg to units rather than leaving it unsavable.
                   qty_mode: isDerivativeExchange(nextVenue) ? (leg.qty_mode ?? 'lots') : 'units',
                 })
               }}
-              placeholder={venueFor(leg.segment)}
-              className="font-mono"
-              maxLength={20}
-            />
+              className={`${SELECT_CLASS_SM} font-mono`}
+            >
+              {SIGNAL_LEG_EXCHANGES.map((venue) => (
+                <option key={venue} value={venue}>
+                  {venue}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -695,7 +720,7 @@ function SignalLegCard({ leg, tab, index, onChange, onRemove, removable }: Signa
               }}
               className={SELECT_CLASS_SM}
             >
-              {SIGNAL_LEG_SEGMENTS.map((segment) => (
+              {signalSegmentsForTab(tab).map((segment) => (
                 <option key={segment} value={segment}>
                   {segment}
                 </option>
@@ -1257,10 +1282,31 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
       if (!exitTime) return 'Exit time is required for an intraday strategy'
       if (entryTime >= exitTime) return 'Entry time must be earlier than exit time'
     }
+    // A short cash leg the product cannot carry. Indian cash equity is sold
+    // short intraday and never carried short, and the product is read as
+    // intent: anything that is not MIS reaches a cash venue as CNC, which
+    // makes the order a naked short delivery the broker refuses.
+    if (product !== 'MIS') {
+      for (const leg of legs) {
+        if (leg.segment !== 'cash') continue
+        if (leg.position === 'S' || leg.side === 'short') {
+          return `Leg ${leg.id}: cash cannot be held short overnight. Use MIS for an intraday short, or make the leg long.`
+        }
+      }
+    }
     for (const leg of legs) {
       if (isSignal) {
         if (!leg.symbol?.trim()) return `Leg ${leg.id}: symbol is required`
         if (!leg.exchange?.trim()) return `Leg ${leg.id}: exchange is required`
+        if (!SIGNAL_LEG_EXCHANGES.includes(leg.exchange.trim().toUpperCase())) {
+          return `Leg ${leg.id}: ${leg.exchange.trim().toUpperCase()} is not a venue this module trades. Use one of ${SIGNAL_LEG_EXCHANGES.join(', ')}.`
+        }
+        if (!segmentSuitsExchange(leg.segment, leg.exchange)) {
+          return `Leg ${leg.id}: a ${leg.segment} leg cannot trade on ${leg.exchange.trim().toUpperCase()}.`
+        }
+        if (!DIRECTION_ACCEPTS[direction].includes(leg.side ?? 'both')) {
+          return `Leg ${leg.id}: side ${leg.side} is one a ${direction} strategy never acts on. Change the side, or the strategy direction.`
+        }
         const qty = Number(leg.qty)
         if (!Number.isInteger(qty) || qty < 1) {
           return `Leg ${leg.id}: quantity must be a whole number of at least 1`
@@ -1280,6 +1326,15 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
         if (leg.strike == null || leg.strike <= 0) {
           return `Leg ${leg.id}: pick a strike, or switch the leg to ATM-relative`
         }
+      }
+      // Shares on cash, lots on a derivative. They are not the same number.
+      const cap = maxBatchQuantityFor(leg.segment)
+      if ((leg.lots ?? 1) > cap) {
+        const counted = leg.segment === 'cash' ? 'quantity' : 'lots'
+        return `Leg ${leg.id}: ${counted} cannot be more than ${cap.toLocaleString('en-IN')}`
+      }
+      if (!TAB_SEGMENTS[tab].includes(leg.segment)) {
+        return `Leg ${leg.id}: the ${UNIVERSE_TAB_LABELS[tab]} universe does not trade ${leg.segment}.`
       }
     }
     if (lockEnabled) {
@@ -1356,7 +1411,6 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
             default_mode: 'sandbox',
           }
         : null,
-      webhook_ip_allowlist: null,
     }
 
     if (isEdit) {
@@ -1615,13 +1669,7 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
                   </option>
                 ))}
               </select>
-              <p className="text-xs text-muted-foreground">
-                {allowedProducts.length === 1
-                  ? 'Mixed cash + derivatives legs: only MIS works for both.'
-                  : allowedProducts.includes('CNC')
-                    ? 'Cash equity: CNC (delivery) or MIS (intraday).'
-                    : 'Derivatives: NRML (carry) or MIS (intraday).'}
-              </p>
+              <p className="text-xs text-muted-foreground">{productHintForLegs(legs, product)}</p>
             </div>
           </div>
         </CardContent>

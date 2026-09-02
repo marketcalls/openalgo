@@ -106,9 +106,9 @@ USDINR_LTP = 88.19
 USDINR_LOT = 1000
 
 #: Which products each exchange actually accepts. Mirrors
-#: blueprints/scalping.py, which is the one surface in this codebase that gets
-#: this right: DERIVATIVE_PRODUCTS = {"MIS", "NRML"}, EQUITY_PRODUCTS =
-#: {"MIS", "CNC"}.
+#: blueprints/scalping.py, which is the one surface in this codebase that
+#: states the rule directly: a derivative venue takes MIS or NRML, a cash
+#: venue MIS or CNC.
 DERIVATIVE_VENUES = frozenset({"NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "NCO"})
 
 
@@ -276,6 +276,13 @@ def market(monkeypatch):
 
 _SEED_ROWS = [
     # (symbol, name, exchange, expiry, lotsize, instrumenttype)
+    # The cash contracts FakeMarket lists, seeded for real so a signal cash leg
+    # can be checked against the master contract the way a derivative one is.
+    # Without rows on the venue, contract_exists takes its "master contract not
+    # downloaded yet" path and answers True for anything.
+    ("RELIANCE", "RELIANCE", "NSE", "", 1, "EQ"),
+    ("SBIN", "SBIN", "NSE", "", 1, "EQ"),
+    ("TATAMOTORS", "TATAMOTORS", "BSE", "", 1, "EQ"),
     ("NIFTY03JAN3023600CE", "NIFTY", "NFO", "03-JAN-30", NIFTY_LOT, "CE"),
     ("NIFTY31JAN30FUT", "NIFTY", "NFO", "31-JAN-30", NIFTY_LOT, "FUT"),
     ("BANKNIFTY31JAN3052000CE", "BANKNIFTY", "NFO", "31-JAN-30", BANKNIFTY_LOT, "CE"),
@@ -395,7 +402,10 @@ def _config(underlying, underlying_exchange, legs, **overrides):
         "name": next(_names),
         "underlying": underlying,
         "underlying_exchange": underlying_exchange,
-        "universe_tab": "weekly_monthly",
+        # No universe_tab on purpose. It is a grouping the wizard sets, and the
+        # validator derives it from the legs when a caller does not, so pinning
+        # one here would have every cash and commodity strategy in this file
+        # claim to be an index one.
         "strategy_type": "positional",
         "legs": legs,
     }
@@ -429,6 +439,28 @@ def _signal_strategy(legs, **overrides):
         _config("MULTI", "NSE", legs, strategy_kind="signal", direction="both", **overrides)
     )
     return store.get_strategy(sid, USER)
+
+
+def _cash_leg(**overrides):
+    """A batch cash leg. Its "lots" is a share count: cash lot size is 1."""
+    leg = {"id": 1, "segment": "cash", "position": "B", "lots": 10}
+    leg.update(overrides)
+    return leg
+
+
+def _option_leg(**overrides):
+    leg = {
+        "id": 1,
+        "segment": "options",
+        "position": "S",
+        "lots": 1,
+        "option_type": "CE",
+        "strike_mode": "atm",
+        "atm_offset": "ATM",
+        "expiry": "monthly",
+    }
+    leg.update(overrides)
+    return leg
 
 
 def _leg_state(run_id, leg_id=1):
@@ -2064,3 +2096,210 @@ def test_a_leg_whose_signal_exit_was_rejected_can_still_be_squared_off(market):
 
     kinds = [row["kind"] for row in store.list_orders(run_id)]
     assert "exit_close_all" in kinds, f"the leg was never squared off: {kinds}"
+
+
+# ---------------------------------------------------------------------------
+# The universe tab, and the segments it decides a leg may use
+#
+# The tab is what says cash is tradable on the stocks universe and nowhere
+# else, because an index has no cash instrument of its own and an MCX commodity
+# has no spot. It used to be validated as free text up to thirty characters,
+# with every rule hanging off it living in the browser, so a cash leg on an
+# index tab validated here and was refused at run start instead.
+# ---------------------------------------------------------------------------
+
+
+def test_a_universe_tab_outside_the_four_is_refused():
+    message = _refused(_config("NIFTY", "NSE_INDEX", [_option_leg()], universe_tab="delta"))
+    assert "universe_tab" in message
+
+
+def test_a_cash_leg_is_refused_on_a_tab_that_has_no_cash_to_trade():
+    message = _refused(_config("NIFTY", "NSE_INDEX", [_cash_leg()], universe_tab="weekly_monthly"))
+    assert "cash" in message and "weekly_monthly" in message
+
+
+def test_a_cash_leg_is_accepted_on_the_stocks_tab():
+    config, error = validate_strategy_config(
+        _config("RELIANCE", "NSE", [_cash_leg()], universe_tab="stocks_fno")
+    )
+    assert error is None, error
+    assert config["universe_tab"] == "stocks_fno"
+
+
+def test_an_omitted_tab_is_read_off_the_legs_rather_than_defaulted():
+    """A caller that never names a tab must not be refused about one.
+
+    The tab is a grouping the wizard sets. An API caller building a cash
+    strategy has no reason to know it exists, and defaulting to the index tab
+    and then refusing the cash leg underneath it would be a refusal about a
+    field the caller never set.
+    """
+    cash, error = validate_strategy_config(_config("RELIANCE", "NSE", [_cash_leg()]))
+    assert error is None, error
+    assert cash["universe_tab"] == "stocks_fno"
+
+    weekly, error = validate_strategy_config(
+        _config("NIFTY", "NSE_INDEX", [_option_leg(expiry="weekly")])
+    )
+    assert error is None, error
+    assert weekly["universe_tab"] == "weekly_monthly"
+
+    commodity, error = validate_strategy_config(
+        _config("CRUDEOIL", "MCX", [_option_leg(expiry="monthly")])
+    )
+    assert error is None, error
+    assert commodity["universe_tab"] == "mcx"
+
+
+# ---------------------------------------------------------------------------
+# A signal leg's segment and its venue have to describe the same instrument
+# ---------------------------------------------------------------------------
+
+
+def test_a_signal_cash_leg_is_refused_on_a_derivative_venue():
+    """The segment was accepted and then ignored, so the leg traded the symbol.
+
+    Nothing downstream reconciles a signal leg's segment against its exchange:
+    _resolve_signal_leg reads the symbol and the venue and never looks at the
+    segment at all.
+    """
+    message = _refused(
+        _config(
+            "MULTI",
+            "NSE",
+            [
+                {
+                    "id": 1,
+                    "symbol": "NIFTY28MAY2624000CE",
+                    "exchange": "NFO",
+                    "qty": 1,
+                    "segment": "cash",
+                }
+            ],
+            strategy_kind="signal",
+            product="MIS",
+        )
+    )
+    assert "cash leg on NFO" in message
+
+
+def test_a_signal_futures_leg_is_refused_on_a_cash_venue():
+    message = _refused(
+        _config(
+            "MULTI",
+            "NSE",
+            [{"id": 1, "symbol": "RELIANCE", "exchange": "NSE", "qty": 1, "segment": "futures"}],
+            strategy_kind="signal",
+            product="MIS",
+        )
+    )
+    assert "futures leg on NSE" in message
+
+
+# ---------------------------------------------------------------------------
+# Cash cannot be carried short
+#
+# Indian cash equity is sold short intraday and never carried short: a delivery
+# sell has to be covered by stock the account holds. The product is read as
+# intent everywhere in this module, so anything that is not MIS reaches a cash
+# venue as CNC, which makes a short a naked short delivery.
+# ---------------------------------------------------------------------------
+
+
+def test_a_short_cash_batch_leg_is_refused_under_a_carry_product():
+    message = _refused(_config("RELIANCE", "NSE", [_cash_leg(position="S")], product="NRML"))
+    assert "short" in message and "MIS" in message
+
+
+def test_a_short_cash_batch_leg_is_accepted_intraday():
+    _, error = validate_strategy_config(
+        _config("RELIANCE", "NSE", [_cash_leg(position="S")], product="MIS")
+    )
+    assert error is None, error
+
+
+def test_a_long_cash_batch_leg_is_untouched_by_the_rule():
+    _, error = validate_strategy_config(
+        _config("RELIANCE", "NSE", [_cash_leg(position="B")], product="CNC")
+    )
+    assert error is None, error
+
+
+def test_a_signal_leg_that_accepts_shorts_is_configurable_under_a_carry_product():
+    """Only the signal that actually shorts is refused, not the configuration.
+
+    A leg's side says which signals it accepts. A leg set to accept both is an
+    ordinary intraday configuration, and refusing it at save time would block
+    the common case to catch a rarer one.
+    """
+    _, error = validate_strategy_config(
+        _config(
+            "MULTI",
+            "NSE",
+            [
+                {
+                    "id": 1,
+                    "symbol": "RELIANCE",
+                    "exchange": "NSE",
+                    "qty": 10,
+                    "segment": "cash",
+                    "side": "both",
+                }
+            ],
+            strategy_kind="signal",
+            product="NRML",
+        )
+    )
+    assert error is None, error
+
+
+def test_a_short_entry_on_cash_under_a_carry_product_places_nothing(market, broker):
+    """The half the form cannot refuse, refused where the side is known."""
+    strategy = _signal_strategy(
+        [{"id": 1, "symbol": "RELIANCE", "exchange": "NSE", "qty": 10, "segment": "cash"}],
+        product="NRML",
+    )
+
+    result = signals.handle_signal(strategy, "short_entry", leg_id=1)
+
+    assert result.ok is False
+    assert "short" in (result.error or "")
+    assert broker == []
+
+
+def test_a_long_entry_on_cash_under_a_carry_product_still_places(market, broker):
+    strategy = _signal_strategy(
+        [{"id": 1, "symbol": "RELIANCE", "exchange": "NSE", "qty": 10, "segment": "cash"}],
+        product="NRML",
+    )
+
+    result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is True, result.error
+    assert broker[0]["action"] == "BUY"
+    # Carry on a cash venue is CNC, which is the whole reason a short is not.
+    assert broker[0]["product"] == "CNC"
+
+
+# ---------------------------------------------------------------------------
+# A signal cash symbol is checked against the master contract
+# ---------------------------------------------------------------------------
+
+
+def test_a_signal_cash_leg_naming_a_symbol_that_is_not_listed_places_nothing(market, broker):
+    """Batch mode refuses the identical typo with contract_not_found.
+
+    The existence check used to be guarded on a derivative exchange, which left
+    a misspelled equity as the one instrument nothing verified: a cash leg is
+    not resolved from an underlying either, so it reached the broker verbatim.
+    """
+    strategy = _signal_strategy(
+        [{"id": 1, "symbol": "RELAINCE", "exchange": "NSE", "qty": 10, "segment": "cash"}]
+    )
+
+    result = signals.handle_signal(strategy, "long_entry", leg_id=1)
+
+    assert result.ok is False
+    assert "RELAINCE is not a contract on NSE" in (result.error or "")
+    assert broker == []

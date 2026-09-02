@@ -135,7 +135,13 @@ def _rate_limited(error):
 
 #: The store's PATCH allowlist doubles as the create allowlist. Sharing it is
 #: deliberate: two lists would drift, and the second one would be the loose one.
-CONFIG_FIELDS = store.UPDATABLE_FIELDS
+#:
+#: strategy_kind is the one field that is settable at create and not updatable
+#: afterwards, so it is added here rather than to the store's list. It also has
+#: to survive the PATCH merge: the merge seeds itself from these fields, and a
+#: signal strategy whose kind was dropped on the way in would have its legs
+#: re-validated as batch legs and fail on its own stored configuration.
+CONFIG_FIELDS = store.UPDATABLE_FIELDS | {"strategy_kind"}
 
 PRODUCTS = ("CNC", "NRML", "MIS")
 # MARKET only, and deliberately so. Neither the strategy configuration nor a
@@ -164,7 +170,28 @@ UNDERLYING_EXCHANGES = (
     "BSE_INDEX",
 )
 
+#: How the wizard groups instruments, and the only thing that says which
+#: segments a leg may use. Stored on the strategy and echoed back, so it was
+#: previously validated as free text: any thirty characters were accepted and
+#: every rule hanging off the tab lived in the browser. A cash leg on an index
+#: tab therefore validated here and failed at run start with "no cash contract
+#: found for NIFTY on NSE", which is the correct refusal arriving far too late.
+UNIVERSE_TABS = ("weekly_monthly", "monthly_only", "stocks_fno", "mcx")
+
 LEG_SEGMENTS = ("options", "futures", "cash")
+
+#: Which segments each tab offers. Cash appears on one tab only, because an
+#: index has no cash instrument of its own and an MCX commodity has no spot:
+#: both resolve to a symbol the master contract does not list. This mirrors
+#: TAB_SEGMENTS in frontend/src/types/strategy_module.ts, which is where the
+#: rule used to live on its own.
+TAB_SEGMENTS = {
+    "weekly_monthly": ("futures", "options"),
+    "monthly_only": ("futures", "options"),
+    "stocks_fno": ("cash", "futures", "options"),
+    "mcx": ("futures", "options"),
+}
+
 LEG_POSITIONS = ("B", "S")
 LEG_OPTION_TYPES = ("CE", "PE")
 LEG_STRIKE_MODES = ("atm", "strike")
@@ -258,7 +285,6 @@ MAX_LOTS = 50
 # capped differently by which kind of strategy holds it.
 MAX_CASH_QUANTITY = 1_000_000
 MAX_NAME_LENGTH = 200
-MAX_UNIVERSE_TAB_LENGTH = 30
 MAX_UNDERLYING_LENGTH = 50
 MAX_IP_ALLOWLIST = 20
 
@@ -848,10 +874,13 @@ def _validate_strategy_config(payload: Any) -> dict:
         ),
         # Only read for signal strategies; harmless and inert on a batch one.
         "direction": _choice(raw.get("direction") or "both", store.DIRECTIONS, "direction"),
-        "universe_tab": _text(
-            raw.get("universe_tab") or "weekly_monthly",
-            "universe_tab",
-            max_length=MAX_UNIVERSE_TAB_LENGTH,
+        # Derived from the legs when the caller does not say, because the tab
+        # is a grouping the wizard uses and not something an API caller should
+        # have to know. Defaulting it to weekly_monthly and then refusing the
+        # cash leg underneath it would be a refusal about a field the caller
+        # never set. An explicit tab is still checked, and still governs.
+        "universe_tab": _choice(
+            raw.get("universe_tab") or _tab_for_legs(raw), UNIVERSE_TABS, "universe_tab"
         ),
         "underlying": _text(
             _required(raw, "underlying"), "underlying", max_length=MAX_UNDERLYING_LENGTH
@@ -894,7 +923,128 @@ def _validate_strategy_config(payload: Any) -> dict:
         raise ValidationError("entry_time must be earlier than exit_time")
 
     _reject_contradictory_sides(config)
+    _reject_segments_outside_tab(config)
+    _reject_cash_on_a_derivative_venue(config)
+    _reject_uncoverable_short_cash(config)
     return config
+
+
+#: Underlying exchanges whose instruments belong to the commodity tab.
+_COMMODITY_EXCHANGES = frozenset({"MCX", "NCDEX", "NCO"})
+
+#: Expiry ranks that only exist where an instrument lists weekly contracts.
+_WEEKLY_RANKS = frozenset({"weekly", "next_week"})
+
+
+def _tab_for_legs(raw: Any) -> str:
+    """The tab a configuration belongs to, read off the configuration itself.
+
+    Used only when the caller did not name one. Kept in step with the same
+    derivation in upgrade/migrate_strategy_universe_tab.py, which normalizes
+    rows written before the tab was validated.
+    """
+    legs = raw.get("legs")
+    if not isinstance(legs, list):
+        return "weekly_monthly"
+
+    segments = {str(leg.get("segment") or "").lower() for leg in legs if isinstance(leg, dict)}
+    if "cash" in segments:
+        return "stocks_fno"
+
+    if str(raw.get("underlying_exchange") or "").upper() in _COMMODITY_EXCHANGES:
+        return "mcx"
+
+    ranks = {str(leg.get("expiry") or "").lower() for leg in legs if isinstance(leg, dict)}
+    return "weekly_monthly" if ranks & _WEEKLY_RANKS else "monthly_only"
+
+
+def _reject_segments_outside_tab(config: dict[str, Any]) -> None:
+    """Refuse a leg whose segment the strategy's universe tab does not offer.
+
+    The tab decides what the underlying is, so it decides which segments can
+    resolve against it. A cash leg on an index tab names the index itself,
+    which has no cash instrument, and a cash leg on the commodity tab names a
+    spot that does not exist. Both were accepted here and refused at run start,
+    after the operator had finished the form and pressed Start.
+    """
+    tab = config.get("universe_tab", "weekly_monthly")
+    allowed = TAB_SEGMENTS.get(tab)
+    if not allowed:
+        return
+
+    for index, leg in enumerate(config.get("legs") or []):
+        segment = leg.get("segment")
+        if segment and segment not in allowed:
+            raise ValidationError(
+                f"legs[{index}].segment is {segment!r}, which the {tab!r} universe does not "
+                f"offer. That tab trades {' and '.join(allowed)}."
+            )
+
+
+def _reject_cash_on_a_derivative_venue(config: dict[str, Any]) -> None:
+    """Refuse a signal leg whose segment and exchange disagree.
+
+    A signal leg names its own venue, and nothing downstream reconciles that
+    against its segment: a leg marked cash on NFO was accepted, and the segment
+    was then simply ignored, so the leg traded whatever the symbol happened to
+    be. Batch legs take their venue from the strategy's underlying and are
+    covered by the tab rule above instead.
+    """
+    if config.get("strategy_kind") != "signal":
+        return
+
+    from services.strategy_module.symbol_resolver import DERIVATIVE_EXCHANGES
+
+    for index, leg in enumerate(config.get("legs") or []):
+        segment = leg.get("segment")
+        exchange = leg.get("exchange")
+        if not segment or not exchange:
+            continue
+        if segment == "cash" and exchange in DERIVATIVE_EXCHANGES:
+            raise ValidationError(
+                f"legs[{index}] is a cash leg on {exchange}, which lists derivatives. "
+                f"Use NSE or BSE for cash, or set the segment to 'futures'."
+            )
+        if segment == "futures" and exchange not in DERIVATIVE_EXCHANGES:
+            raise ValidationError(
+                f"legs[{index}] is a futures leg on {exchange}, which lists cash. "
+                f"Use a derivative exchange, or set the segment to 'cash'."
+            )
+
+
+def _reject_uncoverable_short_cash(config: dict[str, Any]) -> None:
+    """Refuse a short cash leg the product cannot deliver.
+
+    Indian cash equity can be sold short intraday and not carried short: a
+    delivery sell has to be covered by stock the account holds. The product is
+    read as intent, so anything that is not MIS is carry and reaches a cash
+    venue as CNC. A short cash leg under carry is therefore a naked short
+    delivery, which the broker refuses at order time and nothing refused here.
+
+    Batch legs only, and deliberately. A batch leg's position is what it will
+    be entered as the moment the run starts, so a short cash leg under carry is
+    an order that cannot be placed. A signal leg's ``side`` is only which
+    signals it accepts: a leg set to short, or to both, is an ordinary intraday
+    configuration until an alert actually asks for a short, and refusing it
+    here would block the common case to catch a rarer one. That case is caught
+    at signal time by ``signals._reject_uncarryable_short``, which knows the
+    side being opened rather than the sides being accepted.
+    """
+    if config.get("strategy_kind") == "signal":
+        return
+    product = (config.get("product") or "").upper()
+    if product == "MIS":
+        return
+
+    for index, leg in enumerate(config.get("legs") or []):
+        if leg.get("segment") != "cash":
+            continue
+        if leg.get("position") == "S":
+            raise ValidationError(
+                f"legs[{index}] sells cash short, but product {product!r} carries the position. "
+                f"Cash cannot be held short overnight. Use MIS for an intraday short, or make "
+                f"the leg long."
+            )
 
 
 #: Which leg sides a strategy-level direction can ever act on.

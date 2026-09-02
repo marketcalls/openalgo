@@ -442,6 +442,16 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
                 return closed
             flipped = True
 
+        # A short that the product cannot carry. The form refuses a leg
+        # configured short outright, but a leg that accepts both sides is a
+        # normal intraday configuration and only the signal says which way it
+        # is about to open. Cash sold short under a carry product is a naked
+        # short delivery: the broker refuses it, and until it did nothing here
+        # said so.
+        short_error = _reject_uncarryable_short(strategy, leg, side)
+        if short_error:
+            return SignalResult(ok=False, leg_id=leg_id, error=f"Leg {leg_id}: {short_error}")
+
         # Resolves the quantity too, which in lots mode means multiplying by the
         # lot size from the master contract. This is the authoritative pass: the
         # form checks as well, but a strategy saved before the master contract was
@@ -475,6 +485,31 @@ def _enter(strategy: Any, run_id: int, leg: dict, side: str) -> SignalResult:
             engine.reconcile_pending_stop(run_id)
 
 
+def _reject_uncarryable_short(strategy: Any, leg: dict, side: str) -> str | None:
+    """Why this short cannot be opened, or None if it can.
+
+    Cash equity is sold short intraday and never carried short: a delivery sell
+    has to be covered by stock the account holds. The product is read as intent
+    everywhere in this module, so anything that is not MIS reaches a cash venue
+    as CNC, which makes the order a naked short delivery.
+    """
+    if side != _SHORT:
+        return None
+    product = str(getattr(strategy, "product", "MIS") or "MIS").upper()
+    if product == "MIS":
+        return None
+
+    from services.strategy_module.symbol_resolver import DERIVATIVE_EXCHANGES
+
+    exchange = str(leg.get("exchange") or "").upper()
+    if not exchange or exchange in DERIVATIVE_EXCHANGES:
+        return None
+    return (
+        f"cash cannot be held short overnight, and product {product} carries the position. "
+        f"Use MIS for an intraday short."
+    )
+
+
 def _resolve_signal_leg(leg: dict, side: str) -> tuple[dict | None, str | None]:
     """A signal leg in the shape run state expects, or the reason it is not.
 
@@ -490,7 +525,6 @@ def _resolve_signal_leg(leg: dict, side: str) -> tuple[dict | None, str | None]:
     lets a leg survive an exchange revising its lot size.
     """
     from services.strategy_module.symbol_resolver import (
-        DERIVATIVE_EXCHANGES,
         contract_exists,
         resolve_quantity,
     )
@@ -509,7 +543,14 @@ def _resolve_signal_leg(leg: dict, side: str) -> tuple[dict | None, str | None]:
     # the base symbol produced an entirely plausible quantity, because the lot
     # size is read from the root, and then sent the literal base to the broker
     # as an order. Batch mode refuses the same leg with contract_not_found.
-    if exchange in DERIVATIVE_EXCHANGES and not contract_exists(symbol, exchange):
+    #
+    # Checked on every venue, cash included. Guarding this on a derivative
+    # exchange left a misspelled equity as the one instrument nothing verified:
+    # a cash leg is not resolved from an underlying either, so "RELAINCE" on
+    # NSE reached the broker verbatim while batch mode refused the identical
+    # typo. contract_exists answers True when the master contract has no rows
+    # for the venue at all, so a fresh install is still not blocked.
+    if not contract_exists(symbol, exchange):
         return None, f"{symbol} is not a contract on {exchange}"
     quantity, lot_size, error = resolve_quantity(
         raw_qty, leg.get("qty_mode") or "units", symbol, exchange
@@ -658,9 +699,7 @@ def _place(
         quantity=leg.get("quantity") or leg.get("qty"),
         product=strategy_product,
         strategy_name=strategy_name,
-        pricetype=order_dispatch.EXIT_PRICETYPE
-        if exiting
-        else strategy_pricetype,
+        pricetype=order_dispatch.EXIT_PRICETYPE if exiting else strategy_pricetype,
     )
     # Durable intent before the broker is called, exactly as the batch path
     # does. Recording afterwards meant a crash or a database failure between
@@ -771,9 +810,7 @@ def _place(
     if row_id is not None:
         from services.strategy_module.engine import _record_acknowledgement
 
-        _record_acknowledgement(
-            row_id, result, strategy_id, user_id, run_id, leg["leg_id"]
-        )
+        _record_acknowledgement(row_id, result, strategy_id, user_id, run_id, leg["leg_id"])
 
     reconcile_rejected_entry_stop = False
     if not exiting and entry_claim is not None:
