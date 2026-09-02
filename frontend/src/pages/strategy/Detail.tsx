@@ -265,15 +265,32 @@ function TrailCell({ leg, live }: { leg: Leg; live: LegState | undefined }) {
   const trailY = leg.trail?.y ?? 0
   if (!trailX || trailX <= 0) return <span className="text-muted-foreground">—</span>
 
-  // The unit the leg is actually configured in. Printing "pts" on a percent
-  // leg described a 2 percent stop as a two rupee one.
-  const unit = (leg.risk_unit ?? 'points') === 'percent' ? '%' : 'pts'
+  // The unit the leg is configured in. Printing "pts" on a percent leg
+  // described a 2 percent stop as a two rupee one, so the label follows the
+  // leg. The two numbers beside it then have to follow as well: `trail.x` is
+  // stored in the leg's own unit, while `favorablePeakPoints` always returns
+  // price points, so on a percent leg they are not the same quantity and
+  // labelling both "%" would be its own lie.
+  const percent = (leg.risk_unit ?? 'points') === 'percent'
+  const unit = percent ? '%' : 'pts'
 
   const entry = live?.entry_avg ?? null
   const peakPts = live ? favorablePeakPoints(live) : 0
   const armed = Boolean(live?.trail_active)
   const effectiveSl = live?.effective_sl ?? null
-  const armPrice = entry ? (leg.position === 'B' ? entry + trailX : entry - trailX) : null
+
+  // A percent trail arms a percentage of entry away, not that many rupees.
+  // Both the arming price and the progress toward it need converting, and
+  // neither can be shown at all until a fill gives us an entry to measure
+  // against, which is the same rule risk_adapter applies.
+  const armDistance = percent ? (entry ? (entry * trailX) / 100 : null) : trailX
+  const armPrice =
+    entry && armDistance != null
+      ? leg.position === 'B'
+        ? entry + armDistance
+        : entry - armDistance
+      : null
+  const peakShown = percent ? (entry ? (peakPts / entry) * 100 : null) : peakPts
 
   return (
     <div className="flex flex-col items-end gap-0.5 leading-tight">
@@ -292,7 +309,7 @@ function TrailCell({ leg, live }: { leg: Leg; live: LegState | undefined }) {
             <span className="text-muted-foreground">arm pending</span>
           )}
           <span className="text-[10px] text-muted-foreground">
-            {peakPts.toFixed(2)} / {trailX} {unit}
+            {peakShown != null ? peakShown.toFixed(2) : '—'} / {trailX} {unit}
             {trailY > 0 && ` · step ${trailY}`}
           </span>
         </>

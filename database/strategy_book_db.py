@@ -180,13 +180,16 @@ def _prune_old_tags() -> None:
         # Committed whether or not anything matched. The DELETE opens SQLite's
         # write transaction the moment it runs, and a prune that matches
         # nothing is the ordinary case, so committing only when `removed` was
-        # truthy left that transaction open on this thread's session. This runs
-        # from app startup, which has no Flask app context, so the teardown
-        # that would have released it never fires: the write lock was then held
-        # for the life of the process. Every other writer on openalgo.db backed
-        # off for its full budget and failed with "database is locked",
-        # strategy recovery among them, which is how a run that was already
-        # finished stayed open across every restart.
+        # truthy left that transaction open on this thread's session.
+        #
+        # This runs from app startup, inside the single app context that wraps
+        # the whole of `_init_databases_and_schedulers`. `teardown_appcontext`
+        # therefore does not fire until every startup step has finished, so the
+        # write lock was held straight through the ones that still had writing
+        # to do. Every other writer on openalgo.db backed off for its full
+        # budget and failed with "database is locked", strategy recovery among
+        # them, which is how a run that was already finished stayed open across
+        # every restart.
         db_session.commit()
         if removed:
             logger.info(f"Strategy book: pruned {removed} order tag(s) past retention")
@@ -194,7 +197,8 @@ def _prune_old_tags() -> None:
         db_session.rollback()
         logger.exception("Could not prune old order tags")
     finally:
-        # Startup owns no app context, so nothing else will release this.
+        # Released here rather than left to the context teardown, which does
+        # not run until the rest of startup has finished.
         db_session.remove()
 
 

@@ -1158,16 +1158,20 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
 
   // On a closed-universe tab the exchange comes from the seed entry; on an open
   // one every underlying on the tab is listed on the same exchange.
-  // On a closed-universe tab the exchange follows the index that was picked.
-  // On an open one the operator chooses it, because the same typed symbol can
-  // be listed on either venue: RELIANCE trades on NSE and on BSE.
-  const underlyingExchange = useMemo(
-    () =>
-      seededUnderlyings.find((choice) => choice.symbol === underlying)?.exchange ??
-      chosenExchange ??
-      TAB_DEFAULT_EXCHANGE[tab],
-    [underlying, seededUnderlyings, tab, chosenExchange]
-  )
+  // On a closed-universe tab the exchange follows the index that was picked:
+  // NIFTY is quoted on NSE_INDEX and SENSEX on BSE_INDEX, and there is nothing
+  // to choose. On an open one the operator chooses, because the same typed
+  // symbol is listed on both venues: RELIANCE trades on NSE and on BSE.
+  //
+  // The explicit choice wins over the seed. Preferring the seed meant a stock
+  // that happens to be in the tab's seed list, which is most of them, silently
+  // went back to NSE the moment it was named, so BSE could be selected and
+  // never submitted.
+  const underlyingExchange = useMemo(() => {
+    const seeded = seededUnderlyings.find((choice) => choice.symbol === underlying)?.exchange
+    if (closedUniverse) return seeded ?? TAB_DEFAULT_EXCHANGE[tab]
+    return chosenExchange ?? seeded ?? TAB_DEFAULT_EXCHANGE[tab]
+  }, [underlying, seededUnderlyings, tab, chosenExchange, closedUniverse])
 
   const exchangeChoices = TAB_UNDERLYING_EXCHANGES[tab]
 

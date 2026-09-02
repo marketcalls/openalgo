@@ -4,12 +4,13 @@
 DELETE takes SQLite's write transaction the moment it executes, whether or not
 it matches a row, and both used to commit only when the row count was truthy.
 A prune that matched nothing, which is the ordinary case, therefore left the
-transaction open on the startup thread's session. Startup has no Flask app
-context, so `teardown_appcontext` never fired and nothing released it: the
-write lock was held for the life of the process, and every other writer on
-openalgo.db backed off for its full budget and failed with "database is
-locked". Strategy recovery was one of them, which is how a finished run stayed
-open across every restart.
+transaction open on the startup thread's session. Startup runs inside one app
+context spanning the whole of `_init_databases_and_schedulers`, so
+`teardown_appcontext` does not fire until every step has finished and nothing
+released it in between: the write lock was held straight through the steps that
+still had writing to do, and every other writer on openalgo.db backed off for
+its full budget and failed with "database is locked". Strategy recovery was one
+of them, which is how a finished run stayed open across every restart.
 
 The first test asserts the defect itself, so this file cannot pass vacuously.
 """

@@ -2106,29 +2106,26 @@ def test_a_legacy_leg_with_no_exit_row_rebuilds_from_the_checkpoint():
 
 
 def test_a_legacy_leg_with_no_exit_row_but_a_priced_exit_rebuilds():
-    """The other read through the missing row: the exit price."""
+    """The other read through the missing row: the exit price.
+
+    No order rows at all, so `identity` is None and the checkpoint is the only
+    witness of the exit. That is the one path on which `exit_filled` is true
+    with `exit_order` None, and a positive quantity is what makes
+    `exit_applied` true and reaches the price read. An earlier version of this
+    test supplied an entry row, which made `identity` non-None, left
+    `exit_filled` false, and never reached the read at all: it passed against
+    the unguarded code it was meant to pin.
+    """
     leg = recovery._rebuild_legacy_leg(
         "1",
-        entries=[
-            {
-                "id": 1,
-                "kind": "entry",
-                "status": "complete",
-                "action": "BUY",
-                "qty": 5,
-                "filled_qty": 5,
-                "avg_fill_price": 1300.0,
-                "symbol": "RELIANCE",
-                "exchange": "NSE",
-                "position_ref": None,
-            }
-        ],
+        entries=[],
         exits=[],
         cp_leg={
             "position": "B",
             "symbol": "RELIANCE",
             "exchange": "NSE",
             "qty": 5,
+            "entry_avg": 1300.0,
             "exit_filled": True,
             "exit_avg": 1320.0,
             "exit_kind": "exit_sl",
@@ -2137,3 +2134,5 @@ def test_a_legacy_leg_with_no_exit_row_but_a_priced_exit_rebuilds():
     )
 
     assert leg["symbol"] == "RELIANCE"
+    assert leg["exit_avg"] == 1320.0, "the exit price was not read from the checkpoint"
+    assert leg["exit_kind"] == "exit_sl", "the exit kind was not read from the checkpoint"

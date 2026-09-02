@@ -867,11 +867,17 @@ def _validate_strategy_config(payload: Any) -> dict:
     raw = _mapping(payload, "The request body")
     _reject_unknown(raw, CONFIG_FIELDS, "The request")
 
+    # Legs first, because the universe tab is derived from them when the caller
+    # names none, and that derivation has to read the segment a leg will
+    # actually carry. Reading the raw payload saw no segment on a signal leg
+    # that relied on the default, derived a tab for a derivative universe, and
+    # then refused the very cash leg the default had just produced.
+    kind = _choice(raw.get("strategy_kind") or "batch", store.STRATEGY_KINDS, "strategy_kind")
+    legs = _validate_legs(_required(raw, "legs"), kind)
+
     config: dict[str, Any] = {
         "name": _text(_required(raw, "name"), "name", max_length=MAX_NAME_LENGTH),
-        "strategy_kind": _choice(
-            raw.get("strategy_kind") or "batch", store.STRATEGY_KINDS, "strategy_kind"
-        ),
+        "strategy_kind": kind,
         # Only read for signal strategies; harmless and inert on a batch one.
         "direction": _choice(raw.get("direction") or "both", store.DIRECTIONS, "direction"),
         # Derived from the legs when the caller does not say, because the tab
@@ -880,7 +886,7 @@ def _validate_strategy_config(payload: Any) -> dict:
         # cash leg underneath it would be a refusal about a field the caller
         # never set. An explicit tab is still checked, and still governs.
         "universe_tab": _choice(
-            raw.get("universe_tab") or _tab_for_legs(raw), UNIVERSE_TABS, "universe_tab"
+            raw.get("universe_tab") or _tab_for_legs(raw, legs), UNIVERSE_TABS, "universe_tab"
         ),
         "underlying": _text(
             _required(raw, "underlying"), "underlying", max_length=MAX_UNDERLYING_LENGTH
@@ -893,10 +899,7 @@ def _validate_strategy_config(payload: Any) -> dict:
         ),
         "product": _choice(raw.get("product") or "NRML", PRODUCTS, "product"),
         "pricetype": _choice(raw.get("pricetype") or "MARKET", PRICETYPES, "pricetype"),
-        "legs": _validate_legs(
-            _required(raw, "legs"),
-            _choice(raw.get("strategy_kind") or "batch", store.STRATEGY_KINDS, "strategy_kind"),
-        ),
+        "legs": legs,
         "overall_sl_mtm": _loss_amount(raw.get("overall_sl_mtm"), "overall_sl_mtm"),
         "overall_target_mtm": _gain_amount(raw.get("overall_target_mtm"), "overall_target_mtm"),
         "lock_profit": _validate_lock_profit(raw.get("lock_profit")),
@@ -936,17 +939,17 @@ _COMMODITY_EXCHANGES = frozenset({"MCX", "NCDEX", "NCO"})
 _WEEKLY_RANKS = frozenset({"weekly", "next_week"})
 
 
-def _tab_for_legs(raw: Any) -> str:
+def _tab_for_legs(raw: Any, legs: list[dict[str, Any]]) -> str:
     """The tab a configuration belongs to, read off the configuration itself.
 
-    Used only when the caller did not name one. Kept in step with the same
-    derivation in upgrade/migrate_strategy_universe_tab.py, which normalizes
-    rows written before the tab was validated.
+    Used only when the caller did not name one. Takes the *validated* legs
+    rather than the raw ones: a signal leg's segment defaults to cash, and
+    deriving from the raw payload missed that default, picked a derivative
+    universe, and then refused the cash leg validation had just produced. Kept
+    in step with the same derivation in
+    upgrade/migrate_strategy_universe_tab.py, which normalizes rows written
+    before the tab was validated.
     """
-    legs = raw.get("legs")
-    if not isinstance(legs, list):
-        return "weekly_monthly"
-
     segments = {str(leg.get("segment") or "").lower() for leg in legs if isinstance(leg, dict)}
     if "cash" in segments:
         return "stocks_fno"
@@ -1298,6 +1301,25 @@ def update_strategy(sid):
 
     if row.status == "running":
         return _error("Stop the strategy before editing it", 409)
+
+    # Refused here rather than left to the merge. strategy_kind is in
+    # CONFIG_FIELDS because the merge seeds itself from that set and a signal
+    # strategy whose kind was dropped would have its legs re-validated as batch
+    # legs, failing on its own stored configuration. But that also let a PATCH
+    # carry a kind: a changed one then failed on leg shape, naming a leg field
+    # instead of the field the caller actually tried to change, and an
+    # unchanged one was recorded as an update that changed nothing.
+    requested_kind = payload.get("strategy_kind")
+    if requested_kind is not None and requested_kind != row.strategy_kind:
+        return _error(
+            "A strategy cannot change between batch and signal. The two kinds do not "
+            "share a leg shape, so every leg would describe the wrong kind of contract. "
+            "Create a new strategy instead.",
+            400,
+        )
+    payload.pop("strategy_kind", None)
+    if not payload:
+        return _error("Nothing to update", 400)
 
     stored = store.strategy_to_dict(row)
     merged = {field: stored[field] for field in CONFIG_FIELDS if field in stored}

@@ -2369,3 +2369,30 @@ def test_a_start_that_fails_before_any_dispatch_finalises_its_run(market, broker
 
     runs = store.list_runs(sid)
     assert runs and runs[0]["stopped_at"] is not None, "the run was left open"
+
+
+def test_a_refused_short_does_not_liquidate_the_long_it_would_have_flipped(market, broker):
+    """A refusal must cost nothing.
+
+    The uncarryable-short check used to run after the flip, so a short_entry on
+    a leg held long squared that long and only then refused the short: a signal
+    that was never going to open anything liquidated a position instead.
+    """
+    strategy = _signal_strategy(
+        [{"id": 1, "symbol": "RELIANCE", "exchange": "NSE", "qty": 4, "segment": "cash"}],
+        product="NRML",
+    )
+
+    opened = signals.handle_signal(strategy, "long_entry", leg_id=1)
+    assert opened.ok is True, opened.error
+    run_id = store.get_strategy(strategy.id, USER).current_run_id
+    assert _leg_state(run_id)["position"] == "B"
+    placed_before = len(broker)
+
+    refused = signals.handle_signal(store.get_strategy(strategy.id, USER), "short_entry", leg_id=1)
+
+    assert refused.ok is False
+    assert "short" in (refused.error or "")
+    assert len(broker) == placed_before, "the refused short still sent an order"
+    assert _leg_state(run_id)["position"] == "B", "the long was squared by a refused signal"
+    assert _leg_state(run_id)["status"] == "open"
