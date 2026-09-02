@@ -450,7 +450,7 @@ export const UNIVERSE_TAB_LABELS: Record<UniverseTab, string> = {
 export const UNIVERSE_TAB_HINT: Record<UniverseTab, string> = {
   weekly_monthly: 'NIFTY, SENSEX',
   monthly_only: 'MIDCPNIFTY, BANKNIFTY, FINNIFTY, BANKEX',
-  stocks_fno: 'All NIFTY 500 stocks',
+  stocks_fno: 'Any NSE or BSE stock',
   mcx: 'CRUDEOIL, NATURALGAS, GOLD, SILVER, …',
 }
 
@@ -534,6 +534,22 @@ export const TAB_UNDERLYING_IS_CLOSED_SET: Record<UniverseTab, boolean> = {
   mcx: false,
 }
 
+/**
+ * Exchanges a tab's underlying may be quoted on.
+ *
+ * Only the stocks tab has a choice to offer. An index tab's exchange follows
+ * the index the user picked, and MCX lists on one venue. Cash resolves against
+ * whichever of these the strategy carries, and a derivative leg on the same
+ * underlying maps from it (NSE to NFO, BSE to BFO), so this is the strategy's
+ * exchange rather than the cash leg's.
+ */
+export const TAB_UNDERLYING_EXCHANGES: Record<UniverseTab, string[]> = {
+  weekly_monthly: ['NSE_INDEX', 'BSE_INDEX'],
+  monthly_only: ['NSE_INDEX', 'BSE_INDEX'],
+  stocks_fno: ['NSE', 'BSE'],
+  mcx: ['MCX'],
+}
+
 /** The exchange a typed underlying defaults to on an open-universe tab. */
 export const TAB_DEFAULT_EXCHANGE: Record<UniverseTab, string> = {
   weekly_monthly: 'NSE_INDEX',
@@ -591,6 +607,60 @@ export const SIGNAL_MODE_TABS: UniverseTab[] = ['stocks_fno', 'mcx']
 export const SIGNAL_LEG_SEGMENTS: Segment[] = ['cash', 'futures']
 
 /**
+ * Segments a signal leg may take on a given tab.
+ *
+ * The flat list above offered cash on the commodity tab, where there is no
+ * spot to trade: the leg validated, the segment was then ignored downstream,
+ * and the order went to MCX as whatever the symbol happened to be. Intersecting
+ * with the tab keeps the offer honest.
+ */
+export function signalSegmentsForTab(tab: UniverseTab): Segment[] {
+  const allowed = new Set(TAB_SEGMENTS[tab])
+  const offered = SIGNAL_LEG_SEGMENTS.filter((segment) => allowed.has(segment))
+  return offered.length > 0 ? offered : ['futures']
+}
+
+/**
+ * Where a signal leg may trade. Mirrors `SIGNAL_LEG_EXCHANGES` in
+ * `blueprints/strategy_module.py`. The exchange box takes typed text, so
+ * without this the only thing that caught "NSEE" was a 400 on save.
+ */
+export const SIGNAL_LEG_EXCHANGES = [
+  'NSE',
+  'BSE',
+  'NFO',
+  'BFO',
+  'MCX',
+  'CDS',
+  'BCD',
+  'NCDEX',
+  'NCO',
+]
+
+/**
+ * Which leg sides a strategy-level direction can ever act on. Mirrors
+ * `_DIRECTION_ACCEPTS` in `blueprints/strategy_module.py`.
+ *
+ * A long_only strategy discards every short signal before it reaches a leg, so
+ * a leg declared short is configuration that looks complete and can never
+ * trade. The server refuses it; without this the operator found out on save.
+ */
+export const DIRECTION_ACCEPTS: Record<StrategyDirection, LegSide[]> = {
+  both: ['long', 'short', 'both'],
+  long_only: ['long', 'both'],
+  short_only: ['short', 'both'],
+}
+
+/** Whether a signal leg's segment and exchange describe the same instrument. */
+export function segmentSuitsExchange(segment: Segment, exchange: string | null | undefined) {
+  const venue = (exchange ?? '').trim().toUpperCase()
+  if (!venue) return true
+  if (segment === 'cash') return !isDerivativeExchange(venue)
+  if (segment === 'futures') return isDerivativeExchange(venue)
+  return true
+}
+
+/**
  * Intraday window per tab. NSE and BSE trade 09:15-15:30, so 09:35-15:15 skips
  * the opening auction and exits before a broker's MIS square-off. MCX runs to
  * 23:30 in winter, so its window closes at 23:25.
@@ -604,11 +674,31 @@ export const TAB_INTRADAY_DEFAULTS: Record<UniverseTab, { entry: string; exit: s
 
 export const MAX_LEGS = 10
 export const MAX_LOTS = 50
+/**
+ * Cap on a batch cash leg's quantity.
+ *
+ * A cash contract's lot size is 1, so a batch cash leg's "lots" is a share
+ * count. Capping it at the derivative's 50 made fifty shares the largest cash
+ * order a batch strategy could place, while signal mode counted the same
+ * instrument in units up to a million. Mirrors MAX_CASH_QUANTITY in
+ * blueprints/strategy_module.py.
+ */
+export const MAX_CASH_QUANTITY = 1_000_000
 export const MAX_NAME_LENGTH = 200
 /** Cap on a signal leg's quantity when it is counted in units. */
 export const MAX_SIGNAL_QTY = 1_000_000
 /** Cap on a signal leg's quantity when it is counted in lots. */
 export const MAX_SIGNAL_LOTS = 10_000
+
+/** The cap on a batch leg's count: shares on cash, lots on a derivative. */
+export function maxBatchQuantityFor(segment: Segment): number {
+  return segment === 'cash' ? MAX_CASH_QUANTITY : MAX_LOTS
+}
+
+/** What a batch leg's count is measured in, for a label the operator reads. */
+export function batchQuantityLabelFor(segment: Segment): string {
+  return segment === 'cash' ? 'Quantity (shares)' : 'Lots'
+}
 
 /**
  * Exchanges that trade in lots. Mirrors `DERIVATIVE_EXCHANGES` in
@@ -668,23 +758,37 @@ export function resolvedQuantity(
 /**
  * The leg that results from switching to another quantity mode.
  *
- * The number is kept and reinterpreted, never converted. Rewriting 5 lots into
- * 325 units would silently edit what the user typed, and the reverse only
- * works when the lot size is known and divides exactly - so a converting
- * toggle would sometimes convert and sometimes not, which is harder to trust
- * than one that never does. A number that is wrong in the new mode fails
- * visibly: the card says so, and the server refuses a part lot by name.
+ * The number is converted when the lot size is known, because the same digit
+ * means two different trades either side of the toggle. One lot of RELIANCE is
+ * 500 shares, so leaving "1" on screen after a switch to units offers a
+ * quantity that cannot be traded at all, and reads as though the toggle did
+ * nothing. Switching back divides, floored to whole lots and never below one,
+ * so a part-lot number resolves to the lots it covers rather than to nonsense.
+ *
+ * With no lot size the number is kept and reinterpreted, which is the older
+ * behaviour: there is nothing to convert by, and inventing a factor would be
+ * worse than leaving a figure the card already flags. A units quantity off a
+ * lot boundary is still called out by `isWholeLots`, and the server refuses a
+ * part lot by name.
  *
  * Lots on a cash venue is refused outright by the validator, so the switch is
  * a no-op there rather than something to be undone on save.
  */
-export function withQtyMode(leg: Leg, mode: QtyMode): Leg {
+export function withQtyMode(leg: Leg, mode: QtyMode, lotSize?: number | null): Leg {
   if (mode === 'lots' && !isDerivativeExchange(leg.exchange)) return leg
+
+  const current = leg.qty ?? 1
+  const size = lotSize && lotSize > 0 ? lotSize : null
+  let converted = current
+  if (size && mode !== (leg.qty_mode ?? defaultQtyMode(leg.exchange))) {
+    converted = mode === 'units' ? current * size : Math.max(1, Math.floor(current / size))
+  }
+
   return {
     ...leg,
     qty_mode: mode,
-    // Only the cap changes with the mode: 10,000 lots against 1,000,000 units.
-    qty: Math.min(maxQtyFor(mode), leg.qty ?? 1),
+    // The cap changes with the mode too: 10,000 lots against 1,000,000 units.
+    qty: Math.min(maxQtyFor(mode), Math.max(1, converted)),
   }
 }
 
@@ -708,17 +812,37 @@ export function isWholeLots(qty: number | null | undefined, lotSize: number | nu
 /**
  * Products valid for a mix of segments.
  *
- * The product is a strategy-level field applied to every leg, so a basket that
- * mixes cash with derivatives is restricted to MIS: it is the only product that
- * exists on both sides of the exchange's rules.
+ * The product is a strategy-level field applied to every leg, and the engine
+ * reads it as the intent rather than as a literal: MIS is intraday everywhere,
+ * and anything else means carry, which `product_for_exchange` sends as NRML on
+ * a derivative venue and CNC on cash. A mixed basket can therefore be carried,
+ * with each leg receiving a product its own venue accepts.
+ *
+ * This used to offer MIS alone for a mixed basket, which was stricter than the
+ * engine and removed carry from a basket that supports it. NRML is offered as
+ * the carry intent because that is the spelling a derivative leg keeps; the
+ * hint beside the control says what the cash leg is sent as.
  */
 export function allowedProductsForLegs(legs: Leg[]): Product[] {
   const segments = new Set(legs.map((leg) => leg.segment))
   const hasCash = segments.has('cash')
   const hasDerivative = segments.has('futures') || segments.has('options')
-  if (hasCash && hasDerivative) return ['MIS']
+  if (hasCash && hasDerivative) return ['MIS', 'NRML']
   if (hasCash) return ['MIS', 'CNC']
   return ['NRML', 'MIS']
+}
+
+/** What the chosen product is actually sent as, per venue, for a leg mix. */
+export function productHintForLegs(legs: Leg[], product: Product): string {
+  const segments = new Set(legs.map((leg) => leg.segment))
+  const hasCash = segments.has('cash')
+  const hasDerivative = segments.has('futures') || segments.has('options')
+  if (product === 'MIS') return 'Intraday on every leg, squared off the same day.'
+  if (hasCash && hasDerivative) {
+    return 'Carried: the derivative legs are sent as NRML and the cash legs as CNC.'
+  }
+  if (hasCash) return 'Cash equity: CNC takes delivery, MIS is intraday.'
+  return 'Derivatives: NRML carries the position, MIS is intraday.'
 }
 
 /** Default product for a leg composition: cash-only is MIS, derivatives NRML. */
@@ -888,6 +1012,13 @@ export function legToPayload(leg: Leg, kind: StrategyKind = 'batch'): Leg {
   if (leg.sl_pts != null) clean.sl_pts = leg.sl_pts
   if (leg.target_pts != null) clean.target_pts = leg.target_pts
   if (leg.trail && (leg.trail.x > 0 || leg.trail.y > 0)) clean.trail = leg.trail
+  // Sent with the numbers it governs, and always. Leaving it out let the
+  // server apply its own default of points, so a leg configured as a
+  // percentage of entry saved as points: the toggle moved, the form redrew,
+  // and the stop was a rupee distance on a 2500 stock instead of a percentage
+  // of it. Editing such a strategy then converted it back again. Points is
+  // still the default when nothing is set, so this changes no stored leg.
+  clean.risk_unit = leg.risk_unit ?? 'points'
   return clean
 }
 

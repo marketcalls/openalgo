@@ -33,14 +33,14 @@ Feature: Strategy module and risk management
     Then a single conditional update claims it
     And only one set of entry orders reaches the broker
 
-  # Source: test/test_strategy_module_engine.py:127
+  # Source: test/test_strategy_module_engine.py:143
   Scenario: Every batch leg resolves before anything is claimed
     Given one configured leg cannot resolve to a listed contract
     When the batch strategy starts
     Then no run row, strategy claim or broker order is created
     And the failure names the leg and reason
 
-  # Source: test/test_strategy_module_qa_segments.py:687
+  # Source: test/test_strategy_module_qa_segments.py:719
   Scenario: Every leg is sent a product its venue accepts
     Given one strategy product applies to cash and derivative legs
     When an order is built
@@ -55,7 +55,7 @@ Feature: Strategy module and risk management
     Then subsequent live exits still reach the broker
     And a sandbox run still uses the sandbox book and execution pipe
 
-  # Source: services/strategy_module/engine.py:497, test/test_strategy_module_engine.py:304, test/test_strategy_module_scheduler.py:730
+  # Source: services/strategy_module/engine.py:524, test/test_strategy_module_engine.py:318, test/test_strategy_module_scheduler.py:730
   Scenario: Durable intent and acknowledgement surround every broker call
     Given the engine is about to place an entry or exit
     When it dispatches the order
@@ -79,7 +79,7 @@ Feature: Strategy module and risk management
     Then only the superseded position_ref is reduced
     And the replacement remains open and evaluated for risk
 
-  # Source: test/test_strategy_module_engine.py:703
+  # Source: test/test_strategy_module_engine.py:717
   Scenario: One exact owner cannot be sent two covering exits
     Given an open position owner
     When two risk rules fire before the first exit returns
@@ -125,14 +125,14 @@ Feature: Strategy module and risk management
     And run_stop_failed is recorded at critical severity
     And the pending run stays open for another exit attempt
 
-  # Source: test/test_strategy_module_signals.py:550
+  # Source: test/test_strategy_module_signals.py:602
   Scenario: A durable stop gates new signal entries but permits exit retries
     Given a signal run has stop_requested_reason populated
     When entry and exit alerts arrive
     Then a new entry claim is refused under the run lock
     And an alert targeting exposure still held can retry its exit
 
-  # Source: test/test_strategy_module_signals.py:1020
+  # Source: test/test_strategy_module_signals.py:1072
   Scenario: A normal signal round trip keeps one platform-session run
     Given a signal leg opens and exits for a risk reason
     When it becomes flat before the session ends
@@ -170,7 +170,7 @@ Feature: Strategy module and risk management
     Then a weekday square-off is installed at that time
     And no start job is installed
 
-  # Source: test/test_strategy_module_qa_segments.py:1856, test/test_strategy_module_webhook_e2e.py:229
+  # Source: test/test_strategy_module_qa_segments.py:1888, test/test_strategy_module_webhook_e2e.py:233
   Scenario: A signal must name a listed contract and never doubles a held side
     Given a derivatives signal leg names only a base symbol or repeats its held side
     When its entry alert arrives
@@ -242,7 +242,7 @@ Feature: Strategy module and risk management
     Then real zero remains zero
     And every unusable quantity, price and P&L value renders unavailable
 
-  # Source: frontend/src/pages/strategy/Detail.test.tsx:1085, frontend/src/pages/strategy/strategy_module.test.ts:121
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:1085, frontend/src/pages/strategy/strategy_module.test.ts:133
   Scenario: Broker order and trade truth keeps local reconciliation context
     Given broker rows and recorded strategy orders can match, differ or be ambiguous
     When the page reconciles them by broker order id
@@ -250,7 +250,7 @@ Feature: Strategy module and risk management
     And multiple trade fills aggregate quantity and weighted price before comparison
     And local-only, ambiguous, mismatch and rejection context remain visible
 
-  # Source: frontend/src/pages/strategy/Detail.test.tsx:787, frontend/src/pages/strategy/Detail.test.tsx:875, frontend/src/pages/strategy/strategy_module.test.ts:400, test/test_strategy_module_views.py:441
+  # Source: frontend/src/pages/strategy/Detail.test.tsx:787, frontend/src/pages/strategy/Detail.test.tsx:875, frontend/src/pages/strategy/strategy_module.test.ts:412, test/test_strategy_module_views.py:441
   Scenario: Position fallback preserves exposure without inventing valuation
     Given local audit has explicit positive fills in working or terminal statuses
     When the broker positionbook is unavailable

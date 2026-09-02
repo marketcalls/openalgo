@@ -9,7 +9,10 @@ import {
   reconcileBrokerTrades,
 } from '@/api/strategy_module'
 import {
+  allowedProductsForLegs,
+  batchQuantityLabelFor,
   convertLegKind,
+  DIRECTION_ACCEPTS,
   defaultQtyMode,
   derivativeExchangeFor,
   favorablePeakPoints,
@@ -22,18 +25,27 @@ import {
   isWholeLots,
   type Leg,
   legToPayload,
+  MAX_CASH_QUANTITY,
+  MAX_LOTS,
   MAX_SIGNAL_LOTS,
   MAX_SIGNAL_QTY,
+  maxBatchQuantityFor,
   monthlyExpiries,
   type Order,
   parseExpiryDate,
+  productHintForLegs,
   type QtyMode,
   resolvedQuantity,
   resolveExpiryRank,
   SIGNAL_LEG_SEGMENTS,
   SIGNAL_MODE_TABS,
+  segmentSuitsExchange,
+  signalSegmentsForTab,
   sortExpiries,
   TAB_SEGMENTS,
+  TAB_UNDERLYING_EXCHANGES,
+  TAB_UNDERLYING_IS_CLOSED_SET,
+  UNIVERSE_TAB_HINT,
   withQtyMode,
 } from '@/types/strategy_module'
 
@@ -881,6 +893,7 @@ describe('legToPayload, batch', () => {
       sl_pts: 30,
       target_pts: 60,
       trail: { x: 10, y: 5 },
+      risk_unit: 'points',
     })
   })
 
@@ -918,7 +931,34 @@ describe('legToPayload, batch', () => {
       'batch'
     )
     expect(payload).not.toHaveProperty('expiry')
-    expect(Object.keys(payload).sort()).toEqual(['id', 'lots', 'position', 'segment'])
+    expect(Object.keys(payload).sort()).toEqual(['id', 'lots', 'position', 'risk_unit', 'segment'])
+  })
+})
+
+describe('legToPayload, risk unit', () => {
+  it('sends percent, because dropping it silently saved the leg as points', () => {
+    const leg: Leg = { ...BATCH_OPTION_LEG, risk_unit: 'percent' }
+    expect(legToPayload(leg, 'batch').risk_unit).toBe('percent')
+  })
+
+  it('sends points for a leg that never set one, so nothing stored changes', () => {
+    const { risk_unit: _absent, ...withoutUnit } = BATCH_OPTION_LEG
+    void _absent
+    expect(legToPayload(withoutUnit as Leg, 'batch').risk_unit).toBe('points')
+  })
+
+  it('sends percent on a signal leg too, which shares the same risk block', () => {
+    const leg: Leg = {
+      id: 1,
+      segment: 'cash',
+      symbol: 'RELIANCE',
+      exchange: 'NSE',
+      side: 'long',
+      qty: 500,
+      risk_unit: 'percent',
+      sl_pts: 2,
+    }
+    expect(legToPayload(leg, 'signal')).toMatchObject({ risk_unit: 'percent', sl_pts: 2 })
   })
 })
 
@@ -945,6 +985,7 @@ describe('legToPayload, signal', () => {
       side: 'long',
       qty: 500,
       qty_mode: 'units',
+      risk_unit: 'points',
     })
   })
 
@@ -1107,6 +1148,7 @@ describe('freshSignalLeg', () => {
       'id',
       'qty',
       'qty_mode',
+      'risk_unit',
       'segment',
       'side',
       'symbol',
@@ -1235,9 +1277,9 @@ describe('legToPayload, quantity mode', () => {
 })
 
 describe('withQtyMode', () => {
-  // Decided: the number is kept and reinterpreted, never converted. Converting
-  // would silently rewrite what the user typed, and could only work one way.
-  it('keeps the number the user typed rather than converting it', () => {
+  // With no lot size there is nothing to convert by, so the number is kept and
+  // reinterpreted. That is the older behaviour and it still holds here.
+  it('keeps the number when no lot size is known', () => {
     const asUnits = withQtyMode(NIFTY_FUT_LEG, 'units')
     expect(asUnits.qty).toBe(5)
     expect(asUnits.qty_mode).toBe('units')
@@ -1341,5 +1383,138 @@ describe('lotSizeFromRows', () => {
       )
     ).toBeNull()
     expect(lotSizeFromRows([], 'NIFTY')).toBeNull()
+  })
+})
+
+describe('cash and derivative quantities are not the same number', () => {
+  it('caps a batch cash leg at the share ceiling, not the lot one', () => {
+    expect(maxBatchQuantityFor('cash')).toBe(MAX_CASH_QUANTITY)
+    expect(maxBatchQuantityFor('futures')).toBe(MAX_LOTS)
+    expect(maxBatchQuantityFor('options')).toBe(MAX_LOTS)
+  })
+
+  it('labels a cash count as shares, because a lot size of 1 is what makes it one', () => {
+    expect(batchQuantityLabelFor('cash')).toBe('Quantity (shares)')
+    expect(batchQuantityLabelFor('futures')).toBe('Lots')
+  })
+})
+
+describe('a segment and an exchange have to describe the same instrument', () => {
+  it('refuses cash on a derivative venue, which used to validate and be ignored', () => {
+    expect(segmentSuitsExchange('cash', 'NFO')).toBe(false)
+    expect(segmentSuitsExchange('cash', 'MCX')).toBe(false)
+    expect(segmentSuitsExchange('cash', 'NSE')).toBe(true)
+    expect(segmentSuitsExchange('cash', 'BSE')).toBe(true)
+  })
+
+  it('refuses futures on a cash venue', () => {
+    expect(segmentSuitsExchange('futures', 'NSE')).toBe(false)
+    expect(segmentSuitsExchange('futures', 'NFO')).toBe(true)
+  })
+
+  it('says nothing about a leg with no exchange yet', () => {
+    expect(segmentSuitsExchange('cash', '')).toBe(true)
+    expect(segmentSuitsExchange('cash', null)).toBe(true)
+  })
+})
+
+describe('a tab only offers the segments it trades', () => {
+  it('keeps cash off the commodity tab, where there is no spot', () => {
+    expect(signalSegmentsForTab('mcx')).toEqual(['futures'])
+  })
+
+  it('offers cash on the stocks tab', () => {
+    expect(signalSegmentsForTab('stocks_fno')).toEqual(['cash', 'futures'])
+  })
+})
+
+describe('the product a mixed basket is allowed to carry', () => {
+  const cash: Leg = { id: 1, segment: 'cash' }
+  const option: Leg = { id: 2, segment: 'options' }
+
+  it('offers carry on a mixed basket, because the engine translates per venue', () => {
+    expect(allowedProductsForLegs([cash, option])).toEqual(['MIS', 'NRML'])
+  })
+
+  it('says what each venue is actually sent', () => {
+    expect(productHintForLegs([cash, option], 'NRML')).toBe(
+      'Carried: the derivative legs are sent as NRML and the cash legs as CNC.'
+    )
+    expect(productHintForLegs([cash], 'CNC')).toBe(
+      'Cash equity: CNC takes delivery, MIS is intraday.'
+    )
+    expect(productHintForLegs([option], 'MIS')).toBe(
+      'Intraday on every leg, squared off the same day.'
+    )
+  })
+
+  it('still restricts a cash-only basket to the two products cash accepts', () => {
+    expect(allowedProductsForLegs([cash])).toEqual(['MIS', 'CNC'])
+  })
+})
+
+describe('a direction and a leg side cannot contradict each other', () => {
+  it('mirrors the server, so the form refuses what the save would', () => {
+    expect(DIRECTION_ACCEPTS.long_only).toEqual(['long', 'both'])
+    expect(DIRECTION_ACCEPTS.short_only).toEqual(['short', 'both'])
+    expect(DIRECTION_ACCEPTS.both).toEqual(['long', 'short', 'both'])
+  })
+})
+
+describe('the stocks tab trades any listed equity, on either venue', () => {
+  it('offers NSE and BSE on the stocks tab and one venue elsewhere', () => {
+    expect(TAB_UNDERLYING_EXCHANGES.stocks_fno).toEqual(['NSE', 'BSE'])
+    expect(TAB_UNDERLYING_EXCHANGES.mcx).toEqual(['MCX'])
+  })
+
+  it('does not promise a NIFTY 500 universe it does not enforce', () => {
+    // The engine resolves any listed equity, so the hint said something the
+    // product does not do. It was inherited from a stocks list built out of
+    // NFO futures contracts, which this one is not.
+    expect(UNIVERSE_TAB_HINT.stocks_fno).toBe('Any NSE or BSE stock')
+  })
+
+  it('keeps the stocks universe open, so a typed symbol is accepted', () => {
+    expect(TAB_UNDERLYING_IS_CLOSED_SET.stocks_fno).toBe(false)
+    expect(TAB_UNDERLYING_IS_CLOSED_SET.weekly_monthly).toBe(true)
+  })
+})
+
+describe('withQtyMode converts once the lot size is known', () => {
+  it('turns lots into the shares they stand for', () => {
+    // One lot of RELIANCE is 500 shares. Leaving "1" on the toggle offered a
+    // quantity that cannot be traded and read as though nothing happened.
+    const leg: Leg = { id: 1, segment: 'futures', exchange: 'NFO', qty: 1, qty_mode: 'lots' }
+    expect(withQtyMode(leg, 'units', 500).qty).toBe(500)
+  })
+
+  it('scales a multi-lot quantity', () => {
+    const leg: Leg = { id: 1, segment: 'futures', exchange: 'NFO', qty: 3, qty_mode: 'lots' }
+    expect(withQtyMode(leg, 'units', 500).qty).toBe(1500)
+  })
+
+  it('divides on the way back, floored to whole lots', () => {
+    const leg: Leg = { id: 1, segment: 'futures', exchange: 'NFO', qty: 1500, qty_mode: 'units' }
+    expect(withQtyMode(leg, 'lots', 500).qty).toBe(3)
+  })
+
+  it('never floors a part lot to zero', () => {
+    const leg: Leg = { id: 1, segment: 'futures', exchange: 'NFO', qty: 300, qty_mode: 'units' }
+    expect(withQtyMode(leg, 'lots', 500).qty).toBe(1)
+  })
+
+  it('does not convert when the mode is unchanged', () => {
+    const leg: Leg = { id: 1, segment: 'futures', exchange: 'NFO', qty: 2, qty_mode: 'lots' }
+    expect(withQtyMode(leg, 'lots', 500).qty).toBe(2)
+  })
+
+  it('leaves a cash leg alone, because lots is refused there', () => {
+    const leg: Leg = { id: 1, segment: 'cash', exchange: 'NSE', qty: 137, qty_mode: 'units' }
+    expect(withQtyMode(leg, 'lots', 500)).toEqual(leg)
+  })
+
+  it('still keeps the number when the lot size is unknown', () => {
+    const leg: Leg = { id: 1, segment: 'futures', exchange: 'NFO', qty: 4, qty_mode: 'lots' }
+    expect(withQtyMode(leg, 'units', null).qty).toBe(4)
   })
 })

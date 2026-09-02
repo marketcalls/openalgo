@@ -265,11 +265,32 @@ function TrailCell({ leg, live }: { leg: Leg; live: LegState | undefined }) {
   const trailY = leg.trail?.y ?? 0
   if (!trailX || trailX <= 0) return <span className="text-muted-foreground">—</span>
 
+  // The unit the leg is configured in. Printing "pts" on a percent leg
+  // described a 2 percent stop as a two rupee one, so the label follows the
+  // leg. The two numbers beside it then have to follow as well: `trail.x` is
+  // stored in the leg's own unit, while `favorablePeakPoints` always returns
+  // price points, so on a percent leg they are not the same quantity and
+  // labelling both "%" would be its own lie.
+  const percent = (leg.risk_unit ?? 'points') === 'percent'
+  const unit = percent ? '%' : 'pts'
+
   const entry = live?.entry_avg ?? null
   const peakPts = live ? favorablePeakPoints(live) : 0
   const armed = Boolean(live?.trail_active)
   const effectiveSl = live?.effective_sl ?? null
-  const armPrice = entry ? (leg.position === 'B' ? entry + trailX : entry - trailX) : null
+
+  // A percent trail arms a percentage of entry away, not that many rupees.
+  // Both the arming price and the progress toward it need converting, and
+  // neither can be shown at all until a fill gives us an entry to measure
+  // against, which is the same rule risk_adapter applies.
+  const armDistance = percent ? (entry ? (entry * trailX) / 100 : null) : trailX
+  const armPrice =
+    entry && armDistance != null
+      ? leg.position === 'B'
+        ? entry + armDistance
+        : entry - armDistance
+      : null
+  const peakShown = percent ? (entry ? (peakPts / entry) * 100 : null) : peakPts
 
   return (
     <div className="flex flex-col items-end gap-0.5 leading-tight">
@@ -288,7 +309,7 @@ function TrailCell({ leg, live }: { leg: Leg; live: LegState | undefined }) {
             <span className="text-muted-foreground">arm pending</span>
           )}
           <span className="text-[10px] text-muted-foreground">
-            {peakPts.toFixed(2)} / {trailX} pts
+            {peakShown != null ? peakShown.toFixed(2) : '—'} / {trailX} {unit}
             {trailY > 0 && ` · step ${trailY}`}
           </span>
         </>
@@ -466,7 +487,19 @@ function LiveTab({
                           ? 'closed'
                           : 'open')
                   const symbol = legLive?.symbol ?? entry?.symbol ?? leg.symbol ?? '—'
-                  const qty = legLive?.qty ?? entry?.qty ?? leg.qty ?? leg.lots ?? '—'
+                  // A resolved quantity is already the number of shares or
+                  // contracts sent. Only the configured fallback still needs
+                  // saying: leg.lots is a share count on a cash leg and a lot
+                  // count on every other, and this column showed both as a
+                  // bare number.
+                  const resolvedQty = legLive?.qty ?? entry?.qty ?? leg.qty ?? null
+                  const qty = resolvedQty ?? leg.lots ?? '—'
+                  const qtyUnit =
+                    resolvedQty != null || leg.lots == null
+                      ? null
+                      : leg.segment === 'cash'
+                        ? 'shares'
+                        : 'lots'
                   const mtm = legLive?.mtm
 
                   return (
@@ -478,7 +511,12 @@ function LiveTab({
                           {legLive?.position ?? leg.position ?? leg.side ?? '—'}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right font-mono">{qty}</TableCell>
+                      <TableCell className="text-right font-mono">
+                        {qty}
+                        {qtyUnit && (
+                          <span className="ml-1 text-[10px] text-muted-foreground">{qtyUnit}</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-right font-mono">
                         {formatPrice(legLive?.entry_avg)}
                       </TableCell>
@@ -674,8 +712,9 @@ function SetupTab({ strategy }: { strategy: Strategy }) {
                   <tr>
                     <th className="px-2 py-1 text-left">#</th>
                     <th className="px-2 py-1 text-left">Segment</th>
+                    <th className="px-2 py-1 text-left">Instrument</th>
                     <th className="px-2 py-1 text-left">Pos</th>
-                    <th className="px-2 py-1 text-right">Lots</th>
+                    <th className="px-2 py-1 text-right">Qty</th>
                     <th className="px-2 py-1 text-left">Expiry</th>
                     <th className="px-2 py-1 text-left">Type</th>
                     <th className="px-2 py-1 text-left">Strike</th>
@@ -695,12 +734,29 @@ function SetupTab({ strategy }: { strategy: Strategy }) {
                       <tr key={leg.id} className="border-t">
                         <td className="px-2 py-1.5 font-mono">{leg.id}</td>
                         <td className="px-2 py-1.5">{leg.segment}</td>
+                        <td className="px-2 py-1.5 font-mono text-xs">
+                          {/* A batch leg has no instrument of its own: it
+                              resolves against the strategy's underlying, and a
+                              cash leg trades that underlying directly. Naming
+                              it here is what tells an operator which stock a
+                              cash leg will actually buy. */}
+                          {leg.segment === 'cash'
+                            ? `${strategy.underlying} · ${strategy.underlying_exchange}`
+                            : strategy.underlying}
+                        </td>
                         <td className="px-2 py-1.5">
                           <Badge variant="outline" className="text-xs">
                             {leg.position ?? '—'}
                           </Badge>
                         </td>
-                        <td className="px-2 py-1.5 text-right font-mono">{leg.lots ?? '—'}</td>
+                        <td className="px-2 py-1.5 text-right font-mono">
+                          {leg.lots ?? '—'}
+                          {leg.lots != null && (
+                            <span className="ml-1 text-[10px] text-muted-foreground">
+                              {leg.segment === 'cash' ? 'shares' : 'lots'}
+                            </span>
+                          )}
+                        </td>
                         <td className="px-2 py-1.5">{leg.expiry ?? '—'}</td>
                         <td className="px-2 py-1.5">{leg.option_type ?? '—'}</td>
                         <td className="px-2 py-1.5 font-mono">{strikeText}</td>
@@ -2696,8 +2752,21 @@ export default function StrategyDetail() {
               {unlockMutation.isPending ? 'Unlocking…' : 'Unlock webhook'}
             </Button>
           )}
-          {stopped && !strategy.webhook_locked && (
+          {/* Batch only. A signal strategy's run is opened by its first
+              long_entry or short_entry after the session boundary, so there is
+              nothing for a Start button to do: pressing it ran the batch
+              lifecycle over legs that carry an accepted side rather than a
+              position to enter at. */}
+          {stopped && !strategy.webhook_locked && strategy.strategy_kind !== 'signal' && (
             <Button onClick={() => setStartDialogOpen(true)}>Start run</Button>
+          )}
+          {stopped && !strategy.webhook_locked && strategy.strategy_kind === 'signal' && (
+            <span
+              className="text-xs text-muted-foreground"
+              title="A signal strategy has no start. Send a long_entry or short_entry to its webhook."
+            >
+              Starts on its first signal
+            </span>
           )}
           {running && (
             <Button

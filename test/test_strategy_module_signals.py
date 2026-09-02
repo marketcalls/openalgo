@@ -26,6 +26,58 @@ from services.strategy_module.order_dispatch import DispatchResult
 
 USER = "signal_test_user"
 
+#: The cash contracts these legs trade, seeded so the module does not depend on
+#: the shared symbol table being empty.
+#:
+#: A signal leg names its instrument outright, so _resolve_signal_leg checks it
+#: against the master contract. That check answers True when the venue has no
+#: rows at all, which is the "master contract not downloaded yet" case, so this
+#: suite used to pass on an empty table and fail the moment anything else in
+#: the session had seeded an NSE row - test/sandbox/conftest.py does exactly
+#: that, at session scope. Seeding what these tests actually trade makes the
+#: result independent of which other suites ran first.
+_SEED_ROWS = [
+    # (symbol, exchange)
+    ("RELIANCE", "NSE"),
+    ("SBIN", "NSE"),
+]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def seed_master_contract():
+    """Seed, then remove exactly what was seeded."""
+    from database.symbol import SymToken, db_session, init_db
+
+    init_db()
+    inserted = []
+    for symbol, exchange in _SEED_ROWS:
+        if SymToken.query.filter_by(symbol=symbol, exchange=exchange).first() is not None:
+            continue
+        db_session.add(
+            SymToken(
+                symbol=symbol,
+                brsymbol=symbol,
+                name=symbol,
+                exchange=exchange,
+                brexchange=exchange,
+                token=symbol,
+                expiry="",
+                strike=-1.0,
+                lotsize=1,
+                instrumenttype="EQ",
+                tick_size=0.05,
+            )
+        )
+        inserted.append((symbol, exchange))
+    db_session.commit()
+
+    yield
+
+    for symbol, exchange in inserted:
+        SymToken.query.filter_by(symbol=symbol, exchange=exchange).delete()
+    db_session.commit()
+    db_session.remove()
+
 
 def _legs():
     return [
