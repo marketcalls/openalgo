@@ -60,8 +60,75 @@ def get_trade_book(auth_token):
     return get_api_response("/quick/user/trades", auth_token)
 
 
+def _backfill_ltp(response, auth_token):
+    """Kotak's positions payload never includes a live price field at all,
+    for an open position or a closed one - confirmed against the raw
+    endpoint response and against Kotak's own SDK docs, whose "Profit N
+    Loss" formula treats LTP as an external input the caller must supply,
+    not something this endpoint returns. Zerodha's equivalent positions API
+    does return one (`last_price`, straight from Kite) - transform_positions_data
+    just reads it - so this is a Kotak-specific gap, not a display bug in
+    any consumer.
+
+    Batch-fetches one quote per distinct position via the same multiquotes
+    endpoint the option chain/quotes routes already use, and stamps each
+    raw row with an "_ltp" scratch field for transform_positions_data to
+    pick up. Deliberately not the final "ltp" key: this runs before
+    map_position_data's exchange/symbol resolution, so trdSym/exSeg here
+    are still Kotak's raw broker-native values, not OpenAlgo's - resolving
+    them again independently (not mutating the row) keeps get_positions()'s
+    contract of returning raw, unmapped data intact for its other caller
+    (map_position_data itself, called right after this by
+    services/positionbook_service.py).
+
+    Best-effort and non-fatal: any failure here (a bad auth token, the
+    quotes endpoint being down, a symbol that can't be resolved) just
+    leaves positions without a price, exactly as before this function
+    existed - it must never break the positions endpoint itself.
+    """
+    positions = response.get("data")
+    if not positions:
+        return
+    try:
+        from broker.kotak.api.data import BrokerData
+        from broker.kotak.mapping.order_data import _openalgo_symbol
+
+        resolved = []
+        for position in positions:
+            oa_exchange = map_exchange(position.get("exSeg", ""))
+            oa_symbol = _openalgo_symbol(position, oa_exchange) or position.get("trdSym", "")
+            if oa_symbol:
+                resolved.append((position, oa_symbol, oa_exchange))
+        if not resolved:
+            return
+
+        broker_data = BrokerData(auth_token)
+        symbols = [{"symbol": s, "exchange": e} for _, s, e in resolved]
+        # One batched call for every position (get_multiquotes already
+        # handles Kotak's own <50-symbol batch cap internally) - not one
+        # call per position, which is the per-symbol-latency concern that
+        # stalled an earlier, unrelated Kotak P&L PR (#1224).
+        quotes = broker_data.get_multiquotes(symbols)
+
+        ltp_by_key = {}
+        for item in quotes or []:
+            data = item.get("data") or {}
+            ltp = data.get("ltp")
+            if ltp:
+                ltp_by_key[(item.get("symbol"), item.get("exchange"))] = float(ltp)
+
+        for position, oa_symbol, oa_exchange in resolved:
+            ltp = ltp_by_key.get((oa_symbol, oa_exchange))
+            if ltp:
+                position["_ltp"] = ltp
+    except Exception as e:
+        logger.warning(f"Could not backfill LTP for positions: {e}")
+
+
 def get_positions(auth_token):
-    return get_api_response("/quick/user/positions", auth_token)
+    response = get_api_response("/quick/user/positions", auth_token)
+    _backfill_ltp(response, auth_token)
+    return response
 
 
 def get_holdings(auth_token):
