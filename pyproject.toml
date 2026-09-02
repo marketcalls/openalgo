@@ -239,8 +239,9 @@ dev = [
     "detect-secrets>=1.5.0",
     "pip-audit>=2.10.0",
     # Pulled in transitively via pip-api -> pip-audit; pinned here to satisfy
-    # Dependabot's >=26.1 advisory on the lockfile (PYSEC-2026-196 -> >=26.1.2).
-    "pip>=26.1.2",
+    # Dependabot's advisories on the lockfile (PYSEC-2026-196 -> >=26.1.2,
+    # GHSA-qwm4-qh6w-59xr / CVE-2026-13346 -> >=26.2.0).
+    "pip>=26.2.0",
     "pytest-timeout>=2.4.0",
     "ruff>=0.14.14",
 ]
