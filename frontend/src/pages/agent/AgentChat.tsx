@@ -43,9 +43,11 @@
  * in flight.
  */
 
+import { useQuery } from '@tanstack/react-query'
 import { AlertCircle, Bot, SlidersHorizontal } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
+import { agentQueryKeys, getSettings, type ReasoningEffort } from '@/api/agent'
 import { Composer } from '@/components/agent/Composer'
 import { ConversationSidebar } from '@/components/agent/ConversationSidebar'
 import { Message } from '@/components/agent/Message'
@@ -73,10 +75,27 @@ const COLUMN = 'mx-auto w-full max-w-3xl'
 
 export default function AgentChat() {
   const [modelId, setModelId] = useState<number | null>(null)
+  // Per turn, not persisted: effort belongs to the question being asked.
+  const [effort, setEffort] = useState<ReasoningEffort>('off')
+
+  // The trading switch lives on the config page; the chat only reads it.
+  const settings = useQuery({
+    queryKey: agentQueryKeys.settings(),
+    queryFn: getSettings,
+    staleTime: 30_000,
+  })
   const { messages, running, error, conversationId, send, stop, confirm, reset, setConversation } =
     useAgentStream({
       surface: 'chat',
       modelId,
+      reasoningEffort: effort === 'off' ? null : effort,
+      // Asking is not the same as getting: the backend ANDs this with the
+      // operator's own trading setting, so a session that asks while trading is
+      // off still receives no order tools. Reading it from settings is what
+      // makes the config switch actually reach a turn; before this the flag was
+      // never set and the order tools could not be offered at all, so an order
+      // request came back as a refusal rather than an approval prompt.
+      tradingEnabled: settings.data?.data.trading_enabled ?? false,
     })
 
   const threadRef = useRef<HTMLDivElement>(null)
@@ -161,7 +180,13 @@ export default function AgentChat() {
                 <ConversationUsageBadge totals={totals} />
               </div>
             )}
-            <ModelPicker value={modelId} onChange={setModelId} disabled={running} />
+            <ModelPicker
+              value={modelId}
+              onChange={setModelId}
+              effort={effort}
+              onEffortChange={setEffort}
+              disabled={running}
+            />
             {/* The only route from the conversation to its own settings. The
                 profile menu carries one too, but an operator who is looking at
                 the chat does not think to open a dropdown three regions away,

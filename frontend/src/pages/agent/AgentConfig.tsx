@@ -36,6 +36,7 @@ import { Link } from 'react-router'
 import { AddModelDialog } from '@/components/agent/config/AddModelDialog'
 import { ProviderCatalogPanel } from '@/components/agent/config/ProviderCatalogPanel'
 import { RegisteredModelsTable } from '@/components/agent/config/RegisteredModelsTable'
+import { TradingPanel } from '@/components/agent/config/TradingPanel'
 import { WebSearchPanel } from '@/components/agent/config/WebSearchPanel'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { Navbar } from '@/components/layout/Navbar'
@@ -123,6 +124,8 @@ export default function AgentConfig() {
               <ProviderCatalogPanel />
             </Section>
             <Section name="Web search">
+              <TradingPanel />
+
               <WebSearchPanel />
             </Section>
           </div>
