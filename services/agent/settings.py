@@ -122,12 +122,27 @@ class _Field:
 
 _SPEC: Mapping[str, _Field] = MappingProxyType(
     {
-        # The master switch. Off by default: a fresh install must not be able to
-        # send a live order because somebody opened /agent and typed a sentence.
-        KEY_TRADING_ENABLED: _Field("bool", False),
-        # On by default for the same reason. Turning it off is the operator
-        # saying, in the database, that the agent may reach the real broker.
-        KEY_REQUIRE_ANALYZER_MODE: _Field("bool", True),
+        # The master switch, ON by default at the operator's explicit direction.
+        #
+        # This is a deliberate reversal of where the defaults previously sat,
+        # and it is worth stating plainly because it changes what a fresh
+        # install can do: opening /agent and typing a sentence can now reach an
+        # order tool without anyone having opted in. What still stands between
+        # that sentence and a broker is the approval pause on every mutating
+        # tool, the risk guard that runs inside the tool body after approval,
+        # and the per-session and per-order limits below.
+        #
+        # An existing installation that never touched this setting also picks
+        # the new value up on upgrade, because the default is what a missing row
+        # resolves to. An operator who explicitly set it either way keeps what
+        # they set.
+        KEY_TRADING_ENABLED: _Field("bool", True),
+        # Off by default for the same reason: the operator asked for trading to
+        # work in live mode as well, and leaving this on would have allowed
+        # orders only while the platform sat in analyzer mode, which is the same
+        # switch wearing a different name. With it off, an approved order goes
+        # wherever the platform's own analyzer toggle says it goes.
+        KEY_REQUIRE_ANALYZER_MODE: _Field("bool", False),
         KEY_SYSTEM_PROMPT_OVERRIDE: _Field("text", ""),
         KEY_DEFAULT_REASONING_EFFORT: _Field("enum", "off", choices=REASONING_EFFORTS),
         KEY_MAX_ORDERS_PER_SESSION: _Field("int", 20, minimum=0),
