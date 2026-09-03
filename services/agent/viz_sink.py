@@ -66,6 +66,7 @@ __all__ = [
     "emit_frame",
     "frame_hook",
     "new_sink",
+    "no_sink_message",
     "sink_of",
 ]
 
@@ -99,6 +100,28 @@ class VizEntry:
 
     tool: str
     frame: Frame
+
+
+def no_sink_message(what: str) -> str:
+    """Tell the model that a rendering could not be delivered to this surface.
+
+    Every rendering tool needs the same sentence, and the sentence is doing
+    real work: without it a tool whose payload went nowhere still reads as a
+    success, and the model tells the operator to look at a chart that is not
+    on screen. One wording here rather than one per tool, so the instruction
+    not to claim a drawing cannot be softened in a copy nobody rereads.
+
+    Args:
+        what: What was not delivered, named the way the operator would name
+            it, for example ``chart`` or ``instrument card``.
+
+    Returns:
+        The confirmation to return in place of a success line.
+    """
+    return (
+        f"The {what} could not be delivered to this surface, so nothing was drawn. Answer in "
+        f"prose and do not tell the operator that a {what} is on screen."
+    )
 
 
 def new_sink() -> list[VizEntry]:

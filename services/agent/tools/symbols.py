@@ -131,6 +131,35 @@ _UNDERLYING_PATTERN = re.compile(r"\A(.+?)\d{2}[A-Z]{3}\d{0,2}")
 #: An expiry as the instrument master stores it: ``31-JUL-25`` or ``31-JUL-2025``.
 _EXPIRY_PATTERN = re.compile(r"\A(\d{1,2})-?([A-Z]{3})-?(\d{2}|\d{4})\Z")
 
+
+def symbol_expiry(value: Any) -> str | None:
+    """Render a master-stored expiry the way an OpenAlgo symbol spells it.
+
+    ``31-JUL-25`` and ``31-JUL-2025`` both become ``31JUL25``, which is the
+    ``DDMMMYY`` segment every OpenAlgo symbol and every service argument uses.
+
+    Module level and public because more than one toolkit needs the conversion:
+    this file pairs it with each listed expiry, and the derived option
+    analytics resolve a default expiry from the same service. A second copy
+    would drift, and the copy in the path nobody is looking at is the one that
+    goes wrong.
+
+    Args:
+        value: The expiry exactly as the instrument master or
+            ``expiry_service`` returned it.
+
+    Returns:
+        The ``DDMMMYY`` form, or None when the value is not an expiry at all.
+    """
+    if not isinstance(value, str):
+        return None
+    match = _EXPIRY_PATTERN.match(value.strip().upper())
+    if not match:
+        return None
+    day, month, year = match.groups()
+    return f"{int(day):02d}{month}{year[-2:]}"
+
+
 #: A symbol and an exchange are named back to the model in a plain-text
 #: correction message, outside any wrapped block, so they are checked against
 #: the shape a real code has rather than escaped. A candidate that does not
@@ -868,10 +897,9 @@ class SymbolsToolkit(OpenAlgoToolkit):
                 continue
             expiry = value.strip().upper()
             entry = {"expiry": expiry}
-            match = _EXPIRY_PATTERN.match(expiry)
-            if match:
-                day, month, year = match.groups()
-                entry["symbol_expiry"] = f"{int(day):02d}{month}{year[-2:]}"
+            spelled = symbol_expiry(expiry)
+            if spelled:
+                entry["symbol_expiry"] = spelled
             entries.append(entry)
         return entries
 

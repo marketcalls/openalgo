@@ -335,6 +335,17 @@ TOOLKITS: list[ToolkitSpec] = [
         ),
     ),
     ToolkitSpec(
+        key="option_viz",
+        module="services.agent.tools.option_viz",
+        attr="OptionVizToolkit",
+        surfaces=ALL_SURFACES,
+        order=43,
+        description=(
+            "Draw a combined option premium over time, rolling ATM or on fixed legs, and a "
+            "payoff diagram of named legs or of the operator's own open positions."
+        ),
+    ),
+    ToolkitSpec(
         key="openui",
         module="services.agent.tools.openui",
         attr="OpenUiToolkit",

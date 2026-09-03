@@ -97,7 +97,7 @@ from services.agent.tools.market import (
 )
 from services.agent.tools.options import normalise_int
 from services.agent.tools.symbols import DERIVATIVE_EXCHANGES, INDEX_EXCHANGES
-from services.agent.viz_sink import emit, sink_of
+from services.agent.viz_sink import emit, no_sink_message, sink_of
 from services.intervals_service import get_intervals
 from services.positionbook_service import get_positionbook
 from utils.logging import get_logger
@@ -147,10 +147,7 @@ MAX_REASON_CHARS = 300
 
 _TIMEZONE = "Asia/Kolkata"
 
-_NO_SINK = (
-    "The instrument card could not be delivered to this surface, so nothing was drawn. Answer "
-    "in prose and do not tell the operator that a card is on screen."
-)
+_NO_SINK = no_sink_message("instrument card")
 
 
 # ---------------------------------------------------------------------------

@@ -107,7 +107,7 @@ from services.agent.tools.options import (
     normalise_int,
     normalise_symbol,
 )
-from services.agent.viz_sink import emit, sink_of
+from services.agent.viz_sink import emit, no_sink_message, sink_of
 from services.gex_service import get_gex_data
 from services.intervals_service import get_intervals
 from services.option_chain_service import get_option_chain
@@ -119,7 +119,15 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 logger = get_logger(__name__)
 
-__all__ = ["CHART_TYPES", "VIZ_KINDS", "VizToolkit"]
+__all__ = [
+    "CALL_COLOUR",
+    "CHART_TYPES",
+    "PUT_COLOUR",
+    "VIZ_KINDS",
+    "VizToolkit",
+    "plotly_spec",
+    "tool_answer",
+]
 
 #: The two renderer selectors this toolkit emits. Adding a renderer is one more
 #: entry here and one more branch in the client.
@@ -190,9 +198,12 @@ _LENGTH_KEY = "length"
 #: Call and put colours, the only colours this module chooses. Which series is a
 #: call and which is a put is meaning, not decoration, so it is set here; every
 #: other colour, the background and the fonts included, belongs to the client's
-#: own theme and is deliberately absent from the layout.
-_CALL_COLOUR = "#ef4444"
-_PUT_COLOUR = "#22c55e"
+#: own theme and is deliberately absent from the layout. Public because the
+#: derived analytics in :mod:`services.agent.tools.option_viz` draw the same two
+#: legs and a red call in one chart beside a green one in the next is worse than
+#: either choice on its own.
+CALL_COLOUR = "#ef4444"
+PUT_COLOUR = "#22c55e"
 _POSITIVE_COLOUR = "#22c55e"
 _NEGATIVE_COLOUR = "#ef4444"
 
@@ -200,10 +211,7 @@ _NEGATIVE_COLOUR = "#ef4444"
 #: conversation rather than on an analytics page.
 _PLOTLY_CONFIG: Mapping[str, Any] = {"displayModeBar": False, "responsive": True}
 
-_NO_SINK = (
-    "The chart could not be delivered to this surface, so nothing was drawn. Answer in prose "
-    "and do not tell the operator that a chart is on screen."
-)
+_NO_SINK = no_sink_message("chart")
 
 
 # ---------------------------------------------------------------------------
@@ -523,6 +531,69 @@ def _markers(atm: Any, spot: Any) -> tuple[list[dict[str, Any]], list[dict[str, 
     return shapes, annotations
 
 
+def plotly_spec(
+    *,
+    data: list[dict[str, Any]],
+    layout: dict[str, Any],
+    engine: str = "2d",
+) -> dict[str, Any]:
+    """Assemble a Plotly figure spec for a ``plotly`` viz frame.
+
+    The layout carries no colours of its own beyond the meaning-bearing ones on
+    the traces, and no font or paper colour at all, so the client merges its own
+    theme in and a chart looks like the page it sits on in both light and dark.
+
+    Module level rather than a method, because the derived option analytics in
+    :mod:`services.agent.tools.option_viz` build the same envelope. A second
+    copy would drift on the margins, the config or the engine key, and the copy
+    that goes wrong is the one in the chart nobody is looking at.
+
+    Args:
+        data: The traces.
+        layout: Layout keys this chart needs.
+        engine: ``2d`` for the ``Plot2D`` build, ``3d`` for ``Plot3D``. The two
+            are separate Plotly bundles, so the spec has to say which.
+
+    Returns:
+        The spec for a ``plotly`` viz frame.
+    """
+    merged: dict[str, Any] = {
+        "autosize": True,
+        "margin": {"l": 56, "r": 24, "t": 32, "b": 48},
+    }
+    merged.update(layout)
+    return {
+        "engine": engine,
+        "data": json_safe(data),
+        "layout": json_safe(merged),
+        "config": dict(_PLOTLY_CONFIG),
+    }
+
+
+def tool_answer(tool: str, message: str, notices: Sequence[str] = (), **labels: Any) -> str:
+    """Wrap the short confirmation a rendering tool returns to the model.
+
+    Labelled as data like every other tool result, so nothing a symbol name or a
+    broker message carries can read as an instruction. Module level so every
+    rendering tool in this package labels its answer the same way; a second copy
+    is how one of them ends up returning bare text.
+
+    Args:
+        tool: The tool's registered name.
+        message: The confirmation, one or two lines.
+        notices: Corrections and caveats, appended as one trailing sentence.
+        **labels: Attributes for the opening tag. A label whose value is None is
+            dropped rather than rendered as the word ``None``.
+
+    Returns:
+        The ``<tool_result>`` block.
+    """
+    if notices:
+        message = f"{message} Note: {' '.join(str(item) for item in notices)}"
+    clean = {name: value for name, value in labels.items() if value is not None}
+    return wrap_tool_result(tool, message, **clean)
+
+
 def _peak(strikes: Sequence[Any], values: Sequence[Any]) -> Any:
     """The strike carrying the largest value, or None when nothing is positive.
 
@@ -809,14 +880,14 @@ class VizToolkit(OpenAlgoToolkit):
                     "name": "Call OI",
                     "x": strikes,
                     "y": call_oi,
-                    "marker": {"color": _CALL_COLOUR},
+                    "marker": {"color": CALL_COLOUR},
                 },
                 {
                     "type": "bar",
                     "name": "Put OI",
                     "x": strikes,
                     "y": put_oi,
-                    "marker": {"color": _PUT_COLOUR},
+                    "marker": {"color": PUT_COLOUR},
                 },
             ],
             layout={
@@ -1067,40 +1138,9 @@ class VizToolkit(OpenAlgoToolkit):
 
     # -- delivery ------------------------------------------------------------
 
-    @staticmethod
-    def _plotly(
-        *,
-        data: list[dict[str, Any]],
-        layout: dict[str, Any],
-        engine: str = "2d",
-    ) -> dict[str, Any]:
-        """Assemble a Plotly figure spec.
-
-        The layout carries no colours of its own beyond the meaning-bearing ones
-        on the traces, and no font or paper colour at all, so the client merges
-        its own theme in and a chart looks like the page it sits on in both
-        light and dark.
-
-        Args:
-            data: The traces.
-            layout: Layout keys this chart needs.
-            engine: ``2d`` for the ``Plot2D`` build, ``3d`` for ``Plot3D``. The
-                two are separate Plotly bundles, so the spec has to say which.
-
-        Returns:
-            The spec for a ``plotly`` viz frame.
-        """
-        merged: dict[str, Any] = {
-            "autosize": True,
-            "margin": {"l": 56, "r": 24, "t": 32, "b": 48},
-        }
-        merged.update(layout)
-        return {
-            "engine": engine,
-            "data": json_safe(data),
-            "layout": json_safe(merged),
-            "config": dict(_PLOTLY_CONFIG),
-        }
+    #: The figure envelope, shared with the derived option analytics. See
+    #: :func:`plotly_spec`.
+    _plotly = staticmethod(plotly_spec)
 
     def _deliver(
         self,
@@ -1135,19 +1175,17 @@ class VizToolkit(OpenAlgoToolkit):
     def _answer(self, tool: str, message: str, **labels: Any) -> str:
         """Wrap the short confirmation the model receives.
 
-        Labelled as data like every other tool result, so nothing a symbol name
-        or a broker message carries can read as an instruction.
+        A thin binding of :func:`tool_answer` that keeps ``notices`` spelled as
+        a keyword at the call sites in this file.
 
         Args:
             tool: The tool's registered name.
             message: The confirmation, one or two lines.
-            **labels: Attributes for the opening tag.
+            **labels: Attributes for the opening tag, plus an optional
+                ``notices`` sequence.
 
         Returns:
             The ``<tool_result>`` block.
         """
-        notices = labels.pop("notices", None)
-        if notices:
-            message = f"{message} Note: {' '.join(str(item) for item in notices)}"
-        clean = {name: value for name, value in labels.items() if value is not None}
-        return wrap_tool_result(tool, message, **clean)
+        notices = labels.pop("notices", None) or ()
+        return tool_answer(tool, message, notices, **labels)

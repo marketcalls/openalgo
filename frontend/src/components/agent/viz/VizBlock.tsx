@@ -31,6 +31,7 @@ import type { AgentVizItem } from '@/lib/agent/viz'
 import { OPENUI_VIZ, openUiMarkup } from '@/lib/agent/viz'
 import { CandleViz } from './CandleViz'
 import { InstrumentCard } from './InstrumentCard'
+import { PayoffCard } from './PayoffCard'
 import { PlotlyViz } from './PlotlyViz'
 
 /**
@@ -97,6 +98,10 @@ export function VizBlock({ item, streaming, className }: VizBlockProps) {
           className={className}
         />
       )
+    case 'payoff':
+      // The card computes the curve with strategyMath and draws it with the
+      // /strategybuilder chart, so nothing about the payoff lives here.
+      return <PayoffCard spec={item.spec} title={item.title} />
     case OPENUI_VIZ:
       return (
         <Suspense fallback={null}>
