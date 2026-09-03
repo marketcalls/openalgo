@@ -263,7 +263,47 @@ def litellm_kwargs(row: Any, api_key: str | None = None) -> dict[str, Any]:
         kwargs["api_key"] = key
     if provider_spec(kind).needs_base_url:
         kwargs["api_base"] = base_url
+    kwargs.update(sampling_kwargs())
     return kwargs
+
+
+def sampling_kwargs() -> dict[str, Any]:
+    """Sampling parameters to hand `LiteLLM`, which is deliberately none of them.
+
+    `agno.models.litellm.LiteLLM` defaults `temperature=0.7` and `top_p=1.0` and
+    sends both on every request. That is a reasonable default for a chat toy and
+    wrong here for two reasons.
+
+    The first is that it breaks real models. `gpt-5.6-luna` accepts the
+    `temperature` parameter but only at its default value, so a request carrying
+    0.7 is refused outright:
+
+        litellm.BadRequestError: OpenAIException - Unsupported value:
+        'temperature' does not support 0.7 with this model. Only the default (1)
+        value is supported.
+
+    `litellm.get_supported_openai_params` does not help: it reports `temperature`
+    as supported, because the parameter is accepted. It is the permitted *value*
+    that is constrained, and no metadata in the catalogue expresses that.
+
+    The second is maintenance. The alternative is a hand-kept table of which
+    model tolerates which value, which is stale the moment a provider ships a
+    model, and this module exists precisely so that bumping litellm is the whole
+    update story.
+
+    So nothing is sent and each provider applies its own default, which is the
+    value its own documentation describes. `get_request_params` drops any key
+    whose value is None, so returning None here removes the parameter from the
+    request rather than sending a null.
+
+    A future per-model sampling setting would override this per row. Until one
+    exists, there is nothing to express, and an arbitrary 0.7 is not a neutral
+    choice, it is our opinion silently overriding the provider's.
+
+    Returns:
+        The sampling keys to suppress, mapped to None.
+    """
+    return {"temperature": None, "top_p": None}
 
 
 def validate_provider_config(

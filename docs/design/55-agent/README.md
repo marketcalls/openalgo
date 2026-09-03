@@ -745,6 +745,67 @@ invalid workflow cannot ship.
 Never invent a node type. If a requirement has no matching node, say so in
 prose.
 
+## Acceptance
+
+The module is not done until an operator can do all of this, verified in a
+browser against a running instance rather than asserted in a test:
+
+**Setup**
+- Open `/agent` with nothing configured and be shown the setup screen.
+- Pick a provider from a card grid built from LiteLLM's own chat providers.
+- Paste one key, tick several models from that provider, and add them in one action.
+- Add a second provider with its own key. Both stay configured at once.
+- Press Test and see a real pass or a real provider error message, not a generic failure.
+- Set a default. An untested model is refused as default.
+
+**Chat**
+- Send a message and watch the answer stream token by token.
+- See per-turn token usage and cost under the answer, and a running conversation total.
+- Switch model mid-conversation from a picker and see the next turn use it.
+- Stop a running turn and have it actually stop server-side, not just in the browser.
+- Reload and find the conversation, its messages and its usage still there.
+
+**Code generation**
+- Ask for an `openalgo.ta` indicator snippet and get runnable Python.
+- Ask for a full strategy and get a script matching the `strategies/README.md`
+  contract: reads `OPENALGO_API_KEY`, `HOST_SERVER` and `WEBSOCKET_URL` from the
+  environment, hardcodes no credential.
+- Read it in a real Python editor with highlighting, not a grey `<pre>`.
+- Copy it, and save it to `strategies/scripts/` in one action. **It never runs
+  itself**; starting it stays a separate human action in `/python`.
+
+**Flow generation**
+- Ask for a workflow and get JSON validated against the real Flow validator,
+  with any `errors[]` fed back so the model self-corrects rather than shipping
+  something invalid.
+- Read it in the JSON editor, **copy it**, and import it. An imported workflow
+  arrives inactive.
+
+**Web search**
+- Search with DuckDuckGo out of the box, no key, nothing configured.
+- Configure Tavily and Perplexity keys in the same settings UI, never `.env`.
+- Get links from DuckDuckGo and Tavily, and a cited synthesised answer from
+  Perplexity, which is a separate tool because it is a different kind of result.
+
+**Visualization**
+- Ask a question whose answer is numeric and get a **rendered chart in the
+  conversation**, not a markdown table: "plot NIFTY's last 30 daily closes",
+  "compare these three stocks", "show my position sizes as a bar chart".
+- The chart is OpenUI's own Recharts component with OpenUI's `ocean` palette,
+  its colours assigned by the midpoint-outward rule rather than sequentially,
+  and **no entrance animation**, which is what OpenUI's own LLM path does.
+- It renders progressively as the spec streams, and a half-written block never
+  flashes as broken output.
+- Tables, metric cards and callouts render the same way.
+- The data comes from a tool result, never from the model's memory. A chart of
+  invented prices is worse than no chart.
+
+**Chart**
+- Open the agent panel on `/trading` beside Watchlist and Option Chain.
+- Ask it to analyse the chart and have it read the current symbol and interval.
+- Ask it to draw, and see markup appear on the existing chart, namespaced so
+  `clear` never removes the operator's own drawings.
+
 ## Web search
 
 Three providers, configured in the same database-backed settings UI as the LLM

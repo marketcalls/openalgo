@@ -6,15 +6,15 @@
  * setup view is what renders. `GET /agent/api/status` is the single cheap call
  * that decides which of the two the operator sees.
  *
- * The status endpoint does not exist yet, so an unreachable status is read as
- * "not configured" rather than as an error. That is the honest reading during
- * the build, and it stays correct afterwards: a status call that cannot be
- * answered is not evidence that a working agent is sitting behind it.
+ * An unreachable status is read as "not configured" rather than as an error.
+ * That is the honest reading: a status call that cannot be answered is not
+ * evidence that a working agent is sitting behind it.
  */
 
 import { useQuery } from '@tanstack/react-query'
 import { Bot } from 'lucide-react'
 import { webClient } from '@/api/client'
+import AgentChat from './AgentChat'
 
 interface AgentStatus {
   configured: boolean
@@ -73,12 +73,5 @@ export default function AgentIndex() {
     )
   }
 
-  return (
-    <div className="mx-auto max-w-3xl px-6 py-10">
-      <h1 className="text-2xl font-semibold tracking-tight">Agent</h1>
-      <p className="mt-2 text-sm text-muted-foreground">
-        {data.model_count} model{data.model_count === 1 ? '' : 's'} configured.
-      </p>
-    </div>
-  )
+  return <AgentChat />
 }

@@ -286,6 +286,41 @@ class Notice(Frame):
 
 
 @dataclass(frozen=True, slots=True)
+class Usage(Frame):
+    """What the turn has consumed so far, in tokens and money.
+
+    Every usage frame carries the **running total for the turn**, not the delta
+    since the last one, so a client renders the latest frame and discards the
+    one before it. A single turn makes one model call per tool round trip, and a
+    per-call frame would otherwise leave the client adding up numbers whose
+    meaning depends on how many it happened to receive.
+
+    Attributes:
+        input_tokens: Prompt tokens billed, including cached ones.
+        output_tokens: Completion tokens billed.
+        total_tokens: The provider's own total where it reports one.
+        cached_tokens: Prompt tokens served from the provider's cache.
+        reasoning_tokens: Output tokens spent on a reasoning trace.
+        cost_usd: Computed locally from LiteLLM's price table, or None when the
+            model is absent from it. Showing tokens and admitting the price is
+            unknown beats inventing a number.
+        model: The model id the provider billed, as the provider reported it.
+        ttft_ms: Milliseconds from the start of the run to its first token.
+    """
+
+    FRAME_TYPE: ClassVar[str] = "usage"
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    cached_tokens: int = 0
+    reasoning_tokens: int = 0
+    cost_usd: float | None = None
+    model: str | None = None
+    ttft_ms: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Error(Frame):
     """The run failed. No further frames follow except a :class:`Done`.
 
@@ -329,6 +364,7 @@ FRAME_CLASSES: Mapping[str, type[Frame]] = MappingProxyType(
         ChartCommand.FRAME_TYPE: ChartCommand,
         Confirm.FRAME_TYPE: Confirm,
         Notice.FRAME_TYPE: Notice,
+        Usage.FRAME_TYPE: Usage,
         Error.FRAME_TYPE: Error,
         Done.FRAME_TYPE: Done,
     }
