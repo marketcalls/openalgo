@@ -25,6 +25,7 @@
  */
 
 import { Loader2, Send, Square } from 'lucide-react'
+import type { ReactNode } from 'react'
 import {
   type KeyboardEvent,
   useCallback,
@@ -51,12 +52,21 @@ export interface ComposerProps {
   disabled?: boolean
   placeholder?: string
   className?: string
+  /**
+   * Controls rendered on the composer's own bottom row, under the text.
+   * The model and reasoning picker lives here rather than in the page header
+   * because it belongs to the message being written, not to the page: an
+   * operator setting the effort is thinking about the sentence in front of
+   * them, and a control three regions away does not read as part of it.
+   */
+  controls?: ReactNode
 }
 
 export function Composer({
   onSend,
   onStop,
   running,
+  controls,
   disabled = false,
   placeholder = 'Ask about your positions, a symbol, a strategy or a workflow',
   className,
@@ -134,7 +144,7 @@ export function Composer({
 
   return (
     <div className={cn('space-y-1.5', className)}>
-      <div className="flex items-end gap-2 rounded-xl border border-input bg-background p-2 shadow-xs focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50">
+      <div className="flex flex-col gap-1.5 rounded-xl border border-input bg-background p-2 shadow-xs focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50">
         <textarea
           ref={textareaRef}
           rows={1}
@@ -145,29 +155,35 @@ export function Composer({
           aria-label="Message the agent"
           className="max-h-[200px] min-h-[24px] flex-1 resize-none bg-transparent px-1.5 py-1 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
         />
-        {running ? (
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="outline"
-            onClick={onStop}
-            aria-label="Stop the running turn"
-            title="Stop"
-          >
-            <Square className="h-3.5 w-3.5 fill-current" aria-hidden />
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            size="icon-sm"
-            onClick={submit}
-            disabled={disabled || !hasText}
-            aria-label="Send the message"
-            title="Send"
-          >
-            <Send className="h-3.5 w-3.5" aria-hidden />
-          </Button>
-        )}
+        {/* Controls left, send right, both under the text. min-w-0 so a long
+            model name truncates inside its own button rather than pushing the
+            send control off the edge. */}
+        <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">{controls}</div>
+          {running ? (
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="outline"
+              onClick={onStop}
+              aria-label="Stop the running turn"
+              title="Stop"
+            >
+              <Square className="h-3.5 w-3.5 fill-current" aria-hidden />
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="icon-sm"
+              onClick={submit}
+              disabled={disabled || !hasText}
+              aria-label="Send the message"
+              title="Send"
+            >
+              <Send className="h-3.5 w-3.5" aria-hidden />
+            </Button>
+          )}
+        </div>
       </div>
       <p className="px-1 text-[11px] text-muted-foreground">
         {running ? (

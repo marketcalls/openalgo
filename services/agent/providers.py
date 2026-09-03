@@ -39,6 +39,10 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 # The closed vocabulary. The frontend's provider card grid is a static constant
 # that maps a real-world brand onto one of these; the backend never sees a brand
 # name, only a kind.
@@ -376,3 +380,60 @@ def _unknown_kind_message(kind: str) -> str:
     """
     accepted = ", ".join(PROVIDER_KINDS)
     return f"Unknown provider kind {kind!r}. Expected one of: {accepted}"
+
+
+def reasoning_capable(litellm_id: str, operator_flag: bool) -> bool:
+    """Whether this model actually exposes a reasoning effort.
+
+    The row carries an operator checkbox, and an operator can tick it for a
+    model that cannot reason. GPT-4 is the obvious case: LiteLLM forwards
+    ``reasoning_effort`` unchanged and OpenAI answers with an error rather than
+    ignoring it, so the checkbox alone turns one wrong tick into every turn on
+    that model failing. This is the same shape as the ``temperature`` failure
+    earlier in this project, where a parameter the provider would not accept was
+    sent because nothing checked first.
+
+    LiteLLM already knows, from the same table the model catalogue is built
+    from: ``supports_reasoning`` returns True for o1, o3-mini and the reasoning
+    GPT-5 line, and False for gpt-4 and gpt-4o. So LiteLLM decides whenever it
+    has an opinion, and the operator's flag is the fallback for a model it has
+    never heard of, which is a local Ollama build or a custom endpoint. That
+    ordering is deliberate: the library is right about the models it knows, and
+    silent about the ones only the operator can describe.
+
+    Args:
+        litellm_id: The id that will be sent, provider prefix included.
+        operator_flag: The row's own ``supports_reasoning`` column.
+
+    Returns:
+        True when a reasoning effort may be sent.
+    """
+    flag = bool(operator_flag)
+    try:
+        import litellm
+
+        # Whether LiteLLM has an opinion at all has to be asked separately.
+        # Neither helper distinguishes "known, and it does not reason" from
+        # "never heard of it": supports_reasoning returns False for both, and
+        # get_model_info returns supports_reasoning None for both. Membership of
+        # the cost table is the signal that it knows the model, and it is the
+        # same table the model catalogue is already built from. The id is tried
+        # with its provider prefix and without, because a row may carry either.
+        table = litellm.model_cost
+        known_here = litellm_id in table or litellm_id.split("/", 1)[-1] in table
+        if not known_here:
+            return flag
+        capable = bool(litellm.supports_reasoning(model=litellm_id))
+    except Exception:
+        # A LiteLLM build without these helpers, or a lookup that raised. Fall
+        # back to what the operator said rather than removing a capability they
+        # may genuinely have configured.
+        return flag
+
+    if flag and not capable:
+        logger.info(
+            "Model %s is marked as supporting reasoning but LiteLLM reports it does not; "
+            "no reasoning effort will be sent",
+            litellm_id,
+        )
+    return capable

@@ -180,13 +180,6 @@ export default function AgentChat() {
                 <ConversationUsageBadge totals={totals} />
               </div>
             )}
-            <ModelPicker
-              value={modelId}
-              onChange={setModelId}
-              effort={effort}
-              onEffortChange={setEffort}
-              disabled={running}
-            />
             {/* The only route from the conversation to its own settings. The
                 profile menu carries one too, but an operator who is looking at
                 the chat does not think to open a dropdown three regions away,
@@ -259,7 +252,20 @@ export default function AgentChat() {
               </Alert>
             )}
             <ConversationUsageBadge totals={totals} className="px-1 sm:hidden" />
-            <Composer onSend={handleSend} onStop={handleStop} running={running} />
+            <Composer
+              onSend={handleSend}
+              onStop={handleStop}
+              running={running}
+              controls={
+                <ModelPicker
+                  value={modelId}
+                  onChange={setModelId}
+                  effort={effort}
+                  onEffortChange={setEffort}
+                  disabled={running}
+                />
+              }
+            />
           </div>
         </div>
       </div>

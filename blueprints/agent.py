@@ -55,6 +55,7 @@ from services.agent import settings as agent_settings
 from services.agent import stream as agent_stream
 from services.agent import viz_sink as viz_sink_module
 from services.agent.frames import SSE_HEADERS
+from services.agent.providers import litellm_model_id, reasoning_capable
 from services.agent.safety import audit
 from services.agent.tools import ToolContext
 from utils.logging import get_logger
@@ -493,7 +494,7 @@ def list_models():
     ``api_key_source`` plus its last test result. No endpoint in this module
     returns a key value, masked or otherwise.
     """
-    return _ok({"data": agent_db.list_models()})
+    return _ok({"data": _with_resolved_capabilities(agent_db.list_models())})
 
 
 @agent_bp.route("/api/models", methods=["POST"])
@@ -580,7 +581,14 @@ def create_model():
             )
 
     logger.info("Agent model registered: %s (%s)", display_name, provider_kind)
-    return _ok({"data": agent_db.provider_model_to_dict(agent_db.get_model(created["id"]))}, 201)
+    return _ok(
+        {
+            "data": _with_resolved_capabilities(
+                agent_db.provider_model_to_dict(agent_db.get_model(created["id"]))
+            )
+        },
+        201,
+    )
 
 
 @agent_bp.route("/api/models/<int:model_id>", methods=["PATCH"])
@@ -653,7 +661,13 @@ def update_model(model_id: int):
         if not stored:
             return _error(message or "Could not store the API key", 500)
 
-    return _ok({"data": agent_db.provider_model_to_dict(agent_db.get_model(model_id))})
+    return _ok(
+        {
+            "data": _with_resolved_capabilities(
+                agent_db.provider_model_to_dict(agent_db.get_model(model_id))
+            )
+        }
+    )
 
 
 @agent_bp.route("/api/models/<int:model_id>", methods=["DELETE"])
@@ -715,7 +729,9 @@ def test_model(model_id: int):
                 "ok": False,
                 "message": config_error,
                 "latency_ms": 0,
-                "data": agent_db.provider_model_to_dict(agent_db.get_model(model_id)),
+                "data": _with_resolved_capabilities(
+                    agent_db.provider_model_to_dict(agent_db.get_model(model_id))
+                ),
             }
         )
 
@@ -758,7 +774,9 @@ def test_model(model_id: int):
                 "ok": False,
                 "message": message,
                 "latency_ms": latency_ms,
-                "data": agent_db.provider_model_to_dict(agent_db.get_model(model_id)),
+                "data": _with_resolved_capabilities(
+                    agent_db.provider_model_to_dict(agent_db.get_model(model_id))
+                ),
             }
         )
     finally:
@@ -777,7 +795,9 @@ def test_model(model_id: int):
             "ok": True,
             "message": "The provider accepted the request",
             "latency_ms": latency_ms,
-            "data": agent_db.provider_model_to_dict(agent_db.get_model(model_id)),
+            "data": _with_resolved_capabilities(
+                agent_db.provider_model_to_dict(agent_db.get_model(model_id))
+            ),
         }
     )
 
@@ -796,7 +816,13 @@ def set_default_model(model_id: int):
     if not ok:
         code = 404 if message == "Model not found" else 409
         return _error(message or "Could not set the default model", code)
-    return _ok({"data": agent_db.provider_model_to_dict(agent_db.get_model(model_id))})
+    return _ok(
+        {
+            "data": _with_resolved_capabilities(
+                agent_db.provider_model_to_dict(agent_db.get_model(model_id))
+            )
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1617,6 +1643,47 @@ def _run_options_of(row: dict[str, Any]) -> tuple[str | None, list[str]]:
         )
         return effort or None, lines
     return None, []
+
+
+def _with_resolved_capabilities(payload: Any) -> Any:
+    """Overlay the capabilities LiteLLM knows onto a serialised model row.
+
+    ``supports_reasoning`` is an operator checkbox in the database, and the
+    builder does not trust it on its own: LiteLLM decides for any model it
+    knows, and the checkbox only fills in for one it has never heard of. If the
+    API handed the raw column to the client, the picker would offer a reasoning
+    control the run would ignore, or hide one the run would honour, and the two
+    would disagree without either being wrong on its own terms.
+
+    So the resolved answer is computed once and used both places. This is a
+    presentation overlay rather than a write: the operator's own choice stays in
+    the column exactly as they set it.
+
+    Args:
+        payload: One serialised model dict, or a list of them.
+
+    Returns:
+        The same shape, with ``supports_reasoning`` resolved.
+    """
+    if isinstance(payload, list):
+        return [_with_resolved_capabilities(item) for item in payload]
+    if not isinstance(payload, dict):
+        return payload
+
+    kind = str(payload.get("provider_kind") or "")
+    name = str(payload.get("model_name") or "")
+    if not kind or not name:
+        return payload
+
+    try:
+        resolved = reasoning_capable(
+            litellm_model_id(kind, name), bool(payload.get("supports_reasoning"))
+        )
+    except Exception:
+        logger.exception("Could not resolve reasoning support for %s/%s", kind, name)
+        return payload
+
+    return {**payload, "supports_reasoning": resolved}
 
 
 def _analyzer_mode() -> bool:
