@@ -202,8 +202,17 @@ _LENGTH_KEY = "length"
 #: derived analytics in :mod:`services.agent.tools.option_viz` draw the same two
 #: legs and a red call in one chart beside a green one in the next is worse than
 #: either choice on its own.
-CALL_COLOUR = "#ef4444"
-PUT_COLOUR = "#22c55e"
+#:
+#: **Calls are green and puts are red**, matching the `/tools` option analytics.
+#: That agreement had to be made rather than found: OI Tracker, OI Range and the
+#: GEX dashboard drew calls red while OI Profile drew them green, so the suite
+#: contradicted itself and a chart in the conversation could only match half of
+#: it. The pages were moved onto this convention at the same time as this line.
+#: There is a real argument for the other direction, since heavy call writing is
+#: bearish, but a convention that holds everywhere beats the better argument
+#: applied inconsistently.
+CALL_COLOUR = "#22c55e"
+PUT_COLOUR = "#ef4444"
 _POSITIVE_COLOUR = "#22c55e"
 _NEGATIVE_COLOUR = "#ef4444"
 
