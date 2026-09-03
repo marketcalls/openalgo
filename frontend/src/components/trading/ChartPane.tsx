@@ -42,8 +42,16 @@ import { SymbolSearchDialog } from './SymbolSearchDialog'
 /** Hand-drawn to sit at the same 1.7 stroke as the camera beside them. */
 function DownloadIcon({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7}
-      strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
       <path d="M12 3v11m0 0 4-4m-4 4-4-4" />
       <path d="M4 17v3h16v-3" />
     </svg>
@@ -52,8 +60,16 @@ function DownloadIcon({ className }: { className?: string }) {
 
 function CopyIcon({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7}
-      strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
       <rect x="8" y="8" width="12" height="12" rx="2" />
       <path d="M16 5.5H6A1.5 1.5 0 0 0 4.5 7v10" />
     </svg>
@@ -788,60 +804,63 @@ export function ChartPane({
           {/* Positioned, so the menu below anchors to the camera and not to
               whatever ancestor happens to be relative. */}
           <div className="relative">
-          <Button
-            variant="ghost"
-            size="icon"
-            className={cn('h-8 w-8', snapOpen && 'text-primary')}
-            ref={snapBtnRef}
-            onClick={(e) => {
-              // Shift skips the menu and saves, for anyone who only ever saves.
-              if (e.shiftKey) { void terminalRef.current?.screenshot(); return }
-              if (snapOpen) setSnapOpen(false)
-              else openSnapMenu()
-            }}
-            title="Chart snapshot"
-            aria-label="Chart snapshot"
-          >
-            <CameraIcon className="h-[17px] w-[17px]" />
-          </Button>
-          {snapOpen && (
-            <>
-              {/* Catches the click that dismisses, so the menu closes on any
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn('h-8 w-8', snapOpen && 'text-primary')}
+              ref={snapBtnRef}
+              onClick={(e) => {
+                // Shift skips the menu and saves, for anyone who only ever saves.
+                if (e.shiftKey) {
+                  void terminalRef.current?.screenshot()
+                  return
+                }
+                if (snapOpen) setSnapOpen(false)
+                else openSnapMenu()
+              }}
+              title="Chart snapshot"
+              aria-label="Chart snapshot"
+            >
+              <CameraIcon className="h-[17px] w-[17px]" />
+            </Button>
+            {snapOpen && (
+              <>
+                {/* Catches the click that dismisses, so the menu closes on any
                   outside press without a document listener that would also
                   swallow the press that opened it. */}
-              <div className="fixed inset-0 z-40" onClick={() => setSnapOpen(false)} />
-              <div
-                className="fixed z-50 w-56 rounded-md border bg-popover p-1 shadow-lg"
-                style={{ top: snapAt?.top ?? 0, right: snapAt?.right ?? 0 }}
-              >
-                <div className="px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Chart snapshot
+                <div className="fixed inset-0 z-40" onClick={() => setSnapOpen(false)} />
+                <div
+                  className="fixed z-50 w-56 rounded-md border bg-popover p-1 shadow-lg"
+                  style={{ top: snapAt?.top ?? 0, right: snapAt?.right ?? 0 }}
+                >
+                  <div className="px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Chart snapshot
+                  </div>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
+                    onClick={() => {
+                      setSnapOpen(false)
+                      void terminalRef.current?.screenshot()
+                    }}
+                  >
+                    <DownloadIcon className="h-3.5 w-3.5 opacity-70" />
+                    Download image
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
+                    onClick={() => {
+                      setSnapOpen(false)
+                      void terminalRef.current?.copyScreenshot()
+                    }}
+                  >
+                    <CopyIcon className="h-3.5 w-3.5 opacity-70" />
+                    Copy image
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
-                  onClick={() => {
-                    setSnapOpen(false)
-                    void terminalRef.current?.screenshot()
-                  }}
-                >
-                  <DownloadIcon className="h-3.5 w-3.5 opacity-70" />
-                  Download image
-                </button>
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
-                  onClick={() => {
-                    setSnapOpen(false)
-                    void terminalRef.current?.copyScreenshot()
-                  }}
-                >
-                  <CopyIcon className="h-3.5 w-3.5 opacity-70" />
-                  Copy image
-                </button>
-              </div>
-            </>
-          )}
+              </>
+            )}
           </div>
         </div>
       </div>

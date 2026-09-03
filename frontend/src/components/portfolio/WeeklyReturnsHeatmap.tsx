@@ -71,9 +71,7 @@ export function WeeklyReturnsHeatmap({ series }: Props) {
             className="w-20 rounded-md border border-border/40 p-2 text-center"
             style={{ background: cell(p.value) }}
           >
-            <div className="text-sm font-semibold tabular-nums">
-              {(p.value * 100).toFixed(1)}
-            </div>
+            <div className="text-sm font-semibold tabular-nums">{(p.value * 100).toFixed(1)}</div>
             <div className="mt-0.5 text-[10px] text-muted-foreground">
               {formatWeekEnding(p.date)}
             </div>

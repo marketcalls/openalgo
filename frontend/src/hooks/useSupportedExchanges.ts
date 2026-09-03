@@ -75,9 +75,7 @@ export function useSupportedExchanges() {
     const toolsFnoExchanges: ExchangeOption[] = fnoExchanges.filter(
       (e) => !['CDS', 'BCD', 'NCDEX'].includes(e.value)
     )
-    const strategyBuilderExchanges: ExchangeOption[] = fnoExchanges.filter(
-      (e) => e.value !== 'CDS'
-    )
+    const strategyBuilderExchanges: ExchangeOption[] = fnoExchanges.filter((e) => e.value !== 'CDS')
 
     // Defaults
     const defaultExchange = tradingExchanges[0]?.value ?? (isCrypto ? 'CRYPTO' : 'NSE')

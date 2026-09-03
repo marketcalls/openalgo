@@ -187,31 +187,33 @@ describe('OptionChainPanel', () => {
 
   it('shows a dash for a leg with no implied volatility rather than a zero', async () => {
     useOptionChainLive.mockReturnValue(
-      live({ data: chain({
-        chain: [
-          {
-            strike: 24200,
-            ce: {
-              symbol: 'NIFTY01SEP2624200CE',
-              label: 'ATM',
-              ltp: 0,
-              bid: 0,
-              ask: 0,
-              bid_qty: 0,
-              ask_qty: 0,
-              open: 0,
-              high: 0,
-              low: 0,
-              prev_close: 0,
-              volume: 0,
-              oi: 0,
-              lotsize: 65,
-              tick_size: 0.05,
+      live({
+        data: chain({
+          chain: [
+            {
+              strike: 24200,
+              ce: {
+                symbol: 'NIFTY01SEP2624200CE',
+                label: 'ATM',
+                ltp: 0,
+                bid: 0,
+                ask: 0,
+                bid_qty: 0,
+                ask_qty: 0,
+                open: 0,
+                high: 0,
+                low: 0,
+                prev_close: 0,
+                volume: 0,
+                oi: 0,
+                lotsize: 65,
+                tick_size: 0.05,
+              },
+              pe: null,
             },
-            pe: null,
-          },
-        ],
-      }) })
+          ],
+        }),
+      })
     )
     renderPanel()
     // A zero would read as a real measurement of zero volatility.

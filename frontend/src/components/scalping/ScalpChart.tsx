@@ -226,7 +226,13 @@ export function ScalpChart({
       const ts = chart.timeScale()
       const range = preserveRange ? ts.getVisibleLogicalRange() : null
       candle.setData(
-        arr.map((k) => ({ time: k.time as UTCTimestamp, open: k.open, high: k.high, low: k.low, close: k.close }))
+        arr.map((k) => ({
+          time: k.time as UTCTimestamp,
+          open: k.open,
+          high: k.high,
+          low: k.low,
+          close: k.close,
+        }))
       )
       vol.setData(
         arr.map((k) => ({
@@ -366,7 +372,9 @@ export function ScalpChart({
     if (!candle || !vol || !readyRef.current || ltp == null || !Number.isFinite(ltp)) return
 
     const parsed = ts ? Date.parse(ts) : Number.NaN
-    const epochUtc = Number.isNaN(parsed) ? Math.floor(Date.now() / 1000) : Math.floor(parsed / 1000)
+    const epochUtc = Number.isNaN(parsed)
+      ? Math.floor(Date.now() / 1000)
+      : Math.floor(parsed / 1000)
     const sec = intervalSecRef.current
     const bucket = Math.floor((epochUtc + IST_OFFSET) / sec) * sec
     const cur = currentBucketRef.current
@@ -408,7 +416,13 @@ export function ScalpChart({
     }
 
     const color = bar.close >= bar.open ? VOL_UP : VOL_DOWN
-    candle.update({ time: bar.time as UTCTimestamp, open: bar.open, high: bar.high, low: bar.low, close: bar.close })
+    candle.update({
+      time: bar.time as UTCTimestamp,
+      open: bar.open,
+      high: bar.high,
+      low: bar.low,
+      close: bar.close,
+    })
     vol.update({ time: bar.time as UTCTimestamp, value: bar.volume, color })
     renderLegendRef.current()
     // Clear the live-only "waiting for ticks" placeholder once a bar exists.

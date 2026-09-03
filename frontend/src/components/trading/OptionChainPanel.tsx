@@ -23,8 +23,6 @@
 
 import { Check, ChevronsUpDown, RefreshCw } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
-
-import { useOptionChainLive } from '@/hooks/useOptionChainLive'
 import { scalpingApi } from '@/api/scalping'
 import { Button } from '@/components/ui/button'
 import {
@@ -46,6 +44,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useMarketStatus } from '@/hooks/useMarketStatus'
+import { useOptionChainLive } from '@/hooks/useOptionChainLive'
 import { needsPreviousClose } from '@/lib/trading/previousClose'
 import type { SearchRow } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
@@ -349,7 +348,11 @@ export function OptionChainPanel({ apiKey, onPick, activeSymbol }: Props) {
     prefs.exchange,
     prefs.expiry,
     STRIKE_COUNT,
-    { enabled: Boolean(prefs.underlying && prefs.expiry), oiRefreshInterval: 30000, pauseWhenHidden: true }
+    {
+      enabled: Boolean(prefs.underlying && prefs.expiry),
+      oiRefreshInterval: 30000,
+      pauseWhenHidden: true,
+    }
   )
 
   const marketOpen = isMarketOpen(prefs.exchange)

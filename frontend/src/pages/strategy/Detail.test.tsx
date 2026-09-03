@@ -1402,7 +1402,9 @@ describe('strategy exit action toasts describe proven state only', () => {
     await user.click(screen.getByRole('button', { name: 'Start sandbox' }))
 
     await waitFor(() =>
-      expect(rest.post).toHaveBeenCalledWith('/strategy/api/strategies/7/start', { mode: 'sandbox' })
+      expect(rest.post).toHaveBeenCalledWith('/strategy/api/strategies/7/start', {
+        mode: 'sandbox',
+      })
     )
     expect(toast.warning).toHaveBeenCalledWith(
       'Run started, but broker acknowledgement is pending. Check Events and Orders before relying on RMS.'

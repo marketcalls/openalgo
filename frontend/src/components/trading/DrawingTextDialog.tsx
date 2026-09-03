@@ -78,16 +78,22 @@ export function DrawingTextDialog({ req, onSubmit, onClose }: Props) {
     >
       <div className="w-80 rounded-lg border bg-popover shadow-2xl">
         <div className="flex items-center justify-between border-b px-4 py-2.5">
-          <h3 className="text-[15px] font-semibold tracking-tight">
-            {TITLES[req.tool] ?? 'Text'}
-          </h3>
+          <h3 className="text-[15px] font-semibold tracking-tight">{TITLES[req.tool] ?? 'Text'}</h3>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close"
             className="-mr-1 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
-            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              className="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.8}
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
               <path d="M6 6l12 12M18 6L6 18" />
             </svg>
           </button>
@@ -111,7 +117,9 @@ export function DrawingTextDialog({ req, onSubmit, onClose }: Props) {
                 className="h-7 w-[68px] appearance-none rounded border border-border bg-background pl-2 pr-6 text-[13px] outline-none transition-colors hover:bg-accent focus:border-primary"
               >
                 {SIZES.map((n) => (
-                  <option key={n} value={n}>{n}</option>
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
                 ))}
               </select>
               <svg
@@ -132,7 +140,11 @@ export function DrawingTextDialog({ req, onSubmit, onClose }: Props) {
               aria-label="Bold"
               aria-pressed={v.bold}
               onClick={() => set('bold', !v.bold)}
-              className={cn(tog, 'font-bold', v.bold && 'border-primary/50 bg-primary/15 text-primary')}
+              className={cn(
+                tog,
+                'font-bold',
+                v.bold && 'border-primary/50 bg-primary/15 text-primary'
+              )}
             >
               B
             </button>
@@ -141,7 +153,11 @@ export function DrawingTextDialog({ req, onSubmit, onClose }: Props) {
               aria-label="Italic"
               aria-pressed={v.italic}
               onClick={() => set('italic', !v.italic)}
-              className={cn(tog, 'italic', v.italic && 'border-primary/50 bg-primary/15 text-primary')}
+              className={cn(
+                tog,
+                'italic',
+                v.italic && 'border-primary/50 bg-primary/15 text-primary'
+              )}
             >
               I
             </button>

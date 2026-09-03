@@ -44,8 +44,14 @@ const TONE_CLASS: Record<Tone, string> = {
   poor: 'bg-rose-500/15 text-rose-400',
 }
 
-const pctOf = (dp = 1) => (v: number) => `${(v * 100).toFixed(dp)}%`
-const plain = (dp = 2) => (v: number) => v.toFixed(dp)
+const pctOf =
+  (dp = 1) =>
+  (v: number) =>
+    `${(v * 100).toFixed(dp)}%`
+const plain =
+  (dp = 2) =>
+  (v: number) =>
+    v.toFixed(dp)
 
 const SPECS: Spec[] = [
   {
@@ -62,12 +68,28 @@ const SPECS: Spec[] = [
     format: pctOf(),
     verdict: (v) =>
       v >= 0.18
-        ? { rating: 'Excellent', tone: 'great', says: 'Compounding at a rate few portfolios sustain.' }
+        ? {
+            rating: 'Excellent',
+            tone: 'great',
+            says: 'Compounding at a rate few portfolios sustain.',
+          }
         : v >= 0.12
-          ? { rating: 'Strong', tone: 'good', says: 'Comfortably ahead of a fixed deposit and most index funds.' }
+          ? {
+              rating: 'Strong',
+              tone: 'good',
+              says: 'Comfortably ahead of a fixed deposit and most index funds.',
+            }
           : v >= 0.06
-            ? { rating: 'Modest', tone: 'fair', says: 'Growing, but not by much more than inflation.' }
-            : { rating: 'Weak', tone: 'poor', says: 'Barely growing, or losing ground in real terms.' },
+            ? {
+                rating: 'Modest',
+                tone: 'fair',
+                says: 'Growing, but not by much more than inflation.',
+              }
+            : {
+                rating: 'Weak',
+                tone: 'poor',
+                says: 'Barely growing, or losing ground in real terms.',
+              },
   },
   {
     key: 'sharpe',
@@ -104,12 +126,28 @@ const SPECS: Spec[] = [
     format: pctOf(),
     verdict: (v) =>
       v >= -0.15
-        ? { rating: 'Comfortable', tone: 'great', says: 'Never fell far enough to test your nerve.' }
+        ? {
+            rating: 'Comfortable',
+            tone: 'great',
+            says: 'Never fell far enough to test your nerve.',
+          }
         : v >= -0.25
-          ? { rating: 'Normal', tone: 'good', says: 'A fall most equity investors would recognise.' }
+          ? {
+              rating: 'Normal',
+              tone: 'good',
+              says: 'A fall most equity investors would recognise.',
+            }
           : v >= -0.4
-            ? { rating: 'Painful', tone: 'fair', says: 'Deep enough that many would have sold near the bottom.' }
-            : { rating: 'Severe', tone: 'poor', says: 'A fall this deep needs years to recover from.' },
+            ? {
+                rating: 'Painful',
+                tone: 'fair',
+                says: 'Deep enough that many would have sold near the bottom.',
+              }
+            : {
+                rating: 'Severe',
+                tone: 'poor',
+                says: 'A fall this deep needs years to recover from.',
+              },
   },
   {
     key: 'volatility',
@@ -167,12 +205,28 @@ const SPECS: Spec[] = [
     format: (v) => v.toFixed(3),
     verdict: (v) =>
       v >= 0.05
-        ? { rating: 'Real edge', tone: 'great', says: 'The choices added meaningfully over the index.' }
+        ? {
+            rating: 'Real edge',
+            tone: 'great',
+            says: 'The choices added meaningfully over the index.',
+          }
         : v > 0.005
-          ? { rating: 'Slight edge', tone: 'good', says: 'A little better than simply buying the index.' }
+          ? {
+              rating: 'Slight edge',
+              tone: 'good',
+              says: 'A little better than simply buying the index.',
+            }
           : v > -0.005
-            ? { rating: 'Neutral', tone: 'fair', says: 'Effectively matching the index once risk is counted.' }
-            : { rating: 'Negative', tone: 'poor', says: 'An index fund would have served you better.' },
+            ? {
+                rating: 'Neutral',
+                tone: 'fair',
+                says: 'Effectively matching the index once risk is counted.',
+              }
+            : {
+                rating: 'Negative',
+                tone: 'poor',
+                says: 'An index fund would have served you better.',
+              },
   },
   {
     key: 'beta',
@@ -188,12 +242,24 @@ const SPECS: Spec[] = [
     format: plain(),
     verdict: (v) =>
       v <= 0.8
-        ? { rating: 'Defensive', tone: 'good', says: 'Moves less than the market, in both directions.' }
+        ? {
+            rating: 'Defensive',
+            tone: 'good',
+            says: 'Moves less than the market, in both directions.',
+          }
         : v <= 1.2
           ? { rating: 'Market-like', tone: 'good', says: 'Rises and falls roughly with the index.' }
           : v <= 1.5
-            ? { rating: 'Aggressive', tone: 'fair', says: 'Amplifies the market, gains and losses alike.' }
-            : { rating: 'Very aggressive', tone: 'poor', says: 'Swings far harder than the index.' },
+            ? {
+                rating: 'Aggressive',
+                tone: 'fair',
+                says: 'Amplifies the market, gains and losses alike.',
+              }
+            : {
+                rating: 'Very aggressive',
+                tone: 'poor',
+                says: 'Swings far harder than the index.',
+              },
   },
   {
     key: 'calmar',
@@ -209,11 +275,23 @@ const SPECS: Spec[] = [
     format: plain(),
     verdict: (v) =>
       v >= 2
-        ? { rating: 'Excellent', tone: 'great', says: 'The return more than justified the worst fall.' }
+        ? {
+            rating: 'Excellent',
+            tone: 'great',
+            says: 'The return more than justified the worst fall.',
+          }
         : v >= 1
-          ? { rating: 'Good', tone: 'good', says: 'The return was worth the drawdown along the way.' }
+          ? {
+              rating: 'Good',
+              tone: 'good',
+              says: 'The return was worth the drawdown along the way.',
+            }
           : v >= 0.5
-            ? { rating: 'Fair', tone: 'fair', says: 'The fall was steep relative to what it earned.' }
+            ? {
+                rating: 'Fair',
+                tone: 'fair',
+                says: 'The fall was steep relative to what it earned.',
+              }
             : { rating: 'Weak', tone: 'poor', says: 'The drawdown was not repaid by the return.' },
   },
   {
@@ -230,10 +308,22 @@ const SPECS: Spec[] = [
     format: pctOf(0),
     verdict: (v) =>
       v >= 0.55
-        ? { rating: 'Frequent wins', tone: 'good', says: 'More up days than most, though size matters more.' }
+        ? {
+            rating: 'Frequent wins',
+            tone: 'good',
+            says: 'More up days than most, though size matters more.',
+          }
         : v >= 0.48
-          ? { rating: 'Typical', tone: 'good', says: 'About half the days are positive, as expected.' }
-          : { rating: 'Few wins', tone: 'fair', says: 'Fewer up days, so the winners must be large.' },
+          ? {
+              rating: 'Typical',
+              tone: 'good',
+              says: 'About half the days are positive, as expected.',
+            }
+          : {
+              rating: 'Few wins',
+              tone: 'fair',
+              says: 'Fewer up days, so the winners must be large.',
+            },
   },
   {
     key: 'cvar',
@@ -251,8 +341,16 @@ const SPECS: Spec[] = [
       v >= -0.015
         ? { rating: 'Light tail', tone: 'great', says: 'Even the worst days stay small.' }
         : v >= -0.03
-          ? { rating: 'Normal tail', tone: 'good', says: 'Bad days look like ordinary equity bad days.' }
-          : { rating: 'Heavy tail', tone: 'poor', says: 'The worst days are severe when they come.' },
+          ? {
+              rating: 'Normal tail',
+              tone: 'good',
+              says: 'Bad days look like ordinary equity bad days.',
+            }
+          : {
+              rating: 'Heavy tail',
+              tone: 'poor',
+              says: 'The worst days are severe when they come.',
+            },
   },
 ]
 
@@ -284,9 +382,7 @@ export function MetricGuide({ metrics }: { metrics: Record<string, number | null
               </span>
             </div>
 
-            <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-              {spec.meaning}
-            </p>
+            <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{spec.meaning}</p>
 
             <div className="relative mt-4 h-2 rounded-full bg-gradient-to-r from-rose-500 via-amber-400 to-emerald-500">
               {at !== null && (

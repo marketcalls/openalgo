@@ -215,10 +215,7 @@ export interface PortfolioCrisis {
     hit_rate: number | null
     worst: number
     best: number
-    by_scope?: Record<
-      string,
-      { count: number; average_return: number; hit_rate: number | null }
-    >
+    by_scope?: Record<string, { count: number; average_return: number; hit_rate: number | null }>
   } | null
 }
 
@@ -407,9 +404,7 @@ export interface BacktestResponse {
  * all views of one simulation — fetching per tab would re-run it and risk two
  * tabs disagreeing about the same portfolio.
  */
-export async function runPortfolioBacktest(
-  req: BacktestRequest
-): Promise<BacktestResponse> {
+export async function runPortfolioBacktest(req: BacktestRequest): Promise<BacktestResponse> {
   const { data } = await apiClient.post<BacktestResponse>('/portfolio/backtest', req)
   return data
 }

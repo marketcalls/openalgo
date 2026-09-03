@@ -30,12 +30,12 @@ import {
   type PriceLine,
   ReplayController,
   ReplayShade,
-  TextWatermark,
   type ReplayState,
   readChartSettings,
   type SeriesApi,
   type SeriesStyle,
   type SeriesType,
+  TextWatermark,
   tryResolveInterval,
   withBarCache,
 } from 'openalgo-charts'
@@ -765,19 +765,19 @@ export class TradingTerminal {
    */
   private wireLegendActions(): void {
     const act = (e: Event): void => {
-      const el = (e.target as HTMLElement | null)?.closest?.("[data-legend-action]")
+      const el = (e.target as HTMLElement | null)?.closest?.('[data-legend-action]')
       if (!el) return
-      if (el.getAttribute("data-legend-action") !== "volume") return
+      if (el.getAttribute('data-legend-action') !== 'volume') return
       e.preventDefault()
       e.stopPropagation()
       this.setVolumeVisible(!this.volumeOn)
       this.setLegend(this.legendBar)
       this.cb.onVolumeChange?.(this.volumeOn)
     }
-    this.legendEl.addEventListener("click", act)
-    this.legendEl.addEventListener("keydown", (e) => {
+    this.legendEl.addEventListener('click', act)
+    this.legendEl.addEventListener('keydown', (e) => {
       const k = (e as KeyboardEvent).key
-      if (k === "Enter" || k === " ") act(e)
+      if (k === 'Enter' || k === ' ') act(e)
     })
   }
 
@@ -2048,9 +2048,19 @@ export class TradingTerminal {
    * with no rung below it replays bar by bar, as it always did.
    */
   private static readonly REPLAY_SUB: Record<string, string> = {
-    '3m': '1m', '5m': '1m', '10m': '5m', '15m': '5m', '30m': '15m',
-    '1h': '15m', '60m': '15m', '2h': '30m', '4h': '1h',
-    'D': '1h', '1d': '1h', 'W': 'D', '1w': 'D',
+    '3m': '1m',
+    '5m': '1m',
+    '10m': '5m',
+    '15m': '5m',
+    '30m': '15m',
+    '1h': '15m',
+    '60m': '15m',
+    '2h': '30m',
+    '4h': '1h',
+    D: '1h',
+    '1d': '1h',
+    W: 'D',
+    '1w': 'D',
   }
 
   /* ── market replay ──────────────────────────────────────────────────────

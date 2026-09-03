@@ -6,8 +6,9 @@
  * queries the instrument master as they type and returns a symbol that is
  * known to exist on the exchange they picked.
  */
-import { useEffect, useRef, useState } from 'react'
+
 import { useQuery } from '@tanstack/react-query'
+import { useEffect, useRef, useState } from 'react'
 import { chartinkApi } from '@/api/chartink'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
@@ -103,9 +104,7 @@ export function SymbolSearchInput({
             >
               <span className="font-medium">{r.symbol}</span>
               <span className="truncate text-xs text-muted-foreground">{r.name}</span>
-              <span className="ml-auto text-[10px] text-muted-foreground">
-                {r.exchange}
-              </span>
+              <span className="ml-auto text-[10px] text-muted-foreground">{r.exchange}</span>
             </button>
           ))}
         </div>

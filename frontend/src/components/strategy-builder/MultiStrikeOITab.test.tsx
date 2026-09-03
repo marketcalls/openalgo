@@ -120,7 +120,9 @@ describe('MultiStrikeOITab request sequencing', () => {
   it('keeps request B displayed when request A resolves later', async () => {
     const requestA = deferred<MultiStrikeOIResponse>()
     const requestB = deferred<MultiStrikeOIResponse>()
-    mocks.getMultiStrikeOI.mockReturnValueOnce(requestA.promise).mockReturnValueOnce(requestB.promise)
+    mocks.getMultiStrikeOI
+      .mockReturnValueOnce(requestA.promise)
+      .mockReturnValueOnce(requestB.promise)
 
     const view = render(renderTab('BTC'))
     await act(async () => vi.advanceTimersByTimeAsync(300))
