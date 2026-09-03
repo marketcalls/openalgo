@@ -115,13 +115,19 @@ export function TradingPanel() {
             the sandbox note is reassurance nobody needs; on a live one this is
             the single most important sentence on the page. */}
         {enabled && live && (
-          <Alert variant="destructive" className="m-4 mt-0">
-            <AlertDescription>
-              This instance is in live mode, so an order you approve is sent to your broker with
-              real money. Switch the platform to analyzer mode first if you want approved orders to
-              reach the sandbox instead.
-            </AlertDescription>
-          </Alert>
+          // Padding on a wrapper, not margin on the Alert. The Alert base style
+          // is `w-full`, so `w-full` plus a horizontal margin resolves to the
+          // parent's full width PLUS that margin, and the box overhangs its
+          // container by exactly the margin on each side.
+          <div className="px-4 pb-4">
+            <Alert variant="destructive">
+              <AlertDescription>
+                This instance is in live mode, so an order you approve is sent to your broker with
+                real money. Switch the platform to analyzer mode first if you want approved orders
+                to reach the sandbox instead.
+              </AlertDescription>
+            </Alert>
+          </div>
         )}
 
         {enabled && analyzer.data?.analyze_mode === true && (
