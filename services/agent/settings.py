@@ -37,12 +37,15 @@ is on. A database that cannot be read must not be a database that trades.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from cachetools import TTLCache
 
@@ -806,3 +809,803 @@ def set_risk_limits(**limits: Any) -> dict[str, Any]:
         ValueError: When a key is unknown or a value cannot be used.
     """
     return update(limits)
+
+
+# ---------------------------------------------------------------------------
+# Web search configuration
+#
+# `services/agent/tools/websearch.py` owns the behaviour of the two web search
+# tools. This section owns the configuration they read, so an operator can set
+# it from the UI instead of writing an `ag_setting` row by hand. Nothing here
+# comes from `.env`, including Perplexity's key, which the build contract names
+# explicitly.
+#
+# The setting keys, the secret prefix and the code defaults below are repeated
+# as literals rather than imported from that module, for the same reason the
+# keys at the top of this file are not imported from `database.agent_db`:
+# `tools/websearch.py` imports `tools/base.py`, which raises ImportError when
+# the optional `agno` package is absent, and reading or writing configuration
+# must not require the agent runtime to be installed. Only the live provider
+# test imports that module, and it reports the missing package rather than
+# raising. The two sets of literals must be kept in step.
+# ---------------------------------------------------------------------------
+
+WEBSEARCH_DUCKDUCKGO = "duckduckgo"
+WEBSEARCH_TAVILY = "tavily"
+WEBSEARCH_PERPLEXITY = "perplexity"
+
+KEY_WEBSEARCH_PROVIDER = "websearch_provider"
+KEY_WEBSEARCH_PERPLEXITY_MODEL = "websearch_perplexity_model"
+KEY_WEBSEARCH_MAX_CALLS_PER_TURN = "websearch_max_calls_per_turn"
+KEY_WEBSEARCH_DAILY_CAP = "websearch_daily_cap"
+KEY_WEBSEARCH_USAGE = "websearch_usage"
+
+#: One key per provider, shared by every tool that uses it.
+WEBSEARCH_SECRET_PREFIX = "websearch:"
+
+#: The keyless provider is the default, so search works out of the box and
+#: nothing leaves the machine to a paid API until an operator asks for it.
+DEFAULT_WEBSEARCH_PROVIDER = WEBSEARCH_DUCKDUCKGO
+DEFAULT_WEBSEARCH_PERPLEXITY_MODEL = "openai/gpt-5.6-luna"
+DEFAULT_WEBSEARCH_MAX_CALLS_PER_TURN = 5
+DEFAULT_WEBSEARCH_DAILY_CAP = 200
+
+#: The ceilings the tool module clamps the same two settings to. A value above
+#: one of these would be silently reduced at read time, so it is refused at
+#: write time instead, where the operator can see it happen.
+MAX_WEBSEARCH_CALLS_PER_TURN = 50
+MAX_WEBSEARCH_DAILY_CAP = 10000
+
+#: Bounds on the two free-text inputs. Neither is a limit a provider imposes;
+#: both stop a single request storing an unbounded string.
+MAX_PERPLEXITY_MODEL_CHARS = 120
+MAX_WEBSEARCH_KEY_CHARS = 500
+
+#: What a live provider test sends. A real question with a stable answer, for
+#: two reasons: a reachability ping proves nothing about the key, and a market
+#: question would put Tavily on its deeper, slower and dearer finance crawl for
+#: what is meant to be the cheapest real call that settles the question.
+WEBSEARCH_PROBE_QUERY = "who wrote Hamlet"
+WEBSEARCH_PROBE_MAX_RESULTS = 3
+
+#: Indian markets, Indian trading day. The daily cap resets on the IST date,
+#: matching how `tools/websearch.py` counts it.
+_IST = ZoneInfo("Asia/Kolkata")
+
+
+@dataclass(frozen=True)
+class WebSearchProviderSpec:
+    """One selectable web search provider.
+
+    A closed vocabulary rather than a table: adding a provider is a code change
+    in the tool module, so an id the UI could invent has nothing to dispatch to.
+
+    Attributes:
+        id: The value stored in the ``websearch_provider`` setting.
+        label: The provider's own name, for the UI and for messages.
+        needs_key: Whether the provider refuses to answer without a credential.
+        result_kind: ``links`` for a list of pages, ``answer`` for a synthesised
+            answer with citations. The two are different kinds of result, which
+            is why they are different tools.
+        tool: The agent tool this provider answers.
+        description: One sentence an operator can choose on.
+    """
+
+    id: str
+    label: str
+    needs_key: bool
+    result_kind: str
+    tool: str
+    description: str
+
+    def as_dict(self) -> dict[str, Any]:
+        """Render the spec as JSON-safe primitives.
+
+        Returns:
+            The spec's own fields, and nothing derived from a stored key.
+        """
+        return {
+            "id": self.id,
+            "label": self.label,
+            "needs_key": self.needs_key,
+            "result_kind": self.result_kind,
+            "tool": self.tool,
+            "description": self.description,
+        }
+
+
+WEBSEARCH_PROVIDERS: tuple[WebSearchProviderSpec, ...] = (
+    WebSearchProviderSpec(
+        id=WEBSEARCH_DUCKDUCKGO,
+        label="DuckDuckGo",
+        needs_key=False,
+        result_kind="links",
+        tool="web_search",
+        description=(
+            "Keyless and the default, so web search works with nothing configured and no key "
+            "leaves the machine. It scrapes rather than calling an API, so it throttles under "
+            "load."
+        ),
+    ),
+    WebSearchProviderSpec(
+        id=WEBSEARCH_TAVILY,
+        label="Tavily",
+        needs_key=True,
+        result_kind="links",
+        tool="web_search",
+        description=(
+            "A paid search API with better snippets than the keyless provider, and a deeper "
+            "crawl on market questions. It answers web_search in place of DuckDuckGo once its "
+            "key is stored."
+        ),
+    ),
+    WebSearchProviderSpec(
+        id=WEBSEARCH_PERPLEXITY,
+        label="Perplexity",
+        needs_key=True,
+        result_kind="answer",
+        tool="web_research",
+        description=(
+            "Answers a question from current sources and cites them. It returns no links, so it "
+            "answers web_research rather than web_search, and selecting it here leaves "
+            "web_search on DuckDuckGo."
+        ),
+    ),
+)
+
+WEBSEARCH_PROVIDER_IDS: tuple[str, ...] = tuple(spec.id for spec in WEBSEARCH_PROVIDERS)
+
+WEBSEARCH_KEYED_PROVIDER_IDS: tuple[str, ...] = tuple(
+    spec.id for spec in WEBSEARCH_PROVIDERS if spec.needs_key
+)
+
+_WEBSEARCH_BY_ID: Mapping[str, WebSearchProviderSpec] = MappingProxyType(
+    {spec.id: spec for spec in WEBSEARCH_PROVIDERS}
+)
+
+#: What :func:`update_websearch` accepts. An unknown key is rejected rather than
+#: ignored, for the same reason :func:`update` rejects one: a typo that silently
+#: does nothing is indistinguishable from a setting that was never applied.
+WEBSEARCH_UPDATABLE_KEYS: tuple[str, ...] = (
+    "provider",
+    "perplexity_model",
+    "max_calls_per_turn",
+    "daily_cap",
+)
+
+
+@dataclass(frozen=True)
+class WebSearchProbe:
+    """What one live provider test produced.
+
+    Attributes:
+        ok: True when the provider answered with something usable.
+        provider: The provider that was tested.
+        message: What to show the operator. On failure this is the provider's
+            own reason, because a rejected key and an outage need different
+            fixes and one generic message helps with neither.
+        latency_ms: Wall clock milliseconds the call took.
+        result_count: Links for a search provider, citations for Perplexity.
+    """
+
+    ok: bool
+    provider: str
+    message: str
+    latency_ms: int
+    result_count: int = 0
+
+
+def websearch_provider_spec(provider: Any) -> WebSearchProviderSpec:
+    """Resolve a provider id against the closed vocabulary.
+
+    Args:
+        provider: The submitted provider id, in any case and with any padding.
+
+    Returns:
+        The matching :class:`WebSearchProviderSpec`.
+
+    Raises:
+        ValueError: For anything that is not one of the three providers, so an
+            unknown id fails at the edge rather than being written into the
+            setting and degrading to the default at read time.
+    """
+    key = str(provider or "").strip().lower()
+    spec = _WEBSEARCH_BY_ID.get(key)
+    if spec is None:
+        raise ValueError(f"provider must be one of: {', '.join(WEBSEARCH_PROVIDER_IDS)}")
+    return spec
+
+
+def _keyed_provider_spec(provider: Any) -> WebSearchProviderSpec:
+    """Resolve a provider that is allowed to hold a key.
+
+    Args:
+        provider: The submitted provider id.
+
+    Returns:
+        The matching spec.
+
+    Raises:
+        ValueError: For an unknown provider, or for one that takes no key.
+    """
+    spec = websearch_provider_spec(provider)
+    if not spec.needs_key:
+        raise ValueError(f"{spec.label} needs no API key")
+    return spec
+
+
+def websearch_secret_name(provider: str) -> str:
+    """The ``ag_secret`` name holding one provider's key.
+
+    Args:
+        provider: ``tavily`` or ``perplexity``.
+
+    Returns:
+        The secret name, for example ``websearch:tavily``.
+    """
+    return f"{WEBSEARCH_SECRET_PREFIX}{provider.strip().lower()}"
+
+
+def _websearch_today() -> str:
+    """The current trading date in IST, as ``YYYY-MM-DD``.
+
+    Returns:
+        The date the daily cap is counted against.
+    """
+    return datetime.now(_IST).strftime("%Y-%m-%d")
+
+
+def _websearch_usage(values: Mapping[str, Any]) -> tuple[str, int]:
+    """Today's outbound search count, as the tool module records it.
+
+    A counter from an earlier day, a missing row and an unparseable one all read
+    as zero for today, which is how the cap resets itself with no scheduled job.
+
+    Args:
+        values: The raw setting rows.
+
+    Returns:
+        A ``(date, count)`` pair for today.
+    """
+    today = _websearch_today()
+    raw = str(values.get(KEY_WEBSEARCH_USAGE) or "").strip()
+    if not raw:
+        return today, 0
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Agent setting %s is not JSON; reporting today's usage as zero", KEY_WEBSEARCH_USAGE
+        )
+        return today, 0
+    if not isinstance(parsed, dict) or str(parsed.get("date") or "") != today:
+        return today, 0
+    try:
+        return today, max(0, int(parsed.get("count") or 0))
+    except (TypeError, ValueError):
+        return today, 0
+
+
+def _websearch_int(values: Mapping[str, Any], key: str, default: int, maximum: int) -> int:
+    """Read one web search setting as a bounded integer.
+
+    Clamped exactly as ``tools/websearch.py`` clamps it, so the number the UI
+    shows is the number the tool will use.
+
+    Args:
+        values: The raw setting rows.
+        key: The setting key.
+        default: Used when the row is absent or unparseable.
+        maximum: Inclusive upper bound.
+
+    Returns:
+        The clamped integer.
+    """
+    raw = values.get(key)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        logger.warning("Agent setting %s is not an integer; using %d", key, default)
+        return default
+    return max(0, min(maximum, value))
+
+
+def _websearch_selected(values: Mapping[str, Any]) -> str:
+    """The provider web search is configured to use.
+
+    Args:
+        values: The raw setting rows.
+
+    Returns:
+        A provider id. An unrecognised stored value reads as the keyless
+        default, matching the tool module, because a typo in a row must not take
+        web search away.
+    """
+    raw = str(values.get(KEY_WEBSEARCH_PROVIDER) or "").strip().lower()
+    if raw in _WEBSEARCH_BY_ID:
+        return raw
+    if raw:
+        logger.warning(
+            "Agent setting %s holds an unknown provider; reporting %s",
+            KEY_WEBSEARCH_PROVIDER,
+            DEFAULT_WEBSEARCH_PROVIDER,
+        )
+    return DEFAULT_WEBSEARCH_PROVIDER
+
+
+def _websearch_perplexity_model(values: Mapping[str, Any]) -> str:
+    """The model ``web_research`` runs.
+
+    Args:
+        values: The raw setting rows.
+
+    Returns:
+        The stored model id, or the shipped default.
+    """
+    stored = str(values.get(KEY_WEBSEARCH_PERPLEXITY_MODEL) or "").strip()
+    return stored or DEFAULT_WEBSEARCH_PERPLEXITY_MODEL
+
+
+def _websearch_secret_index() -> dict[str, dict[str, Any]]:
+    """The stored web search keys, described and never shown.
+
+    Returns:
+        A name -> secret-description map covering only the secrets that actually
+        hold a value. Empty when the store cannot be read, which reports every
+        provider as unconfigured rather than claiming a key that may not be
+        there.
+    """
+    try:
+        from database import agent_db
+
+        rows = agent_db.list_secrets()
+    except Exception:
+        logger.exception("Could not read the stored web search keys")
+        return {}
+    return {
+        str(row.get("name")): row
+        for row in rows
+        if str(row.get("name") or "").startswith(WEBSEARCH_SECRET_PREFIX) and row.get("has_value")
+    }
+
+
+def _stored_websearch_key(provider: str) -> str:
+    """One provider's stored key, decrypted at the moment of use.
+
+    The value goes to a local in the caller and is never cached on an object,
+    never logged and never placed in a response.
+
+    Args:
+        provider: ``tavily`` or ``perplexity``.
+
+    Returns:
+        The plaintext key, or an empty string when none is stored.
+    """
+    try:
+        from database import agent_db
+
+        value = agent_db.get_secret(websearch_secret_name(provider))
+    except Exception:
+        # No traceback and no exception message: this is the credential path the
+        # build contract carves out, and a storage or decryption failure can
+        # quote the material it choked on inside str(exc).
+        logger.error("Could not read the stored web search key for %s", provider)
+        return ""
+    return str(value or "").strip()
+
+
+def get_websearch_defaults() -> dict[str, Any]:
+    """The shipped web search configuration, with no database access.
+
+    Returns:
+        What each configurable field reverts to, so the settings screen can show
+        it without a second endpoint or a duplicated table.
+    """
+    return {
+        "provider": DEFAULT_WEBSEARCH_PROVIDER,
+        "perplexity_model": DEFAULT_WEBSEARCH_PERPLEXITY_MODEL,
+        "max_calls_per_turn": DEFAULT_WEBSEARCH_MAX_CALLS_PER_TURN,
+        "daily_cap": DEFAULT_WEBSEARCH_DAILY_CAP,
+    }
+
+
+def get_websearch_config() -> dict[str, Any]:
+    """The whole web search configuration, with every key described and none shown.
+
+    Read fresh rather than from the TTL snapshot: this answers a settings screen
+    that has usually just written, and showing an operator the value they
+    replaced is worse than one indexed read.
+
+    Returns:
+        The selected provider, the tunables, today's usage against the daily
+        cap, and one entry per selectable provider carrying whether a key is
+        stored and its fingerprint. **No field here is a key value**, masked or
+        otherwise.
+    """
+    values = _load_all(fresh=True)
+    daily_cap = _websearch_int(
+        values, KEY_WEBSEARCH_DAILY_CAP, DEFAULT_WEBSEARCH_DAILY_CAP, MAX_WEBSEARCH_DAILY_CAP
+    )
+    usage_date, usage_count = _websearch_usage(values)
+    stored = _websearch_secret_index()
+
+    providers: list[dict[str, Any]] = []
+    for spec in WEBSEARCH_PROVIDERS:
+        secret = stored.get(websearch_secret_name(spec.id)) if spec.needs_key else None
+        entry = spec.as_dict()
+        entry["has_api_key"] = secret is not None
+        entry["api_key_fingerprint"] = secret.get("fingerprint") if secret is not None else None
+        entry["api_key_last_used_at"] = secret.get("last_used_at") if secret is not None else None
+        entry["ready"] = (not spec.needs_key) or secret is not None
+        providers.append(entry)
+
+    return {
+        "provider": _websearch_selected(values),
+        "perplexity_model": _websearch_perplexity_model(values),
+        "max_calls_per_turn": _websearch_int(
+            values,
+            KEY_WEBSEARCH_MAX_CALLS_PER_TURN,
+            DEFAULT_WEBSEARCH_MAX_CALLS_PER_TURN,
+            MAX_WEBSEARCH_CALLS_PER_TURN,
+        ),
+        "daily_cap": daily_cap,
+        "usage": {
+            "date": usage_date,
+            "count": usage_count,
+            "remaining": max(0, daily_cap - usage_count),
+        },
+        "providers": providers,
+    }
+
+
+def _validated_websearch_int(name: str, raw: Any, maximum: int) -> int:
+    """Validate one submitted integer tunable.
+
+    Args:
+        name: The field name, used in the message.
+        raw: The submitted value.
+        maximum: Inclusive upper bound.
+
+    Returns:
+        The integer to store.
+
+    Raises:
+        ValueError: When the value is not a whole number in range. Refused
+            rather than clamped, so an operator who typed 5000 is told the
+            ceiling is 50 instead of discovering later that it saved as
+            something else.
+    """
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        try:
+            value = int(str(raw).strip())
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} must be a whole number") from None
+    else:
+        value = raw
+    if value < 0 or value > maximum:
+        raise ValueError(f"{name} must be between 0 and {maximum}")
+    return value
+
+
+def _validated_perplexity_model(raw: Any) -> str:
+    """Validate a submitted Perplexity model id.
+
+    Args:
+        raw: The submitted value. Blank restores the shipped default, which is
+            what makes clearing the field in the UI mean "use the default"
+            rather than "run no model at all".
+
+    Returns:
+        The model id to store.
+
+    Raises:
+        ValueError: When the value is too long, or carries whitespace or
+            anything outside printable ASCII. A model id has none of those, and
+            this string is sent to a provider.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return DEFAULT_WEBSEARCH_PERPLEXITY_MODEL
+    if len(text) > MAX_PERPLEXITY_MODEL_CHARS:
+        raise ValueError(
+            f"perplexity_model must be at most {MAX_PERPLEXITY_MODEL_CHARS} characters"
+        )
+    if not text.isascii() or not text.isprintable() or any(ch.isspace() for ch in text):
+        raise ValueError("perplexity_model must be a plain model id with no spaces")
+    return text
+
+
+def update_websearch(values: Mapping[str, Any]) -> dict[str, Any]:
+    """Persist a partial web search configuration update.
+
+    Every value is parsed and validated before anything is written, so a request
+    carrying one bad field changes nothing at all.
+
+    Args:
+        values: Any subset of :data:`WEBSEARCH_UPDATABLE_KEYS`. A key is never
+            written here; keys have their own routes, so a credential never
+            travels in the same payload as a display setting.
+
+    Returns:
+        The full configuration after the write, as :func:`get_websearch_config`
+        renders it.
+
+    Raises:
+        ValueError: When a key is unknown or a value cannot be used.
+        RuntimeError: When the store refused a write.
+    """
+    unknown = sorted(set(values) - set(WEBSEARCH_UPDATABLE_KEYS))
+    if unknown:
+        raise ValueError(f"Unknown web search setting(s): {', '.join(unknown)}")
+
+    prepared: dict[str, str] = {}
+    if "provider" in values:
+        prepared[KEY_WEBSEARCH_PROVIDER] = websearch_provider_spec(values["provider"]).id
+    if "perplexity_model" in values:
+        prepared[KEY_WEBSEARCH_PERPLEXITY_MODEL] = _validated_perplexity_model(
+            values["perplexity_model"]
+        )
+    if "max_calls_per_turn" in values:
+        prepared[KEY_WEBSEARCH_MAX_CALLS_PER_TURN] = str(
+            _validated_websearch_int(
+                "max_calls_per_turn", values["max_calls_per_turn"], MAX_WEBSEARCH_CALLS_PER_TURN
+            )
+        )
+    if "daily_cap" in values:
+        prepared[KEY_WEBSEARCH_DAILY_CAP] = str(
+            _validated_websearch_int("daily_cap", values["daily_cap"], MAX_WEBSEARCH_DAILY_CAP)
+        )
+
+    if not prepared:
+        raise ValueError("Nothing to update")
+
+    try:
+        from database import agent_db
+
+        # set_setting logs and swallows its own failures and reports them as a
+        # False return, so a caller that ignored it would tell an operator their
+        # provider had been switched when it had not.
+        failed = [key for key, text in prepared.items() if not agent_db.set_setting(key, text)]
+        if failed:
+            raise RuntimeError(
+                f"Could not persist web search setting(s): {', '.join(sorted(failed))}"
+            )
+    except Exception:
+        logger.exception(
+            "Failed to persist the web search configuration: %s", ", ".join(sorted(prepared))
+        )
+        raise
+    finally:
+        # In the finally block for the same reason as :func:`update`: a write
+        # that raised part way through has still changed some rows, and a cache
+        # holding the pre-write values would keep serving them.
+        invalidate_cache()
+
+    logger.info("Web search configuration updated: %s", ", ".join(sorted(prepared)))
+    return get_websearch_config()
+
+
+def _validated_websearch_key(spec: WebSearchProviderSpec, raw: Any) -> str:
+    """Validate a submitted provider key without putting it in a message.
+
+    Args:
+        spec: The provider the key belongs to.
+        raw: The submitted value.
+
+    Returns:
+        The stripped key.
+
+    Raises:
+        ValueError: When the value is absent, too long, or carries whitespace or
+            control characters. Every message names the field and never the
+            value, because these strings reach a log and a response.
+    """
+    if not isinstance(raw, str):
+        raise ValueError(f"An api_key is required for {spec.label}")
+    key = raw.strip()
+    if not key:
+        raise ValueError(f"An api_key is required for {spec.label}")
+    if len(key) > MAX_WEBSEARCH_KEY_CHARS:
+        raise ValueError(f"api_key must be at most {MAX_WEBSEARCH_KEY_CHARS} characters")
+    if any(ch.isspace() for ch in key) or not key.isprintable():
+        raise ValueError("api_key must not contain spaces or control characters")
+    return key
+
+
+def set_websearch_key(provider: Any, api_key: Any) -> dict[str, Any]:
+    """Store one provider's key and report the configuration back without it.
+
+    The write goes through ``agent_db.set_secret``, which encrypts with the
+    platform's existing Fernet and **compares the decrypted plaintext** before
+    it touches the row. That comparison is the point: Fernet is
+    non-deterministic, so a ciphertext comparison never matches and every save
+    of an unchanged settings page would rewrite the row, which is how real
+    "database is locked" failures were produced elsewhere in this codebase.
+
+    Args:
+        provider: ``tavily`` or ``perplexity``.
+        api_key: The plaintext key.
+
+    Returns:
+        The full configuration after the write.
+
+    Raises:
+        ValueError: For an unknown provider, a provider that takes no key, or an
+            unusable value.
+        RuntimeError: When the secret could not be stored.
+    """
+    spec = _keyed_provider_spec(provider)
+    key = _validated_websearch_key(spec, api_key)
+    try:
+        from database import agent_db
+
+        stored, message = agent_db.set_secret(websearch_secret_name(spec.id), key)
+    except Exception:
+        # logger.error, no traceback, and the cause suppressed with `from None`:
+        # this frame's locals hold the plaintext key, and nothing derived from
+        # the original exception may reach a log or a response.
+        logger.error("Could not store the %s web search key", spec.label)
+        raise RuntimeError(f"Could not store the {spec.label} key") from None
+    finally:
+        # The plaintext lives no longer than the call that needed it.
+        key = ""
+
+    if not stored:
+        raise RuntimeError(message or f"Could not store the {spec.label} key")
+
+    logger.info("Web search key stored for %s", spec.id)
+    return get_websearch_config()
+
+
+def clear_websearch_key(provider: Any) -> dict[str, Any]:
+    """Remove one provider's key.
+
+    Idempotent: clearing a key that is not there succeeds, because the operator
+    asked for that provider to hold no key and it holds none.
+
+    Args:
+        provider: ``tavily`` or ``perplexity``.
+
+    Returns:
+        The full configuration after the delete.
+
+    Raises:
+        ValueError: For an unknown provider, or one that takes no key.
+        RuntimeError: When the secret could not be removed.
+    """
+    spec = _keyed_provider_spec(provider)
+    try:
+        from database import agent_db
+
+        agent_db.delete_secret(websearch_secret_name(spec.id))
+    except Exception:
+        # No plaintext passes through this frame, so the traceback is safe here
+        # and worth having.
+        logger.exception("Could not clear the %s web search key", spec.label)
+        raise RuntimeError(f"Could not clear the {spec.label} key") from None
+
+    logger.info("Web search key cleared for %s", spec.id)
+    return get_websearch_config()
+
+
+def probe_websearch_provider(provider: Any, api_key: Any = None) -> WebSearchProbe:
+    """Run one real query through a provider and report what happened.
+
+    The call goes through the very functions the two tools dispatch to, so the
+    test exercises the real path rather than a reachability ping. That is also
+    why Perplexity is tested on the research path: it answers questions and
+    returns no links, so testing it as a link provider would report a working
+    key as broken.
+
+    A test does not count against the daily cap. The cap bounds what the model
+    may spend, and an operator checking their own configuration is not the
+    model.
+
+    Args:
+        provider: The provider to test.
+        api_key: A key to use in place of the stored one, so a key the operator
+            has just typed can be tested before it is saved. Never logged and
+            never returned.
+
+    Returns:
+        A :class:`WebSearchProbe`.
+
+    Raises:
+        ValueError: For an unknown provider.
+    """
+    spec = websearch_provider_spec(provider)
+    key = str(api_key or "").strip()
+    if spec.needs_key and not key:
+        key = _stored_websearch_key(spec.id)
+    if spec.needs_key and not key:
+        return WebSearchProbe(
+            ok=False,
+            provider=spec.id,
+            message=f"No {spec.label} key is stored, so there is nothing to test.",
+            latency_ms=0,
+        )
+
+    try:
+        from services.agent.tools import websearch
+    except ImportError:
+        return WebSearchProbe(
+            ok=False,
+            provider=spec.id,
+            message=(
+                "The web search tools require the 'agno' package, which is not installed on "
+                "this server, so no provider can be tested from here."
+            ),
+            latency_ms=0,
+        )
+
+    model = _websearch_perplexity_model(_load_all(fresh=True))
+    started = time.perf_counter()
+    try:
+        # The tool module's own dispatch. Reaching past the leading underscore is
+        # deliberate: a request written here would be a second implementation,
+        # and a test of a second implementation tests nothing about the tool.
+        if spec.id == WEBSEARCH_PERPLEXITY:
+            outcome = websearch._perplexity_research(WEBSEARCH_PROBE_QUERY, model, key)
+            count = len(outcome.citations)
+        elif spec.id == WEBSEARCH_TAVILY:
+            outcome = websearch._tavily_search(
+                WEBSEARCH_PROBE_QUERY, WEBSEARCH_PROBE_MAX_RESULTS, key
+            )
+            count = len(outcome.results)
+        else:
+            outcome = websearch._duckduckgo_search(
+                WEBSEARCH_PROBE_QUERY, WEBSEARCH_PROBE_MAX_RESULTS
+            )
+            count = len(outcome.results)
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        # The class only: this frame holds the key, and a transport error quotes
+        # the request it was making.
+        logger.error("The %s web search test raised %s", spec.id, type(exc).__name__)
+        return WebSearchProbe(
+            ok=False,
+            provider=spec.id,
+            message=f"{spec.label} could not be reached ({type(exc).__name__}).",
+            latency_ms=latency_ms,
+        )
+    finally:
+        key = ""
+
+    latency_ms = int((time.perf_counter() - started) * 1000)
+
+    if not outcome.ok:
+        return WebSearchProbe(
+            ok=False,
+            provider=spec.id,
+            message=outcome.error or f"{spec.label} did not answer.",
+            latency_ms=latency_ms,
+            result_count=count,
+        )
+
+    if spec.result_kind == "links" and count == 0:
+        # An empty result set from a healthy provider is still `ok` to the tool,
+        # which is right for a search. It is not right for a test: the probe
+        # query has a stable answer, so nothing coming back means the provider is
+        # throttling or has changed shape, and reporting a pass would send the
+        # operator looking somewhere else.
+        return WebSearchProbe(
+            ok=False,
+            provider=spec.id,
+            message=(
+                f"{spec.label} answered but returned no results. It is most likely rate "
+                "limiting this server; try again in a minute."
+            ),
+            latency_ms=latency_ms,
+        )
+
+    noun = "citation" if spec.result_kind == "answer" else "result"
+    plural = "" if count == 1 else "s"
+    return WebSearchProbe(
+        ok=True,
+        provider=spec.id,
+        message=f"{spec.label} answered with {count} {noun}{plural}.",
+        latency_ms=latency_ms,
+        result_count=count,
+    )

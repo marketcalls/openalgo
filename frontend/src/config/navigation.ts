@@ -21,6 +21,7 @@ import {
   MessageSquare,
   Search,
   Settings,
+  SlidersHorizontal,
   TrendingUp,
   User,
   Workflow,
@@ -72,6 +73,11 @@ export const profileMenuItems: NavItem[] = [
   // entry goes after it rather than between the two.
   { href: '/action-center', label: 'Action Center', icon: Bell },
   { href: '/agent', label: 'Agent', icon: Bot },
+  // Listed beside Agent rather than hidden inside it. Once a model is
+  // configured /agent renders the conversation, which carries no route back
+  // here, so an entry in this menu is the only way a returning operator reaches
+  // the settings again.
+  { href: '/agent/config', label: 'Agent Config', icon: SlidersHorizontal },
   { href: '/master-contract', label: 'Master Contract', icon: FileStack },
   { href: '/telegram', label: 'Telegram Bot', icon: MessageSquare },
   { href: '/whatsapp', label: 'WhatsApp Bot', icon: MessageCircle },

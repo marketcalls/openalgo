@@ -860,29 +860,80 @@ set of controls and they are not optional:
 
 ## Visualization
 
-The agent can emit **OpenUI Lang**, which the client renders as charts, tables
-and cards inline in the conversation.
+Three renderers, chosen by domain. **None of them is new**: all three engines
+already ship in this app, and the agent drives what exists rather than growing a
+fourth charting stack.
 
-- Backend responsibility is only the system prompt and forwarding text. There is
-  no Python SDK; none is needed.
+| Domain | Renderer | Already used by |
+| --- | --- | --- |
+| Candlesticks, OHLC, price with indicators | `openalgo-charts` 1.9.2 | `/trading` |
+| Option analytics: payoff, greeks, OI, GEX, max pain, vol surface | Plotly, via `lib/Plot2D.tsx` and `lib/Plot3D.tsx` | `/strategybuilder` and twelve option pages |
+| Everything else: bar, line, area, pie, tables, cards, callouts | OpenUI genui-lib | new here |
+
+### Provenance decides which frame carries it
+
+This is the reason the split matters, and it is not a style preference.
+
+- **`Viz` frame, wire type `viz`.** Built by a **tool**, from a `services/`
+  call. The model asks for a chart; it never supplies the numbers. A price
+  chart therefore cannot show a candle the platform did not return.
+- **`Ui` frame, wire type `ui`.** OpenUI Lang markup the **model composes**, so
+  its numbers are whatever the model typed. This is the one tier where the
+  provenance rule lives in the prompt rather than in the plumbing, which is why
+  it is reserved for general data and never for prices.
+
+A chart of invented prices is worse than no chart, because it reads as
+authoritative.
+
+The `Viz` frame also keeps the series out of the model's context: the tool
+answers with a one line confirmation while the payload travels on the frame, so
+charting five hundred candles costs the conversation almost nothing. A viz tool
+that returns its series to the model has missed the point.
+
+`kind` selects the renderer and an unknown `kind` renders nothing, so a newer
+backend cannot break an older client mid-turn.
+
+### OpenUI specifics
+
 - Packages: `@openuidev/react-lang`, `@openuidev/react-ui`,
   `@openuidev/react-headless`, plus `zod@^4` and `zustand@^4.5.5`. React 19 is
-  supported.
+  supported, and `recharts` and `zod` already matched what OpenUI ships.
 - `<Renderer response={growingString} library={lib} isStreaming={bool} />` is
   the only renderer. Feed it the **whole accumulated string** each token; its
   parser diffs internally and is O(new characters).
-- **Charts must not animate.** Every OpenUI genui-lib wrapper hardcodes
-  `isAnimationActive: false`, and that is the look being reproduced. Where
-  animation is on elsewhere the config is `animationBegin: 0`,
-  `animationDuration: 1500`, `animationEasing: "ease"`.
-- Series colours come from `getDistributedColors`, which centres on the
-  palette midpoint and fans outward. A two-series chart on the default `ocean`
-  palette uses indices 4 and 6, not 0 and 1. Sequential assignment is wrong.
+- **Generate the prompt from the library**, so it cannot drift from what the
+  renderer accepts. The call fails *silently* when wrong: every component name
+  comes out as the literal `undefined`, producing a plausible and useless
+  prompt. Only these two are correct:
+
+  ```js
+  library.prompt(promptOptions)                                    // simplest
+  generateSystemPrompt({ library: library.toSpec(), promptOptions })
+  ```
+
+  `openuiChatLibrary` is **already a built Library**, so `createLibrary` on it
+  throws `input.components is not iterable`. The per-component `signature` the
+  prompt is built from exists only on `toSpec()`. Assert the `undefined` count
+  is zero in a test.
+- **Prompt cost, measured.** The full 58-component chat library is 19,096
+  characters; a 24-component trading subset is 11,651. The rest of the system
+  prompt is ~12,768 and `build_agent` caps at `max_prompt_chars=24000`, so the
+  subset only just fits. Inject it on the **chat surface only**: the chart
+  surface drives the real `/trading` chart and needs none of it.
+- **Do not reimplement animation or palettes.** `isAnimationActive` is a *prop
+  that defaults to `false`*, and is forced false in print context; it is not
+  hardcoded, so charts are still by default and match OpenUI as shipped without
+  anything being passed. `useChartPalette` already calls
+  `getDistributedColors(palette, dataLength)`, which starts at the palette
+  midpoint and walks outward with wraparound, so a two-series chart on `ocean`
+  uses the middle indices rather than 0 and 1. Sequential assignment is wrong,
+  and so is doing this by hand. Named palettes: `ocean`, `orchid`, `emerald`,
+  `spectrum`, `sunset`, `vivid`.
 - `ThemeProvider` is nesting-aware; mount it around the chat panel only, so
   `--openui-*` variables do not leak into the rest of OpenAlgo.
 
-The agent emits UI through a `render_ui` tool rather than in its prose, so
-ordinary answers stay markdown and a visualization is a deliberate act.
+The agent emits UI through a tool rather than in its prose, so ordinary answers
+stay markdown and a visualization is a deliberate act.
 
 ## Rendering generated code
 

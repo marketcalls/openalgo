@@ -19,10 +19,12 @@
  */
 
 import { useQuery } from '@tanstack/react-query'
-import { Bot } from 'lucide-react'
+import { ArrowRight, Bot } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { Link } from 'react-router'
 import { webClient } from '@/api/client'
 import { Navbar } from '@/components/layout/Navbar'
+import { Button } from '@/components/ui/button'
 import AgentChat from './AgentChat'
 
 interface AgentStatus {
@@ -100,9 +102,15 @@ export default function AgentIndex() {
               encrypted in your own database and are never written to a configuration file. A local
               provider is supported if you would rather nothing left this machine.
             </p>
-            <p className="text-xs text-muted-foreground">
-              Provider setup is not available yet on this build.
-            </p>
+            {/* The whole first-run path. A fresh install lands on this gate,
+                so it has to lead somewhere rather than describe a screen the
+                operator cannot reach. */}
+            <Button asChild>
+              <Link to="/agent/config">
+                Configure the agent
+                <ArrowRight className="h-4 w-4" aria-hidden />
+              </Link>
+            </Button>
           </div>
         </div>
       </AgentShell>

@@ -348,6 +348,25 @@ def _model_or_404(model_id: int):
     return row, None
 
 
+def _websearch_spec_or_400(provider: str):
+    """``(spec, error_response)`` for a route addressing one web search provider.
+
+    Resolved before anything else happens, so an unknown id is refused at the
+    edge and every later line, including every log line, carries a vocabulary
+    member rather than whatever was typed into the path.
+
+    Args:
+        provider: The path segment naming the provider.
+
+    Returns:
+        The resolved spec, or a 400 naming the three that exist.
+    """
+    try:
+        return agent_settings.websearch_provider_spec(provider), None
+    except ValueError as exc:
+        return None, _error(str(exc), 400)
+
+
 # ---------------------------------------------------------------------------
 # Status and catalog
 # ---------------------------------------------------------------------------
@@ -842,6 +861,212 @@ def put_settings():
     except Exception:
         logger.exception("Could not write the agent settings")
         return _error("Could not save the agent settings", 500)
+
+
+# ---------------------------------------------------------------------------
+# Web search
+#
+# Separate from `/api/settings` on purpose. A credential must not travel in the
+# same payload as a display setting: the settings PUT accepts a partial body and
+# echoes it back, and a key added to that shape would be one careless `data`
+# render away from the screen. These routes follow the model registry instead,
+# which is the pattern for the same problem: a boolean and a fingerprint on the
+# way out, a write-only key on the way in, and a separate explicit test.
+# ---------------------------------------------------------------------------
+
+
+@agent_bp.route("/api/websearch", methods=["GET"])
+@check_session_validity
+@_api_limit
+def get_websearch():
+    """The web search configuration, with every key described and none shown.
+
+    Carries the selected provider, the tunables, today's usage against the daily
+    cap, and one entry per selectable provider saying whether it needs a key,
+    whether one is stored and what its fingerprint is. The shipped defaults
+    travel alongside, as they do on ``/api/settings``.
+    """
+    try:
+        return _ok(
+            {
+                "data": agent_settings.get_websearch_config(),
+                "defaults": agent_settings.get_websearch_defaults(),
+            }
+        )
+    except Exception:
+        logger.exception("Could not read the web search configuration")
+        return _error("Could not read the web search configuration", 500)
+
+
+@agent_bp.route("/api/websearch", methods=["PUT"])
+@check_session_validity
+@_api_limit
+def put_websearch():
+    """Select the provider, and set the tunables around it.
+
+    Every value is validated before anything is written, so a request carrying
+    one bad field changes nothing. An unknown key is rejected rather than
+    ignored, and so is an unknown provider: writing one would leave the tool
+    module quietly falling back to DuckDuckGo while the screen claimed
+    otherwise.
+
+    This route never accepts a key. Keys have their own route below.
+    """
+    body, error = _json_body()
+    if error:
+        return error
+    if not body:
+        return _error("Nothing to update", 400)
+
+    try:
+        return _ok({"data": agent_settings.update_websearch(body)})
+    except ValueError as exc:
+        return _error(str(exc), 400)
+    except Exception:
+        logger.exception("Could not write the web search configuration")
+        return _error("Could not save the web search configuration", 500)
+
+
+@agent_bp.route("/api/websearch/providers/<provider>/key", methods=["PUT"])
+@check_session_validity
+@_api_limit
+def put_websearch_key(provider: str):
+    """Store one provider's key.
+
+    Refused for DuckDuckGo, which takes no key. The value is encrypted with the
+    platform's existing Fernet and the store compares the **decrypted
+    plaintext** before it writes, so re-saving an unchanged key touches no row.
+    That comparison is not an optimisation: Fernet is non-deterministic, a
+    ciphertext comparison never matches, and rewriting the row on every save is
+    how real "database is locked" failures were produced elsewhere here.
+
+    Blank is refused rather than read as "clear it", because this route takes
+    only a key. Clearing one is the DELETE below, which says so.
+
+    Returns:
+        The refreshed configuration. The key is not in it.
+    """
+    spec, error = _websearch_spec_or_400(provider)
+    if error:
+        return error
+
+    body, error = _json_body()
+    if error:
+        return error
+
+    api_key = body.get("api_key")
+    try:
+        data = agent_settings.set_websearch_key(spec.id, api_key)
+    except ValueError as exc:
+        return _error(str(exc), 400)
+    except Exception:
+        # logger.error and no traceback: the submitted key is a local in this
+        # frame, and str(exc) from a storage or encryption failure can quote the
+        # material it choked on, where utils.logging's redaction patterns -- all
+        # of which key off a "token=" or "secret:" style label -- do not match it.
+        logger.error("Could not store the %s web search key", spec.id)
+        return _error(f"Could not store the {spec.label} key", 500)
+    finally:
+        # The plaintext lives no longer than the call it was needed for.
+        api_key = None
+
+    logger.info("Web search key stored for %s", spec.id)
+    return _ok({"data": data, "message": f"{spec.label} key stored"})
+
+
+@agent_bp.route("/api/websearch/providers/<provider>/key", methods=["DELETE"])
+@check_session_validity
+@_api_limit
+def delete_websearch_key(provider: str):
+    """Remove one provider's key.
+
+    Idempotent: clearing a key that is not there succeeds, because the operator
+    asked for that provider to hold no key and it holds none. A paid provider
+    left selected with no key degrades to DuckDuckGo and says so in the tool
+    result rather than failing silently.
+    """
+    spec, error = _websearch_spec_or_400(provider)
+    if error:
+        return error
+
+    try:
+        data = agent_settings.clear_websearch_key(spec.id)
+    except ValueError as exc:
+        return _error(str(exc), 400)
+    except Exception:
+        logger.exception("Could not clear the %s web search key", spec.id)
+        return _error(f"Could not clear the {spec.label} key", 500)
+
+    return _ok({"data": data, "message": f"{spec.label} key cleared"})
+
+
+@agent_bp.route("/api/websearch/providers/<provider>/test", methods=["POST"])
+@check_session_validity
+@_test_limit
+def test_websearch_provider(provider: str):
+    """Validate one web search provider with a single real query.
+
+    The same shape as ``/api/models/<id>/test`` and the same rule: a real call,
+    or it is not a test. The query runs through the very functions the two tools
+    dispatch to, which is why Perplexity is exercised on the research path and
+    not the link path. Perplexity answers questions and returns no links, so
+    testing it as a link provider would report a working key as broken.
+
+    An ``api_key`` in the body is used in place of the stored one, so a key the
+    operator has just typed can be tested before it is saved. It is never
+    logged, never stored by this route, and never returned.
+
+    **This function's locals hold a provider key**, so its failure paths log with
+    ``logger.error`` and no traceback, exactly as ``test_model`` does.
+
+    Returns:
+        ``{ok, provider, message, latency_ms, result_count}`` alongside the
+        refreshed configuration, since a passing test updates the key's last
+        use.
+    """
+    spec, error = _websearch_spec_or_400(provider)
+    if error:
+        return error
+
+    # A body is optional here: testing the stored key is the common case, and
+    # requiring an empty object for it would be noise.
+    body = request.get_json(silent=True)
+    if body is not None and not isinstance(body, dict):
+        return _error("The request body must be a JSON object", 400)
+
+    api_key = (body or {}).get("api_key")
+    if api_key is not None and not isinstance(api_key, str):
+        return _error("api_key must be a string", 400)
+
+    try:
+        probe = agent_settings.probe_websearch_provider(spec.id, api_key)
+        # Belt and braces. The probe builds its message from provider labels,
+        # HTTP statuses and exception class names rather than response bodies,
+        # but a message that ever did quote the key must not become a log line.
+        message = _redact_secret(probe.message, api_key)[:MAX_TEST_ERROR_CHARS]
+    except ValueError as exc:
+        return _error(str(exc), 400)
+    except Exception:
+        logger.error("The %s web search test could not be run", spec.id)
+        return _error("Could not run the web search test", 500)
+    finally:
+        api_key = None
+
+    if probe.ok:
+        logger.info("Web search provider %s passed its test in %sms", spec.id, probe.latency_ms)
+    else:
+        logger.error("Web search provider %s failed its test: %s", spec.id, message)
+
+    return _ok(
+        {
+            "ok": probe.ok,
+            "provider": spec.id,
+            "message": message,
+            "latency_ms": probe.latency_ms,
+            "result_count": probe.result_count,
+            "data": agent_settings.get_websearch_config(),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------

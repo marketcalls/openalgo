@@ -282,6 +282,125 @@ export interface AgentSettingsResponse {
 }
 
 // =============================================================================
+// Web search
+//
+// Separate from AgentSettings on purpose, and separate on the wire too. A key
+// must not travel in the same payload as a display setting, so the config PUT
+// takes no key at all and each provider's key has its own route: a presence
+// boolean and a fingerprint on the way out, a write-only value on the way in.
+//
+// No web search key ever goes in `.env`, including Perplexity's. They live in
+// `ag_secret` under `websearch:{provider}`, encrypted with the same Fernet as
+// every other agent credential.
+// =============================================================================
+
+/** The three providers `ag_setting.websearch_provider` accepts. */
+export type WebSearchProviderId = 'duckduckgo' | 'tavily' | 'perplexity'
+
+/**
+ * What a provider gives back, and why that decides which tool it answers.
+ *
+ * A list of links and a synthesised answer are different kinds of result, so
+ * they are different tools: presenting one upstream summary as though it were
+ * search results would let it enter the model's context wearing the authority
+ * of primary sources.
+ */
+export type WebSearchResultKind = 'links' | 'answer'
+
+/** The two web search tools the agent exposes. */
+export type WebSearchTool = 'web_search' | 'web_research'
+
+/**
+ * One selectable provider, with its key described and never shown.
+ *
+ * There is no key on this type because there is none in the response, exactly
+ * as with AgentModel. `api_key` is declared as `never` so an attempt to put a
+ * value on a provider row fails to compile rather than reaching a render.
+ */
+export interface WebSearchProvider {
+  id: WebSearchProviderId
+  label: string
+  /** False only for DuckDuckGo, which is why search works with nothing set up. */
+  needs_key: boolean
+  result_kind: WebSearchResultKind
+  /** Which tool this provider answers. Perplexity answers web_research. */
+  tool: WebSearchTool
+  /** One sentence an operator can choose on. */
+  description: string
+  has_api_key: boolean
+  /** Display safe, never the value: `...abcd sha256:0123456789ab`. */
+  api_key_fingerprint: string | null
+  /** Naive UTC ISO string, or null when the key has never been handed over. */
+  api_key_last_used_at: string | null
+  /** True when the provider can run: it needs no key, or one is stored. */
+  ready: boolean
+  /** Never present. Declared so nothing can assign a key onto a provider row. */
+  api_key?: never
+}
+
+/**
+ * Today's outbound search count against the daily cap.
+ *
+ * The per-turn budget alone is bypassed by sending another message, which is
+ * why the daily one is persisted. It is counted on the IST date and resets
+ * itself with no scheduled job.
+ */
+export interface WebSearchUsage {
+  /** The IST date the count belongs to, `YYYY-MM-DD`. */
+  date: string
+  count: number
+  /** `daily_cap - count`, never negative. */
+  remaining: number
+}
+
+export interface WebSearchConfig {
+  /** Which provider answers web_search. Perplexity leaves it on DuckDuckGo. */
+  provider: WebSearchProviderId
+  /** The model web_research runs. */
+  perplexity_model: string
+  /** How many searches one turn may make. */
+  max_calls_per_turn: number
+  /** How many searches one day may make, counted in the database. */
+  daily_cap: number
+  usage: WebSearchUsage
+  providers: WebSearchProvider[]
+}
+
+/** What each configurable field reverts to. */
+export interface WebSearchDefaults {
+  provider: WebSearchProviderId
+  perplexity_model: string
+  max_calls_per_turn: number
+  daily_cap: number
+}
+
+/**
+ * A partial web search configuration write.
+ *
+ * The server validates every field before it writes any of them, an unknown key
+ * is rejected rather than ignored, and an out-of-range cap is refused rather
+ * than clamped. Send an empty `perplexity_model` to restore the shipped default.
+ */
+export type WebSearchConfigUpdate = Partial<WebSearchDefaults>
+
+export interface WebSearchConfigResponse {
+  data: WebSearchConfig
+  defaults: WebSearchDefaults
+}
+
+export interface WebSearchTestResult {
+  ok: boolean
+  provider: WebSearchProviderId
+  /** On failure this is the provider's own reason, which the operator needs. */
+  message: string
+  latency_ms: number
+  /** Links for a search provider, citations for Perplexity. */
+  result_count: number
+  /** The refreshed config: a passing test updates the key's last use. */
+  data: WebSearchConfig
+}
+
+// =============================================================================
 // Conversations, messages and the shared stream vocabulary
 // =============================================================================
 
@@ -540,6 +659,95 @@ export async function updateSettings(values: AgentSettingsUpdate): Promise<Agent
   return response.data.data
 }
 
+/**
+ * The web search configuration, with every key described and none shown.
+ *
+ * Carries the selected provider, the tunables, today's usage against the daily
+ * cap, and one entry per selectable provider. The shipped defaults travel
+ * alongside, as they do on getSettings.
+ */
+export async function getWebSearchConfig(): Promise<WebSearchConfigResponse> {
+  const response = await webClient.get<WebSearchConfigResponse>(`${AGENT_API_BASE}/websearch`)
+  return { data: response.data.data, defaults: response.data.defaults }
+}
+
+/**
+ * Select the provider, and set the tunables around it.
+ *
+ * This never carries a key: keys have their own functions below. An unknown
+ * provider is refused with 400 rather than written, because a stored value the
+ * tool module does not recognise would leave it quietly falling back to
+ * DuckDuckGo while the screen claimed otherwise.
+ */
+export async function updateWebSearchConfig(
+  values: WebSearchConfigUpdate
+): Promise<WebSearchConfig> {
+  const response = await webClient.put<{ data: WebSearchConfig }>(
+    `${AGENT_API_BASE}/websearch`,
+    values
+  )
+  return response.data.data
+}
+
+/**
+ * Store one provider's key.
+ *
+ * Refused with 400 for DuckDuckGo, which takes no key, and for a blank value:
+ * this route takes only a key, and clearing one is clearWebSearchKey, which
+ * says so. The server compares the decrypted plaintext before it writes, so
+ * re-saving an unchanged key touches no row.
+ *
+ * @param provider - `tavily` or `perplexity`.
+ * @param apiKey - The plaintext key. Write only, and never returned.
+ */
+export async function setWebSearchKey(
+  provider: WebSearchProviderId,
+  apiKey: string
+): Promise<WebSearchConfig> {
+  const response = await webClient.put<{ data: WebSearchConfig }>(
+    `${AGENT_API_BASE}/websearch/providers/${encodeURIComponent(provider)}/key`,
+    { api_key: apiKey }
+  )
+  return response.data.data
+}
+
+/**
+ * Remove one provider's key.
+ *
+ * Idempotent: clearing a key that is not there succeeds. A paid provider left
+ * selected with no key degrades to DuckDuckGo and says so in the tool result.
+ */
+export async function clearWebSearchKey(provider: WebSearchProviderId): Promise<WebSearchConfig> {
+  const response = await webClient.delete<{ data: WebSearchConfig }>(
+    `${AGENT_API_BASE}/websearch/providers/${encodeURIComponent(provider)}/key`
+  )
+  return response.data.data
+}
+
+/**
+ * Validate one provider with a single real query.
+ *
+ * The same shape as testModel, and the same rule: a failed test is a 200
+ * carrying `ok: false` and the provider's own message, not an HTTP error. The
+ * query runs through the very functions the tools dispatch to, so Perplexity is
+ * exercised on the research path rather than the link path.
+ *
+ * @param provider - The provider to test. DuckDuckGo needs no key.
+ * @param apiKey - A key to test in place of the stored one, so a key the
+ *   operator has just typed can be checked before it is saved. Never stored by
+ *   this call.
+ */
+export async function testWebSearchProvider(
+  provider: WebSearchProviderId,
+  apiKey?: string
+): Promise<WebSearchTestResult> {
+  const response = await webClient.post<WebSearchTestResult>(
+    `${AGENT_API_BASE}/websearch/providers/${encodeURIComponent(provider)}/test`,
+    apiKey ? { api_key: apiKey } : {}
+  )
+  return response.data
+}
+
 export interface ListConversationsParams {
   surface?: AgentSurface
   /** Clamped server side to between 1 and 200. Defaults to 100. */
@@ -650,6 +858,11 @@ export const agentQueryKeys = {
   models: () => [...agentQueryKeys.all, 'models'] as const,
   model: (id: number) => [...agentQueryKeys.models(), id] as const,
   settings: () => [...agentQueryKeys.all, 'settings'] as const,
+  // One key for the whole web search config. Every mutation here (provider,
+  // tunables, a stored key, a passing test that updates a key's last use)
+  // answers with the same refreshed object, so one cache entry stays correct
+  // and a second key would only be a second thing to invalidate.
+  websearch: () => [...agentQueryKeys.all, 'websearch'] as const,
   conversations: (params: ListConversationsParams = {}) =>
     [...agentQueryKeys.all, 'conversations', params] as const,
   conversation: (id: number) => [...agentQueryKeys.all, 'conversations', id] as const,

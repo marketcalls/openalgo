@@ -396,6 +396,14 @@ def react_agent():
     return serve_react_app()
 
 
+# Agent configuration - models, provider keys and web search. A separate React
+# route under the same surface, so it needs its own registration for the same
+# Error404Tracker reason as /agent above.
+@react_bp.route("/agent/config", strict_slashes=False)
+def react_agent_config():
+    return serve_react_app()
+
+
 # Strategy Builder - multi-leg option strategy builder with payoff diagram
 @react_bp.route("/strategybuilder", strict_slashes=False)
 def react_strategybuilder():
