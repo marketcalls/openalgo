@@ -89,6 +89,9 @@ class MstockWebSocket:
         # Optional zero-arg callable invoked when the feed gives up for good, so
         # the owner can stop advertising a connection that will never recover.
         self.auth_failure_callback = None
+        # Set once the feed is terminally down, so the notice fires exactly
+        # once however many terminal paths are reached.
+        self._feed_dead = False
         self.subscriptions: dict[str, dict] = {}
         self._ws_thread: threading.Thread | None = None
         self._logged_in = False
@@ -363,6 +366,7 @@ class MstockWebSocket:
         self.auth_failure_callback = auth_failure_callback
         self.running = True
         self._logged_in = False
+        self._feed_dead = False
         self._login_event.clear()
         self._stop_event.clear()
 
@@ -428,26 +432,19 @@ class MstockWebSocket:
                     self.auth_failed = False
                     self.auth_failure_reason = None
                 else:
-                    logger.error(
-                        f"mstock auth failure with no fresh token available "
-                        f"({self.auth_failure_reason}); stopping reconnect until next login"
+                    self._notify_feed_dead(
+                        f"auth failure with no fresh token available ({self.auth_failure_reason})",
+                        generation=generation,
                     )
-                    self.running = False
-                    self._connected = False
-                    self._logged_in = False
-                    # The feed is dead until a new login. Tell the owner, or it
-                    # keeps advertising connected=True and the proxy serves a
-                    # cached adapter that will never produce a tick again.
-                    if self.auth_failure_callback is not None:
-                        try:
-                            self.auth_failure_callback()
-                        except Exception:
-                            logger.exception("mstock auth_failure_callback failed")
                     break
 
             self._reconnect_attempts += 1
             if self._reconnect_attempts >= max_attempts:
-                logger.error("Max reconnect attempts reached")
+                # Just as terminal as a dead credential: the thread exits and
+                # nothing reconnects, so the owner must stop advertising it.
+                self._notify_feed_dead(
+                    f"max reconnect attempts ({max_attempts}) reached", generation=generation
+                )
                 break
 
             delay = min(RECONNECT_BASE_DELAY * (1.5**self._reconnect_attempts), RECONNECT_MAX_DELAY)
@@ -520,6 +517,47 @@ class MstockWebSocket:
             on_error=guard(self._on_ws_error),
             on_close=guard(self._on_ws_close),
         )
+
+    def _notify_feed_dead(self, reason: str, generation: int | None = None) -> None:
+        """Tell the owner the feed will not recover without a fresh login.
+
+        Every terminal exit from the reconnect loop lands here: an expired
+        credential and an exhausted retry budget both leave a client that is
+        never coming back, and an owner still advertising connected=True keeps
+        a cached adapter that cannot produce another tick.
+
+        The caller passes the generation it serves, checked against the current
+        one under the state lock. A worker retiring while a new connect_stream()
+        has already started would otherwise clear the *new* connection's flags
+        and fire its callback, killing a feed that had just come up. Idempotent
+        within a generation, so overlapping terminal paths report once.
+
+        Args:
+            reason: What ended the feed, for the log
+            generation: The connect_stream() generation the caller serves;
+                None skips the check, for callers outside the reconnect loop
+        """
+        with self._state_lock:
+            if generation is not None and generation != self._generation:
+                logger.debug(
+                    f"Ignoring feed-dead notice from retired generation {generation}: {reason}"
+                )
+                return
+            if self._feed_dead:
+                return
+            self._feed_dead = True
+
+            self.running = False
+            self._connected = False
+            self._logged_in = False
+
+        logger.error(f"mstock feed is down and will not self-recover: {reason}")
+
+        if self.auth_failure_callback is not None:
+            try:
+                self.auth_failure_callback()
+            except Exception:
+                logger.exception("mstock feed-dead callback failed")
 
     def _mark_logged_in(self, reason: str) -> None:
         """
