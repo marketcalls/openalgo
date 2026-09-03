@@ -246,6 +246,15 @@ def transform_positions_data(positions_data):
             "quantity": (int(position.get("flBuyQty", 0)) - int(position.get("flSellQty", 0)))
             + (int(position.get("cfBuyQty", 0)) - int(position.get("cfSellQty", 0))),
             "average_price": position.get("avgnetprice", 0.0),
+            # "_ltp" is a scratch field get_positions() stamps on before this
+            # function runs (see order_api.py's _backfill_ltp) - Kotak's own
+            # positions endpoint never returns a live price at all, open or
+            # closed, unlike Zerodha's (which reads "last_price" directly
+            # from Kite here). Matches Zerodha's "ltp" key/shape exactly so
+            # every consumer of transform_positions_data can treat brokers
+            # uniformly - always present, defaults to 0.0 if the backfill
+            # couldn't resolve a quote for this symbol.
+            "ltp": round(position.get("_ltp", 0.0), 2),
         }
         buy_qty = float(position.get("flBuyQty", 0))
         sell_qty = float(position.get("flSellQty", 0))
