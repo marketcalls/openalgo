@@ -7,13 +7,10 @@
  * Four behaviours are worth stating because the obvious implementations of
  * them are wrong:
  *
- * - **Auto-scroll fires on a new turn, not on a new token.** Following the tail
- *   of a streaming answer drags the text the operator is reading out from under
- *   them, and a long answer makes that unusable. Instead the newest question is
- *   pinned near the top of the viewport when it is asked, so the answer fills
- *   the space below it as it arrives and the reader's eye never has to move.
- *   The trailing spacer is what lets the last question reach the top even when
- *   the answer is short.
+ * - **Auto-scroll fires on a new turn, not on a new token**, which is
+ *   `usePinNewestQuestion`, shared with the chart panel. The trailing spacer
+ *   below the thread is this page's half of that bargain: it is what lets the
+ *   last question reach the top even when the answer is one line.
  *
  * - **Stop is a server-side action.** `stop()` aborts the fetch for an
  *   immediate end in the browser and posts the cancel route, because a run that
@@ -45,7 +42,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { AlertCircle, Bot, SlidersHorizontal } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import {
   agentErrorMessage,
@@ -62,14 +59,8 @@ import { ConversationUsageBadge, sumUsage } from '@/components/agent/UsageBadge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { type AgentMessage, useAgentStream } from '@/lib/agent/useAgentStream'
+import { usePinNewestQuestion } from '@/lib/agent/useThreadScroll'
 import { cn } from '@/lib/utils'
-
-/**
- * How far the newest question sits from the top of the thread, in pixels.
- * Enough that it does not touch the header, small enough that the answer below
- * it gets the viewport.
- */
-const PIN_OFFSET_PX = 8
 
 /**
  * The reading column shared by the thread and the composer.
@@ -109,26 +100,7 @@ export default function AgentChat() {
 
   const totals = useMemo(() => sumUsage(messages.map((message) => message.usage)), [messages])
 
-  // Only the newest question's identity drives the scroll, so a hundred token
-  // flushes into the answer below it move nothing.
-  const newestQuestionId = useMemo(() => {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      if (messages[index].role === 'user') return messages[index].id
-    }
-    return null
-  }, [messages])
-
-  useEffect(() => {
-    if (!newestQuestionId) return
-    const thread = threadRef.current
-    if (!thread) return
-    const question = thread.querySelector<HTMLElement>(`[data-message-id="${newestQuestionId}"]`)
-    if (!question) return
-    // The thread is positioned, so it is the offset parent of every message
-    // inside it however many unpositioned wrappers sit between them, and
-    // offsetTop is already relative to it.
-    thread.scrollTo({ top: Math.max(question.offsetTop - PIN_OFFSET_PX, 0), behavior: 'smooth' })
-  }, [newestQuestionId])
+  usePinNewestQuestion(threadRef, messages)
 
   const handleSend = useCallback(
     (text: string) => {

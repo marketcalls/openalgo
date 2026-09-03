@@ -60,6 +60,15 @@ export interface ComposerProps {
    * them, and a control three regions away does not read as part of it.
    */
   controls?: ReactNode
+  /**
+   * Whether a turn sent from here can reach an order tool.
+   *
+   * False on a surface built without them, such as the chart panel. It travels
+   * with the prefill registration so an answer's Buy and Sell controls can ask
+   * one question, "can this surface order", rather than inferring it from the
+   * existence of a box to type in.
+   */
+  canOrder?: boolean
 }
 
 export function Composer({
@@ -67,6 +76,7 @@ export function Composer({
   onStop,
   running,
   controls,
+  canOrder = true,
   disabled = false,
   placeholder = 'Ask about your positions, a symbol, a strategy or a workflow',
   className,
@@ -127,8 +137,8 @@ export function Composer({
         // Caret at the end, because the first thing anyone changes is the
         // quantity and it is the last thing they should have to reach for.
         element.setSelectionRange(element.value.length, element.value.length)
-      }),
-    [handleInput]
+      }, canOrder),
+    [handleInput, canOrder]
   )
 
   const handleKeyDown = useCallback(

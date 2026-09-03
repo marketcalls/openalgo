@@ -18,9 +18,11 @@
  *   through `VizBlock` would put a prop about ordering on the switch that
  *   chooses renderers, and the contract there is that adding a renderer is one
  *   `kind` and one branch.
- * - **A surface with no composer must show no controls at all.** The chart
- *   panel and any future read-only host mount the thread without one, and
- *   `useComposerPrefill` reports that as a boolean, so the card leaves the
+ * - **A surface that cannot order must show no order controls at all.** The
+ *   chart panel mounts the same thread and the same box, and is offered no
+ *   order tools whatever, so a Buy there would write a sentence the surface
+ *   can only refuse. A composer therefore registers whether its surface can
+ *   carry an order, `useComposerPrefill` reports that, and the card leaves the
  *   buttons out instead of rendering two that quietly do nothing.
  *
  * Nothing here sends. The channel carries a string to a textarea; that is its
@@ -33,6 +35,15 @@ import { useSyncExternalStore } from 'react'
 type Target = (text: string) => void
 
 const targets = new Set<Target>()
+/**
+ * The subset of {@link targets} whose surface can actually run an order.
+ *
+ * The chart panel mounts a composer too, and it is offered no order tools at
+ * all, so "a box exists" stopped being the same question as "pressing Buy
+ * leads anywhere". Keeping the two sets apart is what lets one boolean answer
+ * the question the card is really asking.
+ */
+const ordering = new Set<Target>()
 const watchers = new Set<() => void>()
 
 function announce() {
@@ -44,13 +55,19 @@ function announce() {
  *
  * @param target - Called with the request. It owns what happens to text the
  *   operator has already typed; nothing here assumes the box is empty.
+ * @param canOrder - Whether a turn sent from this composer can reach an order
+ *   tool. False on a surface built without them, such as the chart panel: the
+ *   text would arrive, the operator would send it, and the answer would be
+ *   that this panel cannot trade.
  * @returns The unsubscribe, for the effect that registered it.
  */
-export function subscribeComposerPrefill(target: Target): () => void {
+export function subscribeComposerPrefill(target: Target, canOrder = true): () => void {
   targets.add(target)
+  if (canOrder) ordering.add(target)
   announce()
   return () => {
     targets.delete(target)
+    ordering.delete(target)
     announce()
   }
 }
@@ -79,8 +96,8 @@ function subscribeWatcher(watcher: () => void): () => void {
   }
 }
 
-function hasTarget(): boolean {
-  return targets.size > 0
+function hasOrderingTarget(): boolean {
+  return ordering.size > 0
 }
 
 function hasNoTarget(): boolean {
@@ -88,11 +105,12 @@ function hasNoTarget(): boolean {
 }
 
 /**
- * Whether a composer is mounted and can receive a prefill.
+ * Whether a composer is mounted whose surface can carry an order request.
  *
- * @returns True once a composer has registered. A card asks this before it
- *   offers a control that would otherwise do nothing.
+ * @returns True once such a composer has registered. A card asks this before it
+ *   offers a Buy or a Sell, so a read-only surface renders neither rather than
+ *   two controls that write a sentence nothing can act on.
  */
 export function useComposerPrefill(): boolean {
-  return useSyncExternalStore(subscribeWatcher, hasTarget, hasNoTarget)
+  return useSyncExternalStore(subscribeWatcher, hasOrderingTarget, hasNoTarget)
 }

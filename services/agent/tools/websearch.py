@@ -77,6 +77,7 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from services.agent import prompts
+from services.agent.tools import context_value
 from services.agent.tools.base import OpenAlgoToolkit
 from utils import real_threading
 from utils.httpx_client import get_httpx_client
@@ -1179,14 +1180,18 @@ def _parse_perplexity_output(payload: Any) -> tuple[str, list[dict[str, Any]]]:
 # ---------------------------------------------------------------------------
 
 
-def _operator_message(context: Any) -> str:
+def operator_message(context: Any) -> str:
     """Find the operator's own message for this turn.
 
-    ``builder.tool_factory`` copies ``context.extras`` onto the per-run context
-    and rebuilds the rest from agno's session state, so both are searched. The
-    surface that starts a run is responsible for putting the message it is about
-    to send under one of :data:`OPERATOR_MESSAGE_KEYS`; without it the taint
-    boundary has nothing to construct from and every search is refused.
+    The surface that starts a run is responsible for putting the message it is
+    about to send under one of :data:`OPERATOR_MESSAGE_KEYS`; without it the
+    taint boundary has nothing to construct from and every caller refuses rather
+    than sending the model's own words.
+
+    Public because the taint boundary has more than one consumer: web search
+    builds an outbound query from the operator's words, and the chart panel
+    builds a drawn caption from them. Two readers of one key would otherwise be
+    two chances to look in the wrong place.
 
     Args:
         context: The run's tool context.
@@ -1194,15 +1199,8 @@ def _operator_message(context: Any) -> str:
     Returns:
         The message text, or an empty string when the surface supplied none.
     """
-    for source_name in ("extras", "session_state"):
-        source = getattr(context, source_name, None)
-        if not isinstance(source, dict):
-            continue
-        for key in OPERATOR_MESSAGE_KEYS:
-            value = source.get(key)
-            if isinstance(value, str) and value.strip():
-                return value
-    return ""
+    value = context_value(context, *OPERATOR_MESSAGE_KEYS)
+    return value if isinstance(value, str) and value.strip() else ""
 
 
 @dataclass
@@ -1283,7 +1281,7 @@ class WebSearchToolkit(OpenAlgoToolkit):
                 should carry the operator's message under one of
                 :data:`OPERATOR_MESSAGE_KEYS`.
         """
-        self.operator_message = redact(_operator_message(context))
+        self.operator_message = redact(operator_message(context))
         self.link_provider = _configured_provider()
         self.perplexity_model = _get_setting(SETTING_PERPLEXITY_MODEL, DEFAULT_PERPLEXITY_MODEL)
         self.budget = _Budget(

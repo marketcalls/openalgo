@@ -77,6 +77,7 @@ __all__ = [
     "add_spec",
     "agno_available",
     "build_toolkits",
+    "context_value",
     "register",
     "registered_specs",
     "select_specs",
@@ -179,6 +180,38 @@ class ToolContext:
             extras=dict(extras) if isinstance(extras, Mapping) else {},
             **values,
         )
+
+
+def context_value(context: Any, *keys: str) -> Any:
+    """Read the first of these keys a run's context carries, wherever it is.
+
+    A surface hands a run its per-request objects through ``ToolContext.extras``:
+    the rendering sink, the operator's own message for the turn, the chart panel's
+    view of its chart. ``builder.tool_factory`` rebuilds the context from agno's
+    session state on every run and copies ``extras`` across shallowly, which is
+    what keeps those objects shared rather than duplicated, but it also means a
+    value can be reached through either mapping depending on who built the
+    context. Every reader therefore has to look in both, and this is that reader,
+    once, rather than once per consumer.
+
+    Args:
+        context: The run's :class:`ToolContext`, or anything shaped like it.
+        *keys: Keys to try, in order of preference.
+
+    Returns:
+        The first value found under any key, or None when the surface supplied
+        none, which each caller treats as "this surface does not offer that"
+        rather than as an error.
+    """
+    for source_name in ("extras", "session_state"):
+        source = getattr(context, source_name, None)
+        if not isinstance(source, Mapping):
+            continue
+        for key in keys:
+            value = source.get(key)
+            if value is not None:
+                return value
+    return None
 
 
 @dataclass
@@ -365,6 +398,18 @@ TOOLKITS: list[ToolkitSpec] = [
         description=(
             "Open a live streaming card: a list of instruments the browser subscribes to, or "
             "one derived value, such as an ATM straddle, recomputed on every tick of its legs."
+        ),
+    ),
+    ToolkitSpec(
+        key="chart",
+        module="services.agent.tools.chart",
+        attr="ChartToolkit",
+        surfaces=CHART_ONLY,
+        order=5,
+        description=(
+            "Read the chart the operator has open, analyse its trend, structure, momentum "
+            "and patterns, and draw levels, trendlines and zones on it. Every price drawn "
+            "comes from real candles; the model supplies none."
         ),
     ),
     ToolkitSpec(

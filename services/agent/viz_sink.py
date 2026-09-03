@@ -48,11 +48,12 @@ sink and build the hook without the optional dependency being installed.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
 from services.agent.frames import Frame, Viz
+from services.agent.tools import context_value
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -137,10 +138,6 @@ def new_sink() -> list[VizEntry]:
 def sink_of(context: Any) -> list[VizEntry] | None:
     """Find the sink a run's context carries, if it carries one.
 
-    ``builder.tool_factory`` rebuilds the per-run context from agno's session
-    state and copies ``extras`` across, so both are searched. The copy is
-    shallow, which is what keeps the list itself shared rather than duplicated.
-
     Args:
         context: The run's tool context, or anything shaped like it.
 
@@ -148,13 +145,8 @@ def sink_of(context: Any) -> list[VizEntry] | None:
         The sink, or None when the surface did not create one, in which case a
         viz tool renders nothing and says so rather than failing.
     """
-    for source_name in ("extras", "session_state"):
-        source = getattr(context, source_name, None)
-        if isinstance(source, Mapping):
-            candidate = source.get(SINK_KEY)
-            if isinstance(candidate, list):
-                return candidate
-    return None
+    candidate = context_value(context, SINK_KEY)
+    return candidate if isinstance(candidate, list) else None
 
 
 def emit(

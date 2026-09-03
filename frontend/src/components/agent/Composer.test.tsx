@@ -14,10 +14,10 @@
  * remembers.
  */
 
-import { act, render, screen } from '@testing-library/react'
+import { act, render, renderHook, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import { prefillComposer } from '@/lib/agent/composer'
+import { prefillComposer, useComposerPrefill } from '@/lib/agent/composer'
 import { Composer } from './Composer'
 
 const REQUEST = 'Buy 1 share of RELIANCE on NSE at market.'
@@ -53,5 +53,32 @@ describe('Composer prefill', () => {
 
   it('reports that nothing received it when no composer is mounted', () => {
     expect(prefillComposer(REQUEST)).toBe(false)
+  })
+})
+
+/**
+ * The chart panel mounts this same composer and is offered no order tools at
+ * all, so a Buy on an answer's instrument card there would write a sentence the
+ * surface can only refuse. "There is a box" is therefore not the question the
+ * card is asking, and these pin the difference.
+ */
+describe('order controls follow the surface, not the box', () => {
+  it('withholds them from a composer whose surface cannot order', () => {
+    render(<Composer onSend={vi.fn()} onStop={vi.fn()} running={false} canOrder={false} />)
+    expect(renderHook(() => useComposerPrefill()).result.current).toBe(false)
+  })
+
+  it('still takes a prefill there, because a chip is not an order', () => {
+    render(<Composer onSend={vi.fn()} onStop={vi.fn()} running={false} canOrder={false} />)
+    act(() => {
+      expect(prefillComposer('Analyse the RELIANCE D chart.')).toBe(true)
+    })
+    const box = screen.getByLabelText('Message the agent') as HTMLTextAreaElement
+    expect(box.value).toBe('Analyse the RELIANCE D chart.')
+  })
+
+  it('offers them on a composer that can', () => {
+    render(<Composer onSend={vi.fn()} onStop={vi.fn()} running={false} />)
+    expect(renderHook(() => useComposerPrefill()).result.current).toBe(true)
   })
 })

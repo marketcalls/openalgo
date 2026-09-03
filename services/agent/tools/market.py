@@ -225,6 +225,30 @@ def epoch_seconds(value: Any) -> int | None:
     return int(number)
 
 
+def ist_label(seconds: Any) -> str:
+    """Render UTC epoch seconds as the IST wall clock a person reads.
+
+    The inverse of :func:`epoch_seconds`, and here beside it for that reason:
+    the chart tools speak epoch seconds to the canvas and IST strings to the
+    model, and the two conversions drifting apart would put a level on the wrong
+    day in the narration while drawing it on the right one.
+
+    Args:
+        seconds: UTC epoch seconds, as a number.
+
+    Returns:
+        ``YYYY-MM-DD HH:MM`` in Asia/Kolkata, or an empty string when the value
+        is not a usable timestamp.
+    """
+    number = as_number(seconds)
+    if number is None:
+        return ""
+    try:
+        return datetime.fromtimestamp(number, IST).strftime("%Y-%m-%d %H:%M")
+    except (OSError, OverflowError, ValueError):
+        return ""
+
+
 def candle_columns(row: Mapping[str, Any]) -> dict[str, str]:
     """Map the candle field names this module uses onto a frame's own keys.
 
