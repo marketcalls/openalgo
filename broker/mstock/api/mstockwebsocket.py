@@ -20,6 +20,27 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _env_float(name: str, default: float) -> float:
+    """Read a tuning knob from the environment, falling back on a bad value."""
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        logger.warning(f"{name}={raw!r} is not a number; using {default}")
+        return default
+
+
+# Reconnect and keepalive tuning. Defaults match the previous hardcoded values;
+# every one is overridable from .env so a deployment can tune without a patch.
+RECONNECT_MAX_ATTEMPTS = int(_env_float("MSTOCK_WS_MAX_RECONNECT_ATTEMPTS", 10))
+RECONNECT_MAX_DELAY = _env_float("MSTOCK_WS_RECONNECT_MAX_DELAY", 60.0)
+RECONNECT_BASE_DELAY = _env_float("MSTOCK_WS_RECONNECT_BASE_DELAY", 2.0)
+PING_INTERVAL = _env_float("MSTOCK_WS_PING_INTERVAL", 20.0)
+PING_TIMEOUT = _env_float("MSTOCK_WS_PING_TIMEOUT", 10.0)
+
+
 class MstockWebSocket:
     """
     WebSocket client for mstock broker's market data API.
@@ -29,12 +50,18 @@ class MstockWebSocket:
 
     WS_URL = "wss://ws.mstock.trade"
 
-    def __init__(self, auth_token: str, token_provider=None):
+    def __init__(self, auth_token: str, token_provider=None, auth_error_check=None):
         self.auth_token = auth_token
         # Optional zero-arg callable returning a fresh access token from the
         # database. Invoked before each reconnect so daily token rollover
         # (~3 AM IST) does not leave the feed dead with the construction-time token.
         self.token_provider = token_provider
+        # Predicate deciding whether an error means the credential is dead.
+        # The adapter passes BaseBrokerWebSocketAdapter.is_auth_error so the
+        # 401/403 vocabulary has one definition across the fleet.
+        self.auth_error_check = auth_error_check
+        self.auth_failed = False
+        self.auth_failure_reason = None
         self.api_key = os.getenv("BROKER_API_SECRET") or os.getenv("BROKER_API_KEY")
         self.ws_url = self._build_ws_url()
 
@@ -43,10 +70,19 @@ class MstockWebSocket:
         self.running = False
         self._connected = False
         self.data_callback = None
+        # Optional zero-arg callable invoked after every successful login. The
+        # adapter registers one so it can resubscribe from its own desired
+        # state, which is authoritative: this dict only holds what was actually
+        # sent, so a subscribe made while the socket was down is absent here.
+        self.resync_callback = None
         self.subscriptions: dict[str, dict] = {}
         self._ws_thread: threading.Thread | None = None
         self._logged_in = False
         self._login_event = threading.Event()
+        # Set by disconnect_stream() to cut the reconnect backoff short. A plain
+        # time.sleep() made teardown wait out the full delay - up to the max -
+        # before the loop could notice it had been asked to stop.
+        self._stop_event = threading.Event()
         # Bumped by every connect_stream(). A reconnect thread carries the
         # generation it was started for and exits as soon as that no longer
         # matches, so a stop/start during backoff cannot leave the old thread
@@ -57,26 +93,31 @@ class MstockWebSocket:
         """Build the WebSocket URL with the current API key and access token."""
         return f"{self.WS_URL}?API_KEY={self.api_key}&ACCESS_TOKEN={self.auth_token}"
 
-    def _refresh_auth_token(self) -> None:
+    def _refresh_auth_token(self) -> bool:
         """
         Re-read a fresh access token from the database (via token_provider) and
         rebuild the URL baked with it. The construction-time token is dead after
         the daily rollover (~3 AM IST); keep the existing token if none returned.
+
+        Returns:
+            bool: True when a genuinely different token was obtained
         """
         if self.token_provider is None:
-            return
+            return False
         try:
             fresh_token = self.token_provider()
         except Exception as token_err:
             logger.warning(
                 f"mstock token_provider failed; keeping existing access token: {token_err}"
             )
-            return
+            return False
         if fresh_token:
+            changed = fresh_token != self.auth_token
             self.auth_token = fresh_token
             self.ws_url = self._build_ws_url()
-        else:
-            logger.warning("mstock token_provider returned no token; keeping existing access token")
+            return changed
+        logger.warning("mstock token_provider returned no token; keeping existing access token")
+        return False
 
     @staticmethod
     def parse_binary_packet(data: bytes) -> dict | None:
@@ -221,7 +262,7 @@ class MstockWebSocket:
             return quote
 
         except Exception as e:
-            logger.error(f"Error parsing binary packet: {str(e)}")
+            logger.exception(f"Error parsing binary packet: {str(e)}")
             return None
 
     @staticmethod
@@ -255,7 +296,7 @@ class MstockWebSocket:
             num_packets = struct.unpack("<H", data[0:2])[0]
             packet_size = struct.unpack("<H", data[2:4])[0]
         except Exception as e:
-            logger.error(f"Error parsing binary frame header: {str(e)}")
+            logger.exception(f"Error parsing binary frame header: {str(e)}")
             return []
 
         # When the header reports a size that cannot be right, treat the frame
@@ -288,7 +329,7 @@ class MstockWebSocket:
 
     # ==================== Streaming Mode Methods ====================
 
-    def connect_stream(self, data_callback):
+    def connect_stream(self, data_callback, resync_callback=None):
         """
         Start persistent WebSocket connection for streaming data.
         Returns immediately — connection happens in background thread.
@@ -297,9 +338,11 @@ class MstockWebSocket:
             data_callback: Callback function(quote_data) called when data is received
         """
         self.data_callback = data_callback
+        self.resync_callback = resync_callback
         self.running = True
         self._logged_in = False
         self._login_event.clear()
+        self._stop_event.clear()
 
         # Close any socket left from a previous generation. Without this, a
         # thread still blocked in run_forever would hold that socket open
@@ -340,17 +383,17 @@ class MstockWebSocket:
             app: The WebSocketApp this thread owns
         """
         self._reconnect_attempts = 0
-        max_attempts = 10
+        max_attempts = RECONNECT_MAX_ATTEMPTS
 
         while self.running and generation == self._generation:
             try:
                 app.run_forever(
                     sslopt={"cert_reqs": ssl.CERT_NONE},
-                    ping_interval=20,
-                    ping_timeout=10,
+                    ping_interval=PING_INTERVAL,
+                    ping_timeout=PING_TIMEOUT,
                 )
             except Exception as e:
-                logger.error(f"WebSocket run_forever error: {e}")
+                logger.exception(f"WebSocket run_forever error: {e}")
 
             self._connected = False
             self._logged_in = False
@@ -358,14 +401,37 @@ class MstockWebSocket:
             if not self.running or generation != self._generation:
                 break
 
+            # An expired credential is not a network hiccup: every retry is
+            # another rejected handshake. Try a token refresh once, since the
+            # daily rollover (~3 AM IST) is the common cause and the database
+            # may already hold a live token; if that yields nothing new, stand
+            # down and wait for a login rather than burning the backoff budget.
+            if self.auth_failed:
+                if self._refresh_auth_token():
+                    logger.info("mstock auth failure; a fresh token was found, retrying once")
+                    self.auth_failed = False
+                    self.auth_failure_reason = None
+                else:
+                    logger.error(
+                        f"mstock auth failure with no fresh token available "
+                        f"({self.auth_failure_reason}); stopping reconnect until next login"
+                    )
+                    self.running = False
+                    break
+
             self._reconnect_attempts += 1
             if self._reconnect_attempts >= max_attempts:
                 logger.error("Max reconnect attempts reached")
                 break
 
-            delay = min(2 * (1.5**self._reconnect_attempts), 60)
+            delay = min(RECONNECT_BASE_DELAY * (1.5**self._reconnect_attempts), RECONNECT_MAX_DELAY)
             logger.info(f"Reconnecting in {delay:.0f}s (attempt {self._reconnect_attempts})...")
-            time.sleep(delay)
+            # Waits on the stop event rather than sleeping, so disconnect_stream()
+            # ends the backoff immediately instead of the thread lingering for
+            # the remainder of the delay.
+            if self._stop_event.wait(delay):
+                logger.info("Reconnect backoff interrupted by disconnect")
+                break
 
             # disconnect_stream(), or a stop/start pair, may have run during the
             # backoff. Testing self.running alone is not enough: a restart sets
@@ -379,6 +445,17 @@ class MstockWebSocket:
             # after the daily token rollover uses a live token. Both self.ws_url
             # and the LOGIN payload in _on_ws_open derive from self.auth_token.
             self._refresh_auth_token()
+
+            # Close the outgoing app before replacing it. run_forever already
+            # tears its socket down in a finally on every exit, so this is
+            # belt-and-braces for an abnormal exit that skipped that path;
+            # teardown() is guarded by has_done_teardown, so a second close is
+            # a no-op rather than an error.
+            previous = app
+            try:
+                previous.close()
+            except Exception as close_err:
+                logger.debug(f"Error closing previous WebSocket app: {close_err}")
 
             # Recreate WebSocketApp for reconnection
             app = websocket.WebSocketApp(
@@ -421,20 +498,55 @@ class MstockWebSocket:
                 self._logged_in = True
                 self._login_event.set()
                 logger.info("mstock login confirmed")
+                self.auth_failed = False
+                self.auth_failure_reason = None
+                self._reconnect_attempts = 0
 
-                # Re-subscribe to existing subscriptions
-                self._resubscribe_all()
+                # Prefer the owner's resync: this client's dict only records
+                # what was actually sent, so replaying it would silently skip
+                # any subscription made while the socket was down.
+                if self.resync_callback is not None:
+                    try:
+                        self.resync_callback()
+                    except Exception:
+                        logger.exception("mstock resync callback failed")
+                else:
+                    self._resubscribe_all()
+
+    def _is_auth_error(self, detail) -> bool:
+        """True when the broker refused the handshake over a dead credential."""
+        if self.auth_error_check is None or detail in (None, ""):
+            return False
+        try:
+            return bool(self.auth_error_check(str(detail)))
+        except Exception:
+            logger.exception("mstock auth_error_check raised; treating as non-auth error")
+            return False
 
     def _on_ws_error(self, ws, error):
         """Called on WebSocket error"""
+        # logger.error, not logger.exception: this is a library callback, not an
+        # except block, so there is no active exception and logger.exception
+        # would append a useless "NoneType: None" traceback to every line.
         logger.error(f"WebSocket error: {error}")
         self._connected = False
+
+        status = getattr(error, "status_code", None)
+        if self._is_auth_error(error) or status in (401, 403):
+            self.auth_failed = True
+            self.auth_failure_reason = str(error)
+            logger.error(f"mstock auth failure on WebSocket: {error}")
 
     def _on_ws_close(self, ws, close_status_code, close_msg):
         """Called when WebSocket is closed"""
         logger.info(f"WebSocket closed (code={close_status_code}, msg={close_msg})")
         self._connected = False
         self._logged_in = False
+
+        if self._is_auth_error(close_msg) or self._is_auth_error(close_status_code):
+            self.auth_failed = True
+            self.auth_failure_reason = f"close code={close_status_code} msg={close_msg}"
+            logger.error(f"mstock auth failure on close: {self.auth_failure_reason}")
 
     def _resubscribe_all(self):
         """
@@ -458,7 +570,7 @@ class MstockWebSocket:
                 self.subscribe_batch(subs, mode)
                 logger.info(f"Re-subscribed {len(subs)} token(s) in mode {mode}")
             except Exception as e:
-                logger.error(f"Error re-subscribing {len(subs)} token(s) in mode {mode}: {e}")
+                logger.exception(f"Error re-subscribing {len(subs)} token(s) in mode {mode}: {e}")
 
     @staticmethod
     def build_token_list(subs: list) -> list:
@@ -527,7 +639,7 @@ class MstockWebSocket:
             return True
 
         except Exception as e:
-            logger.error(f"Error subscribing batch of {len(subs)}: {str(e)}")
+            logger.exception(f"Error subscribing batch of {len(subs)}: {str(e)}")
             return False
 
     def subscribe_stream(
@@ -595,7 +707,7 @@ class MstockWebSocket:
                     self.subscriptions.pop(correlation_id, None)
 
             except Exception as e:
-                logger.error(f"Error unsubscribing batch in mode {mode}: {str(e)}")
+                logger.exception(f"Error unsubscribing batch in mode {mode}: {str(e)}")
                 sent_all = False
 
         return sent_all
@@ -615,6 +727,8 @@ class MstockWebSocket:
         """Disconnect the persistent WebSocket connection"""
         self.running = False
         self._connected = False
+        # Wake a thread parked in the reconnect backoff so teardown is prompt.
+        self._stop_event.set()
 
         if self.ws:
             try:
@@ -686,7 +800,7 @@ class MstockWebSocket:
             return None
 
         except Exception as e:
-            logger.error(f"Error fetching quote: {e}")
+            logger.exception(f"Error fetching quote: {e}")
             return None
 
         finally:
