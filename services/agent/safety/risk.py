@@ -102,12 +102,24 @@ HUNDRED = Decimal("100")
 # Destructive operations that touch one named thing. Permitted whenever trading
 # is enabled and the analyzer policy is satisfied, because each is a reduction
 # of exposure the operator can point at.
+#
+# `close_position` belongs here and not below. It takes a symbol, an exchange
+# and a product and squares off exactly that contract, which is the same shape
+# as cancelling one order: the operator names the thing, and the tool touches
+# nothing else. Classifying it as bulk had two costs, and the second is the
+# serious one. It refused the agent's only per-position exit by default, and the
+# only way to permit it was `allow_bulk_destructive`, which in the same stroke
+# unlocks `cancel_all_orders` and `close_all_positions`. An operator who wanted
+# to close one leg had to grant account-wide sweep authority to get it, which is
+# a wider permission than they asked for. The refusal also told them
+# `close_position` "affects the whole account", which is not true.
 TARGETED_OPERATIONS: frozenset[str] = frozenset(
     {
         "cancel_order",
         "modify_order",
         "cancel_gtt_order",
         "modify_gtt_order",
+        "close_position",
     }
 )
 
@@ -115,10 +127,12 @@ TARGETED_OPERATIONS: frozenset[str] = frozenset(
 # `allow_bulk_destructive`, off by default: "close everything" is the single
 # most expensive sentence a model can produce, and it should take an operator
 # turning a switch on rather than a confirmation dialog nobody reads.
+#
+# The test for membership is whether the operation can be named at one
+# instrument. If it cannot, it belongs here.
 BULK_OPERATIONS: frozenset[str] = frozenset(
     {
         "cancel_all_orders",
-        "close_position",
         "close_all_positions",
         "square_off_all",
     }

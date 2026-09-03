@@ -245,6 +245,49 @@ class Ui(Frame):
 
 
 @dataclass(frozen=True, slots=True)
+class Viz(Frame):
+    """A complete chart the client renders with a purpose-built engine.
+
+    This is the counterpart to :class:`Ui`, and the difference is the point.
+    `Ui` streams OpenUI markup the model composes itself, so its numbers are
+    whatever the model typed. A `Viz` frame carries a payload a **tool** built
+    from a service call, so the model never types a price. That is what makes a
+    price chart trustworthy: it cannot show a candle the platform did not
+    return.
+
+    It also keeps the data out of the model's context. The tool answers the
+    model with a one line confirmation while the full series travels here, so
+    charting five hundred candles costs the conversation nothing.
+
+    `kind` selects the renderer, and the client ignores a kind it does not know
+    rather than throwing, so a newer backend cannot break an older client
+    mid-turn:
+
+    * `candles` renders through `openalgo-charts`, the same engine as
+      `/trading`, so an OHLC chart in chat is the chart the operator already
+      knows, indicators included.
+    * `plotly` renders through the shared `Plot2D` and `Plot3D` wrappers, the
+      same ones `/strategybuilder` and the option analytics pages use. Its
+      `spec` is a Plotly figure: `data`, and optionally `layout` and `config`.
+
+    Attributes:
+        kind: Which renderer draws this. See above.
+        spec: The renderer's payload. Self-contained; the client fetches
+            nothing further to draw it.
+        title: Heading shown above the chart. May be empty.
+        source: What produced the data, for example `history_service`. Shown to
+            the operator so the provenance of a number is never a guess.
+    """
+
+    FRAME_TYPE: ClassVar[str] = "viz"
+
+    kind: str = ""
+    spec: dict[str, Any] = field(default_factory=dict)
+    title: str = ""
+    source: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class ChartCommand(Frame):
     """Commands for the `/trading` terminal to apply.
 
@@ -371,6 +414,7 @@ FRAME_CLASSES: Mapping[str, type[Frame]] = MappingProxyType(
         ToolEnd.FRAME_TYPE: ToolEnd,
         Reasoning.FRAME_TYPE: Reasoning,
         Ui.FRAME_TYPE: Ui,
+        Viz.FRAME_TYPE: Viz,
         ChartCommand.FRAME_TYPE: ChartCommand,
         Confirm.FRAME_TYPE: Confirm,
         Notice.FRAME_TYPE: Notice,

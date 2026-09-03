@@ -72,9 +72,19 @@ top of this module. ``services.place_order_service`` reaches
 ``restx_api.schemas``, which runs ``restx_api/__init__.py``, which imports a
 service that imports ``services.place_order_service`` again: a pre-existing
 cycle that resolves only when something else has already imported ``restx_api``
-first, as the running application does. This module is resolved lazily by the
-tool registry and is imported directly by tests, so it must not depend on that
-having happened. The imports are local for that reason and no other.
+first, as the running application does.
+
+Deferring those imports is necessary but **not sufficient**, and that is worth
+being precise about because the difference is a mutating tool failing at the
+moment it is used. A local import does not break the cycle, it only moves when
+the cycle is entered: whichever module reaches ``services.place_order_service``
+first still triggers it, and if that is this toolkit then ``place_order`` fails
+at call time with a partially-initialised module rather than at startup.
+``app.py`` imports ``restx_api`` on line 141, so the running application never
+sees it; a test, a script or any future process that builds a toolkit without
+booting the app does. :func:`_ensure_order_services_importable` therefore warms
+``restx_api`` once before the first dispatch, which makes the cycle resolve in
+the order that works and costs nothing when the application has already done it.
 """
 
 from __future__ import annotations
@@ -147,6 +157,42 @@ _FUNDS_KEYS: tuple[str, ...] = (
 #: type does not use is an error rather than a harmless extra field.
 _NEEDS_PRICE: frozenset[str] = frozenset({PRICE_TYPE_LIMIT, PRICE_TYPE_SL})
 _NEEDS_TRIGGER: frozenset[str] = frozenset({PRICE_TYPE_SL, PRICE_TYPE_SLM})
+
+
+#: Set once the ``restx_api`` cycle has been warmed, so the check is a boolean
+#: test rather than a ``sys.modules`` lookup on every mutating call.
+_order_services_warmed = False
+
+
+def _ensure_order_services_importable() -> None:
+    """Import ``restx_api`` once so the order services import cleanly after it.
+
+    ``services.place_order_service`` cannot be the module that enters the
+    ``restx_api`` cycle: it imports ``restx_api.schemas``, which runs
+    ``restx_api/__init__.py``, which reaches
+    ``services.options_multiorder_service``, which imports ``place_order`` back
+    out of the module still executing. Entering from ``restx_api`` instead makes
+    every step of that chain complete in order.
+
+    The running application already imports ``restx_api`` at startup, so this is
+    a no-op there. It matters for a test or a script that builds the toolkit
+    without booting the app, where the cycle would otherwise surface as an
+    ``ImportError`` inside a mutating tool call.
+
+    A failure is logged and swallowed: the caller's own import raises next and
+    the pipeline reports that, which is a better message than one about a
+    warm-up the model cannot act on.
+    """
+    global _order_services_warmed
+    if _order_services_warmed:
+        return
+    _order_services_warmed = True
+    try:
+        import restx_api  # noqa: F401
+    except Exception:
+        logger.exception(
+            "Could not pre-import restx_api; an order service import may fail on the cycle"
+        )
 
 
 def _decimal(value: Any) -> Decimal | None:
@@ -778,6 +824,10 @@ class OrdersToolkit(OpenAlgoToolkit):
         attempt_id = self.audit_attempt(tool, args)
 
         try:
+            # Every mutating tool reaches an order service through plan_factory
+            # or through the dispatch it returns, so warming the restx_api cycle
+            # here covers all seven of them from one place.
+            _ensure_order_services_importable()
             plan = plan_factory()
         except RetryAgentRun as exc:
             self.audit_result(

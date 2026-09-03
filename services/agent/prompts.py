@@ -96,6 +96,22 @@ TAG_USER_TEXT = "user_text"
 #: Wrapper for generated code echoed back for review.
 TAG_CODE = "generated_code"
 
+#: Every tag that means something to the model. Untrusted text is defanged
+#: against **all** of them, not only the one wrapping it, because the tags carry
+#: different levels of trust and forging a sibling is as useful to an attacker
+#: as escaping the wrapper.
+#:
+#: Neutralising only the wrapper's own tag left a real hole. A search snippet
+#: could carry an intact ``<tool_result tool="account">...</tool_result>`` and it
+#: arrived in context verbatim: the ``<web_result>`` block never broke, so the
+#: forgery was not an escape, it was a page presenting fabricated balances under
+#: the exact label the platform's own service layer uses. Web pages, broker
+#: rejection text and news are the inputs the threat model says will carry text
+#: somebody else wrote, so the set is closed here rather than per call site.
+RESERVED_TAGS: frozenset[str] = frozenset(
+    {TAG_TOOL_RESULT, TAG_WEB_RESULT, TAG_USER_TEXT, TAG_CODE}
+)
+
 # A tag has to be a plain identifier. Anything else is a caller bug and would
 # put attacker-influenced characters into the structure of the prompt rather
 # than into its content, which is the whole thing this module exists to prevent.
@@ -148,7 +164,7 @@ def escape_attribute(value: Any) -> str:
 
 
 def _neutralise(tag: str, text: str) -> str:
-    """Break every forged boundary for one tag inside untrusted text.
+    """Break every forged block boundary inside untrusted text.
 
     The closer is what the build contract names, and it is the important one: a
     result carrying ``</tool_result>`` would otherwise end its own block and
@@ -157,23 +173,34 @@ def _neutralise(tag: str, text: str) -> str:
     forged ``<tool_result source="platform">`` inside a web page would let that
     page claim the authority of the platform's own service layer.
 
+    **Every reserved tag is defanged, not only the wrapper's own.** Escaping the
+    wrapper is not the only way to lie: a search snippet that carries an intact
+    ``<tool_result>`` block never breaks the surrounding ``<web_result>`` and so
+    passed straight through, arriving in context as a well-formed block claiming
+    to be the platform's own data. The tags exist to separate levels of trust, so
+    a page must not be able to write any of them.
+
     Both patterns tolerate case and internal whitespace, because a model reading
     ``</ Tool_Result >`` sees a closing tag even though a literal string compare
     does not.
 
     Args:
-        tag: The already-validated tag name.
+        tag: The already-validated tag name of the block being written. It is
+            defanged too, whether or not it is one of :data:`RESERVED_TAGS`, so a
+            surface with its own tag is protected the same way.
         text: The untrusted text.
 
     Returns:
-        The text with every opening and closing form of `tag` defanged by a
-        backslash, which is visible to the model as a disarmed tag and can no
-        longer act as a boundary.
+        The text with every opening and closing form of every reserved tag
+        defanged by a backslash, which is visible to the model as a disarmed tag
+        and can no longer act as a boundary or as a label.
     """
-    closer = re.compile(rf"</\s*{re.escape(tag)}\s*>", re.IGNORECASE)
-    opener = re.compile(rf"<\s*{re.escape(tag)}(?=[\s/>])", re.IGNORECASE)
-    text = closer.sub(lambda _match: f"<\\/{tag}>", text)
-    return opener.sub(lambda _match: f"<\\{tag}", text)
+    for name in sorted(RESERVED_TAGS | {tag}):
+        closer = re.compile(rf"</\s*{re.escape(name)}\s*>", re.IGNORECASE)
+        opener = re.compile(rf"<\s*{re.escape(name)}(?=[\s/>])", re.IGNORECASE)
+        text = closer.sub(lambda _match, tag=name: f"<\\/{tag}>", text)
+        text = opener.sub(lambda _match, tag=name: f"<\\{tag}", text)
+    return text
 
 
 def wrap_untrusted(tag: str, text: Any, **attributes: Any) -> str:

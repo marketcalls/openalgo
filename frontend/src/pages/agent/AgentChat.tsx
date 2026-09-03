@@ -170,11 +170,29 @@ export default function AgentChat() {
           {messages.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
               <Bot className="h-10 w-10 text-muted-foreground/50" aria-hidden />
-              <p className="text-sm font-medium">Ask the agent</p>
-              <p className="max-w-sm text-sm leading-relaxed text-muted-foreground">
-                It reads your platform through the same service layer the rest of OpenAlgo uses, and
-                it can write an OpenAlgo strategy or a Flow workflow for you to review.
-              </p>
+              {conversationId === null ? (
+                <>
+                  <p className="text-sm font-medium">Ask the agent</p>
+                  <p className="max-w-sm text-sm leading-relaxed text-muted-foreground">
+                    It reads your platform through the same service layer the rest of OpenAlgo uses,
+                    and it can write an OpenAlgo strategy or a Flow workflow for you to review.
+                  </p>
+                </>
+              ) : (
+                /* A conversation is open and holds nothing. Saying so matters:
+                   the welcome copy above is what an operator sees with nothing
+                   selected at all, so reusing it here reads as a thread that
+                   failed to load rather than one that is genuinely empty. A row
+                   gets into this state when a run was interrupted before its
+                   first message was stored. */
+                <>
+                  <p className="text-sm font-medium">This conversation is empty</p>
+                  <p className="max-w-sm text-sm leading-relaxed text-muted-foreground">
+                    Nothing was stored against it, which happens when a run was interrupted before it
+                    answered. Ask something below to carry on in this thread.
+                  </p>
+                </>
+              )}
             </div>
           ) : (
             <div className={cn(COLUMN, 'space-y-6 px-4 py-4')}>
