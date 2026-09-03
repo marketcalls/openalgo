@@ -52,6 +52,13 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # tokens per exchangeType, so the whole batch fits in one message.
         self.subscription_queue: list[dict] = []
         self.batch_timer: threading.Timer | None = None
+        # Per-token requeue budget. A refused send is retried, but a socket that
+        # keeps refusing while still reporting connected would otherwise requeue
+        # and re-arm every batch_delay forever, spinning the timer and filling
+        # the log. After the budget is spent the token is left for the resync,
+        # which runs on the next login.
+        self.send_retries: dict[str, int] = {}
+        self.max_send_retries = max(1, int(_env_float("MSTOCK_WS_SEND_RETRIES", 3)))
         # Coalescing window; overridable from .env for deployments that want a
         # tighter or looser batch than the fleet default.
         self.batch_delay = _env_float("MSTOCK_WS_BATCH_DELAY", 0.5)
@@ -117,17 +124,22 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.ws_client.connect_stream(
             self._on_data,
             resync_callback=self._resync_subscriptions,
-            auth_failure_callback=self._on_auth_failure,
+            auth_failure_callback=self._on_feed_dead,
         )
         self.connected = True
         self.logger.info("mstock WebSocket adapter connected")
 
-    def _on_auth_failure(self) -> None:
-        """Stop advertising a feed that will not recover without a new login."""
+    def _on_feed_dead(self) -> None:
+        """Stop advertising a feed that will not recover without a new login.
+
+        Reached on an expired credential and on an exhausted reconnect budget.
+        Without this the proxy keeps serving a cached adapter whose thread has
+        already exited, so subscribes succeed and no tick ever arrives.
+        """
         self.connected = False
         self.logger.error(
-            "mstock feed stopped on an auth failure; marking the adapter "
-            "disconnected so it is rebuilt on the next login"
+            "mstock feed is terminally down; marking the adapter disconnected "
+            "so it is rebuilt on the next login"
         )
 
     def _on_data(self, quote_data: dict) -> None:
@@ -394,6 +406,7 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # The broker retains nothing across a reconnect.
             self.token_modes.clear()
             self.token_correlation_ids.clear()
+            self.send_retries.clear()
             self.subscription_queue = [
                 {
                     "token": token,
@@ -509,26 +522,35 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         for entry in subs:
                             self.token_correlation_ids[entry["token"]] = entry["correlation_id"]
                             self.token_modes[entry["token"]] = mode
+                            self.send_retries.pop(entry["token"], None)
                     self.logger.info(f"Batch subscribed {len(subs)} token(s) in mode {mode}")
                 else:
                     # Requeue rather than wait for a resync: the client is still
                     # connected, so no login is coming and nothing else would
                     # ever send these. token_modes stays unset either way.
-                    self.logger.warning(
-                        f"Batch subscription failed for {len(subs)} token(s) in mode {mode}; "
-                        f"requeuing for another attempt"
-                    )
                     with self.lock:
                         queued_tokens = {q["token"] for q in self.subscription_queue}
+                        requeued, exhausted = [], []
                         for entry in subs:
-                            if entry["token"] in queued_tokens:
+                            token = entry["token"]
+                            if token in queued_tokens:
                                 continue
-                            sub = latest.get(entry["token"])
+                            sub = latest.get(token)
                             if sub is None:
                                 continue
+
+                            attempts = self.send_retries.get(token, 0) + 1
+                            if attempts > self.max_send_retries:
+                                # Spent: leave it unconfirmed for the resync
+                                # rather than re-arming the timer forever.
+                                exhausted.append(token)
+                                continue
+
+                            self.send_retries[token] = attempts
+                            requeued.append(token)
                             self.subscription_queue.append(
                                 {
-                                    "token": entry["token"],
+                                    "token": token,
                                     "mode": mode,
                                     "exchange_type": entry["exchange_type"],
                                     "symbol": sub["symbol"],
@@ -538,6 +560,19 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             )
                         if self.subscription_queue and self.batch_timer is None:
                             self._start_batch_timer()
+
+                    if requeued:
+                        self.logger.warning(
+                            f"Batch subscription failed for {len(subs)} token(s) in mode {mode}; "
+                            f"requeued {len(requeued)} (attempt "
+                            f"{max(self.send_retries[t] for t in requeued)} of "
+                            f"{self.max_send_retries})"
+                        )
+                    if exhausted:
+                        self.logger.error(
+                            f"Giving up sending {len(exhausted)} token(s) in mode {mode} after "
+                            f"{self.max_send_retries} attempts; left unconfirmed for the resync"
+                        )
 
         except Exception as e:
             self.logger.exception(f"Error processing subscription batch: {str(e)}")
