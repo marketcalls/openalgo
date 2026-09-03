@@ -236,6 +236,34 @@ def map_position_data(position_data):
     return map_order_data(position_data)
 
 
+def _price_factor(position):
+    """The price scaling terms of Kotak's documented P&L formula.
+
+    "multiplier * (genNum/genDen) * (prcNum/prcDen)", which scales the
+    mark-to-market leg. Every one of them is "1" on the segments reachable
+    through OpenAlgo today, so this is a no-op in practice - but they are the
+    documented terms, and a field that arrives absent, unparseable or zero must
+    not take the whole position book down with a ZeroDivisionError.
+
+    Args:
+        position: One raw Kotak position row.
+
+    Returns:
+        float: The combined scaling factor, 1.0 when Kotak sends nothing usable.
+    """
+
+    def term(field):
+        try:
+            value = float(position.get(field, 1) or 1)
+        except (TypeError, ValueError):
+            return 1.0
+        return value or 1.0
+
+    return (
+        term("multiplier") * (term("genNum") / term("genDen")) * (term("prcNum") / term("prcDen"))
+    )
+
+
 def transform_positions_data(positions_data):
     transformed_data = []
     for position in positions_data:
@@ -258,7 +286,6 @@ def transform_positions_data(positions_data):
         }
         buy_qty = float(position.get("flBuyQty", 0))
         sell_qty = float(position.get("flSellQty", 0))
-        cf_buy_qty = float(position.get("cfBuyQty", 0))
 
         if transformed_position["quantity"] > 0 and buy_qty > 0:
             transformed_position["average_price"] = round(
@@ -270,18 +297,47 @@ def transform_positions_data(positions_data):
             )
         elif transformed_position["quantity"] != 0:
             transformed_position["average_price"] = 0.0
-        elif buy_qty + cf_buy_qty > 0:
-            # Fully closed (net quantity 0, but there was a real round trip
-            # today or carried forward) - Kotak never returns a pnl field
-            # for positions at all (transform_holdings_data two functions
-            # below does; this function didn't). Kotak's own Positions.md
-            # ("Profit N Loss" formula) reduces to sellAmt - buyAmt once Net
-            # Qty is 0; cfBuyAmt/cfSellAmt are included so a leg carried
-            # forward and closed today still gets its full realized P&L,
-            # not just today's fresh-leg portion. See openalgo issue #1970.
-            total_buy_amt = float(position.get("cfBuyAmt", 0)) + float(position.get("buyAmt", 0))
-            total_sell_amt = float(position.get("cfSellAmt", 0)) + float(position.get("sellAmt", 0))
-            transformed_position["pnl"] = round(total_sell_amt - total_buy_amt, 2)
+
+        # Kotak's documented "Profit N Loss" formula (Positions.md), in full:
+        #
+        #   PnL = (Total Sell Amt - Total Buy Amt)
+        #         + Net Qty * LTP * multiplier * (genNum/genDen) * (prcNum/prcDen)
+        #
+        # The amount difference is the realized leg; the Net Qty term marks an
+        # open position to market. Kotak's positions endpoint returns no pnl
+        # field of its own, so it has to be computed here. Writing the whole
+        # formula rather than the two halves separately is deliberate: it
+        # collapses to the realized-only form when Net Qty is 0, so a
+        # fully-closed leg keeps reporting exactly what #1970's fix gave it.
+        # cfBuyAmt/cfSellAmt are included so a leg carried forward reports its
+        # entire P&L, not just today's slice.
+        #
+        # "pnl" is set on every row, open or closed, because that is the shape
+        # the rest of the platform already expects from the other broker
+        # adapters: the positions CSV writes a P&L column, and Flow's Position
+        # Check reads pos.get("pnl", 0) for its pnl_above/pnl_below guards. With
+        # the key absent on open positions those guards read 0 and could never
+        # fire - which is the half a closed-position-only fix leaves broken,
+        # since a P&L stop is only meaningful while the position is still open.
+        total_buy_amt = float(position.get("cfBuyAmt", 0)) + float(position.get("buyAmt", 0))
+        total_sell_amt = float(position.get("cfSellAmt", 0)) + float(position.get("sellAmt", 0))
+        realized = total_sell_amt - total_buy_amt
+        net_qty = transformed_position["quantity"]
+
+        if not net_qty:
+            transformed_position["pnl"] = round(realized, 2)
+        elif transformed_position["ltp"]:
+            transformed_position["pnl"] = round(
+                realized + net_qty * transformed_position["ltp"] * _price_factor(position), 2
+            )
+        else:
+            # Open, but with no price to mark against - the LTP backfill in
+            # order_api.py is best-effort and leaves the row alone when the
+            # quotes call fails. The realized leg on its own is not a P&L: for
+            # a freshly opened long it is the entire cost of the position and
+            # would read as a total loss. Report 0.0, which is what every
+            # consumer already fell back to while the key was missing.
+            transformed_position["pnl"] = 0.0
 
         transformed_data.append(transformed_position)
 
