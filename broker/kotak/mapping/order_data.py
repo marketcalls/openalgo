@@ -284,17 +284,23 @@ def transform_positions_data(positions_data):
             # couldn't resolve a quote for this symbol.
             "ltp": round(position.get("_ltp", 0.0), 2),
         }
-        buy_qty = float(position.get("flBuyQty", 0))
-        sell_qty = float(position.get("flSellQty", 0))
+        # Totals across the carried-forward leg and today's, which Kotak keeps
+        # in separate fields. "quantity" above already sums both, so the average
+        # has to as well: dividing today's amount by today's quantity reported
+        # 0.00 for a position carried forward with no fills today, because
+        # flBuyQty is 0 there and the branch fell through to the zero default.
+        # That then also stopped the positions page marking the position to
+        # market, since it only computes an unrealized P&L when average_price is
+        # above zero - so a carried-forward holding showed no cost and no P&L.
+        total_buy_amt = float(position.get("cfBuyAmt", 0)) + float(position.get("buyAmt", 0))
+        total_sell_amt = float(position.get("cfSellAmt", 0)) + float(position.get("sellAmt", 0))
+        buy_qty = float(position.get("flBuyQty", 0)) + float(position.get("cfBuyQty", 0))
+        sell_qty = float(position.get("flSellQty", 0)) + float(position.get("cfSellQty", 0))
 
         if transformed_position["quantity"] > 0 and buy_qty > 0:
-            transformed_position["average_price"] = round(
-                float(position.get("buyAmt", 0)) / buy_qty, 2
-            )
+            transformed_position["average_price"] = round(total_buy_amt / buy_qty, 2)
         elif transformed_position["quantity"] < 0 and sell_qty > 0:
-            transformed_position["average_price"] = round(
-                float(position.get("sellAmt", 0)) / sell_qty, 2
-            )
+            transformed_position["average_price"] = round(total_sell_amt / sell_qty, 2)
         elif transformed_position["quantity"] != 0:
             transformed_position["average_price"] = 0.0
 
@@ -319,8 +325,6 @@ def transform_positions_data(positions_data):
         # the key absent on open positions those guards read 0 and could never
         # fire - which is the half a closed-position-only fix leaves broken,
         # since a P&L stop is only meaningful while the position is still open.
-        total_buy_amt = float(position.get("cfBuyAmt", 0)) + float(position.get("buyAmt", 0))
-        total_sell_amt = float(position.get("cfSellAmt", 0)) + float(position.get("sellAmt", 0))
         realized = total_sell_amt - total_buy_amt
         net_qty = transformed_position["quantity"]
 

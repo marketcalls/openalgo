@@ -141,3 +141,38 @@ def test_an_unusable_scaling_field_falls_back_to_one(scaling):
     position = one(flBuyQty="100", buyAmt="2100.00", _ltp=22.50, **scaling)
 
     assert position["pnl"] == 150.0
+
+
+# --- average price across the carried-forward leg ----------------------------
+
+
+def test_a_carried_forward_position_reports_what_it_cost():
+    """flBuyQty is 0 with nothing filled today, which used to give 0.00."""
+    position = one(cfBuyQty="50", cfBuyAmt="40000.00", _ltp=815.0)
+
+    assert position["quantity"] == 50
+    assert position["average_price"] == 800.0
+    assert position["pnl"] == 750.0
+
+
+def test_an_average_blends_the_carried_leg_with_todays():
+    # 50 carried at 800.00, 20 more bought today at 810.00.
+    position = one(cfBuyQty="50", cfBuyAmt="40000.00", flBuyQty="20", buyAmt="16200.00")
+
+    assert position["quantity"] == 70
+    assert position["average_price"] == 802.86
+
+
+def test_a_carried_forward_short_reports_what_it_sold_for():
+    position = one(cfSellQty="50", cfSellAmt="40000.00", _ltp=790.0)
+
+    assert position["quantity"] == -50
+    assert position["average_price"] == 800.0
+    assert position["pnl"] == 500.0
+
+
+def test_a_position_opened_and_partly_closed_today_keeps_its_entry_price():
+    position = one(flBuyQty="100", buyAmt="2100.00", flSellQty="40", sellAmt="880.00")
+
+    assert position["quantity"] == 60
+    assert position["average_price"] == 21.0
