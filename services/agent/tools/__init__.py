@@ -297,6 +297,17 @@ TOOLKITS: list[ToolkitSpec] = [
         description="Symbol search, contract lookup and expiry dates.",
     ),
     ToolkitSpec(
+        key="indicators",
+        module="services.agent.tools.indicators",
+        attr="IndicatorsToolkit",
+        surfaces=ALL_SURFACES,
+        order=25,
+        description=(
+            "Compute any of the 127 openalgo.ta indicators over real candles, several in "
+            "one call, or screen a list of instruments for one condition."
+        ),
+    ),
+    ToolkitSpec(
         key="account",
         module="services.agent.tools.account",
         attr="AccountToolkit",
@@ -343,6 +354,17 @@ TOOLKITS: list[ToolkitSpec] = [
         description=(
             "Draw a combined option premium over time, rolling ATM or on fixed legs, and a "
             "payoff diagram of named legs or of the operator's own open positions."
+        ),
+    ),
+    ToolkitSpec(
+        key="live",
+        module="services.agent.tools.live",
+        attr="LiveToolkit",
+        surfaces=ALL_SURFACES,
+        order=47,
+        description=(
+            "Open a live streaming card: a list of instruments the browser subscribes to, or "
+            "one derived value, such as an ATM straddle, recomputed on every tick of its legs."
         ),
     ),
     ToolkitSpec(

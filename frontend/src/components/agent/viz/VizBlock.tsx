@@ -10,10 +10,16 @@
  * | `plotly` | `Plot2D` / `Plot3D` | `/strategybuilder` and the option pages |
  * | `openui` | OpenUI genui-lib | new here |
  * | `instrument` | `openalgo-charts`, through `CandleViz` | as above |
+ * | `live_quotes` | the shared market data feed | the trading surfaces |
+ * | `live_combo` | the shared market data feed | as above |
  *
  * `instrument` is a composed card rather than a fourth engine: it draws its
  * chart by mounting `CandleViz` in its inline variant, so the number of things
- * in this app that drive a charting library is unchanged by it.
+ * in this app that drive a charting library is unchanged by it. The two live
+ * kinds are the same idea applied to the feed: they subscribe through
+ * `useMarketData`, which is the one shared `MarketDataManager` connection the
+ * whole application already streams on. Neither is a second WebSocket client
+ * and neither is a second poller.
  *
  * **An unknown kind renders nothing, and says nothing.** A backend that learns
  * a fourth kind must be able to ship before every browser has the client that
@@ -31,6 +37,8 @@ import type { AgentVizItem } from '@/lib/agent/viz'
 import { OPENUI_VIZ, openUiMarkup } from '@/lib/agent/viz'
 import { CandleViz } from './CandleViz'
 import { InstrumentCard } from './InstrumentCard'
+import { LiveComboCard } from './LiveComboCard'
+import { LiveQuotesCard } from './LiveQuotesCard'
 import { PayoffCard } from './PayoffCard'
 import { PlotlyViz } from './PlotlyViz'
 
@@ -92,6 +100,24 @@ export function VizBlock({ item, streaming, className }: VizBlockProps) {
     case 'instrument':
       return (
         <InstrumentCard
+          spec={item.spec}
+          title={item.title}
+          source={item.source}
+          className={className}
+        />
+      )
+    case 'live_quotes':
+      return (
+        <LiveQuotesCard
+          spec={item.spec}
+          title={item.title}
+          source={item.source}
+          className={className}
+        />
+      )
+    case 'live_combo':
+      return (
+        <LiveComboCard
           spec={item.spec}
           title={item.title}
           source={item.source}

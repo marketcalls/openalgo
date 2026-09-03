@@ -43,9 +43,14 @@ history through :func:`normalise_pair`, :func:`normalise_source`,
 :func:`normalise_range`, :func:`normalise_interval` and :class:`BrokerIntervals`
 here rather than through a second copy of them. A copy would drift, and the copy
 in the chart path is the one nobody notices is wrong. The same reasoning puts
-:func:`candle_columns`, :func:`summarise_candles`, :func:`epoch_seconds` and
-:func:`chart_bars` here: they are the shared reading of a history frame, and the
-chart tools and the instrument card all go through them.
+:func:`candle_columns`, :func:`summarise_candles`, :func:`epoch_seconds`,
+:func:`chart_bars` and :func:`candle_frame` here: they are the shared reading of
+a history frame, and the chart tools, the instrument card and the indicator
+tools all go through them. :func:`lookback_range` and :func:`fit_to_budget` are
+here for the same reason, one sizing a fetch from a bar count and the other
+bounding a result to the character budget. :func:`symbol_pairs` and
+:func:`pair_fields` join them because a live subscription card takes the same
+list of instruments this toolkit's batched quote does.
 """
 
 from __future__ import annotations
@@ -53,9 +58,11 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Callable, Mapping, Sequence
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
+
+import pandas as pd
 
 from database.token_db import get_token
 from services import depth_service, history_service, intervals_service, quotes_service
@@ -67,6 +74,7 @@ from services.agent.tools.base import (
     invalid_argument,
     json_safe,
 )
+from services.indicator_service import MAX_HISTORY_CALENDAR_DAYS, calendar_days_for_bars
 from utils.constants import VALID_EXCHANGES
 from utils.logging import get_logger
 
@@ -404,6 +412,118 @@ def chart_bars(
     return bars
 
 
+def candle_frame(records: Sequence[Mapping[str, Any]], columns: Mapping[str, str]) -> pd.DataFrame:
+    """Turn a history frame into the cleaned DataFrame an indicator can run on.
+
+    The third reading of a history frame that lives here, beside
+    :func:`summarise_candles` and :func:`chart_bars`, for the same reason: the
+    indicator tools and the chart tools must agree about which bars a broker
+    actually returned, and a second copy of this conversion is how they would
+    stop agreeing.
+
+    Cleaning is not cosmetic. The ``ta`` backend's ``sma`` and ``rolling_sum``
+    are cumulative-sum based, so **one** NaN anywhere in the input poisons every
+    later value: measured on this build, a single NaN at bar 50 of 900 left
+    ``ta.sma`` with 37 finite values out of 900. A column that is entirely
+    missing is dropped rather than emptying the frame, so an index with no
+    volume still computes its price indicators and refuses only the volume ones,
+    naming the column it lacks.
+
+    Args:
+        records: The service's rows, in whatever order the broker sent them.
+        columns: The mapping from :func:`candle_columns`.
+
+    Returns:
+        A frame indexed by IST timestamp, oldest first, with unique timestamps,
+        float ``open``, ``high``, ``low``, ``close`` and ``volume`` columns
+        where the broker supplied them, and no NaN left anywhere. An empty
+        frame when the records carry no usable timestamp or no close.
+    """
+    time_key = columns.get("timestamp")
+    if not records or not time_key:
+        return pd.DataFrame()
+
+    index: list[Any] = []
+    series: dict[str, list[float | None]] = {
+        field: [] for field in ("open", "high", "low", "close", "volume") if field in columns
+    }
+    for row in records:
+        moment = epoch_seconds(row.get(time_key))
+        if moment is None:
+            continue
+        index.append(moment)
+        for field in series:
+            series[field].append(as_number(row.get(columns[field])))
+
+    if not index or "close" not in series:
+        return pd.DataFrame()
+
+    frame = pd.DataFrame(series, index=pd.to_datetime(index, unit="s", utc=True).tz_convert(IST))
+    frame = frame.astype("float64")
+    # A column the broker never populated would empty the whole frame under
+    # dropna. Drop the column instead, so the indicator that needs it refuses
+    # by name and every other indicator still runs.
+    frame = frame.dropna(axis="columns", how="all")
+    frame = frame.dropna(axis="index", how="any")
+    frame = frame[~frame.index.duplicated(keep="last")]
+    return frame.sort_index()
+
+
+def fit_to_budget(build: Callable[[int], dict[str, Any]], start: int) -> dict[str, Any]:
+    """Build the largest payload that fits the character budget.
+
+    Module level, and shared, because every tool that answers with a bounded
+    list of rows needs it: the history summary, the multi-quote result and the
+    indicator tables all have to drop rows deliberately rather than let
+    ``to_json`` cut the string mid-value, which reads to the model as a broken
+    result rather than a bounded one.
+
+    Args:
+        build: Builds the payload for a given number of rows. It is responsible
+            for saying in the payload how many were omitted.
+        start: Row count to try first.
+
+    Returns:
+        The payload for the largest row count that fits, down to none at all,
+        so the caller always returns a well-formed result rather than a
+        truncation envelope.
+    """
+    limit = max(0, start)
+    while True:
+        payload = build(limit)
+        length = _rendered_length(payload)
+        if limit == 0 or length <= _JSON_BUDGET:
+            return payload
+        # Scale the row count by how far over budget this attempt was, which
+        # lands within a row or two of the real limit instead of halving away
+        # rows that would have fitted. The min guarantees progress even when the
+        # estimate does not move, so the loop always terminates.
+        limit = min(limit - 1, max(0, int(limit * _JSON_BUDGET / length)))
+
+
+def lookback_range(interval: str, bars: int, end_date: date | None = None) -> tuple[str, str]:
+    """Derive a history date range covering roughly ``bars`` candles.
+
+    This is what lets a tool take a lookback instead of asking the operator
+    which dates to use. The calendar span comes from
+    ``services.indicator_service.calendar_days_for_bars``, the same arithmetic
+    Flow's history nodes size their own window with, so the two cannot drift.
+
+    Args:
+        interval: The candle interval, in OpenAlgo's own vocabulary.
+        bars: How many candles are wanted, warm-up already included.
+        end_date: Last day of the range. Defaults to today in IST, because the
+            platform states every timestamp in IST and a server in another zone
+            would otherwise ask for tomorrow or miss today.
+
+    Returns:
+        The start and end days as ``YYYY-MM-DD``.
+    """
+    end = end_date or datetime.now(IST).date()
+    days = min(calendar_days_for_bars(max(int(bars), 1), interval), MAX_HISTORY_CALENDAR_DAYS)
+    return (end - timedelta(days=days)).strftime(_DATE_FORMAT), end.strftime(_DATE_FORMAT)
+
+
 # ---------------------------------------------------------------------------
 # Shared argument handling
 # ---------------------------------------------------------------------------
@@ -659,6 +779,136 @@ def normalise_interval(
     )
 
 
+def pair_fields(item: Any, index: int, field: str = "symbols") -> tuple[Any, Any]:
+    """Pull the symbol and exchange out of one entry of a symbol list.
+
+    Args:
+        item: The entry, an object or an ``EXCHANGE:SYMBOL`` string.
+        index: Its position in the list, named in the error so the model knows
+            which entry to fix.
+        field: The argument being read, named in the error.
+
+    Returns:
+        The raw symbol and exchange, before normalisation.
+
+    Raises:
+        RetryAgentRun: If the entry is not a usable pair.
+    """
+    if isinstance(item, Mapping):
+        lowered = {str(key).strip().lower(): value for key, value in item.items()}
+        symbol = lowered.get("symbol")
+        exchange = lowered.get("exchange")
+        if symbol is None or exchange is None:
+            invalid_argument(
+                field,
+                f"entry {index + 1} is missing 'symbol' or 'exchange'",
+                'Every entry needs both, for example {"symbol": "INFY", "exchange": "NSE"}.',
+            )
+        return symbol, exchange
+
+    if isinstance(item, str) and ":" in item:
+        exchange, _, symbol = item.partition(":")
+        return symbol, exchange
+
+    invalid_argument(
+        field,
+        f"entry {index + 1} is {type(item).__name__}, not an object carrying a symbol "
+        "and an exchange",
+        'Pass objects, for example [{"symbol": "INFY", "exchange": "NSE"}].',
+    )
+
+
+def symbol_pairs(
+    symbols: Any,
+    *,
+    field: str = "symbols",
+    limit: int = MAX_MULTIQUOTE_SYMBOLS,
+    truncate: bool = False,
+) -> tuple[list[dict[str, str]], list[str]]:
+    """Normalise a list of instruments a model passed as a tool argument.
+
+    Accepts the documented list of objects, a single object, and a JSON string
+    of either, because a model that has been told to send an array still
+    sometimes sends the array as text. Every pair goes through
+    :func:`normalise_pair`, so an index symbol lands on its index exchange here
+    rather than in each caller.
+
+    Module level rather than private to the quote toolkit, because a live
+    subscription card takes exactly the same argument. A second copy would
+    drift, and the copy nobody is looking at is the one that goes wrong.
+
+    Args:
+        symbols: Whatever the model passed.
+        field: The argument's name, used in every failure message.
+        limit: Most entries this caller accepts.
+        truncate: True to drop the entries past ``limit`` with a notice, which
+            is what a card holding a live subscription per entry wants. False
+            to refuse the whole call, which is what a one-shot batch request
+            wants, because there the model can simply ask again in batches.
+
+    Returns:
+        The de-duplicated pairs, and any notices for the result.
+
+    Raises:
+        RetryAgentRun: If the argument is not a usable list of pairs, or it is
+            over ``limit`` and ``truncate`` is false.
+    """
+    raw = symbols
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            invalid_argument(
+                field,
+                "it is a string that is not valid JSON",
+                'Pass a list of objects, for example [{"symbol": "INFY", "exchange": "NSE"}].',
+            )
+    if isinstance(raw, Mapping):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)) or not raw:
+        invalid_argument(
+            field,
+            "it is empty or is not a list",
+            'Pass a list of objects, for example [{"symbol": "INFY", "exchange": "NSE"}, '
+            '{"symbol": "SBIN", "exchange": "NSE"}].',
+        )
+
+    notices: list[str] = []
+    if len(raw) > limit:
+        if not truncate:
+            invalid_argument(
+                field,
+                f"it carries {len(raw)} entries, more than the {limit} allowed in one call",
+                f"Split it into batches of at most {limit} and call the tool once per batch.",
+            )
+        notices.append(
+            f"{len(raw) - limit} of {len(raw)} entries were dropped, because this call "
+            f"carries at most {limit}."
+        )
+        raw = list(raw)[:limit]
+
+    pairs: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    duplicates = 0
+
+    for index, item in enumerate(raw):
+        symbol, exchange = pair_fields(item, index, field)
+        symbol, exchange, item_notices = normalise_pair(symbol, exchange)
+        notices.extend(item_notices)
+        key = (symbol, exchange)
+        if key in seen:
+            duplicates += 1
+            continue
+        seen.add(key)
+        pairs.append({"symbol": symbol, "exchange": exchange})
+
+    if duplicates:
+        notices.append(
+            f"{duplicates} duplicate entries were requested once each rather than repeatedly."
+        )
+    return pairs, notices
+
+
 class BrokerIntervals:
     """The connected broker's interval list, fetched at most once per run.
 
@@ -864,7 +1114,7 @@ class MarketToolkit(OpenAlgoToolkit):
             self._note(payload, notices)
             return payload
 
-        payload = self._fit(build, total)
+        payload = fit_to_budget(build, total)
         return self._wrapped("get_quotes", payload, count=len(pairs))
 
     def get_depth(self, symbol: str, exchange: str) -> str:
@@ -1000,7 +1250,7 @@ class MarketToolkit(OpenAlgoToolkit):
             self._note(payload, notices)
             return payload
 
-        payload = self._fit(build, min(total, MAX_HISTORY_ROWS))
+        payload = fit_to_budget(build, min(total, MAX_HISTORY_ROWS))
         return self._wrapped(
             "get_history", payload, symbol=symbol, exchange=exchange, interval=interval
         )
@@ -1042,10 +1292,6 @@ class MarketToolkit(OpenAlgoToolkit):
     def _pairs(self, symbols: Any) -> tuple[list[dict[str, str]], list[str]]:
         """Normalise the ``symbols`` argument of :meth:`get_quotes`.
 
-        Accepts the documented list of objects, a single object, and a JSON
-        string of either, because a model that has been told to send an array
-        still sometimes sends the array as text.
-
         Args:
             symbols: Whatever the model passed.
 
@@ -1055,92 +1301,7 @@ class MarketToolkit(OpenAlgoToolkit):
         Raises:
             RetryAgentRun: If the argument is not a usable list of pairs.
         """
-        raw = symbols
-        if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except ValueError:
-                self.invalid_argument(
-                    "symbols",
-                    "it is a string that is not valid JSON",
-                    'Pass a list of objects, for example [{"symbol": "INFY", "exchange": "NSE"}].',
-                )
-        if isinstance(raw, Mapping):
-            raw = [raw]
-        if not isinstance(raw, (list, tuple)) or not raw:
-            self.invalid_argument(
-                "symbols",
-                "it is empty or is not a list",
-                'Pass a list of objects, for example [{"symbol": "INFY", "exchange": "NSE"}, '
-                '{"symbol": "SBIN", "exchange": "NSE"}].',
-            )
-        if len(raw) > MAX_MULTIQUOTE_SYMBOLS:
-            self.invalid_argument(
-                "symbols",
-                f"it carries {len(raw)} entries, more than the {MAX_MULTIQUOTE_SYMBOLS} "
-                "allowed in one call",
-                f"Split it into batches of at most {MAX_MULTIQUOTE_SYMBOLS} and call the tool "
-                "once per batch.",
-            )
-
-        pairs: list[dict[str, str]] = []
-        notices: list[str] = []
-        seen: set[tuple[str, str]] = set()
-        duplicates = 0
-
-        for index, item in enumerate(raw):
-            symbol, exchange = self._pair_fields(item, index)
-            symbol, exchange, item_notices = normalise_pair(symbol, exchange)
-            notices.extend(item_notices)
-            key = (symbol, exchange)
-            if key in seen:
-                duplicates += 1
-                continue
-            seen.add(key)
-            pairs.append({"symbol": symbol, "exchange": exchange})
-
-        if duplicates:
-            notices.append(
-                f"{duplicates} duplicate entries were requested once each rather than repeatedly."
-            )
-        return pairs, notices
-
-    def _pair_fields(self, item: Any, index: int) -> tuple[Any, Any]:
-        """Pull the symbol and exchange out of one entry of ``symbols``.
-
-        Args:
-            item: The entry, an object or an ``EXCHANGE:SYMBOL`` string.
-            index: Its position in the list, named in the error so the model
-                knows which entry to fix.
-
-        Returns:
-            The raw symbol and exchange, before normalisation.
-
-        Raises:
-            RetryAgentRun: If the entry is not a usable pair.
-        """
-        if isinstance(item, Mapping):
-            lowered = {str(key).strip().lower(): value for key, value in item.items()}
-            symbol = lowered.get("symbol")
-            exchange = lowered.get("exchange")
-            if symbol is None or exchange is None:
-                self.invalid_argument(
-                    "symbols",
-                    f"entry {index + 1} is missing 'symbol' or 'exchange'",
-                    'Every entry needs both, for example {"symbol": "INFY", "exchange": "NSE"}.',
-                )
-            return symbol, exchange
-
-        if isinstance(item, str) and ":" in item:
-            exchange, _, symbol = item.partition(":")
-            return symbol, exchange
-
-        self.invalid_argument(
-            "symbols",
-            f"entry {index + 1} is {type(item).__name__}, not an object carrying a symbol "
-            "and an exchange",
-            'Pass objects, for example [{"symbol": "INFY", "exchange": "NSE"}].',
-        )
+        return symbol_pairs(symbols, limit=MAX_MULTIQUOTE_SYMBOLS)
 
     # -- result shaping ------------------------------------------------------
 
@@ -1155,32 +1316,6 @@ class MarketToolkit(OpenAlgoToolkit):
         """
         if notices:
             payload["notices"] = list(notices)
-
-    @staticmethod
-    def _fit(build: Callable[[int], dict[str, Any]], start: int) -> dict[str, Any]:
-        """Build the largest payload that fits the character budget.
-
-        Args:
-            build: Builds the payload for a given number of rows. It is
-                responsible for saying in the payload how many were omitted.
-            start: Row count to try first.
-
-        Returns:
-            The payload for the largest row count that fits, down to none at
-            all, so the caller always returns a well-formed result rather than a
-            truncation envelope.
-        """
-        limit = max(0, start)
-        while True:
-            payload = build(limit)
-            length = _rendered_length(payload)
-            if limit == 0 or length <= _JSON_BUDGET:
-                return payload
-            # Scale the row count by how far over budget this attempt was, which
-            # lands within a row or two of the real limit instead of halving
-            # away rows that would have fitted. The min guarantees progress even
-            # when the estimate does not move, so the loop always terminates.
-            limit = min(limit - 1, max(0, int(limit * _JSON_BUDGET / length)))
 
     def _wrapped(self, tool: str, payload: Any, **labels: Any) -> str:
         """Serialise a result and label it as data before it re-enters context.

@@ -123,7 +123,17 @@ DEFAULT_NUM_HISTORY_RUNS = 8
 #: the section that overshot it, it deletes a different one, which is why
 #: ``test_agent_openui_tool.py`` asserts every surface renders whole rather than
 #: leaving the next addition to find out in production.
-DEFAULT_MAX_PROMPT_CHARS = 28000
+#:
+#: Raised again from 28000 when the live card section joined the base prompt.
+#: The arithmetic, measured across all eight surface configurations rather than
+#: estimated: the worst case (chat, trading disabled, analyzer on) was 26541
+#: characters before that section and is 27676 after it, so 28000 left 324
+#: characters of headroom. That is less than one bullet, and the failure mode is
+#: not a truncated bullet, it is a **different** whole section disappearing with
+#: only a log line. 30000 restores about two thousand characters of room. The
+#: cap is a ceiling and not a target, so raising it costs nothing until a
+#: section actually grows into it.
+DEFAULT_MAX_PROMPT_CHARS = 30000
 
 #: The operator's timezone. Indian markets, and every schedule in this platform,
 #: run on IST. This is not configuration, it is what the exchanges do.

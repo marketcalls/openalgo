@@ -19,6 +19,11 @@ import type { AgentVizItem } from '@/lib/agent/viz'
 import { OPENUI_VIZ, openUiSpec } from '@/lib/agent/viz'
 import { VizBlock } from './VizBlock'
 
+// The two live cards subscribe through the shared market data manager, which
+// opens a WebSocket and fetches a CSRF token. Neither exists in jsdom, and
+// neither is what this file is about.
+vi.mock('@/lib/MarketDataManager', () => import('@/test/marketDataHarness'))
+
 // The instrument card mounts the live-quote layer, which reaches the shared
 // WebSocket manager and the market calendar. Neither exists in jsdom, and
 // neither is what this file is about: it tests that a branch was taken.
@@ -61,7 +66,7 @@ describe('VizBlock', () => {
   }, 30000)
 
   it('renders nothing, and says nothing, for a kind it does not know', () => {
-    for (const kind of ['sankey', '', 'CANDLES', 'openui ']) {
+    for (const kind of ['sankey', '', 'CANDLES', 'openui ', 'live', 'live_quote']) {
       const { container } = render(<VizBlock item={item(kind, { anything: true })} />)
       expect(container).toBeEmptyDOMElement()
     }
@@ -110,6 +115,51 @@ describe('VizBlock', () => {
       />
     )
     expect(screen.getByText('RELIANCE')).toBeInTheDocument()
+  })
+
+  it('hands a live quotes frame to the live quotes card', () => {
+    render(
+      <VizBlock
+        item={item('live_quotes', {
+          mode: 'LTP',
+          instruments: [
+            {
+              symbol: 'RELIANCE',
+              exchange: 'NSE',
+              calendar_exchange: 'NSE',
+              seed: { ltp: 1302.5 },
+            },
+          ],
+          subscribe: [{ symbol: 'RELIANCE', exchange: 'NSE' }],
+          market: { known: false, exchanges: [] },
+        })}
+      />
+    )
+    expect(screen.getByText('RELIANCE')).toBeInTheDocument()
+  })
+
+  it('hands a live combo frame to the live combo card', () => {
+    render(
+      <VizBlock
+        item={item('live_combo', {
+          structure: 'straddle',
+          label: 'NIFTY 08SEP26 23850 straddle',
+          legs: [
+            {
+              symbol: 'NIFTY08SEP2623850CE',
+              exchange: 'NFO',
+              multiplier: 1,
+              side: 'BUY',
+              seed: { ltp: 120.5 },
+            },
+          ],
+          formula: { kind: 'signed_sum', constant: null, per: 'unit', expression: '' },
+          subscribe: [{ symbol: 'NIFTY08SEP2623850CE', exchange: 'NFO' }],
+          market: { known: false, exchanges: [] },
+        })}
+      />
+    )
+    expect(screen.getByText('NIFTY 08SEP26 23850 straddle')).toBeInTheDocument()
   })
 
   it('hands a plotly frame to the plotly renderer', () => {

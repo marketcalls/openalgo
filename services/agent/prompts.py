@@ -62,6 +62,8 @@ __all__ = [
     "CHART_SURFACE_SECTION",
     "CHAT_SURFACE_SECTION",
     "DATA_NOT_INSTRUCTIONS",
+    "INDICATORS_SECTION",
+    "LIVE_SECTION",
     "PromptSection",
     "SURFACE_SECTIONS",
     "VISUALIZATION_SECTION",
@@ -606,6 +608,35 @@ a result, and report the `message` when it is not.
 )
 
 
+INDICATORS_SECTION = PromptSection(
+    key="indicators",
+    title="TECHNICAL INDICATORS",
+    order=35,
+    body="""
+127 indicators compute here, from real candles, through the indicator tools.
+Never describe what an indicator would show, never work one out yourself, and
+never read one off a chart: compute it and quote the number.
+
+- Compute straight away with the name you already know. rsi, macd, supertrend,
+  atr, adx, bbands, sma, ema, vwap, stochastic, obv, cci, mfi, psar, ichimoku,
+  keltner, donchian and cmf are all spelled exactly like that. A wrong name or
+  parameter comes back naming the right one, so guessing costs less than a
+  lookup. Reach for list_indicators only when you genuinely do not know the
+  name, and describe_indicator only when you need an output name or a parameter
+  you cannot guess.
+- Several at once, or anything the operator wants as a table, is ONE
+  compute_indicators_batch call, not one call each. It shares a single candle
+  fetch, the values line up bar for bar, and it returns the candles beside them,
+  so it answers a table question on its own.
+- Never ask which dates to use, and do not fetch history first. These tools take
+  a lookback in bars and pad it by the indicator's warm-up themselves.
+- Default to daily candles unless the operator named an interval, and say which
+  interval and parameters you used.
+- Screening a list of instruments is scan_symbols, whose condition is either
+  "output < number" or "crossover(output_a, output_b)" and nothing else.
+""",
+)
+
 VISUALIZATION_SECTION = PromptSection(
     key="visualization",
     title="WHEN TO DRAW SOMETHING",
@@ -710,6 +741,32 @@ OPENUI_LANG_SECTION = PromptSection(
     body=f"{_OPENUI_LANG_PREAMBLE}\n\n{_read_prompt_doc(OPENUI_LANG_DOC)}".strip(),
 )
 
+LIVE_SECTION = PromptSection(
+    key="live",
+    title="WHEN TO OPEN A LIVE CARD",
+    order=56,
+    body="""
+Stream, watch, track, live, monitor and "keep an eye on" mean a live card. It
+subscribes in the browser and keeps updating by itself, so the operator does
+not have to ask you again.
+
+- **Several instruments, or a watchlist, is stream_quotes.** Mode Quote, or
+  Depth when the question is about the book or the spread.
+- **One instrument asked about once is show_instrument, not stream_quotes.**
+  That card carries the day's range, an intraday chart, the 52 week high and
+  low, the book and the operator's own position. Use stream_quotes for a single
+  instrument only when they asked to watch it.
+- **A combination is stream_combo:** a straddle, strangle, spread, ratio,
+  synthetic or basis. One number recomputed per tick, so never open two cards
+  and add them up yourself.
+- Defaults are the ATM straddle, the current week's expiry and Quote mode. Say
+  which expiry date and strike came back; both are resolved from what is listed.
+- These tools resolve and seed. The values they return are what the card opened
+  with, so describe what the operator can watch and never restate one as the
+  price now.
+""",
+)
+
 ANSWER_STYLE_SECTION = PromptSection(
     key="answer_style",
     title="HOW TO ANSWER",
@@ -736,10 +793,12 @@ BASE_SECTIONS: tuple[PromptSection, ...] = (
     IDENTITY_SECTION,
     TOOL_USE_SECTION,
     SYMBOLS_SECTION,
+    INDICATORS_SECTION,
     ORDER_CONSTANTS_SECTION,
     OPENALGO_SDK_SECTION,
     CODE_OUTPUT_SECTION,
     VISUALIZATION_SECTION,
+    LIVE_SECTION,
     ANSWER_STYLE_SECTION,
 )
 

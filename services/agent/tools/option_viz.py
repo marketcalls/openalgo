@@ -97,13 +97,29 @@ The token rule
 Both tools return one or two lines. The series, the legs and the spot travel to
 the client on the frame through ``services/agent/viz_sink.py``, so charting a
 whole session of a straddle costs the conversation a sentence.
+
+The signed-leg vocabulary is module level and public
+-----------------------------------------------------
+
+A combination of instruments is described here in exactly one way: a list of
+legs, each carrying a side and a number of lots, whose contribution is
+``signed_multiplier(side, lots)``. The live combination card in
+``services/agent/tools/live.py`` describes a straddle, a spread and a ratio the
+same way, so :func:`leg_entries`, :func:`leg_symbol`, :func:`leg_side`,
+:func:`leg_lots`, :func:`signed_multiplier` and :func:`leg_label`, along with
+the three resolvers :func:`resolve_underlying_exchange`, :func:`resolve_expiry`
+and :func:`resolve_contract`, are plain module-level functions rather than
+methods. The three resolvers take the caller's ``service_call`` as their first
+argument, which is the whole reason they need no toolkit. A second vocabulary
+for the same idea is how a sold leg ends up added in one card and subtracted in
+another.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -150,7 +166,21 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 logger = get_logger(__name__)
 
-__all__ = ["PAYOFF_VIZ", "OptionVizToolkit"]
+__all__ = [
+    "MAX_LEGS",
+    "PAYOFF_VIZ",
+    "OptionVizToolkit",
+    "leg_entries",
+    "leg_label",
+    "leg_lots",
+    "leg_side",
+    "leg_symbol",
+    "listed_expiries",
+    "resolve_contract",
+    "resolve_expiry",
+    "resolve_underlying_exchange",
+    "signed_multiplier",
+]
 
 #: The renderer selector the payoff tool emits. One kind, one branch in the
 #: client's ``VizBlock``: that is the whole cost of adding a renderer. The
@@ -258,7 +288,7 @@ def _ist_label(epoch: Any) -> str | None:
     return datetime.fromtimestamp(moment, IST).isoformat(timespec="seconds")
 
 
-def _entries(value: Any, field: str) -> list[Any]:
+def leg_entries(value: Any, field: str) -> list[Any]:
     """Normalise a list argument a model may have sent as text.
 
     Args:
@@ -307,7 +337,7 @@ def _entries(value: Any, field: str) -> list[Any]:
     return list(raw)
 
 
-def _side(value: Any, position: int) -> str:
+def leg_side(value: Any, position: int) -> str:
     """Normalise a leg's side.
 
     Args:
@@ -336,7 +366,7 @@ def _side(value: Any, position: int) -> str:
     )
 
 
-def _lots(value: Any, position: int) -> int:
+def leg_lots(value: Any, position: int) -> int:
     """Normalise a leg's lot count.
 
     Args:
@@ -354,7 +384,7 @@ def _lots(value: Any, position: int) -> int:
     return normalise_int(value, f"legs (leg {position} lots)", 1, 100)
 
 
-def _leg_symbol(entry: Any, position: int, underlying: str, expiry: str) -> tuple[str, str]:
+def leg_symbol(entry: Any, position: int, underlying: str, expiry: str) -> tuple[str, str]:
     """Read the symbol and the exchange one leg entry names.
 
     Three spellings are accepted, because a model reaches for all three: the
@@ -522,7 +552,7 @@ def _leg_colour(segment: str, option_type: str) -> str:
     return _OTHER_LEG_COLOUR
 
 
-def _signed(side: str, lots: int) -> int:
+def signed_multiplier(side: str, lots: int) -> int:
     """The multiplier one leg contributes to a combined premium.
 
     Args:
@@ -538,7 +568,7 @@ def _signed(side: str, lots: int) -> int:
     return (1 if side == _BUY else -1) * lots
 
 
-def _leg_label(leg: Mapping[str, Any]) -> str:
+def leg_label(leg: Mapping[str, Any]) -> str:
     """Name one leg for a legend entry or a confirmation line.
 
     Args:
@@ -551,6 +581,182 @@ def _leg_label(leg: Mapping[str, Any]) -> str:
     lots = int(leg.get("lots") or 1)
     count = "" if lots == 1 else f" {lots}x"
     return f"{leg.get('side', _BUY)}{count} {leg.get('symbol', '')}"
+
+
+def resolve_underlying_exchange(base: str, value: Any, notices: list[str]) -> str:
+    """Settle which exchange an underlying is quoted on.
+
+    Args:
+        base: The already-normalised underlying.
+        value: The exchange the model named, or an empty value.
+        notices: Collected notices, appended to when one is resolved here.
+
+    Returns:
+        The exchange code the instrument master holds the underlying on.
+
+    Raises:
+        RetryAgentRun: If the underlying is listed nowhere the tool searched.
+    """
+    text = "" if value is None else str(value).strip().upper()
+    if text:
+        return text
+
+    for candidate in _UNDERLYING_SEARCH_ORDER:
+        if is_listed(base, candidate):
+            notices.append(f"{base} was resolved to {candidate} from the instrument master.")
+            return candidate
+
+    invalid_argument(
+        "underlying",
+        f"{base} is not listed on any exchange this tool searched",
+        f"Pass the exchange explicitly, one of {', '.join(_UNDERLYING_SEARCH_ORDER)}, or "
+        "look the symbol up with search_symbols first.",
+    )
+
+
+def listed_expiries(call: Callable[..., Any], base: str, venue: str) -> list[str]:
+    """Every option expiry the instrument master still lists for an underlying.
+
+    The one reader of ``expiry_service`` in the agent's option path, so
+    "which expiries exist" has a single answer. The service drops expired dates
+    and sorts what is left chronologically, which is what lets a caller take
+    the first entry as the nearest and pick a monthly one out of the rest.
+
+    Args:
+        call: The toolkit's ``service_call``, so this stays a plain function
+            that any toolkit can hand its own service access to.
+        base: The already-normalised underlying.
+        venue: The underlying's exchange. Mapped to its options venue here.
+
+    Returns:
+        Expiries in ``DDMMMYY`` form, nearest first. Empty when the underlying
+        lists no options, which every caller reads as a refusal rather than as
+        an error.
+    """
+    payload = call(
+        get_expiry_dates,
+        symbol=base,
+        exchange=get_option_exchange(venue),
+        instrumenttype="options",
+    )
+    dates = payload.get("data") if isinstance(payload, Mapping) else None
+    if not isinstance(dates, list):
+        return []
+    return [item for item in (symbol_expiry(entry) for entry in dates) if item]
+
+
+def resolve_expiry(
+    call: Callable[..., Any], base: str, venue: str, value: Any, notices: list[str]
+) -> str:
+    """Settle which expiry to price, defaulting to the nearest listed one.
+
+    Resolving it here rather than making the model call ``get_expiry_dates``
+    first is a whole round trip saved on the most common question this tool
+    answers.
+
+    Args:
+        call: The toolkit's ``service_call``, so this stays a plain function
+            that any toolkit can hand its own service access to.
+        base: The already-normalised underlying.
+        venue: The underlying's exchange.
+        value: The expiry the model named, or an empty value.
+        notices: Collected notices, appended to when one is resolved here.
+
+    Returns:
+        The expiry in ``DDMMMYY`` form.
+
+    Raises:
+        RetryAgentRun: If the underlying lists no options at all.
+    """
+    text = "" if value is None else str(value).strip().upper()
+    if text:
+        return normalise_expiry(text, base, allow_embedded=False)
+
+    nearest = next(iter(listed_expiries(call, base, venue)), None)
+    if not nearest:
+        invalid_argument(
+            "expiry_date",
+            f"{base} lists no option expiries on {get_option_exchange(venue)}",
+            "Confirm the underlying has listed options, or name the expiry explicitly in "
+            "DDMMMYY form.",
+        )
+    notices.append(f"{nearest} is the nearest listed expiry and was used.")
+    return nearest
+
+
+def resolve_contract(
+    call: Callable[..., Any], symbol: str, exchange: str, where: str | None
+) -> dict[str, Any]:
+    """Read one contract's own details from the instrument master.
+
+    Args:
+        call: The toolkit's ``service_call``, so this stays a plain function
+            that any toolkit can hand its own service access to.
+        symbol: The OpenAlgo symbol.
+        exchange: The exchange it lists on, or an empty string to resolve.
+        where: How to name this leg in a failure message when the operator
+            named it, or None when it came out of the position book.
+
+    Returns:
+        The leg fields the master owns: exchange, segment, strike, option
+        type, lot size, tick size, expiry and the underlying it belongs to.
+
+    Raises:
+        RetryAgentRun: If the master holds no row for the pair.
+    """
+    label = where or f"the open position {symbol}"
+    venue = _resolve_leg_exchange(symbol, exchange, label)
+    segment = _segment_of(symbol, label)
+    payload = call(symbol_service.get_symbol_info, symbol=symbol, exchange=venue)
+    info = payload.get("data") if isinstance(payload, Mapping) else None
+    if not isinstance(info, Mapping) or not info:
+        invalid_argument(
+            "legs",
+            f"{symbol} on {venue} has no row in the instrument master",
+            "Resolve the contract with get_option_symbol or search_symbols and pass the "
+            "symbol it returns.",
+        )
+
+    expiry = ""
+    embedded = _EMBEDDED_EXPIRY.search(symbol)
+    if embedded:
+        expiry = embedded.group(0)
+    else:
+        expiry = symbol_expiry(info.get("expiry")) or ""
+
+    option_type = ""
+    strike = None
+    expiry_ts = None
+    if segment == _SEGMENT_OPTION:
+        option_type = symbol[-2:]
+        strike = as_number(info.get("strike"))
+        try:
+            _base, moment, parsed_strike, parsed_type = parse_option_symbol(symbol, venue)
+        except Exception:
+            logger.exception("Payoff leg %s could not be parsed for its expiry instant", symbol)
+        else:
+            option_type = parsed_type
+            if strike is None:
+                strike = parsed_strike
+            expiry_ts = int(moment.replace(tzinfo=IST).timestamp())
+
+    base = str(info.get("name") or "").strip().upper()
+    if not base:
+        base = re.split(_EMBEDDED_EXPIRY, symbol)[0]
+
+    return {
+        "symbol": symbol,
+        "exchange": venue,
+        "segment": segment,
+        "strike": strike,
+        "option_type": option_type,
+        "lotSize": int(as_number(info.get("lotsize")) or 0) or 1,
+        "tickSize": as_number(info.get("tick_size")),
+        "expiry": expiry,
+        "expiryTs": expiry_ts,
+        "base": base,
+        "underlying_exchange": get_underlying_exchange(base, venue),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -662,7 +868,7 @@ class OptionVizToolkit(OpenAlgoToolkit):
             the range. The series travels to the operator's screen, not through
             this answer, so describe what it shows rather than listing points.
         """
-        entries = _entries(legs, "legs")
+        entries = leg_entries(legs, "legs")
         interval, notice = normalise_interval(interval, "api", self._intervals.accepted())
         notices = [notice] if notice else []
         sessions = normalise_int(days, "days", 1, MAX_PREMIUM_DAYS)
@@ -698,8 +904,8 @@ class OptionVizToolkit(OpenAlgoToolkit):
             The wrapped confirmation.
         """
         base = normalise_symbol(underlying, "underlying")
-        venue = self._underlying_exchange(base, exchange, notices)
-        expiry = self._expiry(base, venue, expiry_date, notices)
+        venue = resolve_underlying_exchange(base, exchange, notices)
+        expiry = resolve_expiry(self.service_call, base, venue, expiry_date, notices)
 
         payload = self.service_call(
             get_straddle_chart_data,
@@ -803,7 +1009,7 @@ class OptionVizToolkit(OpenAlgoToolkit):
         legs: list[dict[str, Any]] = []
         for index, entry in enumerate(entries, start=1):
             where = f"leg {index}"
-            symbol, exchange = _leg_symbol(entry, index, base, shorthand_expiry)
+            symbol, exchange = leg_symbol(entry, index, base, shorthand_expiry)
             exchange = _resolve_leg_exchange(symbol, exchange, where)
             option_type = symbol[-2:] if _OPTION_SUFFIX.search(symbol) else ""
             legs.append(
@@ -811,8 +1017,12 @@ class OptionVizToolkit(OpenAlgoToolkit):
                     "symbol": symbol,
                     "exchange": exchange,
                     "segment": _segment_of(symbol, where),
-                    "side": _side(entry.get("side") if isinstance(entry, Mapping) else None, index),
-                    "lots": _lots(entry.get("lots") if isinstance(entry, Mapping) else None, index),
+                    "side": leg_side(
+                        entry.get("side") if isinstance(entry, Mapping) else None, index
+                    ),
+                    "lots": leg_lots(
+                        entry.get("lots") if isinstance(entry, Mapping) else None, index
+                    ),
                     "option_type": option_type,
                 }
             )
@@ -878,7 +1088,7 @@ class OptionVizToolkit(OpenAlgoToolkit):
         combined = [
             round(
                 sum(
-                    _signed(leg["side"], leg["lots"]) * seen[moment]
+                    signed_multiplier(leg["side"], leg["lots"]) * seen[moment]
                     for leg, seen in zip(legs, closes, strict=True)
                 ),
                 4,
@@ -887,7 +1097,7 @@ class OptionVizToolkit(OpenAlgoToolkit):
         ]
         traces = [
             {
-                "label": _leg_label(leg),
+                "label": leg_label(leg),
                 "colour": _leg_colour(leg["segment"], leg["option_type"]),
                 "values": [seen[moment] for moment in times],
             }
@@ -900,7 +1110,7 @@ class OptionVizToolkit(OpenAlgoToolkit):
             f"{total_dropped} dropped."
         )
         heading = (
-            " ".join(_leg_label(leg) for leg in legs)
+            " ".join(leg_label(leg) for leg in legs)
             if len(legs) <= _MAX_HEADING_LEGS
             else f"{legs[0]['symbol']} and {len(legs) - 1} more legs"
         )
@@ -919,7 +1129,7 @@ class OptionVizToolkit(OpenAlgoToolkit):
             return tool_answer("plot_combined_premium", _NO_SINK_CHART, notices)
 
         parts = " plus ".join(
-            f"{_leg_label(leg)} at {format_price(seen[times[-1]])}"
+            f"{leg_label(leg)} at {format_price(seen[times[-1]])}"
             for leg, seen in zip(legs, closes, strict=True)
         )
         message = (
@@ -992,7 +1202,7 @@ class OptionVizToolkit(OpenAlgoToolkit):
             from the legs this tool resolved, so describe the shape rather than
             listing numbers you do not have.
         """
-        entries = _entries(legs, "legs")
+        entries = leg_entries(legs, "legs")
         base = str(underlying or "").strip().upper()
         shorthand_expiry = str(expiry_date or "").strip().upper()
         if shorthand_expiry:
@@ -1123,12 +1333,12 @@ class OptionVizToolkit(OpenAlgoToolkit):
         """
         legs: list[dict[str, Any]] = []
         for index, entry in enumerate(entries, start=1):
-            symbol, exchange = _leg_symbol(entry, index, base, expiry)
-            contract = self._contract(symbol, exchange, f"leg {index}")
-            contract["side"] = _side(
+            symbol, exchange = leg_symbol(entry, index, base, expiry)
+            contract = resolve_contract(self.service_call, symbol, exchange, f"leg {index}")
+            contract["side"] = leg_side(
                 entry.get("side") if isinstance(entry, Mapping) else None, index
             )
-            contract["lots"] = _lots(
+            contract["lots"] = leg_lots(
                 entry.get("lots") if isinstance(entry, Mapping) else None, index
             )
             contract["origin"] = "named"
@@ -1184,7 +1394,7 @@ class OptionVizToolkit(OpenAlgoToolkit):
                 )
                 continue
 
-            contract = self._contract(symbol, exchange, None)
+            contract = resolve_contract(self.service_call, symbol, exchange, None)
             lot_size = contract["lotSize"]
             contract["side"] = _BUY if quantity > 0 else _SELL
             contract["lots"] = max(1, int(round(abs(quantity) / lot_size))) if lot_size else 1
@@ -1194,76 +1404,6 @@ class OptionVizToolkit(OpenAlgoToolkit):
                 contract["entry_price"] = average
             legs.append(contract)
         return legs
-
-    def _contract(self, symbol: str, exchange: str, where: str | None) -> dict[str, Any]:
-        """Read one contract's own details from the instrument master.
-
-        Args:
-            symbol: The OpenAlgo symbol.
-            exchange: The exchange it lists on, or an empty string to resolve.
-            where: How to name this leg in a failure message when the operator
-                named it, or None when it came out of the position book.
-
-        Returns:
-            The leg fields the master owns: exchange, segment, strike, option
-            type, lot size, tick size, expiry and the underlying it belongs to.
-
-        Raises:
-            RetryAgentRun: If the master holds no row for the pair.
-        """
-        label = where or f"the open position {symbol}"
-        venue = _resolve_leg_exchange(symbol, exchange, label)
-        segment = _segment_of(symbol, label)
-        payload = self.service_call(symbol_service.get_symbol_info, symbol=symbol, exchange=venue)
-        info = payload.get("data") if isinstance(payload, Mapping) else None
-        if not isinstance(info, Mapping) or not info:
-            invalid_argument(
-                "legs",
-                f"{symbol} on {venue} has no row in the instrument master",
-                "Resolve the contract with get_option_symbol or search_symbols and pass the "
-                "symbol it returns.",
-            )
-
-        expiry = ""
-        embedded = _EMBEDDED_EXPIRY.search(symbol)
-        if embedded:
-            expiry = embedded.group(0)
-        else:
-            expiry = symbol_expiry(info.get("expiry")) or ""
-
-        option_type = ""
-        strike = None
-        expiry_ts = None
-        if segment == _SEGMENT_OPTION:
-            option_type = symbol[-2:]
-            strike = as_number(info.get("strike"))
-            try:
-                _base, moment, parsed_strike, parsed_type = parse_option_symbol(symbol, venue)
-            except Exception:
-                logger.exception("Payoff leg %s could not be parsed for its expiry instant", symbol)
-            else:
-                option_type = parsed_type
-                if strike is None:
-                    strike = parsed_strike
-                expiry_ts = int(moment.replace(tzinfo=IST).timestamp())
-
-        base = str(info.get("name") or "").strip().upper()
-        if not base:
-            base = re.split(_EMBEDDED_EXPIRY, symbol)[0]
-
-        return {
-            "symbol": symbol,
-            "exchange": venue,
-            "segment": segment,
-            "strike": strike,
-            "option_type": option_type,
-            "lotSize": int(as_number(info.get("lotsize")) or 0) or 1,
-            "tickSize": as_number(info.get("tick_size")),
-            "expiry": expiry,
-            "expiryTs": expiry_ts,
-            "base": base,
-            "underlying_exchange": get_underlying_exchange(base, venue),
-        }
 
     @staticmethod
     def _one_underlying(
@@ -1413,80 +1553,6 @@ class OptionVizToolkit(OpenAlgoToolkit):
 
         atm_iv = round(sum(ivs) / len(ivs), 4) if ivs else None
         return priced, spot, bool(forwards), atm_iv
-
-    # -- resolution helpers --------------------------------------------------
-
-    def _underlying_exchange(self, base: str, value: Any, notices: list[str]) -> str:
-        """Settle which exchange an underlying is quoted on.
-
-        Args:
-            base: The already-normalised underlying.
-            value: The exchange the model named, or an empty value.
-            notices: Collected notices, appended to when one is resolved here.
-
-        Returns:
-            The exchange code the instrument master holds the underlying on.
-
-        Raises:
-            RetryAgentRun: If the underlying is listed nowhere the tool searched.
-        """
-        text = "" if value is None else str(value).strip().upper()
-        if text:
-            return text
-
-        for candidate in _UNDERLYING_SEARCH_ORDER:
-            if is_listed(base, candidate):
-                notices.append(f"{base} was resolved to {candidate} from the instrument master.")
-                return candidate
-
-        invalid_argument(
-            "underlying",
-            f"{base} is not listed on any exchange this tool searched",
-            f"Pass the exchange explicitly, one of {', '.join(_UNDERLYING_SEARCH_ORDER)}, or "
-            "look the symbol up with search_symbols first.",
-        )
-
-    def _expiry(self, base: str, venue: str, value: Any, notices: list[str]) -> str:
-        """Settle which expiry to price, defaulting to the nearest listed one.
-
-        Resolving it here rather than making the model call ``get_expiry_dates``
-        first is a whole round trip saved on the most common question this tool
-        answers.
-
-        Args:
-            base: The already-normalised underlying.
-            venue: The underlying's exchange.
-            value: The expiry the model named, or an empty value.
-            notices: Collected notices, appended to when one is resolved here.
-
-        Returns:
-            The expiry in ``DDMMMYY`` form.
-
-        Raises:
-            RetryAgentRun: If the underlying lists no options at all.
-        """
-        text = "" if value is None else str(value).strip().upper()
-        if text:
-            return normalise_expiry(text, base, allow_embedded=False)
-
-        payload = self.service_call(
-            get_expiry_dates,
-            symbol=base,
-            exchange=get_option_exchange(venue),
-            instrumenttype="options",
-        )
-        dates = payload.get("data") if isinstance(payload, Mapping) else None
-        listed = [symbol_expiry(item) for item in dates] if isinstance(dates, list) else []
-        nearest = next((item for item in listed if item), None)
-        if not nearest:
-            invalid_argument(
-                "expiry_date",
-                f"{base} lists no option expiries on {get_option_exchange(venue)}",
-                "Confirm the underlying has listed options, or name the expiry explicitly in "
-                "DDMMMYY form.",
-            )
-        notices.append(f"{nearest} is the nearest listed expiry and was used.")
-        return nearest
 
     # -- delivery ------------------------------------------------------------
 

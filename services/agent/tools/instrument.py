@@ -66,6 +66,17 @@ The token rule
 Like every rendering tool, the model gets one or two lines carrying the price
 and the move, while the intraday series, the ladder and the position travel on
 the frame. A card of four hundred bars costs the conversation a sentence.
+
+Four helpers here are module level and public
+----------------------------------------------
+
+:func:`normalise_quote`, :func:`quote_move`, :func:`depth_levels` and
+:func:`percent_change` each carry a rule rather than a convenience, and the
+live subscription cards in ``services/agent/tools/live.py`` need every one of
+them: a feed's zero is absence and not a measurement, a zero last traded price
+is not a hundred percent fall, a padded ladder level is not a resting order,
+and a percentage of zero is undefined rather than infinite. A second copy would
+drift, and the copy in the path nobody is looking at is the one that goes wrong.
 """
 
 from __future__ import annotations
@@ -107,7 +118,14 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 logger = get_logger(__name__)
 
-__all__ = ["INSTRUMENT_VIZ", "InstrumentToolkit"]
+__all__ = [
+    "INSTRUMENT_VIZ",
+    "InstrumentToolkit",
+    "depth_levels",
+    "normalise_quote",
+    "percent_change",
+    "quote_move",
+]
 
 #: The renderer selector this toolkit emits. One kind, one branch in the
 #: client's ``VizBlock``: that is the whole cost of adding a renderer.
@@ -238,7 +256,7 @@ def _reason(exc: BaseException) -> str:
     return (head + separator.strip())[:MAX_REASON_CHARS]
 
 
-def _levels(raw: Any) -> list[dict[str, Any]]:
+def depth_levels(raw: Any) -> list[dict[str, Any]]:
     """Normalise one side of the order book.
 
     A broker pads its ladder to a fixed depth with zero-price, zero-quantity
@@ -270,7 +288,7 @@ def _levels(raw: Any) -> list[dict[str, Any]]:
     return levels
 
 
-def _percent(part: float | None, whole: float | None) -> float | None:
+def percent_change(part: float | None, whole: float | None) -> float | None:
     """Express one number as a percentage of another.
 
     Args:
@@ -286,6 +304,74 @@ def _percent(part: float | None, whole: float | None) -> float | None:
     if part is None or not whole:
         return None
     return round(part / whole * 100.0, 2)
+
+
+def normalise_quote(raw: Any) -> dict[str, Any]:
+    """Normalise the quote to the fields this platform actually returns.
+
+    ``quotes_service`` returns exactly nine fields and that is the whole
+    quote OpenAlgo has. Naming them here rather than passing the broker's
+    payload through keeps a plugin's extra key from reaching the card as a
+    tile nobody designed, and keeps the card's contract stable across
+    brokers.
+
+    A field that came back as exactly zero is dropped, because for every
+    one of these except the last traded price zero is how a feed spells
+    absence rather than a measurement: an index reports no traded volume and
+    no open interest, and a closed book reports no bid. Rendering those as
+    ``0.00`` is the same failure as a blank tile, only more confident. The
+    last traded price is kept at zero, because there the caller has to be
+    able to tell "nothing has printed" from "no quote came back at all", and
+    it says so on the card rather than deriving a hundred percent fall.
+
+    Args:
+        raw: The service's ``data`` payload.
+
+    Returns:
+        The fields the broker supplied, as numbers.
+    """
+    source = raw if isinstance(raw, Mapping) else {}
+    fields = ("ltp", "open", "high", "low", "prev_close", "volume", "bid", "ask", "oi")
+    quote: dict[str, Any] = {}
+    for field in fields:
+        value = as_number(source.get(field))
+        if value is None or (value == 0 and field != "ltp"):
+            continue
+        quote[field] = value
+    return quote
+
+
+def quote_move(quote: Mapping[str, Any], notices: list[str], *, symbol: str = "") -> dict[str, Any]:
+    """Derive the day's move from the quote.
+
+    Args:
+        quote: The normalised quote.
+        notices: Collected notices, appended to when the move cannot be
+            stated.
+        symbol: The instrument the quote belongs to. Named in the notice when
+            given, because a card carrying several rows has to say which one
+            has not printed; a card carrying one does not.
+
+    Returns:
+        ``change`` and ``change_percent`` when both are meaningful, an empty
+        mapping otherwise.
+    """
+    ltp = as_number(quote.get("ltp"))
+    previous = as_number(quote.get("prev_close"))
+    if ltp is None or not previous:
+        return {}
+    if ltp == 0:
+        # A last traded price of zero means nothing has printed yet, not a
+        # hundred percent loss. The holdings mapping in the Zerodha plugin
+        # learned the same lesson: report nothing rather than a fabricated
+        # wipeout.
+        subject = f"{symbol}'s last traded price" if symbol else "The last traded price"
+        notices.append(
+            f"{subject} is zero, so no trade has printed yet and the day's change is not stated."
+        )
+        return {}
+    change = round(ltp - previous, 4)
+    return {"change": change, "change_percent": percent_change(change, previous)}
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +474,7 @@ class InstrumentToolkit(OpenAlgoToolkit):
         # way of saying there is no card.
         response = self.service_call(quotes_service.get_quotes, symbol=symbol, exchange=exchange)
         raw_quote = response.get("data") if isinstance(response, Mapping) else response
-        quote = self._quote(raw_quote)
+        quote = normalise_quote(raw_quote)
 
         ltp = quote.get("ltp")
         if ltp is None:
@@ -411,7 +497,7 @@ class InstrumentToolkit(OpenAlgoToolkit):
             "is_index": exchange in INDEX_EXCHANGES,
             "quote": quote,
         }
-        spec.update(self._move(quote, notices))
+        spec.update(quote_move(quote, notices))
 
         unavailable: dict[str, str] = {}
         sources = ["quotes_service"]
@@ -466,73 +552,6 @@ class InstrumentToolkit(OpenAlgoToolkit):
             return self._answer(_NO_SINK, symbol=symbol, exchange=exchange)
 
         return self._answer(self._confirmation(spec, unavailable), symbol=symbol, exchange=exchange)
-
-    # -- the quote and the move ----------------------------------------------
-
-    @staticmethod
-    def _quote(raw: Any) -> dict[str, Any]:
-        """Normalise the quote to the fields this platform actually returns.
-
-        ``quotes_service`` returns exactly nine fields and that is the whole
-        quote OpenAlgo has. Naming them here rather than passing the broker's
-        payload through keeps a plugin's extra key from reaching the card as a
-        tile nobody designed, and keeps the card's contract stable across
-        brokers.
-
-        A field that came back as exactly zero is dropped, because for every
-        one of these except the last traded price zero is how a feed spells
-        absence rather than a measurement: an index reports no traded volume and
-        no open interest, and a closed book reports no bid. Rendering those as
-        ``0.00`` is the same failure as a blank tile, only more confident. The
-        last traded price is kept at zero, because there the caller has to be
-        able to tell "nothing has printed" from "no quote came back at all", and
-        it says so on the card rather than deriving a hundred percent fall.
-
-        Args:
-            raw: The service's ``data`` payload.
-
-        Returns:
-            The fields the broker supplied, as numbers.
-        """
-        source = raw if isinstance(raw, Mapping) else {}
-        fields = ("ltp", "open", "high", "low", "prev_close", "volume", "bid", "ask", "oi")
-        quote: dict[str, Any] = {}
-        for field in fields:
-            value = as_number(source.get(field))
-            if value is None or (value == 0 and field != "ltp"):
-                continue
-            quote[field] = value
-        return quote
-
-    @staticmethod
-    def _move(quote: Mapping[str, Any], notices: list[str]) -> dict[str, Any]:
-        """Derive the day's move from the quote.
-
-        Args:
-            quote: The normalised quote.
-            notices: Collected notices, appended to when the move cannot be
-                stated.
-
-        Returns:
-            ``change`` and ``change_percent`` when both are meaningful, an empty
-            mapping otherwise.
-        """
-        ltp = as_number(quote.get("ltp"))
-        previous = as_number(quote.get("prev_close"))
-        if ltp is None or not previous:
-            return {}
-        if ltp == 0:
-            # A last traded price of zero means nothing has printed yet, not a
-            # hundred percent loss. The holdings mapping in the Zerodha plugin
-            # learned the same lesson: report nothing rather than a fabricated
-            # wipeout.
-            notices.append(
-                "The last traded price is zero, so no trade has printed yet and the day's "
-                "change is not stated."
-            )
-            return {}
-        change = round(ltp - previous, 4)
-        return {"change": change, "change_percent": _percent(change, previous)}
 
     # -- optional sections ---------------------------------------------------
 
@@ -752,9 +771,9 @@ class InstrumentToolkit(OpenAlgoToolkit):
             ("last_date", last_date),
             ("high_date", _day_part(summary.get("highest_high_timestamp"))),
             ("low_date", _day_part(summary.get("lowest_low_timestamp"))),
-            ("position_percent", _percent(ltp - low, high - low)),
-            ("from_high_percent", _percent(ltp - high, high)),
-            ("from_low_percent", _percent(ltp - low, low)),
+            ("position_percent", percent_change(ltp - low, high - low)),
+            ("from_high_percent", percent_change(ltp - high, high)),
+            ("from_low_percent", percent_change(ltp - low, low)),
         ):
             if value is not None:
                 section[field] = value
@@ -775,8 +794,8 @@ class InstrumentToolkit(OpenAlgoToolkit):
         if not isinstance(data, Mapping):
             return None, "the broker returned no order book for this instrument"
 
-        bids = _levels(data.get("bids"))
-        asks = _levels(data.get("asks"))
+        bids = depth_levels(data.get("bids"))
+        asks = depth_levels(data.get("asks"))
         if not bids and not asks:
             return None, "there are no resting orders on either side"
 
@@ -793,7 +812,7 @@ class InstrumentToolkit(OpenAlgoToolkit):
         if best_bid and best_ask and best_ask > best_bid:
             spread = round(best_ask - best_bid, 4)
             section["spread"] = spread
-            spread_percent = _percent(spread, (best_ask + best_bid) / 2.0)
+            spread_percent = percent_change(spread, (best_ask + best_bid) / 2.0)
             if spread_percent is not None:
                 section["spread_percent"] = spread_percent
         return section, None
@@ -881,7 +900,7 @@ class InstrumentToolkit(OpenAlgoToolkit):
             pnl = section.get("pnl")
             quantity = section.get("quantity")
             if pnl is not None and average and quantity:
-                percent = _percent(pnl, abs(quantity) * average)
+                percent = percent_change(pnl, abs(quantity) * average)
                 if percent is not None:
                     section["pnl_percent"] = percent
         return section, None

@@ -48,6 +48,11 @@
  * Every section below the quote is optional and the card is correct with only
  * the quote present. The spec is read defensively, because it is JSON off the
  * wire: a malformed one renders a sentence, never an exception.
+ *
+ * How a number is read off the wire lives in `spec.ts` and how it is written
+ * on screen lives in `cards.tsx`, because the two live cards ask exactly the
+ * same questions and a second copy of the answers is how two cards in one
+ * thread end up disagreeing about what a value means.
  */
 
 import type { Bar } from 'openalgo-charts'
@@ -56,13 +61,25 @@ import { Button } from '@/components/ui/button'
 import { useLiveQuote } from '@/hooks/useLiveQuote'
 import { useMarketStatus } from '@/hooks/useMarketStatus'
 import { prefillComposer, useComposerPrefill } from '@/lib/agent/composer'
-import { fmtPrice, groupIndian, money } from '@/lib/trading/format'
+import { fmtPrice } from '@/lib/trading/format'
 import { cn } from '@/lib/utils'
 import { CandleViz } from './CandleViz'
-import { asNumber, asRecord, asText, parseBars } from './spec'
-
-/** Most depth levels shown a side. The backend caps at five; this is the guard. */
-const MAX_DEPTH_LEVELS = 5
+import {
+  asOfLabel,
+  Chip,
+  compact,
+  FeedBadge,
+  type FeedState,
+  percent,
+  plain,
+  Stat,
+  signed,
+  TONE,
+  type Tone,
+  toneOf,
+  whole,
+} from './cards'
+import { asNumber, asRecord, asText, type DepthRow, nonZero, parseBars, parseLevels } from './spec'
 
 /** Most position legs listed before the rest are dropped. */
 const MAX_LEGS = 6
@@ -89,24 +106,6 @@ const SECTION_NAMES: Record<string, string> = {
   depth: 'the order book',
   position: 'your position',
 }
-
-/** Up, down and neither, in the two themes. */
-const TONE = {
-  up: 'text-emerald-600 dark:text-emerald-500',
-  down: 'text-red-600 dark:text-red-400',
-  flat: 'text-muted-foreground',
-} as const
-
-type Tone = keyof typeof TONE
-
-/** Whether the numbers on screen are moving, and how the header says so. */
-const FEED = {
-  live: { dot: 'animate-pulse bg-emerald-500', label: 'Live' },
-  delayed: { dot: 'bg-amber-500', label: 'Delayed' },
-  closed: { dot: 'bg-muted-foreground/50', label: 'Closed' },
-} as const
-
-type FeedState = keyof typeof FEED
 
 // ---------------------------------------------------------------------------
 // The spec
@@ -154,11 +153,6 @@ interface Missing {
   reason: string
 }
 
-interface DepthRow {
-  price?: number
-  quantity?: number
-}
-
 interface Depth {
   bids: DepthRow[]
   asks: DepthRow[]
@@ -202,21 +196,6 @@ interface InstrumentSpec {
   position?: Position
   missing: Missing[]
   notices: string[]
-}
-
-/**
- * A number that is present and not zero.
- *
- * For every field this card reads, zero spells absence rather than a
- * measurement: no instrument trades at zero, an open interest of zero is a
- * contract nobody holds a position in, and a bid of zero is a book with no
- * resting order rather than one offering to pay nothing. The backend applies
- * the same rule before it sends, so this is what keeps a live tick that has
- * only depth so far from overwriting a real served value with 0.00.
- */
-function nonZero(value: unknown): number | undefined {
-  const parsed = asNumber(value)
-  return parsed === null || parsed === 0 ? undefined : parsed
 }
 
 function parseQuote(value: unknown): Quote | null {
@@ -279,23 +258,6 @@ function parseWeek52(value: unknown): Week52 | undefined {
     highDate: asText(row.high_date) ?? undefined,
     lowDate: asText(row.low_date) ?? undefined,
   }
-}
-
-function parseLevels(value: unknown): DepthRow[] {
-  if (!Array.isArray(value)) return []
-  const rows: DepthRow[] = []
-  for (const entry of value) {
-    if (rows.length >= MAX_DEPTH_LEVELS) break
-    const row = asRecord(entry)
-    if (!row) continue
-    const price = nonZero(row.price)
-    const quantity = nonZero(row.quantity)
-    // A level with neither a price nor a size is a padding row the feed emits
-    // to fill a fixed-width book. It is not an order.
-    if (price === undefined && quantity === undefined) continue
-    rows.push({ price, quantity })
-  }
-  return rows
 }
 
 function parseDepth(value: unknown): Depth | undefined {
@@ -421,55 +383,6 @@ function parseInstrumentSpec(value: unknown): InstrumentSpec | null {
 // Formatting
 // ---------------------------------------------------------------------------
 
-function toneOf(value: number | undefined): Tone {
-  if (value === undefined || value === 0) return 'flat'
-  return value > 0 ? 'up' : 'down'
-}
-
-/**
- * A change or a result, with its sign in front of it.
- *
- * `money` supplies the magnitude, so a four-figure profit is grouped the same
- * way every other rupee value in this product is and never rounds paise away.
- */
-function signed(value: number): string {
-  if (value === 0) return money(0)
-  return `${value > 0 ? '+' : '-'}${money(value)}`
-}
-
-function percent(value: number, digits = 2): string {
-  return `${Math.abs(value).toFixed(digits)}%`
-}
-
-/** A whole number, grouped the Indian way, sign kept. */
-function whole(value: number): string {
-  const sign = value < 0 ? '-' : ''
-  return `${sign}${groupIndian(Math.round(Math.abs(value)).toString())}`
-}
-
-/**
- * A size, shortened once grouping stops being readable.
- *
- * Volume runs to nine digits on a liquid stock, and `12,34,56,789` in a tile
- * that is a quarter of a narrow chat column wraps or truncates. Lakh and crore
- * are what the exchange, the broker and the operator all use. Quantities the
- * operator has to act on (a position size, a lot, a resting order) are never
- * shortened, because rounding the number somebody would type into an order is
- * not a formatting decision.
- */
-function compact(value: number): string {
-  const sign = value < 0 ? '-' : ''
-  const size = Math.abs(value)
-  if (size >= 1e7) return `${sign}${(size / 1e7).toFixed(2)} Cr`
-  if (size >= 1e5) return `${sign}${(size / 1e5).toFixed(2)} L`
-  return whole(value)
-}
-
-/** A number as written, grouped when it is whole and left alone when it is not. */
-function plain(value: number): string {
-  return Number.isInteger(value) ? whole(value) : String(value)
-}
-
 /**
  * How far the price on screen sits below the high of its range.
  *
@@ -491,21 +404,6 @@ function pnlLabel(value: number): string {
 }
 
 /**
- * When the served values were taken, as a fixed string.
- *
- * Sliced out of the ISO timestamp rather than run through `Intl`, for the
- * reason `lib/trading/format.ts` gives: 'en-IN' data varies across operating
- * systems and browsers, and the offset in the string is already IST.
- */
-function asOfLabel(asOf: string | undefined, timezone: string | undefined): string | null {
-  if (!asOf || asOf.length < 16) return null
-  const date = asOf.slice(0, 10)
-  const time = asOf.slice(11, 16)
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) return null
-  return `${date} ${time}${timezone === 'Asia/Kolkata' ? ' IST' : ''}`
-}
-
-/**
  * The request a Buy or Sell control writes into the composer.
  *
  * One lot for anything with a lot size, one share otherwise, because a
@@ -522,32 +420,6 @@ function orderRequest(side: 'Buy' | 'Sell', spec: InstrumentSpec): string {
 // ---------------------------------------------------------------------------
 // Pieces
 // ---------------------------------------------------------------------------
-
-function Chip({ children, className }: { children: string; className?: string }) {
-  return (
-    <span
-      className={cn(
-        'rounded border border-border px-1.5 py-px text-[10px] leading-4 font-medium tracking-wide text-muted-foreground uppercase',
-        className
-      )}
-    >
-      {children}
-    </span>
-  )
-}
-
-function Stat({ label, value, className }: { label: string; value: string; className?: string }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[10px] leading-4 tracking-wide text-muted-foreground uppercase">
-        {label}
-      </div>
-      <div className={cn('truncate font-mono text-[12px] tabular-nums text-foreground', className)}>
-        {value}
-      </div>
-    </div>
-  )
-}
 
 interface RangeBarProps {
   label: string
@@ -842,10 +714,7 @@ export function InstrumentCard({ spec, title, source, className }: InstrumentCar
             <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{subtitle}</p>
           )}
         </div>
-        <span className="flex shrink-0 items-center gap-1.5 text-[10px] leading-4 tracking-wide text-muted-foreground uppercase">
-          <span aria-hidden className={cn('h-1.5 w-1.5 rounded-full', FEED[state].dot)} />
-          {FEED[state].label}
-        </span>
+        <FeedBadge state={state} />
       </div>
 
       {/* Price */}
