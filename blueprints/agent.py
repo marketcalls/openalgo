@@ -1181,6 +1181,104 @@ def get_conversation(conversation_id: int):
     )
 
 
+@agent_bp.route(
+    "/api/conversations/<int:conversation_id>/messages/<int:message_id>", methods=["DELETE"]
+)
+@check_session_validity
+@_api_limit
+def truncate_conversation(conversation_id: int, message_id: int):
+    """Remove a message and everything after it, from BOTH stores.
+
+    This is what editing a question does before it is asked again. The answer
+    that followed it, and everything after that, has to go: an edited question
+    sitting above its old answer is incoherent.
+
+    Two stores, and truncating only the first is the failure this route exists
+    to avoid. ``ag_message`` is the transcript the sidebar renders. Agno's own
+    session store is what gets replayed into the model's context through
+    ``add_history_to_context``, so a purely visual truncation would leave the
+    model still answering the question the operator has just rewritten. The
+    edit would look right and silently not be.
+
+    The agno runs are found through the ``run`` entry each assistant row carries
+    in its sidecar. A row stored before that entry existed simply has none, and
+    its run stays in the session store: the transcript is still correct, and the
+    model may carry one superseded exchange it will age out of its history
+    window anyway. That is the honest degradation, and it is better than
+    refusing to truncate at all.
+
+    Ownership is checked first. A conversation id is a small integer and the
+    route is authenticated but not authorised by anything else, so without this
+    an operator could truncate somebody else's thread by guessing.
+    """
+    username = session.get("user")
+    conversation = agent_db.get_conversation(conversation_id, username)
+    if conversation is None:
+        return _error(NOT_FOUND, 404)
+
+    try:
+        removed = agent_db.truncate_messages_from(conversation_id, message_id)
+    except Exception:
+        logger.exception("Could not truncate conversation %s", conversation_id)
+        return _error("Could not truncate the conversation", 500)
+
+    run_ids = [
+        str(entry.get("run_id"))
+        for row in removed
+        for entry in (row.get("notices") or [])
+        if isinstance(entry, dict) and entry.get("type") == "run" and entry.get("run_id")
+    ]
+
+    forgotten = _forget_agno_runs(run_ids)
+
+    logger.info(
+        "Truncated conversation %s from message %s: %d messages, %d runs forgotten",
+        conversation_id,
+        message_id,
+        len(removed),
+        forgotten,
+    )
+    return _ok({"removed": len(removed), "runs_forgotten": forgotten})
+
+
+def _forget_agno_runs(run_ids: list[str]) -> int:
+    """Delete runs from agno's own session store.
+
+    Never raises. A transcript that was truncated and a model history that was
+    not is a worse outcome than either alone, but it is still better than an
+    error after the rows are already gone: the caller has committed, and the
+    operator is waiting to re-ask their question.
+
+    Args:
+        run_ids: The runs to remove.
+
+    Returns:
+        How many were removed.
+    """
+    if not run_ids:
+        return 0
+    try:
+        store = builder.session_db()
+    except Exception:
+        logger.exception("Could not open the agno session store to forget runs")
+        return 0
+    if store is None:
+        return 0
+
+    forgotten = 0
+    for run_id in run_ids:
+        try:
+            # delete_run takes the run id alone and answers whether it removed
+            # anything, so a run already gone is not counted as forgotten.
+            if store.delete_run(run_id=run_id):
+                forgotten += 1
+        except Exception:
+            # One run that will not delete should not strand the rest. It ages
+            # out of num_history_runs on its own.
+            logger.exception("Could not forget agno run %s", run_id)
+    return forgotten
+
+
 @agent_bp.route("/api/conversations/<int:conversation_id>", methods=["DELETE"])
 @check_session_validity
 @_api_limit
@@ -1313,6 +1411,20 @@ class _TurnRecorder:
             entries.append({"type": "ui", "content": "".join(self._ui)})
         if self._usage is not None:
             entries.append(self._usage)
+        if self.run_id:
+            # The agno run that produced this answer, carried so an edit can
+            # truncate the model's OWN history and not merely the transcript
+            # the operator sees. Those are two different stores: ag_message is
+            # what the sidebar renders, and agno's session store is what gets
+            # replayed into context. Dropping only the first would leave the
+            # model still seeing a question the operator has since rewritten,
+            # so the edit would look right and silently not be.
+            #
+            # It rides in the existing JSON sidecar rather than a new column,
+            # which is what keeps this off the migration path entirely.
+            # `hydrate.ts` ignores a notice type it does not know, so a stored
+            # row still renders as before.
+            entries.append({"type": "run", "run_id": self.run_id})
         return entries
 
     def has_content(self) -> bool:

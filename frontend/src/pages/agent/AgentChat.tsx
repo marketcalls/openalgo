@@ -47,7 +47,13 @@ import { useQuery } from '@tanstack/react-query'
 import { AlertCircle, Bot, SlidersHorizontal } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
-import { agentQueryKeys, getSettings, type ReasoningEffort } from '@/api/agent'
+import {
+  agentErrorMessage,
+  agentQueryKeys,
+  getSettings,
+  type ReasoningEffort,
+  truncateConversation,
+} from '@/api/agent'
 import { Composer } from '@/components/agent/Composer'
 import { ConversationSidebar } from '@/components/agent/ConversationSidebar'
 import { Message } from '@/components/agent/Message'
@@ -77,6 +83,7 @@ export default function AgentChat() {
   const [modelId, setModelId] = useState<number | null>(null)
   // Per turn, not persisted: effort belongs to the question being asked.
   const [effort, setEffort] = useState<ReasoningEffort>('off')
+  const [editError, setEditError] = useState<string | null>(null)
 
   // The trading switch lives on the config page; the chat only reads it.
   const settings = useQuery({
@@ -144,6 +151,66 @@ export default function AgentChat() {
   // The sidebar has already fetched the conversation and hydrated it, so the
   // thread is switched in one commit: the id the next message continues, and
   // the stored turns with their tools, notices and usage on them.
+  /** The newest answer, the only one worth offering a retry on. */
+  const lastAssistantId = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].role === 'assistant') return messages[index].id
+    }
+    return null
+  }, [messages])
+
+  /** The most recent question, which is what a retry re-sends. */
+  const lastUserText = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].role === 'user') return messages[index].content
+    }
+    return ''
+  }, [messages])
+
+  /**
+   * Replace a question and discard everything after it.
+   *
+   * The truncation happens on the SERVER first and the local state is rebuilt
+   * from what it removed. Splicing locally and letting the server catch up
+   * would look identical and be wrong: agno keeps its own copy of the
+   * conversation, and a purely local edit leaves the model still answering the
+   * question that was just rewritten.
+   *
+   * A message with no numeric id has never been stored, which happens when a
+   * turn is still in flight. There is nothing to truncate, so it is refused
+   * rather than silently sending a second question into the same thread.
+   */
+  const handleEdit = useCallback(
+    (messageId: string, text: string) => {
+      const numericId = Number(messageId)
+      if (!conversationId || !Number.isFinite(numericId)) return
+      setEditError(null)
+      void truncateConversation(conversationId, numericId)
+        .then(() => {
+          setConversation(
+            conversationId,
+            messages.slice(
+              0,
+              messages.findIndex((item) => item.id === messageId)
+            )
+          )
+          send(text)
+        })
+        .catch((cause) => {
+          // The answer is still on screen and the question unchanged, which is
+          // the right place to fail: nothing has been half-removed.
+          setEditError(agentErrorMessage(cause, 'Could not edit that message'))
+        })
+    },
+    [conversationId, messages, send, setConversation]
+  )
+
+  /** Ask the last question again, after a failure or an unsatisfying answer. */
+  const handleRetry = useCallback(() => {
+    if (!lastUserText) return
+    send(lastUserText)
+  }, [lastUserText, send])
+
   const handleSelectConversation = useCallback(
     (id: number, loaded: AgentMessage[]) => {
       setConversation(id, loaded)
@@ -234,7 +301,18 @@ export default function AgentChat() {
           ) : (
             <div className={cn(COLUMN, 'space-y-6 px-4 py-4')}>
               {messages.map((message) => (
-                <Message key={message.id} message={message} onConfirm={handleConfirm} />
+                <Message
+                  key={message.id}
+                  message={message}
+                  onConfirm={handleConfirm}
+                  onEdit={message.role === 'user' ? handleEdit : undefined}
+                  onRetry={
+                    message.role === 'assistant' && message.id === lastAssistantId
+                      ? handleRetry
+                      : undefined
+                  }
+                  busy={running}
+                />
               ))}
               {/* Lets the newest question reach the top of the viewport even
                   when the answer under it is only a line long. */}
@@ -245,10 +323,10 @@ export default function AgentChat() {
 
         <div className="shrink-0 border-t border-border">
           <div className={cn(COLUMN, 'space-y-2 px-4 py-3')}>
-            {error && (
+            {(error || editError) && (
               <Alert variant="destructive" className="py-2">
                 <AlertCircle className="h-4 w-4" aria-hidden />
-                <AlertDescription className="text-xs">{error}</AlertDescription>
+                <AlertDescription className="text-xs">{error || editError}</AlertDescription>
               </Alert>
             )}
             <ConversationUsageBadge totals={totals} className="px-1 sm:hidden" />

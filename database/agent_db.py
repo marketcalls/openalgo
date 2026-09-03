@@ -1633,6 +1633,48 @@ def list_messages(conversation_id: int, limit: int = 500) -> list[dict]:
         return []
 
 
+def truncate_messages_from(conversation_id: int, message_id: int) -> list[dict]:
+    """Remove one message and everything after it, returning what was removed.
+
+    This is what an edit does to the transcript. The rows come back rather than
+    a count because the caller needs their ``notices``: an assistant row carries
+    the agno run that produced it, and the model's own history has to be
+    truncated alongside this one or the edit is cosmetic.
+
+    Ordering is by id rather than by ``created_at``. Two messages in one turn
+    can share a timestamp to the resolution stored, and an ordering that ties is
+    an ordering that can drop the wrong row.
+
+    Args:
+        conversation_id: The conversation to truncate.
+        message_id: The first message to remove, kept in the removal.
+
+    Returns:
+        The removed rows, oldest first, as dicts.
+    """
+    try:
+        rows = (
+            db_session.query(AgMessage)
+            .filter(
+                AgMessage.conversation_id == conversation_id,
+                AgMessage.id >= message_id,
+            )
+            .order_by(AgMessage.id.asc())
+            .all()
+        )
+        removed = [message_to_dict(row) for row in rows]
+        for row in rows:
+            db_session.delete(row)
+        db_session.commit()
+        return removed
+    except Exception:
+        db_session.rollback()
+        logger.exception(
+            "Could not truncate conversation %s from message %s", conversation_id, message_id
+        )
+        raise
+
+
 def delete_messages(conversation_id: int) -> int:
     """Clear a conversation without deleting it.
 

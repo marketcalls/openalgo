@@ -806,6 +806,34 @@ export async function getConversation(id: number): Promise<ConversationDetail> {
   }
 }
 
+export interface TruncateResult {
+  /** How many messages were removed, the edited one included. */
+  removed: number
+  /** How many agno runs were forgotten alongside them. */
+  runs_forgotten: number
+}
+
+/**
+ * Remove a message and everything after it, from both stores.
+ *
+ * This is the first half of editing a question: the answer that followed it,
+ * and everything after that, has to go before the new question is asked, or the
+ * thread reads as an edited question sitting above its old answer.
+ *
+ * The server truncates agno's session store as well as the transcript, so the
+ * model stops seeing the superseded exchange. A purely local splice would look
+ * identical here and silently leave the model answering the old question.
+ */
+export async function truncateConversation(
+  conversationId: number,
+  messageId: number
+): Promise<TruncateResult> {
+  const response = await webClient.delete<TruncateResult>(
+    `${AGENT_API_BASE}/conversations/${conversationId}/messages/${messageId}`
+  )
+  return response.data
+}
+
 /**
  * Delete a conversation and its messages. Its audit rows stay: they are a trade
  * record and they outlive the conversation the trade was typed into.

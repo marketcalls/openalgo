@@ -60,6 +60,8 @@ import type { AgentMessage } from '@/lib/agent/useAgentStream'
 import type { AgentVizItem } from '@/lib/agent/viz'
 import { cn } from '@/lib/utils'
 import { CodeArtifact } from './CodeArtifact'
+import { MessageActions } from './MessageActions'
+import { MessageEditor } from './MessageEditor'
 import { ToolTimeline } from './ToolTimeline'
 import { UsageBadge } from './UsageBadge'
 import { VizBlock } from './viz/VizBlock'
@@ -386,6 +388,15 @@ export interface MessageProps {
   message: AgentMessage
   /** Resume a paused run. Omitted where the surface cannot approve anything. */
   onConfirm?: (decisions: Record<string, boolean>) => void
+  /**
+   * Replace this question and discard everything after it. Omitted where the
+   * surface cannot edit, and while a turn is streaming.
+   */
+  onEdit?: (messageId: string, text: string) => void
+  /** Ask the last question again. Offered on a turn that failed. */
+  onRetry?: () => void
+  /** True while any turn is streaming. Editing mid-run would race the answer. */
+  busy?: boolean
   className?: string
 }
 
@@ -394,7 +405,15 @@ export interface MessageProps {
  *
  * @param message - The turn, live or rehydrated from a stored conversation.
  */
-export const Message = memo(function Message({ message, onConfirm, className }: MessageProps) {
+export const Message = memo(function Message({
+  message,
+  onConfirm,
+  onEdit,
+  onRetry,
+  busy = false,
+  className,
+}: MessageProps) {
+  const [editing, setEditing] = useState(false)
   const split = useMemo(
     () => (message.role === 'assistant' ? splitAtOpenFence(message.content) : null),
     [message.role, message.content]
@@ -405,11 +424,37 @@ export const Message = memo(function Message({ message, onConfirm, className }: 
   )
 
   if (message.role === 'user') {
+    if (editing && onEdit) {
+      // Full width while editing. The bubble is right-aligned and capped at
+      // 85%, which is right for reading and cramped for writing.
+      return (
+        <div className={cn('flex justify-end', className)} data-message-id={message.id}>
+          <MessageEditor
+            value={message.content}
+            onCancel={() => setEditing(false)}
+            onSend={(text) => {
+              setEditing(false)
+              onEdit(message.id, text)
+            }}
+            className="w-full"
+          />
+        </div>
+      )
+    }
+
     return (
-      <div className={cn('flex justify-end', className)} data-message-id={message.id}>
+      <div
+        className={cn('group flex flex-col items-end gap-1', className)}
+        data-message-id={message.id}
+      >
         <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words text-primary-foreground">
           {message.content}
         </div>
+        <MessageActions
+          text={message.content}
+          onEdit={onEdit ? () => setEditing(true) : undefined}
+          disabled={busy}
+        />
       </div>
     )
   }
@@ -418,7 +463,7 @@ export const Message = memo(function Message({ message, onConfirm, className }: 
     !message.content && !message.reasoning && message.tools.length === 0 && message.viz.length === 0
 
   return (
-    <div className={cn('space-y-3', className)} data-message-id={message.id}>
+    <div className={cn('group space-y-3', className)} data-message-id={message.id}>
       {message.reasoning && <Reasoning text={message.reasoning} />}
       {message.tools.length > 0 && <ToolTimeline tools={message.tools} />}
       {/* Fragments, not wrappers: the turn's `space-y-3` spaces DOM children,
@@ -438,6 +483,11 @@ export const Message = memo(function Message({ message, onConfirm, className }: 
         <PendingConfirm pending={message.pending} onConfirm={onConfirm} />
       )}
       {message.usage && <UsageBadge usage={message.usage} />}
+      {/* Actions last, so they sit under the answer rather than over it. Not
+          offered mid-stream: copying half an answer is rarely what was meant. */}
+      {!message.streaming && (
+        <MessageActions text={message.content} onRetry={onRetry} disabled={busy} />
+      )}
     </div>
   )
 })
