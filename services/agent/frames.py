@@ -157,6 +157,11 @@ class Start(Frame):
     run_id: str
     session_id: str
     conversation_id: int | str
+    #: The stored ``ag_message`` row for the question that opened this run, or
+    #: an empty string on a surface that stores nothing. The client needs it to
+    #: edit that question later: its own message ids are local counters, and
+    #: truncation addresses rows by their database id.
+    user_message_id: int | str = ""
 
 
 @dataclass(frozen=True, slots=True)

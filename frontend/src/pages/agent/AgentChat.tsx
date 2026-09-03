@@ -182,8 +182,17 @@ export default function AgentChat() {
    */
   const handleEdit = useCallback(
     (messageId: string, text: string) => {
-      const numericId = Number(messageId)
-      if (!conversationId || !Number.isFinite(numericId)) return
+      // Message ids are `stored-<row>` once the server has told us the row, and
+      // a local counter like `user-3` before that. Only the first can be
+      // truncated, because truncation names rows by database id.
+      const match = /^stored-(\d+)$/.exec(messageId)
+      const numericId = match ? Number(match[1]) : Number.NaN
+      if (!conversationId || !Number.isFinite(numericId)) {
+        // Never a silent return. An edit that quietly reverts is exactly what
+        // this looked like before the id was carried back from the server.
+        setEditError('That message cannot be edited yet. Wait for the turn to finish, then retry.')
+        return
+      }
       setEditError(null)
       void truncateConversation(conversationId, numericId)
         .then(() => {

@@ -70,6 +70,13 @@ export interface StartFrame {
   run_id: string
   session_id: string
   conversation_id: number | string
+  /**
+   * The stored row for the question that opened this run, empty on a surface
+   * that persists nothing. Editing addresses rows by database id, and the
+   * client's own message ids are local counters, so this is the only way a
+   * live message can later be edited.
+   */
+  user_message_id?: number | string
 }
 
 /** One chunk of assistant prose. The client appends; it never replaces. */

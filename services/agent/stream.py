@@ -410,6 +410,7 @@ class EventTranslator:
         *,
         model: str | None = None,
         tool_frames: Callable[[str, Any], Iterable[Frame]] | None = None,
+        user_message_id: int | str = "",
     ) -> None:
         """Build a translator for one run.
 
@@ -426,6 +427,7 @@ class EventTranslator:
                 visualization must not kill the answer it belongs to.
         """
         self.conversation_id = conversation_id
+        self.user_message_id = user_message_id
         self.run_id: str = ""
         self.session_id: str = ""
 
@@ -555,6 +557,7 @@ class EventTranslator:
                 run_id=self.run_id,
                 session_id=self.session_id,
                 conversation_id=self.conversation_id,
+                user_message_id=self.user_message_id,
             )
         ]
 
@@ -1308,6 +1311,7 @@ def stream_run(
     user_id: str | None = None,
     model: str | None = None,
     tool_frames: Callable[[str, Any], Iterable[Frame]] | None = None,
+    user_message_id: int | str = "",
     **run_kwargs: Any,
 ) -> Iterator[str]:
     """Stream one turn of a conversation as SSE text.
@@ -1334,7 +1338,9 @@ def stream_run(
         SSE text, ready to hand to a Flask response together with
         :data:`~services.agent.frames.SSE_HEADERS`.
     """
-    translator = EventTranslator(conversation_id, model=model, tool_frames=tool_frames)
+    translator = EventTranslator(
+        conversation_id, model=model, tool_frames=tool_frames, user_message_id=user_message_id
+    )
 
     def _start() -> Iterator[Any]:
         return agent.run(

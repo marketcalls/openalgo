@@ -282,6 +282,32 @@ export function useAgentStream(options: UseAgentStreamOptions = {}): UseAgentStr
             conversationIdRef.current = id
             setConversationId(id)
           }
+          // Re-key the question just sent to the row the server stored it as,
+          // so it can be edited later. Local ids are counters like `user-3`,
+          // and truncation names rows by database id; without this the newest
+          // question is the one message that cannot be edited.
+          //
+          // It is committed straight to state rather than through the draft:
+          // the draft is the ASSISTANT message being streamed, and the question
+          // is already in the list above it.
+          const storedUser = Number(frame.user_message_id)
+          if (Number.isFinite(storedUser) && storedUser > 0) {
+            setMessages((prev) => {
+              // A plain reverse scan: findLastIndex needs a newer lib target
+              // than this project sets, and one loop is not worth moving it.
+              let index = -1
+              for (let scan = prev.length - 1; scan >= 0; scan -= 1) {
+                if (prev[scan].role === 'user') {
+                  index = scan
+                  break
+                }
+              }
+              if (index < 0 || prev[index].id === `stored-${storedUser}`) return prev
+              const next = [...prev]
+              next[index] = { ...next[index], id: `stored-${storedUser}` }
+              return next
+            })
+          }
           scheduleFlush()
           break
         }

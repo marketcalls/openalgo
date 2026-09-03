@@ -1925,9 +1925,13 @@ def chat_stream():
         logger.exception("Could not build the agent for conversation %s", conversation_id)
         return _error("Could not start the agent", 500)
 
-    agent_db.add_message(
+    stored_user, _store_error = agent_db.add_message(
         conversation_id, "user", message, notices=_run_options_notice(effort, runtime_lines)
     )
+    # The client addresses a truncation by database id, and its own message ids
+    # are local counters, so the row it just created has to travel back in the
+    # start frame. Without it an edit has nothing to name and fails silently.
+    user_message_id = (stored_user or {}).get("id") or ""
 
     recorder = _TurnRecorder()
     chunks = agent_stream.stream_run(
@@ -1938,6 +1942,7 @@ def chat_stream():
         user_id=username,
         model=_model_id_of(agent),
         tool_frames=viz_sink_module.frame_hook(viz_sink),
+        user_message_id=user_message_id,
     )
 
     response = Response(
