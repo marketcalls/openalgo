@@ -86,10 +86,15 @@ def _backfill_ltp(response, auth_token):
     leaves positions without a price, exactly as before this function
     existed - it must never break the positions endpoint itself.
     """
-    positions = response.get("data")
-    if not positions:
-        return
     try:
+        # Inside the try, not ahead of it: this is the one statement that can
+        # reach a payload Kotak did not shape as an object (an error body that
+        # decodes to a list, say), and the docstring's promise that positions
+        # never break on our account has to cover it too.
+        positions = response.get("data")
+        if not positions:
+            return
+
         from broker.kotak.api.data import BrokerData
         from broker.kotak.mapping.order_data import _openalgo_symbol
 
@@ -103,11 +108,19 @@ def _backfill_ltp(response, auth_token):
             return
 
         broker_data = BrokerData(auth_token)
-        symbols = [{"symbol": s, "exchange": e} for _, s, e in resolved]
-        # One batched call for every position (get_multiquotes already
-        # handles Kotak's own <50-symbol batch cap internally) - not one
-        # call per position, which is the per-symbol-latency concern that
-        # stalled an earlier, unrelated Kotak P&L PR (#1224).
+        # One quote per *distinct* instrument. The same symbol is routinely
+        # held under two products (MIS and NRML), and one entry per position
+        # would send it twice in the same request - wasted room against a
+        # batch cap that get_multiquotes splits at 25. dict.fromkeys keeps
+        # the first-seen order; the price is matched back per position below,
+        # so both rows still get stamped.
+        symbols = [
+            {"symbol": s, "exchange": e} for s, e in dict.fromkeys((s, e) for _, s, e in resolved)
+        ]
+        # One batched call for every position (get_multiquotes splits at
+        # Kotak's own sub-50 cap internally, 25 per request since #1961) -
+        # not one call per position, which is the per-symbol-latency concern
+        # that stalled an earlier, unrelated Kotak P&L PR (#1224).
         quotes = broker_data.get_multiquotes(symbols)
 
         ltp_by_key = {}
