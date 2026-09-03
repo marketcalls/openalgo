@@ -118,6 +118,7 @@ def adapter(monkeypatch):
     a.lock = threading.Lock()
     a.subscriptions, a.token_modes, a.token_correlation_ids = {}, {}, {}
     a.subscription_queue, a.batch_timer, a.batch_delay = [], None, 0.05
+    a.send_retries, a.max_send_retries = {}, 3
     a.running, a.connected = True, True
     a.ws_client = MstockWebSocket(auth_token="t")
     a.ws_client.ws = FakeWs()
@@ -198,6 +199,47 @@ def test_refused_send_leaves_the_token_retryable(adapter):
     assert wait_until(lambda: refused), "the batch was never offered to the broker"
 
     assert adapter.token_modes == {}, "a refused send must not be confirmed"
+
+
+def test_a_permanently_refused_send_stops_retrying(adapter):
+    """A refused send is retried, but must not re-arm the timer forever.
+
+    Requeuing without a budget spun the batch timer every batch_delay and
+    logged a warning each time, for as long as the socket kept refusing while
+    still reporting itself connected.
+    """
+    attempts = []
+
+    def always_refuse(subs, mode):
+        attempts.append(mode)
+        return False
+
+    adapter.ws_client.subscribe_batch = always_refuse
+
+    want(adapter, "S")
+    wait_until(lambda: adapter.batch_timer is None and not adapter.subscription_queue)
+
+    assert len(attempts) == 1 + adapter.max_send_retries, "one send plus its retry budget"
+    assert adapter.batch_timer is None, "the timer must not stay armed"
+    assert adapter.subscription_queue == []
+    assert adapter.token_modes == {}, "left unconfirmed so the resync recovers it"
+
+
+def test_a_transient_refusal_still_recovers(adapter):
+    """The budget must not cost recovery from a couple of failed sends."""
+    calls = {"n": 0}
+
+    def flaky(subs, mode):
+        calls["n"] += 1
+        return calls["n"] > 2
+
+    adapter.ws_client.subscribe_batch = flaky
+
+    want(adapter, "S")
+    wait_until(lambda: adapter.token_modes)
+
+    assert adapter.token_modes == {"22": 3}
+    assert adapter.send_retries == {}, "the budget resets once the send lands"
 
 
 def test_resync_uses_the_highest_requested_mode(adapter):
@@ -305,6 +347,74 @@ def test_dead_token_retries_once_when_a_fresh_one_exists(monkeypatch):
         c.running = False
         c.disconnect_stream()
         thread.join(timeout=6)
+
+
+def test_every_terminal_exit_reports_the_feed_dead(monkeypatch):
+    """THE DEFECT: only the auth path told the owner.
+
+    A client whose reconnect budget is spent is just as dead as one holding an
+    expired credential - the thread exits and nothing reconnects - but the
+    adapter kept reporting connected=True, so the proxy served a cached feed
+    that could never produce another tick.
+    """
+    monkeypatch.setattr(ws_module, "WebSocketApp", FakeApp)
+    monkeypatch.setattr(ws_mod, "RECONNECT_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(ws_mod, "RECONNECT_BASE_DELAY", 0.01)
+    monkeypatch.setattr(ws_mod, "RECONNECT_MAX_DELAY", 0.02)
+
+    for label, arm in (
+        ("auth stand-down", lambda c: setattr(c, "auth_failed", True)),
+        ("max attempts", lambda c: None),
+    ):
+        fired = []
+        c = MstockWebSocket(auth_token="t", token_provider=lambda: "t", auth_error_check=auth_check)
+        # Bind per iteration: a bare closure would capture the loop's name.
+        c.auth_failure_callback = lambda seen=fired: seen.append(1)
+        c.running, c._generation, c.ws = True, 1, FakeApp("u")
+        c._stop_event.clear()
+        c._feed_dead = False
+        arm(c)
+
+        thread = threading.Thread(target=c._run_websocket, args=(1, c.ws), daemon=True)
+        thread.start()
+        thread.join(timeout=10)
+
+        assert thread.is_alive() is False, label
+        assert fired == [1], f"{label}: the owner must be told exactly once"
+        assert c._connected is False, label
+
+
+def test_a_deliberate_disconnect_is_not_a_dead_feed(monkeypatch):
+    """Teardown is not a failure; the owner already knows it asked to stop."""
+    monkeypatch.setattr(ws_module, "WebSocketApp", FakeApp)
+    monkeypatch.setattr(ws_mod, "RECONNECT_BASE_DELAY", 2.0)
+    monkeypatch.setattr(ws_mod, "RECONNECT_MAX_DELAY", 5.0)
+
+    fired = []
+    c = MstockWebSocket(auth_token="t")
+    c.auth_failure_callback = lambda: fired.append(1)
+    c.running, c._generation, c.ws = True, 1, FakeApp("u")
+    c._stop_event.clear()
+    c._feed_dead = False
+
+    thread = threading.Thread(target=c._run_websocket, args=(1, c.ws), daemon=True)
+    thread.start()
+    wait_until(lambda: c._reconnect_attempts >= 1)
+    c.disconnect_stream()
+    thread.join(timeout=5)
+
+    assert fired == [], "a requested teardown must not look like a dead feed"
+
+
+def test_the_dead_feed_notice_is_idempotent():
+    fired = []
+    c = MstockWebSocket(auth_token="t")
+    c.auth_failure_callback = lambda: fired.append(1)
+
+    c._notify_feed_dead("first")
+    c._notify_feed_dead("second")
+
+    assert fired == [1]
 
 
 @pytest.mark.parametrize(
