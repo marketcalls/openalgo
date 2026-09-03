@@ -176,3 +176,36 @@ def test_a_position_opened_and_partly_closed_today_keeps_its_entry_price():
 
     assert position["quantity"] == 60
     assert position["average_price"] == 21.0
+
+
+# --- fields Kotak sent in a shape we cannot use ------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"cfBuyAmt": None},
+        {"cfSellAmt": ""},
+        {"sellAmt": "NA"},
+        {"cfBuyQty": None},
+        {"flSellQty": ""},
+        {"_ltp": None},
+    ],
+)
+def test_one_unusable_field_does_not_take_the_whole_book_down(bad):
+    positions = transform_positions_data([row(flBuyQty="10", buyAmt="1000.00", **bad)])
+
+    assert len(positions) == 1
+    assert "pnl" in positions[0]
+
+
+def test_an_open_position_is_marked_against_the_unrounded_price():
+    """CDS quotes carry four decimals, so the display value is not good enough.
+
+    USDINR ticks at 0.0025. Marking 10,000 against 83.47 instead of 83.4725
+    understates the position by 25 rupees.
+    """
+    position = one(flBuyQty="10000", buyAmt="834000.00", _ltp=83.4725)
+
+    assert position["ltp"] == 83.47
+    assert position["pnl"] == 725.0

@@ -236,6 +236,28 @@ def map_position_data(position_data):
     return map_order_data(position_data)
 
 
+def _number(position, field):
+    """One of Kotak's numeric position fields as a float.
+
+    Kotak sends these as strings, and an optional one can arrive as null or
+    empty on a row that never had that leg - float() raises on both, which
+    would abort the entire position book over a single field on a single row.
+    Anything unusable reads as zero, which is what the field's absence already
+    meant.
+
+    Args:
+        position: One raw Kotak position row.
+        field: The field name to read.
+
+    Returns:
+        float: The field's value, or 0.0 if it is absent, null or not a number.
+    """
+    try:
+        return float(position.get(field) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _price_factor(position):
     """The price scaling terms of Kotak's documented P&L formula.
 
@@ -253,11 +275,7 @@ def _price_factor(position):
     """
 
     def term(field):
-        try:
-            value = float(position.get(field, 1) or 1)
-        except (TypeError, ValueError):
-            return 1.0
-        return value or 1.0
+        return _number(position, field) or 1.0
 
     return (
         term("multiplier") * (term("genNum") / term("genDen")) * (term("prcNum") / term("prcDen"))
@@ -267,22 +285,28 @@ def _price_factor(position):
 def transform_positions_data(positions_data):
     transformed_data = []
     for position in positions_data:
+        # "_ltp" is a scratch field get_positions() stamps on before this
+        # function runs (see order_api.py's _backfill_ltp) - Kotak's own
+        # positions endpoint never returns a live price at all, open or closed,
+        # unlike Zerodha's (which reads "last_price" directly from Kite here).
+        # Kept unrounded for the P&L arithmetic below and rounded only on the
+        # way out: CDS prices carry four decimals (USDINR ticks at 0.0025), so
+        # marking a position against the display value costs real money on a
+        # large one.
+        ltp = _number(position, "_ltp")
         transformed_position = {
             "symbol": position.get("trdSym", ""),
             "exchange": position.get("exSeg", ""),
             "product": position.get("prod", ""),
-            "quantity": (int(position.get("flBuyQty", 0)) - int(position.get("flSellQty", 0)))
-            + (int(position.get("cfBuyQty", 0)) - int(position.get("cfSellQty", 0))),
+            "quantity": int(
+                (_number(position, "flBuyQty") - _number(position, "flSellQty"))
+                + (_number(position, "cfBuyQty") - _number(position, "cfSellQty"))
+            ),
             "average_price": position.get("avgnetprice", 0.0),
-            # "_ltp" is a scratch field get_positions() stamps on before this
-            # function runs (see order_api.py's _backfill_ltp) - Kotak's own
-            # positions endpoint never returns a live price at all, open or
-            # closed, unlike Zerodha's (which reads "last_price" directly
-            # from Kite here). Matches Zerodha's "ltp" key/shape exactly so
-            # every consumer of transform_positions_data can treat brokers
-            # uniformly - always present, defaults to 0.0 if the backfill
-            # couldn't resolve a quote for this symbol.
-            "ltp": round(position.get("_ltp", 0.0), 2),
+            # Matches Zerodha's "ltp" key/shape exactly so every consumer of
+            # transform_positions_data can treat brokers uniformly - always
+            # present, defaults to 0.0 if the backfill couldn't resolve a quote.
+            "ltp": round(ltp, 2),
         }
         # Totals across the carried-forward leg and today's, which Kotak keeps
         # in separate fields. "quantity" above already sums both, so the average
@@ -292,10 +316,10 @@ def transform_positions_data(positions_data):
         # That then also stopped the positions page marking the position to
         # market, since it only computes an unrealized P&L when average_price is
         # above zero - so a carried-forward holding showed no cost and no P&L.
-        total_buy_amt = float(position.get("cfBuyAmt", 0)) + float(position.get("buyAmt", 0))
-        total_sell_amt = float(position.get("cfSellAmt", 0)) + float(position.get("sellAmt", 0))
-        buy_qty = float(position.get("flBuyQty", 0)) + float(position.get("cfBuyQty", 0))
-        sell_qty = float(position.get("flSellQty", 0)) + float(position.get("cfSellQty", 0))
+        total_buy_amt = _number(position, "cfBuyAmt") + _number(position, "buyAmt")
+        total_sell_amt = _number(position, "cfSellAmt") + _number(position, "sellAmt")
+        buy_qty = _number(position, "flBuyQty") + _number(position, "cfBuyQty")
+        sell_qty = _number(position, "flSellQty") + _number(position, "cfSellQty")
 
         if transformed_position["quantity"] > 0 and buy_qty > 0:
             transformed_position["average_price"] = round(total_buy_amt / buy_qty, 2)
@@ -330,9 +354,9 @@ def transform_positions_data(positions_data):
 
         if not net_qty:
             transformed_position["pnl"] = round(realized, 2)
-        elif transformed_position["ltp"]:
+        elif ltp:
             transformed_position["pnl"] = round(
-                realized + net_qty * transformed_position["ltp"] * _price_factor(position), 2
+                realized + net_qty * ltp * _price_factor(position), 2
             )
         else:
             # Open, but with no price to mark against - the LTP backfill in

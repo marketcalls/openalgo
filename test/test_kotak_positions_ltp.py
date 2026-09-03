@@ -109,11 +109,23 @@ def test_both_product_rows_of_a_duplicate_still_get_a_price(quote_batches):
 
 
 @pytest.mark.parametrize("payload", [["error"], "gateway timeout", None, 0])
-def test_a_payload_that_is_not_an_object_does_not_raise(monkeypatch, payload):
-    """The backfill is best-effort; it must never turn a read into a 500."""
+def test_a_payload_that_is_not_an_object_is_rejected_by_name(monkeypatch, payload):
+    """Loudly, and before the mapping layer turns it into a puzzle.
+
+    Not normalized to an empty book on purpose: close_all_positions reads a
+    response with no positions in it as a successful square-off, so standing in
+    for a failed read would report closed positions the broker still holds.
+    """
     monkeypatch.setattr(order_api, "get_api_response", lambda *a, **k: copy.deepcopy(payload))
 
-    assert order_api.get_positions(AUTH) == payload
+    with pytest.raises(Exception, match="not an object"):
+        order_api.get_positions(AUTH)
+
+
+@pytest.mark.parametrize("payload", [["error"], "gateway timeout", None, 0])
+def test_the_backfill_itself_never_raises(monkeypatch, payload):
+    """The rejection above is get_positions'. _backfill_ltp stays best-effort."""
+    order_api._backfill_ltp(payload, AUTH)
 
 
 def test_a_quotes_outage_leaves_prices_at_zero(monkeypatch, quote_batches):

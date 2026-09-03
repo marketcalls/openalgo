@@ -140,6 +140,22 @@ def _backfill_ltp(response, auth_token):
 
 def get_positions(auth_token):
     response = get_api_response("/quick/user/positions", auth_token)
+    if not isinstance(response, dict):
+        # Every caller indexes this as an object - the positionbook mapping,
+        # the smart-order position lookup, close_all_positions - so a payload
+        # that is not one can only fail. Failing here names it; letting it
+        # through surfaced as "list indices must be integers" from inside the
+        # mapping layer, several frames from the cause.
+        #
+        # Deliberately NOT normalized to an empty book. close_all_positions
+        # reads a response with no positions in it as "No Open Positions Found"
+        # and returns 200, which close_position_service reports as a successful
+        # square-off - so quietly standing in for a failed read would tell an
+        # operator their positions were closed while the broker still held them.
+        # A read that did not work has to say so.
+        raise Exception(
+            f"Kotak returned a positions payload that is not an object: {type(response).__name__}"
+        )
     _backfill_ltp(response, auth_token)
     return response
 
@@ -254,7 +270,7 @@ def place_order_api(data, auth_token):
 
     try:
         response = client.post(url, headers=headers, content=payload)
-        logger.debug(f"PLACE ORDER API Response: {response.status_code} {response.text}")
+        logger.info(f"PLACE ORDER API Response: {response.status_code} {response.text}")
 
         # Add status attribute for compatibility with the existing codebase
         response.status = response.status_code
