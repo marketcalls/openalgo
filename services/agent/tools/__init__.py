@@ -1,0 +1,503 @@
+"""Agent tool registry.
+
+This package holds every toolkit the agent can be given. The registry is the
+only thing that decides which of them a particular run actually sees.
+
+Adding a capability
+-------------------
+
+Adding a capability is **one new file plus one registry line**:
+
+1. Write ``services/agent/tools/<name>.py`` holding a subclass of
+   ``services.agent.tools.base.OpenAlgoToolkit``.
+2. Add one ``ToolkitSpec(...)`` entry to :data:`TOOLKITS` below naming the
+   module, the class, the surfaces it belongs to, and whether it may only be
+   handed out when trading is enabled.
+
+Nothing else changes. ``builder.py`` passes :func:`build_toolkits` to agno as a
+callable factory, so the list is re-evaluated on every run against the current
+session state: a session that has not enabled trading never sees the order
+tools in its schema at all, and the chart surface never sees them either.
+
+Import safety
+-------------
+
+This module must stay importable when ``agno`` is not installed, so the rest of
+OpenAlgo and the whole test suite can import it without pulling in the agent's
+optional dependency. That is why:
+
+* ``agno`` is imported **inside** :func:`build_toolkits`, never at module level;
+* :data:`TOOLKITS` holds module and attribute *names*, not imported classes, so
+  a registry entry costs nothing until a toolkit is actually built;
+* :class:`ToolContext` lives here rather than in ``base.py`` (which does need
+  agno), so a context can be constructed and the registry filtered with no
+  optional dependency present at all.
+
+Selection rules
+---------------
+
+A spec is selected when its surface list contains the context's surface, and,
+when it is marked ``requires_trading``, only if the context says trading is
+enabled. Selection never inspects anything the model can influence.
+"""
+
+from __future__ import annotations
+
+import importlib
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field, fields
+from typing import TYPE_CHECKING, Any
+
+from utils.logging import get_logger
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
+    from agno.tools import Toolkit
+
+logger = get_logger(__name__)
+
+SURFACE_CHAT = "chat"
+SURFACE_CHART = "chart"
+
+#: Every surface the agent runs on. A toolkit that names all of them is offered
+#: to both the conversation page and the chart panel.
+ALL_SURFACES: frozenset[str] = frozenset({SURFACE_CHAT, SURFACE_CHART})
+
+CHAT_ONLY: frozenset[str] = frozenset({SURFACE_CHAT})
+CHART_ONLY: frozenset[str] = frozenset({SURFACE_CHART})
+
+__all__ = [
+    "ALL_SURFACES",
+    "CHART_ONLY",
+    "CHAT_ONLY",
+    "SURFACE_CHART",
+    "SURFACE_CHAT",
+    "TOOLKITS",
+    "ToolContext",
+    "ToolkitSpec",
+    "add_spec",
+    "agno_available",
+    "build_toolkits",
+    "register",
+    "registered_specs",
+    "select_specs",
+]
+
+
+def _normalise_surface(value: Any) -> str:
+    """Normalise a surface name to its canonical lower-case form.
+
+    Args:
+        value: Raw surface value from a context or a spec.
+
+    Returns:
+        The lower-case, whitespace-stripped surface name. An empty or
+        unusable value becomes :data:`SURFACE_CHAT`.
+    """
+    if not isinstance(value, str):
+        return SURFACE_CHAT
+    cleaned = value.strip().lower()
+    return cleaned or SURFACE_CHAT
+
+
+@dataclass
+class ToolContext:
+    """Everything a toolkit needs to know about the run it is serving.
+
+    One instance is built per agent run, before any tool is constructed. It
+    carries no agno type and no database handle, so it can be created in a test
+    or in a blueprint without the optional agent dependencies being installed.
+
+    Attributes:
+        api_key: The OpenAlgo API key the internal service layer resolves the
+            user, broker and auth token from. Required.
+        conversation_id: Primary key of the ``ag_conversation`` row this run
+            belongs to, used to tie audit rows to a conversation.
+        surface: ``chat`` or ``chart``. Decides which toolkits are offered.
+        run_id: Agno run id for the current turn, when one is known.
+        session_id: Agno session id for the current turn, when one is known.
+        user_id: OpenAlgo user the run belongs to.
+        trading_enabled: True when the operator has enabled trading for this
+            session. Toolkits marked ``requires_trading`` are withheld when it
+            is false, so the model cannot see an order tool it may not use.
+        analyzer_mode: True when the platform analyzer toggle is on. Carried for
+            the risk guard and for prompt wording; it never selects toolkits.
+        session_state: The agno session state mapping this context was derived
+            from. Kept so a tool can read a value the context does not model.
+        extras: Free-form extras for a surface that needs more, such as the
+            chart panel's current symbol and interval.
+    """
+
+    api_key: str
+    conversation_id: int | str | None = None
+    surface: str = SURFACE_CHAT
+    run_id: str | None = None
+    session_id: str | None = None
+    user_id: str | None = None
+    trading_enabled: bool = False
+    analyzer_mode: bool = False
+    session_state: dict[str, Any] = field(default_factory=dict)
+    extras: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Normalise the surface and reject a context with no API key."""
+        if not self.api_key or not isinstance(self.api_key, str):
+            raise ValueError("ToolContext requires a non-empty OpenAlgo api_key")
+        self.surface = _normalise_surface(self.surface)
+        self.trading_enabled = bool(self.trading_enabled)
+        self.analyzer_mode = bool(self.analyzer_mode)
+
+    @classmethod
+    def from_session_state(cls, session_state: Mapping[str, Any], **overrides: Any) -> ToolContext:
+        """Build a context from an agno session-state mapping.
+
+        ``builder.py`` hands the toolkit factory a run context whose session
+        state carries the values below. Keys the context does not model are
+        ignored but kept in :attr:`session_state`, so a later toolkit can read
+        one without this class changing.
+
+        Args:
+            session_state: Mapping of session values. Recognised keys are the
+                field names of this class.
+            **overrides: Values that win over the mapping, used by callers that
+                already know the run id or surface for the current turn.
+
+        Returns:
+            A populated :class:`ToolContext`.
+
+        Raises:
+            ValueError: If neither the mapping nor the overrides carry an
+                ``api_key``.
+        """
+        known = {f.name for f in fields(cls)} - {"session_state", "extras"}
+        values: dict[str, Any] = {
+            name: session_state[name] for name in known if name in session_state
+        }
+        values.update({name: value for name, value in overrides.items() if name in known})
+        extras = overrides.get("extras")
+        return cls(
+            session_state=dict(session_state),
+            extras=dict(extras) if isinstance(extras, Mapping) else {},
+            **values,
+        )
+
+
+@dataclass
+class ToolkitSpec:
+    """One registry entry: a toolkit class named by module and attribute.
+
+    The class is not imported until a run actually selects it, which is what
+    keeps this package importable without agno and keeps a broken toolkit from
+    taking the whole agent down at import time.
+
+    Attributes:
+        key: Stable identifier, unique across the registry. Also the dedupe key.
+        module: Fully qualified module holding the toolkit class.
+        attr: Class name inside that module.
+        surfaces: Surfaces the toolkit is offered on.
+        requires_trading: True when the toolkit may only be handed out to a
+            session that has trading enabled.
+        order: Sort weight. Lower is offered first; ties break on ``key``.
+        description: One line for logs and for the settings UI.
+        cls: Resolved class, filled in by :meth:`resolve` or supplied up front
+            by :func:`register`.
+    """
+
+    key: str
+    module: str
+    attr: str
+    surfaces: frozenset[str] = ALL_SURFACES
+    requires_trading: bool = False
+    order: int = 100
+    description: str = ""
+    cls: type | None = None
+
+    def __post_init__(self) -> None:
+        """Coerce the surface collection to a normalised frozenset."""
+        self.surfaces = frozenset(_normalise_surface(s) for s in self.surfaces)
+        if not self.surfaces:
+            raise ValueError(f"Toolkit spec {self.key!r} names no surface")
+
+    def resolve(self) -> type:
+        """Import the module and return the toolkit class, caching the result.
+
+        Returns:
+            The toolkit class named by :attr:`module` and :attr:`attr`.
+
+        Raises:
+            ImportError: If the module cannot be imported, which includes agno
+                being absent because ``base.py`` requires it.
+            AttributeError: If the module has no such attribute.
+            TypeError: If the attribute is not a class.
+        """
+        if self.cls is not None:
+            return self.cls
+        module = importlib.import_module(self.module)
+        obj = getattr(module, self.attr)
+        if not isinstance(obj, type):
+            raise TypeError(f"{self.module}.{self.attr} is not a class")
+        self.cls = obj
+        return obj
+
+    def matches(self, context: Any) -> bool:
+        """Report whether this toolkit should be offered to a run.
+
+        Attributes are read with ``getattr`` defaults so a duck-typed context
+        from a test is accepted, and a context missing ``trading_enabled`` is
+        treated as not permitted rather than permitted.
+
+        Args:
+            context: The run's :class:`ToolContext`, or anything shaped like it.
+
+        Returns:
+            True when the surface matches and the trading requirement is met.
+        """
+        surface = _normalise_surface(getattr(context, "surface", SURFACE_CHAT))
+        if surface not in self.surfaces:
+            return False
+        if self.requires_trading and not bool(getattr(context, "trading_enabled", False)):
+            return False
+        return True
+
+
+# ---------------------------------------------------------------------------
+# The registry
+# ---------------------------------------------------------------------------
+
+#: One entry per toolkit file. This is the single line an author adds when they
+#: add a capability. Example, for ``services/agent/tools/market.py`` holding
+#: ``class MarketToolkit(OpenAlgoToolkit)``::
+#:
+#:     ToolkitSpec(
+#:         key="market",
+#:         module="services.agent.tools.market",
+#:         attr="MarketToolkit",
+#:         surfaces=ALL_SURFACES,
+#:         order=10,
+#:         description="Quotes, depth, history and intervals.",
+#:     ),
+#:
+#: An order toolkit adds ``requires_trading=True``; a chart toolkit narrows to
+#: ``surfaces=CHART_ONLY``. Concrete toolkits land in a later phase, so the list
+#: is deliberately empty rather than naming files that do not exist yet.
+TOOLKITS: list[ToolkitSpec] = []
+
+
+def add_spec(spec: ToolkitSpec) -> ToolkitSpec:
+    """Add a spec to the registry, replacing any earlier one with the same key.
+
+    Replacing rather than appending keeps a module reload, or a test that
+    registers a stand-in toolkit, from producing two entries that both build.
+
+    Args:
+        spec: The spec to register.
+
+    Returns:
+        The spec that was registered.
+    """
+    for index, existing in enumerate(TOOLKITS):
+        if existing.key == spec.key:
+            logger.debug("Replacing agent toolkit spec %r", spec.key)
+            TOOLKITS[index] = spec
+            return spec
+    TOOLKITS.append(spec)
+    return spec
+
+
+def _default_key(cls: type) -> str:
+    """Derive a registry key from a toolkit class name.
+
+    ``MarketDataToolkit`` becomes ``market_data``.
+
+    Args:
+        cls: The toolkit class.
+
+    Returns:
+        A snake-case key.
+    """
+    name = cls.__name__
+    if name.endswith("Toolkit"):
+        name = name[: -len("Toolkit")] or cls.__name__
+    out: list[str] = []
+    for index, char in enumerate(name):
+        if char.isupper() and index and not name[index - 1].isupper():
+            out.append("_")
+        out.append(char.lower())
+    return "".join(out) or cls.__name__.lower()
+
+
+def register(
+    cls: type | None = None,
+    /,
+    *,
+    key: str | None = None,
+    surfaces: Iterable[str] = ALL_SURFACES,
+    requires_trading: bool = False,
+    order: int = 100,
+    description: str = "",
+) -> Any:
+    """Register a toolkit class, as a decorator or by direct call.
+
+    Use this for a toolkit that is not part of the built-in :data:`TOOLKITS`
+    table, such as one contributed by a test or loaded at runtime. Built-in
+    toolkits use the table instead, because the table needs no import to be
+    filtered and a decorator only runs once its module has been imported.
+
+    Args:
+        cls: The toolkit class, when called directly rather than as a decorator.
+        key: Registry key. Defaults to the snake-case class name with a trailing
+            ``Toolkit`` removed.
+        surfaces: Surfaces the toolkit is offered on.
+        requires_trading: True when the toolkit may only be built for a session
+            with trading enabled.
+        order: Sort weight, lower first.
+        description: One line describing the toolkit.
+
+    Returns:
+        The class when used directly, or the decorator when used with keywords.
+    """
+
+    def decorate(target: type) -> type:
+        first_line = (target.__doc__ or "").strip().splitlines()
+        add_spec(
+            ToolkitSpec(
+                key=key or _default_key(target),
+                module=target.__module__,
+                attr=target.__name__,
+                surfaces=frozenset(surfaces),
+                requires_trading=requires_trading,
+                order=order,
+                description=description or (first_line[0] if first_line else ""),
+                cls=target,
+            )
+        )
+        return target
+
+    if cls is not None:
+        return decorate(cls)
+    return decorate
+
+
+def registered_specs() -> tuple[ToolkitSpec, ...]:
+    """Return every registered spec, in registration order.
+
+    Returns:
+        A tuple snapshot of the registry, safe to iterate while it changes.
+    """
+    return tuple(TOOLKITS)
+
+
+def select_specs(context: Any) -> list[ToolkitSpec]:
+    """Return the specs a run should build, filtered and ordered.
+
+    Nothing is imported here, so this is the cheap call for a status endpoint or
+    a test that only wants to know what a given context would be offered.
+
+    Args:
+        context: The run's :class:`ToolContext`, or anything shaped like it.
+
+    Returns:
+        Matching specs sorted by ``order`` then ``key``.
+    """
+    surface = _normalise_surface(getattr(context, "surface", SURFACE_CHAT))
+    if surface not in ALL_SURFACES:
+        logger.warning(
+            "Agent tool registry asked for unknown surface %r; no toolkit selected", surface
+        )
+        return []
+    selected = [spec for spec in TOOLKITS if spec.matches(context)]
+    selected.sort(key=lambda spec: (spec.order, spec.key))
+    return selected
+
+
+def agno_available() -> bool:
+    """Report whether the optional ``agno`` dependency can be imported.
+
+    Returns:
+        True when ``agno.tools`` imports cleanly. Used by the setup gate so the
+        UI can say the dependency is missing instead of failing mid-stream.
+    """
+    try:
+        importlib.import_module("agno.tools")
+    except ImportError:
+        return False
+    return True
+
+
+def _require_agno() -> type:
+    """Import agno's ``Toolkit`` base class or raise an actionable error.
+
+    Returns:
+        The ``agno.tools.Toolkit`` class.
+
+    Raises:
+        RuntimeError: When agno is not installed, with the command to fix it.
+    """
+    try:
+        from agno.tools import Toolkit
+    except ImportError as exc:
+        raise RuntimeError(
+            "The agent module requires the 'agno' package, which is not installed. "
+            "Install it with: uv add agno"
+        ) from exc
+    return Toolkit
+
+
+def build_toolkits(context: Any) -> list[Toolkit]:
+    """Build the toolkits a run may use.
+
+    Called on every run by the callable factory ``builder.py`` hands to agno, so
+    a change to the session state (trading enabled, a different surface) takes
+    effect on the next turn without rebuilding the agent.
+
+    Each toolkit is imported and constructed independently and a failure is
+    logged and skipped, so one broken toolkit costs its own tools rather than
+    the whole agent.
+
+    Args:
+        context: The run's :class:`ToolContext`, or anything shaped like it.
+            Must carry ``api_key``, ``surface`` and ``trading_enabled``.
+
+    Returns:
+        Toolkit instances, ordered by their spec's ``order`` then ``key``.
+
+    Raises:
+        RuntimeError: When the ``agno`` package is not installed.
+    """
+    toolkit_base = _require_agno()
+    toolkits: list[Toolkit] = []
+
+    for spec in select_specs(context):
+        try:
+            cls = spec.resolve()
+        except Exception:
+            logger.exception(
+                "Agent toolkit %r could not be imported from %s.%s; skipping it",
+                spec.key,
+                spec.module,
+                spec.attr,
+            )
+            continue
+
+        try:
+            instance = cls(context)
+        except Exception:
+            logger.exception("Agent toolkit %r could not be built; skipping it", spec.key)
+            continue
+
+        if not isinstance(instance, toolkit_base):
+            logger.warning(
+                "Agent toolkit %r built a %s, which is not an agno Toolkit; skipping it",
+                spec.key,
+                type(instance).__name__,
+            )
+            continue
+
+        toolkits.append(instance)
+
+    logger.debug(
+        "Agent toolkits for surface=%s trading_enabled=%s: %s",
+        getattr(context, "surface", SURFACE_CHAT),
+        bool(getattr(context, "trading_enabled", False)),
+        ", ".join(getattr(t, "name", type(t).__name__) for t in toolkits) or "none",
+    )
+    return toolkits

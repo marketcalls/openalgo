@@ -151,6 +151,7 @@ dependencies = [
   "zipp==3.23.1",
   "opengreeks>=0.2.0",
   "openstatz==0.4.1",
+  "litellm==1.99.0",
 ]
 
 [build-system]

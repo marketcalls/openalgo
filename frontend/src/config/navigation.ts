@@ -1,6 +1,7 @@
 import {
   BarChart3,
   Bell,
+  Bot,
   BookOpen,
   Boxes,
   CandlestickChart,
@@ -66,6 +67,7 @@ export const mobileSheetItems = navItems.filter((item) => !bottomNavPaths.includ
 export const profileMenuItems: NavItem[] = [
   { href: '/profile', label: 'Profile', icon: User },
   { href: '/apikey', label: 'API Key', icon: Key },
+  { href: '/agent', label: 'Agent', icon: Bot },
   { href: '/action-center', label: 'Action Center', icon: Bell },
   { href: '/master-contract', label: 'Master Contract', icon: FileStack },
   { href: '/telegram', label: 'Telegram Bot', icon: MessageSquare },
