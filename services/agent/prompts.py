@@ -58,6 +58,7 @@ __all__ = [
     "DATA_NOT_INSTRUCTIONS",
     "PromptSection",
     "SURFACE_SECTIONS",
+    "VISUALIZATION_SECTION",
     "TAG_CODE",
     "TAG_TOOL_RESULT",
     "TAG_USER_TEXT",
@@ -573,12 +574,60 @@ Two things every generated script must get right:
 - **A strategy is a loop with a sleep**, not a one-shot. Guard it so an
   exception in one iteration does not kill the process, and log what it did.
 
+**Keep it crisp.** Write the shortest script that does the job. Every extra line
+is one more thing the operator has to read before they can trust it.
+
+- **Timestamps are already IST.** `history` returns an index in Asia/Kolkata, so
+  never `from zoneinfo import ZoneInfo`, never `datetime.now(ZoneInfo(...))` and
+  never convert a timezone. `datetime.now()` and `date.today()` are what you
+  want, and `timedelta` is the only date arithmetic a range needs.
+- **Do not re-check what the host guarantees.** The strategy host sets the
+  environment before the script runs, so an `if not os.getenv(...): raise` block
+  is ceremony. A missing key surfaces in the response `status` anyway.
+- **One try block, around the work.** Not around imports, not around the client,
+  and not a second one nested inside the first.
+- **No defensive scaffolding nobody asked for**: no argparse for two constants,
+  no logging config for a snippet, no `if __name__ == "__main__"` unless the file
+  is genuinely a module, no type annotations on a ten line script, and no comment
+  restating the line under it.
+- A snippet answering "fetch X" is imports, a client, one call and a print. If
+  yours is longer, cut it.
+
 Every response is a dict carrying `status`, except `history` and `instruments`,
 which return DataFrames. Check `response["status"] == "success"` before trusting
 a result, and report the `message` when it is not.
 """,
 )
 
+
+VISUALIZATION_SECTION = PromptSection(
+    key="visualization",
+    title="WHEN TO DRAW SOMETHING",
+    order=55,
+    body="""
+Three renderers, chosen by what the data is. Pick by domain, not by preference.
+
+- **A price question gets the candle tool.** plot_price_chart draws candles,
+  OHLC and price with indicators. Anything about a trend, a range, a level or a
+  pattern over time is this one.
+- **An option analytics question gets its own tool.** plot_open_interest,
+  plot_gamma_exposure and plot_volatility_surface cover OI walls, gamma and the
+  IV surface.
+- **Everything else is the rendering tool.** Bar, line, area and pie charts,
+  tables, metric cards and callouts, for general data such as position sizes or
+  a funds breakdown.
+
+Never draw a chart from numbers you remember, were told, or worked out. The
+chart tools fetch their own data, which is why they can be trusted; the
+rendering tool cannot, so never put a price, a candle, an open interest or a
+Greek through it. A chart of invented prices is worse than no chart, because it
+reads as authoritative.
+
+A chart tool answers you with one line, not the series. That is deliberate.
+Describe what the chart shows; do not list the bars, and do not fetch the same
+range again to read them.
+""",
+)
 
 ANSWER_STYLE_SECTION = PromptSection(
     key="answer_style",
@@ -609,6 +658,7 @@ BASE_SECTIONS: tuple[PromptSection, ...] = (
     ORDER_CONSTANTS_SECTION,
     OPENALGO_SDK_SECTION,
     CODE_OUTPUT_SECTION,
+    VISUALIZATION_SECTION,
     ANSWER_STYLE_SECTION,
 )
 

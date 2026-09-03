@@ -23,12 +23,22 @@ import { Message, splitAtOpenFence } from './Message'
 // The editors mount CodeMirror, which is irrelevant to what is being asserted
 // and slow in jsdom. Stubbing them keeps the failure of one of these tests
 // unambiguous.
-vi.mock('@/components/ui/python-editor', () => ({
-  PythonEditor: ({ value }: { value: string }) => <div data-testid="python-editor">{value}</div>,
+// The chat no longer mounts CodeMirror, so mocking it proves nothing. Prism is
+// mocked for the same reason the editor was: to make "is this block highlighted
+// yet" observable without pulling a real tokeniser into the test.
+vi.mock('react-syntax-highlighter', () => ({
+  PrismLight: Object.assign(
+    ({ children }: { children: string }) => <div data-testid="highlighted">{children}</div>,
+    { registerLanguage: () => undefined }
+  ),
 }))
-vi.mock('@/components/ui/json-editor', () => ({
-  JsonEditor: ({ value }: { value: string }) => <div data-testid="json-editor">{value}</div>,
-}))
+vi.mock('react-syntax-highlighter/dist/esm/languages/prism/python', () => ({ default: {} }))
+vi.mock('react-syntax-highlighter/dist/esm/languages/prism/json', () => ({ default: {} }))
+vi.mock('react-syntax-highlighter/dist/esm/languages/prism/bash', () => ({ default: {} }))
+vi.mock('react-syntax-highlighter/dist/esm/languages/prism/javascript', () => ({ default: {} }))
+vi.mock('react-syntax-highlighter/dist/esm/languages/prism/typescript', () => ({ default: {} }))
+vi.mock('react-syntax-highlighter/dist/esm/styles/prism/one-dark', () => ({ default: {} }))
+vi.mock('react-syntax-highlighter/dist/esm/styles/prism/one-light', () => ({ default: {} }))
 
 function renderAssistant(content: string) {
   return render(<Message message={createAgentMessage('assistant', content)} />)
@@ -93,14 +103,45 @@ describe('Message rendering controls', () => {
     expect(link?.getAttribute('href') ?? '').not.toContain('javascript:')
   })
 
-  it('mounts the editor only once a python fence has closed', () => {
-    const { queryByTestId, rerender } = render(
+  it('highlights a python fence only once it has closed', () => {
+    // Highlighting an open fence would re-tokenise the block on every token
+    // of a long answer. The open block still renders its text; only the
+    // highlighter is withheld.
+    const { queryByTestId, rerender, container } = render(
       <Message message={createAgentMessage('assistant', '```python\nx = 1\n')} />
     )
-    expect(queryByTestId('python-editor')).toBeNull()
+    expect(queryByTestId('highlighted')).toBeNull()
+    expect(container.textContent).toContain('x = 1')
 
     rerender(<Message message={createAgentMessage('assistant', '```python\nx = 1\n```\n')} />)
-    expect(queryByTestId('python-editor')).not.toBeNull()
+    expect(queryByTestId('highlighted')).not.toBeNull()
+  })
+
+  it('renders a code block with no line-number gutter', () => {
+    // The gutter belongs in an editor. Its absence here is a decision, so it
+    // is pinned: a regression reintroducing it would otherwise be invisible
+    // to every other test in this file.
+    const { container } = render(
+      <Message message={createAgentMessage('assistant', '```python\nx = 1\ny = 2\n```\n')} />
+    )
+    expect(container.querySelector('.linenumber')).toBeNull()
+    expect(container.querySelector('[data-testid="python-editor"]')).toBeNull()
+  })
+
+  it('does not cap the height of a long code block', () => {
+    // A fixed row cap hid the tail of a longer script behind an inner scroll
+    // region nobody found, so the block read as truncated rather than
+    // scrollable. Nothing in the block may constrain its own height.
+    const body = Array.from({ length: 80 }, (_, i) => `line_${i} = ${i}`).join('\n')
+    const source = '```python\n' + body + '\n```\n'
+    const { container } = render(<Message message={createAgentMessage('assistant', source)} />)
+    for (const el of Array.from(container.querySelectorAll<HTMLElement>('*'))) {
+      expect(el.style.height).toBe('')
+      expect(el.style.maxHeight).toBe('')
+      // getAttribute, not className: an SVG element's className is an
+      // SVGAnimatedString rather than a string, and every icon here is an SVG.
+      expect(el.getAttribute('class') || '').not.toMatch(/max-h-/)
+    }
   })
 })
 

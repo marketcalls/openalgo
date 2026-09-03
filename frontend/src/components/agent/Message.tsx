@@ -35,152 +35,18 @@
  * tail is the artifact still being written.
  */
 
-import { Check, ChevronRight, Copy } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 import { type ComponentProps, memo, useCallback, useMemo, useState } from 'react'
 import Markdown, { type Components, type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ConfirmRequirement } from '@/api/agent'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { JsonEditor } from '@/components/ui/json-editor'
-import { PythonEditor } from '@/components/ui/python-editor'
 import type { AgentMessage } from '@/lib/agent/useAgentStream'
 import { cn } from '@/lib/utils'
+import { CodeArtifact } from './CodeArtifact'
 import { ToolTimeline } from './ToolTimeline'
 import { UsageBadge } from './UsageBadge'
-
-// ---------------------------------------------------------------------------
-// Code artifacts
-// ---------------------------------------------------------------------------
-
-type ArtifactLanguage = 'python' | 'json' | 'text'
-
-/** Rows the editor shows before it scrolls inside itself. */
-const MAX_EDITOR_ROWS = 24
-const MIN_EDITOR_ROWS = 3
-const EDITOR_ROW_PX = 22
-const EDITOR_PADDING_PX = 24
-
-/**
- * Map a fence's info string onto the editor that understands it.
- *
- * Only the two languages OpenAlgo already ships an editor for get one. Anything
- * else is monospace text, which is honest: a shell snippet highlighted as
- * Python reads worse than a shell snippet not highlighted at all.
- */
-function normalizeLanguage(raw: string | null | undefined): ArtifactLanguage {
-  const language = (raw ?? '').trim().toLowerCase()
-  if (language === 'python' || language === 'py') return 'python'
-  if (language === 'json' || language === 'jsonc' || language === 'json5') return 'json'
-  return 'text'
-}
-
-function editorHeight(code: string): string {
-  const lines = code.split('\n').length
-  const rows = Math.min(Math.max(lines, MIN_EDITOR_ROWS), MAX_EDITOR_ROWS)
-  return `${rows * EDITOR_ROW_PX + EDITOR_PADDING_PX}px`
-}
-
-function CopyButton({ text, label }: { text: string; label: string }) {
-  const [copied, setCopied] = useState(false)
-
-  const copy = useCallback(() => {
-    const done = () => {
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1500)
-    }
-    // `navigator.clipboard` is missing on an insecure origin, which a
-    // self-hosted install reached over plain http on a LAN address is.
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard
-        .writeText(text)
-        .then(done)
-        .catch(() => undefined)
-      return
-    }
-    const area = document.createElement('textarea')
-    area.value = text
-    area.setAttribute('readonly', '')
-    area.style.position = 'fixed'
-    area.style.opacity = '0'
-    document.body.appendChild(area)
-    area.select()
-    try {
-      document.execCommand('copy')
-      done()
-    } catch {
-      // Copying is a convenience. A browser that refuses it is not an error
-      // worth interrupting the answer for.
-    } finally {
-      document.body.removeChild(area)
-    }
-  }, [text])
-
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      onClick={copy}
-      className="h-6 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
-      aria-label={label}
-    >
-      {copied ? (
-        <Check className="h-3 w-3" aria-hidden />
-      ) : (
-        <Copy className="h-3 w-3" aria-hidden />
-      )}
-      {copied ? 'Copied' : 'Copy'}
-    </Button>
-  )
-}
-
-interface CodeArtifactProps {
-  code: string
-  /** The fence's info string, or null for a fence that named no language. */
-  language: string | null
-  /**
-   * True while the fence is still open, mid-stream. The editor does not mount
-   * until it closes, so nothing is re-highlighted per token.
-   */
-  streaming?: boolean
-}
-
-function CodeArtifact({ code, language, streaming = false }: CodeArtifactProps) {
-  const kind = normalizeLanguage(language)
-  const lines = code === '' ? 0 : code.split('\n').length
-  const label = language?.trim() || 'text'
-
-  return (
-    <div className="my-3 overflow-hidden rounded-lg border border-border bg-card">
-      <div className="flex items-center gap-2 border-b border-border bg-muted/50 px-3 py-1.5">
-        <span className="font-mono text-[11px] font-medium text-foreground">{label}</span>
-        <span className="text-[11px] text-muted-foreground">
-          {lines} line{lines === 1 ? '' : 's'}
-        </span>
-        {streaming && <span className="text-[11px] text-muted-foreground">writing</span>}
-        <div className="ml-auto">
-          <CopyButton text={code} label={`Copy the ${label} block`} />
-        </div>
-      </div>
-      {streaming || kind === 'text' ? (
-        // Plain monospace while the block is open, and for a language with no
-        // editor. Mounting CodeMirror here would re-highlight on every token.
-        <pre className="max-h-[560px] overflow-auto p-3 font-mono text-[13px] leading-[22px] whitespace-pre-wrap break-words text-foreground">
-          {code}
-        </pre>
-      ) : (
-        <div style={{ height: editorHeight(code) }}>
-          {kind === 'python' ? (
-            <PythonEditor value={code} readOnly height="100%" />
-          ) : (
-            <JsonEditor value={code} readOnly />
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
 
 // ---------------------------------------------------------------------------
 // Markdown
