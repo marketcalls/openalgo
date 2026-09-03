@@ -42,6 +42,7 @@ import type { Bar, Chart, SeriesStyle, SeriesType } from 'openalgo-charts'
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
+import { asNumber, asRecord, asText, parseBars } from './spec'
 
 /** Most overlays one chart draws. The backend caps at six; this is the guard. */
 const MAX_OVERLAYS = 8
@@ -61,35 +62,10 @@ const MAX_BAR_SPACING = 24
 // ---------------------------------------------------------------------------
 // Reading the frame
 // ---------------------------------------------------------------------------
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
-}
-
-function asText(value: unknown): string | null {
-  if (typeof value !== 'string') return null
-  const trimmed = value.trim()
-  return trimmed === '' ? null : trimmed
-}
-
-/**
- * A finite number, accepting the numeric string a JSON encoder somewhere along
- * the way may have produced. Anything else, `null` and `NaN` included, is
- * absent rather than zero: a bar plotted at zero is a lie, a bar left out is a
- * gap.
- */
-function asNumber(value: unknown): number | null {
-  if (typeof value === 'number') return Number.isFinite(value) ? value : null
-  if (typeof value === 'string') {
-    const trimmed = value.trim()
-    if (trimmed === '') return null
-    const parsed = Number(trimmed)
-    return Number.isFinite(parsed) ? parsed : null
-  }
-  return null
-}
+//
+// `asRecord`, `asText`, `asNumber` and `parseBars` live in `./spec`: the
+// instrument card reads the same four things out of its own payload, and a
+// second copy of them here is how the two would drift.
 
 /** One entry of the spec's `indicators` list. */
 interface CandleOverlay {
@@ -117,37 +93,6 @@ interface CandleChartSpec {
 type CandleParse =
   | { ok: true; spec: CandleChartSpec }
   | { ok: false; reason: 'unreadable' | 'empty' }
-
-function parseBars(value: unknown): Bar[] {
-  if (!Array.isArray(value)) return []
-  const bars: Bar[] = []
-  for (const entry of value) {
-    const row = asRecord(entry)
-    if (!row) continue
-    const time = asNumber(row.time)
-    const close = asNumber(row.close)
-    // A row with no timestamp or no close cannot be placed or valued. The
-    // backend drops these too; this is the same rule applied to whatever
-    // actually arrived.
-    if (time === null || close === null) continue
-    const bar: Bar = {
-      time,
-      open: asNumber(row.open) ?? close,
-      high: asNumber(row.high) ?? close,
-      low: asNumber(row.low) ?? close,
-      close,
-    }
-    const volume = asNumber(row.volume)
-    if (volume !== null) bar.volume = volume
-    bars.push(bar)
-  }
-  bars.sort((a, b) => a.time - b.time)
-  // The data layer gives one logical index per timestamp, so two bars sharing
-  // one collide. The backend sends them ordered and distinct, which means this
-  // only fires on a frame that is already wrong, and dropping the repeat is
-  // what keeps that frame drawable instead of throwing.
-  return bars.filter((bar, index) => index === 0 || bar.time > bars[index - 1].time)
-}
 
 function parseOverlays(value: unknown): CandleOverlay[] {
   if (!Array.isArray(value)) return []
@@ -268,6 +213,18 @@ export interface CandleVizProps {
   title?: string
   /** The frame's `source`, e.g. `history_service`. Reported to screen readers. */
   source?: string
+  /**
+   * How much of the card this draws.
+   *
+   * `figure`, the default, is the standalone block a `candles` frame renders
+   * as: its own border, a caption naming the instrument, and a footer counting
+   * the bars. `inline` is the same chart with all of that removed and a
+   * shorter height, for a host that has already said what the instrument is.
+   * The instrument card is that host, and this prop is why it drives no second
+   * copy of the engine: the chart, its disposal, its theme and its handling of
+   * a malformed payload are this component's, once.
+   */
+  variant?: 'figure' | 'inline'
   /** Extra classes on the figure, for a host that needs to adjust its margins. */
   className?: string
 }
@@ -279,9 +236,12 @@ export interface CandleVizProps {
  *   spec: The frame's `spec`.
  *   title: The frame's `title`.
  *   source: The frame's `source`.
+ *   variant: `figure` for the standalone block, `inline` for a chart inside a
+ *     host that supplies its own header.
  *   className: Extra classes on the figure.
  */
-export function CandleViz({ spec, title, source, className }: CandleVizProps) {
+export function CandleViz({ spec, title, source, variant = 'figure', className }: CandleVizProps) {
+  const inline = variant === 'inline'
   const mode = useThemeStore((state) => state.mode)
   const appMode = useThemeStore((state) => state.appMode)
   const hostRef = useRef<HTMLDivElement | null>(null)
@@ -350,7 +310,9 @@ export function CandleViz({ spec, title, source, className }: CandleVizProps) {
         // mark fills under half of it, so scaling it up scales the padding too.
         src: '/images/openalgo-glyph.svg',
         position: 'bottom-left',
-        height: 22,
+        // Proportional to the chart it sits in: a mark sized for the standalone
+        // block would occupy a sixth of an inline one.
+        height: inline ? 15 : 22,
         padding: 3,
         margin: 8,
         opacity: 0.8,
@@ -447,7 +409,7 @@ export function CandleViz({ spec, title, source, className }: CandleVizProps) {
       // rather than stacking a second canvas on the first.
       host.innerHTML = ''
     }
-  }, [chartSpec, label, mode, appMode])
+  }, [chartSpec, label, mode, appMode, inline])
 
   const heading = chartSpec?.symbol ?? asText(title) ?? 'Price chart'
   const overlayText = chartSpec?.overlays.map(overlayLabel).join(', ') ?? ''
@@ -455,7 +417,12 @@ export function CandleViz({ spec, title, source, className }: CandleVizProps) {
   let body: ReactNode
   if (!parsed.ok) {
     body = (
-      <p className="px-3 py-8 text-center text-[12px] text-muted-foreground">
+      <p
+        className={cn(
+          'text-center text-[12px] text-muted-foreground',
+          inline ? 'px-3 py-6' : 'px-3 py-8'
+        )}
+      >
         {parsed.reason === 'empty'
           ? 'No candles came back for this range, so there is nothing to draw.'
           : 'This chart could not be drawn: the price data did not arrive in a shape this page can read.'}
@@ -463,14 +430,30 @@ export function CandleViz({ spec, title, source, className }: CandleVizProps) {
     )
   } else if (failed) {
     body = (
-      <p className="px-3 py-8 text-center text-[12px] text-muted-foreground">
+      <p
+        className={cn(
+          'text-center text-[12px] text-muted-foreground',
+          inline ? 'px-3 py-6' : 'px-3 py-8'
+        )}
+      >
         This chart could not be drawn. The answer above still stands.
       </p>
     )
   } else {
     // A definite height, because the engine measures its host. Compact enough
     // that several charts read as one thread rather than one page each.
-    body = <div ref={hostRef} className="h-[280px] w-full sm:h-[340px]" />
+    body = (
+      <div
+        ref={hostRef}
+        className={cn('w-full', inline ? 'h-[150px] sm:h-[180px]' : 'h-[280px] sm:h-[340px]')}
+      />
+    )
+  }
+
+  // The host has already named the instrument and framed the block, so an
+  // inline chart is the drawing and nothing else.
+  if (inline) {
+    return <div className={cn('min-w-0', className)}>{body}</div>
   }
 
   return (

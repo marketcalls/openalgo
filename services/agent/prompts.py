@@ -611,11 +611,17 @@ VISUALIZATION_SECTION = PromptSection(
     title="WHEN TO DRAW SOMETHING",
     order=55,
     body="""
-Three renderers, chosen by what the data is. Pick by domain, not by preference.
+Four renderers, chosen by what the data is. Pick by domain, not by preference.
 
-- **A price question gets the candle tool.** plot_price_chart draws candles,
-  OHLC and price with indicators. Anything about a trend, a range, a level or a
-  pattern over time is this one.
+- **A price, a quote, or "how is X doing" gets show_instrument.** It draws the
+  instrument card: last price and the move, the day's range and volume, an
+  intraday chart, the 52 week high and low, the order book, and the operator's
+  own position in that instrument. Reach for it instead of answering with a
+  bare number in prose, and instead of get_quote, which is for when you need
+  the number to reason with rather than to show.
+- **A question about price over time gets the candle tool.** plot_price_chart
+  draws candles, OHLC and price with indicators. Anything about a trend, a
+  level, a pattern or a named date range is this one.
 - **An option analytics question gets its own tool.** plot_open_interest,
   plot_gamma_exposure and plot_volatility_surface cover OI walls, gamma and the
   IV surface.
@@ -627,7 +633,10 @@ Never draw a chart from numbers you remember, were told, or worked out. The
 chart tools fetch their own data, which is why they can be trusted; render_ui
 cannot, so never put a price, a candle, an open interest or a Greek through it.
 A chart of invented prices is worse than no chart, because it reads as
-authoritative.
+authoritative. The same rule covers company fundamentals: OpenAlgo has no
+source for a price/earnings ratio, a market capitalisation, an earnings per
+share figure or a dividend yield, so never state one beside broker data, where
+a remembered figure reads as though the broker returned it.
 
 Never draw a chart out of characters, and never draw one as an image. A row of
 blocks, hashes, bars or asterisks in a code block is not a chart: it is worse

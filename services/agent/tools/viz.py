@@ -51,6 +51,13 @@ price chart (``history_service``), open interest by strike
 (``option_chain_service``), gamma exposure by strike (``gex_service``) and the
 volatility surface across expiries (``vol_surface_service``).
 
+The instrument card, a fifth rendering, lives in
+:mod:`services.agent.tools.instrument` rather than here. It emits the same kind
+of frame through the same sink, but its work is a fan-out across five services
+with a resilience rule per section, which has nothing in common with assembling
+a Plotly figure. The shared reading of a history frame is in
+:mod:`services.agent.tools.market`, so both files reach candles the same way.
+
 Deliberately left out for now, and why:
 
 * **Payoff diagrams.** A payoff is composed from legs the operator chose, and
@@ -76,11 +83,17 @@ from typing import TYPE_CHECKING, Any
 
 from services import history_service
 from services.agent.prompts import wrap_tool_result
-from services.agent.tools.base import OpenAlgoToolkit, invalid_argument, json_safe
+from services.agent.tools.base import (
+    OpenAlgoToolkit,
+    as_number,
+    format_number,
+    invalid_argument,
+    json_safe,
+)
 from services.agent.tools.market import (
     BrokerIntervals,
     candle_columns,
-    epoch_seconds,
+    chart_bars,
     normalise_interval,
     normalise_pair,
     normalise_range,
@@ -196,85 +209,6 @@ _NO_SINK = (
 # ---------------------------------------------------------------------------
 # Small pure helpers
 # ---------------------------------------------------------------------------
-
-
-def _number(value: Any) -> float | None:
-    """Coerce a service field to a plottable number.
-
-    Args:
-        value: The raw field.
-
-    Returns:
-        The value as a float, or None when it is missing or not a number. None
-        is what Plotly and ``openalgo-charts`` both read as a gap, which is the
-        honest rendering of a leg the exchange does not list.
-    """
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        number = float(value)
-    else:
-        try:
-            number = float(str(value).strip())
-        except (TypeError, ValueError):
-            return None
-    return number if number == number and abs(number) != float("inf") else None
-
-
-def _bars(records: Sequence[Mapping[str, Any]], columns: Mapping[str, str]) -> list[dict[str, Any]]:
-    """Turn a history frame into the bar series ``openalgo-charts`` draws.
-
-    The shape is the library's own ``Bar``: ``time`` in UTC epoch seconds, then
-    ``open``, ``high``, ``low``, ``close`` and an optional ``volume``. It is
-    exactly what the library's ``OpenAlgoDataFeed`` builds when the terminal
-    fetches history itself, so a chart in the conversation and a chart on
-    ``/trading`` are drawn from identically shaped data.
-
-    Args:
-        records: The service's rows, oldest first.
-        columns: The mapping from
-            :func:`services.agent.tools.market.candle_columns`.
-
-    Returns:
-        The bars, oldest first, with any row carrying no usable timestamp or no
-        close dropped rather than plotted at the epoch.
-    """
-    if not columns:
-        return []
-
-    time_key = columns.get("timestamp")
-    open_key = columns.get("open")
-    high_key = columns.get("high")
-    low_key = columns.get("low")
-    close_key = columns.get("close")
-    volume_key = columns.get("volume")
-    if not time_key or not close_key:
-        return []
-
-    bars: list[dict[str, Any]] = []
-    for row in records:
-        moment = epoch_seconds(row.get(time_key))
-        close = _number(row.get(close_key))
-        if moment is None or close is None:
-            continue
-        bar: dict[str, Any] = {
-            "time": moment,
-            "open": _number(row.get(open_key)) if open_key else close,
-            "high": _number(row.get(high_key)) if high_key else close,
-            "low": _number(row.get(low_key)) if low_key else close,
-            "close": close,
-        }
-        for field in ("open", "high", "low"):
-            if bar[field] is None:
-                bar[field] = close
-        if volume_key:
-            volume = _number(row.get(volume_key))
-            if volume is not None:
-                bar["volume"] = volume
-        bars.append(bar)
-
-    bars.sort(key=lambda item: item["time"])
-    return bars
 
 
 def _indicator_inputs(raw: Any) -> dict[str, Any]:
@@ -581,7 +515,7 @@ def _markers(atm: Any, spot: Any) -> tuple[list[dict[str, Any]], list[dict[str, 
     shapes: list[dict[str, Any]] = []
     annotations: list[dict[str, Any]] = []
     for value, colour, label in ((atm, "#94a3b8", "ATM"), (spot, "#0ea5e9", "Spot")):
-        if _number(value) is None:
+        if as_number(value) is None:
             continue
         shape, annotation = _vertical(value, colour, label, row=len(annotations))
         shapes.append(shape)
@@ -602,29 +536,11 @@ def _peak(strikes: Sequence[Any], values: Sequence[Any]) -> Any:
     best: Any = None
     best_value = 0.0
     for strike, value in zip(strikes, values, strict=False):
-        number = _number(value)
+        number = as_number(value)
         if number is not None and number > best_value:
             best_value = number
             best = strike
     return best
-
-
-def _plain(value: Any) -> str:
-    """Format a number for the one-line confirmation the model reads.
-
-    Args:
-        value: The number, or anything else.
-
-    Returns:
-        A short plain rendering. Large values keep two decimals at most, so a
-        confirmation stays a sentence rather than a wall of digits.
-    """
-    number = _number(value)
-    if number is None:
-        return "unknown"
-    if abs(number) >= 1000:
-        return f"{number:,.0f}"
-    return f"{number:,.2f}".rstrip("0").rstrip(".")
 
 
 # ---------------------------------------------------------------------------
@@ -751,7 +667,7 @@ class VizToolkit(OpenAlgoToolkit):
         )
         columns = candle_columns(records[0]) if records else {}
         summary = summarise_candles(records, columns)
-        bars = _bars(records, columns)
+        bars = chart_bars(records, columns)
 
         total = len(bars)
         omitted = max(0, total - MAX_CHART_BARS)
@@ -806,10 +722,12 @@ class VizToolkit(OpenAlgoToolkit):
         )
         message = (
             f"Drew a {shape} chart of {symbol} on {exchange} at {interval}{overlay_text}, "
-            f"{len(bars)} bars from {start} to {end}. Open {_plain(summary.get('first_open'))}, "
-            f"close {_plain(summary.get('last_close'))}, high "
-            f"{_plain(summary.get('highest_high'))}, low {_plain(summary.get('lowest_low'))}, "
-            f"change {_plain(summary.get('change_percent'))} percent. "
+            f"{len(bars)} bars from {start} to {end}. "
+            f"Open {format_number(summary.get('first_open'))}, "
+            f"close {format_number(summary.get('last_close'))}, "
+            f"high {format_number(summary.get('highest_high'))}, "
+            f"low {format_number(summary.get('lowest_low'))}, "
+            f"change {format_number(summary.get('change_percent'))} percent. "
             "The operator can see it, so describe what it shows rather than listing bars."
         )
         return self._answer(
@@ -876,8 +794,8 @@ class VizToolkit(OpenAlgoToolkit):
             )
 
         strikes = [row.get("strike") for row in rows]
-        call_oi = [_number((row.get("ce") or {}).get("oi")) for row in rows]
-        put_oi = [_number((row.get("pe") or {}).get("oi")) for row in rows]
+        call_oi = [as_number((row.get("ce") or {}).get("oi")) for row in rows]
+        put_oi = [as_number((row.get("pe") or {}).get("oi")) for row in rows]
 
         atm = payload.get("atm_strike")
         spot = payload.get("underlying_ltp")
@@ -926,10 +844,11 @@ class VizToolkit(OpenAlgoToolkit):
         ratio = round(put_total / call_total, 2) if call_total else None
         message = (
             f"Drew open interest by strike for {underlying} {expiry}: {len(rows)} strikes, "
-            f"ATM {_plain(atm)}, spot {_plain(spot)}. Call OI peaks at "
-            f"{_plain(_peak(strikes, call_oi))} and put OI at {_plain(_peak(strikes, put_oi))}; "
-            f"total call OI {_plain(call_total)}, total put OI {_plain(put_total)}, PCR "
-            f"{_plain(ratio)}."
+            f"ATM {format_number(atm)}, spot {format_number(spot)}. "
+            f"Call OI peaks at {format_number(_peak(strikes, call_oi))} "
+            f"and put OI at {format_number(_peak(strikes, put_oi))}; "
+            f"total call OI {format_number(call_total)}, "
+            f"total put OI {format_number(put_total)}, PCR {format_number(ratio)}."
         )
         return self._answer(
             "plot_open_interest", message, underlying=underlying, expiry=expiry or None
@@ -982,7 +901,7 @@ class VizToolkit(OpenAlgoToolkit):
             )
 
         strikes = [row.get("strike") for row in rows]
-        net = [_number(row.get("net_gex")) for row in rows]
+        net = [as_number(row.get("net_gex")) for row in rows]
         colours = [
             _NEGATIVE_COLOUR if (value is not None and value < 0) else _POSITIVE_COLOUR
             for value in net
@@ -1026,10 +945,11 @@ class VizToolkit(OpenAlgoToolkit):
         negative = _peak(strikes, [-value if value is not None else None for value in net])
         message = (
             f"Drew net gamma exposure for {underlying} {expiry}: {len(rows)} strikes, ATM "
-            f"{_plain(atm)}, spot {_plain(spot)}. Total net GEX "
-            f"{_plain(payload.get('total_net_gex'))}, PCR "
-            f"{_plain(payload.get('pcr_oi'))}. Longest gamma at strike {_plain(positive)}, "
-            f"shortest at {_plain(negative)}."
+            f"{format_number(atm)}, spot {format_number(spot)}. Total net GEX "
+            f"{format_number(payload.get('total_net_gex'))}, PCR "
+            f"{format_number(payload.get('pcr_oi'))}. "
+            f"Longest gamma at strike {format_number(positive)}, "
+            f"shortest at {format_number(negative)}."
         )
         return self._answer(
             "plot_gamma_exposure", message, underlying=underlying, expiry=expiry or None
@@ -1097,7 +1017,7 @@ class VizToolkit(OpenAlgoToolkit):
 
         rows = expiry_rows if isinstance(expiry_rows, list) else []
         days = [
-            _number(row.get("dte")) if isinstance(row, Mapping) else None for row in rows
+            as_number(row.get("dte")) if isinstance(row, Mapping) else None for row in rows
         ] or list(range(len(surface)))
         labels = [str(row.get("date")) if isinstance(row, Mapping) else "" for row in rows] or list(
             expiries
@@ -1140,8 +1060,8 @@ class VizToolkit(OpenAlgoToolkit):
         message = (
             f"Drew an implied volatility surface for {underlying}: {len(strikes)} strikes "
             f"across {len(surface)} expiries ({', '.join(labels)}), ATM "
-            f"{_plain(payload.get('atm_strike'))}, spot "
-            f"{_plain(payload.get('underlying_ltp'))}."
+            f"{format_number(payload.get('atm_strike'))}, spot "
+            f"{format_number(payload.get('underlying_ltp'))}."
         )
         return self._answer("plot_volatility_surface", message, underlying=underlying)
 

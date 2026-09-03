@@ -16,11 +16,25 @@
  * Enter sends and Shift+Enter inserts a newline, with one exception that is not
  * optional: while an IME composition is open, Enter commits the composition and
  * must not send. Indian language input and every CJK keyboard rely on that.
+ *
+ * It also registers itself as the destination for a prefill, which is how a
+ * Buy or Sell control inside an answer starts an order without being wired to
+ * an order tool. See `lib/agent/composer.ts`: text arrives, the operator reads
+ * it and presses send, and the turn goes through the approval gate like any
+ * other. **Nothing that arrives that way is sent by this component.**
  */
 
 import { Loader2, Send, Square } from 'lucide-react'
-import { type KeyboardEvent, useCallback, useLayoutEffect, useRef, useState } from 'react'
+import {
+  type KeyboardEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 import { Button } from '@/components/ui/button'
+import { subscribeComposerPrefill } from '@/lib/agent/composer'
 import { cn } from '@/lib/utils'
 
 /** The textarea stops growing here and scrolls inside itself. */
@@ -87,6 +101,25 @@ export function Composer({
     resize()
     onSend(text)
   }, [disabled, onSend, resize, running])
+
+  useEffect(
+    () =>
+      subscribeComposerPrefill((text) => {
+        const element = textareaRef.current
+        if (!element) return
+        // Never discard what the operator was already writing. An empty box
+        // takes the request as its whole content; a box with something in it
+        // gets the request on a new line under it.
+        const existing = element.value.replace(/\s+$/, '')
+        element.value = existing ? `${existing}\n${text}` : text
+        handleInput()
+        element.focus()
+        // Caret at the end, because the first thing anyone changes is the
+        // quantity and it is the last thing they should have to reach for.
+        element.setSelectionRange(element.value.length, element.value.length)
+      }),
+    [handleInput]
+  )
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {

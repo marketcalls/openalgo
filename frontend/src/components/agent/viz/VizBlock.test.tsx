@@ -14,10 +14,39 @@
  */
 
 import { render, screen } from '@testing-library/react'
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import type { AgentVizItem } from '@/lib/agent/viz'
 import { OPENUI_VIZ, openUiSpec } from '@/lib/agent/viz'
 import { VizBlock } from './VizBlock'
+
+// The instrument card mounts the live-quote layer, which reaches the shared
+// WebSocket manager and the market calendar. Neither exists in jsdom, and
+// neither is what this file is about: it tests that a branch was taken.
+vi.mock('@/hooks/useLiveQuote', () => ({
+  useLiveQuote: () => ({
+    data: {},
+    isLive: false,
+    isConnected: false,
+    isLoading: false,
+    isPaused: false,
+    isFallbackMode: false,
+    dataSource: 'none',
+    refresh: async () => {},
+  }),
+}))
+
+vi.mock('@/hooks/useMarketStatus', () => ({
+  useMarketStatus: () => ({
+    isMarketOpen: () => false,
+    isAnyMarketOpen: () => false,
+    isHolidayForExchange: () => false,
+    getMarketStatus: () => null,
+    timings: [],
+    holidays: [],
+    isLoading: false,
+    error: null,
+  }),
+}))
 
 function item(kind: string, spec: Record<string, unknown> = {}): AgentVizItem {
   return { kind, spec, title: 'A chart', source: 'history_service', at: 0 }
@@ -67,6 +96,20 @@ describe('VizBlock', () => {
       />
     )
     expect(container).not.toBeEmptyDOMElement()
+  })
+
+  it('hands an instrument frame to the instrument card', () => {
+    render(
+      <VizBlock
+        item={item('instrument', {
+          symbol: 'RELIANCE',
+          exchange: 'NSE',
+          currency: 'INR',
+          quote: { ltp: 1302.5, prev_close: 1313.1 },
+        })}
+      />
+    )
+    expect(screen.getByText('RELIANCE')).toBeInTheDocument()
   })
 
   it('hands a plotly frame to the plotly renderer', () => {

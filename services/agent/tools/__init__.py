@@ -324,6 +324,17 @@ TOOLKITS: list[ToolkitSpec] = [
         ),
     ),
     ToolkitSpec(
+        key="instrument",
+        module="services.agent.tools.instrument",
+        attr="InstrumentToolkit",
+        surfaces=ALL_SURFACES,
+        order=44,
+        description=(
+            "Draw a full instrument card: quote, the day's move, an intraday chart, the "
+            "52 week range, the order book and the operator's own position in it."
+        ),
+    ),
+    ToolkitSpec(
         key="openui",
         module="services.agent.tools.openui",
         attr="OpenUiToolkit",

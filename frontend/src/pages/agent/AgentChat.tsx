@@ -43,14 +43,16 @@
  * in flight.
  */
 
-import { AlertCircle, Bot } from 'lucide-react'
+import { AlertCircle, Bot, SlidersHorizontal } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link } from 'react-router'
 import { Composer } from '@/components/agent/Composer'
 import { ConversationSidebar } from '@/components/agent/ConversationSidebar'
 import { Message } from '@/components/agent/Message'
 import { ModelPicker } from '@/components/agent/ModelPicker'
 import { ConversationUsageBadge, sumUsage } from '@/components/agent/UsageBadge'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import { type AgentMessage, useAgentStream } from '@/lib/agent/useAgentStream'
 import { cn } from '@/lib/utils'
 
@@ -160,6 +162,23 @@ export default function AgentChat() {
               </div>
             )}
             <ModelPicker value={modelId} onChange={setModelId} disabled={running} />
+            {/* The only route from the conversation to its own settings. The
+                profile menu carries one too, but an operator who is looking at
+                the chat does not think to open a dropdown three regions away,
+                and the setup screen that used to offer this link is exactly the
+                screen a configured instance never sees again. It sits beside
+                the model picker because adding a model is what the config page
+                is most often opened to do. */}
+            <Button
+              asChild
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+            >
+              <Link to="/agent/config" aria-label="Agent settings">
+                <SlidersHorizontal className="h-4 w-4" aria-hidden />
+              </Link>
+            </Button>
           </div>
         </header>
 
@@ -188,8 +207,8 @@ export default function AgentChat() {
                 <>
                   <p className="text-sm font-medium">This conversation is empty</p>
                   <p className="max-w-sm text-sm leading-relaxed text-muted-foreground">
-                    Nothing was stored against it, which happens when a run was interrupted before it
-                    answered. Ask something below to carry on in this thread.
+                    Nothing was stored against it, which happens when a run was interrupted before
+                    it answered. Ask something below to carry on in this thread.
                   </p>
                 </>
               )}

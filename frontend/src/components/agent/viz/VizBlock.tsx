@@ -9,6 +9,11 @@
  * | `candles` | `openalgo-charts` | the `/trading` terminal |
  * | `plotly` | `Plot2D` / `Plot3D` | `/strategybuilder` and the option pages |
  * | `openui` | OpenUI genui-lib | new here |
+ * | `instrument` | `openalgo-charts`, through `CandleViz` | as above |
+ *
+ * `instrument` is a composed card rather than a fourth engine: it draws its
+ * chart by mounting `CandleViz` in its inline variant, so the number of things
+ * in this app that drive a charting library is unchanged by it.
  *
  * **An unknown kind renders nothing, and says nothing.** A backend that learns
  * a fourth kind must be able to ship before every browser has the client that
@@ -25,6 +30,7 @@ import { lazy, Suspense } from 'react'
 import type { AgentVizItem } from '@/lib/agent/viz'
 import { OPENUI_VIZ, openUiMarkup } from '@/lib/agent/viz'
 import { CandleViz } from './CandleViz'
+import { InstrumentCard } from './InstrumentCard'
 import { PlotlyViz } from './PlotlyViz'
 
 /**
@@ -81,6 +87,15 @@ export function VizBlock({ item, streaming, className }: VizBlockProps) {
     case 'plotly':
       return (
         <PlotlyViz spec={item.spec} title={item.title} source={item.source} className={className} />
+      )
+    case 'instrument':
+      return (
+        <InstrumentCard
+          spec={item.spec}
+          title={item.title}
+          source={item.source}
+          className={className}
+        />
       )
     case OPENUI_VIZ:
       return (

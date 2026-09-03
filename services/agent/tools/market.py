@@ -42,14 +42,17 @@ visualization toolkit charts the same candles this one summarises, so it reaches
 history through :func:`normalise_pair`, :func:`normalise_source`,
 :func:`normalise_range`, :func:`normalise_interval` and :class:`BrokerIntervals`
 here rather than through a second copy of them. A copy would drift, and the copy
-in the chart path is the one nobody notices is wrong.
+in the chart path is the one nobody notices is wrong. The same reasoning puts
+:func:`candle_columns`, :func:`summarise_candles`, :func:`epoch_seconds` and
+:func:`chart_bars` here: they are the shared reading of a history frame, and the
+chart tools and the instrument card all go through them.
 """
 
 from __future__ import annotations
 
 import json
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -60,6 +63,7 @@ from services.agent.prompts import wrap_tool_result
 from services.agent.tools.base import (
     MAX_JSON_CHARS,
     OpenAlgoToolkit,
+    as_number,
     invalid_argument,
     json_safe,
 )
@@ -135,27 +139,6 @@ def _rendered_length(payload: Any) -> int:
     except (TypeError, ValueError):
         logger.exception("Could not measure the size of an agent market-data payload")
         return _JSON_BUDGET + 1
-
-
-def _as_float(value: Any) -> float | None:
-    """Coerce a candle field to a float.
-
-    Args:
-        value: The raw field, which may be a string, a numpy scalar or None.
-
-    Returns:
-        The float value, or None when it is missing or not a number.
-    """
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        result = float(value)
-    else:
-        try:
-            result = float(str(value).strip())
-        except (TypeError, ValueError):
-            return None
-    return result if math.isfinite(result) else None
 
 
 def _ist_timestamp(value: Any) -> Any:
@@ -282,8 +265,14 @@ def summarise_candles(rows: list[Mapping[str, Any]], columns: Mapping[str, str])
 
     Returns:
         First open, last close, highest high, lowest low, total volume and the
-        change across the range. A statistic no row supplied is omitted rather
+        change across the range, plus the IST timestamps of the bars the high
+        and the low were set on. A statistic no row supplied is omitted rather
         than reported as zero.
+
+        The two extreme timestamps are what turns a 52 week high into a date the
+        operator can act on rather than a bare number, so they are computed here
+        beside the extremes themselves rather than by a second pass somewhere
+        else that could disagree about which bar won a tie.
     """
     summary: dict[str, Any] = {}
     if not rows:
@@ -293,6 +282,8 @@ def summarise_candles(rows: list[Mapping[str, Any]], columns: Mapping[str, str])
     last_close: float | None = None
     highest: float | None = None
     lowest: float | None = None
+    highest_at: Any = None
+    lowest_at: Any = None
     volume_total = 0.0
     volume_seen = False
 
@@ -301,29 +292,31 @@ def summarise_candles(rows: list[Mapping[str, Any]], columns: Mapping[str, str])
     low_key = columns.get("low")
     close_key = columns.get("close")
     volume_key = columns.get("volume")
+    timestamp_key = columns.get("timestamp")
 
     for row in rows:
         if open_key and first_open is None:
-            first_open = _as_float(row.get(open_key))
+            first_open = as_number(row.get(open_key))
         if close_key:
-            close = _as_float(row.get(close_key))
+            close = as_number(row.get(close_key))
             if close is not None:
                 last_close = close
         if high_key:
-            high = _as_float(row.get(high_key))
+            high = as_number(row.get(high_key))
             if high is not None and (highest is None or high > highest):
                 highest = high
+                highest_at = row.get(timestamp_key) if timestamp_key else None
         if low_key:
-            low = _as_float(row.get(low_key))
+            low = as_number(row.get(low_key))
             if low is not None and (lowest is None or low < lowest):
                 lowest = low
+                lowest_at = row.get(timestamp_key) if timestamp_key else None
         if volume_key:
-            volume = _as_float(row.get(volume_key))
+            volume = as_number(row.get(volume_key))
             if volume is not None:
                 volume_total += volume
                 volume_seen = True
 
-    timestamp_key = columns.get("timestamp")
     if timestamp_key:
         summary["first_timestamp"] = _ist_timestamp(rows[0].get(timestamp_key))
         summary["last_timestamp"] = _ist_timestamp(rows[-1].get(timestamp_key))
@@ -333,8 +326,12 @@ def summarise_candles(rows: list[Mapping[str, Any]], columns: Mapping[str, str])
         summary["last_close"] = last_close
     if highest is not None:
         summary["highest_high"] = highest
+        if highest_at is not None:
+            summary["highest_high_timestamp"] = _ist_timestamp(highest_at)
     if lowest is not None:
         summary["lowest_low"] = lowest
+        if lowest_at is not None:
+            summary["lowest_low_timestamp"] = _ist_timestamp(lowest_at)
     if volume_seen:
         summary["total_volume"] = round(volume_total, 4)
     if first_open is not None and last_close is not None:
@@ -343,6 +340,68 @@ def summarise_candles(rows: list[Mapping[str, Any]], columns: Mapping[str, str])
             summary["change_percent"] = round((last_close - first_open) / first_open * 100.0, 4)
 
     return summary
+
+
+def chart_bars(
+    records: Sequence[Mapping[str, Any]], columns: Mapping[str, str]
+) -> list[dict[str, Any]]:
+    """Turn a history frame into the bar series a chart draws.
+
+    The shape is ``openalgo-charts``'s own ``Bar``: ``time`` in UTC epoch
+    seconds, then ``open``, ``high``, ``low``, ``close`` and an optional
+    ``volume``. It is exactly what the library's ``OpenAlgoDataFeed`` builds when
+    the terminal fetches history itself, so a chart in the conversation and a
+    chart on ``/trading`` are drawn from identically shaped data.
+
+    Module level, and here rather than in a chart module, because every tool
+    that draws price over time needs the same conversion: the candle chart, the
+    instrument card's intraday strip, and whatever comes next. One conversion is
+    what keeps them agreeing about which bars were dropped and why.
+
+    Args:
+        records: The service's rows, oldest first.
+        columns: The mapping from :func:`candle_columns`.
+
+    Returns:
+        The bars, oldest first, with any row carrying no usable timestamp or no
+        close dropped rather than plotted at the epoch.
+    """
+    if not columns:
+        return []
+
+    time_key = columns.get("timestamp")
+    open_key = columns.get("open")
+    high_key = columns.get("high")
+    low_key = columns.get("low")
+    close_key = columns.get("close")
+    volume_key = columns.get("volume")
+    if not time_key or not close_key:
+        return []
+
+    bars: list[dict[str, Any]] = []
+    for row in records:
+        moment = epoch_seconds(row.get(time_key))
+        close = as_number(row.get(close_key))
+        if moment is None or close is None:
+            continue
+        bar: dict[str, Any] = {
+            "time": moment,
+            "open": as_number(row.get(open_key)) if open_key else close,
+            "high": as_number(row.get(high_key)) if high_key else close,
+            "low": as_number(row.get(low_key)) if low_key else close,
+            "close": close,
+        }
+        for field in ("open", "high", "low"):
+            if bar[field] is None:
+                bar[field] = close
+        if volume_key:
+            volume = as_number(row.get(volume_key))
+            if volume is not None:
+                bar["volume"] = volume
+        bars.append(bar)
+
+    bars.sort(key=lambda item: item["time"])
+    return bars
 
 
 # ---------------------------------------------------------------------------

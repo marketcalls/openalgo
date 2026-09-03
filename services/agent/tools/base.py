@@ -264,6 +264,80 @@ def _finite_or_none(value: float) -> float | None:
     return value if math.isfinite(value) else None
 
 
+def as_number(value: Any) -> float | None:
+    """Coerce a field a service returned into a finite float.
+
+    The one numeric coercion the tool layer has. A broker sends a price as a
+    float, as an integer, as a numeric string or as a numpy scalar depending on
+    the plugin, and every toolkit that does arithmetic on one needs the same
+    answer for all four. Keeping it here rather than in each toolkit is what
+    stops a second copy drifting: the copy that goes wrong is always the one in
+    the path nobody is looking at.
+
+    Args:
+        value: The raw field.
+
+    Returns:
+        The value as a float, or None when it is missing, is a boolean, is not a
+        number at all, or is a NaN or an infinity. None is what both Plotly and
+        ``openalgo-charts`` read as a gap, and it is the honest rendering of a
+        figure the exchange did not supply.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        number = float(value)
+    else:
+        try:
+            number = float(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+    return number if math.isfinite(number) else None
+
+
+def format_number(value: Any) -> str:
+    """Format a number for the one-line confirmation a tool returns to the model.
+
+    Args:
+        value: The number, or anything else.
+
+    Returns:
+        A short plain rendering. Large values keep no decimals and smaller ones
+        keep at most two, so a confirmation stays a sentence rather than a wall
+        of digits. A value that is not a number reads as ``unknown``, which is
+        what it is.
+    """
+    number = as_number(value)
+    if number is None:
+        return "unknown"
+    if abs(number) >= 1000:
+        return f"{number:,.0f}"
+    return f"{number:,.2f}".rstrip("0").rstrip(".")
+
+
+def format_price(value: Any) -> str:
+    """Format a traded price or a rupee figure for a confirmation line.
+
+    Separate from :func:`format_number` because the two are formatting different
+    things. A count of open interest contracts is read at a glance and its last
+    two digits are noise, so it is rounded; a price is a price, and the paise
+    are part of it. ``1,302`` is not what the instrument traded at and
+    ``1,302.50`` is, which matters when the model repeats the figure to the
+    operator.
+
+    Args:
+        value: The price, or anything else.
+
+    Returns:
+        The value with thousands separators and two decimals, or ``unknown``
+        when it is not a number.
+    """
+    number = as_number(value)
+    if number is None:
+        return "unknown"
+    return f"{number:,.2f}"
+
+
 def json_safe(value: Any, _depth: int = 0, _path: frozenset[int] | None = None) -> Any:
     """Convert an arbitrary Python object into something ``json.dumps`` accepts.
 

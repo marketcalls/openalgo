@@ -152,12 +152,16 @@ def _split_book(
     return [], {"data": data}, False
 
 
-def _looks_flat(quantity: Any) -> bool:
+def looks_flat(quantity: Any) -> bool:
     """Report whether a position quantity means "no position".
 
     Brokers return the quantity as an integer, a float or a numeric string, so
     the comparison is made on a parsed copy. The value the tool returns is never
     the parsed one.
+
+    Module level and public, because more than one toolkit has to decide whether
+    a row in the position book is a position the operator actually holds, and a
+    second copy of this would eventually disagree about the unparseable case.
 
     Args:
         quantity: The quantity exactly as the service returned it.
@@ -171,6 +175,35 @@ def _looks_flat(quantity: Any) -> bool:
         return float(str(quantity).strip()) == 0.0
     except (TypeError, ValueError):
         return False
+
+
+def current_mode(fallback_analyzer: bool = False) -> str:
+    """Report which account a figure just read came from.
+
+    Read at call time from the same setting the services consult, so the label
+    matches the routing that actually happened rather than the state the run
+    started in.
+
+    Module level for the same reason as :func:`looks_flat`: the instrument card
+    reports the mode beside the operator's position exactly as this toolkit
+    reports it beside a balance, and never presenting a sandbox number as real
+    money is too important to hold two copies of.
+
+    Args:
+        fallback_analyzer: What the run believed the analyzer toggle was, used
+            only when the setting cannot be read. A slightly stale label beats a
+            missing one.
+
+    Returns:
+        ``analyze`` when the platform analyzer toggle is on, else ``live``.
+    """
+    try:
+        from database.settings_db import get_analyze_mode
+
+        return _MODE_ANALYZE if get_analyze_mode() else _MODE_LIVE
+    except Exception:
+        logger.exception("Could not read the analyzer mode for an agent tool result")
+        return _MODE_ANALYZE if fallback_analyzer else _MODE_LIVE
 
 
 class AccountToolkit(OpenAlgoToolkit):
@@ -207,21 +240,12 @@ class AccountToolkit(OpenAlgoToolkit):
     def _mode(self) -> str:
         """Report which account the figures in a result came from.
 
-        Read at call time from the same setting the services consult, so the
-        label matches the routing that actually happened rather than the state
-        the run started in. A lookup failure falls back to the run context,
-        because a missing label is worse than a slightly stale one.
-
         Returns:
             ``analyze`` when the platform analyzer toggle is on, else ``live``.
+            A lookup failure falls back to what the run context believed,
+            because a missing label is worse than a slightly stale one.
         """
-        try:
-            from database.settings_db import get_analyze_mode
-
-            return _MODE_ANALYZE if get_analyze_mode() else _MODE_LIVE
-        except Exception:
-            logger.exception("Could not read the analyzer mode for an account tool result")
-            return _MODE_ANALYZE if self.analyzer_mode else _MODE_LIVE
+        return current_mode(self.analyzer_mode)
 
     def _envelope(self, **fields: Any) -> dict[str, Any]:
         """Build the common part of every result in this toolkit.
@@ -602,7 +626,7 @@ class AccountToolkit(OpenAlgoToolkit):
             product=product,
             quantity=quantity,
         )
-        if _looks_flat(quantity):
+        if looks_flat(quantity):
             result["note"] = (
                 f"There is no open {product} position in {symbol} on {exchange}. Zero is a real "
                 "answer, not a failure; the operator is flat in this contract."

@@ -269,6 +269,12 @@ class Viz(Frame):
     * `plotly` renders through the shared `Plot2D` and `Plot3D` wrappers, the
       same ones `/strategybuilder` and the option analytics pages use. Its
       `spec` is a Plotly figure: `data`, and optionally `layout` and `config`.
+    * `instrument` renders the instrument card built by
+      `services/agent/tools/instrument.py`: the quote and the day's move, an
+      intraday price and volume series, the 52 week range, the order book, and
+      the operator's own position in that instrument. Every section beyond the
+      quote is optional, and one that could not be read is absent from the spec
+      and named in its `unavailable` mapping instead.
 
     Attributes:
         kind: Which renderer draws this. See above.
