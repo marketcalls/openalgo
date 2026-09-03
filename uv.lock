@@ -2698,7 +2698,7 @@ analysis = [
 dev = [
     { name = "bandit", extras = ["sarif"], specifier = ">=1.9.3" },
     { name = "detect-secrets", specifier = ">=1.5.0" },
-    { name = "pip", specifier = ">=26.1.2" },
+    { name = "pip", specifier = ">=26.2.0" },
     { name = "pip-audit", specifier = ">=2.10.0" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "ruff", specifier = ">=0.14.14" },

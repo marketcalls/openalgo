@@ -991,10 +991,14 @@ def _rebuild_legacy_leg(
 
     exit_avg = None
     if exit_applied:
+        # Guarded the way `entry` is above. An exit can be known filled with no
+        # order row at all: the third clause of `exit_filled` reads the
+        # checkpoint as the only witness, which is exactly the case where a row
+        # was never written.
         exit_avg = (
-            _usable_fill_price(exit_order.get("avg_fill_price"))
+            _usable_fill_price(exit_order.get("avg_fill_price") if exit_order else None)
             or _usable_fill_price(cp_leg.get("exit_avg"))
-            or _usable_fill_price(exit_order.get("price"))
+            or _usable_fill_price(exit_order.get("price") if exit_order else None)
         )
 
     # Volatile, from the checkpoint, with a derivation for the one figure the
@@ -1015,7 +1019,11 @@ def _rebuild_legacy_leg(
         exit_kind = exit_order.get("kind")
     elif exit_filled and remaining_qty == 0:
         exit_order_id = None
-        exit_kind = exit_order.get("kind")
+        # The checkpoint when there is no row to read it from. `exit_filled` is
+        # reachable with `exit_order` None, and reading through it raised
+        # AttributeError inside recovery, which finalised the run as
+        # recovery_failed rather than rebuilding it.
+        exit_kind = exit_order.get("kind") if exit_order else cp_leg.get("exit_kind")
     elif exit_order is not None:
         exit_order_id = None
         exit_kind = None

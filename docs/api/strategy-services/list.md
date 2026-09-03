@@ -146,13 +146,12 @@ Each object in `data`:
 | name | string | Strategy name, unique per user |
 | strategy_kind | string | `batch` or `signal` |
 | direction | string | `both`, `long_only` or `short_only`. Signal mode only |
-| universe_tab | string | Which instrument universe the wizard built this from |
+| universe_tab | string | Which instrument universe the strategy was built from: `weekly_monthly`, `monthly_only`, `stocks_fno` or `mcx`. It decides which segments a leg may use, and cash is offered on `stocks_fno` only. A strategy saved without one has it derived from its own legs |
 | underlying | string | Underlying symbol |
 | underlying_exchange | string | Exchange the underlying is quoted on |
 | strategy_type | string | `intraday` or `positional` |
 | entry_time | string or null | IST entry time as `HH:MM` |
 | exit_time | string or null | IST square-off time as `HH:MM` |
-| risk_unit | string | `points` (default) or `percent`. Governs `sl_pts`, `target_pts` and `trail` together. A percentage is measured against the leg's own entry price, so 2 on a short filled at 2500 is a stop at 2550. Absent means points |
 | product | string | `CNC`, `NRML` or `MIS`, as configured. It is read as the intent rather than the literal when an order goes out: `MIS` is intraday everywhere, anything else means carry, which is sent as `NRML` on a derivatives venue and `CNC` on cash. See the `product` field on [`/orders`](./orders.md) for what was actually sent |
 | pricetype | string | `MARKET`. Neither the strategy nor a leg carries a price, so a LIMIT, SL or SL-M order would go out priced at zero; exits are MARKET on every path regardless |
 | overall_sl_mtm | number or null | Strategy-level stop loss in rupees of MTM |

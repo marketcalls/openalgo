@@ -118,13 +118,25 @@ neither preflight refusal writes a durable webhook audit row.
 
 ## Vocabularies
 
-These tuples live in `database/strategy_module_db.py` and are imported by the schemas, so the API and the store cannot drift apart.
+Most of these tuples live in `database/strategy_module_db.py`. The four the request schemas validate against, `RUN_MODES`, `STRATEGY_STATUSES`, `EVENT_KINDS` and `EVENT_SEVERITIES`, are imported from there by `restx_api/strategy_schema.py`, so those four cannot drift apart from the store. Products, price types, quantity modes, universe tabs and leg segments are configuration vocabularies owned by `blueprints/strategy_module.py`, because the store has no opinion on a leg's shape: legs are a JSON column.
 
 ### Strategy kinds
 
 `batch`, `signal`
 
 A batch strategy is a multi-leg spread entered and exited as a unit, driven by `start` and `stop`. A signal strategy moves one leg at a time, driven by `long_entry`, `long_exit`, `short_entry` and `short_exit`. Each kind refuses the other's vocabulary.
+
+### Universe tabs
+
+`weekly_monthly`, `monthly_only`, `stocks_fno`, `mcx`
+
+The instrument universe a strategy was built from. It is not decoration: it decides which segments a leg may use. A configuration saved without a tab has one derived from its own legs rather than defaulted, so a caller is never refused about a field it did not set.
+
+### Leg segments
+
+`options`, `futures`, `cash`
+
+A batch leg's segment must be one its universe tab offers. **Cash is offered on `stocks_fno` only**: an index has no cash instrument of its own and an MCX commodity has no spot, so a cash leg on either tab names a symbol the master contract does not list. A signal leg takes `cash` or `futures` only; there is no `options` segment in signal mode, and an exact option contract is named as a symbol instead. A signal leg's segment and its exchange must agree, so cash on a derivative venue is refused rather than ignored.
 
 ### Directions
 
@@ -183,13 +195,19 @@ important to an operator:
 
 `lots`, `units`
 
-`lots` multiplies the value by the contract's lot size from the master contract, so 5 lots of NIFTY is 5 x 65. The lot **count** is what is stored, so a strategy survives the exchange revising the lot size, as NIFTY did from 75 to 65. `units` is the number of shares or contracts outright. A derivative venue defaults to `lots` and a cash venue to `units`; an explicit value always wins. An unknown lot size in `lots` mode is an error, never a guess.
+`lots` multiplies the value by the contract's lot size from the master contract, so 5 lots of NIFTY is 5 x 65. The lot **count** is what is stored, so a strategy survives the exchange revising the lot size, as NIFTY did from 75 to 65. `units` is the number of shares or contracts outright. An unknown lot size in `lots` mode is an error, never a guess.
+
+`qty_mode` is a **signal** leg field. A derivative venue defaults to `lots` and a cash venue to `units`; `units` may be set explicitly on a derivative, but `lots` on a cash venue is refused, because a cash instrument has no lot size to multiply by.
+
+A **batch** leg has no `qty_mode` at all. Its `lots` count is multiplied by the master contract's lot size on every segment, cash included. A cash row's lot size is 1, so the count reads as a share count, but the multiplication is unconditional.
 
 ### Products
 
 `CNC`, `NRML`, `MIS`
 
 A strategy carries one product for every leg, and it is read as the **intent** rather than the literal: `MIS` is intraday everywhere, and anything else means carry the position, which is sent as `NRML` on a derivatives venue and `CNC` on cash. A basket mixing a cash leg and an option leg therefore works, and no leg is ever sent a product its venue refuses.
+
+One combination is refused rather than translated: a **short** cash leg under a carrying product. Cash cannot be held short overnight, so anything that is not `MIS` would reach the venue as a naked short delivery. A batch leg with `position: "S"` on a cash segment is refused when the product is not `MIS`; a signal leg is refused at signal time instead, when the side actually being opened is known rather than the sides it accepts.
 
 ### Price types
 

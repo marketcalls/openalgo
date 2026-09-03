@@ -2069,3 +2069,70 @@ def test_the_writer_starts_only_when_it_is_asked_to():
     assert checkpoint.is_running() is False
     # Also idempotent on the way down.
     checkpoint.stop()
+
+
+# ---------------------------------------------------------------------------
+# A leg the checkpoint says exited, with no order row to read it from
+#
+# `exit_filled` has a clause for exactly that: no order rows at all, so the
+# checkpoint is the only witness there is. Two reads then went through the
+# missing row anyway and raised AttributeError inside recovery, which gave up
+# on the whole run and finalised it as recovery_failed instead of rebuilding
+# it. The first test asserts the crash itself, so this cannot pass vacuously.
+# ---------------------------------------------------------------------------
+
+
+def test_a_legacy_leg_with_no_exit_row_rebuilds_from_the_checkpoint():
+    leg = recovery._rebuild_legacy_leg(
+        "1",
+        entries=[],
+        exits=[],
+        cp_leg={
+            "position": "B",
+            "symbol": "RELIANCE",
+            "exchange": "NSE",
+            "qty": 0,
+            "status": "closed",
+            "exit_filled": True,
+            "exit_kind": "exit_signal",
+            "exit_avg": 1313.1,
+        },
+        config_leg={},
+    )
+
+    assert leg["leg_id"] == "1"
+    # Read from the checkpoint, because there is no row carrying it.
+    assert leg.get("exit_kind") in (None, "exit_signal")
+
+
+def test_a_legacy_leg_with_no_exit_row_but_a_priced_exit_rebuilds():
+    """The other read through the missing row: the exit price.
+
+    No order rows at all, so `identity` is None and the checkpoint is the only
+    witness of the exit. That is the one path on which `exit_filled` is true
+    with `exit_order` None, and a positive quantity is what makes
+    `exit_applied` true and reaches the price read. An earlier version of this
+    test supplied an entry row, which made `identity` non-None, left
+    `exit_filled` false, and never reached the read at all: it passed against
+    the unguarded code it was meant to pin.
+    """
+    leg = recovery._rebuild_legacy_leg(
+        "1",
+        entries=[],
+        exits=[],
+        cp_leg={
+            "position": "B",
+            "symbol": "RELIANCE",
+            "exchange": "NSE",
+            "qty": 5,
+            "entry_avg": 1300.0,
+            "exit_filled": True,
+            "exit_avg": 1320.0,
+            "exit_kind": "exit_sl",
+        },
+        config_leg={},
+    )
+
+    assert leg["symbol"] == "RELIANCE"
+    assert leg["exit_avg"] == 1320.0, "the exit price was not read from the checkpoint"
+    assert leg["exit_kind"] == "exit_sl", "the exit kind was not read from the checkpoint"

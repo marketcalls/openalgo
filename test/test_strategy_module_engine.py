@@ -105,6 +105,22 @@ def _make(config=None):
     return created["id"]
 
 
+def _mark_kind(sid, kind):
+    """Set the stored kind directly.
+
+    Not through update_strategy, which refuses a kind change by design: the two
+    kinds do not share a leg shape. A test that needs a started run whose row
+    says signal has to write it, because nothing in the product will.
+    """
+    from database.strategy_module_db import SmStrategy
+    from database.strategy_module_db import db_session as store_session
+
+    row = store_session.query(SmStrategy).filter_by(id=sid).first()
+    row.strategy_kind = kind
+    store_session.commit()
+    store_session.remove()
+
+
 def _start(sid, mode="sandbox", dispatch=None, resolved=None):
     """Start a run with resolution and placement mocked."""
     resolved = resolved if resolved is not None else [_resolved()]
@@ -281,9 +297,7 @@ def test_failed_ack_persistence_records_exact_structured_repair_metadata(api_key
     assert result.ok is True
     assert result.legs[0]["acknowledged"] is False
     event = next(
-        event
-        for event in store.list_events(sid)
-        if event["kind"] == "order_ack_unrecorded"
+        event for event in store.list_events(sid) if event["kind"] == "order_ack_unrecorded"
     )
     order = store.list_orders(result.run_id)[0]
     assert event["severity"] == "critical"
@@ -816,17 +830,9 @@ def test_close_leg_event_is_request_only_for_browser_and_restx_until_fill(api_ke
 
     assert result["ok"] is True
     assert result["run_stopped"] is False
-    manual = [
-        event
-        for event in store.list_events(sid)
-        if event["kind"] == "leg_close_manual"
-    ]
-    assert [event["message"] for event in manual] == [
-        "Operator requested closure of leg 1"
-    ]
-    assert not any(
-        event["kind"] == "run_stopped" for event in store.list_events(sid)
-    )
+    manual = [event for event in store.list_events(sid) if event["kind"] == "leg_close_manual"]
+    assert [event["message"] for event in manual] == ["Operator requested closure of leg 1"]
+    assert not any(event["kind"] == "run_stopped" for event in store.list_events(sid))
 
 
 def test_stop_cancels_a_working_entry_through_run_mode_then_polls_terminal_fact(api_key):
@@ -920,12 +926,8 @@ def test_stop_cancel_success_polling_a_partial_fill_exits_only_authoritative_qua
 
     assert result["ok"] is True
     assert result["stop_pending"] is True
-    cancel.assert_called_once_with(
-        mode="sandbox", api_key="test-api-key", broker_order_id="SB-1"
-    )
-    poll.assert_called_once_with(
-        mode="sandbox", api_key="test-api-key", broker_order_id="SB-1"
-    )
+    cancel.assert_called_once_with(mode="sandbox", api_key="test-api-key", broker_order_id="SB-1")
+    poll.assert_called_once_with(mode="sandbox", api_key="test-api-key", broker_order_id="SB-1")
     assert exit_orders[0]["quantity"] == "25"
     entry = next(row for row in store.list_orders(run_id) if row["kind"] == "entry")
     assert entry["status"] == "complete"
@@ -1239,9 +1241,7 @@ def test_late_exit_fill_reconciles_each_durable_position_incarnation(api_key):
             },
         )
         assert order is not None
-        assert store.update_order(
-            order.id, status="complete", avg_fill_price=price, filled_qty=1
-        )
+        assert store.update_order(order.id, status="complete", avg_fill_price=price, filled_qty=1)
 
     # No live state remains, which takes the same detached-state repair path as
     # a late broker correction after finalisation/restart.
@@ -1337,8 +1337,13 @@ def test_a_quiet_tick_with_no_session_records_nothing(api_key):
 
 
 def test_synchronous_signal_risk_exit_fill_does_not_end_the_session_run(api_key):
-    sid = _make(_config(strategy_kind="signal"))
+    # Started as a batch strategy and then marked signal. A signal strategy has
+    # no start: its run is opened by the first signal, and start_run refuses it
+    # by name. What this test is about is the finalisation rule, which reads
+    # the kind off the row, so the row is what has to say signal.
+    sid = _make()
     run_id = _start(sid).run_id
+    _mark_kind(sid, "signal")
     engine.apply_fill(run_id, 1, 100.0, is_entry=True)
 
     def fill_inline(**_kwargs):

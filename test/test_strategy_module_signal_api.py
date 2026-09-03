@@ -123,8 +123,11 @@ def test_expiry_belongs_to_a_futures_leg_and_not_a_cash_one():
     _, error = validate_strategy_config(_signal(legs=[_leg(segment="cash", expiry="current")]))
     assert error is not None and "cash" in error
 
+    # On NFO, because a futures leg on NSE names an instrument that venue
+    # does not list, and the validator now refuses that rather than accepting
+    # a segment nothing downstream reads.
     config, error = validate_strategy_config(
-        _signal(legs=[_leg(segment="futures", expiry="current")])
+        _signal(legs=[_leg(segment="futures", exchange="NFO", expiry="current")])
     )
     assert error is None
     assert config["legs"][0]["expiry"] == "current"

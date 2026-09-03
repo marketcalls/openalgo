@@ -74,13 +74,17 @@ class OrderStatusResult:
     error: str | None = None
 
 
-# Which products each venue accepts. /scalping already carries this rule
-# (blueprints/scalping.py), and every broker enforces it: CNC is a delivery
-# product for cash, NRML a carry-forward product for derivatives, and neither
-# is accepted on the other's venue.
+# Which venues list derivatives, for the purpose of naming the product.
+# /scalping already carries this rule (blueprints/scalping.py), and every
+# broker enforces it: CNC is a delivery product for cash, NRML a carry-forward
+# product for derivatives, and neither is accepted on the other's venue.
+#
+# There is deliberately no set of "products a derivative accepts" beside this
+# one. Two such sets used to sit here and were referenced by nothing, which
+# read as a validation rule that ran somewhere and did not: the product is
+# translated per venue below rather than refused, so a legal value for the
+# venue is produced instead of being demanded from the caller.
 DERIVATIVE_EXCHANGES_FOR_PRODUCT = frozenset({"NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "NCO"})
-DERIVATIVE_PRODUCTS = frozenset({"MIS", "NRML"})
-EQUITY_PRODUCTS = frozenset({"MIS", "CNC"})
 
 
 def product_for_exchange(product: str, exchange: str) -> str:

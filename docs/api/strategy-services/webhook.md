@@ -108,7 +108,7 @@ subscribed and managed until exact exit fills confirm every owner is flat.
 
 A signal strategy moves one leg at a time. It accepts `long_entry`, `long_exit`, `short_entry` and `short_exit`, and nothing else. There is no `start` and no `mode`: the first signal after the platform session boundary opens the run, and the mode comes from the strategy's own live opt-in.
 
-The leg is named either by `leg_id` or by `symbol` plus `exchange`. `leg_id` wins when both are given.
+The leg is named either by `leg_id` or by `symbol`, optionally narrowed by `exchange`. `leg_id` wins when both are given.
 
 ### Sample API Request (By Leg Id)
 
@@ -206,7 +206,7 @@ The body must be a JSON object. A JSON array, a bare string and a number are all
 | `rejected_live_disabled` | 403 | `mode: "live"` on a strategy that has not opted into live trading |
 | `rejected_dedupe` | 200 | An identical signal was already handled within the last 60 seconds. Reported as a success |
 | `rejected_cooling_off` | 409 | The strategy stopped within the last 30 seconds, so a `start` is held off |
-| `rejected_engine_error` | 500 | The engine refused the signal or raised while acting on it |
+| `rejected_engine_error` | 500 | The engine refused a batch `start` or `stop`, or raised anywhere. A signal-mode engine refusal is reported as `rejected_invalid_action` (400) instead; only a raised exception on the signal path answers 500 |
 | `rate_limited` | 429 | The route's rate limiter refused the request |
 
 Only requests admitted to the validation pipeline are audited. Every terminal
@@ -214,7 +214,7 @@ outcome inside that pipeline, accepted or rejected, writes a row to the webhook
 audit table. The route's rate limiter and declared-size 413 run before durable
 webhook-event audit, so those preflight refusals do not create an audit row.
 The declared-size 413 response contains `status` and `message` but no `result`;
-the limiter's 429 response contains `result: "rate_limited"`.
+the limiter's 429 response contains `result: "rate_limited"`, a `retry_after` field and a `Retry-After` header.
 The session endpoint can read admitted events, but the `/strategy` page does
 not currently expose them. The page also does not provide an IP-allowlist
 editor; creation currently stores no allowlist. Configure/read these through
@@ -243,15 +243,16 @@ The kill switch outranks the allowlist, and the allowlist outranks the payload, 
 
 ## Notes
 
-- **`mode` is required on a batch `start` and is never defaulted.** A start with no mode, or with `paper`, `real`, `LIVE` or an empty string, is refused with `rejected_invalid_action` and never reaches the engine.
+- **`mode` is required on a batch `start` and is never defaulted.** A start with no mode, or with `paper`, `real` or an empty string, is refused with `rejected_invalid_action` and never reaches the engine. Case and surrounding whitespace do not matter here: `"LIVE"` and `" Sandbox "` are read as `live` and `sandbox`. This is the one place the webhook is more forgiving than [`/start`](./start.md), where `LIVE` is a 400.
 - **Live is opt-in per strategy.** A strategy is created sandbox-only. `mode: "live"` is refused with `rejected_live_disabled` until the operator enables live trading on the strategy page.
 - **An unknown token and a malformed one are indistinguishable.** Same result label, same message, same status, so the endpoint is not an oracle for which tokens exist. A malformed token is refused on its shape before any database lookup, so the two are not separable by timing either.
 - **A 404 here does not count towards an IP ban.** The endpoint answers with a controlled 404 rather than falling through to the application's handler, so a scanner walking the token space cannot get the address a real alert arrives from banned.
-- **A signal that does nothing answers 200 with a note.** A repeat `long_entry` on a leg already long, or an exit for a position that is not held, is a no-op, not a failure. This is deliberate: reporting it as a failure invites a retry, and a retry on an order path is how one alert becomes two positions. The notes are `already_long`, `already_short`, `no_matching_position`, `outside_entry_window` and `outside_trading_window`, and they appear in the message as `Signal accepted (already_long)`.
-- **Being refused is different from being a no-op.** A signal blocked by the strategy's `direction`, or by the leg's own accepted side, or naming a leg that does not exist, is a configuration mismatch the operator should see. It answers `rejected_invalid_action` with the engine's own message, for example `This strategy is long_only; a short signal is not accepted` or `No leg matches this signal`.
+- **A signal that does nothing answers 200 with a note.** A repeat `long_entry` on a leg already long, or an exit for a position that is not held, is a no-op, not a failure. This is deliberate: reporting it as a failure invites a retry, and a retry on an order path is how one alert becomes two positions. The notes are `already_long`, `already_short`, `flip_pending`, `no_matching_position`, `outside_entry_window` and `outside_trading_window`, and they appear in the message as `Signal accepted (already_long)`. One further note, `run_stopping`, is not a no-op: a signal arriving while a durable stop is in flight is refused with `rejected_invalid_action` and the generic message `The signal was refused`.
+- **Being refused is different from being a no-op.** A signal blocked by the strategy's `direction`, or by the leg's own accepted side, or naming a leg that does not exist, is a configuration mismatch the operator should see. So is a `short_entry` on a cash leg when the strategy's product is not `MIS`: cash cannot be carried short, so anything else would reach the venue as a naked short delivery. All of these answer `rejected_invalid_action` with the engine's own message, for example `This strategy is long_only; a short signal is not accepted`, `No leg matches this signal`, or `Leg 1: cash cannot be held short overnight, and product CNC carries the position. Use MIS for an intraday short.`
+- **A signal leg names its instrument outright, and it is checked.** A signal leg is not resolved from an underlying and an expiry rank, so the symbol on the leg is the symbol sent to the broker. It is checked against the master contract on every venue, cash included: `NIFTY` on `NFO` is a base symbol rather than a contract, and a misspelled equity such as `RELAINCE` on `NSE` is refused the same way, both with `rejected_invalid_action`. If the master contract holds no rows at all for that exchange there is nothing to check against and the leg passes, so a fresh install is not blocked.
 - **Each kind refuses the other's vocabulary.** `long_entry` against a batch strategy and `start` against a signal strategy are both `rejected_invalid_action`, and the message names the actions that strategy does accept.
 - **Duplicate suppression, batch only.** Two identical `(strategy, action, mode)` deliveries inside 60 seconds are one signal. This exists because senders retry a delivery they believe failed. A delivery whose engine call then failed releases its claim, so a genuine retry is not swallowed as a duplicate of something that never happened.
-- **Cooling off, batch `start` only.** A strategy that stopped within the last 30 seconds refuses a `start`, so a misconfigured pair of alerts firing against each other cannot oscillate and pay the spread each time. A stop is never blocked by the window, and a stop against an already-stopped strategy does not arm it.
+- **Cooling off, batch `start` only.** A strategy that stopped within the last 30 seconds refuses a `start`, so a misconfigured pair of alerts firing against each other cannot oscillate and pay the spread each time. A stop is never blocked by the window. A stop against an already-stopped strategy does not arm it, and neither does a stop that is still pending.
 - **The IP allowlist is a closed set when it is non-empty.** An empty or absent allowlist allows every address, which is how a strategy is created. Entries are CIDR ranges, and a bare address is read as its own `/32` or `/128`. A request that arrives with no address at all fails a non-empty allowlist. One malformed entry is skipped rather than failing the whole list closed.
 - **Body size cap: 16384 bytes.** An oversized `Content-Length` is refused with a 413 **before the body is read or audited**, so an unauthenticated caller does not get to decide how much the worker reads. The admitted pipeline then applies its own byte cap to what actually arrived and audits that `rejected_payload` outcome. A TradingView alert is a few hundred bytes.
 - **The caller is identified by the real client address.** The proxy headers are honoured through `get_real_ip()`, so the IP allowlist and the audit trail name the sender rather than the reverse proxy most installs run behind.

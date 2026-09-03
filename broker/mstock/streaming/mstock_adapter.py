@@ -4,6 +4,7 @@ mstock WebSocket adapter implementation (synchronous).
 Uses sync websocket-client to avoid asyncio event loop conflicts
 with eventlet in gunicorn+eventlet deployments.
 """
+
 import copy
 import json
 import os
@@ -41,6 +42,17 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.auth_token = None
         self.token_modes = {}
         self.token_correlation_ids = {}
+
+        # Subscribe coalescing (issue #1352) - mirrors the angel/zerodha
+        # subscription_queue + batch_timer pattern. Per-symbol subscribe()
+        # calls append to the queue and arm a 500ms timer; the timer drains
+        # the queue and emits one ws_client.subscribe_batch() per mode, so a
+        # 100-symbol watchlist collapses into a handful of broker-side frames
+        # instead of one frame per symbol. mStock's tokenList accepts many
+        # tokens per exchangeType, so the whole batch fits in one message.
+        self.subscription_queue: list[dict] = []
+        self.batch_timer: threading.Timer | None = None
+        self.batch_delay = 0.5  # seconds - matches the zerodha/angel fleet pattern
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -110,7 +122,7 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             matching_subscriptions = []
             with self.lock:
-                for correlation_id, sub in self.subscriptions.items():
+                for sub in self.subscriptions.values():
                     if sub["token"] == token:
                         matching_subscriptions.append(sub)
 
@@ -129,12 +141,14 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 topic = f"{exchange}_{symbol}_{mode_str}"
 
                 market_data = copy.deepcopy(market_data_base)
-                market_data.update({
-                    "symbol": symbol,
-                    "exchange": exchange,
-                    "mode": mode,
-                    "timestamp": int(time.time() * 1000),
-                })
+                market_data.update(
+                    {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "mode": mode,
+                        "timestamp": int(time.time() * 1000),
+                    }
+                )
 
                 self.publish_market_data(topic, market_data)
                 self.logger.debug(f"Published data for {symbol} on {exchange} mode {mode}")
@@ -145,6 +159,14 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def disconnect(self) -> None:
         """Disconnect from mstock WebSocket"""
         self.running = False
+
+        # Cancel any pending subscribe-batch flush so the timer thread does not
+        # outlive the connection it was going to send on.
+        with self.lock:
+            if self.batch_timer:
+                self.batch_timer.cancel()
+                self.batch_timer = None
+            self.subscription_queue.clear()
 
         if self.ws_client:
             self.ws_client.disconnect_stream()
@@ -208,30 +230,32 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     f"WebSocket not connected, subscription for {symbol} stored locally but not sent to broker"
                 )
             else:
+                # Queue for batched subscribe. The actual send is emitted by
+                # _process_batch_subscriptions after the coalescing window, so
+                # bursty per-symbol startups collapse into one frame per mode.
                 try:
-                    # Unsubscribe old mode if upgrading
-                    if current_mstock_mode > 0 and token in self.token_correlation_ids:
-                        old_correlation_id = self.token_correlation_ids[token]
-                        if old_correlation_id in self.ws_client.subscriptions:
-                            self.ws_client.unsubscribe_stream(old_correlation_id)
-                            time.sleep(0.2)
-
-                    # Subscribe with new mode
-                    mstock_correlation_id = f"mstock_{token}_{subscribe_mode}"
-                    result = self.ws_client.subscribe_stream(
-                        mstock_correlation_id, token, exchange_type, subscribe_mode
-                    )
-
-                    if result:
-                        self.token_correlation_ids[token] = mstock_correlation_id
-                        self.logger.info(
-                            f"Subscribed to {symbol} (token: {token}) on {exchange} with mode {subscribe_mode}"
+                    with self.lock:
+                        self.subscription_queue.append(
+                            {
+                                "token": token,
+                                "mode": subscribe_mode,
+                                "exchange_type": exchange_type,
+                                "symbol": symbol,
+                                "exchange": exchange,
+                                # Set when upgrading an existing lower mode, so
+                                # the flush drops the old subscription first.
+                                "old_correlation_id": (
+                                    self.token_correlation_ids.get(token)
+                                    if current_mstock_mode > 0
+                                    else None
+                                ),
+                            }
                         )
-                    else:
-                        self.logger.warning(f"Failed to subscribe to {symbol} on {exchange}")
-
+                        if len(self.subscription_queue) == 1:
+                            self._start_batch_timer()
                 except Exception as e:
-                    self.logger.error(f"Error subscribing: {str(e)}")
+                    self.logger.error(f"Error queuing subscription for {symbol}.{exchange}: {e}")
+                    return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
 
         return {
             "status": "success",
@@ -244,19 +268,21 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             normalized = {"ltp": float(quote_data.get("ltp", 0))}
 
             if mode >= 2:
-                normalized.update({
-                    "open": float(quote_data.get("open", 0)),
-                    "high": float(quote_data.get("high", 0)),
-                    "low": float(quote_data.get("low", 0)),
-                    "close": float(quote_data.get("close", 0)),
-                    "prev_close": float(quote_data.get("close", 0)),
-                    "volume": int(quote_data.get("volume", 0)),
-                    "oi": int(quote_data.get("oi", 0)),
-                    "last_trade_quantity": int(quote_data.get("last_traded_qty", 0)),
-                    "average_price": float(quote_data.get("avg_price", 0)),
-                    "total_buy_quantity": int(quote_data.get("total_buy_qty", 0)),
-                    "total_sell_quantity": int(quote_data.get("total_sell_qty", 0)),
-                })
+                normalized.update(
+                    {
+                        "open": float(quote_data.get("open", 0)),
+                        "high": float(quote_data.get("high", 0)),
+                        "low": float(quote_data.get("low", 0)),
+                        "close": float(quote_data.get("close", 0)),
+                        "prev_close": float(quote_data.get("close", 0)),
+                        "volume": int(quote_data.get("volume", 0)),
+                        "oi": int(quote_data.get("oi", 0)),
+                        "last_trade_quantity": int(quote_data.get("last_traded_qty", 0)),
+                        "average_price": float(quote_data.get("avg_price", 0)),
+                        "total_buy_quantity": int(quote_data.get("total_buy_qty", 0)),
+                        "total_sell_quantity": int(quote_data.get("total_sell_qty", 0)),
+                    }
+                )
 
             if mode == 3:
                 bids = quote_data.get("bids", [])[:5]
@@ -265,46 +291,133 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 formatted_bids = []
                 for bid in bids:
                     if isinstance(bid, dict):
-                        formatted_bids.append({
-                            "price": float(bid.get("price", 0)),
-                            "quantity": int(bid.get("quantity", 0)),
-                            "orders": int(bid.get("orders", 0)),
-                        })
+                        formatted_bids.append(
+                            {
+                                "price": float(bid.get("price", 0)),
+                                "quantity": int(bid.get("quantity", 0)),
+                                "orders": int(bid.get("orders", 0)),
+                            }
+                        )
                     elif isinstance(bid, (list, tuple)) and len(bid) >= 2:
-                        formatted_bids.append({
-                            "price": float(bid[0]),
-                            "quantity": int(bid[1]),
-                            "orders": int(bid[2]) if len(bid) > 2 else 0,
-                        })
+                        formatted_bids.append(
+                            {
+                                "price": float(bid[0]),
+                                "quantity": int(bid[1]),
+                                "orders": int(bid[2]) if len(bid) > 2 else 0,
+                            }
+                        )
 
                 formatted_asks = []
                 for ask in asks:
                     if isinstance(ask, dict):
-                        formatted_asks.append({
-                            "price": float(ask.get("price", 0)),
-                            "quantity": int(ask.get("quantity", 0)),
-                            "orders": int(ask.get("orders", 0)),
-                        })
+                        formatted_asks.append(
+                            {
+                                "price": float(ask.get("price", 0)),
+                                "quantity": int(ask.get("quantity", 0)),
+                                "orders": int(ask.get("orders", 0)),
+                            }
+                        )
                     elif isinstance(ask, (list, tuple)) and len(ask) >= 2:
-                        formatted_asks.append({
-                            "price": float(ask[0]),
-                            "quantity": int(ask[1]),
-                            "orders": int(ask[2]) if len(ask) > 2 else 0,
-                        })
+                        formatted_asks.append(
+                            {
+                                "price": float(ask[0]),
+                                "quantity": int(ask[1]),
+                                "orders": int(ask[2]) if len(ask) > 2 else 0,
+                            }
+                        )
 
                 normalized["depth"] = {"buy": formatted_bids, "sell": formatted_asks}
-                normalized.update({
-                    "total_buy_quantity": int(quote_data.get("total_buy_qty", 0)),
-                    "total_sell_quantity": int(quote_data.get("total_sell_qty", 0)),
-                    "upper_circuit": float(quote_data.get("upper_circuit", 0)),
-                    "lower_circuit": float(quote_data.get("lower_circuit", 0)),
-                })
+                normalized.update(
+                    {
+                        "total_buy_quantity": int(quote_data.get("total_buy_qty", 0)),
+                        "total_sell_quantity": int(quote_data.get("total_sell_qty", 0)),
+                        "upper_circuit": float(quote_data.get("upper_circuit", 0)),
+                        "lower_circuit": float(quote_data.get("lower_circuit", 0)),
+                    }
+                )
 
             return normalized
 
         except Exception as e:
             self.logger.error(f"Error normalizing market data: {str(e)}")
             return {"ltp": 0}
+
+    def _start_batch_timer(self) -> None:
+        """
+        Arm the coalescing timer that drains subscription_queue.
+
+        Called from within the lock when a fresh subscription enters an empty
+        queue; enqueues during the window join the same flush.
+        """
+        if self.batch_timer:
+            self.batch_timer.cancel()
+        self.batch_timer = threading.Timer(self.batch_delay, self._process_batch_subscriptions)
+        self.batch_timer.daemon = True
+        self.batch_timer.start()
+
+    def _process_batch_subscriptions(self) -> None:
+        """
+        Drain the queue and emit one subscribe frame per mode.
+
+        Collapses N per-symbol subscribes into one frame per distinct mode.
+        Mode upgrades drop their old subscription first; those unsubscribes
+        are batched too, so the settle pause is paid once for the whole flush
+        rather than once per symbol.
+        """
+        with self.lock:
+            if not self.subscription_queue:
+                self.batch_timer = None
+                return
+            pending = list(self.subscription_queue)
+            self.subscription_queue.clear()
+            self.batch_timer = None
+
+        if not self.running or not self.ws_client or not self.ws_client.is_connected():
+            self.logger.warning(f"Dropping batch of {len(pending)} subscriptions - not connected")
+            return
+
+        # Last entry wins per token: a token queued twice in one window only
+        # needs its final mode, and the earlier entry's frame would be
+        # superseded immediately anyway.
+        latest: dict[str, dict] = {}
+        for sub in pending:
+            latest[str(sub["token"])] = sub
+
+        try:
+            stale = [
+                sub["old_correlation_id"]
+                for sub in latest.values()
+                if sub.get("old_correlation_id")
+            ]
+            if stale:
+                self.ws_client.unsubscribe_batch(stale)
+                # One settle pause for the whole flush, not one per symbol.
+                time.sleep(0.2)
+
+            by_mode: dict[int, list] = {}
+            for token, sub in latest.items():
+                correlation_id = "mstock_" + token + "_" + str(sub["mode"])
+                by_mode.setdefault(sub["mode"], []).append(
+                    {
+                        "correlation_id": correlation_id,
+                        "token": token,
+                        "exchange_type": sub["exchange_type"],
+                    }
+                )
+
+            for mode, subs in by_mode.items():
+                if self.ws_client.subscribe_batch(subs, mode):
+                    with self.lock:
+                        for entry in subs:
+                            self.token_correlation_ids[entry["token"]] = entry["correlation_id"]
+                    self.logger.info(f"Batch subscribed {len(subs)} token(s) in mode {mode}")
+                else:
+                    self.logger.warning(
+                        f"Batch subscription failed for {len(subs)} token(s) in mode {mode}"
+                    )
+
+        except Exception as e:
+            self.logger.error(f"Error processing subscription batch: {str(e)}")
 
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> dict[str, Any]:
         correlation_id = f"{symbol}_{exchange}_{mode}"
@@ -350,7 +463,10 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         self.ws_client.unsubscribe_stream(current_correlation_id)
                         self.logger.info(f"Unsubscribed token {token} from mstock")
                 else:
-                    if current_correlation_id and current_correlation_id in self.ws_client.subscriptions:
+                    if (
+                        current_correlation_id
+                        and current_correlation_id in self.ws_client.subscriptions
+                    ):
                         self.ws_client.unsubscribe_stream(current_correlation_id)
                         time.sleep(0.2)
 
@@ -359,7 +475,9 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         new_correlation_id, token, exchange_type, new_mode
                     )
                     self.token_correlation_ids[token] = new_correlation_id
-                    self.logger.debug(f"Downgraded subscription for token {token} to mode {new_mode}")
+                    self.logger.debug(
+                        f"Downgraded subscription for token {token} to mode {new_mode}"
+                    )
 
             except Exception as e:
                 self.logger.error(f"Error updating WebSocket subscription: {str(e)}")

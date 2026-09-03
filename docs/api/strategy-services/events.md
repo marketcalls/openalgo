@@ -176,7 +176,7 @@ the same owners and quantities.
 - **A `run_id` belonging to another strategy matches nothing.** The query is scoped to this strategy before the run filter is applied.
 - Configuration-layer events share the table with runtime ones and carry `run_id: null`. Filtering by `run_id` therefore excludes them.
 - The `close_all_manual` event written by [`/close_all`](./close_all.md) records the request before broker exits settle; use `run_stopped` as confirmed-flat evidence.
-- `payload` is free-form JSON and is `null` on most events. A scheduler-started run carries `{"trigger_source": "scheduler", "mode": "sandbox"}`; `order_ack_unrecorded` carries the exact reconciliation fields documented above. Do not assume one shape across kinds.
+- `payload` is free-form JSON and is `null` on most events, `run_started` included. A scheduled **live** start that was refused because live trading is not enabled writes a `live_disabled` event carrying `{"trigger_source": "scheduler", "mode": "live"}`; `order_ack_unrecorded` carries the exact reconciliation fields documented above. Do not assume one shape across kinds.
 
 ## Use Cases
 
