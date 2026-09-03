@@ -9,11 +9,20 @@
  * An unreachable status is read as "not configured" rather than as an error.
  * That is the honest reading: a status call that cannot be answered is not
  * evidence that a working agent is sitting behind it.
+ *
+ * The route lives under `FullWidthLayout`, which renders no navigation of its
+ * own, so this page renders `Navbar` itself exactly as /trading does. The
+ * layout gives it an `h-screen` flex column with `overflow-hidden`, so
+ * everything below the nav is one `flex-1 min-h-0` region: the height comes
+ * from the viewport rather than from a `calc()` that has to guess how tall the
+ * chrome above it is.
  */
 
 import { useQuery } from '@tanstack/react-query'
 import { Bot } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { webClient } from '@/api/client'
+import { Navbar } from '@/components/layout/Navbar'
 import AgentChat from './AgentChat'
 
 interface AgentStatus {
@@ -39,6 +48,25 @@ async function fetchAgentStatus(): Promise<AgentStatus> {
   }
 }
 
+/**
+ * The nav plus the one region everything else fills.
+ *
+ * `min-h-0` is load-bearing: a flex item's default `min-height: auto` refuses
+ * to shrink below its content, so without it a long thread grows this region
+ * past the viewport and the composer walks off the bottom of the screen
+ * instead of staying pinned.
+ */
+function AgentShell({ children }: { children: ReactNode }) {
+  return (
+    <>
+      {/* Full-bleed page: the nav spans the viewport rather than Layout's
+          centred container. See NavbarProps.fluid. */}
+      <Navbar fluid />
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
+    </>
+  )
+}
+
 export default function AgentIndex() {
   const { data, isLoading } = useQuery({
     queryKey: ['agent', 'status'],
@@ -48,30 +76,42 @@ export default function AgentIndex() {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center">
-        <span className="text-sm text-muted-foreground">Checking agent configuration</span>
-      </div>
+      <AgentShell>
+        <div className="flex min-h-0 flex-1 items-center justify-center">
+          <span className="text-sm text-muted-foreground">Checking agent configuration</span>
+        </div>
+      </AgentShell>
     )
   }
 
   if (!data?.configured) {
     return (
-      <div className="mx-auto flex min-h-[60vh] max-w-xl flex-col items-center justify-center gap-4 px-6 text-center">
-        <div className="rounded-xl border bg-muted/40 p-4">
-          <Bot className="h-8 w-8 text-muted-foreground" aria-hidden />
+      <AgentShell>
+        {/* Scrolls on a short viewport rather than clipping, which the
+            layout's overflow-hidden would otherwise do. */}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="mx-auto flex min-h-full max-w-xl flex-col items-center justify-center gap-4 px-6 py-10 text-center">
+            <div className="rounded-xl border bg-muted/40 p-4">
+              <Bot className="h-8 w-8 text-muted-foreground" aria-hidden />
+            </div>
+            <h1 className="text-2xl font-semibold tracking-tight">Set up your agent</h1>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Choose a model provider and add its API key to start using the agent. Keys are stored
+              encrypted in your own database and are never written to a configuration file. A local
+              provider is supported if you would rather nothing left this machine.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Provider setup is not available yet on this build.
+            </p>
+          </div>
         </div>
-        <h1 className="text-2xl font-semibold tracking-tight">Set up your agent</h1>
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          Choose a model provider and add its API key to start using the agent. Keys are
-          stored encrypted in your own database and are never written to a configuration
-          file. A local provider is supported if you would rather nothing left this machine.
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Provider setup is not available yet on this build.
-        </p>
-      </div>
+      </AgentShell>
     )
   }
 
-  return <AgentChat />
+  return (
+    <AgentShell>
+      <AgentChat />
+    </AgentShell>
+  )
 }

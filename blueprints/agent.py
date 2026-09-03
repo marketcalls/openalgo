@@ -1215,6 +1215,7 @@ def _build_context(
     body: dict,
     conversation_id: int,
     surface: str,
+    operator_message: str = "",
 ) -> ToolContext:
     """Build the run's tool context.
 
@@ -1222,12 +1223,22 @@ def _build_context(
     the operator's database setting, so a session that asks for order tools while
     trading is off in settings still does not get them.
 
+    ``operator_message`` is the turn's own message from the person, and it is
+    the surface's job to supply it. The web search taint boundary builds every
+    outbound query from it and refuses outright when it is missing, so a route
+    that forgets it does not degrade search, it disables it. It is passed
+    explicitly rather than read out of ``body`` because the resume route has no
+    new message and has to recover the one that opened the run.
+
     This runs after the conversation row exists and outside the caller's
     ``try``, so nothing in it may raise: an exception here answers a JSON client
     with a 500 HTML page and leaves behind the empty conversation
     ``_discard_empty_conversation`` exists to clean up.
     """
     chart_context = body.get("chart_context")
+    extras: dict = {"user_message": operator_message} if operator_message else {}
+    if isinstance(chart_context, dict):
+        extras["chart_context"] = chart_context
     return ToolContext(
         api_key=api_key,
         conversation_id=conversation_id,
@@ -1235,8 +1246,37 @@ def _build_context(
         user_id=username,
         trading_enabled=bool(body.get("trading_enabled", False)),
         analyzer_mode=_analyzer_mode(),
-        extras={"chart_context": chart_context} if isinstance(chart_context, dict) else {},
+        extras=extras,
     )
+
+
+def _last_operator_message(conversation_id: int) -> str:
+    """The most recent message the person sent in this conversation.
+
+    A resumed run carries only the approval decisions, so the message that
+    opened it has to come back out of the store for the web search boundary to
+    have anything to build from. A read failure degrades to an empty string,
+    which refuses search rather than searching on something unverified.
+
+    Args:
+        conversation_id: The conversation being resumed.
+
+    Returns:
+        The last user message, or an empty string when there is none.
+    """
+    try:
+        rows = agent_db.list_messages(conversation_id)
+    except Exception:
+        logger.exception(
+            "Could not read the last operator message for conversation %s", conversation_id
+        )
+        return ""
+    for row in reversed(rows):
+        if row.get("role") == "user":
+            content = row.get("content")
+            if isinstance(content, str) and content.strip():
+                return content
+    return ""
 
 
 def _analyzer_mode() -> bool:
@@ -1342,7 +1382,7 @@ def chat_stream():
     if not conversation.title:
         agent_db.update_conversation(conversation_id, username, title=message[:80])
 
-    context = _build_context(username, api_key, body, conversation_id, surface)
+    context = _build_context(username, api_key, body, conversation_id, surface, message)
     try:
         agent = builder.build_agent(
             context,
@@ -1433,7 +1473,9 @@ def chat_confirm():
     if surface_error:
         return _error(surface_error, 400)
 
-    context = _build_context(username, api_key, body, conversation_id, surface)
+    context = _build_context(
+        username, api_key, body, conversation_id, surface, _last_operator_message(conversation_id)
+    )
     try:
         agent = builder.build_agent(
             context,

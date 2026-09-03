@@ -1076,11 +1076,16 @@ def set_secret(name: str, value: str) -> tuple[bool, str | None]:
 
         db_session.commit()
         return True, None
-    except Exception:
+    except Exception as exc:
         db_session.rollback()
-        # The name, never the value: a traceback carrying a provider key would
-        # write it to log/errors.jsonl in plaintext.
-        logger.exception("Could not store agent secret %s", name)
+        # logger.error and no traceback: this is the credential-set path the
+        # build contract carves out. The exception's own message is the vector
+        # that matters, not the frame locals - a stdlib traceback never prints
+        # a local, but it does print str(exc), and an unlabelled key inside one
+        # is not matched by utils.logging's redaction patterns, which all key
+        # off a "token=" / "secret:" style label. So the name and the exception
+        # type go to the log and the message does not.
+        logger.error("Could not store agent secret %s: %s", name, type(exc).__name__)
         return False, "Could not store the secret"
 
 
@@ -1103,8 +1108,12 @@ def get_secret(name: str) -> str | None:
         # safe_decrypt_token returns the raw value when decryption fails, which
         # is what lets a column move from plaintext to encrypted with no cutover.
         return safe_decrypt_token(row.ciphertext)
-    except Exception:
-        logger.exception("Could not read agent secret %s", name)
+    except Exception as exc:
+        # Same carve-out as set_secret: the decrypted plaintext passes through
+        # this frame, so nothing derived from the exception beyond its class
+        # name is written. See the comment there for why the message, not the
+        # locals, is the thing being kept out of log/errors.jsonl.
+        logger.error("Could not read agent secret %s: %s", name, type(exc).__name__)
         return None
 
 

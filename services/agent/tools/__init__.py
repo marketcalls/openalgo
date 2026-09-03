@@ -277,9 +277,78 @@ class ToolkitSpec:
 #:     ),
 #:
 #: An order toolkit adds ``requires_trading=True``; a chart toolkit narrows to
-#: ``surfaces=CHART_ONLY``. Concrete toolkits land in a later phase, so the list
-#: is deliberately empty rather than naming files that do not exist yet.
-TOOLKITS: list[ToolkitSpec] = []
+#: ``surfaces=CHART_ONLY``. Entries name a module and an attribute rather than
+#: importing anything, so a toolkit that is not selected costs nothing.
+TOOLKITS: list[ToolkitSpec] = [
+    ToolkitSpec(
+        key="market",
+        module="services.agent.tools.market",
+        attr="MarketToolkit",
+        surfaces=ALL_SURFACES,
+        order=10,
+        description="Quotes, depth, history and intervals.",
+    ),
+    ToolkitSpec(
+        key="symbols",
+        module="services.agent.tools.symbols",
+        attr="SymbolsToolkit",
+        surfaces=ALL_SURFACES,
+        order=20,
+        description="Symbol search, contract lookup and expiry dates.",
+    ),
+    ToolkitSpec(
+        key="account",
+        module="services.agent.tools.account",
+        attr="AccountToolkit",
+        surfaces=ALL_SURFACES,
+        order=30,
+        description="Funds, positions, holdings, order book, trade book and order status.",
+    ),
+    ToolkitSpec(
+        key="options",
+        module="services.agent.tools.options",
+        attr="OptionsToolkit",
+        surfaces=ALL_SURFACES,
+        order=40,
+        description="Option chain, strike resolution, Greeks and the synthetic future.",
+    ),
+    ToolkitSpec(
+        key="orders",
+        module="services.agent.tools.orders",
+        attr="OrdersToolkit",
+        surfaces=CHAT_ONLY,
+        requires_trading=True,
+        order=50,
+        description=(
+            "Place, modify, cancel and close real orders and positions. "
+            "Every tool requires human approval and runs the risk guard."
+        ),
+    ),
+    ToolkitSpec(
+        key="strategy_gen",
+        module="services.agent.tools.strategy_gen",
+        attr="StrategyGenToolkit",
+        surfaces=CHAT_ONLY,
+        order=60,
+        description="Write a generated Python strategy to strategies/scripts/. Never starts it.",
+    ),
+    ToolkitSpec(
+        key="flow_gen",
+        module="services.agent.tools.flow_gen",
+        attr="FlowGenToolkit",
+        surfaces=CHAT_ONLY,
+        order=70,
+        description="Validate Flow workflow JSON, and import a valid one as an inactive workflow.",
+    ),
+    ToolkitSpec(
+        key="websearch",
+        module="services.agent.tools.websearch",
+        attr="WebSearchToolkit",
+        surfaces=ALL_SURFACES,
+        order=80,
+        description="Web search for links, and cited web research.",
+    ),
+]
 
 
 def add_spec(spec: ToolkitSpec) -> ToolkitSpec:

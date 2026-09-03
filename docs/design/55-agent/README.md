@@ -345,8 +345,14 @@ the broker rather than about setup state.
 `fetch` plus a `ReadableStream` reader, not `EventSource`, because the request
 carries a body.
 
-Headers: `Cache-Control: no-cache`, `Connection: keep-alive`,
-`X-Accel-Buffering: no`.
+Headers: `Cache-Control: no-cache`, `X-Accel-Buffering: no`.
+
+No `Connection` header. It is hop-by-hop, PEP 3333 forbids a WSGI application
+from setting one, and the server already owns it. Sending `keep-alive` on a
+chunked stream the server intends to close produces the merged, contradictory
+`Connection: keep-alive, close`, and a client that believes the first token
+keeps a socket in its pool that the server has already shut: the next request on
+it never gets a reply.
 
 ### The eventlet crossing
 

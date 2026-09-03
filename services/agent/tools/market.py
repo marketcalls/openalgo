@@ -1,0 +1,1033 @@
+"""Market data tools: quotes, depth, candles and the broker's interval list.
+
+Five read-only tools, all of them calling OpenAlgo's internal service layer
+directly. Nothing here makes an HTTP request back into this process and nothing
+here uses the ``openalgo`` SDK, which is for generated strategy code rather than
+for platform internals.
+
+Three decisions in this file are worth knowing about before changing it.
+
+**A history frame is summarised, not dumped.** ``get_history`` on a minute
+interval over a month is tens of thousands of candles, and handing that to a
+model wastes the whole context window to answer a question about the last few
+bars. The tool computes the summary over **every** row it received (first open,
+last close, the true high and low, total volume, the change across the range)
+and then returns only a bounded tail of candles, saying in the result how many
+older ones were dropped. The base class would otherwise cap the string
+mid-value, which reads to the model as a broken result rather than a deliberate
+one.
+
+**The interval is checked against the broker, not against a list in this file.**
+Every broker advertises its own resolutions through
+``services.intervals_service``, so a hardcoded list would either refuse an
+interval that works or accept one that 400s. When that lookup itself fails the
+check is skipped rather than failing closed: this is a read-only tool, and
+refusing a history call because the intervals endpoint hiccuped is the worse
+failure. The history service still validates, so nothing unsafe gets through.
+
+**An index is quoted on an index exchange.** ``NIFTY`` on ``NSE`` does not
+exist; it lives on ``NSE_INDEX``. Rather than failing, the tools ask the symbol
+database whether the pair the model gave actually resolves, and if it does not
+but the same symbol resolves on an index exchange, they use that one and say so
+in the result. The correction is data-driven, never a guess from the symbol's
+spelling, and it only ever moves **towards** an index exchange, so a genuine
+"symbol not found" is still reported as one.
+
+Every result leaves through :func:`services.agent.prompts.wrap_tool_result`, so
+what re-enters the model's context is labelled as data rather than as something
+it should obey.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+from collections.abc import Callable, Mapping
+from datetime import date, datetime
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from database.token_db import get_token
+from services import depth_service, history_service, intervals_service, quotes_service
+from services.agent.prompts import wrap_tool_result
+from services.agent.tools.base import MAX_JSON_CHARS, OpenAlgoToolkit, json_safe
+from utils.constants import VALID_EXCHANGES
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+#: The platform states every timestamp in IST, and a broker's market timestamps
+#: are IST, so the conversion is fixed rather than taken from the server locale.
+IST = ZoneInfo("Asia/Kolkata")
+
+#: Quote-only exchanges an index is listed on, in the order they are tried when
+#: the pair the model asked for does not resolve.
+INDEX_EXCHANGES: tuple[str, ...] = ("NSE_INDEX", "BSE_INDEX", "MCX_INDEX", "GLOBAL_INDEX")
+
+#: The index exchange to try first, given the exchange the model asked for. A
+#: request for NIFTY on NSE is far more likely to mean NSE_INDEX than BSE_INDEX.
+_INDEX_FIRST_CHOICE: Mapping[str, str] = {
+    "NSE": "NSE_INDEX",
+    "NFO": "NSE_INDEX",
+    "BSE": "BSE_INDEX",
+    "BFO": "BSE_INDEX",
+    "MCX": "MCX_INDEX",
+}
+
+#: Most symbols one ``get_quotes`` call may carry. A broker multiquote request
+#: is batched upstream, but an unbounded list is a slow call whose result cannot
+#: fit anyway.
+MAX_MULTIQUOTE_SYMBOLS = 50
+
+#: Most candles ``get_history`` returns, before the character budget is even
+#: considered. A model answers questions about a trend from the recent tail plus
+#: the summary; it does not need five thousand bars, and asking it to read them
+#: costs more than the answer is worth.
+MAX_HISTORY_ROWS = 200
+
+#: Character budget for the JSON inside a result, kept under the base class cap
+#: so a payload this module sized itself is never truncated by ``to_json``.
+_JSON_BUDGET = MAX_JSON_CHARS - 256
+
+#: The columns a history frame carries, in the order they are emitted.
+_CANDLE_FIELDS: tuple[str, ...] = ("timestamp", "open", "high", "low", "close", "volume", "oi")
+
+#: Epoch values at or above this are milliseconds rather than seconds. The
+#: boundary is far past any plausible seconds timestamp (year 5138) and far
+#: below any plausible milliseconds one (1973).
+_EPOCH_MILLISECOND_FLOOR = 100_000_000_000
+
+_DATE_FORMAT = "%Y-%m-%d"
+
+
+# ---------------------------------------------------------------------------
+# Small pure helpers
+# ---------------------------------------------------------------------------
+
+
+def _rendered_length(payload: Any) -> int:
+    """Measure how many characters a payload occupies once serialised.
+
+    Args:
+        payload: The object about to be returned to the model.
+
+    Returns:
+        The length of its compact JSON form, or a value above the budget when
+        it cannot be serialised at all, so the caller shrinks it rather than
+        assuming it fits.
+    """
+    try:
+        return len(
+            json.dumps(json_safe(payload), ensure_ascii=False, separators=(",", ":"), default=str)
+        )
+    except (TypeError, ValueError):
+        logger.exception("Could not measure the size of an agent market-data payload")
+        return _JSON_BUDGET + 1
+
+
+def _as_float(value: Any) -> float | None:
+    """Coerce a candle field to a float.
+
+    Args:
+        value: The raw field, which may be a string, a numpy scalar or None.
+
+    Returns:
+        The float value, or None when it is missing or not a number.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        result = float(value)
+    else:
+        try:
+            result = float(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+    return result if math.isfinite(result) else None
+
+
+def _ist_timestamp(value: Any) -> Any:
+    """Render a candle timestamp as an ISO-8601 string in IST.
+
+    A broker frame carries the timestamp as epoch seconds, epoch milliseconds,
+    a pandas ``Timestamp`` or an ISO string depending on the plugin. The model
+    reads dates, not epochs, so everything numeric is converted and everything
+    else is passed through untouched.
+
+    Args:
+        value: The raw ``timestamp`` field of one candle.
+
+    Returns:
+        An ISO-8601 string in Asia/Kolkata when the value was a usable epoch,
+        otherwise the value unchanged.
+    """
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+
+    seconds = float(value)
+    if abs(seconds) >= _EPOCH_MILLISECOND_FLOOR:
+        seconds /= 1000.0
+    try:
+        return datetime.fromtimestamp(seconds, IST).isoformat()
+    except (OSError, OverflowError, ValueError):
+        return value
+
+
+def _column_map(row: Mapping[str, Any]) -> dict[str, str]:
+    """Map the candle field names this module uses onto a frame's own keys.
+
+    Args:
+        row: One record from the history frame.
+
+    Returns:
+        Field name to the key it is stored under, for the fields present. Built
+        once from the first row, because a frame's records are uniform.
+    """
+    lowered = {str(key).strip().lower(): str(key) for key in row}
+    return {field: lowered[field] for field in _CANDLE_FIELDS if field in lowered}
+
+
+def _candle(row: Mapping[str, Any], columns: Mapping[str, str]) -> dict[str, Any]:
+    """Build one returned candle from a frame record.
+
+    Args:
+        row: The record.
+        columns: The mapping from :func:`_column_map`.
+
+    Returns:
+        The candle with its timestamp rendered in IST. A record whose columns
+        were unrecognisable is returned as-is rather than emptied.
+    """
+    if not columns:
+        return dict(row)
+
+    out: dict[str, Any] = {}
+    for field, key in columns.items():
+        value = row.get(key)
+        out[field] = _ist_timestamp(value) if field == "timestamp" else value
+    return out
+
+
+def _summarise(rows: list[Mapping[str, Any]], columns: Mapping[str, str]) -> dict[str, Any]:
+    """Reduce a whole history frame to the numbers an answer usually needs.
+
+    Computed over every row, including the ones that will not be returned, so
+    the high, the low and the volume describe the range that was asked for
+    rather than only the tail that fitted.
+
+    Args:
+        rows: Every record the service returned, oldest first.
+        columns: The mapping from :func:`_column_map`.
+
+    Returns:
+        First open, last close, highest high, lowest low, total volume and the
+        change across the range. A statistic no row supplied is omitted rather
+        than reported as zero.
+    """
+    summary: dict[str, Any] = {}
+    if not rows:
+        return summary
+
+    first_open: float | None = None
+    last_close: float | None = None
+    highest: float | None = None
+    lowest: float | None = None
+    volume_total = 0.0
+    volume_seen = False
+
+    open_key = columns.get("open")
+    high_key = columns.get("high")
+    low_key = columns.get("low")
+    close_key = columns.get("close")
+    volume_key = columns.get("volume")
+
+    for row in rows:
+        if open_key and first_open is None:
+            first_open = _as_float(row.get(open_key))
+        if close_key:
+            close = _as_float(row.get(close_key))
+            if close is not None:
+                last_close = close
+        if high_key:
+            high = _as_float(row.get(high_key))
+            if high is not None and (highest is None or high > highest):
+                highest = high
+        if low_key:
+            low = _as_float(row.get(low_key))
+            if low is not None and (lowest is None or low < lowest):
+                lowest = low
+        if volume_key:
+            volume = _as_float(row.get(volume_key))
+            if volume is not None:
+                volume_total += volume
+                volume_seen = True
+
+    timestamp_key = columns.get("timestamp")
+    if timestamp_key:
+        summary["first_timestamp"] = _ist_timestamp(rows[0].get(timestamp_key))
+        summary["last_timestamp"] = _ist_timestamp(rows[-1].get(timestamp_key))
+    if first_open is not None:
+        summary["first_open"] = first_open
+    if last_close is not None:
+        summary["last_close"] = last_close
+    if highest is not None:
+        summary["highest_high"] = highest
+    if lowest is not None:
+        summary["lowest_low"] = lowest
+    if volume_seen:
+        summary["total_volume"] = round(volume_total, 4)
+    if first_open is not None and last_close is not None:
+        summary["change"] = round(last_close - first_open, 6)
+        if first_open:
+            summary["change_percent"] = round((last_close - first_open) / first_open * 100.0, 4)
+
+    return summary
+
+
+# ---------------------------------------------------------------------------
+# The toolkit
+# ---------------------------------------------------------------------------
+
+
+class MarketToolkit(OpenAlgoToolkit):
+    """Quotes, market depth, historical candles and the broker's intervals.
+
+    Every tool is read-only, so none of them requires confirmation and none of
+    them writes an audit row. They are offered on both surfaces and to a session
+    that has not enabled trading, because reading a price changes nothing.
+    """
+
+    def __init__(self, context: Any) -> None:
+        """Register the five market-data tools.
+
+        The interval cache is assigned before ``super().__init__`` because agno
+        introspects the bound methods the moment it receives them, and a method
+        that reads an attribute the instance does not have yet would fail during
+        registration rather than during a call.
+
+        Args:
+            context: The run's :class:`services.agent.tools.ToolContext`.
+        """
+        self._intervals_payload: dict[str, Any] | None = None
+        self._accepted_intervals: list[str] | None = None
+        self._intervals_error: str | None = None
+        self._intervals_loaded = False
+
+        super().__init__(
+            context,
+            name="market",
+            tools=[
+                self.get_quote,
+                self.get_quotes,
+                self.get_depth,
+                self.get_history,
+                self.get_intervals,
+            ],
+        )
+
+    # -- tools ---------------------------------------------------------------
+
+    def get_quote(self, symbol: str, exchange: str) -> str:
+        """Fetch the latest quote for one instrument.
+
+        Use this for a single symbol. For several at once use ``get_quotes``,
+        which is one broker call instead of many.
+
+        Args:
+            symbol: OpenAlgo symbol, in capitals, exactly as the instrument is
+                listed. For example ``RELIANCE``, ``BANKNIFTY24APR24FUT`` or
+                ``NIFTY28MAR2420800CE``.
+            exchange: Exchange code the symbol is listed on. One of NSE, BSE
+                (equity), NFO, BFO (futures and options), CDS, BCD (currency),
+                MCX, NCDEX, NCO (commodity), CRYPTO, or the quote-only index
+                codes NSE_INDEX, BSE_INDEX, MCX_INDEX and GLOBAL_INDEX. An index
+                such as NIFTY or SENSEX is quoted on an index code, never on NSE
+                or BSE.
+
+        Returns:
+            JSON carrying the last traded price, open, high, low, previous
+            close, bid, ask and volume for the symbol, plus a note when the
+            exchange had to be corrected to an index exchange.
+        """
+        symbol, exchange, notices = self._pair(symbol, exchange)
+        response = self.service_call(quotes_service.get_quotes, symbol=symbol, exchange=exchange)
+
+        payload: dict[str, Any] = {
+            "symbol": symbol,
+            "exchange": exchange,
+            "quote": response.get("data") if isinstance(response, Mapping) else response,
+        }
+        self._note(payload, notices)
+        return self._wrapped("get_quote", payload, symbol=symbol, exchange=exchange)
+
+    def get_quotes(self, symbols: list[dict[str, str]]) -> str:
+        """Fetch the latest quote for several instruments in one call.
+
+        Prefer this over repeated ``get_quote`` calls: it is a single broker
+        request, which is faster and far less likely to be rate limited.
+
+        Args:
+            symbols: The instruments to quote, as a list of objects each
+                carrying a ``symbol`` and an ``exchange``, for example
+                ``[{"symbol": "INFY", "exchange": "NSE"}, {"symbol": "NIFTY",
+                "exchange": "NSE_INDEX"}]``. Both fields are required on every
+                entry; the exchange is not inherited from the entry before it.
+                At most 50 entries per call, so split a longer watchlist into
+                batches. A plain ``"NSE:INFY"`` string is accepted in place of
+                an object.
+
+        Returns:
+            JSON with one result per requested instrument, each carrying either
+            its quote or the reason that instrument failed, so a bad symbol
+            costs its own row rather than the whole call.
+        """
+        pairs, notices = self._pairs(symbols)
+        response = self.service_call(quotes_service.get_multiquotes, symbols=pairs)
+
+        results = response.get("results") if isinstance(response, Mapping) else None
+        if not isinstance(results, list):
+            results = [] if results is None else [results]
+        total = len(results)
+
+        def build(limit: int) -> dict[str, Any]:
+            payload: dict[str, Any] = {
+                "requested": len(pairs),
+                "results_returned": min(limit, total),
+                "results": results[:limit],
+            }
+            if total > limit:
+                payload["results_omitted"] = total - limit
+                payload["note"] = (
+                    f"{total - limit} of {total} results were dropped to fit the reply. "
+                    "Ask for fewer symbols per call to see them all."
+                )
+            self._note(payload, notices)
+            return payload
+
+        payload = self._fit(build, total)
+        return self._wrapped("get_quotes", payload, count=len(pairs))
+
+    def get_depth(self, symbol: str, exchange: str) -> str:
+        """Fetch the order book depth for one instrument.
+
+        Depth is the resting bid and ask ladder, normally five levels a side,
+        with the total buy and sell quantity behind them. Use it to judge
+        liquidity and the spread before sizing an order. An index has no order
+        book; quote it instead.
+
+        Args:
+            symbol: OpenAlgo symbol, in capitals, exactly as the instrument is
+                listed. For example ``SBIN`` or ``NIFTY28MAR2420800CE``.
+            exchange: Exchange code the symbol is listed on: NSE, BSE, NFO, BFO,
+                CDS, BCD, MCX, NCDEX, NCO or CRYPTO. Depth on a quote-only index
+                exchange is normally unavailable.
+
+        Returns:
+            JSON with the bid and ask ladders, total buy and sell quantity, the
+            last traded price and the day's open, high, low and previous close.
+        """
+        symbol, exchange, notices = self._pair(symbol, exchange)
+        response = self.service_call(depth_service.get_depth, symbol=symbol, exchange=exchange)
+
+        payload: dict[str, Any] = {
+            "symbol": symbol,
+            "exchange": exchange,
+            "depth": response.get("data") if isinstance(response, Mapping) else response,
+        }
+        self._note(payload, notices)
+        return self._wrapped("get_depth", payload, symbol=symbol, exchange=exchange)
+
+    def get_history(
+        self,
+        symbol: str,
+        exchange: str,
+        interval: str,
+        start_date: str,
+        end_date: str,
+        source: str = "api",
+    ) -> str:
+        """Fetch historical candles for one instrument.
+
+        The result is a summary of the whole range plus the most recent candles,
+        not the whole frame: a minute interval over a month is tens of thousands
+        of bars. The summary is computed over every candle in the range, so the
+        high, the low and the volume are the real ones even when older candles
+        were dropped, and the result says how many were dropped.
+
+        Ask for the range you actually need. A question about a trend over three
+        months wants a daily interval, not a one-minute one.
+
+        Args:
+            symbol: OpenAlgo symbol, in capitals, exactly as the instrument is
+                listed. For example ``INFY``, ``NIFTY`` or
+                ``BANKNIFTY24APR24FUT``.
+            exchange: Exchange code the symbol is listed on: NSE, BSE, NFO, BFO,
+                CDS, BCD, MCX, NCDEX, NCO, CRYPTO, or an index code such as
+                NSE_INDEX or BSE_INDEX for an index.
+            interval: Candle size. Call ``get_intervals`` for the ones this
+                broker accepts; they are drawn from ``1s`` to ``45s`` for
+                seconds, ``1m`` to ``30m`` for minutes, ``1h`` to ``4h`` for
+                hours, and ``D``, ``W``, ``M`` for daily, weekly and monthly.
+                Case matters: ``1m`` is one minute and ``M`` is one month.
+            start_date: First day of the range, as ``YYYY-MM-DD``, for example
+                ``2026-01-15``. Inclusive, and interpreted in IST.
+            end_date: Last day of the range, as ``YYYY-MM-DD``. Inclusive, and
+                interpreted in IST. It must not be before ``start_date``.
+            source: Where the candles come from. ``api`` (the default) asks the
+                broker, which is what you want for anything current. ``db``
+                reads the local Historify store, which only holds what the
+                operator has already downloaded and answers with a download
+                instruction when it holds nothing for the request.
+
+        Returns:
+            JSON carrying ``summary`` (first open, last close, highest high,
+            lowest low, total volume and the change across the range), the most
+            recent candles in ``candles`` oldest first with IST timestamps, and
+            ``rows_total`` and ``rows_omitted`` so the count is never guessed.
+        """
+        symbol, exchange, notices = self._pair(symbol, exchange)
+        source = self._source(source)
+        interval, interval_notice = self._interval(interval, source)
+        if interval_notice:
+            notices.append(interval_notice)
+        start, end = self._range(start_date, end_date)
+
+        response = self.service_call(
+            history_service.get_history,
+            symbol=symbol,
+            exchange=exchange,
+            interval=interval,
+            start_date=start,
+            end_date=end,
+            source=source,
+        )
+
+        rows = response.get("data") if isinstance(response, Mapping) else response
+        if not isinstance(rows, list):
+            rows = []
+        records = [row for row in rows if isinstance(row, Mapping)]
+        total = len(records)
+        columns = _column_map(records[0]) if records else {}
+        summary = _summarise(records, columns)
+
+        def build(limit: int) -> dict[str, Any]:
+            tail = records[total - limit :] if limit else []
+            payload: dict[str, Any] = {
+                "symbol": symbol,
+                "exchange": exchange,
+                "interval": interval,
+                "start_date": start,
+                "end_date": end,
+                "source": source,
+                "timezone": "Asia/Kolkata",
+                "rows_total": total,
+                "rows_returned": len(tail),
+                "rows_omitted": total - len(tail),
+                "summary": summary,
+                "candles": [_candle(row, columns) for row in tail],
+            }
+            if payload["rows_omitted"]:
+                payload["note"] = (
+                    f"{payload['rows_omitted']} older candles of {total} were omitted; "
+                    f"'candles' holds the most recent {len(tail)}, oldest first. The summary "
+                    "covers all of them. Narrow the dates or use a larger interval to see more."
+                )
+            elif not total:
+                payload["note"] = (
+                    "The range returned no candles. Check the dates against the trading "
+                    "calendar and confirm the interval is one this broker supports."
+                )
+            self._note(payload, notices)
+            return payload
+
+        payload = self._fit(build, min(total, MAX_HISTORY_ROWS))
+        return self._wrapped(
+            "get_history", payload, symbol=symbol, exchange=exchange, interval=interval
+        )
+
+    def get_intervals(self) -> str:
+        """List the candle intervals the connected broker supports.
+
+        Brokers differ: one offers seconds, another starts at one minute, and
+        the hourly resolutions vary. Call this before ``get_history`` when you
+        are unsure, and pass one of the returned values verbatim.
+
+        Returns:
+            JSON with the intervals grouped as seconds, minutes, hours, days,
+            weeks and months, plus a flat ``accepted`` list of every value
+            ``get_history`` will take.
+        """
+        payload = self._load_intervals()
+        if payload is None:
+            # A fresh failure raises out of _load_intervals. Reaching here means
+            # either the service answered with a shape carrying no intervals, or
+            # a history call earlier in this run already tried and failed, in
+            # which case the recorded reason is the useful part of the answer.
+            payload = {
+                "intervals": {},
+                "accepted": [],
+                "note": (
+                    "The broker did not return a usable interval list. Try a common interval "
+                    "such as 'D' or '5m' with get_history and report the error if it is "
+                    "rejected."
+                ),
+            }
+            if self._intervals_error:
+                payload["error"] = self._intervals_error
+        return self._wrapped("get_intervals", payload)
+
+    # -- argument handling ---------------------------------------------------
+
+    def _pair(self, symbol: str, exchange: str) -> tuple[str, str, list[str]]:
+        """Normalise one symbol and exchange, correcting an index exchange.
+
+        Args:
+            symbol: The symbol the model supplied.
+            exchange: The exchange the model supplied.
+
+        Returns:
+            The symbol in capitals, the exchange to use, and any notices to put
+            in the result.
+
+        Raises:
+            RetryAgentRun: If either argument is empty or the exchange is not an
+                OpenAlgo exchange code.
+        """
+        cleaned_symbol = str(symbol or "").strip().upper()
+        if not cleaned_symbol:
+            self.invalid_argument(
+                "symbol",
+                "it is empty",
+                "Pass the OpenAlgo symbol in capitals, for example 'INFY' or 'NIFTY'.",
+            )
+
+        cleaned_exchange = str(exchange or "").strip().upper().replace(" ", "_").replace("-", "_")
+        if not cleaned_exchange:
+            self.invalid_argument(
+                "exchange",
+                "it is empty",
+                f"Pass one of: {', '.join(VALID_EXCHANGES)}.",
+            )
+        if cleaned_exchange not in VALID_EXCHANGES:
+            self.invalid_argument(
+                "exchange",
+                f"{cleaned_exchange!r} is not an OpenAlgo exchange code",
+                f"Pass one of: {', '.join(VALID_EXCHANGES)}.",
+            )
+
+        resolved, notice = self._resolve_exchange(cleaned_symbol, cleaned_exchange)
+        return cleaned_symbol, resolved, [notice] if notice else []
+
+    def _pairs(self, symbols: Any) -> tuple[list[dict[str, str]], list[str]]:
+        """Normalise the ``symbols`` argument of :meth:`get_quotes`.
+
+        Accepts the documented list of objects, a single object, and a JSON
+        string of either, because a model that has been told to send an array
+        still sometimes sends the array as text.
+
+        Args:
+            symbols: Whatever the model passed.
+
+        Returns:
+            The de-duplicated pairs to request, and any notices for the result.
+
+        Raises:
+            RetryAgentRun: If the argument is not a usable list of pairs.
+        """
+        raw = symbols
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except ValueError:
+                self.invalid_argument(
+                    "symbols",
+                    "it is a string that is not valid JSON",
+                    'Pass a list of objects, for example [{"symbol": "INFY", "exchange": "NSE"}].',
+                )
+        if isinstance(raw, Mapping):
+            raw = [raw]
+        if not isinstance(raw, (list, tuple)) or not raw:
+            self.invalid_argument(
+                "symbols",
+                "it is empty or is not a list",
+                'Pass a list of objects, for example [{"symbol": "INFY", "exchange": "NSE"}, '
+                '{"symbol": "SBIN", "exchange": "NSE"}].',
+            )
+        if len(raw) > MAX_MULTIQUOTE_SYMBOLS:
+            self.invalid_argument(
+                "symbols",
+                f"it carries {len(raw)} entries, more than the {MAX_MULTIQUOTE_SYMBOLS} "
+                "allowed in one call",
+                f"Split it into batches of at most {MAX_MULTIQUOTE_SYMBOLS} and call the tool "
+                "once per batch.",
+            )
+
+        pairs: list[dict[str, str]] = []
+        notices: list[str] = []
+        seen: set[tuple[str, str]] = set()
+        duplicates = 0
+
+        for index, item in enumerate(raw):
+            symbol, exchange = self._pair_fields(item, index)
+            symbol, exchange, item_notices = self._pair(symbol, exchange)
+            notices.extend(item_notices)
+            key = (symbol, exchange)
+            if key in seen:
+                duplicates += 1
+                continue
+            seen.add(key)
+            pairs.append({"symbol": symbol, "exchange": exchange})
+
+        if duplicates:
+            notices.append(
+                f"{duplicates} duplicate entries were requested once each rather than repeatedly."
+            )
+        return pairs, notices
+
+    def _pair_fields(self, item: Any, index: int) -> tuple[Any, Any]:
+        """Pull the symbol and exchange out of one entry of ``symbols``.
+
+        Args:
+            item: The entry, an object or an ``EXCHANGE:SYMBOL`` string.
+            index: Its position in the list, named in the error so the model
+                knows which entry to fix.
+
+        Returns:
+            The raw symbol and exchange, before normalisation.
+
+        Raises:
+            RetryAgentRun: If the entry is not a usable pair.
+        """
+        if isinstance(item, Mapping):
+            lowered = {str(key).strip().lower(): value for key, value in item.items()}
+            symbol = lowered.get("symbol")
+            exchange = lowered.get("exchange")
+            if symbol is None or exchange is None:
+                self.invalid_argument(
+                    "symbols",
+                    f"entry {index + 1} is missing 'symbol' or 'exchange'",
+                    'Every entry needs both, for example {"symbol": "INFY", "exchange": "NSE"}.',
+                )
+            return symbol, exchange
+
+        if isinstance(item, str) and ":" in item:
+            exchange, _, symbol = item.partition(":")
+            return symbol, exchange
+
+        self.invalid_argument(
+            "symbols",
+            f"entry {index + 1} is {type(item).__name__}, not an object carrying a symbol "
+            "and an exchange",
+            'Pass objects, for example [{"symbol": "INFY", "exchange": "NSE"}].',
+        )
+
+    def _source(self, source: Any) -> str:
+        """Validate the history source.
+
+        Args:
+            source: The value the model supplied.
+
+        Returns:
+            ``api`` or ``db``.
+
+        Raises:
+            RetryAgentRun: For anything else.
+        """
+        cleaned = str(source or "api").strip().lower()
+        if cleaned not in {"api", "db"}:
+            self.invalid_argument(
+                "source",
+                f"{cleaned!r} is not a data source",
+                "Use 'api' for live broker history, or 'db' for candles already downloaded "
+                "into the local Historify store.",
+            )
+        return cleaned
+
+    def _range(self, start_date: Any, end_date: Any) -> tuple[str, str]:
+        """Validate the history date range.
+
+        Args:
+            start_date: First day, as ``YYYY-MM-DD``.
+            end_date: Last day, as ``YYYY-MM-DD``.
+
+        Returns:
+            The two dates, normalised.
+
+        Raises:
+            RetryAgentRun: If either date is unparseable or the range is
+                backwards.
+        """
+        start = self._date("start_date", start_date)
+        end = self._date("end_date", end_date)
+        if start > end:
+            self.invalid_argument(
+                "start_date",
+                f"it is {start}, which is after end_date {end}",
+                "Pass the earlier day as start_date.",
+            )
+        return start, end
+
+    def _date(self, field: str, value: Any) -> str:
+        """Parse one ``YYYY-MM-DD`` date argument.
+
+        Args:
+            field: The argument name, named in the error message.
+            value: The value the model supplied.
+
+        Returns:
+            The date as ``YYYY-MM-DD``.
+
+        Raises:
+            RetryAgentRun: If it cannot be parsed.
+        """
+        if isinstance(value, (datetime, date)):
+            return value.strftime(_DATE_FORMAT)
+
+        text = str(value or "").strip()
+        try:
+            return datetime.strptime(text, _DATE_FORMAT).strftime(_DATE_FORMAT)
+        except ValueError:
+            self.invalid_argument(
+                field,
+                f"{text!r} is not a date",
+                "Use YYYY-MM-DD, for example 2026-01-15.",
+            )
+
+    def _interval(self, interval: Any, source: str) -> tuple[str, str | None]:
+        """Validate the candle interval against what this broker accepts.
+
+        The accepted set comes from ``services.intervals_service``, never from a
+        list in this file, because it is per broker. Two deliberate softenings:
+        a value that differs only in case from an accepted one is corrected with
+        a notice (a model asking for ``5M`` means five minutes), and the check is
+        skipped entirely for ``source='db'``, whose candles come from the local
+        Historify store and whose resolutions are the ones the operator
+        downloaded rather than the ones the broker serves.
+
+        Args:
+            interval: The value the model supplied.
+            source: ``api`` or ``db``.
+
+        Returns:
+            The interval to use, and a notice when it was corrected.
+
+        Raises:
+            RetryAgentRun: If the broker's own list does not contain it.
+        """
+        cleaned = str(interval or "").strip()
+        if not cleaned:
+            self.invalid_argument(
+                "interval",
+                "it is empty",
+                "Pass a candle size such as '5m', '1h' or 'D'. Call get_intervals for the "
+                "ones this broker accepts.",
+            )
+
+        if source != "api":
+            return cleaned, None
+
+        accepted = self._accepted()
+        if not accepted or cleaned in accepted:
+            # No list means the intervals lookup failed. This is a read-only
+            # tool, so it is skipped rather than failing closed; the history
+            # service validates the interval again anyway.
+            return cleaned, None
+
+        matches = [value for value in accepted if value.lower() == cleaned.lower()]
+        if len(matches) == 1:
+            return matches[0], (
+                f"The interval was read as {matches[0]!r} rather than {cleaned!r}. Interval "
+                "names are case sensitive: 'm' is minutes and 'M' is months."
+            )
+
+        self.invalid_argument(
+            "interval",
+            f"{cleaned!r} is not one this broker accepts",
+            f"Use one of: {', '.join(accepted)}.",
+        )
+
+    # -- index exchange correction ------------------------------------------
+
+    def _resolve_exchange(self, symbol: str, exchange: str) -> tuple[str, str | None]:
+        """Move a symbol onto an index exchange when that is where it is listed.
+
+        Driven entirely by the symbol database, never by the spelling of the
+        symbol: the pair is corrected only when the requested one does not
+        resolve and an index one does. That means a genuinely unknown symbol is
+        still reported as unknown, and a tradable instrument is never quietly
+        moved onto a quote-only exchange.
+
+        Args:
+            symbol: The symbol, already in capitals.
+            exchange: The exchange the model asked for, already validated.
+
+        Returns:
+            The exchange to use, and a notice when it differs from the request.
+        """
+        if self._listed(symbol, exchange):
+            return exchange, None
+
+        for candidate in self._index_candidates(exchange):
+            if candidate == exchange or not self._listed(symbol, candidate):
+                continue
+            logger.debug(
+                "Agent market tool: %s is not listed on %s; using %s", symbol, exchange, candidate
+            )
+            return candidate, (
+                f"{symbol} is not listed on {exchange}, but it is listed on {candidate}, so "
+                f"{candidate} was used. Index values are quoted on the index exchanges and "
+                "cannot be traded there; the tradable instrument is the index future or option."
+            )
+
+        return exchange, None
+
+    @staticmethod
+    def _index_candidates(exchange: str) -> tuple[str, ...]:
+        """Order the index exchanges to try for a requested exchange.
+
+        Args:
+            exchange: The exchange the model asked for.
+
+        Returns:
+            Every index exchange, with the one most likely to be meant first.
+        """
+        first = _INDEX_FIRST_CHOICE.get(exchange)
+        if not first:
+            return INDEX_EXCHANGES
+        return (first, *(item for item in INDEX_EXCHANGES if item != first))
+
+    @staticmethod
+    def _listed(symbol: str, exchange: str) -> bool:
+        """Report whether the symbol database holds this pair.
+
+        Args:
+            symbol: The symbol, in capitals.
+            exchange: The exchange code.
+
+        Returns:
+            True when the master contract carries the pair. A lookup failure
+            answers False, which leaves the exchange the model asked for
+            untouched and lets the service report the real problem.
+        """
+        try:
+            return get_token(symbol, exchange) is not None
+        except Exception:
+            logger.exception(
+                "Agent market tool could not look up %s on %s in the symbol database",
+                symbol,
+                exchange,
+            )
+            return False
+
+    # -- intervals -----------------------------------------------------------
+
+    def _load_intervals(self) -> dict[str, Any] | None:
+        """Fetch the broker's interval list once per run.
+
+        Returns:
+            The payload for :meth:`get_intervals`, or None when the service
+            returned nothing usable. A failure raises the first time and is
+            remembered on :attr:`_intervals_error`, so a second call in the same
+            run reports the reason instead of asking the broker again.
+        """
+        if self._intervals_loaded:
+            return self._intervals_payload
+
+        self._intervals_loaded = True
+        try:
+            response = self.service_call(intervals_service.get_intervals)
+        except Exception as exc:
+            self._intervals_error = str(exc)
+            raise
+
+        grouped = response.get("data") if isinstance(response, Mapping) else None
+        if not isinstance(grouped, Mapping):
+            return None
+
+        accepted: list[str] = []
+        for values in grouped.values():
+            if isinstance(values, (list, tuple)):
+                accepted.extend(str(value) for value in values)
+
+        self._accepted_intervals = accepted
+        self._intervals_payload = {"intervals": dict(grouped), "accepted": accepted}
+        return self._intervals_payload
+
+    def _accepted(self) -> list[str] | None:
+        """Return the intervals this broker accepts, or None if unknown.
+
+        Returns:
+            The flat accepted list, or None when the lookup failed. The failure
+            is swallowed on purpose: this is the validation path for a read-only
+            tool, and refusing a history call because the intervals endpoint
+            hiccuped is the worse failure. A real credential or broker problem
+            surfaces on the history call itself a moment later.
+        """
+        if self._intervals_loaded:
+            return self._accepted_intervals
+
+        try:
+            self._load_intervals()
+        except Exception:
+            logger.exception(
+                "Agent market tool could not read the broker's intervals; skipping the "
+                "interval check for this run"
+            )
+            self._accepted_intervals = None
+        return self._accepted_intervals
+
+    # -- result shaping ------------------------------------------------------
+
+    @staticmethod
+    def _note(payload: dict[str, Any], notices: list[str]) -> None:
+        """Attach any notices to a result payload.
+
+        Args:
+            payload: The payload being built.
+            notices: Messages about corrections this tool made, which the model
+                must be able to repeat to the operator.
+        """
+        if notices:
+            payload["notices"] = list(notices)
+
+    @staticmethod
+    def _fit(build: Callable[[int], dict[str, Any]], start: int) -> dict[str, Any]:
+        """Build the largest payload that fits the character budget.
+
+        Args:
+            build: Builds the payload for a given number of rows. It is
+                responsible for saying in the payload how many were omitted.
+            start: Row count to try first.
+
+        Returns:
+            The payload for the largest row count that fits, down to none at
+            all, so the caller always returns a well-formed result rather than a
+            truncation envelope.
+        """
+        limit = max(0, start)
+        while True:
+            payload = build(limit)
+            length = _rendered_length(payload)
+            if limit == 0 or length <= _JSON_BUDGET:
+                return payload
+            # Scale the row count by how far over budget this attempt was, which
+            # lands within a row or two of the real limit instead of halving
+            # away rows that would have fitted. The min guarantees progress even
+            # when the estimate does not move, so the loop always terminates.
+            limit = min(limit - 1, max(0, int(limit * _JSON_BUDGET / length)))
+
+    def _wrapped(self, tool: str, payload: Any, **labels: Any) -> str:
+        """Serialise a result and label it as data before it re-enters context.
+
+        Args:
+            tool: The tool's registered name.
+            payload: The result payload.
+            **labels: Attributes for the opening tag, such as the symbol and
+                exchange the result is about. Each is escaped.
+
+        Returns:
+            The ``<tool_result>`` block to return to the model.
+        """
+        return wrap_tool_result(tool, self.to_json(payload), **labels)

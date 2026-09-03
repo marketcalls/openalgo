@@ -67,8 +67,11 @@ export const mobileSheetItems = navItems.filter((item) => !bottomNavPaths.includ
 export const profileMenuItems: NavItem[] = [
   { href: '/profile', label: 'Profile', icon: User },
   { href: '/apikey', label: 'API Key', icon: Key },
-  { href: '/agent', label: 'Agent', icon: Bot },
+  // Action Center stays immediately after API Key. It was moved here out of the
+  // main navbar on that understanding and a test pins the adjacency, so a new
+  // entry goes after it rather than between the two.
   { href: '/action-center', label: 'Action Center', icon: Bell },
+  { href: '/agent', label: 'Agent', icon: Bot },
   { href: '/master-contract', label: 'Master Contract', icon: FileStack },
   { href: '/telegram', label: 'Telegram Bot', icon: MessageSquare },
   { href: '/whatsapp', label: 'WhatsApp Bot', icon: MessageCircle },

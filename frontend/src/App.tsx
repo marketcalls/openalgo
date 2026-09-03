@@ -194,7 +194,6 @@ function App() {
                 <Route path="/search" element={<Search />} />
                 {/* API Key management */}
                 <Route path="/apikey" element={<ApiKey />} />
-                <Route path="/agent" element={<AgentIndex />} />
                 {/* Phase 4: Charts & Webhook Configuration */}
                 <Route path="/platforms" element={<Platforms />} />
                 <Route path="/tradingview" element={<TradingView />} />
@@ -308,6 +307,12 @@ function App() {
               <Route element={<FullWidthLayout />}>
                 <Route path="/playground" element={<Playground />} />
                 <Route path="/trading" element={<Trading />} />
+                {/* The agent is an application surface, not a document: the
+                    thread scrolls inside a fixed viewport with the composer
+                    pinned under it, and a conversation sidebar sits beside it.
+                    Layout's centred, page-scrolling container cannot hold that,
+                    so it renders its own Navbar like /trading does. */}
+                <Route path="/agent" element={<AgentIndex />} />
                 <Route path="/historify" element={<Historify />} />
                 <Route path="/historify/charts" element={<HistorifyCharts />} />
                 <Route path="/historify/charts/:symbol" element={<HistorifyCharts />} />

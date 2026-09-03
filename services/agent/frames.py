@@ -51,11 +51,21 @@ from typing import Any, ClassVar
 # Response headers for the streaming routes. `X-Accel-Buffering` is what stops
 # nginx holding a frame back until its buffer fills, which turns a token stream
 # into one long pause followed by the whole answer at once.
+#
+# `Connection` is deliberately absent. It is a hop-by-hop header, which PEP 3333
+# forbids a WSGI application from setting, and the server owns it: HTTP/1.1 is
+# persistent by default, so asking for keep-alive buys nothing, while a
+# chunked stream that the server means to close ends up answering
+# `Connection: keep-alive, close` - both tokens, merged, contradicting each
+# other. A client that reads the first token keeps the socket in its pool and
+# the server has already closed it, so the next request on that connection gets
+# no reply at all and sits out its whole timeout. Measured against the dev
+# server: every call made after a finished turn on the same connection timed
+# out, while the same call on a fresh connection answered in milliseconds.
 SSE_HEADERS: Mapping[str, str] = MappingProxyType(
     {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
         "X-Accel-Buffering": "no",
     }
 )

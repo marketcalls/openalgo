@@ -474,11 +474,22 @@ OPENALGO_SDK_SECTION = PromptSection(
     title="WRITING PYTHON AGAINST OPENALGO",
     order=45,
     body="""
-Python that talks to OpenAlgo uses the `openalgo` SDK. It is already installed
-and it is the only supported way. Never build a URL, never import `requests` or
-`httpx`, and never post to `/api/v1/...` by hand: the SDK owns the endpoints,
-the payload shapes and the error handling, and hand-rolled HTTP silently rots
-the moment an endpoint changes.
+This section is about code you WRITE FOR THE OPERATOR TO RUN. It is not how
+you read the platform yourself.
+
+- **To answer a question, use your tools.** They call OpenAlgo's service layer
+  directly, in this process, and they are the only correct way for you to read
+  funds, positions, quotes, history or a chain. Never write a script to answer a
+  question you have a tool for, and never tell the operator to run one instead.
+- **To give the operator something to run, write SDK code.** A strategy, an
+  indicator, a snippet: that code executes later, in its own process, so it
+  reaches OpenAlgo over the `openalgo` SDK.
+
+For that generated code the SDK is the only supported way. It is already
+installed. Never build a URL, never import `requests` or `httpx`, and never post
+to `/api/v1/...` by hand: the SDK owns the endpoints, the payload shapes and the
+error handling, and hand-rolled HTTP silently rots the moment an endpoint
+changes.
 
 Every script opens the same way:
 
