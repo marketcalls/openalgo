@@ -217,7 +217,10 @@ def test_a_permanently_refused_send_stops_retrying(adapter):
     adapter.ws_client.subscribe_batch = always_refuse
 
     want(adapter, "S")
-    wait_until(lambda: adapter.batch_timer is None and not adapter.subscription_queue)
+    # Wait on the attempt count, not on the queue draining: the flush clears
+    # the queue and the timer as its first act, so a poll landing in that gap
+    # would return before the send was even recorded.
+    wait_until(lambda: len(attempts) == 1 + adapter.max_send_retries)
 
     assert len(attempts) == 1 + adapter.max_send_retries, "one send plus its retry budget"
     assert adapter.batch_timer is None, "the timer must not stay armed"
@@ -382,6 +385,82 @@ def test_every_terminal_exit_reports_the_feed_dead(monkeypatch):
         assert thread.is_alive() is False, label
         assert fired == [1], f"{label}: the owner must be told exactly once"
         assert c._connected is False, label
+
+
+def test_a_retiring_generation_cannot_kill_the_live_stream():
+    """THE DEFECT: a worker retiring after a restart tore down the new feed.
+
+    connect_stream() resets _feed_dead, so the old worker's terminal path
+    passed the idempotency guard and cleared the flags - and fired the
+    callback - of the connection that had just replaced it.
+    """
+    fired = []
+    c = MstockWebSocket(auth_token="t")
+    c.auth_failure_callback = lambda: fired.append(1)
+    c._generation = 2  # a newer connect_stream() has already run
+    c.running, c._connected, c._feed_dead = True, True, False
+
+    c._notify_feed_dead("generation 1 gave up", generation=1)
+
+    assert c.running is True, "the live stream must survive an old worker retiring"
+    assert c._connected is True
+    assert fired == []
+
+    c._notify_feed_dead("generation 2 gave up", generation=2)
+    assert c.running is False, "the current generation is still honoured"
+    assert fired == [1]
+
+
+def test_a_feed_that_dies_during_connect_leaves_the_adapter_disconnected(monkeypatch, adapter):
+    """connect() set connected=True after starting the thread, so a connection
+    that failed outright had its False overwritten and the proxy cached a feed
+    whose worker had already exited."""
+
+    class DyingApp:
+        def __init__(self, url, **kwargs):
+            self.closed = False
+
+        def run_forever(self, **kwargs):
+            return False
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(ws_module, "WebSocketApp", DyingApp)
+    monkeypatch.setattr(ws_mod, "RECONNECT_MAX_ATTEMPTS", 1)
+    monkeypatch.setattr(ws_mod, "RECONNECT_BASE_DELAY", 0.01)
+    monkeypatch.setattr(ws_mod, "RECONNECT_MAX_DELAY", 0.02)
+
+    adapter.ws_client = MstockWebSocket(auth_token="t")
+    adapter.running = True
+    adapter.connect()
+    wait_until(lambda: adapter.ws_client.running is False)
+
+    assert adapter.connected is False, "a dead feed must not be advertised as connected"
+
+
+def test_unsubscribing_restores_the_retry_budget(adapter):
+    """An exhausted token came back already spent, so a later subscribe got
+    its one send and no retry, and the dict grew an entry per token seen."""
+    attempts = []
+
+    def refuse(subs, mode):
+        attempts.append(mode)
+        return False
+
+    adapter.ws_client.subscribe_batch = refuse
+
+    want(adapter, "S")
+    wait_until(lambda: len(attempts) == 1 + adapter.max_send_retries)
+    assert adapter.send_retries == {"22": 3}
+
+    adapter.unsubscribe("S", "NSE", 3)
+    assert adapter.send_retries == {}, "the budget goes with the subscription"
+
+    attempts.clear()
+    want(adapter, "S")
+    wait_until(lambda: len(attempts) == 1 + adapter.max_send_retries)
+    assert len(attempts) == 1 + adapter.max_send_retries, "a fresh budget, not a spent one"
 
 
 def test_a_deliberate_disconnect_is_not_a_dead_feed(monkeypatch):

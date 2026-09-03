@@ -433,7 +433,8 @@ class MstockWebSocket:
                     self.auth_failure_reason = None
                 else:
                     self._notify_feed_dead(
-                        f"auth failure with no fresh token available ({self.auth_failure_reason})"
+                        f"auth failure with no fresh token available ({self.auth_failure_reason})",
+                        generation=generation,
                     )
                     break
 
@@ -441,7 +442,9 @@ class MstockWebSocket:
             if self._reconnect_attempts >= max_attempts:
                 # Just as terminal as a dead credential: the thread exits and
                 # nothing reconnects, so the owner must stop advertising it.
-                self._notify_feed_dead(f"max reconnect attempts ({max_attempts}) reached")
+                self._notify_feed_dead(
+                    f"max reconnect attempts ({max_attempts}) reached", generation=generation
+                )
                 break
 
             delay = min(RECONNECT_BASE_DELAY * (1.5**self._reconnect_attempts), RECONNECT_MAX_DELAY)
@@ -515,22 +518,39 @@ class MstockWebSocket:
             on_close=guard(self._on_ws_close),
         )
 
-    def _notify_feed_dead(self, reason: str) -> None:
+    def _notify_feed_dead(self, reason: str, generation: int | None = None) -> None:
         """Tell the owner the feed will not recover without a fresh login.
 
         Every terminal exit from the reconnect loop lands here: an expired
         credential and an exhausted retry budget both leave a client that is
         never coming back, and an owner still advertising connected=True keeps
-        a cached adapter that cannot produce another tick. Idempotent, so the
-        paths can overlap.
-        """
-        if self._feed_dead:
-            return
-        self._feed_dead = True
+        a cached adapter that cannot produce another tick.
 
-        self.running = False
-        self._connected = False
-        self._logged_in = False
+        The caller passes the generation it serves, checked against the current
+        one under the state lock. A worker retiring while a new connect_stream()
+        has already started would otherwise clear the *new* connection's flags
+        and fire its callback, killing a feed that had just come up. Idempotent
+        within a generation, so overlapping terminal paths report once.
+
+        Args:
+            reason: What ended the feed, for the log
+            generation: The connect_stream() generation the caller serves;
+                None skips the check, for callers outside the reconnect loop
+        """
+        with self._state_lock:
+            if generation is not None and generation != self._generation:
+                logger.debug(
+                    f"Ignoring feed-dead notice from retired generation {generation}: {reason}"
+                )
+                return
+            if self._feed_dead:
+                return
+            self._feed_dead = True
+
+            self.running = False
+            self._connected = False
+            self._logged_in = False
+
         logger.error(f"mstock feed is down and will not self-recover: {reason}")
 
         if self.auth_failure_callback is not None:

@@ -120,13 +120,25 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.info("Connecting to mstock WebSocket in streaming mode...")
         self.running = True
 
+        # Set before the thread starts. connect_stream() returns immediately but
+        # the worker is already live, and a connection that fails outright can
+        # reach _on_feed_dead() first - setting the flag afterwards would
+        # overwrite its False and hand the proxy a feed whose thread has exited.
+        self.connected = True
+
         # Start streaming — returns immediately (same as Angel/Upstox pattern)
         self.ws_client.connect_stream(
             self._on_data,
             resync_callback=self._resync_subscriptions,
             auth_failure_callback=self._on_feed_dead,
         )
-        self.connected = True
+
+        # And re-check, in case the worker died between the two statements.
+        if not self.ws_client.running:
+            self.connected = False
+            self.logger.error("mstock feed died during connect; adapter left disconnected")
+            return
+
         self.logger.info("mstock WebSocket adapter connected")
 
     def _on_feed_dead(self) -> None:
@@ -611,6 +623,11 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.subscription_queue = [
                     queued for queued in self.subscription_queue if queued["token"] != token
                 ]
+                # Drop the retry budget with the subscription. Kept, a token
+                # that had exhausted it would come back already spent, so a
+                # later subscribe got its one send and no retry at all - and
+                # the dict would grow a permanent entry per token ever seen.
+                self.send_retries.pop(token, None)
 
             current_mstock_mode = self.token_modes.get(token, 0)
             if max_mode_for_token < current_mstock_mode:
