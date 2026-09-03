@@ -47,7 +47,12 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from services.agent.prompts import wrap_tool_result
-from services.agent.tools.base import MAX_JSON_CHARS, OpenAlgoToolkit, dumps_capped
+from services.agent.tools.base import (
+    MAX_JSON_CHARS,
+    OpenAlgoToolkit,
+    dumps_capped,
+    invalid_argument,
+)
 from services.option_chain_service import get_option_chain as fetch_option_chain
 from services.option_greeks_service import get_option_greeks as fetch_option_greeks
 from services.option_symbol_service import get_option_symbol as resolve_option_symbol
@@ -209,6 +214,150 @@ def _narrow_chain_to_budget(payload: Any, budget: int = MAX_JSON_CHARS) -> Any:
     trimmed["strikes_omitted"] = len(chain) - len(kept)
     trimmed["note"] = _CHAIN_TRIMMED_NOTE
     return trimmed
+
+
+# ---------------------------------------------------------------------------
+# Shared argument handling
+# ---------------------------------------------------------------------------
+#
+# Module level rather than methods because the visualization toolkit asks for
+# the same chain, by the same underlying, exchange, expiry and strike count. A
+# second copy of these checks would drift from this one.
+
+
+def normalise_symbol(value: Any, field: str) -> str:
+    """Normalise a symbol argument to the upper case the platform stores.
+
+    Args:
+        value: The model's value.
+        field: Argument name, used in the failure message.
+
+    Returns:
+        The trimmed, upper-cased symbol.
+
+    Raises:
+        RetryAgentRun: If it is empty.
+    """
+    text = "" if value is None else str(value).strip().upper()
+    if not text:
+        invalid_argument(
+            field,
+            "it is empty.",
+            "Pass the symbol, for example 'NIFTY' for an underlying or "
+            "'NIFTY28NOV2524000CE' for a contract.",
+        )
+    return text
+
+
+def normalise_exchange(value: Any, allowed: tuple[str, ...]) -> str:
+    """Check an exchange code against the codes that segment accepts.
+
+    Args:
+        value: The model's value.
+        allowed: The exchange codes this argument permits.
+
+    Returns:
+        The trimmed, upper-cased exchange code.
+
+    Raises:
+        RetryAgentRun: If it is not one of ``allowed``.
+    """
+    text = "" if value is None else str(value).strip().upper()
+    if text not in allowed:
+        invalid_argument(
+            "exchange",
+            f"{text or 'it'} is not an exchange this tool accepts.",
+            f"Use one of: {', '.join(allowed)}.",
+        )
+    return text
+
+
+def normalise_expiry(value: Any, underlying: str, allow_embedded: bool) -> str:
+    """Check an expiry against the DDMMMYY format every service expects.
+
+    Args:
+        value: The model's value.
+        underlying: The already-normalised underlying, checked for an embedded
+            expiry when the argument is empty.
+        allow_embedded: True when an empty value is acceptable because the
+            underlying may carry the expiry itself.
+
+    Returns:
+        The trimmed, upper-cased expiry, or an empty string when the underlying
+        carries it.
+
+    Raises:
+        RetryAgentRun: If it is missing where it is required, or malformed.
+    """
+    text = "" if value is None else str(value).strip().upper()
+
+    if not text:
+        if allow_embedded and _EMBEDDED_EXPIRY_PATTERN.search(underlying):
+            return ""
+        invalid_argument(
+            "expiry_date",
+            (
+                "no expiry was given and the underlying does not carry one."
+                if allow_embedded
+                else "no expiry was given, and this tool needs one named explicitly."
+            ),
+            "Pass the expiry in DDMMMYY format, for example '28NOV25'. Look up the "
+            "listed expiries first rather than guessing a date.",
+        )
+
+    match = _EXPIRY_PATTERN.match(text)
+    if not match or match.group(2) not in _MONTHS:
+        invalid_argument(
+            "expiry_date",
+            f"{text!r} is not a DDMMMYY expiry.",
+            "Use two digits for the day, a three-letter month and two digits for the "
+            "year, for example '28NOV25' or '05JAN26'.",
+        )
+    return text
+
+
+def normalise_int(value: Any, field: str, minimum: int, maximum: int) -> int:
+    """Coerce a whole-number argument and check its range.
+
+    A model routinely sends ``"5"`` or ``5.0`` where an integer is wanted, so
+    both are accepted; anything that is not a whole number in range is refused
+    with the range spelled out.
+
+    Args:
+        value: The model's value.
+        field: Argument name, used in the failure message.
+        minimum: Smallest acceptable value, inclusive.
+        maximum: Largest acceptable value, inclusive.
+
+    Returns:
+        The value as an int.
+
+    Raises:
+        RetryAgentRun: If it is not a whole number inside the range.
+    """
+    if isinstance(value, bool):
+        number = None
+    elif isinstance(value, int):
+        number = value
+    elif isinstance(value, float):
+        number = int(value) if value.is_integer() else None
+    else:
+        text = "" if value is None else str(value).strip()
+        try:
+            parsed = float(text)
+        except ValueError:
+            number = None
+        else:
+            number = int(parsed) if parsed.is_integer() else None
+
+    if number is None or not minimum <= number <= maximum:
+        invalid_argument(
+            field,
+            f"{value!r} is not a whole number between {minimum} and {maximum}.",
+            f"Pass an integer in that range; {DEFAULT_STRIKE_COUNT} is a sensible "
+            f"{field} for a first look.",
+        )
+    return number
 
 
 class OptionsToolkit(OpenAlgoToolkit):
@@ -539,83 +688,16 @@ class OptionsToolkit(OpenAlgoToolkit):
     # handed a service error it has to interpret.
 
     def _symbol_argument(self, value: Any, field: str) -> str:
-        """Normalise a symbol argument to the upper case the platform stores.
-
-        Args:
-            value: The model's value.
-            field: Argument name, used in the failure message.
-
-        Returns:
-            The trimmed, upper-cased symbol.
-        """
-        text = "" if value is None else str(value).strip().upper()
-        if not text:
-            self.invalid_argument(
-                field,
-                "it is empty.",
-                "Pass the symbol, for example 'NIFTY' for an underlying or "
-                "'NIFTY28NOV2524000CE' for a contract.",
-            )
-        return text
+        """Delegate to :func:`normalise_symbol`, kept for call-site readability."""
+        return normalise_symbol(value, field)
 
     def _exchange_argument(self, value: Any, allowed: tuple[str, ...]) -> str:
-        """Check an exchange code against the codes that segment accepts.
-
-        Args:
-            value: The model's value.
-            allowed: The exchange codes this argument permits.
-
-        Returns:
-            The trimmed, upper-cased exchange code.
-        """
-        text = "" if value is None else str(value).strip().upper()
-        if text not in allowed:
-            self.invalid_argument(
-                "exchange",
-                f"{text or 'it'} is not an exchange this tool accepts.",
-                f"Use one of: {', '.join(allowed)}.",
-            )
-        return text
+        """Delegate to :func:`normalise_exchange`."""
+        return normalise_exchange(value, allowed)
 
     def _expiry_argument(self, value: Any, underlying: str, allow_embedded: bool) -> str:
-        """Check an expiry against the DDMMMYY format every service expects.
-
-        Args:
-            value: The model's value.
-            underlying: The already-normalised underlying, checked for an
-                embedded expiry when the argument is empty.
-            allow_embedded: True when an empty value is acceptable because the
-                underlying may carry the expiry itself.
-
-        Returns:
-            The trimmed, upper-cased expiry, or an empty string when the
-            underlying carries it.
-        """
-        text = "" if value is None else str(value).strip().upper()
-
-        if not text:
-            if allow_embedded and _EMBEDDED_EXPIRY_PATTERN.search(underlying):
-                return ""
-            self.invalid_argument(
-                "expiry_date",
-                (
-                    "no expiry was given and the underlying does not carry one."
-                    if allow_embedded
-                    else "no expiry was given, and this tool needs one named explicitly."
-                ),
-                "Pass the expiry in DDMMMYY format, for example '28NOV25'. Look up the "
-                "listed expiries first rather than guessing a date.",
-            )
-
-        match = _EXPIRY_PATTERN.match(text)
-        if not match or match.group(2) not in _MONTHS:
-            self.invalid_argument(
-                "expiry_date",
-                f"{text!r} is not a DDMMMYY expiry.",
-                "Use two digits for the day, a three-letter month and two digits for the "
-                "year, for example '28NOV25' or '05JAN26'.",
-            )
-        return text
+        """Delegate to :func:`normalise_expiry`."""
+        return normalise_expiry(value, underlying, allow_embedded)
 
     def _offset_argument(self, value: Any) -> str:
         """Check a strike offset against the ATM/ITMn/OTMn vocabulary.
@@ -655,44 +737,8 @@ class OptionsToolkit(OpenAlgoToolkit):
         return text
 
     def _int_argument(self, value: Any, field: str, minimum: int, maximum: int) -> int:
-        """Coerce a whole-number argument and check its range.
-
-        A model routinely sends ``"5"`` or ``5.0`` where an integer is wanted, so
-        both are accepted; anything that is not a whole number in range is
-        refused with the range spelled out.
-
-        Args:
-            value: The model's value.
-            field: Argument name, used in the failure message.
-            minimum: Smallest acceptable value, inclusive.
-            maximum: Largest acceptable value, inclusive.
-
-        Returns:
-            The value as an int.
-        """
-        if isinstance(value, bool):
-            number = None
-        elif isinstance(value, int):
-            number = value
-        elif isinstance(value, float):
-            number = int(value) if value.is_integer() else None
-        else:
-            text = "" if value is None else str(value).strip()
-            try:
-                parsed = float(text)
-            except ValueError:
-                number = None
-            else:
-                number = int(parsed) if parsed.is_integer() else None
-
-        if number is None or not minimum <= number <= maximum:
-            self.invalid_argument(
-                field,
-                f"{value!r} is not a whole number between {minimum} and {maximum}.",
-                f"Pass an integer in that range; {DEFAULT_STRIKE_COUNT} is a sensible "
-                f"{field} for a first look.",
-            )
-        return number
+        """Delegate to :func:`normalise_int`."""
+        return normalise_int(value, field, minimum, maximum)
 
     def _bool_argument(self, value: Any, field: str) -> bool:
         """Coerce a true/false argument, accepting the words a model may send.

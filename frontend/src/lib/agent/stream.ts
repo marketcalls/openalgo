@@ -120,6 +120,32 @@ export interface UiFrame {
   delta: string
 }
 
+/**
+ * A complete chart a tool built, ready to draw.
+ *
+ * The counterpart to `UiFrame`, and the difference is the point. A `ui` frame
+ * streams markup the model composed, so its numbers are whatever it typed. A
+ * `viz` frame carries a payload a tool built from a `services/` call, so the
+ * model never types a price and a chart cannot show a candle the platform did
+ * not return. It also keeps the series out of the model's context: the tool
+ * answers with one line while the payload travels here.
+ *
+ * `kind` selects the renderer and **an unknown kind renders nothing**, so a
+ * newer backend cannot break an older client mid-turn. `spec` is free-form
+ * JSON; `lib/agent/viz.ts` validates it per kind before anything draws.
+ */
+export interface VizFrame {
+  type: 'viz'
+  /** `candles`, `plotly`, or something this client has not been taught. */
+  kind: string
+  /** The renderer's payload. Self-contained: nothing further is fetched. */
+  spec: Record<string, unknown>
+  /** Heading shown above the chart. May be empty. */
+  title: string
+  /** The service the data came from, so provenance is never a guess. */
+  source: string
+}
+
 /** Commands for the `/trading` terminal to apply. */
 export interface ChartCommandFrame {
   type: 'chart_command'
@@ -181,6 +207,7 @@ export type AgentFrame =
   | ToolEndFrame
   | ReasoningFrame
   | UiFrame
+  | VizFrame
   | ChartCommandFrame
   | ConfirmFrame
   | NoticeFrame

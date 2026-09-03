@@ -313,6 +313,28 @@ TOOLKITS: list[ToolkitSpec] = [
         description="Option chain, strike resolution, Greeks and the synthetic future.",
     ),
     ToolkitSpec(
+        key="viz",
+        module="services.agent.tools.viz",
+        attr="VizToolkit",
+        surfaces=ALL_SURFACES,
+        order=45,
+        description=(
+            "Draw a price chart or an option analytics chart in the conversation. "
+            "The tool fetches the data, so the model never supplies a number."
+        ),
+    ),
+    ToolkitSpec(
+        key="openui",
+        module="services.agent.tools.openui",
+        attr="OpenUiToolkit",
+        surfaces=CHAT_ONLY,
+        order=46,
+        description=(
+            "Render a card of general data: bar, line, area and pie charts, tables, "
+            "metric callouts. The model composes the markup, so never prices."
+        ),
+    ),
+    ToolkitSpec(
         key="orders",
         module="services.agent.tools.orders",
         attr="OrdersToolkit",

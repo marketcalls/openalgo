@@ -488,6 +488,60 @@ def redact_arguments(args: Any) -> Any:
     return args
 
 
+def invalid_argument(field: str, reason: str, fix: str | None = None) -> NoReturn:
+    """Reject a tool argument with a message the model can act on.
+
+    Module level rather than a method so a helper lifted out of a toolkit can
+    still refuse an argument the same way the toolkit does.
+    :meth:`OpenAlgoToolkit.invalid_argument` delegates here, so there is exactly
+    one wording of a rejection.
+
+    Args:
+        field: Name of the offending argument, exactly as the model sees it.
+        reason: Why the value is unusable.
+        fix: What a valid value looks like.
+
+    Raises:
+        RetryAgentRun: Always.
+    """
+    message = f"The '{field}' argument is invalid: {reason}"
+    if fix:
+        message += f" {fix}"
+    raise RetryAgentRun(message)
+
+
+def strip_code_fence(text: str) -> str:
+    """Remove a Markdown code fence wrapped around a tool argument.
+
+    Every tool that takes a whole document as a string meets the same slip: the
+    model has spent the turn writing markdown and fences the argument out of
+    habit. Unwrapping it is cheaper than spending a turn on a parse error that
+    says nothing about the document itself.
+
+    Module level, and shared, because the alternative is a copy in every such
+    tool. Two copies of this drift, and the copy that goes wrong is the one in
+    the path nobody is looking at.
+
+    Args:
+        text: The raw argument.
+
+    Returns:
+        The text with a leading fence line and a trailing fence removed,
+        unchanged when there is no fence.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+
+    lines = stripped.splitlines()
+    if len(lines) < 2:
+        return stripped
+    body = lines[1:]
+    if body and body[-1].strip().startswith("```"):
+        body = body[:-1]
+    return "\n".join(body).strip()
+
+
 # ---------------------------------------------------------------------------
 # Audit scope
 # ---------------------------------------------------------------------------
@@ -977,7 +1031,8 @@ class OpenAlgoToolkit(Toolkit):
 
         Use this for a check the tool makes itself, before any service is
         called, so the model gets the same shape of feedback it would get from a
-        service rejection.
+        service rejection. A thin delegate to the module-level
+        :func:`invalid_argument`, which is the single wording of a rejection.
 
         Args:
             field: Name of the offending argument, exactly as the model sees it.
@@ -987,10 +1042,7 @@ class OpenAlgoToolkit(Toolkit):
         Raises:
             RetryAgentRun: Always.
         """
-        message = f"The '{field}' argument is invalid: {reason}"
-        if fix:
-            message += f" {fix}"
-        raise RetryAgentRun(message)
+        invalid_argument(field, reason, fix)
 
     # -- serialisation -------------------------------------------------------
 

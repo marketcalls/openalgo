@@ -113,7 +113,17 @@ DEFAULT_NUM_HISTORY_RUNS = 8
 
 #: Character budget for the system prompt. Generous, because trimming drops
 #: whole sections; the pinned security rules survive any budget.
-DEFAULT_MAX_PROMPT_CHARS = 24000
+#:
+#: Raised from 24000 when the generated OpenUI Lang reference joined the chat
+#: prompt. That section alone renders about 8.8k characters, which took the
+#: chat surface to roughly 24.3k, and the way ``render_sections`` enforces a cap
+#: is to drop **whole** unpinned sections from the end with nothing but a log
+#: line: the section actually lost was the one telling the model that a
+#: visualization is a deliberate act. Overshooting this number does not truncate
+#: the section that overshot it, it deletes a different one, which is why
+#: ``test_agent_openui_tool.py`` asserts every surface renders whole rather than
+#: leaving the next addition to find out in production.
+DEFAULT_MAX_PROMPT_CHARS = 28000
 
 #: The operator's timezone. Indian markets, and every schedule in this platform,
 #: run on IST. This is not configuration, it is what the exchanges do.

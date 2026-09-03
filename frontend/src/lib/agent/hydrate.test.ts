@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '@/api/agent'
 import { sumUsage } from '@/components/agent/UsageBadge'
 import { hydrateMessages } from './hydrate'
+import { OPENUI_VIZ } from './viz'
 
 function storedMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
   return {
@@ -69,7 +70,7 @@ describe('hydrateMessages', () => {
     expect(sumUsage([message.usage]).hasUnpricedTurn).toBe(true)
   })
 
-  it('splits the sidecar into notices, ui and prose', () => {
+  it('splits the sidecar into notices, visualizations and prose', () => {
     const [message] = hydrateMessages([
       storedMessage({
         content: 'Here is the position book.',
@@ -77,7 +78,7 @@ describe('hydrateMessages', () => {
         notices: [
           { type: 'notice', level: 'warning', message: 'Trading is disabled.' },
           { type: 'error', message: 'The provider timed out.', kind: 'provider' },
-          { type: 'ui', content: '<Chart/>' },
+          { type: 'ui', content: 'root = Card([])' },
         ],
       }),
     ])
@@ -86,12 +87,70 @@ describe('hydrateMessages', () => {
     expect(message.content).toBe('Here is the position book.')
     expect(message.tools).toHaveLength(1)
     expect(message.tools[0].ok).toBe(true)
-    expect(message.ui).toBe('<Chart/>')
+    expect(message.viz).toEqual([
+      {
+        kind: OPENUI_VIZ,
+        spec: { markup: 'root = Card([])' },
+        title: '',
+        source: '',
+        at: 'Here is the position book.'.length,
+      },
+    ])
     expect(message.notices).toEqual([
       { level: 'warning', message: 'Trading is disabled.' },
       { level: 'error', message: 'The provider timed out.' },
     ])
     expect(message.streaming).toBe(false)
+  })
+
+  it('restores a stored chart as the same item the live frame produced', () => {
+    // `_TurnRecorder` stores the frame dict verbatim, which is what lets one
+    // renderer branch serve a chart that is streaming and the same chart after
+    // a reload. Without this a conversation loses every chart it drew.
+    const spec = { engine: '2d', data: [{ type: 'bar' }] }
+    const [message] = hydrateMessages([
+      storedMessage({
+        content: 'Open interest peaks at 24000.',
+        notices: [
+          {
+            type: 'viz',
+            kind: 'plotly',
+            spec,
+            title: 'NIFTY 08SEP26 open interest by strike',
+            source: 'option_chain_service',
+          },
+          { type: 'ui', content: 'root = Card([])' },
+        ],
+      }),
+    ])
+
+    expect(message.viz.map((entry) => entry.kind)).toEqual(['plotly', OPENUI_VIZ])
+    expect(message.viz[0].spec).toEqual(spec)
+    expect(message.viz[0].title).toBe('NIFTY 08SEP26 open interest by strike')
+    expect(message.viz[0].source).toBe('option_chain_service')
+    // A stored turn has no record of how much prose had been written when the
+    // frame arrived, so every chart is anchored at the end of the answer.
+    expect(message.viz[0].at).toBe(message.content.length)
+  })
+
+  it('drops a stored viz entry whose spec is not an object', () => {
+    const [message] = hydrateMessages([
+      storedMessage({
+        notices: [
+          {
+            type: 'viz',
+            kind: 'candles',
+            spec: null,
+            title: null,
+            source: null,
+          } as unknown as ChatMessage['notices'][number],
+        ],
+      }),
+    ])
+
+    expect(message.viz).toHaveLength(1)
+    expect(message.viz[0].spec).toEqual({})
+    expect(message.viz[0].title).toBe('')
   })
 
   it('re-offers a confirmation only on the newest message', () => {

@@ -37,6 +37,7 @@ services/agent/
   builder.py            Agent construction + the tool factory
   stream.py             real-thread bridge; agno events -> frames
   frames.py             the wire contract, standalone, no agno import
+  viz_sink.py           per-run side channel a viz tool's payload travels on
   prompts.py            system prompt assembly
   safety/
     __init__.py
@@ -46,7 +47,7 @@ services/agent/
     __init__.py         registry: build_toolkits(context) -> list
     base.py             OpenAlgoToolkit
     market.py account.py orders.py symbols.py options.py
-    chart.py viz.py strategy_gen.py flow_gen.py
+    chart.py viz.py openui.py strategy_gen.py flow_gen.py
   generators/
     python_strategy.py  emits a strategies/scripts/*.py
     flow_json.py        emits + validates Flow JSON

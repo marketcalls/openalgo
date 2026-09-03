@@ -53,6 +53,7 @@ from limiter import limiter
 from services.agent import builder, catalog, providers
 from services.agent import settings as agent_settings
 from services.agent import stream as agent_stream
+from services.agent import viz_sink as viz_sink_module
 from services.agent.frames import SSE_HEADERS
 from services.agent.safety import audit
 from services.agent.tools import ToolContext
@@ -97,6 +98,20 @@ TEST_TIMEOUT_SECONDS = 30
 MAX_TEST_ERROR_CHARS = 2000
 
 NOT_FOUND = "Conversation not found"
+
+#: Sidecar entry the stream route writes on the user's own message so the resume
+#: route can rebuild the agent the way the original turn built it. The client's
+#: hydrator ignores a notice type it does not recognise, so this renders nothing.
+RUN_OPTIONS_NOTICE = "run_options"
+
+#: How many ``viz`` charts one stored turn keeps. A chart spec is a series, not
+#: a sentence, so an unbounded count would put a data dump in a text column.
+MAX_STORED_VIZ = 4
+
+#: How many chart-context bullets reach the prompt. The panel reads its context
+#: fresh at send time, so without a cap this is an operator-supplied prompt of
+#: unbounded length.
+MAX_RUNTIME_LINES = 10
 
 #: Refused outright as a base URL host. The cloud metadata address is the one
 #: destination an operator never means to type, and reaching it from this
@@ -1177,10 +1192,10 @@ class _TurnRecorder:
         text: The assistant's prose, concatenated from ``token`` deltas.
         tools: One entry per tool call, keyed by call id while it is open.
         notices: The turn's non-prose frames, each keeping its own ``type``
-            discriminator: ``notice``, ``usage``, ``error``, ``confirm`` and the
-            accumulated ``ui`` markup. The column is free-form JSON, and one
-            ordered list of what happened beside the answer is what the client
-            re-renders from.
+            discriminator: ``notice``, ``usage``, ``error``, ``confirm``, each
+            ``viz`` chart and the accumulated ``ui`` markup. The column is
+            free-form JSON, and one ordered list of what happened beside the
+            answer is what the client re-renders from.
         run_id: Agno's run id, learned from the ``start`` frame.
         session_id: Agno's session id, learned from the same frame. Bound back
             onto the conversation so a paused confirmation can be resumed.
@@ -1192,6 +1207,7 @@ class _TurnRecorder:
         "_open",
         "_ui",
         "_usage",
+        "_viz",
         "notices",
         "paused",
         "run_id",
@@ -1204,6 +1220,7 @@ class _TurnRecorder:
         self.text: list[str] = []
         self.tools: list[dict[str, Any]] = []
         self.notices: list[dict[str, Any]] = []
+        self._viz: list[dict[str, Any]] = []
         self.run_id: str = ""
         self.session_id: str = ""
         self.paused: bool = False
@@ -1241,6 +1258,13 @@ class _TurnRecorder:
             entry["ok"] = payload.get("ok")
             entry["result"] = payload.get("result")
             entry["duration"] = payload.get("duration")
+        elif kind == "viz":
+            # Kept so a reloaded conversation still shows its charts. Capped
+            # because a chart spec is a data series rather than a sentence, and
+            # this row is stored JSON: a turn that drew a dozen of them would
+            # otherwise put a megabyte in one column.
+            if len(self._viz) < MAX_STORED_VIZ:
+                self._viz.append(payload)
         elif kind == "usage":
             # Every usage frame carries the running total for the turn, so the
             # last one is the only one worth keeping.
@@ -1258,6 +1282,7 @@ class _TurnRecorder:
     def sidecar(self) -> list[dict[str, Any]]:
         """Everything that belongs beside the prose, in the order it happened."""
         entries = list(self.notices)
+        entries.extend(self._viz)
         if self._ui:
             entries.append({"type": "ui", "content": "".join(self._ui)})
         if self._usage is not None:
@@ -1266,7 +1291,7 @@ class _TurnRecorder:
 
     def has_content(self) -> bool:
         """Whether the turn produced anything worth persisting."""
-        return bool(self.text or self.tools or self.notices or self._ui or self._usage)
+        return bool(self.text or self.tools or self.notices or self._viz or self._ui or self._usage)
 
 
 def _record_stream(chunks, recorder: _TurnRecorder, conversation_id: int, username: str):
@@ -1411,7 +1436,7 @@ def _runtime_lines(chart_context: Any) -> list[str]:
         if not isinstance(value, str | int | float | bool):
             continue
         lines.append(f"{str(key)[:40]}: {str(value)[:120]}")
-        if len(lines) >= 10:
+        if len(lines) >= MAX_RUNTIME_LINES:
             break
     return lines
 
@@ -1441,6 +1466,7 @@ def _build_context(
     conversation_id: int,
     surface: str,
     operator_message: str = "",
+    viz_sink: list | None = None,
 ) -> ToolContext:
     """Build the run's tool context.
 
@@ -1455,6 +1481,13 @@ def _build_context(
     explicitly rather than read out of ``body`` because the resume route has no
     new message and has to recover the one that opened the run.
 
+    ``viz_sink`` is the list a chart tool leaves its payload on. It is created
+    per request and passed here rather than made by this function, because the
+    route also has to hand the *same* list to the streaming call, which is what
+    turns a queued payload into a frame. ``ToolContext.from_session_state``
+    copies ``extras`` shallowly, so every toolkit the run builds shares this one
+    list rather than a copy of it.
+
     This runs after the conversation row exists and outside the caller's
     ``try``, so nothing in it may raise: an exception here answers a JSON client
     with a 500 HTML page and leaves behind the empty conversation
@@ -1464,6 +1497,8 @@ def _build_context(
     extras: dict = {"user_message": operator_message} if operator_message else {}
     if isinstance(chart_context, dict):
         extras["chart_context"] = chart_context
+    if viz_sink is not None:
+        extras[viz_sink_module.SINK_KEY] = viz_sink
     return ToolContext(
         api_key=api_key,
         conversation_id=conversation_id,
@@ -1475,33 +1510,113 @@ def _build_context(
     )
 
 
-def _last_operator_message(conversation_id: int) -> str:
-    """The most recent message the person sent in this conversation.
+def _last_user_row(conversation_id: int) -> dict[str, Any]:
+    """The most recent turn the person sent in this conversation.
 
-    A resumed run carries only the approval decisions, so the message that
-    opened it has to come back out of the store for the web search boundary to
-    have anything to build from. A read failure degrades to an empty string,
-    which refuses search rather than searching on something unverified.
+    A resumed run carries only the approval decisions, so everything the
+    original turn was started with has to come back out of the store. That is
+    the operator's own message, which the web search boundary builds every
+    outbound query from, and the run options the turn was built with, which
+    :func:`_run_options_of` reads off the same row.
+
+    A read failure degrades to an empty row rather than raising: the resumed run
+    then loses the message and the options, which is a worse answer, not a
+    failed one.
 
     Args:
         conversation_id: The conversation being resumed.
 
     Returns:
-        The last user message, or an empty string when there is none.
+        The last user message row, or an empty mapping when there is none.
     """
     try:
         rows = agent_db.list_messages(conversation_id)
     except Exception:
-        logger.exception(
-            "Could not read the last operator message for conversation %s", conversation_id
-        )
-        return ""
+        logger.exception("Could not read the last user turn for conversation %s", conversation_id)
+        return {}
     for row in reversed(rows):
         if row.get("role") == "user":
-            content = row.get("content")
-            if isinstance(content, str) and content.strip():
-                return content
-    return ""
+            return dict(row)
+    return {}
+
+
+def _operator_message_of(row: dict[str, Any]) -> str:
+    """The operator's own text from a stored user row.
+
+    Args:
+        row: A row from :func:`_last_user_row`.
+
+    Returns:
+        The message, or an empty string. Empty refuses web search rather than
+        searching on something unverified.
+    """
+    content = row.get("content")
+    return content if isinstance(content, str) and content.strip() else ""
+
+
+def _run_options_notice(
+    effort: str | None, runtime_lines: list[str]
+) -> list[dict[str, Any]] | None:
+    """Store what a turn was built with, beside the message that opened it.
+
+    The resume route receives neither the reasoning effort nor the chart
+    context: the client posts only the decisions. Recording them on the user
+    row is what lets a resumed run be built the same way the original was,
+    rather than silently dropping to the platform default and to no chart
+    awareness at all.
+
+    The chart context is stored **already rendered** into the same bounded lines
+    the prompt would carry, so what comes back is exactly what goes into the
+    prompt and no second, unbounded shape is persisted.
+
+    Args:
+        effort: The reasoning effort the request asked for, if any.
+        runtime_lines: The rendered chart-context lines, if any.
+
+    Returns:
+        A one-entry notices list, or None when the turn carried neither. The
+        entry's ``type`` is unknown to the client's hydrator, which ignores what
+        it does not recognise, so a user row still renders as plain text.
+    """
+    entry: dict[str, Any] = {"type": RUN_OPTIONS_NOTICE}
+    if effort:
+        entry["reasoning_effort"] = effort
+    if runtime_lines:
+        entry["runtime_lines"] = list(runtime_lines)
+    return [entry] if len(entry) > 1 else None
+
+
+def _run_options_of(row: dict[str, Any]) -> tuple[str | None, list[str]]:
+    """Recover the run options a stored turn was built with.
+
+    Every value is re-validated on the way out. The row is our own write, but a
+    stored value reaching ``build_agent`` unchecked is exactly the shape of
+    mistake that outlives the code that wrote it.
+
+    Args:
+        row: A row from :func:`_last_user_row`.
+
+    Returns:
+        ``(reasoning_effort, runtime_lines)``, either of which may be absent.
+    """
+    notices = row.get("notices")
+    if not isinstance(notices, list):
+        return None, []
+
+    for entry in notices:
+        if not isinstance(entry, dict) or entry.get("type") != RUN_OPTIONS_NOTICE:
+            continue
+        effort = str(entry.get("reasoning_effort") or "").strip().lower()
+        if effort not in agent_db.REASONING_EFFORTS:
+            effort = ""
+        raw_lines = entry.get("runtime_lines")
+        lines = (
+            [str(line)[:200] for line in raw_lines[:MAX_RUNTIME_LINES] if isinstance(line, str)]
+            if isinstance(raw_lines, list)
+            else []
+        )
+        return effort or None, lines
+    return None, []
 
 
 def _analyzer_mode() -> bool:
@@ -1607,14 +1722,18 @@ def chat_stream():
     if not conversation.title:
         agent_db.update_conversation(conversation_id, username, title=message[:80])
 
-    context = _build_context(username, api_key, body, conversation_id, surface, message)
+    runtime_lines = _runtime_lines(body.get("chart_context"))
+    viz_sink = viz_sink_module.new_sink()
+    context = _build_context(
+        username, api_key, body, conversation_id, surface, message, viz_sink=viz_sink
+    )
     try:
         agent = builder.build_agent(
             context,
             model_id=body.get("model_id"),
             session_id=session_id,
             reasoning_effort=effort,
-            extra_runtime_lines=_runtime_lines(body.get("chart_context")),
+            extra_runtime_lines=runtime_lines,
         )
     except builder.AgentBuildError as exc:
         # A conversation opened by this request has nothing in it, and leaving
@@ -1627,7 +1746,9 @@ def chat_stream():
         logger.exception("Could not build the agent for conversation %s", conversation_id)
         return _error("Could not start the agent", 500)
 
-    agent_db.add_message(conversation_id, "user", message)
+    agent_db.add_message(
+        conversation_id, "user", message, notices=_run_options_notice(effort, runtime_lines)
+    )
 
     recorder = _TurnRecorder()
     chunks = agent_stream.stream_run(
@@ -1637,6 +1758,7 @@ def chat_stream():
         session_id=session_id,
         user_id=username,
         model=_model_id_of(agent),
+        tool_frames=viz_sink_module.frame_hook(viz_sink),
     )
 
     response = Response(
@@ -1697,15 +1819,36 @@ def chat_confirm():
     surface, surface_error = _surface_of(body)
     if surface_error:
         return _error(surface_error, 400)
+    effort, effort_error = _reasoning_effort_of(body)
+    if effort_error:
+        return _error(effort_error, 400)
 
+    # A resumed run has to be built the way the run it resumes was built. The
+    # client posts only the decisions, so the reasoning effort and the chart
+    # context come back off the user row the way the operator's message does;
+    # a value the client did send still wins, because it is the fresher one.
+    last_user = _last_user_row(conversation_id)
+    stored_effort, stored_lines = _run_options_of(last_user)
+    effort = effort or stored_effort
+    runtime_lines = _runtime_lines(body.get("chart_context")) or stored_lines
+
+    viz_sink = viz_sink_module.new_sink()
     context = _build_context(
-        username, api_key, body, conversation_id, surface, _last_operator_message(conversation_id)
+        username,
+        api_key,
+        body,
+        conversation_id,
+        surface,
+        _operator_message_of(last_user),
+        viz_sink=viz_sink,
     )
     try:
         agent = builder.build_agent(
             context,
             model_id=body.get("model_id"),
             session_id=session_id,
+            reasoning_effort=effort,
+            extra_runtime_lines=runtime_lines,
         )
     except builder.AgentBuildError as exc:
         return _build_error(exc)
@@ -1737,6 +1880,7 @@ def chat_confirm():
         note=note,
         user_id=username,
         model=_model_id_of(agent),
+        tool_frames=viz_sink_module.frame_hook(viz_sink),
     )
 
     response = Response(

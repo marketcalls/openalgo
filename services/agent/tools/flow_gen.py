@@ -40,7 +40,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from services.agent.prompts import wrap_tool_result
-from services.agent.tools.base import OpenAlgoToolkit
+from services.agent.tools.base import OpenAlgoToolkit, strip_code_fence
 from services.flow_workflow_validator import (
     migrate_legacy_node_data,
     trigger_config,
@@ -77,34 +77,6 @@ IMPORT_SUFFIX = " (imported)"
 #: Most validator errors handed back in one message. A graph with hundreds of
 #: errors has one root cause, and the first few carry it.
 MAX_REPORTED_ERRORS = 50
-
-
-def _strip_code_fence(text: str) -> str:
-    """Remove a Markdown code fence wrapped around a JSON document.
-
-    The schema document tells the model to emit the object alone, and a fenced
-    payload is a formatting slip rather than a malformed workflow. Unwrapping it
-    is cheaper than spending a turn on a parse error that says nothing about the
-    graph.
-
-    Args:
-        text: The raw argument.
-
-    Returns:
-        The text with a leading ``````` line and a trailing fence
-        removed, unchanged when there is no fence.
-    """
-    stripped = text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-
-    lines = stripped.splitlines()
-    if len(lines) < 2:
-        return stripped
-    body = lines[1:]
-    if body and body[-1].strip().startswith("```"):
-        body = body[:-1]
-    return "\n".join(body).strip()
 
 
 class FlowGenToolkit(OpenAlgoToolkit):
@@ -347,7 +319,7 @@ class FlowGenToolkit(OpenAlgoToolkit):
                 "Build a smaller workflow.",
             )
 
-        text = _strip_code_fence(workflow_json)
+        text = strip_code_fence(workflow_json)
         if not text:
             self.invalid_argument(
                 "workflow_json",

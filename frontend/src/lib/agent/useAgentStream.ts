@@ -23,6 +23,12 @@
  * - **Aborting the fetch does not stop the run.** `stop()` aborts locally for
  *   an immediate stop to the UI, and posts the cancel route so the model stops
  *   being billed.
+ *
+ * Visualizations fold into **one ordered list**, `AgentMessage.viz`, whatever
+ * engine draws them: a `viz` frame appends an item, and `ui` deltas accumulate
+ * into the trailing OpenUI item. Each records the length of the prose when it
+ * arrived, so the thread can put a chart back where the model drew it. Adding
+ * a fourth renderer is a `kind` and a branch in `VizBlock`, and nothing here.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -41,6 +47,7 @@ import {
   streamAgentFrames,
   type UsageFrame,
 } from './stream'
+import { type AgentVizItem, OPENUI_VIZ, openUiMarkup, openUiSpec, vizItemFromFrame } from './viz'
 
 /** Fallback cadence where `requestAnimationFrame` is missing, in ms. */
 const FRAME_MS = 16
@@ -88,8 +95,17 @@ export interface AgentMessage {
   content: string
   /** The reasoning trace, kept apart from the answer. */
   reasoning: string
-  /** Accumulated OpenUI Lang markup. Hand the renderer the whole string. */
-  ui: string
+  /**
+   * Every visualization in this turn, in arrival order.
+   *
+   * One list holds all three renderers rather than a field per engine, because
+   * each carries its own `kind` and each records the point in `content` it
+   * arrived at, which is what lets the thread interleave charts with the prose
+   * instead of stacking them all after it. OpenUI markup is one of them: `ui`
+   * deltas accumulate into the trailing `openui` item, so a turn that draws,
+   * writes, then draws again renders in that order.
+   */
+  viz: AgentVizItem[]
   /** In dispatch order. A call with no `ok` yet is still running. */
   tools: ToolCall[]
   notices: AgentNotice[]
@@ -127,7 +143,7 @@ export function createAgentMessage(
     role,
     content,
     reasoning: '',
-    ui: '',
+    viz: [],
     tools: [],
     notices: [],
     usage: null,
@@ -228,6 +244,13 @@ export function useAgentStream(options: UseAgentStreamOptions = {}): UseAgentStr
       ...draft,
       tools: draft.tools.map((tool) => ({ ...tool })),
       notices: [...draft.notices],
+      // Each item is copied; its `spec` deliberately is not. A chart's spec
+      // never changes, and `CandleViz` keys its whole chart lifecycle on that
+      // object's identity, so cloning it here would tear the chart down and
+      // rebuild it on every streamed token. Growing OpenUI markup is handled
+      // the other way round: the `ui` case assigns a **new** spec object, so
+      // the payload that did change carries a new identity anyway.
+      viz: draft.viz.map((item) => ({ ...item })),
     }
     setMessages((prev) => prev.map((item) => (item.id === snapshot.id ? snapshot : item)))
   }, [])
@@ -270,8 +293,34 @@ export function useAgentStream(options: UseAgentStreamOptions = {}): UseAgentStr
           draft.reasoning += frame.delta
           scheduleFlush()
           break
-        case 'ui':
-          draft.ui += frame.delta
+        case 'ui': {
+          // Deltas accumulate into the trailing OpenUI block, and anything
+          // else on the list closes it: a chart drawn between two render_ui
+          // calls means two blocks, not one with a chart wedged inside it.
+          const open = draft.viz[draft.viz.length - 1]
+          if (open && open.kind === OPENUI_VIZ) {
+            open.spec = openUiSpec(openUiMarkup(open.spec) + frame.delta)
+          } else {
+            draft.viz = [
+              ...draft.viz,
+              {
+                kind: OPENUI_VIZ,
+                spec: openUiSpec(frame.delta),
+                title: '',
+                source: '',
+                at: draft.content.length,
+              },
+            ]
+          }
+          scheduleFlush()
+          break
+        }
+        case 'viz':
+          // `at` is what puts the chart back where the model drew it. The
+          // spec itself is never inspected here: an unknown kind is stored
+          // and the renderer decides it can draw nothing, which is what lets
+          // a newer backend add a kind without a client release.
+          draft.viz = [...draft.viz, vizItemFromFrame(frame, draft.content.length)]
           scheduleFlush()
           break
         case 'tool_start':

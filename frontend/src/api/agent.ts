@@ -487,12 +487,19 @@ export interface ConfirmDecision {
  * keeping its own `type` discriminator, so a reloaded conversation re-renders
  * from the same union the live stream produced. `ui` is the one that differs:
  * the stream sends deltas and the stored entry carries the accumulated string.
+ *
+ * A `viz` entry is the live frame's dict verbatim, capped at `MAX_STORED_VIZ`
+ * per turn by `_TurnRecorder`, so one renderer branch serves a chart that is
+ * streaming and the same chart after a reload. An entry with a `type` this
+ * client does not know is ignored rather than rendered as text, which is what
+ * lets the backend record something new without breaking an older client.
  */
 export type MessageNotice =
   | { type: 'notice'; level: NoticeLevel; message: string }
   | { type: 'error'; message: string; kind: ErrorKind }
   | { type: 'confirm'; run_id: string; session_id: string; requirements: ConfirmRequirement[] }
   | { type: 'ui'; content: string }
+  | { type: 'viz'; kind: string; spec: Record<string, unknown>; title: string; source: string }
   | ({ type: 'usage' } & Usage)
 
 export interface ChatMessage {

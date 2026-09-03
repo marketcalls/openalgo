@@ -33,20 +33,36 @@
  * wasted work and it visibly flickers, so the message is split at the start of
  * the unterminated fence: everything before it is finished markdown, and the
  * tail is the artifact still being written.
+ *
+ * Visualizations, and why they are not simply appended
+ * ----------------------------------------------------
+ *
+ * A turn can draw more than once, and the answer usually reads as "here is the
+ * chart, and here is what it says". Each entry of `message.viz` records how
+ * much prose had been written when it arrived, so the prose is cut at those
+ * offsets and the blocks go back where the model drew them. Stacking every
+ * chart after the answer would put the third one's commentary above it.
+ *
+ * The cut is taken inside the finished markdown only. An anchor past the start
+ * of an open fence is clamped to it, so a chart that landed while a code block
+ * was still being written appears just before that block rather than splitting
+ * it in half and leaving markdown to parse two unterminated fences.
  */
 
 import { ChevronRight } from 'lucide-react'
-import { type ComponentProps, memo, useCallback, useMemo, useState } from 'react'
+import { type ComponentProps, Fragment, memo, useCallback, useMemo, useState } from 'react'
 import Markdown, { type Components, type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ConfirmRequirement } from '@/api/agent'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import type { AgentMessage } from '@/lib/agent/useAgentStream'
+import type { AgentVizItem } from '@/lib/agent/viz'
 import { cn } from '@/lib/utils'
 import { CodeArtifact } from './CodeArtifact'
 import { ToolTimeline } from './ToolTimeline'
 import { UsageBadge } from './UsageBadge'
+import { VizBlock } from './viz/VizBlock'
 
 // ---------------------------------------------------------------------------
 // Markdown
@@ -191,6 +207,49 @@ export function splitAtOpenFence(text: string): FenceSplit {
     openCode: lines.slice(fenceStart + 1).join('\n'),
     hasOpenFence: true,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Interleaving the visualizations with the prose
+// ---------------------------------------------------------------------------
+
+/** One prose run and the visualization that follows it, if any. */
+interface TurnPart {
+  key: string
+  /** Finished markdown. Empty when two blocks arrived with nothing between. */
+  text: string
+  viz: AgentVizItem | null
+}
+
+/**
+ * Cut the finished prose at each visualization's anchor.
+ *
+ * The anchors are non-decreasing because prose only grows, but they are read
+ * off the wire, so each one is clamped forward to the previous cut and back to
+ * the end of the finished markdown. That keeps the parts in order whatever the
+ * offsets say, and keeps every cut outside an open code fence.
+ *
+ * @param prose - The finished markdown, before any unterminated fence.
+ * @param viz - The turn's visualizations, in arrival order.
+ * @returns The parts, in render order. Each prose run keeps a stable key, so
+ *   a flush that appended one token re-parses the tail and nothing else.
+ */
+export function splitByViz(prose: string, viz: readonly AgentVizItem[]): TurnPart[] {
+  if (viz.length === 0) {
+    return prose ? [{ key: 'prose-0', text: prose, viz: null }] : []
+  }
+
+  const parts: TurnPart[] = []
+  let cursor = 0
+  viz.forEach((item, index) => {
+    const at = Math.min(Math.max(item.at, cursor), prose.length)
+    parts.push({ key: `viz-${index}`, text: prose.slice(cursor, at), viz: item })
+    cursor = at
+  })
+
+  const tail = prose.slice(cursor)
+  if (tail) parts.push({ key: 'prose-tail', text: tail, viz: null })
+  return parts
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +399,10 @@ export const Message = memo(function Message({ message, onConfirm, className }: 
     () => (message.role === 'assistant' ? splitAtOpenFence(message.content) : null),
     [message.role, message.content]
   )
+  const parts = useMemo(
+    () => splitByViz(split?.closed ?? '', message.viz),
+    [split?.closed, message.viz]
+  )
 
   if (message.role === 'user') {
     return (
@@ -351,13 +414,21 @@ export const Message = memo(function Message({ message, onConfirm, className }: 
     )
   }
 
-  const empty = !message.content && !message.reasoning && message.tools.length === 0
+  const empty =
+    !message.content && !message.reasoning && message.tools.length === 0 && message.viz.length === 0
 
   return (
     <div className={cn('space-y-3', className)} data-message-id={message.id}>
       {message.reasoning && <Reasoning text={message.reasoning} />}
       {message.tools.length > 0 && <ToolTimeline tools={message.tools} />}
-      {split?.closed && <Prose text={split.closed} />}
+      {/* Fragments, not wrappers: the turn's `space-y-3` spaces DOM children,
+          so a div per part would move every gap one level down. */}
+      {parts.map((part) => (
+        <Fragment key={part.key}>
+          {part.text ? <Prose text={part.text} /> : null}
+          {part.viz ? <VizBlock item={part.viz} streaming={message.streaming} /> : null}
+        </Fragment>
+      ))}
       {split?.hasOpenFence && (
         <CodeArtifact code={split.openCode} language={split.openLanguage} streaming />
       )}

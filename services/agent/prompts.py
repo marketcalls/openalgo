@@ -25,8 +25,11 @@ approval and reads no prompt, and tool availability is decided by session state
 rather than by anything the model says. Wording is defence in depth. Treat a
 change here as a hardening change, not as a control.
 
-This module does no I/O beyond logging, imports no agno and reads no database,
-so it is importable and testable on its own.
+This module imports no agno and reads no database, so it is importable and
+testable on its own. Its only I/O beyond logging is one read, at import, of the
+generated OpenUI Lang reference under ``docs/prompt/``: a committed file, read
+once, with nothing held open. A missing one costs that section and nothing
+else.
 
 Typical use
 -----------
@@ -43,6 +46,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from utils.logging import get_logger
@@ -53,6 +57,8 @@ __all__ = [
     "ASSISTANT_NAME",
     "BASE_SECTIONS",
     "OPENALGO_SDK_SECTION",
+    "OPENUI_LANG_DOC",
+    "OPENUI_LANG_SECTION",
     "CHART_SURFACE_SECTION",
     "CHAT_SURFACE_SECTION",
     "DATA_NOT_INSTRUCTIONS",
@@ -613,20 +619,86 @@ Three renderers, chosen by what the data is. Pick by domain, not by preference.
 - **An option analytics question gets its own tool.** plot_open_interest,
   plot_gamma_exposure and plot_volatility_surface cover OI walls, gamma and the
   IV surface.
-- **Everything else is the rendering tool.** Bar, line, area and pie charts,
-  tables, metric cards and callouts, for general data such as position sizes or
-  a funds breakdown.
+- **Everything else is render_ui.** Bar, line, area and pie charts, tables,
+  metric cards and callouts, for general data such as position sizes or a funds
+  breakdown. Its markup is OpenUI Lang, described in its own section below.
 
 Never draw a chart from numbers you remember, were told, or worked out. The
-chart tools fetch their own data, which is why they can be trusted; the
-rendering tool cannot, so never put a price, a candle, an open interest or a
-Greek through it. A chart of invented prices is worse than no chart, because it
-reads as authoritative.
+chart tools fetch their own data, which is why they can be trusted; render_ui
+cannot, so never put a price, a candle, an open interest or a Greek through it.
+A chart of invented prices is worse than no chart, because it reads as
+authoritative.
+
+Never draw a chart out of characters, and never draw one as an image. A row of
+blocks, hashes, bars or asterisks in a code block is not a chart: it is worse
+than the table it replaced, and it is what these tools exist to stop. If none
+of them fits, write the numbers as a markdown table and say so.
 
 A chart tool answers you with one line, not the series. That is deliberate.
-Describe what the chart shows; do not list the bars, and do not fetch the same
-range again to read them.
+Describe what the chart shows; do not list the bars, do not repeat them as a
+table underneath, and do not fetch the same range again to read them.
 """,
+)
+
+#: The generated OpenUI Lang reference, relative to the repository root.
+#: ``frontend/scripts/generate-openui-prompt.mjs`` writes it from the same
+#: library object the browser renders with, so the model cannot be taught a
+#: component the renderer lacks. Regenerate it rather than editing it.
+OPENUI_LANG_DOC = Path(__file__).resolve().parents[2] / "docs" / "prompt" / "openui-lang.md"
+
+#: Scoping put in front of the generated reference.
+#:
+#: The generated file is written as a whole-response system prompt, in OpenUI's
+#: own words: "Your ENTIRE response must be valid openui-lang code". That is
+#: true of the tool argument and false of the answer, and left unqualified it
+#: teaches the model to stop writing markdown entirely. This says which it is,
+#: before the reference gets a chance to say otherwise.
+_OPENUI_LANG_PREAMBLE = """
+This describes the `markup` argument of the render_ui tool. It does not
+describe your reply. Your reply is markdown, as always; render_ui is one
+deliberate call inside it, and the reference below says "your entire response"
+because it was written for a different kind of assistant. Read every such line
+as "the entire markup argument".
+
+Call render_ui at most once per answer, and do not repeat the rendered numbers
+as a markdown table underneath it.
+""".strip()
+
+
+def _read_prompt_doc(path: Path) -> str:
+    """Read a generated prompt document, or return an empty string.
+
+    A missing document costs its own section and nothing else: the agent still
+    runs, the tool that document teaches still refuses bad input, and the
+    warning names the file and the command that regenerates it.
+
+    Args:
+        path: Absolute path to the document.
+
+    Returns:
+        The file's text, stripped, or ``""`` when it cannot be read.
+    """
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        logger.warning(
+            "Agent prompt document %s could not be read (%s); the section it fills "
+            "will be omitted. Regenerate it with: "
+            "node frontend/scripts/generate-openui-prompt.mjs",
+            path,
+            exc,
+        )
+        return ""
+
+
+#: The OpenUI Lang reference, or an empty body when the document is missing.
+#: :data:`SURFACE_SECTIONS` leaves it out entirely in that case rather than
+#: rendering a heading over nothing.
+OPENUI_LANG_SECTION = PromptSection(
+    key="openui_lang",
+    title="OPENUI LANG: WHAT render_ui TAKES",
+    order=56,
+    body=f"{_OPENUI_LANG_PREAMBLE}\n\n{_read_prompt_doc(OPENUI_LANG_DOC)}".strip(),
 )
 
 ANSWER_STYLE_SECTION = PromptSection(
@@ -696,11 +768,21 @@ conclusion.
 """,
 )
 
-#: Surface name to the section it adds. A surface not listed here gets the base
-#: prompt alone, which is correct behaviour rather than an error.
-SURFACE_SECTIONS: Mapping[str, PromptSection] = {
-    "chat": CHAT_SURFACE_SECTION,
-    "chart": CHART_SURFACE_SECTION,
+#: Surface name to the sections it adds, in no particular order: each carries
+#: its own ``order`` weight. A surface not listed here gets the base prompt
+#: alone, which is correct behaviour rather than an error.
+#:
+#: The OpenUI reference is on ``chat`` alone and deliberately so. It is by far
+#: the largest section, the chart panel drives the real ``/trading`` terminal
+#: rather than composing cards, and its ``render_ui`` tool is registered
+#: ``CHAT_ONLY`` to match: a surface is never taught a tool it does not have.
+#: It is omitted when the generated document is missing, because a heading over
+#: an empty body teaches the model a language it was not given.
+SURFACE_SECTIONS: Mapping[str, tuple[PromptSection, ...]] = {
+    "chat": tuple(
+        section for section in (CHAT_SURFACE_SECTION, OPENUI_LANG_SECTION) if section.body.strip()
+    ),
+    "chart": (CHART_SURFACE_SECTION,),
 }
 
 
@@ -786,7 +868,7 @@ def sections_for(
 
     Args:
         surface: ``chat`` or ``chart``. An unknown surface contributes no
-            surface section.
+            surface section, which is correct rather than an error.
         extra_sections: Sections a caller adds, applied last.
         override: The operator's replacement prompt. When present it replaces
             every base section except the pinned ones, which is what makes the
@@ -810,9 +892,7 @@ def sections_for(
     else:
         base = list(BASE_SECTIONS)
 
-    surface_section = SURFACE_SECTIONS.get(name)
-    if surface_section is not None:
-        base.append(surface_section)
+    base.extend(SURFACE_SECTIONS.get(name, ()))
 
     base.extend(extra_sections)
 

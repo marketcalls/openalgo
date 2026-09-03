@@ -36,6 +36,13 @@ spelling, and it only ever moves **towards** an index exchange, so a genuine
 Every result leaves through :func:`services.agent.prompts.wrap_tool_result`, so
 what re-enters the model's context is labelled as data rather than as something
 it should obey.
+
+**The argument handling is module level, not private to the toolkit.** The
+visualization toolkit charts the same candles this one summarises, so it reaches
+history through :func:`normalise_pair`, :func:`normalise_source`,
+:func:`normalise_range`, :func:`normalise_interval` and :class:`BrokerIntervals`
+here rather than through a second copy of them. A copy would drift, and the copy
+in the chart path is the one nobody notices is wrong.
 """
 
 from __future__ import annotations
@@ -50,7 +57,12 @@ from zoneinfo import ZoneInfo
 from database.token_db import get_token
 from services import depth_service, history_service, intervals_service, quotes_service
 from services.agent.prompts import wrap_tool_result
-from services.agent.tools.base import MAX_JSON_CHARS, OpenAlgoToolkit, json_safe
+from services.agent.tools.base import (
+    MAX_JSON_CHARS,
+    OpenAlgoToolkit,
+    invalid_argument,
+    json_safe,
+)
 from utils.constants import VALID_EXCHANGES
 from utils.logging import get_logger
 
@@ -175,7 +187,54 @@ def _ist_timestamp(value: Any) -> Any:
         return value
 
 
-def _column_map(row: Mapping[str, Any]) -> dict[str, str]:
+def epoch_seconds(value: Any) -> int | None:
+    """Render a candle timestamp as UTC epoch seconds for a chart series.
+
+    The counterpart to :func:`_ist_timestamp`, which renders the same field for
+    a model to read. A chart needs the number, and it needs the same number
+    ``openalgo-charts`` computes for itself when it fetches history directly:
+    epoch values are taken verbatim (milliseconds scaled down), and a string or
+    a naive datetime is read as an IST wall clock, because that is what the
+    platform states every timestamp in.
+
+    Args:
+        value: The raw ``timestamp`` field of one candle.
+
+    Returns:
+        UTC epoch seconds, or None when the value is not a usable timestamp, in
+        which case the candle is dropped rather than plotted at the epoch.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, datetime):
+        moment = value if value.tzinfo is not None else value.replace(tzinfo=IST)
+        return int(moment.timestamp())
+    if isinstance(value, date):
+        return int(datetime(value.year, value.month, value.day, tzinfo=IST).timestamp())
+
+    if isinstance(value, (int, float)):
+        number = float(value)
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            number = float(text)
+        except ValueError:
+            try:
+                parsed = datetime.fromisoformat(text.replace(" ", "T", 1))
+            except ValueError:
+                return None
+            return epoch_seconds(parsed)
+
+    if not math.isfinite(number):
+        return None
+    if abs(number) >= _EPOCH_MILLISECOND_FLOOR:
+        number /= 1000.0
+    return int(number)
+
+
+def candle_columns(row: Mapping[str, Any]) -> dict[str, str]:
     """Map the candle field names this module uses onto a frame's own keys.
 
     Args:
@@ -194,7 +253,7 @@ def _candle(row: Mapping[str, Any], columns: Mapping[str, str]) -> dict[str, Any
 
     Args:
         row: The record.
-        columns: The mapping from :func:`_column_map`.
+        columns: The mapping from :func:`candle_columns`.
 
     Returns:
         The candle with its timestamp rendered in IST. A record whose columns
@@ -210,7 +269,7 @@ def _candle(row: Mapping[str, Any], columns: Mapping[str, str]) -> dict[str, Any
     return out
 
 
-def _summarise(rows: list[Mapping[str, Any]], columns: Mapping[str, str]) -> dict[str, Any]:
+def summarise_candles(rows: list[Mapping[str, Any]], columns: Mapping[str, str]) -> dict[str, Any]:
     """Reduce a whole history frame to the numbers an answer usually needs.
 
     Computed over every row, including the ones that will not be returned, so
@@ -219,7 +278,7 @@ def _summarise(rows: list[Mapping[str, Any]], columns: Mapping[str, str]) -> dic
 
     Args:
         rows: Every record the service returned, oldest first.
-        columns: The mapping from :func:`_column_map`.
+        columns: The mapping from :func:`candle_columns`.
 
     Returns:
         First open, last close, highest high, lowest low, total volume and the
@@ -287,6 +346,347 @@ def _summarise(rows: list[Mapping[str, Any]], columns: Mapping[str, str]) -> dic
 
 
 # ---------------------------------------------------------------------------
+# Shared argument handling
+# ---------------------------------------------------------------------------
+#
+# These are module level rather than methods because more than one toolkit
+# needs them: the visualization toolkit charts the same candles this one
+# summarises, and it has to reach them through the same symbol correction, the
+# same date parsing and the same broker interval check. A second copy would
+# drift, and the copy in the chart path is the one nobody notices is wrong.
+
+
+def is_listed(symbol: str, exchange: str) -> bool:
+    """Report whether the symbol database holds this pair.
+
+    Args:
+        symbol: The symbol, in capitals.
+        exchange: The exchange code.
+
+    Returns:
+        True when the master contract carries the pair. A lookup failure
+        answers False, which leaves the exchange the caller asked for untouched
+        and lets the service report the real problem.
+    """
+    try:
+        return get_token(symbol, exchange) is not None
+    except Exception:
+        logger.exception(
+            "Agent market tool could not look up %s on %s in the symbol database",
+            symbol,
+            exchange,
+        )
+        return False
+
+
+def index_candidates(exchange: str) -> tuple[str, ...]:
+    """Order the index exchanges to try for a requested exchange.
+
+    Args:
+        exchange: The exchange the model asked for.
+
+    Returns:
+        Every index exchange, with the one most likely to be meant first.
+    """
+    first = _INDEX_FIRST_CHOICE.get(exchange)
+    if not first:
+        return INDEX_EXCHANGES
+    return (first, *(item for item in INDEX_EXCHANGES if item != first))
+
+
+def resolve_exchange(symbol: str, exchange: str) -> tuple[str, str | None]:
+    """Move a symbol onto an index exchange when that is where it is listed.
+
+    Driven entirely by the symbol database, never by the spelling of the
+    symbol: the pair is corrected only when the requested one does not resolve
+    and an index one does. That means a genuinely unknown symbol is still
+    reported as unknown, and a tradable instrument is never quietly moved onto a
+    quote-only exchange.
+
+    Args:
+        symbol: The symbol, already in capitals.
+        exchange: The exchange the model asked for, already validated.
+
+    Returns:
+        The exchange to use, and a notice when it differs from the request.
+    """
+    if is_listed(symbol, exchange):
+        return exchange, None
+
+    for candidate in index_candidates(exchange):
+        if candidate == exchange or not is_listed(symbol, candidate):
+            continue
+        logger.debug(
+            "Agent market tool: %s is not listed on %s; using %s", symbol, exchange, candidate
+        )
+        return candidate, (
+            f"{symbol} is not listed on {exchange}, but it is listed on {candidate}, so "
+            f"{candidate} was used. Index values are quoted on the index exchanges and "
+            "cannot be traded there; the tradable instrument is the index future or option."
+        )
+
+    return exchange, None
+
+
+def normalise_pair(symbol: Any, exchange: Any) -> tuple[str, str, list[str]]:
+    """Normalise one symbol and exchange, correcting an index exchange.
+
+    Args:
+        symbol: The symbol the model supplied.
+        exchange: The exchange the model supplied.
+
+    Returns:
+        The symbol in capitals, the exchange to use, and any notices to put in
+        the result.
+
+    Raises:
+        RetryAgentRun: If either argument is empty or the exchange is not an
+            OpenAlgo exchange code.
+    """
+    cleaned_symbol = str(symbol or "").strip().upper()
+    if not cleaned_symbol:
+        invalid_argument(
+            "symbol",
+            "it is empty",
+            "Pass the OpenAlgo symbol in capitals, for example 'INFY' or 'NIFTY'.",
+        )
+
+    cleaned_exchange = str(exchange or "").strip().upper().replace(" ", "_").replace("-", "_")
+    if not cleaned_exchange:
+        invalid_argument(
+            "exchange",
+            "it is empty",
+            f"Pass one of: {', '.join(VALID_EXCHANGES)}.",
+        )
+    if cleaned_exchange not in VALID_EXCHANGES:
+        invalid_argument(
+            "exchange",
+            f"{cleaned_exchange!r} is not an OpenAlgo exchange code",
+            f"Pass one of: {', '.join(VALID_EXCHANGES)}.",
+        )
+
+    resolved, notice = resolve_exchange(cleaned_symbol, cleaned_exchange)
+    return cleaned_symbol, resolved, [notice] if notice else []
+
+
+def normalise_source(source: Any) -> str:
+    """Validate the history source.
+
+    Args:
+        source: The value the model supplied.
+
+    Returns:
+        ``api`` or ``db``.
+
+    Raises:
+        RetryAgentRun: For anything else.
+    """
+    cleaned = str(source or "api").strip().lower()
+    if cleaned not in {"api", "db"}:
+        invalid_argument(
+            "source",
+            f"{cleaned!r} is not a data source",
+            "Use 'api' for live broker history, or 'db' for candles already downloaded "
+            "into the local Historify store.",
+        )
+    return cleaned
+
+
+def normalise_date(field: str, value: Any) -> str:
+    """Parse one ``YYYY-MM-DD`` date argument.
+
+    Args:
+        field: The argument name, named in the error message.
+        value: The value the model supplied.
+
+    Returns:
+        The date as ``YYYY-MM-DD``.
+
+    Raises:
+        RetryAgentRun: If it cannot be parsed.
+    """
+    if isinstance(value, (datetime, date)):
+        return value.strftime(_DATE_FORMAT)
+
+    text = str(value or "").strip()
+    try:
+        return datetime.strptime(text, _DATE_FORMAT).strftime(_DATE_FORMAT)
+    except ValueError:
+        invalid_argument(
+            field,
+            f"{text!r} is not a date",
+            "Use YYYY-MM-DD, for example 2026-01-15.",
+        )
+
+
+def normalise_range(start_date: Any, end_date: Any) -> tuple[str, str]:
+    """Validate a history date range.
+
+    Args:
+        start_date: First day, as ``YYYY-MM-DD``.
+        end_date: Last day, as ``YYYY-MM-DD``.
+
+    Returns:
+        The two dates, normalised.
+
+    Raises:
+        RetryAgentRun: If either date is unparseable or the range is backwards.
+    """
+    start = normalise_date("start_date", start_date)
+    end = normalise_date("end_date", end_date)
+    if start > end:
+        invalid_argument(
+            "start_date",
+            f"it is {start}, which is after end_date {end}",
+            "Pass the earlier day as start_date.",
+        )
+    return start, end
+
+
+def normalise_interval(
+    interval: Any, source: str, accepted: list[str] | None
+) -> tuple[str, str | None]:
+    """Validate the candle interval against what this broker accepts.
+
+    The accepted set comes from ``services.intervals_service`` through
+    :class:`BrokerIntervals`, never from a list in this file, because it is per
+    broker. Two deliberate softenings: a value that differs only in case from an
+    accepted one is corrected with a notice (a model asking for ``5M`` means five
+    minutes), and the check is skipped entirely for ``source='db'``, whose
+    candles come from the local Historify store and whose resolutions are the
+    ones the operator downloaded rather than the ones the broker serves.
+
+    Args:
+        interval: The value the model supplied.
+        source: ``api`` or ``db``.
+        accepted: The intervals this broker accepts, or None when the lookup
+            failed and the check is to be skipped.
+
+    Returns:
+        The interval to use, and a notice when it was corrected.
+
+    Raises:
+        RetryAgentRun: If the broker's own list does not contain it.
+    """
+    cleaned = str(interval or "").strip()
+    if not cleaned:
+        invalid_argument(
+            "interval",
+            "it is empty",
+            "Pass a candle size such as '5m', '1h' or 'D'. Call get_intervals for the "
+            "ones this broker accepts.",
+        )
+
+    if source != "api":
+        return cleaned, None
+
+    if not accepted or cleaned in accepted:
+        # No list means the intervals lookup failed. This is a read-only tool,
+        # so it is skipped rather than failing closed; the history service
+        # validates the interval again anyway.
+        return cleaned, None
+
+    matches = [value for value in accepted if value.lower() == cleaned.lower()]
+    if len(matches) == 1:
+        return matches[0], (
+            f"The interval was read as {matches[0]!r} rather than {cleaned!r}. Interval "
+            "names are case sensitive: 'm' is minutes and 'M' is months."
+        )
+
+    invalid_argument(
+        "interval",
+        f"{cleaned!r} is not one this broker accepts",
+        f"Use one of: {', '.join(accepted)}.",
+    )
+
+
+class BrokerIntervals:
+    """The connected broker's interval list, fetched at most once per run.
+
+    Held by a toolkit rather than cached at module level, so it lives exactly as
+    long as the run that built it and a broker change is picked up on the next
+    turn rather than never.
+
+    Attributes:
+        error: The reason the lookup failed, once it has failed. Reported to the
+            model instead of asking the broker again.
+    """
+
+    __slots__ = ("_accepted", "_fetch", "_loaded", "_payload", "error")
+
+    def __init__(self, fetch: Callable[[], Any]) -> None:
+        """Build the cache.
+
+        Args:
+            fetch: Calls ``intervals_service.get_intervals`` through the
+                toolkit's own ``service_call``, so a failure arrives as the same
+                actionable error every other service call raises.
+        """
+        self._fetch = fetch
+        self._payload: dict[str, Any] | None = None
+        self._accepted: list[str] | None = None
+        self._loaded = False
+        self.error: str | None = None
+
+    def payload(self) -> dict[str, Any] | None:
+        """The grouped interval list, fetched once.
+
+        Returns:
+            The payload for the ``get_intervals`` tool, or None when the service
+            returned nothing usable.
+
+        Raises:
+            RetryAgentRun: On the first failure only. A second call in the same
+                run reports :attr:`error` instead of asking the broker again.
+        """
+        if self._loaded:
+            return self._payload
+
+        self._loaded = True
+        try:
+            response = self._fetch()
+        except Exception as exc:
+            self.error = str(exc)
+            raise
+
+        grouped = response.get("data") if isinstance(response, Mapping) else None
+        if not isinstance(grouped, Mapping):
+            return None
+
+        accepted: list[str] = []
+        for values in grouped.values():
+            if isinstance(values, (list, tuple)):
+                accepted.extend(str(value) for value in values)
+
+        self._accepted = accepted
+        self._payload = {"intervals": dict(grouped), "accepted": accepted}
+        return self._payload
+
+    def accepted(self) -> list[str] | None:
+        """The flat list of intervals this broker accepts, or None if unknown.
+
+        Returns:
+            The accepted values, or None when the lookup failed. The failure is
+            swallowed on purpose: this is the validation path for a read-only
+            tool, and refusing a history call because the intervals endpoint
+            hiccuped is the worse failure. A real credential or broker problem
+            surfaces on the history call itself a moment later.
+        """
+        if self._loaded:
+            return self._accepted
+
+        try:
+            self.payload()
+        except Exception:
+            logger.exception(
+                "Agent market tool could not read the broker's intervals; skipping the "
+                "interval check for this run"
+            )
+            self._accepted = None
+        return self._accepted
+
+
+# ---------------------------------------------------------------------------
 # The toolkit
 # ---------------------------------------------------------------------------
 
@@ -310,10 +710,9 @@ class MarketToolkit(OpenAlgoToolkit):
         Args:
             context: The run's :class:`services.agent.tools.ToolContext`.
         """
-        self._intervals_payload: dict[str, Any] | None = None
-        self._accepted_intervals: list[str] | None = None
-        self._intervals_error: str | None = None
-        self._intervals_loaded = False
+        self._intervals = BrokerIntervals(
+            lambda: self.service_call(intervals_service.get_intervals)
+        )
 
         super().__init__(
             context,
@@ -351,7 +750,7 @@ class MarketToolkit(OpenAlgoToolkit):
             close, bid, ask and volume for the symbol, plus a note when the
             exchange had to be corrected to an index exchange.
         """
-        symbol, exchange, notices = self._pair(symbol, exchange)
+        symbol, exchange, notices = normalise_pair(symbol, exchange)
         response = self.service_call(quotes_service.get_quotes, symbol=symbol, exchange=exchange)
 
         payload: dict[str, Any] = {
@@ -428,7 +827,7 @@ class MarketToolkit(OpenAlgoToolkit):
             JSON with the bid and ask ladders, total buy and sell quantity, the
             last traded price and the day's open, high, low and previous close.
         """
-        symbol, exchange, notices = self._pair(symbol, exchange)
+        symbol, exchange, notices = normalise_pair(symbol, exchange)
         response = self.service_call(depth_service.get_depth, symbol=symbol, exchange=exchange)
 
         payload: dict[str, Any] = {
@@ -487,12 +886,12 @@ class MarketToolkit(OpenAlgoToolkit):
             recent candles in ``candles`` oldest first with IST timestamps, and
             ``rows_total`` and ``rows_omitted`` so the count is never guessed.
         """
-        symbol, exchange, notices = self._pair(symbol, exchange)
-        source = self._source(source)
-        interval, interval_notice = self._interval(interval, source)
+        symbol, exchange, notices = normalise_pair(symbol, exchange)
+        source = normalise_source(source)
+        interval, interval_notice = normalise_interval(interval, source, self._intervals.accepted())
         if interval_notice:
             notices.append(interval_notice)
-        start, end = self._range(start_date, end_date)
+        start, end = normalise_range(start_date, end_date)
 
         response = self.service_call(
             history_service.get_history,
@@ -509,8 +908,8 @@ class MarketToolkit(OpenAlgoToolkit):
             rows = []
         records = [row for row in rows if isinstance(row, Mapping)]
         total = len(records)
-        columns = _column_map(records[0]) if records else {}
-        summary = _summarise(records, columns)
+        columns = candle_columns(records[0]) if records else {}
+        summary = summarise_candles(records, columns)
 
         def build(limit: int) -> dict[str, Any]:
             tail = records[total - limit :] if limit else []
@@ -559,12 +958,13 @@ class MarketToolkit(OpenAlgoToolkit):
             weeks and months, plus a flat ``accepted`` list of every value
             ``get_history`` will take.
         """
-        payload = self._load_intervals()
+        payload = self._intervals.payload()
         if payload is None:
-            # A fresh failure raises out of _load_intervals. Reaching here means
-            # either the service answered with a shape carrying no intervals, or
-            # a history call earlier in this run already tried and failed, in
-            # which case the recorded reason is the useful part of the answer.
+            # A fresh failure raises out of BrokerIntervals.payload. Reaching
+            # here means either the service answered with a shape carrying no
+            # intervals, or a history call earlier in this run already tried and
+            # failed, in which case the recorded reason is the useful part of
+            # the answer.
             payload = {
                 "intervals": {},
                 "accepted": [],
@@ -574,51 +974,11 @@ class MarketToolkit(OpenAlgoToolkit):
                     "rejected."
                 ),
             }
-            if self._intervals_error:
-                payload["error"] = self._intervals_error
+            if self._intervals.error:
+                payload["error"] = self._intervals.error
         return self._wrapped("get_intervals", payload)
 
     # -- argument handling ---------------------------------------------------
-
-    def _pair(self, symbol: str, exchange: str) -> tuple[str, str, list[str]]:
-        """Normalise one symbol and exchange, correcting an index exchange.
-
-        Args:
-            symbol: The symbol the model supplied.
-            exchange: The exchange the model supplied.
-
-        Returns:
-            The symbol in capitals, the exchange to use, and any notices to put
-            in the result.
-
-        Raises:
-            RetryAgentRun: If either argument is empty or the exchange is not an
-                OpenAlgo exchange code.
-        """
-        cleaned_symbol = str(symbol or "").strip().upper()
-        if not cleaned_symbol:
-            self.invalid_argument(
-                "symbol",
-                "it is empty",
-                "Pass the OpenAlgo symbol in capitals, for example 'INFY' or 'NIFTY'.",
-            )
-
-        cleaned_exchange = str(exchange or "").strip().upper().replace(" ", "_").replace("-", "_")
-        if not cleaned_exchange:
-            self.invalid_argument(
-                "exchange",
-                "it is empty",
-                f"Pass one of: {', '.join(VALID_EXCHANGES)}.",
-            )
-        if cleaned_exchange not in VALID_EXCHANGES:
-            self.invalid_argument(
-                "exchange",
-                f"{cleaned_exchange!r} is not an OpenAlgo exchange code",
-                f"Pass one of: {', '.join(VALID_EXCHANGES)}.",
-            )
-
-        resolved, notice = self._resolve_exchange(cleaned_symbol, cleaned_exchange)
-        return cleaned_symbol, resolved, [notice] if notice else []
 
     def _pairs(self, symbols: Any) -> tuple[list[dict[str, str]], list[str]]:
         """Normalise the ``symbols`` argument of :meth:`get_quotes`.
@@ -671,7 +1031,7 @@ class MarketToolkit(OpenAlgoToolkit):
 
         for index, item in enumerate(raw):
             symbol, exchange = self._pair_fields(item, index)
-            symbol, exchange, item_notices = self._pair(symbol, exchange)
+            symbol, exchange, item_notices = normalise_pair(symbol, exchange)
             notices.extend(item_notices)
             key = (symbol, exchange)
             if key in seen:
@@ -722,261 +1082,6 @@ class MarketToolkit(OpenAlgoToolkit):
             "and an exchange",
             'Pass objects, for example [{"symbol": "INFY", "exchange": "NSE"}].',
         )
-
-    def _source(self, source: Any) -> str:
-        """Validate the history source.
-
-        Args:
-            source: The value the model supplied.
-
-        Returns:
-            ``api`` or ``db``.
-
-        Raises:
-            RetryAgentRun: For anything else.
-        """
-        cleaned = str(source or "api").strip().lower()
-        if cleaned not in {"api", "db"}:
-            self.invalid_argument(
-                "source",
-                f"{cleaned!r} is not a data source",
-                "Use 'api' for live broker history, or 'db' for candles already downloaded "
-                "into the local Historify store.",
-            )
-        return cleaned
-
-    def _range(self, start_date: Any, end_date: Any) -> tuple[str, str]:
-        """Validate the history date range.
-
-        Args:
-            start_date: First day, as ``YYYY-MM-DD``.
-            end_date: Last day, as ``YYYY-MM-DD``.
-
-        Returns:
-            The two dates, normalised.
-
-        Raises:
-            RetryAgentRun: If either date is unparseable or the range is
-                backwards.
-        """
-        start = self._date("start_date", start_date)
-        end = self._date("end_date", end_date)
-        if start > end:
-            self.invalid_argument(
-                "start_date",
-                f"it is {start}, which is after end_date {end}",
-                "Pass the earlier day as start_date.",
-            )
-        return start, end
-
-    def _date(self, field: str, value: Any) -> str:
-        """Parse one ``YYYY-MM-DD`` date argument.
-
-        Args:
-            field: The argument name, named in the error message.
-            value: The value the model supplied.
-
-        Returns:
-            The date as ``YYYY-MM-DD``.
-
-        Raises:
-            RetryAgentRun: If it cannot be parsed.
-        """
-        if isinstance(value, (datetime, date)):
-            return value.strftime(_DATE_FORMAT)
-
-        text = str(value or "").strip()
-        try:
-            return datetime.strptime(text, _DATE_FORMAT).strftime(_DATE_FORMAT)
-        except ValueError:
-            self.invalid_argument(
-                field,
-                f"{text!r} is not a date",
-                "Use YYYY-MM-DD, for example 2026-01-15.",
-            )
-
-    def _interval(self, interval: Any, source: str) -> tuple[str, str | None]:
-        """Validate the candle interval against what this broker accepts.
-
-        The accepted set comes from ``services.intervals_service``, never from a
-        list in this file, because it is per broker. Two deliberate softenings:
-        a value that differs only in case from an accepted one is corrected with
-        a notice (a model asking for ``5M`` means five minutes), and the check is
-        skipped entirely for ``source='db'``, whose candles come from the local
-        Historify store and whose resolutions are the ones the operator
-        downloaded rather than the ones the broker serves.
-
-        Args:
-            interval: The value the model supplied.
-            source: ``api`` or ``db``.
-
-        Returns:
-            The interval to use, and a notice when it was corrected.
-
-        Raises:
-            RetryAgentRun: If the broker's own list does not contain it.
-        """
-        cleaned = str(interval or "").strip()
-        if not cleaned:
-            self.invalid_argument(
-                "interval",
-                "it is empty",
-                "Pass a candle size such as '5m', '1h' or 'D'. Call get_intervals for the "
-                "ones this broker accepts.",
-            )
-
-        if source != "api":
-            return cleaned, None
-
-        accepted = self._accepted()
-        if not accepted or cleaned in accepted:
-            # No list means the intervals lookup failed. This is a read-only
-            # tool, so it is skipped rather than failing closed; the history
-            # service validates the interval again anyway.
-            return cleaned, None
-
-        matches = [value for value in accepted if value.lower() == cleaned.lower()]
-        if len(matches) == 1:
-            return matches[0], (
-                f"The interval was read as {matches[0]!r} rather than {cleaned!r}. Interval "
-                "names are case sensitive: 'm' is minutes and 'M' is months."
-            )
-
-        self.invalid_argument(
-            "interval",
-            f"{cleaned!r} is not one this broker accepts",
-            f"Use one of: {', '.join(accepted)}.",
-        )
-
-    # -- index exchange correction ------------------------------------------
-
-    def _resolve_exchange(self, symbol: str, exchange: str) -> tuple[str, str | None]:
-        """Move a symbol onto an index exchange when that is where it is listed.
-
-        Driven entirely by the symbol database, never by the spelling of the
-        symbol: the pair is corrected only when the requested one does not
-        resolve and an index one does. That means a genuinely unknown symbol is
-        still reported as unknown, and a tradable instrument is never quietly
-        moved onto a quote-only exchange.
-
-        Args:
-            symbol: The symbol, already in capitals.
-            exchange: The exchange the model asked for, already validated.
-
-        Returns:
-            The exchange to use, and a notice when it differs from the request.
-        """
-        if self._listed(symbol, exchange):
-            return exchange, None
-
-        for candidate in self._index_candidates(exchange):
-            if candidate == exchange or not self._listed(symbol, candidate):
-                continue
-            logger.debug(
-                "Agent market tool: %s is not listed on %s; using %s", symbol, exchange, candidate
-            )
-            return candidate, (
-                f"{symbol} is not listed on {exchange}, but it is listed on {candidate}, so "
-                f"{candidate} was used. Index values are quoted on the index exchanges and "
-                "cannot be traded there; the tradable instrument is the index future or option."
-            )
-
-        return exchange, None
-
-    @staticmethod
-    def _index_candidates(exchange: str) -> tuple[str, ...]:
-        """Order the index exchanges to try for a requested exchange.
-
-        Args:
-            exchange: The exchange the model asked for.
-
-        Returns:
-            Every index exchange, with the one most likely to be meant first.
-        """
-        first = _INDEX_FIRST_CHOICE.get(exchange)
-        if not first:
-            return INDEX_EXCHANGES
-        return (first, *(item for item in INDEX_EXCHANGES if item != first))
-
-    @staticmethod
-    def _listed(symbol: str, exchange: str) -> bool:
-        """Report whether the symbol database holds this pair.
-
-        Args:
-            symbol: The symbol, in capitals.
-            exchange: The exchange code.
-
-        Returns:
-            True when the master contract carries the pair. A lookup failure
-            answers False, which leaves the exchange the model asked for
-            untouched and lets the service report the real problem.
-        """
-        try:
-            return get_token(symbol, exchange) is not None
-        except Exception:
-            logger.exception(
-                "Agent market tool could not look up %s on %s in the symbol database",
-                symbol,
-                exchange,
-            )
-            return False
-
-    # -- intervals -----------------------------------------------------------
-
-    def _load_intervals(self) -> dict[str, Any] | None:
-        """Fetch the broker's interval list once per run.
-
-        Returns:
-            The payload for :meth:`get_intervals`, or None when the service
-            returned nothing usable. A failure raises the first time and is
-            remembered on :attr:`_intervals_error`, so a second call in the same
-            run reports the reason instead of asking the broker again.
-        """
-        if self._intervals_loaded:
-            return self._intervals_payload
-
-        self._intervals_loaded = True
-        try:
-            response = self.service_call(intervals_service.get_intervals)
-        except Exception as exc:
-            self._intervals_error = str(exc)
-            raise
-
-        grouped = response.get("data") if isinstance(response, Mapping) else None
-        if not isinstance(grouped, Mapping):
-            return None
-
-        accepted: list[str] = []
-        for values in grouped.values():
-            if isinstance(values, (list, tuple)):
-                accepted.extend(str(value) for value in values)
-
-        self._accepted_intervals = accepted
-        self._intervals_payload = {"intervals": dict(grouped), "accepted": accepted}
-        return self._intervals_payload
-
-    def _accepted(self) -> list[str] | None:
-        """Return the intervals this broker accepts, or None if unknown.
-
-        Returns:
-            The flat accepted list, or None when the lookup failed. The failure
-            is swallowed on purpose: this is the validation path for a read-only
-            tool, and refusing a history call because the intervals endpoint
-            hiccuped is the worse failure. A real credential or broker problem
-            surfaces on the history call itself a moment later.
-        """
-        if self._intervals_loaded:
-            return self._accepted_intervals
-
-        try:
-            self._load_intervals()
-        except Exception:
-            logger.exception(
-                "Agent market tool could not read the broker's intervals; skipping the "
-                "interval check for this run"
-            )
-            self._accepted_intervals = None
-        return self._accepted_intervals
 
     # -- result shaping ------------------------------------------------------
 

@@ -11,7 +11,8 @@
  * | --- | --- |
  * | `{type: 'notice', level, message}` | one entry of `notices` |
  * | `{type: 'error', message, kind}` | one entry of `notices`, at error level |
- * | `{type: 'ui', content}` | appended to `ui`, already accumulated |
+ * | `{type: 'ui', content}` | one `openui` entry of `viz`, already accumulated |
+ * | `{type: 'viz', kind, spec, title, source}` | one entry of `viz` |
  * | `{type: 'usage', ...}` | `usage` |
  * | `{type: 'confirm', run_id, session_id, requirements}` | `pending` |
  *
@@ -20,8 +21,15 @@
  * no tokens and no cost, and the conversation total in the header silently
  * counts only what was sent since the page loaded.
  *
- * Two decisions that are not obvious:
+ * Three decisions that are not obvious:
  *
+ * - **A stored chart renders after the prose, not inside it.** A live frame
+ *   knows how much of the answer had been written when it arrived; the sidecar
+ *   does not record that, and `_TurnRecorder` groups the viz entries together
+ *   rather than interleaving them with the notices. Anchoring every stored
+ *   chart at the end of the turn is the honest reading of what was kept, and
+ *   guessing a position from the sidecar's order would put charts in places
+ *   they were never drawn.
  * - **Only the last message may carry a pending confirmation.** Approving or
  *   rejecting a paused run resumes it, and the resumed run is persisted as its
  *   own message row, so a confirm entry with anything after it was already
@@ -43,6 +51,7 @@ import {
   type AgentUsage,
   createAgentMessage,
 } from './useAgentStream'
+import { type AgentVizItem, OPENUI_VIZ, openUiSpec } from './viz'
 
 /** The levels `Message.tsx` has a style for. Anything else is read as info. */
 const NOTICE_LEVELS: readonly NoticeLevel[] = ['info', 'warning', 'error']
@@ -138,8 +147,10 @@ function hydrateMessage(row: ChatMessage, isLast: boolean): AgentMessage {
   // dropping it would lose the row without saying so.
   const role: AgentRole = row.role === 'user' ? 'user' : 'assistant'
 
+  const content = toText(row.content)
   const notices: AgentNotice[] = []
-  let ui = ''
+  const viz: AgentVizItem[] = []
+  let markup = ''
   let usage: AgentUsage | null = null
   let pending: AgentPendingConfirm | null = null
 
@@ -156,7 +167,22 @@ function hydrateMessage(row: ChatMessage, isLast: boolean): AgentMessage {
         notices.push({ level: 'error', message: toText(entry.message) })
         break
       case 'ui':
-        ui += toText(entry.content)
+        // The stored entry is the whole accumulated markup, not a delta, and
+        // a turn keeps at most one. Concatenating rather than replacing costs
+        // nothing and survives a row that somehow holds two.
+        markup += toText(entry.content)
+        break
+      case 'viz':
+        viz.push({
+          kind: toText(entry.kind),
+          spec:
+            entry.spec && typeof entry.spec === 'object' && !Array.isArray(entry.spec)
+              ? entry.spec
+              : {},
+          title: toText(entry.title),
+          source: toText(entry.source),
+          at: content.length,
+        })
         break
       case 'usage':
         // A row holds at most one, and the last is the running total anyway.
@@ -174,13 +200,25 @@ function hydrateMessage(row: ChatMessage, isLast: boolean): AgentMessage {
     }
   }
 
-  return createAgentMessage(role, toText(row.content), {
+  if (markup) {
+    // Last, so a turn that both drew a chart and composed markup keeps the
+    // charts ahead of it, which is the order _TurnRecorder wrote them in.
+    viz.push({
+      kind: OPENUI_VIZ,
+      spec: openUiSpec(markup),
+      title: '',
+      source: '',
+      at: content.length,
+    })
+  }
+
+  return createAgentMessage(role, content, {
     // Keyed on the row rather than on the hook's counter, so re-opening the
     // same conversation reuses React's nodes instead of remounting the thread.
     id: `stored-${row.id}`,
     tools: toTools(row.tools),
     notices,
-    ui,
+    viz,
     usage,
     pending,
     streaming: false,
