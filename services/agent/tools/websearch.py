@@ -1342,12 +1342,30 @@ class WebSearchToolkit(OpenAlgoToolkit):
         notices: list[str] = []
 
         if provider not in LINK_PROVIDERS:
-            notices.append(
-                "The configured provider is Perplexity, which answers questions rather than "
-                "returning links, so DuckDuckGo answered this search. Use web_research for a "
-                "Perplexity answer."
-            )
-            provider = PROVIDER_DUCKDUCKGO
+            # Perplexity answers questions rather than returning links, so a link
+            # search has to fall back. It falls back to Tavily when a Tavily key
+            # is stored, and only to DuckDuckGo otherwise.
+            #
+            # The order matters more than it looks. DuckDuckGo is keyless, which
+            # makes it the obvious default, but it scrapes several engines and
+            # rate limits under load: measured here at 21s and 24s against
+            # Tavily's 0.7s, and it has timed out outright. Falling back to it
+            # while a working Tavily key sat unused turned every link search into
+            # a wait long enough to read as a failure.
+            if _provider_key(PROVIDER_TAVILY):
+                notices.append(
+                    "The configured provider is Perplexity, which answers questions rather than "
+                    "returning links, so Tavily answered this search. Use web_research for a "
+                    "Perplexity answer."
+                )
+                provider = PROVIDER_TAVILY
+            else:
+                notices.append(
+                    "The configured provider is Perplexity, which answers questions rather than "
+                    "returning links, so DuckDuckGo answered this search. Use web_research for a "
+                    "Perplexity answer."
+                )
+                provider = PROVIDER_DUCKDUCKGO
 
         outcome: ProviderOutcome | None = None
 
