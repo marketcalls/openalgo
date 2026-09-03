@@ -6,6 +6,7 @@ Handles connection to Shoonya's market data streaming API
 import json
 import threading
 import time
+import weakref
 from collections import deque
 from collections.abc import Callable
 from typing import Any
@@ -13,6 +14,127 @@ from typing import Any
 import websocket
 
 from utils.logging import get_logger
+
+
+class _WeakCallback:
+    """Holds an external callback without keeping its owner alive.
+
+    Bound methods are stored via ``weakref.WeakMethod``. The adapter passes
+    ``self._on_message`` and friends, so a strong reference here would pin the
+    adapter to this client — and this client is pinned by its own running
+    threads, so neither object's ``__del__`` could ever run and the adapter's
+    ZMQ socket and bound port would leak with it. Plain functions have no owner
+    to leak, so they are held strongly.
+    """
+
+    __slots__ = ("_ref", "_strong")
+
+    def __init__(self, fn: Callable | None):
+        self._ref: weakref.WeakMethod | None = None
+        self._strong: Callable | None = None
+        if fn is None:
+            return
+        try:
+            self._ref = weakref.WeakMethod(fn)
+        except TypeError:
+            # Not a bound method (plain function, lambda, functools.partial)
+            self._strong = fn
+
+    def __bool__(self) -> bool:
+        return self._ref is not None or self._strong is not None
+
+    def resolve(self) -> Callable | None:
+        """Return the live callable, or None if its owner has been collected."""
+        if self._strong is not None:
+            return self._strong
+        if self._ref is not None:
+            return self._ref()
+        return None
+
+
+def _make_ws_runner(client: "ShoonyaWebSocket", ws: Any) -> Callable:
+    """Thread target that blocks in ``run_forever`` for the whole session.
+
+    ``_weak_dispatch`` is no good here: it would resolve the weakref and then
+    hold the client strongly in its frame for the entire connection. This
+    runner keeps only the ``WebSocketApp`` alive (it must, to run it) and
+    touches the client through a weakref, so an abandoned client stays
+    collectable while its socket is up.
+    """
+    ref = weakref.ref(client)
+    ping_interval = client.PING_INTERVAL
+    ping_timeout = client.PING_TIMEOUT
+
+    def runner() -> None:
+        try:
+            ws.run_forever(ping_interval=ping_interval, ping_timeout=ping_timeout)
+        except Exception as e:
+            target = ref()
+            if target is not None:
+                target.logger.error(f"WebSocket run error: {e}")
+        finally:
+            target = ref()
+            if target is not None:
+                target._cleanup_connection_state()
+
+    return runner
+
+
+def _make_heartbeat_runner(client: "ShoonyaWebSocket") -> Callable:
+    """Thread target for the heartbeat loop, holding the client weakly.
+
+    The loop resolves the weakref once per tick and drops it again before
+    waiting, so a client abandoned mid-session becomes collectable within one
+    HEARTBEAT_INTERVAL instead of being pinned forever.
+    """
+    ref = weakref.ref(client)
+
+    def runner() -> None:
+        while True:
+            target = ref()
+            if target is None:
+                return
+            # Grab what the wait needs, then drop the strong reference: holding
+            # it across a HEARTBEAT_INTERVAL sleep would keep an abandoned
+            # client (and its socket) alive for a whole interval.
+            interval = target.HEARTBEAT_INTERVAL
+            shutdown = target._shutdown_event
+            del target
+
+            if shutdown.wait(interval):
+                return
+            del shutdown
+
+            target = ref()
+            if target is None:
+                return
+            keep_going = target._heartbeat_beat()
+            del target
+            if not keep_going:
+                return
+
+    return runner
+
+
+def _weak_dispatch(obj: "ShoonyaWebSocket", method_name: str) -> Callable:
+    """Bind ``obj.method_name`` through a weak reference.
+
+    Used for the callbacks handed to ``websocket.WebSocketApp`` and for thread
+    targets: a bound method would make the WebSocketApp (and the thread running
+    it) keep this client alive forever, so dropping the last external reference
+    to a *connected* client would strand its socket and threads for the life of
+    the process. Going through a weakref lets the client become collectable,
+    at which point ``__del__`` runs ``stop()`` and the socket is released.
+    """
+    ref = weakref.ref(obj)
+
+    def dispatch(*args: Any, **kwargs: Any) -> Any:
+        target = ref()
+        if target is None:
+            return None
+        return getattr(target, method_name)(*args, **kwargs)
+
+    return dispatch
 
 
 class ShoonyaWebSocket:
@@ -96,11 +218,12 @@ class ShoonyaWebSocket:
         self.auth_failed = False
         self.auth_failure_reason: str | None = None
 
-        # Callbacks
-        self.on_message = on_message
-        self.on_error = on_error
-        self.on_close = on_close
-        self.on_open = on_open
+        # Callbacks — held weakly when they are bound methods so the owner
+        # (normally ShoonyaWebSocketAdapter) stays collectable. See _WeakCallback.
+        self.on_message = _WeakCallback(on_message)
+        self.on_error = _WeakCallback(on_error)
+        self.on_close = _WeakCallback(on_close)
+        self.on_open = _WeakCallback(on_open)
 
         # Heartbeat management
         self._heartbeat_thread = None
@@ -123,6 +246,13 @@ class ShoonyaWebSocket:
         self.logger = get_logger("shoonya_websocket")
 
     def __del__(self):
+        """Last-resort teardown for a client dropped without stop().
+
+        This only fires because the WebSocketApp, the run_forever thread and
+        the heartbeat thread all hold this object weakly. Reinstating any of
+        them as a bound method would silently make this dead code and strand
+        one socket plus three threads per abandoned client.
+        """
         try:
             self.stop()
         except Exception:
@@ -158,15 +288,19 @@ class ShoonyaWebSocket:
         self.auth_failed = False
         self.auth_failure_reason = None
 
+        # Weak dispatch: a bound method here would let the WebSocketApp — and
+        # the thread blocked in run_forever() — pin this client, so an
+        # abandoned connected client could never be collected and its socket
+        # would stay ESTABLISHED for the life of the process.
         self.ws = websocket.WebSocketApp(
             self.WS_URL,
-            on_open=self._on_open,
-            on_message=self._on_message,
-            on_error=self._on_error,
-            on_close=self._on_close,
+            on_open=_weak_dispatch(self, "_on_open"),
+            on_message=_weak_dispatch(self, "_on_message"),
+            on_error=_weak_dispatch(self, "_on_error"),
+            on_close=_weak_dispatch(self, "_on_close"),
         )
 
-        self.ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
+        self.ws_thread = threading.Thread(target=_make_ws_runner(self, self.ws), daemon=True)
         self.ws_thread.start()
 
     def _wait_for_connection(self) -> bool:
@@ -191,14 +325,8 @@ class ShoonyaWebSocket:
         self.stop()
         return False
 
-    def _run_websocket(self) -> None:
-        """Run the WebSocket connection with proper error handling"""
-        try:
-            self.ws.run_forever(ping_interval=self.PING_INTERVAL, ping_timeout=self.PING_TIMEOUT)
-        except Exception as e:
-            self.logger.error(f"WebSocket run error: {e}")
-        finally:
-            self._cleanup_connection_state()
+    # The run_forever loop lives in _make_ws_runner() rather than a bound
+    # method here, so the thread does not keep this client alive.
 
     def _cleanup_connection_state(self) -> None:
         """Clean up connection state"""
@@ -240,6 +368,13 @@ class ShoonyaWebSocket:
     # M3 fix: Null ws_thread after join to match _close_websocket pattern
     def _wait_for_thread_completion(self) -> None:
         """Wait for WebSocket thread to complete"""
+        # Guard against self-join, mirroring _stop_heartbeat. Now that the
+        # runner holds this client weakly, stop() can be reached from __del__
+        # while GC runs on the ws thread itself; joining there would deadlock
+        # until the timeout on every teardown.
+        if self.ws_thread is threading.current_thread():
+            self.ws_thread = None
+            return
         if self.ws_thread and self.ws_thread.is_alive():
             self.ws_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
             if self.ws_thread.is_alive():
@@ -378,11 +513,19 @@ class ShoonyaWebSocket:
             callback: Callback function to call
             *args: Arguments to pass to callback
         """
-        if callback:
-            try:
-                callback(*args)
-            except Exception as e:
-                self.logger.error(f"Error in external callback: {e}")
+        if not callback:
+            return
+        # Callbacks are _WeakCallback wrappers; tolerate a raw callable in case
+        # a caller reassigns one directly.
+        fn = callback.resolve() if isinstance(callback, _WeakCallback) else callback
+        if fn is None:
+            # Owner was garbage collected — it can no longer want these events.
+            self.logger.debug("Skipping callback: owner has been collected")
+            return
+        try:
+            fn(*args)
+        except Exception as e:
+            self.logger.error(f"Error in external callback: {e}")
 
     # Heartbeat Management
     def _update_last_message_time(self) -> None:
@@ -407,7 +550,9 @@ class ShoonyaWebSocket:
                 else:
                     return
 
-            self._heartbeat_thread = threading.Thread(target=self._heartbeat_worker, daemon=True)
+            self._heartbeat_thread = threading.Thread(
+                target=_make_heartbeat_runner(self), daemon=True
+            )
             self._heartbeat_thread.start()
             self.logger.debug("Heartbeat thread started")
 
@@ -428,24 +573,30 @@ class ShoonyaWebSocket:
             if self._heartbeat_thread is thread:
                 self._heartbeat_thread = None
 
-    def _heartbeat_worker(self) -> None:
-        """Heartbeat worker thread - sends periodic heartbeats and monitors connection"""
-        while self.running and self.connected:
-            try:
-                # Phase 8: interruptible — exit immediately on shutdown signal
-                if self._shutdown_event.wait(self.HEARTBEAT_INTERVAL):
-                    break
+    def _heartbeat_beat(self) -> bool:
+        """One beat of the heartbeat loop, run after the interval has elapsed.
 
-                if self.running and self.connected:
-                    if not self._send_heartbeat():
-                        break
+        Split out of the old _heartbeat_worker so the waiting happens in
+        _make_heartbeat_runner without a strong reference to this client — the
+        loop used to pin it for the life of the connection, which kept an
+        abandoned client's socket open indefinitely.
 
-                    if not self._check_connection_health():
-                        break
+        Returns:
+            bool: True to keep looping, False to stop the heartbeat thread.
+        """
+        try:
+            if not (self.running and self.connected):
+                return False
 
-            except Exception as e:
-                self.logger.error(f"Heartbeat worker error: {e}")
-                break
+            if not self._send_heartbeat():
+                return False
+
+            if not self._check_connection_health():
+                return False
+        except Exception as e:
+            self.logger.error(f"Heartbeat worker error: {e}")
+            return False
+        return True
 
     # L1 fix: Snapshot self.ws to prevent race with _close_websocket nulling it
     def _send_heartbeat(self) -> bool:
