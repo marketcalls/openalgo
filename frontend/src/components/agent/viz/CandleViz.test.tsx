@@ -25,10 +25,12 @@ interface ChartStub {
   options: Record<string, unknown>
   series: SeriesStub[]
   indicators: string[]
+  primitives: Array<{ primitive: unknown; pane: number }>
   destroyed: number
   fitted: number
   spacing: number[]
   addSeries: (type: string) => SeriesStub
+  addPrimitive: (primitive: unknown, pane: number) => void
   addIndicator: (id: string) => void
   fitContent: () => void
   timeScale: { barSpacing: number; setBarSpacing: (value: number) => void }
@@ -42,6 +44,7 @@ const harness = vi.hoisted(() => {
       options,
       series: [],
       indicators: [],
+      primitives: [],
       destroyed: 0,
       fitted: 0,
       spacing: [],
@@ -63,6 +66,9 @@ const harness = vi.hoisted(() => {
         chart.series.push(series)
         return series
       },
+      addPrimitive: (primitive: unknown, pane: number) => {
+        chart.primitives.push({ primitive, pane })
+      },
       addIndicator: (id: string) => {
         // An id this build does not know is exactly what the engine throws on.
         if (id === 'not-an-indicator') throw new Error('unknown indicator')
@@ -78,7 +84,16 @@ const harness = vi.hoisted(() => {
     charts.push(chart)
     return chart
   })
-  return { charts, createChart }
+  // The brand mark is a host-owned primitive, so the stub records what it was
+  // constructed with; the test below asserts the asset and the corner rather
+  // than merely that something was added.
+  class LogoWatermark {
+    options: Record<string, unknown>
+    constructor(options: Record<string, unknown>) {
+      this.options = options
+    }
+  }
+  return { charts, createChart, LogoWatermark }
 })
 
 vi.mock('openalgo-charts', () => ({
@@ -86,6 +101,7 @@ vi.mock('openalgo-charts', () => ({
   isValidTimezone: (zone: string) => zone === 'Asia/Kolkata',
   lightTheme: {},
   darkTheme: {},
+  LogoWatermark: harness.LogoWatermark,
 }))
 
 vi.mock('openalgo-charts/transform', () => ({
@@ -228,5 +244,23 @@ describe('CandleViz', () => {
 
     expect(await screen.findByText(/could not be drawn/)).toBeInTheDocument()
     expect(harness.createChart).not.toHaveBeenCalled()
+  })
+
+  it('carries the OpenAlgo mark by default', async () => {
+    // The library has no watermark option: the mark is a primitive the host
+    // adds, so a chart that never adds one simply has none, and nothing fails.
+    // That is how it went missing here while /trading kept its own. Pinned by
+    // the asset and the corner, not merely by something having been added.
+    render(<CandleViz spec={SPEC} title="RELIANCE NSE D" />)
+    await waitFor(() => expect(harness.charts).toHaveLength(1))
+
+    const marks = harness.charts[0].primitives
+    expect(marks).toHaveLength(1)
+    expect(marks[0].pane).toBe(0)
+
+    const options = (marks[0].primitive as { options: Record<string, unknown> }).options
+    expect(options.src).toBe('/images/openalgo-glyph.svg')
+    expect(options.position).toBe('bottom-left')
+    expect(options.label).toBe('OpenAlgo Charts')
   })
 })
