@@ -128,6 +128,13 @@ export function ModelPicker({
 
   const selectedLabel = selected?.display_name || selected?.model_name || 'Select a model'
   const showSearch = models.length > SEARCH_THRESHOLD
+  // Not every model thinks. GPT-4 and GPT-4o take no reasoning effort, and the
+  // backend refuses to send one for them whatever is asked, so offering the
+  // menu would be a control that silently does nothing. The row's flag is
+  // resolved against LiteLLM's own table on the server, so this is the same
+  // answer the run will act on rather than a second opinion.
+  const canReason = selected?.supports_reasoning ?? false
+  const showEffort = Boolean(onEffortChange) && canReason
 
   const modelList = (
     <>
@@ -190,7 +197,7 @@ export function ModelPicker({
           aria-label={`Model ${selectedLabel}, reasoning ${effortLabel(effort)}. Change either.`}
         >
           <span className="max-w-[12rem] truncate">{selectedLabel}</span>
-          {onEffortChange && (
+          {showEffort && (
             <span className="shrink-0 text-muted-foreground">{effortLabel(effort)}</span>
           )}
           <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" aria-hidden />
@@ -198,14 +205,14 @@ export function ModelPicker({
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="end" className="min-w-[13rem]">
-        {onEffortChange ? (
+        {showEffort ? (
           <>
             <DropdownMenuLabel className="text-[11px] tracking-wide text-muted-foreground uppercase">
               Reasoning effort
             </DropdownMenuLabel>
             <DropdownMenuRadioGroup
               value={effort}
-              onValueChange={(next) => onEffortChange(next as ReasoningEffort)}
+              onValueChange={(next) => onEffortChange?.(next as ReasoningEffort)}
             >
               {EFFORTS.map((item) => (
                 <DropdownMenuRadioItem key={item.value} value={item.value} className="text-xs">
@@ -243,6 +250,15 @@ export function ModelPicker({
               Model
             </DropdownMenuLabel>
             {modelList}
+            {Boolean(onEffortChange) && !canReason && (
+              <>
+                <DropdownMenuSeparator />
+                <p className="px-2 py-1.5 text-[11px] text-muted-foreground">
+                  {selectedLabel} does not take a reasoning effort. Pick a reasoning model to
+                  control how hard it thinks.
+                </p>
+              </>
+            )}
           </>
         )}
       </DropdownMenuContent>
