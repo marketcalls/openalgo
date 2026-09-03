@@ -1,8 +1,8 @@
 import {
   BarChart3,
   Bell,
-  Bot,
   BookOpen,
+  Bot,
   Boxes,
   CandlestickChart,
   ClipboardList,
@@ -21,7 +21,6 @@ import {
   MessageSquare,
   Search,
   Settings,
-  SlidersHorizontal,
   TrendingUp,
   User,
   Workflow,
@@ -72,12 +71,11 @@ export const profileMenuItems: NavItem[] = [
   // main navbar on that understanding and a test pins the adjacency, so a new
   // entry goes after it rather than between the two.
   { href: '/action-center', label: 'Action Center', icon: Bell },
+  // Agent Config is NOT here. It lives under /admin with the other
+  // configuration surfaces. The chat header carries its own settings control,
+  // so a configured /agent still has a route back to its settings without this
+  // menu holding one.
   { href: '/agent', label: 'Agent', icon: Bot },
-  // Listed beside Agent rather than hidden inside it. Once a model is
-  // configured /agent renders the conversation, which carries no route back
-  // here, so an entry in this menu is the only way a returning operator reaches
-  // the settings again.
-  { href: '/agent/config', label: 'Agent Config', icon: SlidersHorizontal },
   { href: '/master-contract', label: 'Master Contract', icon: FileStack },
   { href: '/telegram', label: 'Telegram Bot', icon: MessageSquare },
   { href: '/whatsapp', label: 'WhatsApp Bot', icon: MessageCircle },
