@@ -390,8 +390,26 @@ We do not use `arun`. There is no asyncio anywhere in this module.
 | `chart_command` | `commands: [...]` |
 | `confirm` | `run_id`, `session_id`, `requirements: [...]` |
 | `notice` | `level`, `message` |
+| `usage` | `input_tokens`, `output_tokens`, `total_tokens`, `cached_tokens`, `reasoning_tokens`, `cost_usd`, `model`, `ttft_ms` |
 | `error` | `message`, `kind` |
 | `done` | `reason` (`stop`/`cancelled`/`incomplete`) |
+
+### Token usage and cost
+
+Agno reports this without extra work: `ModelRequestCompletedEvent` carries
+`input_tokens`, `output_tokens`, `total_tokens`, `time_to_first_token`,
+`reasoning_tokens`, `cache_read_tokens` and `cache_write_tokens`, and
+`RunCompletedEvent` carries `metrics`.
+
+**Cost is computed locally, never guessed.** `litellm.model_cost` already gives
+`input_cost_per_token` and `output_cost_per_token` for the model in use, and the
+catalog is read anyway, so cost is arithmetic rather than a second API call.
+A model absent from `model_cost` reports tokens with `cost_usd: null`; showing
+tokens and admitting the price is unknown beats inventing a number.
+
+The UI shows per-turn usage under each answer and a running total for the
+conversation. Usage is persisted on the message row so a reloaded conversation
+still shows what it cost.
 
 Three measured agno behaviours the translator must handle:
 

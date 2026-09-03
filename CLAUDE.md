@@ -293,6 +293,38 @@ The reason to still register a route in `blueprints/react_app.py` is that
 unregistered paths hit `Error404Tracker` for *unauthenticated* visitors and
 count toward an IP ban.
 
+### Adding a page: the three registrations
+
+A new page is not done until all three are present. Miss the second and the
+page works until someone opens a bookmark while logged out; miss the third and
+nobody finds it.
+
+1. **The route, in `frontend/src/App.tsx`** — a `lazy()` import plus a `<Route>`
+   inside the right layout wrapper. `Layout` is the standard sidebar shell;
+   `FullWidthLayout` is for canvas-style pages like the Flow editor.
+
+2. **The same path, in `blueprints/react_app.py`** — a view that only calls
+   `serve_react_app()`:
+
+   ```python
+   @react_bp.route("/agent", strict_slashes=False)
+   def react_agent():
+       return serve_react_app()
+   ```
+
+   It serves nothing different. It exists so a direct hit or a refresh on that
+   path is a *known* route rather than a 404 counted against the visitor's IP.
+   Register every path the page owns, including its parameterised children.
+
+3. **The nav entry, in `frontend/src/config/navigation.ts`** — usually
+   `profileMenuItems`. Entries are shown unfiltered; the filtering in
+   `useProfileMenuItems.ts` is for **broker capabilities** (Leverage, Holdings),
+   not for whether a feature has been configured yet. A feature that needs
+   setup shows its own setup screen on the page, as Telegram and WhatsApp do.
+
+Add the nav entry in the same change as the route. A menu item pointing at a
+path that does not resolve is worse than no menu item.
+
 ## Symbol Format
 
 Standardized across all brokers; broker-specific symbols are mapped via
