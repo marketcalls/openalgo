@@ -146,11 +146,13 @@ The `data` object above is abridged for readability. A real response always carr
 | data | object | The strategy's full configuration, including `legs` |
 | run | object or null | The current run, or `null` when the strategy is not running |
 
-`data` carries the same fields as a [list](./list.md) row, plus:
+`data` carries the same fields as a [list](./list.md) row, with one omission and one addition. It does **not** carry `last_finalized_run`, which the list builds by joining each strategy's most recently finalised run; read the newest row from [`/runs`](./runs.md) instead. It adds:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | legs | array | The leg configuration as the wizard saved it |
+
+Each leg carries `risk_unit`, `points` (the default) or `percent`, which governs that leg's `sl_pts`, `target_pts` and `trail` together. A percentage is measured against the leg's own entry price, so 2 on a short filled at 2500 is a stop at 2550. Every saved leg carries the field even when it was defaulted.
 
 `run`:
 

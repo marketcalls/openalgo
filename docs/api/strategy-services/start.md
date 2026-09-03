@@ -171,7 +171,7 @@ Each object in `legs`:
 - **Live is opt-in per strategy.** A strategy is created sandbox-only. Enable live trading on the strategy page at `/strategy` before asking for `mode: "live"`. This endpoint cannot enable it.
 - **Starting is idempotent by conflict, not by silence.** A second start against a running strategy answers 409, so two triggers firing at the same instant cannot both place a full set of entries.
 - A start through this API records `trigger_source: "manual"` on the run.
-- A run whose entry orders were **all** rejected is closed immediately and the call answers 400 with `Every entry order was rejected`: a running strategy holding nothing would be worse than none.
+- A run whose entry orders were **all** rejected is closed immediately and the call answers 400: a running strategy holding nothing would be worse than none. The message carries the venue's own words, so `Every entry order was rejected: MIS orders cannot be placed after square-off time (15:15 IST). Trading resumes at 09:00 AM IST.` rather than the bare sentence. When the legs were refused for different reasons each is listed against the leg it belongs to.
 - Partial success is a 200. Check `legs[].ok` rather than assuming every leg is in the market.
 - **`ok: true, acknowledged: false` is a real broker order with incomplete
   database attribution.** The intent row was durable before dispatch and the
@@ -181,7 +181,7 @@ Each object in `legs`:
   reconciliation. Conflicts remain managed and reserved rather than retrying
   the entry or asserting flatness.
 - Long legs are placed before short legs. On a spread, a short leg alone can be refused for margin the account would have had once the long leg existed.
-- This endpoint is for `batch` strategies. A `signal` strategy has no start: its first inbound signal after the platform session boundary opens the run. See the [webhook page](./webhook.md).
+- This endpoint is for `batch` strategies, and enforces it. A `signal` strategy has no start: its first inbound signal after the platform session boundary opens the run, so a start against one answers 400 with `A signal strategy has no start. Its run opens on the first long_entry or short_entry signal after the session boundary.` and nothing is claimed or resolved. See the [webhook page](./webhook.md).
 
 ## Use Cases
 

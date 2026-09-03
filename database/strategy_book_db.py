@@ -67,6 +67,7 @@ _initialized = False
 class StrategyBookUnavailable(RuntimeError):
     """The per-strategy book could not be read, so its figures are unknown."""
 
+
 engine = create_db_engine()
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
@@ -176,12 +177,29 @@ def _prune_old_tags() -> None:
             .filter(StrategyOrderTag.created_at < cutoff)
             .delete(synchronize_session=False)
         )
+        # Committed whether or not anything matched. The DELETE opens SQLite's
+        # write transaction the moment it runs, and a prune that matches
+        # nothing is the ordinary case, so committing only when `removed` was
+        # truthy left that transaction open on this thread's session.
+        #
+        # This runs from app startup, inside the single app context that wraps
+        # the whole of `_init_databases_and_schedulers`. `teardown_appcontext`
+        # therefore does not fire until every startup step has finished, so the
+        # write lock was held straight through the ones that still had writing
+        # to do. Every other writer on openalgo.db backed off for its full
+        # budget and failed with "database is locked", strategy recovery among
+        # them, which is how a run that was already finished stayed open across
+        # every restart.
+        db_session.commit()
         if removed:
-            db_session.commit()
             logger.info(f"Strategy book: pruned {removed} order tag(s) past retention")
     except Exception:
         db_session.rollback()
         logger.exception("Could not prune old order tags")
+    finally:
+        # Released here rather than left to the context teardown, which does
+        # not run until the rest of startup has finished.
+        db_session.remove()
 
 
 def _migrate_add_columns():
@@ -347,8 +365,11 @@ def _prune_pending_fills() -> None:
             .filter(StrategyPendingFill.created_at < cutoff)
             .delete(synchronize_session=False)
         )
+        # Unconditionally, for the reason given in _prune_old_tags: the DELETE
+        # takes the write lock whether or not it matches a row, so a commit
+        # guarded on the row count leaves the transaction open.
+        db_session.commit()
         if removed:
-            db_session.commit()
             # The bulk delete bypasses the identity map; drop the stale entries
             # so a reused primary key does not warn on the next flush.
             db_session.expire_all()
