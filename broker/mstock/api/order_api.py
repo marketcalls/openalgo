@@ -214,7 +214,7 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
             positions_data.get("status"),
             len(positions_data.get("data") or []),
         )
-    logger.debug(f"Positions data: {positions_data}")
+    logger.debug("Positions data: %s", positions_data)
 
     net_qty = "0"
 

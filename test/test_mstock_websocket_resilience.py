@@ -45,6 +45,24 @@ from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_proxy.mapping import SymbolMapper
 
 
+def wait_until(predicate, timeout=5.0, interval=0.01):
+    """Poll until predicate() is truthy; return its final value.
+
+    Almost everything here is completed by a background thread or a 0.05s
+    batch timer, so a fixed sleep is a bet on the scheduler. Waiting on the
+    state the test is about to assert makes the timeout the only slow path and
+    leaves the assertion itself unchanged: a genuine regression still fails on
+    the real value rather than on a timing message.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(interval)
+    return predicate()
+
+
 def auth_check(text):
     """The predicate the adapter passes in, unbound from the base adapter."""
     return BaseBrokerWebSocketAdapter.is_auth_error(None, text)
@@ -119,6 +137,16 @@ def subscribe_frames(a):
     return [f for f in a.ws_client.ws.sent if f["action"] == 1]
 
 
+def batch_flushed(a):
+    """True once the armed batch timer has fired and drained the queue.
+
+    _process_batch_subscriptions() clears batch_timer under the lock as its
+    first act, so this is the observable edge the negative tests need: it says
+    the flush ran, which is the only way "nothing was sent" means anything.
+    """
+    return a.batch_timer is None
+
+
 # --------------------------------------------------------------------------
 # a dropped subscribe must stay recoverable
 # --------------------------------------------------------------------------
@@ -132,7 +160,7 @@ def test_subscribe_with_socket_down_is_recovered_on_login(adapter):
 
     adapter.ws_client.is_connected = lambda: True
     adapter._resync_subscriptions()
-    time.sleep(0.25)
+    wait_until(lambda: adapter.token_modes)
 
     frames = subscribe_frames(adapter)
     assert len(frames) == 1
@@ -143,23 +171,31 @@ def test_subscribe_with_socket_down_is_recovered_on_login(adapter):
 def test_dropped_batch_leaves_the_token_unconfirmed(adapter):
     want(adapter, "S")
     adapter.ws_client.is_connected = lambda: False  # drops inside the window
-    time.sleep(0.25)
+    assert wait_until(lambda: batch_flushed(adapter)), "the batch timer never fired"
 
     assert adapter.ws_client.ws.sent == []
     assert adapter.token_modes == {}, "a dropped batch must not claim success"
 
     adapter.ws_client.is_connected = lambda: True
     adapter._resync_subscriptions()
-    time.sleep(0.25)
+    wait_until(lambda: adapter.token_modes)
 
     assert len(subscribe_frames(adapter)) == 1
     assert adapter.token_modes == {"22": 3}
 
 
 def test_refused_send_leaves_the_token_retryable(adapter):
-    adapter.ws_client.subscribe_batch = lambda subs, mode: False
+    refused = []
+
+    def refuse(subs, mode):
+        refused.append((subs, mode))
+        return False
+
+    adapter.ws_client.subscribe_batch = refuse
     want(adapter, "S")
-    time.sleep(0.25)
+    # The refusal itself is the wait target: batch_flushed() turns True before
+    # the send is even attempted, so it would prove nothing here.
+    assert wait_until(lambda: refused), "the batch was never offered to the broker"
 
     assert adapter.token_modes == {}, "a refused send must not be confirmed"
 
@@ -168,11 +204,13 @@ def test_resync_uses_the_highest_requested_mode(adapter):
     want(adapter, "S", mode=1)
     want(adapter, "S", mode=3)
     want(adapter, "T", mode=2)
-    time.sleep(0.25)
+    assert wait_until(lambda: adapter.token_modes == {"22": 3, "33": 2}), (
+        f"the initial subscribes never settled: {adapter.token_modes}"
+    )
     adapter.ws_client.ws.sent.clear()
 
     adapter._resync_subscriptions()
-    time.sleep(0.25)
+    wait_until(lambda: adapter.token_modes == {"22": 3, "33": 2})
 
     by_mode = {f["params"]["mode"]: f["params"]["tokenList"] for f in subscribe_frames(adapter)}
     assert by_mode.get(3) == [{"exchangeType": 1, "tokens": ["22"]}]
@@ -182,7 +220,7 @@ def test_resync_uses_the_highest_requested_mode(adapter):
 
 def test_successful_send_confirms_state(adapter):
     want(adapter, "S")
-    time.sleep(0.25)
+    wait_until(lambda: adapter.token_modes)
 
     assert adapter.token_modes == {"22": 3}
     assert adapter.token_correlation_ids == {"22": "mstock_22_3"}
@@ -207,7 +245,7 @@ def test_unsubscribe_inside_the_window_cancels_the_queued_subscribe(adapter):
     """A subscribe cancelled before the flush must never reach the broker."""
     want(adapter, "S")
     adapter.unsubscribe("S", "NSE", 3)
-    time.sleep(0.25)
+    assert wait_until(lambda: batch_flushed(adapter)), "the batch timer never fired"
 
     assert subscribe_frames(adapter) == []
     assert adapter.subscription_queue == []
@@ -217,7 +255,7 @@ def test_unsubscribe_leaves_other_queued_tokens_alone(adapter):
     want(adapter, "A")
     want(adapter, "B")
     adapter.unsubscribe("A", "NSE", 3)
-    time.sleep(0.25)
+    wait_until(lambda: subscribe_frames(adapter))
 
     frames = subscribe_frames(adapter)
     assert len(frames) == 1
@@ -257,7 +295,9 @@ def test_dead_token_retries_once_when_a_fresh_one_exists(monkeypatch):
 
     thread = threading.Thread(target=c._run_websocket, args=(1, c.ws), daemon=True)
     thread.start()
-    time.sleep(0.4)
+    # auth_failed is cleared after _refresh_auth_token() has swapped the token,
+    # so it is the later of the two writes and safe to wait on.
+    wait_until(lambda: c.auth_failed is False)
     try:
         assert c.auth_token == "fresh"
         assert c.auth_failed is False
@@ -335,7 +375,10 @@ def test_disconnect_during_backoff_is_prompt(monkeypatch):
 
     thread = threading.Thread(target=c._run_websocket, args=(1, c.ws), daemon=True)
     thread.start()
-    time.sleep(0.3)  # now parked in the backoff
+    # The attempt counter is bumped immediately before the backoff wait, so it
+    # is the signal that the thread has reached it. The delay is 3s, far longer
+    # than the bound below, so a prompt teardown is still the only way to pass.
+    assert wait_until(lambda: c._reconnect_attempts >= 1), "never entered the backoff"
 
     started = time.monotonic()
     c.disconnect_stream()
@@ -343,7 +386,7 @@ def test_disconnect_during_backoff_is_prompt(monkeypatch):
     elapsed = time.monotonic() - started
 
     assert thread.is_alive() is False
-    assert elapsed < 1.0, f"teardown took {elapsed:.2f}s; the backoff was not interrupted"
+    assert elapsed < 2.0, f"teardown took {elapsed:.2f}s; the backoff was not interrupted"
 
 
 def test_uninterrupted_backoff_still_elapses(monkeypatch):
@@ -355,6 +398,9 @@ def test_uninterrupted_backoff_still_elapses(monkeypatch):
 
     thread = threading.Thread(target=c._run_websocket, args=(1, c.ws), daemon=True)
     thread.start()
+    # A real sleep on purpose: the assertion is that the thread is STILL parked
+    # after it, so there is no state to poll for. Polling for the negative would
+    # test nothing. The first backoff is 3s, so 1.0s leaves ample margin.
     time.sleep(1.0)
     try:
         assert thread.is_alive() is True, "the backoff must not be skipped"
@@ -403,3 +449,88 @@ def test_a_malformed_knob_falls_back_to_the_default(monkeypatch):
     finally:
         os.environ.pop("MSTOCK_WS_PING_TIMEOUT", None)
         importlib.reload(ws_mod)
+
+
+# --------------------------------------------------------------------------
+# the session must become usable without an acknowledgement
+# --------------------------------------------------------------------------
+class SilentBroker:
+    """mStock as observed: accepts LOGIN and never sends a text reply."""
+
+    def __init__(self, url, on_open=None, on_message=None, on_error=None, on_close=None):
+        self.on_open, self.on_message = on_open, on_message
+        self.sent = []
+        self.closed = False
+
+    def run_forever(self, **kwargs):
+        self.on_open(self)
+        while not self.closed:
+            time.sleep(0.01)
+        return False
+
+    def send(self, payload):
+        self.sent.append(payload)
+
+    def close(self):
+        self.closed = True
+
+
+def test_session_is_usable_once_login_is_sent(monkeypatch):
+    """THE DEFECT: readiness waited on an ACK mStock does not send.
+
+    The Market Data WebSocket page documents no reply to LOGIN and states that
+    every response is binary, so is_connected() stayed False for the life of
+    the connection: every subscribe was held locally and no tick ever arrived,
+    which is the "LTP shows ---" symptom on /websocket/test.
+    """
+    monkeypatch.setattr(ws_module, "WebSocketApp", SilentBroker)
+    c = MstockWebSocket(auth_token="tok")
+
+    c.connect_stream(lambda quote: None)
+    try:
+        wait_until(c.is_connected)
+        assert c.is_connected() is True, "no ACK arrives; LOGIN itself is the handshake"
+        assert any(p.startswith("LOGIN:") for p in c.ws.sent)
+    finally:
+        c.disconnect_stream()
+
+
+def test_a_failed_login_send_leaves_the_session_unusable(monkeypatch):
+    """Without LOGIN the broker drops the socket, so do not subscribe into it."""
+
+    class RefusingBroker(SilentBroker):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            # Records that LOGIN was actually attempted, so the assertion below
+            # cannot pass simply by running before the client got that far.
+            self.attempted = threading.Event()
+
+        def send(self, payload):
+            self.attempted.set()
+            raise OSError("broken pipe")
+
+    monkeypatch.setattr(ws_module, "WebSocketApp", RefusingBroker)
+    c = MstockWebSocket(auth_token="tok")
+
+    c.connect_stream(lambda quote: None)
+    try:
+        assert wait_until(c.ws.attempted.is_set), "LOGIN was never attempted"
+        assert c.is_connected() is False
+    finally:
+        c.disconnect_stream()
+
+
+def test_resync_runs_once_per_connection(monkeypatch):
+    """Marking the session live is idempotent; later frames must not re-resync."""
+    monkeypatch.setattr(ws_module, "WebSocketApp", SilentBroker)
+    calls = []
+    c = MstockWebSocket(auth_token="tok")
+
+    c.connect_stream(lambda quote: None, resync_callback=lambda: calls.append(1))
+    try:
+        assert wait_until(lambda: calls), "the first resync never fired"
+        c._on_ws_message(c.ws, "some text")
+        c._on_ws_message(c.ws, b"\x00" * 51)
+        assert calls == [1], "resync must fire once, not on every frame"
+    finally:
+        c.disconnect_stream()

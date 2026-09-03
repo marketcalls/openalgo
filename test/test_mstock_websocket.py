@@ -258,7 +258,10 @@ class FakeConn:
             raise ConnectionResetError("connection reset by peer")
 
     def recv(self):
-        return snap_packet() if self.behaviour == "good" else b""
+        # "close_raises" is a *successful* read whose close() then fails: the
+        # point of that case is that the raising close() must not replace the
+        # quote the caller is about to get, which an empty read could not show.
+        return snap_packet() if self.behaviour in ("good", "close_raises") else b""
 
     def close(self):
         self.closed = True
@@ -308,10 +311,19 @@ def test_no_quote_path_closes(quote_client):
 
 
 def test_close_failure_does_not_mask_the_result(quote_client):
-    """A raising close() must not replace what the caller gets."""
+    """A raising close() must not replace what the caller gets.
+
+    The read succeeds and the quote is already the return value when close()
+    raises in the finally. Asserting the quote, not None, is what pins this:
+    letting that exception escape would turn a good fetch into None (or worse,
+    a raise) at the call site.
+    """
     quote_client.install("close_raises")
 
-    assert quote_client.fetch_quote("22", 1, mode=3) is None
+    quote = quote_client.fetch_quote("22", 1, mode=3)
+
+    assert quote is not None, "a failing close() must not swallow the quote"
+    assert quote["token"] == "22"
     assert FakeConn.created[0].closed is True
 
 

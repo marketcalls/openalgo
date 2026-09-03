@@ -6,6 +6,7 @@ event loop conflicts with eventlet in gunicorn+eventlet deployments.
 """
 
 import json
+import math
 import os
 import ssl
 import struct
@@ -21,20 +22,30 @@ logger = get_logger(__name__)
 
 
 def _env_float(name: str, default: float) -> float:
-    """Read a tuning knob from the environment, falling back on a bad value."""
+    """Read a tuning knob from the environment, falling back on a bad value.
+
+    Non-finite values are rejected: "nan" and "inf" parse cleanly as floats but
+    blow up the int() cast below, which would crash module import - and this
+    module is imported at startup, so a stray .env value would take the whole
+    app down rather than degrading one broker.
+    """
     raw = os.getenv(name)
     if raw is None or not str(raw).strip():
         return default
     try:
-        return float(raw)
+        value = float(raw)
     except (TypeError, ValueError):
         logger.warning(f"{name}={raw!r} is not a number; using {default}")
         return default
+    if not math.isfinite(value):
+        logger.warning(f"{name}={raw!r} is not finite; using {default}")
+        return default
+    return value
 
 
 # Reconnect and keepalive tuning. Defaults match the previous hardcoded values;
 # every one is overridable from .env so a deployment can tune without a patch.
-RECONNECT_MAX_ATTEMPTS = int(_env_float("MSTOCK_WS_MAX_RECONNECT_ATTEMPTS", 10))
+RECONNECT_MAX_ATTEMPTS = max(1, int(_env_float("MSTOCK_WS_MAX_RECONNECT_ATTEMPTS", 10)))
 RECONNECT_MAX_DELAY = _env_float("MSTOCK_WS_RECONNECT_MAX_DELAY", 60.0)
 RECONNECT_BASE_DELAY = _env_float("MSTOCK_WS_RECONNECT_BASE_DELAY", 2.0)
 PING_INTERVAL = _env_float("MSTOCK_WS_PING_INTERVAL", 20.0)
@@ -75,10 +86,16 @@ class MstockWebSocket:
         # state, which is authoritative: this dict only holds what was actually
         # sent, so a subscribe made while the socket was down is absent here.
         self.resync_callback = None
+        # Optional zero-arg callable invoked when the feed gives up for good, so
+        # the owner can stop advertising a connection that will never recover.
+        self.auth_failure_callback = None
         self.subscriptions: dict[str, dict] = {}
         self._ws_thread: threading.Thread | None = None
         self._logged_in = False
         self._login_event = threading.Event()
+        # Guards generation reads paired with a write to self.ws, so a retiring
+        # thread cannot install its app after a newer one has published.
+        self._state_lock = threading.Lock()
         # Set by disconnect_stream() to cut the reconnect backoff short. A plain
         # time.sleep() made teardown wait out the full delay - up to the max -
         # before the loop could notice it had been asked to stop.
@@ -304,6 +321,10 @@ class MstockWebSocket:
         # discard a shorter LTP or Quote frame outright.
         if packet_size <= 0 or packet_size > len(data) - 4:
             fallback = len(data) - 4
+            if fallback <= 0:
+                # A header with no payload behind it; nothing to divide into.
+                logger.error(f"Invalid frame size: {len(data)} bytes")
+                return []
             logger.warning(
                 f"Unexpected packet size {packet_size} in frame header; assuming {fallback}"
             )
@@ -329,7 +350,7 @@ class MstockWebSocket:
 
     # ==================== Streaming Mode Methods ====================
 
-    def connect_stream(self, data_callback, resync_callback=None):
+    def connect_stream(self, data_callback, resync_callback=None, auth_failure_callback=None):
         """
         Start persistent WebSocket connection for streaming data.
         Returns immediately — connection happens in background thread.
@@ -339,6 +360,7 @@ class MstockWebSocket:
         """
         self.data_callback = data_callback
         self.resync_callback = resync_callback
+        self.auth_failure_callback = auth_failure_callback
         self.running = True
         self._logged_in = False
         self._login_event.clear()
@@ -354,17 +376,11 @@ class MstockWebSocket:
             except Exception as close_err:
                 logger.debug(f"Error closing previous WebSocket: {close_err}")
 
-        self._generation += 1
-        generation = self._generation
-
-        app = websocket.WebSocketApp(
-            self.ws_url,
-            on_open=self._on_ws_open,
-            on_message=self._on_ws_message,
-            on_error=self._on_ws_error,
-            on_close=self._on_ws_close,
-        )
-        self.ws = app
+        with self._state_lock:
+            self._generation += 1
+            generation = self._generation
+            app = self._build_app(generation)
+            self.ws = app
 
         # The thread owns its own app reference: reading self.ws inside the loop
         # would let one generation drive another's connection.
@@ -417,6 +433,16 @@ class MstockWebSocket:
                         f"({self.auth_failure_reason}); stopping reconnect until next login"
                     )
                     self.running = False
+                    self._connected = False
+                    self._logged_in = False
+                    # The feed is dead until a new login. Tell the owner, or it
+                    # keeps advertising connected=True and the proxy serves a
+                    # cached adapter that will never produce a tick again.
+                    if self.auth_failure_callback is not None:
+                        try:
+                            self.auth_failure_callback()
+                        except Exception:
+                            logger.exception("mstock auth_failure_callback failed")
                     break
 
             self._reconnect_attempts += 1
@@ -457,17 +483,75 @@ class MstockWebSocket:
             except Exception as close_err:
                 logger.debug(f"Error closing previous WebSocket app: {close_err}")
 
-            # Recreate WebSocketApp for reconnection
-            app = websocket.WebSocketApp(
-                self.ws_url,
-                on_open=self._on_ws_open,
-                on_message=self._on_ws_message,
-                on_error=self._on_ws_error,
-                on_close=self._on_ws_close,
-            )
-            if not self.running or generation != self._generation:
-                break
-            self.ws = app
+            # Recreate WebSocketApp for reconnection. The generation check and
+            # the publication happen under one lock: tested separately, a
+            # retiring thread could pass the check and then overwrite an app a
+            # newer connect_stream() had already installed.
+            with self._state_lock:
+                if not self.running or generation != self._generation:
+                    break
+                app = self._build_app(generation)
+                self.ws = app
+
+    def _build_app(self, generation: int):
+        """Build a WebSocketApp whose callbacks are scoped to one generation.
+
+        The handlers mutate shared flags (_connected, _logged_in). Bound
+        directly, a retiring connection's close or error callback would clear
+        the flags belonging to the connection that replaced it, leaving a live
+        socket marked down.
+        """
+
+        def guard(handler):
+            def wrapper(*args, **kwargs):
+                if generation != self._generation:
+                    logger.debug(
+                        f"Ignoring {handler.__name__} from retired generation {generation}"
+                    )
+                    return None
+                return handler(*args, **kwargs)
+
+            return wrapper
+
+        return websocket.WebSocketApp(
+            self.ws_url,
+            on_open=guard(self._on_ws_open),
+            on_message=guard(self._on_ws_message),
+            on_error=guard(self._on_ws_error),
+            on_close=guard(self._on_ws_close),
+        )
+
+    def _mark_logged_in(self, reason: str) -> None:
+        """
+        Mark the session usable and resubscribe, once per connection.
+
+        mStock documents no acknowledgement for the LOGIN frame - the Market
+        Data WebSocket page says only that the frame must be sent promptly or
+        the socket is dropped, and that every response is binary. Waiting for a
+        text reply therefore left is_connected() False for the life of the
+        connection, so every subscribe was held locally and no tick ever
+        arrived. Sending LOGIN is the handshake; any inbound frame confirms it.
+        """
+        if self._logged_in:
+            return
+
+        self._logged_in = True
+        self._login_event.set()
+        self.auth_failed = False
+        self.auth_failure_reason = None
+        self._reconnect_attempts = 0
+        logger.info(f"mstock session ready ({reason})")
+
+        # Prefer the owner's resync: this client's dict only records what was
+        # actually sent, so replaying it would silently skip any subscription
+        # made while the socket was down.
+        if self.resync_callback is not None:
+            try:
+                self.resync_callback()
+            except Exception:
+                logger.exception("mstock resync callback failed")
+        else:
+            self._resubscribe_all()
 
     def _on_ws_open(self, ws):
         """Called when WebSocket connection is opened"""
@@ -477,8 +561,19 @@ class MstockWebSocket:
 
         # Send LOGIN message
         login_msg = f"LOGIN:{self.auth_token}"
-        ws.send(login_msg)
+        try:
+            ws.send(login_msg)
+        except Exception:
+            # Without LOGIN the broker drops the socket; leave the session
+            # unusable so the reconnect loop retries rather than subscribing
+            # into a connection that is about to close.
+            logger.exception("mstock LOGIN send failed; leaving session unauthenticated")
+            return
         logger.debug("Sent LOGIN message")
+
+        # The handshake is complete once LOGIN is away - there is no ACK to
+        # wait for, and gating readiness on one stalls the feed permanently.
+        self._mark_logged_in("LOGIN sent")
 
     def _on_ws_message(self, ws, message):
         """Called for both binary and text messages"""
@@ -488,30 +583,14 @@ class MstockWebSocket:
             # set of sizes here dropped header-prefixed LTP/Quote frames before
             # the parser ever saw them.
             if message:
+                # Data proves the session is live, whatever the handshake did.
+                self._mark_logged_in("binary frame received")
                 for quote_data in self.parse_binary_message(message):
                     if self.data_callback:
                         self.data_callback(quote_data)
         elif isinstance(message, str):
             logger.debug(f"Received string message: {message}")
-            # Mark as logged in after receiving login response
-            if not self._logged_in:
-                self._logged_in = True
-                self._login_event.set()
-                logger.info("mstock login confirmed")
-                self.auth_failed = False
-                self.auth_failure_reason = None
-                self._reconnect_attempts = 0
-
-                # Prefer the owner's resync: this client's dict only records
-                # what was actually sent, so replaying it would silently skip
-                # any subscription made while the socket was down.
-                if self.resync_callback is not None:
-                    try:
-                        self.resync_callback()
-                    except Exception:
-                        logger.exception("mstock resync callback failed")
-                else:
-                    self._resubscribe_all()
+            self._mark_logged_in("text frame received")
 
     def _is_auth_error(self, detail) -> bool:
         """True when the broker refused the handshake over a dead credential."""

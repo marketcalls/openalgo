@@ -114,9 +114,21 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.running = True
 
         # Start streaming — returns immediately (same as Angel/Upstox pattern)
-        self.ws_client.connect_stream(self._on_data, resync_callback=self._resync_subscriptions)
+        self.ws_client.connect_stream(
+            self._on_data,
+            resync_callback=self._resync_subscriptions,
+            auth_failure_callback=self._on_auth_failure,
+        )
         self.connected = True
         self.logger.info("mstock WebSocket adapter connected")
+
+    def _on_auth_failure(self) -> None:
+        """Stop advertising a feed that will not recover without a new login."""
+        self.connected = False
+        self.logger.error(
+            "mstock feed stopped on an auth failure; marking the adapter "
+            "disconnected so it is rebuilt on the next login"
+        )
 
     def _on_data(self, quote_data: dict) -> None:
         """Callback function called when data is received from WebSocket"""
@@ -445,13 +457,23 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # already prunes the queue, so this only catches an unsubscribe that
         # landed between the drain above and here.
         with self.lock:
-            live_tokens = {str(sub["token"]) for sub in self.subscriptions.values()}
-        dropped = [token for token in latest if token not in live_tokens]
+            desired_mode: dict[str, int] = {}
+            for sub in self.subscriptions.values():
+                token = str(sub["token"])
+                desired_mode[token] = max(desired_mode.get(token, 0), sub["mode"])
+
+        # Compare the queued mode against the highest mode still wanted, not
+        # merely whether the token survives: unsubscribing a depth stream while
+        # an LTP one remains leaves the token live but its queued mode stale,
+        # and sending it would resubscribe depth nobody asked for.
+        dropped = [
+            token for token, sub in latest.items() if sub["mode"] > desired_mode.get(token, 0)
+        ]
         for token in dropped:
             del latest[token]
         if dropped:
             self.logger.info(
-                f"Skipping {len(dropped)} queued subscription(s) unsubscribed before the flush"
+                f"Skipping {len(dropped)} queued subscription(s) no longer wanted at that mode"
             )
         if not latest:
             return
@@ -489,10 +511,33 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             self.token_modes[entry["token"]] = mode
                     self.logger.info(f"Batch subscribed {len(subs)} token(s) in mode {mode}")
                 else:
+                    # Requeue rather than wait for a resync: the client is still
+                    # connected, so no login is coming and nothing else would
+                    # ever send these. token_modes stays unset either way.
                     self.logger.warning(
                         f"Batch subscription failed for {len(subs)} token(s) in mode {mode}; "
-                        f"leaving them unconfirmed for the next resync"
+                        f"requeuing for another attempt"
                     )
+                    with self.lock:
+                        queued_tokens = {q["token"] for q in self.subscription_queue}
+                        for entry in subs:
+                            if entry["token"] in queued_tokens:
+                                continue
+                            sub = latest.get(entry["token"])
+                            if sub is None:
+                                continue
+                            self.subscription_queue.append(
+                                {
+                                    "token": entry["token"],
+                                    "mode": mode,
+                                    "exchange_type": entry["exchange_type"],
+                                    "symbol": sub["symbol"],
+                                    "exchange": sub["exchange"],
+                                    "old_correlation_id": None,
+                                }
+                            )
+                        if self.subscription_queue and self.batch_timer is None:
+                            self._start_batch_timer()
 
         except Exception as e:
             self.logger.exception(f"Error processing subscription batch: {str(e)}")
