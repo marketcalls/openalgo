@@ -120,12 +120,12 @@ export default function AgentConfig() {
                 <RegisteredModelsTable />
               </section>
             </Section>
-            <Section name="The provider catalog">
-              <ProviderCatalogPanel />
-            </Section>
             <Section name="Web search">
               <TradingPanel />
 
+            <Section name="The provider catalog">
+              <ProviderCatalogPanel />
+            </Section>
               <WebSearchPanel />
             </Section>
           </div>
