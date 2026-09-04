@@ -46,11 +46,16 @@ spec:
       # A Kubernetes volume mount shadows the image's /app/strategies content
       # (Docker named volumes copy on first use; k8s volumes do not), so seed
       # the bundled strategy example and chart-indicator example into the PVC.
-      # cp -n never overwrites user files; the mount is the strategies subPath.
+      # Seeds only when the volume is completely empty — never touches an
+      # instance that already has content. The mount is the strategies subPath.
       - name: seed-bundled-strategies
+        # MUST stay the same image string as the app container below: an
+        # overlay pins releases via the `images:` transformer in its
+        # kustomization.yaml, which rewrites both containers — patching the
+        # app container's image alone would seed from a different release.
         image: marketcalls/openalgo:latest
         imagePullPolicy: Always
-command: ["sh", "-c", "if [ -z \"$(ls -A /seed 2>/dev/null)\" ]; then cp -rn /app/strategies/. /seed/; fi"]
+        command: ["sh", "-c", "if [ -z \"$(ls -A /seed 2>/dev/null)\" ]; then cp -rn /app/strategies/. /seed/; fi"]
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:

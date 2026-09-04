@@ -34,11 +34,16 @@ patches:
 - path: patches/edge-host-ingress.yaml
 # For the Gateway API variant use this host patch instead:
 # - path: patches/edge-host-gateway.yaml
-# Pin the image tag per release (base ships :latest):
-# - path: patches/statefulset-image.yaml
 # Swap StorageClass/size — MUST be enabled before the FIRST apply (the
 # volumeClaimTemplate is immutable afterwards):
 # - path: patches/storage.yaml
+
+# Pin the image tag per release (base ships :latest). Use the images
+# transformer — it rewrites BOTH the app container and the seed init
+# container; a containers-only patch would leave the seeder on :latest.
+# images:
+# - name: marketcalls/openalgo
+#   newTag: CHANGE_ME_TAG
 
 labels:
 - pairs:
