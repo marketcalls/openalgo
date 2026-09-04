@@ -166,6 +166,27 @@ def get_orderbook_with_auth(
         formatted_orders = format_order_data(order_data)
         formatted_stats = format_statistics(order_stats)
 
+        # Echo caller-supplied labels (client_order_id / tag) recorded at
+        # placement time. The orderbook is proxied from the broker, which
+        # knows nothing of OpenAlgo-level idempotency keys, so this is the
+        # only place the association can be re-attached.
+        try:
+            from database.idempotency_db import get_labels_for_orderids
+
+            api_key = original_data.get("apikey") if original_data else None
+            orderids = [str(o.get("orderid", "")) for o in formatted_orders]
+            labels = get_labels_for_orderids(api_key, orderids)
+            if labels:
+                for order_row in formatted_orders:
+                    row_labels = labels.get(str(order_row.get("orderid", "")))
+                    if row_labels:
+                        order_row["client_order_id"] = row_labels["client_order_id"]
+                        if row_labels["tag"]:
+                            order_row["tag"] = row_labels["tag"]
+        except Exception:
+            # Label echo is decoration, never a reason to fail the orderbook.
+            logger.exception("Failed to attach client_order_id labels to orderbook")
+
         return (
             True,
             {

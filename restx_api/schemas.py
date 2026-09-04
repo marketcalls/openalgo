@@ -46,10 +46,31 @@ class OrderSchema(Schema):
     underlying_ltp = fields.Float(
         missing=None, allow_none=True
     )  # Optional: passed from options order for execution reference
+    client_order_id = fields.Str(
+        required=False,
+        missing=None,
+        allow_none=True,
+        validate=validate.Length(min=1, max=128),
+    )  # Optional application-level idempotency key; echoed on the orderbook
+    tag = fields.Str(
+        required=False,
+        missing=None,
+        allow_none=True,
+        validate=validate.Length(min=1, max=128),
+    )  # Optional free-form label, stored and echoed on the orderbook response
 
     @post_load
     def coerce_quantity(self, data, **kwargs):
         return _coerce_quantity_to_int(data)
+
+    @post_load
+    def normalize_client_fields(self, data, **kwargs):
+        """Drop the idempotency fields when absent so the broker payload stays unchanged."""
+        if data.get("client_order_id") is None:
+            data.pop("client_order_id", None)
+        if data.get("tag") is None:
+            data.pop("tag", None)
+        return data
 
 
 class SmartOrderSchema(Schema):
