@@ -1640,8 +1640,9 @@ export interface UnderlyingSearch {
  * F&O cannot carry an options leg, and offering it would only produce a
  * strategy that fails to resolve when it starts.
  *
- * Search rows are contracts, so they are collapsed onto their `name` - one row
- * per underlying, carrying the instrument types seen for it.
+ * Search rows are contracts, so they are collapsed onto the underlying behind
+ * them - one row per underlying, carrying the instrument types seen for it.
+ * See `underlyingOf` for which field that is on which exchange.
  */
 async function searchSymbols(apiKey: string, term: string, exchange: string): Promise<SearchRow[]> {
   const response = await apiClient.post<{
@@ -1681,11 +1682,35 @@ export function useUnderlyingSearch(
   }
 }
 
+/**
+ * Exchanges whose symbols are decorated contracts - RELIANCE25AUGFUT,
+ * CRUDEOIL25SEP6000CE - so the row's `name` is the underlying root behind
+ * them. Mirrors DERIVATIVE_EXCHANGES in services/strategy_module/symbol_resolver.py.
+ */
+const CONTRACT_EXCHANGES = new Set(['NFO', 'BFO', 'MCX', 'CDS', 'NCO', 'BCD', 'NCDEX', 'CRYPTO'])
+
+/**
+ * The underlying a search row names.
+ *
+ * On a derivative exchange the symbol is a contract and `name` carries the
+ * root, so `name` is what an underlying is picked by. On the cash and index
+ * exchanges it is the other way round: `symbol` is the tradable name
+ * (RELIANCE, NIFTY) while `name` is the descriptive one - "RELIANCE
+ * INDUSTRIES LTD", "NIFTY 50". Collapsing on `name` everywhere put those
+ * company names in the picker, and stored one as the strategy's underlying,
+ * which then resolved to nothing at run start.
+ */
+export function underlyingOf(row: SearchRow): string {
+  const venue = (row.exchange || '').trim().toUpperCase()
+  const base = CONTRACT_EXCHANGES.has(venue) ? row.name || row.symbol : row.symbol || row.name
+  return (base || '').trim().toUpperCase()
+}
+
 /** Contract rows reduced to the underlyings behind them, best match first. */
 export function collapseToUnderlyings(rows: SearchRow[], term: string): UnderlyingSearchResult[] {
   const byName = new Map<string, Set<string>>()
   for (const row of rows) {
-    const base = (row.name || row.symbol || '').trim().toUpperCase()
+    const base = underlyingOf(row)
     if (!base) continue
     const kinds = byName.get(base) ?? new Set<string>()
     if (row.instrumenttype) kinds.add(row.instrumenttype.toUpperCase())
@@ -1762,7 +1787,7 @@ export function useLotSize(
  */
 export function lotSizeFromRows(rows: SearchRow[], root: string): number | null {
   const needle = root.trim().toUpperCase()
-  const mine = rows.filter((row) => (row.name || '').trim().toUpperCase() === needle)
+  const mine = rows.filter((row) => underlyingOf(row) === needle)
   const usable = (row: SearchRow) => typeof row.lotsize === 'number' && row.lotsize > 0
   const futures = mine.find(
     (row) => (row.instrumenttype || '').toUpperCase() === 'FUT' && usable(row)
