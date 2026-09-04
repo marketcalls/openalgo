@@ -54,7 +54,7 @@ from zoneinfo import ZoneInfo
 
 from database import agent_db
 from database.engine_factory import create_db_engine
-from services.agent import prompts, settings
+from services.agent import chatgpt_oauth, prompts, settings
 from services.agent import tools as agent_tools
 from services.agent.frames import ErrorKind
 from services.agent.providers import (
@@ -62,6 +62,7 @@ from services.agent.providers import (
     litellm_model_id,
     reasoning_capable,
     validate_provider_config,
+    vision_capable,
 )
 from services.agent.tools import ToolContext
 from utils.logging import get_logger
@@ -86,6 +87,7 @@ __all__ = [
     "ModelNotConfigured",
     "ModelNotFound",
     "ResolvedModel",
+    "VisionUnsupported",
     "build_agent",
     "build_model",
     "build_session_state",
@@ -202,6 +204,23 @@ class InvalidModelConfig(AgentBuildError):
     status = 409
 
 
+class VisionUnsupported(AgentBuildError):
+    """The turn carries an image and the resolved model cannot read one.
+
+    Raised in preference to sending the image anyway, because the two ways of
+    being lenient are both worse. Passing it on gets either a provider error or,
+    on a provider that quietly drops what it cannot parse, an answer written
+    without the picture: the operator asked about a screenshot, got a confident
+    reply, and has no way to tell it was never seen. Dropping the image
+    ourselves and answering on the text alone is the same failure with our name
+    on it. So the turn is refused, the model is named, and the operator picks a
+    model that can see or removes the image.
+    """
+
+    kind = ErrorKind.INPUT
+    status = 400
+
+
 class AgnoNotInstalled(AgentBuildError):
     """The optional `agno` dependency is not installed."""
 
@@ -267,9 +286,11 @@ class ResolvedModel:
         display_name: The name shown in the picker.
         base_url: The configured base URL, normalised, or None.
         litellm_id: The model id LiteLLM is addressed with.
-        supports_reasoning: Operator-set flag.
+        supports_reasoning: Resolved against LiteLLM, not the raw column.
         default_reasoning_effort: The row's own effort, ``off`` when unset.
-        supports_vision: Operator-set flag.
+        supports_vision: Resolved against LiteLLM, not the raw column. The
+            operator's checkbox only decides for a model LiteLLM has never
+            heard of.
         tools_unreliable: Operator-set flag. A tool-driven agent has to know.
         is_default: Whether this is the ``is_default`` row.
         has_key: Whether a key is stored for this model or its provider.
@@ -354,18 +375,31 @@ def resolve_model(model_id: int | str | None = None) -> ResolvedModel:
             )
         raise InvalidModelConfig(f"{error} ({display_name}).")
 
+    litellm_id = litellm_model_id(kind, model_name)
+
+    # A subscription model has no key to validate, so the gate above passes it
+    # and this one has to hold. Without it the run reaches LiteLLM with nothing
+    # to authenticate with, and `Authenticator.get_access_token` falls through to
+    # `_login_device_code`, which prints a code to stdout nobody is reading and
+    # then polls for fifteen minutes on the run thread. `ensure_ready` does no
+    # network work at all, so it is safe here on the green side.
+    if chatgpt_oauth.is_subscription_model(litellm_id):
+        ready, reason = chatgpt_oauth.ensure_ready()
+        if not ready:
+            raise MissingCredential(
+                reason or f"No ChatGPT subscription is authorised for {display_name}."
+            )
+
     resolved = ResolvedModel(
         id=row_id,
         provider_kind=kind,
         model_name=model_name,
         display_name=display_name,
         base_url=base_url,
-        litellm_id=litellm_model_id(kind, model_name),
-        supports_reasoning=reasoning_capable(
-            litellm_model_id(kind, model_name), bool(row.supports_reasoning)
-        ),
+        litellm_id=litellm_id,
+        supports_reasoning=reasoning_capable(litellm_id, bool(row.supports_reasoning)),
         default_reasoning_effort=str(row.default_reasoning_effort or "off").strip().lower(),
-        supports_vision=bool(row.supports_vision),
+        supports_vision=vision_capable(litellm_id, bool(row.supports_vision)),
         tools_unreliable=bool(row.tools_unreliable),
         is_default=bool(row.is_default),
         has_key=has_key,
@@ -467,6 +501,23 @@ def _reasoning_effort(resolved: ResolvedModel, requested: str | None = None) -> 
     return fallback if fallback in levels else None
 
 
+def _register_chatgpt_models() -> None:
+    """Teach LiteLLM about the ChatGPT plan models its registry omits.
+
+    Idempotent and cheap after the first call. Silent on failure: the
+    supplement is a convenience, and the models LiteLLM does ship are
+    unaffected either way. See `services/agent/chatgpt_models.py`.
+    """
+    try:
+        import litellm
+
+        from services.agent import chatgpt_models
+
+        chatgpt_models.register(litellm)
+    except Exception:
+        logger.exception("Could not register the supplemental ChatGPT models")
+
+
 def build_model(resolved: ResolvedModel, *, reasoning_effort: str | None = None) -> LiteLLM:
     """Construct the LiteLLM model for a resolved row.
 
@@ -489,6 +540,14 @@ def build_model(resolved: ResolvedModel, *, reasoning_effort: str | None = None)
             construction, which is what a concurrent delete looks like.
         InvalidModelConfig: When the row cannot be turned into model kwargs.
     """
+    # LiteLLM's registry omits several models the ChatGPT subscription serves,
+    # and an unregistered one is not merely unlisted: it is routed to the
+    # chat-completions bridge and comes back as a Cloudflare interstitial. Done
+    # here rather than in `chatgpt_oauth.ensure_ready`, which must stay free of
+    # network work and of importing litellm, and rather than only in
+    # `catalog._build`, which a run resolving a stored row never reaches.
+    _register_chatgpt_models()
+
     _agent_cls, litellm_cls, _db_cls = _require_agno()
 
     # Nothing is decrypted for a provider that stores no key. `ollama` is the
@@ -673,6 +732,11 @@ def build_session_state(context: ToolContext, **extra: Any) -> dict[str, Any]:
     state: dict[str, Any] = {
         "surface": context.surface,
         "trading_enabled": _effective_trading_enabled(context.trading_enabled),
+        # Per turn, and persisted here because it has to survive into the run
+        # the tool factory rebuilds. A resumed run reads it back off the same
+        # state, so a turn sent with search off cannot get the search tools
+        # handed to it when the operator approves a pending order.
+        "web_search_enabled": bool(context.web_search_enabled),
         "analyzer_mode": bool(context.analyzer_mode),
         "conversation_id": context.conversation_id,
         "user_id": context.user_id,
@@ -752,6 +816,7 @@ def tool_factory(context: ToolContext) -> Callable[..., list[Any]]:
             trading_enabled=_effective_trading_enabled(
                 state.get("trading_enabled", context.trading_enabled)
             ),
+            web_search_enabled=bool(state.get("web_search_enabled", context.web_search_enabled)),
             run_id=run_context_id,
             session_id=session_id,
             extras=context.extras,
@@ -774,6 +839,7 @@ def build_agent(
     reasoning_effort: str | None = None,
     extra_sections: Iterable[prompts.PromptSection] = (),
     extra_runtime_lines: Sequence[str] = (),
+    require_vision: bool = False,
     tool_call_limit: int = DEFAULT_TOOL_CALL_LIMIT,
     num_history_runs: int = DEFAULT_NUM_HISTORY_RUNS,
     max_prompt_chars: int | None = DEFAULT_MAX_PROMPT_CHARS,
@@ -796,6 +862,8 @@ def build_agent(
         extra_sections: Prompt sections the surface adds or replaces.
         extra_runtime_lines: Extra bullets for the session section of the
             prompt, such as the chart's current symbol and interval.
+        require_vision: True when the turn carries an image. The build is
+            refused, by name, on a model that cannot read one.
         tool_call_limit: Maximum tool calls for the whole run.
         num_history_runs: How many previous runs are replayed into context.
         max_prompt_chars: Budget for the system prompt. The pinned security
@@ -813,6 +881,16 @@ def build_agent(
 
     requested = model_id if model_id is not None else context.extras.get("model_id")
     resolved = resolve_model(requested)
+
+    # Before the model is constructed, so an image on a text-only model costs
+    # nothing and the operator gets a clean 400 rather than a stream that dies
+    # on the provider's own complaint.
+    if require_vision and not resolved.supports_vision:
+        raise VisionUnsupported(
+            f"{resolved.display_name} cannot read images. Remove the image, or "
+            "choose a model that supports vision."
+        )
+
     model = build_model(resolved, reasoning_effort=reasoning_effort)
 
     state = build_session_state(context)

@@ -367,7 +367,15 @@ class Usage(Frame):
         reasoning_tokens: Output tokens spent on a reasoning trace.
         cost_usd: Computed locally from LiteLLM's price table, or None when the
             model is absent from it. Showing tokens and admitting the price is
-            unknown beats inventing a number.
+            unknown beats inventing a number. Always None when `billing` is
+            `subscription`: those tokens came out of a plan and have no
+            per-token price, so any figure here would be a false one.
+        billing: `metered` when the turn is billed per token, `subscription`
+            when it came out of a ChatGPT plan. The two are not distinguishable
+            from `model` alone: eight of the ten subscription models share a
+            bare name with an `openai` one, and a client rendering `$0.00` for a
+            plan turn would be saying it was free. A client that does not know
+            this field renders tokens and no cost, which is already correct.
         model: The model id the provider billed, as the provider reported it.
         ttft_ms: Milliseconds from the start of the run to its first token.
     """
@@ -380,6 +388,7 @@ class Usage(Frame):
     cached_tokens: int = 0
     reasoning_tokens: int = 0
     cost_usd: float | None = None
+    billing: str = "metered"
     model: str | None = None
     ttft_ms: float | None = None
 

@@ -35,9 +35,16 @@ vi.mock('@/lib/agent/stream', async (importOriginal) => ({
   },
 }))
 
+/** Whether this instance has a usable model, for the setup gate. */
+let configured = true
+
 vi.mock('@/api/agent', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/agent')>()),
-  getStatus: async () => ({ configured: true, default_model_id: 1, model_count: 1 }),
+  getStatus: async () => ({ configured, default_model_id: 1, model_count: 1 }),
+  // The composer asks which model the turn will run on so it knows whether a
+  // file may be attached. Nothing here configures one, and no model means the
+  // question cannot be answered, which is not a reason to refuse a file.
+  listModels: async () => [],
 }))
 
 function context(overrides: Partial<ChartContext> = {}): ChartContext {
@@ -70,6 +77,7 @@ function box(): HTMLTextAreaElement {
 beforeEach(() => {
   streams.length = 0
   replies = []
+  configured = true
   localStorage.clear()
 })
 
@@ -169,5 +177,94 @@ describe('AgentPanel suggestion chips', () => {
     ]) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument()
     }
+  })
+})
+
+/**
+ * The composer's own controls, tested here rather than against `onSend`
+ * because what matters is the request the server receives. The panel is the
+ * cheapest place to see one: it already mounts the whole stream path.
+ */
+describe('AgentPanel composer controls', () => {
+  it('withholds web search from the turn when the switch is off', async () => {
+    wrap(<AgentPanel getChartContext={() => context()} onChartCommand={vi.fn()} />)
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add to this message' }))
+    await userEvent.click(await screen.findByRole('menuitemcheckbox', { name: 'Web search' }))
+    await userEvent.type(box(), 'what is the news on this{Enter}')
+
+    await waitFor(() => expect(streams).toHaveLength(1))
+    // Only the off case is transmitted. Absent means on, which is the default
+    // the backend had before the switch existed.
+    expect(streams[0].body.web_search).toBe(false)
+  })
+
+  it('leaves web search alone when the switch is untouched', async () => {
+    wrap(<AgentPanel getChartContext={() => context()} onChartCommand={vi.fn()} />)
+    await userEvent.type(box(), 'read this chart{Enter}')
+
+    await waitFor(() => expect(streams).toHaveLength(1))
+    expect(streams[0].body.web_search).toBeUndefined()
+  })
+
+  it('sends an attached file in the body the backend parses', async () => {
+    wrap(<AgentPanel getChartContext={() => context()} onChartCommand={vi.fn()} />)
+
+    await userEvent.upload(
+      screen.getByLabelText('Choose files to attach'),
+      new File(['symbol,qty\nRELIANCE,10\n'], 'book.csv', { type: 'text/csv' })
+    )
+    await screen.findByText('book.csv')
+    await userEvent.type(box(), 'what is in this{Enter}')
+
+    await waitFor(() => expect(streams).toHaveLength(1))
+    const files = streams[0].body.attachments as { name: string; mime: string; data: string }[]
+    expect(files).toHaveLength(1)
+    expect(files[0].name).toBe('book.csv')
+    expect(files[0].mime).toBe('text/csv')
+    // A data URL, which is what the server's decoder accepts alongside bare
+    // base64, and what FileReader produces without a re-encoding step.
+    expect(files[0].data.startsWith('data:')).toBe(true)
+    // The message still carries the question. A file is not one.
+    expect(streams[0].body.message).toBe('what is in this')
+  })
+
+  it('offers the chart screenshot, because this surface has a chart', async () => {
+    const capture = vi.fn().mockResolvedValue(null)
+    wrap(
+      <AgentPanel
+        getChartContext={() => context()}
+        onChartCommand={vi.fn()}
+        onCaptureChart={capture}
+      />
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: 'Add to this message' }))
+    expect(
+      await screen.findByRole('menuitem', { name: 'Attach chart screenshot' })
+    ).toBeInTheDocument()
+  })
+})
+
+/**
+ * The setup gate, which this panel shares with `/agent` rather than
+ * reimplementing. A composer that takes a question an unconfigured instance
+ * cannot answer is worse than one that explains itself.
+ */
+describe('AgentPanel setup gate', () => {
+  it('asks for a model instead of a question when none is configured', async () => {
+    configured = false
+    wrap(<AgentPanel getChartContext={() => context()} onChartCommand={vi.fn()} />)
+
+    expect(await screen.findByText('Set up your agent')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Message the agent')).not.toBeInTheDocument()
+    expect(streams).toHaveLength(0)
+  })
+
+  it('shows the composer once one is', async () => {
+    wrap(<AgentPanel getChartContext={() => context()} onChartCommand={vi.fn()} />)
+
+    await waitFor(() => expect(screen.getByLabelText('Message the agent')).toBeInTheDocument())
+    expect(screen.queryByText('Set up your agent')).not.toBeInTheDocument()
   })
 })

@@ -45,12 +45,14 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from flask import Blueprint, Response, jsonify, request, session, stream_with_context
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from database import agent_db
 from database.auth_db import get_api_key_for_tradingview
 from database.settings_db import get_analyze_mode
 from limiter import limiter
-from services.agent import builder, catalog, providers
+from services.agent import attachments as agent_attachments
+from services.agent import builder, catalog, chatgpt_oauth, providers
 from services.agent import settings as agent_settings
 from services.agent import stream as agent_stream
 from services.agent import viz_sink as viz_sink_module
@@ -87,6 +89,20 @@ _test_limit = limiter.shared_limit(AGENT_TEST_RATE_LIMIT, scope="agent_test")
 #: real limit; this only stops a single request pinning memory before the run
 #: starts.
 MAX_MESSAGE_CHARS = 32000
+
+#: The largest request body any route here will read. Attachments arrive as
+#: base64 inside the JSON body, which inflates them by about a third, so this is
+#: ``attachments.MAX_TOTAL_BYTES`` plus that inflation plus room for the message
+#: and the rest of the envelope. Without it a single POST could ask this process
+#: to buffer an unbounded string before a single validation runs; Flask sets no
+#: ``MAX_CONTENT_LENGTH`` by default and the production worker never restarts.
+MAX_REQUEST_BYTES = 12_000_000
+
+#: Sidecar entry recording which files a turn carried. Metadata only, never the
+#: bytes: see ``services/agent/attachments.py`` for the size comparison that
+#: decided that. The client's hydrator ignores a notice type it does not know,
+#: so a stored row renders exactly as it did before this existed.
+ATTACHMENTS_NOTICE = "attachments"
 
 #: Seconds a credential test waits on the provider. Long enough for a cold
 #: local Ollama to load a model, short enough that an unreachable endpoint is
@@ -200,8 +216,33 @@ def _error(message: str, code: int, payload: dict | None = None):
 
 
 def _json_body():
-    """The request body as a dict, or ``(None, error_response)``."""
-    payload = request.get_json(silent=True)
+    """The request body as a dict, or ``(None, error_response)``.
+
+    The size limit is a fact about these routes, not about the application, so
+    it is applied per request rather than as ``MAX_CONTENT_LENGTH``, which would
+    change every other blueprint's behaviour.
+
+    It is applied **twice**, and the declared-length check is the one that does
+    the work. ``request.max_content_length`` alone was not enough here, measured
+    against the running app: CSRF protection looks for a token in
+    ``request.form`` before the view runs, which resolves the cached ``stream``
+    property while the limit is still unset, so a 13 MB body sailed through to
+    be refused later by a per-file cap. Reading ``content_length`` off the header
+    does not depend on who touched the stream first. The assignment is kept for
+    the case the header does not cover, a chunked body with no declared length.
+    """
+    declared = request.content_length
+    if declared is not None and declared > MAX_REQUEST_BYTES:
+        return None, _error(
+            f"The request body may be at most {MAX_REQUEST_BYTES // 1_000_000} MB", 413
+        )
+    request.max_content_length = MAX_REQUEST_BYTES
+    try:
+        payload = request.get_json(silent=True)
+    except RequestEntityTooLarge:
+        return None, _error(
+            f"The request body may be at most {MAX_REQUEST_BYTES // 1_000_000} MB", 413
+        )
     if payload is None:
         return None, _error("A JSON body is required", 400)
     if not isinstance(payload, dict):
@@ -335,8 +376,16 @@ def _validate_base_url(raw: Any, provider_kind: str) -> tuple[str | None, str | 
         address = ipaddress.ip_address(host)
     except ValueError:
         address = None
-    if address is not None and str(address) in BLOCKED_BASE_URL_HOSTS:
-        return None, "That address is the cloud metadata endpoint and cannot be used"
+    if address is not None:
+        # An IPv4-mapped IPv6 literal is the same address written differently,
+        # and `str()` renders it as `::ffff:a9fe:a9fe`, which matches nothing in
+        # the set. `http://[::ffff:169.254.169.254]/` reached the metadata
+        # endpoint before this line existed.
+        mapped = getattr(address, "ipv4_mapped", None)
+        if mapped is not None:
+            address = mapped
+        if str(address) in BLOCKED_BASE_URL_HOSTS:
+            return None, "That address is the cloud metadata endpoint and cannot be used"
 
     return url, None
 
@@ -408,6 +457,17 @@ def agent_status():
         logger.exception("Could not read the agent trading setting")
         trading_enabled = False
 
+    try:
+        # Does no network work and starts no device login, so it is safe to read
+        # on the gate. It is here rather than behind a second request because a
+        # `chatgpt/` model that is registered but not signed in looks configured
+        # and is not, and the setup page has to render that on first paint.
+        chatgpt_authorised = bool(chatgpt_oauth.is_authorised())
+    except Exception:
+        # logger.error and no traceback: this reads a credential.
+        logger.error("Could not read the ChatGPT subscription authorisation")
+        chatgpt_authorised = False
+
     return _ok(
         {
             "configured": agent_db.is_configured(),
@@ -418,6 +478,7 @@ def agent_status():
             # even after a model has been added.
             "agent_available": _agno_available(),
             "has_openalgo_api_key": bool(_openalgo_api_key(username)),
+            "chatgpt_authorised": chatgpt_authorised,
         }
     )
 
@@ -749,15 +810,32 @@ def test_model(model_id: int):
         # works without it.
         import litellm
 
-        litellm.completion(
+        # Streamed, because streaming is the only way the agent ever runs a
+        # model: `stream.py` calls `agent.run(stream=True)` and nothing else.
+        # A test that takes a path the product never takes can fail on a defect
+        # no operator would ever meet, and can pass over one they would.
+        #
+        # It is not hypothetical. LiteLLM's non-streaming reader for the
+        # ChatGPT subscription raises "Unknown items in responses API
+        # response: []" on a reply that streams back perfectly, so a plan model
+        # that works in the chat reported Failed here. Measured on this
+        # install: both OpenAI rows pass either way, the subscription row only
+        # streamed.
+        stream = litellm.completion(
             model=call_kwargs["id"],
             messages=[{"role": "user", "content": "ping"}],
             max_tokens=1,
             timeout=TEST_TIMEOUT_SECONDS,
             num_retries=0,
+            stream=True,
             api_key=call_kwargs.get("api_key"),
             api_base=call_kwargs.get("api_base"),
         )
+        # Draining is the test. An iterator left unread would report success
+        # on a credential the provider goes on to reject, which is the one
+        # thing this route exists to catch.
+        for _ in stream:
+            pass
     except Exception as exc:
         latency_ms = int((time.perf_counter() - started) * 1000)
         message = _redact_secret(str(exc), api_key)[:MAX_TEST_ERROR_CHARS]
@@ -1108,6 +1186,141 @@ def test_websearch_provider(provider: str):
             "data": agent_settings.get_websearch_config(),
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# ChatGPT subscription
+# ---------------------------------------------------------------------------
+
+
+@agent_bp.route("/api/chatgpt/status", methods=["GET"])
+@check_session_validity
+@_api_limit
+def chatgpt_status():
+    """Whether a ChatGPT plan is authorised, and what any login in flight is doing.
+
+    Carries a fingerprint and never a token, exactly as the model routes do for
+    an API key. The fingerprint is taken over the refresh token rather than over
+    the stored blob, so it survives an access-token refresh and stays the
+    identifier the operator saw when they signed in.
+
+    Returns:
+        ``{data: {provider, authorised, fingerprint, account_id,
+        access_token_expires_at, access_token_expired, stored_in_database,
+        token_dir, login: {...}}}``.
+    """
+    try:
+        data = chatgpt_oauth.status()
+    except Exception:
+        # logger.error and no traceback: this reads a credential, and a decrypt
+        # failure can put the material it choked on into str(exc), which
+        # utils.logging's redaction patterns do not match because they all key
+        # off a "token=" or "secret:" style label.
+        logger.error("Could not read the ChatGPT subscription status")
+        return _error("Could not read the ChatGPT subscription status", 500)
+
+    return _ok({"data": data})
+
+
+@agent_bp.route("/api/chatgpt/login", methods=["POST"])
+@check_session_validity
+@_test_limit
+def chatgpt_login():
+    """Start the OAuth device flow and return the code to show the operator.
+
+    Returns as soon as the device code has been issued, which is one bounded
+    HTTP request; the poll that waits for the operator to approve it runs on a
+    real OS thread and nothing green ever waits on it. On ``_test_limit`` rather
+    than the shared budget because it reaches upstream.
+
+    A login already in flight is returned as it stands rather than replaced: the
+    device endpoint applies a cooldown after issuing a code, and the first code
+    may already be half typed at the verification URL. ``{"force": true}``,
+    which is what a "start over" control sends, cancels it and begins again.
+
+    The user code is in the response and deliberately in no log line: it is a
+    standing phishing target and belongs on the authenticated operator's screen.
+
+    Returns:
+        ``{data: {state, user_code, verification_url, started_at, expires_at,
+        message}, reused: bool}``. ``501`` when LiteLLM has no chatgpt provider,
+        ``502`` when the device code could not be issued.
+    """
+    body = request.get_json(silent=True)
+    if body is not None and not isinstance(body, dict):
+        return _error("The request body must be a JSON object", 400)
+    force = bool((body or {}).get("force"))
+
+    before = chatgpt_oauth.login_status()
+    try:
+        snapshot = chatgpt_oauth.start_login(force=force)
+    except chatgpt_oauth.ChatGptOAuthUnavailable as exc:
+        logger.error("ChatGPT subscription login is unavailable: %s", exc)
+        return _error(str(exc), 501, {"data": chatgpt_oauth.login_status().as_dict()})
+    except chatgpt_oauth.ChatGptOAuthError as exc:
+        logger.error("ChatGPT subscription login could not start: %s", exc)
+        return _error(str(exc), 502, {"data": chatgpt_oauth.login_status().as_dict()})
+    except Exception:
+        logger.exception("Could not start the ChatGPT subscription login")
+        return _error("Could not start the ChatGPT sign-in", 500)
+
+    reused = (
+        before.pending
+        and snapshot.started_at == before.started_at
+        and snapshot.user_code == before.user_code
+    )
+    return _ok({"data": snapshot.as_dict(), "reused": reused})
+
+
+@agent_bp.route("/api/chatgpt/cancel", methods=["POST"])
+@check_session_validity
+@_api_limit
+def chatgpt_cancel():
+    """Stop a login in flight.
+
+    Idempotent: cancelling when nothing is running succeeds with ``stopped``
+    false, because the operator asked for no login to be running and none is.
+
+    The snapshot is read back through ``login_status``, which is a frozen copy
+    taken under a real lock and costs nothing. ``status()`` is deliberately not
+    used here: it decrypts the stored credential to build a fingerprint, and a
+    UI polling this while a code is on screen would pay for that every second.
+
+    Returns:
+        ``{data: {state, ...}, stopped: bool}``.
+    """
+    try:
+        stopped = chatgpt_oauth.cancel_login()
+    except Exception:
+        logger.exception("Could not cancel the ChatGPT subscription login")
+        return _error("Could not cancel the ChatGPT sign-in", 500)
+
+    return _ok({"data": chatgpt_oauth.login_status().as_dict(), "stopped": stopped})
+
+
+@agent_bp.route("/api/chatgpt/session", methods=["DELETE"])
+@check_session_validity
+@_api_limit
+def chatgpt_forget():
+    """Sign the subscription out: drop the stored secret and the cached file.
+
+    Idempotent, and it cancels a login in flight first, so signing out during a
+    half-finished sign-in leaves nothing behind polling for a code nobody will
+    enter.
+
+    Returns:
+        ``{removed: bool}``, true when either copy of the credential was there
+        to remove.
+    """
+    try:
+        removed = bool(chatgpt_oauth.forget())
+    except Exception:
+        # logger.error and no traceback for the same reason as the status route:
+        # this path handles a credential.
+        logger.error("Could not remove the ChatGPT subscription authorisation")
+        return _error("Could not sign out of ChatGPT", 500)
+
+    return _ok({"removed": removed, "message": "ChatGPT subscription signed out"})
 
 
 # ---------------------------------------------------------------------------
@@ -1605,12 +1818,19 @@ def _build_context(
     surface: str,
     operator_message: str = "",
     viz_sink: list | None = None,
+    web_search: bool = True,
 ) -> ToolContext:
     """Build the run's tool context.
 
     ``trading_enabled`` here is only the session asking. The builder ANDs it with
     the operator's database setting, so a session that asks for order tools while
     trading is off in settings still does not get them.
+
+    ``web_search`` is the composer's own switch for this turn, and off means the
+    web search toolkit is not built, so its two tools are not in the request the
+    provider receives. That is the only reading of the switch that is true: a
+    tool the model can still see is a tool it can still call, and an instruction
+    not to would be a preference rather than a control.
 
     ``operator_message`` is the turn's own message from the person, and it is
     the surface's job to supply it. The web search taint boundary builds every
@@ -1643,9 +1863,36 @@ def _build_context(
         surface=surface,
         user_id=username,
         trading_enabled=bool(body.get("trading_enabled", False)),
+        web_search_enabled=bool(web_search),
         analyzer_mode=_analyzer_mode(),
         extras=extras,
     )
+
+
+def _web_search_of(body: dict) -> bool:
+    """Whether this turn may reach the public web.
+
+    Absent means on, which is the behaviour every caller had before the switch
+    existed and what the module's own acceptance criteria ask for: search works
+    out of the box with nothing configured. Only an explicit false withholds the
+    tools.
+
+    A string is read as well as a boolean. A switch that only understood JSON
+    ``false`` would be silently on for a client that sent ``"false"``, and the
+    direction of that mistake is the wrong one.
+
+    Args:
+        body: The request body.
+
+    Returns:
+        True when the web search toolkit should be built for this turn.
+    """
+    raw = body.get("web_search")
+    if raw is None:
+        return True
+    if isinstance(raw, str):
+        return raw.strip().lower() not in ("false", "0", "off", "no", "")
+    return bool(raw)
 
 
 def _last_user_row(conversation_id: int) -> dict[str, Any]:
@@ -1693,15 +1940,26 @@ def _operator_message_of(row: dict[str, Any]) -> str:
 
 
 def _run_options_notice(
-    effort: str | None, runtime_lines: list[str]
+    effort: str | None,
+    runtime_lines: list[str],
+    web_search: bool,
+    files: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]] | None:
     """Store what a turn was built with, beside the message that opened it.
 
-    The resume route receives neither the reasoning effort nor the chart
-    context: the client posts only the decisions. Recording them on the user
-    row is what lets a resumed run be built the same way the original was,
-    rather than silently dropping to the platform default and to no chart
-    awareness at all.
+    The resume route receives neither the reasoning effort, nor the chart
+    context, nor the web search switch: the client posts only the decisions.
+    Recording them on the user row is what lets a resumed run be built the same
+    way the original was, rather than silently dropping to the platform default
+    and to no chart awareness at all.
+
+    **The web search switch is the one that matters for safety here.** A turn
+    sent with search off that pauses on a confirmation would otherwise come back
+    with the search tools in its schema, because the resume route builds a fresh
+    agent and would have nothing telling it the switch was off. The operator
+    approving an order is not asking to lift a switch they set on the question.
+    It is stored as an explicit false, so a stored ``off`` and a row written
+    before this existed stay distinguishable.
 
     The chart context is stored **already rendered** into the same bounded lines
     the prompt would carry, so what comes back is exactly what goes into the
@@ -1710,21 +1968,30 @@ def _run_options_notice(
     Args:
         effort: The reasoning effort the request asked for, if any.
         runtime_lines: The rendered chart-context lines, if any.
+        web_search: Whether this turn was allowed to reach the web.
+        files: Attachment metadata, if the turn carried any.
 
     Returns:
-        A one-entry notices list, or None when the turn carried neither. The
-        entry's ``type`` is unknown to the client's hydrator, which ignores what
-        it does not recognise, so a user row still renders as plain text.
+        The notices list, or None when the turn carried nothing worth
+        recording. Each entry's ``type`` is unknown to the client's hydrator,
+        which ignores what it does not recognise, so a user row still renders as
+        plain text.
     """
     entry: dict[str, Any] = {"type": RUN_OPTIONS_NOTICE}
     if effort:
         entry["reasoning_effort"] = effort
     if runtime_lines:
         entry["runtime_lines"] = list(runtime_lines)
-    return [entry] if len(entry) > 1 else None
+    if not web_search:
+        entry["web_search"] = False
+
+    notices: list[dict[str, Any]] = [entry] if len(entry) > 1 else []
+    if files:
+        notices.append({"type": ATTACHMENTS_NOTICE, "items": files})
+    return notices or None
 
 
-def _run_options_of(row: dict[str, Any]) -> tuple[str | None, list[str]]:
+def _run_options_of(row: dict[str, Any]) -> tuple[str | None, list[str], bool]:
     """Recover the run options a stored turn was built with.
 
     Every value is re-validated on the way out. The row is our own write, but a
@@ -1735,11 +2002,13 @@ def _run_options_of(row: dict[str, Any]) -> tuple[str | None, list[str]]:
         row: A row from :func:`_last_user_row`.
 
     Returns:
-        ``(reasoning_effort, runtime_lines)``, either of which may be absent.
+        ``(reasoning_effort, runtime_lines, web_search)``. The first two may be
+        absent; the third defaults to True, matching a row written before the
+        switch existed and the behaviour of a client that sends no switch.
     """
     notices = row.get("notices")
     if not isinstance(notices, list):
-        return None, []
+        return None, [], True
 
     for entry in notices:
         if not isinstance(entry, dict) or entry.get("type") != RUN_OPTIONS_NOTICE:
@@ -1753,8 +2022,8 @@ def _run_options_of(row: dict[str, Any]) -> tuple[str | None, list[str]]:
             if isinstance(raw_lines, list)
             else []
         )
-        return effort or None, lines
-    return None, []
+        return effort or None, lines, entry.get("web_search") is not False
+    return None, [], True
 
 
 def _with_resolved_capabilities(payload: Any) -> Any:
@@ -1876,6 +2145,16 @@ def chat_stream():
     if effort_error:
         return _error(effort_error, 400)
 
+    # Before the conversation row exists, so a refused file leaves nothing
+    # behind. Every cap, the content sniff and the declared-type check all run
+    # here; what survives is bytes this process has already measured.
+    try:
+        files = agent_attachments.parse_attachments(body.get("attachments"))
+    except agent_attachments.AttachmentError as exc:
+        return _error(exc.message, 400, {"kind": "input"})
+
+    web_search = _web_search_of(body)
+
     raw_conversation = body.get("conversation_id")
     opened_here = raw_conversation in (None, "")
     if opened_here:
@@ -1904,7 +2183,14 @@ def chat_stream():
     runtime_lines = _runtime_lines(body.get("chart_context"))
     viz_sink = viz_sink_module.new_sink()
     context = _build_context(
-        username, api_key, body, conversation_id, surface, message, viz_sink=viz_sink
+        username,
+        api_key,
+        body,
+        conversation_id,
+        surface,
+        message,
+        viz_sink=viz_sink,
+        web_search=web_search,
     )
     try:
         agent = builder.build_agent(
@@ -1913,6 +2199,7 @@ def chat_stream():
             session_id=session_id,
             reasoning_effort=effort,
             extra_runtime_lines=runtime_lines,
+            require_vision=agent_attachments.has_image(files),
         )
     except builder.AgentBuildError as exc:
         # A conversation opened by this request has nothing in it, and leaving
@@ -1925,18 +2212,37 @@ def chat_stream():
         logger.exception("Could not build the agent for conversation %s", conversation_id)
         return _error("Could not start the agent", 500)
 
+    # The stored content is the operator's own typed text, never the composed
+    # input below. Two reasons, and the second is a control rather than a
+    # preference: the transcript should show the question that was asked, and
+    # `_operator_message_of` reads this row back to build the web search taint
+    # boundary. Folding a file's contents in here would make every word of an
+    # attached document a token the model is allowed to send to a search
+    # provider, which is exactly the exfiltration path that boundary exists for.
     stored_user, _store_error = agent_db.add_message(
-        conversation_id, "user", message, notices=_run_options_notice(effort, runtime_lines)
+        conversation_id,
+        "user",
+        message,
+        notices=_run_options_notice(
+            effort, runtime_lines, web_search, agent_attachments.stored_metadata(files)
+        ),
     )
     # The client addresses a truncation by database id, and its own message ids
     # are local counters, so the row it just created has to travel back in the
     # start frame. Without it an edit has nothing to name and fails silently.
     user_message_id = (stored_user or {}).get("id") or ""
 
+    # A text attachment is prompt text and travels inside the message; an image
+    # is a media part and travels beside it. Both are what the model sees this
+    # turn and what agno replays into every later turn of the conversation.
+    text_block = agent_attachments.prompt_block(files)
+    model_input = f"{message}\n\n{text_block}" if text_block else message
+
     recorder = _TurnRecorder()
     chunks = agent_stream.stream_run(
         agent,
-        message,
+        model_input,
+        images=agent_attachments.images_for_run(files) or None,
         conversation_id=conversation_id,
         session_id=session_id,
         user_id=username,
@@ -2012,9 +2318,14 @@ def chat_confirm():
     # context come back off the user row the way the operator's message does;
     # a value the client did send still wins, because it is the fresher one.
     last_user = _last_user_row(conversation_id)
-    stored_effort, stored_lines = _run_options_of(last_user)
+    stored_effort, stored_lines, stored_web_search = _run_options_of(last_user)
     effort = effort or stored_effort
     runtime_lines = _runtime_lines(body.get("chart_context")) or stored_lines
+    # Both have to agree. The stored value is the switch the operator set on the
+    # question; the body's is whatever this client sent. Approving a pending
+    # order is not an occasion to hand the run a tool the original turn withheld,
+    # so the resumed run gets the narrower of the two.
+    web_search = stored_web_search and _web_search_of(body)
 
     viz_sink = viz_sink_module.new_sink()
     context = _build_context(
@@ -2025,6 +2336,7 @@ def chat_confirm():
         surface,
         _operator_message_of(last_user),
         viz_sink=viz_sink,
+        web_search=web_search,
     )
     try:
         agent = builder.build_agent(

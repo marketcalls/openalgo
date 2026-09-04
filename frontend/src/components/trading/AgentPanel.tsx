@@ -37,7 +37,7 @@
 import { AlertCircle, Bot, SquarePen } from 'lucide-react'
 import { useCallback, useRef } from 'react'
 import { AgentSetupGate, useAgentConfigured } from '@/components/agent/AgentSetupGate'
-import { Composer } from '@/components/agent/Composer'
+import { Composer, type ComposerTurn } from '@/components/agent/Composer'
 import { Message } from '@/components/agent/Message'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -89,9 +89,19 @@ export interface AgentPanelProps {
   getChartContext: () => ChartContext | null
   /** Applied by the terminal. Drawing, and clearing what it drew. */
   onChartCommand: (commands: AgentChartCommand[]) => void
+  /**
+   * The chart as a PNG, for the composer's "Attach chart screenshot".
+   *
+   * **This is why that menu item exists here and not on `/agent`.** The chat
+   * page has no chart to photograph, and an item that opens a file dialog
+   * instead would be lying about what it does. Resolved through the same
+   * focused-pane lookup as the context, so the screenshot is of the chart the
+   * question is about.
+   */
+  onCaptureChart?: () => Promise<File | null>
 }
 
-export function AgentPanel({ getChartContext, onChartCommand }: AgentPanelProps) {
+export function AgentPanel({ getChartContext, onChartCommand, onCaptureChart }: AgentPanelProps) {
   const { configured, loading } = useAgentConfigured()
   const threadRef = useRef<HTMLDivElement>(null)
 
@@ -106,7 +116,10 @@ export function AgentPanel({ getChartContext, onChartCommand }: AgentPanelProps)
 
   usePinNewestQuestion(threadRef, messages)
 
-  const handleSend = useCallback((text: string) => void send(text), [send])
+  const handleSend = useCallback(
+    (text: string, turn: ComposerTurn) => void send(text, turn),
+    [send]
+  )
   const handleStop = useCallback(() => void stop(), [stop])
 
   return (
@@ -204,6 +217,10 @@ export function AgentPanel({ getChartContext, onChartCommand }: AgentPanelProps)
               onStop={handleStop}
               running={running}
               placeholder="Ask about this chart"
+              // No picker on this surface, so the turn runs on the configured
+              // default and the composer asks about that row.
+              modelId={null}
+              onCaptureChart={onCaptureChart}
               // The surface asks for no order tools, so an answer's Buy and
               // Sell controls are withheld here. They write an order request
               // into this box, and a request this panel can only refuse is

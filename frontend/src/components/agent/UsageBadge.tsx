@@ -11,9 +11,23 @@
  * is exactly the invented number that would make an expensive turn look free.
  * The dash carries a title saying why.
  *
- * The conversation total follows from that: turns with a known price are summed
- * and a total that had at least one unpriced turn says so, rather than quietly
- * under-reporting.
+ * **A subscription turn is the one case where null does not mean unknown, and
+ * the dash would be wrong too.** A turn on a ChatGPT Plus or Pro plan has no
+ * per-token price to publish: it is covered by a fee that was paid whether or
+ * not the turn happened. `litellm.model_cost` prices `gpt-5.4` and deliberately
+ * returns nothing for `chatgpt/gpt-5.4` for exactly that reason. Three
+ * statements, three renderings, and no two of them may share one:
+ *
+ * | situation | rendered | means |
+ * | --- | --- | --- |
+ * | a price is known | `$0.0123` | that much was spent |
+ * | no price is published | `-` | unknown, and not zero |
+ * | the turn ran on a plan | `included in your ChatGPT plan` | already paid for |
+ *
+ * The conversation total follows from that: turns with a known price are summed,
+ * a total that had at least one unpriced turn says so rather than quietly
+ * under-reporting, and plan turns are counted separately because they belong to
+ * neither side of that sum.
  */
 
 import type { AgentUsage } from '@/lib/agent/useAgentStream'
@@ -24,6 +38,25 @@ const UNKNOWN_COST = '-'
 
 const UNKNOWN_COST_TITLE =
   'This model has no published price in the catalog, so the cost is unknown. It is not zero.'
+
+/** What a plan turn reads as. Not a price, because it is not one. */
+const SUBSCRIPTION_COST = 'included in your ChatGPT plan'
+
+const SUBSCRIPTION_COST_TITLE =
+  'This turn ran on your ChatGPT Plus or Pro plan, which has no per-token price. It is covered by the plan, not free and not unknown.'
+
+/**
+ * Whether a turn was billed to a subscription rather than per token.
+ *
+ * @param usage - The turn's usage, possibly from a row stored before the field
+ *   existed.
+ * @returns True only when the turn says so. Unknown is read as metered, because
+ *   claiming a turn was covered by a plan when nobody said so is the reading
+ *   that costs somebody money.
+ */
+export function isSubscriptionTurn(usage: AgentUsage | null | undefined): boolean {
+  return usage?.billing === 'subscription'
+}
 
 const tokenFormatter = new Intl.NumberFormat('en-US')
 
@@ -66,6 +99,8 @@ export interface UsageTotals {
   costUsd: number | null
   /** True when at least one turn ran on a model with no published price. */
   hasUnpricedTurn: boolean
+  /** How many turns came out of a ChatGPT plan rather than out of credits. */
+  subscriptionTurns: number
 }
 
 const EMPTY_TOTALS: UsageTotals = {
@@ -75,14 +110,21 @@ const EMPTY_TOTALS: UsageTotals = {
   totalTokens: 0,
   costUsd: null,
   hasUnpricedTurn: false,
+  subscriptionTurns: 0,
 }
 
 /**
  * Add up every turn's usage in a conversation.
  *
+ * A plan turn contributes its tokens and nothing to the money, and it does
+ * **not** set `hasUnpricedTurn`: the total is not missing that turn's price,
+ * because there was never a price to miss. Counting it as unpriced would mark
+ * an exact total as a floor for no reason.
+ *
  * @param usages - One entry per message, most of them null for a user turn.
  * @returns The running total, with `hasUnpricedTurn` set when a turn's cost was
- *   unknown, so the caller can say the total is partial rather than exact.
+ *   genuinely unknown, so the caller can say the total is partial rather than
+ *   exact, and `subscriptionTurns` counting the ones a plan covered.
  */
 export function sumUsage(usages: readonly (AgentUsage | null | undefined)[]): UsageTotals {
   const totals: UsageTotals = { ...EMPTY_TOTALS }
@@ -92,7 +134,9 @@ export function sumUsage(usages: readonly (AgentUsage | null | undefined)[]): Us
     totals.inputTokens += usage.input_tokens ?? 0
     totals.outputTokens += usage.output_tokens ?? 0
     totals.totalTokens += usage.total_tokens ?? 0
-    if (typeof usage.cost_usd === 'number' && Number.isFinite(usage.cost_usd)) {
+    if (isSubscriptionTurn(usage)) {
+      totals.subscriptionTurns += 1
+    } else if (typeof usage.cost_usd === 'number' && Number.isFinite(usage.cost_usd)) {
       totals.costUsd = (totals.costUsd ?? 0) + usage.cost_usd
     } else {
       totals.hasUnpricedTurn = true
@@ -120,11 +164,13 @@ function usageTitle(usage: AgentUsage): string {
   if (typeof usage.ttft_ms === 'number' && Number.isFinite(usage.ttft_ms)) {
     parts.push(`First token: ${Math.round(usage.ttft_ms)} ms`)
   }
-  parts.push(
-    typeof usage.cost_usd === 'number' && Number.isFinite(usage.cost_usd)
-      ? `Cost: ${formatCost(usage.cost_usd)}`
-      : `Cost: unknown. ${UNKNOWN_COST_TITLE}`
-  )
+  if (isSubscriptionTurn(usage)) {
+    parts.push(`Billing: ChatGPT plan. ${SUBSCRIPTION_COST_TITLE}`)
+  } else if (typeof usage.cost_usd === 'number' && Number.isFinite(usage.cost_usd)) {
+    parts.push(`Cost: ${formatCost(usage.cost_usd)}`)
+  } else {
+    parts.push(`Cost: unknown. ${UNKNOWN_COST_TITLE}`)
+  }
   return parts.join('\n')
 }
 
@@ -139,7 +185,8 @@ export interface UsageBadgeProps {
 export function UsageBadge({ usage, className }: UsageBadgeProps) {
   if (!usage) return null
 
-  const priced = typeof usage.cost_usd === 'number' && Number.isFinite(usage.cost_usd)
+  const onPlan = isSubscriptionTurn(usage)
+  const priced = !onPlan && typeof usage.cost_usd === 'number' && Number.isFinite(usage.cost_usd)
 
   return (
     <div
@@ -165,7 +212,12 @@ export function UsageBadge({ usage, className }: UsageBadgeProps) {
         </>
       )}
       <span aria-hidden>&middot;</span>
-      {priced ? (
+      {onPlan ? (
+        // Neither a number nor the unknown dash. The dash means "nobody
+        // published a price"; this turn has no price to publish, which is a
+        // different and more useful thing to say.
+        <span title={SUBSCRIPTION_COST_TITLE}>{SUBSCRIPTION_COST}</span>
+      ) : priced ? (
         <span className="tabular-nums">{formatCost(usage.cost_usd)}</span>
       ) : (
         // Never $0.00: the price is not known, and a zero would read as free.
@@ -188,15 +240,33 @@ export interface ConversationUsageBadgeProps {
  * A total built from at least one unpriced turn is marked with a trailing plus
  * and explains itself on hover, because the number is a floor rather than the
  * amount actually spent.
+ *
+ * A conversation held entirely on a ChatGPT plan has no total to show, so it
+ * says so in words instead of showing a dash. A mixed conversation shows the
+ * money its metered turns cost and names the plan turns in the hover, because
+ * the number on the line is then the complete answer to "what did this spend"
+ * even though it is not the complete answer to "what did this use".
  */
 export function ConversationUsageBadge({ totals, className }: ConversationUsageBadgeProps) {
   if (totals.turns === 0) return null
 
+  const allOnPlan = totals.subscriptionTurns === totals.turns
   const partial = totals.hasUnpricedTurn
   const costLabel = totals.costUsd === null ? UNKNOWN_COST : formatCost(totals.costUsd)
-  const title = partial
-    ? `${totals.turns} turn${totals.turns === 1 ? '' : 's'}. ${UNKNOWN_COST_TITLE} The total covers only the turns that had one.`
-    : `${totals.turns} turn${totals.turns === 1 ? '' : 's'}, ${formatTokens(totals.totalTokens)} tokens.`
+  const turnCount = `${totals.turns} turn${totals.turns === 1 ? '' : 's'}`
+  const planNote =
+    totals.subscriptionTurns > 0 && !allOnPlan
+      ? ` ${totals.subscriptionTurns} of them ran on your ChatGPT plan and cost nothing extra.`
+      : ''
+
+  let title: string
+  if (allOnPlan) {
+    title = `${turnCount}, ${formatTokens(totals.totalTokens)} tokens. ${SUBSCRIPTION_COST_TITLE}`
+  } else if (partial) {
+    title = `${turnCount}. ${UNKNOWN_COST_TITLE} The total covers only the turns that had one.${planNote}`
+  } else {
+    title = `${turnCount}, ${formatTokens(totals.totalTokens)} tokens.${planNote}`
+  }
 
   return (
     <div
@@ -208,10 +278,14 @@ export function ConversationUsageBadge({ totals, className }: ConversationUsageB
     >
       <span>{formatTokens(totals.totalTokens)} tokens</span>
       <span aria-hidden>&middot;</span>
-      <span className="tabular-nums">
-        {costLabel}
-        {partial && totals.costUsd !== null ? '+' : ''}
-      </span>
+      {allOnPlan ? (
+        <span>{SUBSCRIPTION_COST}</span>
+      ) : (
+        <span className="tabular-nums">
+          {costLabel}
+          {partial && totals.costUsd !== null ? '+' : ''}
+        </span>
+      )}
     </div>
   )
 }

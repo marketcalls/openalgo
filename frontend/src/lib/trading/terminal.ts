@@ -30,12 +30,12 @@ import {
   type PriceLine,
   ReplayController,
   ReplayShade,
-  TextWatermark,
   type ReplayState,
   readChartSettings,
   type SeriesApi,
   type SeriesStyle,
   type SeriesType,
+  TextWatermark,
   tryResolveInterval,
   withBarCache,
 } from 'openalgo-charts'
@@ -73,6 +73,7 @@ import type { AgentChartCommand } from '@/lib/agent/stream'
 import type { AppMode, ThemeMode } from '@/stores/themeStore'
 import {
   applyChartCommands,
+  applyIndicatorCommands,
   type ChartContext,
   describeDrawings,
   isAgentDrawingId,
@@ -1718,9 +1719,8 @@ export class TradingTerminal {
   private async runChartCommands(commands: AgentChartCommand[]): Promise<void> {
     if (this.destroyed || commands.length === 0) return
 
-    // `indicator` is handled here rather than in chartContract, which works
-    // against a drawing surface and knows nothing about panes or the indicator
-    // tier. Splitting them keeps the contract testable without a chart.
+    // The two halves of the vocabulary land on two different surfaces: an
+    // indicator is not a drawing, and a clear must never reach one.
     const indicators = commands.filter((c) => c.op === 'indicator')
     const rest = commands.filter((c) => c.op !== 'indicator')
     if (indicators.length) await this.runIndicatorCommands(indicators)
@@ -1738,18 +1738,14 @@ export class TradingTerminal {
   }
 
   /**
-   * Add or remove an indicator the agent asked for.
+   * Add or remove the indicators the agent asked for.
    *
-   * The id is checked against the chart's OWN registry rather than trusted,
-   * because that registry includes the operator's custom modules from
-   * `strategies/indicators/`, which no list on the server can know about. So a
-   * custom indicator is addable by name even though the backend catalogue has
-   * never heard of it, and a name that is simply wrong is refused here rather
-   * than reaching `addIndicator` and throwing inside the chart.
-   *
-   * Unknown ids are skipped quietly, matching how an unknown `op` is ignored:
-   * the answer already told the operator what it was adding, and a thrown
-   * error would take the whole command batch with it.
+   * The decision is `chartContract.applyIndicatorCommands`, which is pure and
+   * testable without a chart; this supplies the live tier and persists the
+   * result. `loadIndicators` runs first so the operator's own modules from
+   * `strategies/indicators/` have registered: the id is checked against the
+   * chart's OWN registry, which is what lets a custom indicator be added by a
+   * name no list on the server has ever heard of.
    */
   private async runIndicatorCommands(commands: AgentChartCommand[]): Promise<void> {
     await this.loadIndicators()
@@ -1760,33 +1756,19 @@ export class TradingTerminal {
     if (this.destroyed || !this.chart) return
     const chart = this.chart
 
-    let changed = false
-    for (const command of commands) {
-      const id = typeof command.id === 'string' ? command.id.trim() : ''
-      if (!id || !hasIndicator(id)) continue
-      const action = command.action === 'remove' ? 'remove' : 'add'
-
-      if (action === 'remove') {
-        for (const instance of chart.indicators()) {
-          if (instance.id === id) {
-            instance.remove()
-            changed = true
-          }
-        }
-        continue
-      }
-
-      // Adding the same indicator twice draws two identical lines nobody asked
-      // for, so a repeat is a no-op rather than a second instance.
-      if (chart.indicators().some((instance) => instance.id === id)) continue
-      const settings =
-        command.settings && typeof command.settings === 'object'
-          ? (command.settings as Record<string, unknown>)
-          : {}
-      chart.addIndicator(id, settings)
-      changed = true
-    }
-
+    const changed = applyIndicatorCommands(
+      {
+        indicators: () => chart.indicators(),
+        addIndicator: (id, settings) => chart.addIndicator(id, settings),
+        // The same call `removeIndicatorById` makes for the dialog's Remove,
+        // so the agent's removal and the operator's are one behaviour.
+        removeIndicator: (instanceId) => {
+          chart.removeIndicator(instanceId)
+        },
+        hasIndicator,
+      },
+      commands
+    )
     if (changed) this.syncIndicators()
   }
 
@@ -2107,8 +2089,21 @@ export class TradingTerminal {
     this.syncIndicators()
   }
 
-  listIndicators(): { id: string; name: string }[] {
-    return this.chart ? this.chart.indicators().map((i) => ({ id: i.id, name: i.name })) : []
+  /**
+   * The live indicators, carrying both ids because its two callers need
+   * different ones.
+   *
+   * The rail's list removes one overlay of several, so it needs the instance
+   * `id`. The agent names a descriptor it can add and remove, so it needs
+   * `indicatorId`: handed `ema-1` it would ask the chart to remove an
+   * indicator no registry has ever heard of, and the command would be dropped
+   * without a word. One shape carrying both is what keeps that from becoming
+   * two functions that drift.
+   */
+  listIndicators(): { id: string; indicatorId: string; name: string }[] {
+    return this.chart
+      ? this.chart.indicators().map((i) => ({ id: i.id, indicatorId: i.indicatorId, name: i.name }))
+      : []
   }
 
   /**
@@ -2997,6 +2992,29 @@ export class TradingTerminal {
   }
 
   /**
+   * The chart as a named PNG file, or null when there is nothing to capture.
+   *
+   * A `File` rather than a `Blob` because every caller needs the name as well
+   * as the bytes, and a File is a Blob, so the clipboard takes it unchanged.
+   * The name is the same `SYMBOL-interval-timestamp.png` the saved image uses,
+   * which is what makes an attached screenshot say in the conversation which
+   * chart it was.
+   *
+   * This is the one place a PNG is produced. Copying to the clipboard and
+   * attaching one to an agent turn both come through here, so a change to what
+   * is composited, or to which overlays are taken down first, reaches both.
+   */
+  async snapshotPng(): Promise<File | null> {
+    const chart = this.chart
+    if (!chart || !this.sym) return null
+    const canvas = await this.captureCanvas(chart)
+    if (!canvas) return null
+    const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/png'))
+    if (!blob) return null
+    return new File([blob], this.screenshotName(), { type: 'image/png' })
+  }
+
+  /**
    * Put the chart on the clipboard as an image, ready to paste.
    *
    * The image clipboard is the only form that pastes into a post composer or a
@@ -3006,17 +3024,14 @@ export class TradingTerminal {
    * OpenAlgo qualifies. Anything else is reported rather than failing silently.
    */
   async copyScreenshot(): Promise<void> {
-    const chart = this.chart
-    if (!chart || !this.sym) return
+    if (!this.chart || !this.sym) return
     try {
       if (!navigator.clipboard || typeof ClipboardItem === 'undefined') {
         throw new Error('Copying images needs https or localhost')
       }
-      const canvas = await this.captureCanvas(chart)
-      if (!canvas) return
-      const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/png'))
-      if (!blob) throw new Error('The chart produced no image')
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+      const file = await this.snapshotPng()
+      if (!file) throw new Error('The chart produced no image')
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': file })])
       this.toast('Chart copied, paste it anywhere', 'ok')
     } catch (e) {
       this.toast(this.cleanError(e), 'err')

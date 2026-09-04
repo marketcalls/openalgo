@@ -13,7 +13,7 @@ carries a list of dicts each keyed by ``op``. The terminal **ignores an op it
 does not know** rather than throwing, so a newer backend cannot break an older
 client mid-turn, and this module can grow an op without a lockstep release.
 
-Two ops, and that is the whole vocabulary:
+Three ops, and that is the whole vocabulary:
 
 ``{"op": "draw", "group": str, "shapes": [...]}``
     Replace the named agent group with these shapes. Replacing rather than
@@ -475,7 +475,9 @@ class ChartView:
         visible_from: Left edge of the viewport in UTC epoch seconds.
         visible_to: Right edge in UTC epoch seconds.
         last_price: The chart's live last price, when it has one.
-        indicators: Overlays on the chart, each ``{"id", "name"}``.
+        indicators: Overlays on the chart, each ``{"id", "name"}`` where ``id``
+            is the descriptor the chart registry knows, so an indicator tool can
+            name it.
         drawings: The operator's own drawings, each ``{"tool", "points", "text"}``
             with anchors in ``{time, price}``. Agent drawings are excluded by the
             panel, which knows them by their ``ai:`` id prefix.
@@ -531,7 +533,13 @@ class ChartView:
             name = _text(item.get("name"), 48)
             if not name:
                 continue
-            indicators.append({"id": _text(item.get("id"), 48), "name": name})
+            # ``indicatorId`` is the descriptor the chart registry knows, which
+            # is the only id an indicator tool can act on. ``id`` is the
+            # instance, ``ema-1``, unique so three EMAs can coexist and useless
+            # to name one by. Older panels send only ``id``, so it is the
+            # fallback rather than the preference.
+            marker = item.get("indicatorId") or item.get("id")
+            indicators.append({"id": _text(marker, 48), "name": name})
             if len(indicators) >= MAX_INDICATORS:
                 break
 

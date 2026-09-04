@@ -347,10 +347,38 @@ def validate_provider_config(
     if url and not url.startswith(("http://", "https://")):
         return "The base URL must start with http:// or https://"
 
-    if spec.needs_key and not has_key:
+    if spec.needs_key and not has_key and not _is_subscription(model_name):
         return f"{spec.label} requires an API key"
 
     return None
+
+
+def _is_subscription(model_name: str) -> bool:
+    """Whether this model authenticates with a subscription instead of a key.
+
+    A `chatgpt/` model is reached through an OAuth device flow, so there is no
+    key for the operator to paste and `needs_key` on the `litellm` spec must not
+    refuse the row. Everything else about the kind is unchanged: the model id is
+    still the name verbatim, and `litellm_kwargs` already omits `api_key` when
+    there is none.
+
+    The import is **deliberately lazy**. This module promises to do no I/O and
+    to import nothing heavy, and `chatgpt_oauth` pulls in httpx and the project's
+    HTTP client. A failure to import it is answered False, which restores the
+    old behaviour of asking for a key rather than letting an unusable row save.
+
+    Args:
+        model_name: The model name as stored on the row.
+
+    Returns:
+        True when the model is billed to a ChatGPT plan.
+    """
+    try:
+        from services.agent.chatgpt_oauth import is_subscription_model
+    except Exception:
+        logger.debug("Could not consult the ChatGPT subscription check")
+        return False
+    return is_subscription_model(model_name)
 
 
 def _row_value(row: Any, name: str) -> Any:
@@ -382,6 +410,110 @@ def _unknown_kind_message(kind: str) -> str:
     return f"Unknown provider kind {kind!r}. Expected one of: {accepted}"
 
 
+def _litellm_opinion(litellm_id: str, probe: str) -> bool | None:
+    """What LiteLLM says about one capability, or None when it has no opinion.
+
+    **The trap this exists for:** ``supports_reasoning`` and ``supports_vision``
+    both answer False for a model LiteLLM knows cannot do the thing *and* for a
+    model it has never heard of, and ``get_model_info`` returns None for both.
+    Taking either answer at face value would silently strip a capability from a
+    local Ollama build or a custom endpoint that genuinely has it. Membership of
+    ``litellm.model_cost`` is what separates the two cases, and it is the same
+    table the model catalogue is already built from, so nothing new is loaded.
+
+    The id is tried with its provider prefix and without, because a row may
+    carry either and the table is keyed inconsistently: ``gpt-4o`` is in it,
+    ``openai/gpt-4o`` is not.
+
+    **A subscription model is answered from the table and never from the
+    predicate**, and that is not an optimisation. Measured against
+    ``litellm==1.99.0``: ``litellm.supports_reasoning(model="chatgpt/gpt-5.4")``
+    reaches ``get_llm_provider`` -> ``ChatGPTConfig.
+    _get_openai_compatible_provider_info`` -> ``Authenticator.get_access_token``,
+    which with no cached token falls through to ``_login_device_code`` and polls
+    OpenAI for fifteen minutes on the calling thread after printing a code to a
+    stdout nobody is reading. That call sits behind no gate at all: it is on
+    ``GET /agent/api/models``, through ``_with_resolved_capabilities``, so merely
+    listing a registered ``chatgpt/`` model would hang the request. Reading the
+    entry gives the same answer, because the predicate is a lookup in this very
+    table once the provider has been resolved.
+
+    **The lookup has to include LiteLLM's own bare-name fallback**, and reading
+    the prefixed entry alone is not the same answer. ``_supports_factory``
+    treats an *absent* key as "this entry does not say" and consults the
+    bare-name entry, which is how a sparse provider entry inherits the complete
+    metadata (LiteLLM #20885). An explicit ``False`` is respected and does not
+    fall through. Every one of the ten ``chatgpt/`` entries carries
+    ``supports_vision`` and ``supports_function_calling`` and **none of them
+    carries ``supports_reasoning``**, so reading only the prefixed entry
+    answered False for all ten, against a predicate that answers True for
+    eight, ``chatgpt/gpt-5.4`` and ``chatgpt/gpt-5.4-pro`` among them. That
+    turned every reasoning model on a plan into a non-reasoning one, silently
+    and in the direction that loses a capability the operator is paying for.
+
+    Args:
+        litellm_id: The id that will be sent, provider prefix included.
+        probe: Name of the LiteLLM predicate to call, such as
+            ``supports_vision``.
+
+    Returns:
+        True or False when LiteLLM knows the model, None when it does not, when
+        the build has no such predicate, or when the lookup raised.
+    """
+    try:
+        import litellm
+
+        table = litellm.model_cost
+        bare = litellm_id.split("/", 1)[-1]
+        entry = table.get(litellm_id)
+        if entry is None:
+            entry = table.get(bare)
+        if entry is None:
+            return None
+        if _is_subscription(litellm_id):
+            answer = entry.get(probe)
+            if answer is None:
+                answer = (table.get(bare) or {}).get(probe)
+            return bool(answer)
+        return bool(getattr(litellm, probe)(model=litellm_id))
+    except Exception:
+        # A LiteLLM build without the predicate, or a lookup that raised. The
+        # caller falls back to the operator's flag rather than removing a
+        # capability they may genuinely have configured.
+        return None
+
+
+def _resolved_capability(litellm_id: str, operator_flag: bool, probe: str, label: str) -> bool:
+    """Resolve one operator checkbox against what LiteLLM knows.
+
+    LiteLLM decides for any model it knows; the checkbox is the fallback for one
+    it has never heard of. That ordering is deliberate: the library is right
+    about the models it ships metadata for, and silent about the ones only the
+    operator can describe.
+
+    Args:
+        litellm_id: The id that will be sent, provider prefix included.
+        operator_flag: The row's own column.
+        probe: Name of the LiteLLM predicate to consult.
+        label: The capability's name, for the log line only.
+
+    Returns:
+        The capability that will actually be honoured.
+    """
+    flag = bool(operator_flag)
+    opinion = _litellm_opinion(litellm_id, probe)
+    if opinion is None:
+        return flag
+    if flag and not opinion:
+        logger.info(
+            "Model %s is marked as supporting %s but LiteLLM reports it does not; "
+            "the capability is treated as absent",
+            litellm_id,
+            label,
+        )
+    return opinion
+
+
 def reasoning_capable(litellm_id: str, operator_flag: bool) -> bool:
     """Whether this model actually exposes a reasoning effort.
 
@@ -393,14 +525,6 @@ def reasoning_capable(litellm_id: str, operator_flag: bool) -> bool:
     earlier in this project, where a parameter the provider would not accept was
     sent because nothing checked first.
 
-    LiteLLM already knows, from the same table the model catalogue is built
-    from: ``supports_reasoning`` returns True for o1, o3-mini and the reasoning
-    GPT-5 line, and False for gpt-4 and gpt-4o. So LiteLLM decides whenever it
-    has an opinion, and the operator's flag is the fallback for a model it has
-    never heard of, which is a local Ollama build or a custom endpoint. That
-    ordering is deliberate: the library is right about the models it knows, and
-    silent about the ones only the operator can describe.
-
     Args:
         litellm_id: The id that will be sent, provider prefix included.
         operator_flag: The row's own ``supports_reasoning`` column.
@@ -408,32 +532,25 @@ def reasoning_capable(litellm_id: str, operator_flag: bool) -> bool:
     Returns:
         True when a reasoning effort may be sent.
     """
-    flag = bool(operator_flag)
-    try:
-        import litellm
+    return _resolved_capability(litellm_id, operator_flag, "supports_reasoning", "reasoning")
 
-        # Whether LiteLLM has an opinion at all has to be asked separately.
-        # Neither helper distinguishes "known, and it does not reason" from
-        # "never heard of it": supports_reasoning returns False for both, and
-        # get_model_info returns supports_reasoning None for both. Membership of
-        # the cost table is the signal that it knows the model, and it is the
-        # same table the model catalogue is already built from. The id is tried
-        # with its provider prefix and without, because a row may carry either.
-        table = litellm.model_cost
-        known_here = litellm_id in table or litellm_id.split("/", 1)[-1] in table
-        if not known_here:
-            return flag
-        capable = bool(litellm.supports_reasoning(model=litellm_id))
-    except Exception:
-        # A LiteLLM build without these helpers, or a lookup that raised. Fall
-        # back to what the operator said rather than removing a capability they
-        # may genuinely have configured.
-        return flag
 
-    if flag and not capable:
-        logger.info(
-            "Model %s is marked as supporting reasoning but LiteLLM reports it does not; "
-            "no reasoning effort will be sent",
-            litellm_id,
-        )
-    return capable
+def vision_capable(litellm_id: str, operator_flag: bool) -> bool:
+    """Whether this model can actually read an image.
+
+    Resolved exactly the way reasoning is, through the same helper, because the
+    failure is the same shape and worse in its consequence: a wrongly ticked
+    checkbox on a text-only model turns an attached screenshot into either a
+    provider error or, on a provider that drops what it cannot parse, an answer
+    written without ever having seen the picture. The operator believes it was
+    read. That is why the attachment path refuses by name rather than dropping
+    the image, and why this decides the capability rather than the column.
+
+    Args:
+        litellm_id: The id that will be sent, provider prefix included.
+        operator_flag: The row's own ``supports_vision`` column.
+
+    Returns:
+        True when an image may be sent to this model.
+    """
+    return _resolved_capability(litellm_id, operator_flag, "supports_vision", "vision")

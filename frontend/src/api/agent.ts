@@ -401,6 +401,93 @@ export interface WebSearchTestResult {
 }
 
 // =============================================================================
+// The ChatGPT subscription
+//
+// LiteLLM exposes a ChatGPT Plus or Pro plan as its own provider, `chatgpt`,
+// separate from `openai`. The same ten models, a different billing path: an
+// `openai/` model bills API credits against a key you paste, a `chatgpt/` model
+// bills the plan and is authorised through an OAuth device flow instead.
+//
+// There is therefore no key to type and none to show. What the operator is
+// given is what an API key row gives them, a fingerprint, and what they do is a
+// device-code sign-in: press Connect, read a short code, enter it at OpenAI's
+// own page, and this screen notices when it is approved.
+//
+// The credential is a refresh token. It is encrypted in `ag_secret`, it is
+// never returned by any route, and none of the types below has a field for it.
+// =============================================================================
+
+/**
+ * The states one sign-in moves through. `pending` is the only non-terminal one.
+ *
+ * Mirrors the `LOGIN_*` constants in `services/agent/chatgpt_oauth.py`. Poll
+ * while the state is `pending` and stop on anything else.
+ */
+export type ChatGptLoginState =
+  | 'idle'
+  | 'pending'
+  | 'authorised'
+  | 'expired'
+  | 'failed'
+  | 'cancelled'
+
+/**
+ * A snapshot of the one sign-in the server will run at a time.
+ *
+ * `user_code` is shown to the authenticated operator and is deliberately never
+ * logged: a device code is a standing phishing target, so it belongs on the
+ * screen of the person who asked for it and nowhere else.
+ */
+export interface ChatGptLogin {
+  state: ChatGptLoginState
+  /** The code to type at `verification_url`. Empty outside a pending sign-in. */
+  user_code: string
+  /** OpenAI's own device page. Opened in a new tab, never framed. */
+  verification_url: string
+  /** Unix seconds the device code was issued. */
+  started_at: number | null
+  /** Unix seconds the device code stops being accepted, about 15 minutes on. */
+  expires_at: number | null
+  /** Why a terminal state is what it is. Empty while pending. */
+  message: string
+}
+
+/**
+ * Whether a plan is connected, and what is in flight.
+ *
+ * There is no token on this type because there is none in the response.
+ * `api_key` is declared as `never` for the same reason it is on AgentModel: an
+ * attempt to put a credential on this object fails to compile.
+ */
+export interface ChatGptStatus {
+  authorised: boolean
+  /**
+   * Display safe, never the value: `...abcd sha256:0123456789ab`, exactly the
+   * form an API key row shows. Taken over the refresh token, so it survives an
+   * access-token refresh and stays the identifier seen at sign-in.
+   */
+  fingerprint: string
+  /** The OpenAI account the plan belongs to, when the record names one. */
+  account_id: string | null
+  /** Unix seconds the access token expires. Null when the record has none. */
+  expiry: number | null
+  /** True once the credential is in `ag_secret` rather than only on disk. */
+  stored_in_database: boolean
+  /** Where LiteLLM's own auth file lives. Shown so a stale one is findable. */
+  token_dir: string
+  login: ChatGptLogin
+  /** Never present. Declared so nothing can assign a token onto this object. */
+  api_key?: never
+}
+
+/** What cancelling reports: the snapshot, and whether a poll was really stopped. */
+export interface ChatGptCancelResult {
+  data: ChatGptLogin
+  /** False when nothing was running, which is a success rather than an error. */
+  stopped: boolean
+}
+
+// =============================================================================
 // Conversations, messages and the shared stream vocabulary
 // =============================================================================
 
@@ -436,6 +523,20 @@ export interface ToolCall {
 }
 
 /**
+ * Which of two places a turn was billed to.
+ *
+ * `metered` is a per-token price against a provider key. `subscription` is a
+ * ChatGPT Plus or Pro plan, which has no per-token price at all: the turn is
+ * covered by a monthly fee that was paid whether or not it happened.
+ *
+ * The distinction is not cosmetic. Eight of the ten `chatgpt/` models share a
+ * bare name with an `openai/` model, so two rows in the registry can both read
+ * GPT-5.4 and bill to different places. This field is what tells them apart
+ * after the fact, on the turn itself.
+ */
+export type UsageBilling = 'subscription' | 'metered'
+
+/**
  * What a turn consumed, in tokens and money.
  *
  * Every usage frame carries the running total for the turn, not a delta, so a
@@ -444,6 +545,11 @@ export interface ToolCall {
  * `cost_usd` is null when the model is absent from LiteLLM's price table.
  * **Render that as unknown, never as zero.** Showing tokens and admitting the
  * price is not known beats inventing a number.
+ *
+ * A subscription turn is the one case where null does not mean unknown: there
+ * is no per-token price to know, so `billing` is what separates "nobody
+ * published a price" from "this turn came out of a plan you already pay for".
+ * Both still refuse to render $0.00, which would say the turn was free.
  */
 export interface Usage {
   /** Prompt tokens billed, including cached ones. */
@@ -458,6 +564,11 @@ export interface Usage {
   model: string | null
   /** Milliseconds from the start of the run to its first token. */
   ttft_ms: number | null
+  /**
+   * Which billing path the turn took. Optional because a message stored before
+   * this field existed has none, and an older row must still render.
+   */
+  billing?: UsageBilling
 }
 
 /** One pending decision on a paused run. */
@@ -494,8 +605,25 @@ export interface ConfirmDecision {
  * client does not know is ignored rather than rendered as text, which is what
  * lets the backend record something new without breaking an older client.
  */
+/**
+ * One file a stored turn carried, as `stored_metadata` wrote it.
+ *
+ * No bytes: an attachment is described on the row and never kept there. `kind`
+ * is `image` or `text` as the server sniffed it, and is read defensively
+ * because the row is free-form JSON written by whatever vocabulary was live.
+ */
+export interface StoredAttachment {
+  name: string
+  kind: string
+  mime: string
+  size: number
+  /** Short content hash, so the same file twice is recognisable as the same. */
+  digest: string
+}
+
 export type MessageNotice =
   | { type: 'notice'; level: NoticeLevel; message: string }
+  | { type: 'attachments'; items: StoredAttachment[] }
   | { type: 'error'; message: string; kind: ErrorKind }
   | { type: 'confirm'; run_id: string; session_id: string; requirements: ConfirmRequirement[] }
   | { type: 'ui'; content: string }
@@ -755,6 +883,86 @@ export async function testWebSearchProvider(
   return response.data
 }
 
+// -----------------------------------------------------------------------------
+// The ChatGPT subscription
+// -----------------------------------------------------------------------------
+
+const CHATGPT_BASE = `${AGENT_API_BASE}/chatgpt`
+
+/**
+ * Read a payload that may travel flat or under `data`.
+ *
+ * The agent routes are not uniform about this: `status` and the model test are
+ * flat, everything else sits under `data`. These four routes are being written
+ * alongside this file, so rather than hardcode a guess that turns into a blank
+ * panel if it is wrong, unwrap whichever arrived.
+ *
+ * @param body - The parsed response body.
+ * @param probe - A field the payload itself is known to carry.
+ * @returns The payload.
+ */
+function chatGptPayload<T>(body: unknown, probe: keyof T & string): T {
+  const envelope = body as { data?: unknown } | null | undefined
+  const nested = envelope?.data
+  if (nested && typeof nested === 'object' && probe in (nested as object)) return nested as T
+  return body as T
+}
+
+/**
+ * Whether a ChatGPT plan is connected, and what a sign-in is doing.
+ *
+ * Cheap enough to poll, and the panel does exactly that while a sign-in is
+ * pending. It carries a fingerprint and never a token.
+ */
+export async function getChatGptStatus(): Promise<ChatGptStatus> {
+  const response = await webClient.get(`${CHATGPT_BASE}/status`)
+  const status = chatGptPayload<ChatGptStatus>(response.data, 'authorised')
+  // The service layer names this `access_token_expires_at`; the route reports
+  // `expiry`. Read whichever is present so the expiry line is not silently
+  // blank if the two names ever drift apart again.
+  const raw = status as ChatGptStatus & { access_token_expires_at?: number | null }
+  return { ...status, expiry: raw.expiry ?? raw.access_token_expires_at ?? null }
+}
+
+/**
+ * Start a device-flow sign-in, and answer as soon as the code is issued.
+ *
+ * The poll that waits for the operator to approve it runs on a real OS thread
+ * server side, so this returns in milliseconds with a code to display rather
+ * than holding the request open for up to fifteen minutes.
+ *
+ * @param force - Start again even though a plan is already connected, which is
+ *   how an operator moves this instance to a different ChatGPT account.
+ */
+export async function startChatGptLogin(force = false): Promise<ChatGptLogin> {
+  const response = await webClient.post(`${CHATGPT_BASE}/login`, { force })
+  return chatGptPayload<ChatGptLogin>(response.data, 'state')
+}
+
+/**
+ * Stop a sign-in that is still waiting for its code to be approved.
+ *
+ * `stopped` is false when nothing was running, which is a success: the operator
+ * asked for it to be stopped and it is stopped.
+ */
+export async function cancelChatGptLogin(): Promise<ChatGptCancelResult> {
+  const response = await webClient.post<ChatGptCancelResult>(`${CHATGPT_BASE}/cancel`, {})
+  return response.data
+}
+
+/**
+ * Disconnect the plan: forget the stored credential and the cached token file.
+ *
+ * Idempotent, and `removed` is false when there was nothing to remove. Any
+ * `chatgpt/` model stays registered and stops working until a plan is connected
+ * again, which is the honest outcome: the row is operator intent and this call
+ * only revokes the credential behind it.
+ */
+export async function removeChatGptSession(): Promise<boolean> {
+  const response = await webClient.delete<{ removed?: boolean }>(`${CHATGPT_BASE}/session`)
+  return response.data?.removed === true
+}
+
 export interface ListConversationsParams {
   surface?: AgentSurface
   /** Clamped server side to between 1 and 200. Defaults to 100. */
@@ -898,6 +1106,11 @@ export const agentQueryKeys = {
   // answers with the same refreshed object, so one cache entry stays correct
   // and a second key would only be a second thing to invalidate.
   websearch: () => [...agentQueryKeys.all, 'websearch'] as const,
+  // One key for the subscription. The panel polls it while a sign-in is
+  // pending, and the registry and the model picker read the same cache entry to
+  // describe the credential a `chatgpt/` row runs on, which has no key of its
+  // own to fingerprint.
+  chatgpt: () => [...agentQueryKeys.all, 'chatgpt'] as const,
   conversations: (params: ListConversationsParams = {}) =>
     [...agentQueryKeys.all, 'conversations', params] as const,
   conversation: (id: number) => [...agentQueryKeys.all, 'conversations', id] as const,

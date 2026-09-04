@@ -59,6 +59,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import type { AgentMessage } from '@/lib/agent/useAgentStream'
 import type { AgentVizItem } from '@/lib/agent/viz'
 import { cn } from '@/lib/utils'
+import { AttachmentChip } from './AttachmentChip'
 import { CodeArtifact } from './CodeArtifact'
 import { MessageActions } from './MessageActions'
 import { MessageEditor } from './MessageEditor'
@@ -447,6 +448,21 @@ export const Message = memo(function Message({
         className={cn('group flex flex-col items-end gap-1', className)}
         data-message-id={message.id}
       >
+        {/* Above the bubble, because a file is context for the question rather
+            than part of it. There is no image to show: the server records what
+            a file was and never its bytes. */}
+        {message.attachments.length > 0 && (
+          <div className="flex max-w-[85%] flex-wrap justify-end gap-1.5">
+            {message.attachments.map((item) => (
+              <AttachmentChip
+                key={`${item.name}-${item.size}`}
+                name={item.name}
+                kind={item.kind}
+                size={item.size}
+              />
+            ))}
+          </div>
+        )}
         <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap break-words text-primary-foreground">
           {message.content}
         </div>

@@ -171,6 +171,14 @@ export function CodeArtifact({ code, language, streaming = false }: CodeArtifact
     []
   )
 
+  // The theme paints a background on the inner <code> as well as on the <pre>,
+  // and that <code> is `display: inline`. An inline background is painted once
+  // per line box and ends at the last character of the line, so the block came
+  // out as one ragged rectangle per line, reading as though every line were
+  // selected. Clearing it lets the card behind show through as one flat panel,
+  // which is what stripping the <pre> background above was already trying to do.
+  const codeTagProps = useMemo(() => ({ style: { background: 'transparent' } }), [])
+
   let body: ReactNode
   if (streaming || prism === null) {
     // Plain monospace while the fence is open, and for a language Prism was not
@@ -188,6 +196,7 @@ export function CodeArtifact({ code, language, streaming = false }: CodeArtifact
         language={prism}
         style={isDark ? oneDark : oneLight}
         customStyle={highlighterStyle}
+        codeTagProps={codeTagProps}
         // The gutter is deliberately absent. See the module docstring.
         showLineNumbers={false}
         wrapLines={false}

@@ -11,8 +11,8 @@ Adding a capability is **one new file plus one registry line**:
 1. Write ``services/agent/tools/<name>.py`` holding a subclass of
    ``services.agent.tools.base.OpenAlgoToolkit``.
 2. Add one ``ToolkitSpec(...)`` entry to :data:`TOOLKITS` below naming the
-   module, the class, the surfaces it belongs to, and whether it may only be
-   handed out when trading is enabled.
+   module, the class, the surfaces it belongs to, and any run capability it
+   requires (:data:`CAPABILITIES`).
 
 Nothing else changes. ``builder.py`` passes :func:`build_toolkits` to agno as a
 callable factory, so the list is re-evaluated on every run against the current
@@ -36,9 +36,17 @@ optional dependency. That is why:
 Selection rules
 ---------------
 
-A spec is selected when its surface list contains the context's surface, and,
-when it is marked ``requires_trading``, only if the context says trading is
-enabled. Selection never inspects anything the model can influence.
+A spec is selected when its surface list contains the context's surface and
+every capability it names in ``requires`` is true on the context. Selection
+never inspects anything the model can influence.
+
+A capability is a boolean on :class:`ToolContext` that the surface decides per
+run: ``trading_enabled`` and ``web_search_enabled`` today. Withholding the
+toolkit is the whole enforcement -- a tool that is not built has no schema, so
+the model cannot call it, cannot be talked into calling it, and does not pay for
+its description. There is deliberately **one** mechanism for this rather than a
+branch per switch, so the next capability is a constant and a spec field and
+carries no new way to get the check wrong.
 """
 
 from __future__ import annotations
@@ -65,8 +73,20 @@ ALL_SURFACES: frozenset[str] = frozenset({SURFACE_CHAT, SURFACE_CHART})
 CHAT_ONLY: frozenset[str] = frozenset({SURFACE_CHAT})
 CHART_ONLY: frozenset[str] = frozenset({SURFACE_CHART})
 
+#: A run capability a toolkit may require. Each names a boolean attribute of
+#: :class:`ToolContext` that the surface sets per run.
+CAPABILITY_TRADING = "trading_enabled"
+CAPABILITY_WEB_SEARCH = "web_search_enabled"
+
+#: Every capability a spec may name. Validated on the spec so a typo is a build
+#: error rather than a gate that is silently always open.
+CAPABILITIES: frozenset[str] = frozenset({CAPABILITY_TRADING, CAPABILITY_WEB_SEARCH})
+
 __all__ = [
     "ALL_SURFACES",
+    "CAPABILITIES",
+    "CAPABILITY_TRADING",
+    "CAPABILITY_WEB_SEARCH",
     "CHART_ONLY",
     "CHAT_ONLY",
     "SURFACE_CHART",
@@ -118,8 +138,15 @@ class ToolContext:
         session_id: Agno session id for the current turn, when one is known.
         user_id: OpenAlgo user the run belongs to.
         trading_enabled: True when the operator has enabled trading for this
-            session. Toolkits marked ``requires_trading`` are withheld when it
-            is false, so the model cannot see an order tool it may not use.
+            session. Toolkits requiring :data:`CAPABILITY_TRADING` are withheld
+            when it is false, so the model cannot see an order tool it may not
+            use.
+        web_search_enabled: True when this turn may reach the public web.
+            Toolkits requiring :data:`CAPABILITY_WEB_SEARCH` are withheld when
+            it is false, which is what the composer's Web search switch means:
+            not "prefer not to search" but "the search tools are not in the
+            request at all". Absent means on, so a surface that has no switch
+            keeps the behaviour it had.
         analyzer_mode: True when the platform analyzer toggle is on. Carried for
             the risk guard and for prompt wording; it never selects toolkits.
         session_state: The agno session state mapping this context was derived
@@ -135,6 +162,7 @@ class ToolContext:
     session_id: str | None = None
     user_id: str | None = None
     trading_enabled: bool = False
+    web_search_enabled: bool = True
     analyzer_mode: bool = False
     session_state: dict[str, Any] = field(default_factory=dict)
     extras: dict[str, Any] = field(default_factory=dict)
@@ -145,6 +173,7 @@ class ToolContext:
             raise ValueError("ToolContext requires a non-empty OpenAlgo api_key")
         self.surface = _normalise_surface(self.surface)
         self.trading_enabled = bool(self.trading_enabled)
+        self.web_search_enabled = bool(self.web_search_enabled)
         self.analyzer_mode = bool(self.analyzer_mode)
 
     @classmethod
@@ -227,8 +256,9 @@ class ToolkitSpec:
         module: Fully qualified module holding the toolkit class.
         attr: Class name inside that module.
         surfaces: Surfaces the toolkit is offered on.
-        requires_trading: True when the toolkit may only be handed out to a
-            session that has trading enabled.
+        requires: Capabilities from :data:`CAPABILITIES` that must all be true
+            on the run's context for this toolkit to be built. Empty means the
+            toolkit is always offered on its surfaces.
         order: Sort weight. Lower is offered first; ties break on ``key``.
         description: One line for logs and for the settings UI.
         cls: Resolved class, filled in by :meth:`resolve` or supplied up front
@@ -239,16 +269,32 @@ class ToolkitSpec:
     module: str
     attr: str
     surfaces: frozenset[str] = ALL_SURFACES
-    requires_trading: bool = False
+    requires: frozenset[str] = frozenset()
     order: int = 100
     description: str = ""
     cls: type | None = None
 
     def __post_init__(self) -> None:
-        """Coerce the surface collection to a normalised frozenset."""
+        """Normalise the surfaces and reject a capability that does not exist.
+
+        A misspelt capability would name an attribute no context carries, and
+        ``matches`` reads capabilities with a False default, so the toolkit
+        would silently never be offered. Failing here instead makes that a
+        startup error with the offending name in it.
+
+        Raises:
+            ValueError: The spec names no surface, or names a capability that
+                is not in :data:`CAPABILITIES`.
+        """
         self.surfaces = frozenset(_normalise_surface(s) for s in self.surfaces)
         if not self.surfaces:
             raise ValueError(f"Toolkit spec {self.key!r} names no surface")
+        self.requires = frozenset(self.requires)
+        unknown = sorted(self.requires - CAPABILITIES)
+        if unknown:
+            raise ValueError(
+                f"Toolkit spec {self.key!r} requires unknown capabilities: {', '.join(unknown)}"
+            )
 
     def resolve(self) -> type:
         """Import the module and return the toolkit class, caching the result.
@@ -274,22 +320,22 @@ class ToolkitSpec:
     def matches(self, context: Any) -> bool:
         """Report whether this toolkit should be offered to a run.
 
-        Attributes are read with ``getattr`` defaults so a duck-typed context
-        from a test is accepted, and a context missing ``trading_enabled`` is
-        treated as not permitted rather than permitted.
+        Capabilities are read with ``getattr(context, name, False)`` so a
+        duck-typed context from a test is accepted, and a context missing one is
+        treated as not permitted rather than permitted. That default is the
+        fail-closed direction for every capability: an order toolkit and a web
+        search toolkit are both worse to hand out by accident than to withhold.
 
         Args:
             context: The run's :class:`ToolContext`, or anything shaped like it.
 
         Returns:
-            True when the surface matches and the trading requirement is met.
+            True when the surface matches and every required capability is on.
         """
         surface = _normalise_surface(getattr(context, "surface", SURFACE_CHAT))
         if surface not in self.surfaces:
             return False
-        if self.requires_trading and not bool(getattr(context, "trading_enabled", False)):
-            return False
-        return True
+        return all(bool(getattr(context, name, False)) for name in self.requires)
 
 
 # ---------------------------------------------------------------------------
@@ -309,9 +355,10 @@ class ToolkitSpec:
 #:         description="Quotes, depth, history and intervals.",
 #:     ),
 #:
-#: An order toolkit adds ``requires_trading=True``; a chart toolkit narrows to
-#: ``surfaces=CHART_ONLY``. Entries name a module and an attribute rather than
-#: importing anything, so a toolkit that is not selected costs nothing.
+#: An order toolkit adds ``requires=frozenset({CAPABILITY_TRADING})``; a chart
+#: toolkit narrows to ``surfaces=CHART_ONLY``. Entries name a module and an
+#: attribute rather than importing anything, so a toolkit that is not selected
+#: costs nothing.
 TOOLKITS: list[ToolkitSpec] = [
     ToolkitSpec(
         key="market",
@@ -428,7 +475,7 @@ TOOLKITS: list[ToolkitSpec] = [
         module="services.agent.tools.orders",
         attr="OrdersToolkit",
         surfaces=CHAT_ONLY,
-        requires_trading=True,
+        requires=frozenset({CAPABILITY_TRADING}),
         order=50,
         description=(
             "Place, modify, cancel and close real orders and positions. "
@@ -456,6 +503,7 @@ TOOLKITS: list[ToolkitSpec] = [
         module="services.agent.tools.websearch",
         attr="WebSearchToolkit",
         surfaces=ALL_SURFACES,
+        requires=frozenset({CAPABILITY_WEB_SEARCH}),
         order=80,
         description="Web search for links, and cited web research.",
     ),
@@ -511,7 +559,7 @@ def register(
     *,
     key: str | None = None,
     surfaces: Iterable[str] = ALL_SURFACES,
-    requires_trading: bool = False,
+    requires: Iterable[str] = (),
     order: int = 100,
     description: str = "",
 ) -> Any:
@@ -527,8 +575,7 @@ def register(
         key: Registry key. Defaults to the snake-case class name with a trailing
             ``Toolkit`` removed.
         surfaces: Surfaces the toolkit is offered on.
-        requires_trading: True when the toolkit may only be built for a session
-            with trading enabled.
+        requires: Capabilities from :data:`CAPABILITIES` the run must have.
         order: Sort weight, lower first.
         description: One line describing the toolkit.
 
@@ -544,7 +591,7 @@ def register(
                 module=target.__module__,
                 attr=target.__name__,
                 surfaces=frozenset(surfaces),
-                requires_trading=requires_trading,
+                requires=frozenset(requires),
                 order=order,
                 description=description or (first_line[0] if first_line else ""),
                 cls=target,
@@ -635,7 +682,8 @@ def build_toolkits(context: Any) -> list[Toolkit]:
 
     Args:
         context: The run's :class:`ToolContext`, or anything shaped like it.
-            Must carry ``api_key``, ``surface`` and ``trading_enabled``.
+            Must carry ``api_key``, ``surface`` and every capability in
+            :data:`CAPABILITIES`.
 
     Returns:
         Toolkit instances, ordered by their spec's ``order`` then ``key``.
@@ -675,9 +723,9 @@ def build_toolkits(context: Any) -> list[Toolkit]:
         toolkits.append(instance)
 
     logger.debug(
-        "Agent toolkits for surface=%s trading_enabled=%s: %s",
+        "Agent toolkits for surface=%s capabilities=%s: %s",
         getattr(context, "surface", SURFACE_CHAT),
-        bool(getattr(context, "trading_enabled", False)),
+        ",".join(f"{name}={bool(getattr(context, name, False))}" for name in sorted(CAPABILITIES)),
         ", ".join(getattr(t, "name", type(t).__name__) for t in toolkits) or "none",
     )
     return toolkits

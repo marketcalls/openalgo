@@ -80,7 +80,7 @@ class TestTheRenderingTierIsRegistered:
 
     def test_it_needs_no_trading_permission(self):
         # Rendering a card mutates nothing, so a read-only session gets it.
-        assert _spec("openui").requires_trading is False
+        assert _spec("openui").requires == frozenset()
         keys = {
             spec.key
             for spec in select_specs(

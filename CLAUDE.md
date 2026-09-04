@@ -416,6 +416,75 @@ component files, TanStack Query for server state.
 messages, PR descriptions, changelogs, release notes, or any generated text
 including drafts for Discord or Telegram. Use plain text labels.
 
+### The ChatGPT subscription model list is ours to maintain
+
+The `chatgpt/` provider authenticates with a ChatGPT Plus or Pro plan by OAuth
+device flow instead of an API key, and it reaches **Codex**, not the ChatGPT web
+app. Everything about the agent's provider catalogue is read live from LiteLLM
+precisely so a package bump brings new models with it. This provider is the one
+exception, and it needs a person.
+
+**The symptom, if you do not know this.** LiteLLM's registry carries ten
+`chatgpt/*` entries, newest `gpt-5.4`, while the backend serves more. A model
+absent from that registry has no `mode`, so LiteLLM routes it through the
+chat-completions bridge instead of `/v1/responses`. The request never reaches
+the API: it lands on a Cloudflare interstitial and returns
+`403 Enable JavaScript and cookies to continue`. That reads like a network
+problem, an account problem or a bot block, and is none of them. Registering the
+entry with `mode: responses` is the entire fix.
+
+**The distinction that makes a candidate testable.** The backend refuses a model
+it does not serve in plain words:
+
+```
+{"detail":"The 'gpt-5.6' model is not supported when using Codex with a ChatGPT account."}
+```
+
+So a clean 400 naming the model means **not available**; a 403 HTML page means
+**not registered**, and is your bug, not OpenAI's. Anything else, read it.
+
+**Adding a model.** `services/agent/chatgpt_models.py` holds the supplement,
+registered into LiteLLM by `catalog._build()` and by `builder.build_model()`.
+Both are needed: a run resolving a stored row never touches the catalogue. It is
+deliberately NOT done in `chatgpt_oauth.ensure_ready()`, which runs inside a
+request and must import no LiteLLM and do no network work -- a hook placed there
+was caught by `test_the_gate_does_no_network_work`. To add a name, verify it
+first against a real
+subscription rather than guessing, because the set is not derivable from a
+pattern -- `gpt-5.6` is refused while `gpt-5.6-sol`, `-luna` and `-terra` all
+work:
+
+```python
+litellm.register_model({"chatgpt/<name>": {"litellm_provider": "chatgpt", "mode": "responses"}})
+litellm.responses(model="chatgpt/<name>", input=[{"role": "user", "content": "ok"}], stream=True)
+```
+
+Then add it to `SUPPLEMENTAL` with its context window.
+
+**Three rules for that file.**
+
+- **Never write cost keys.** A plan turn has no per-token price, and
+  `catalog.estimate_cost` returning None is what makes the usage badge report
+  tokens and no cost. Reporting `$0.00` claims the turn was free when it
+  consumed plan quota; falling back to the API price is worse.
+- **Never overwrite a LiteLLM entry, and test the provider, not the name.**
+  Eight of these models share a bare name with an OpenAI API model, so
+  `"gpt-5.6-sol" in litellm.model_cost` is True because of *OpenAI's* entry. A
+  guard written that way skips every model it exists to add. Match on
+  `litellm_provider == "chatgpt"`.
+- **Fail quietly.** The supplement is a convenience; a LiteLLM whose registry
+  has a different shape should cost these models, not a working agent.
+
+**Availability is per plan, not per provider.** These are the models the backend
+serves; which a given account may use is between the operator and OpenAI. The
+catalogue is advisory, and the model test on the config page is what answers for
+one account. That test **streams**, deliberately: LiteLLM's non-streaming reader
+for this provider raises `Unknown items in responses API response: []` on a
+reply that streams back perfectly (upstream #26179, open; its fix #27562 was
+closed unmerged), and the agent only ever runs `stream=True` anyway.
+
+Delete the file when LiteLLM ships these names. Its entries win automatically.
+
 ## Frontend build
 
 `frontend/dist/` is in `.gitignore` so contributors cannot commit half-built

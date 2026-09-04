@@ -310,6 +310,158 @@ class TestGeometryReadsRealBars:
         assert math.isclose(geom.bar_seconds(gapped), DAY)
 
 
+class TestARailIsALinePriceRespected:
+    """`fit_line` grew a containment ranking that nothing was passing.
+
+    Its docstring says containment "decides before any of that", and cites the
+    lines price crossed 22 and 19 times out of 107 bars that ranking on touches
+    alone produced. Both call sites in `tools/chart.py` were written without
+    `bars` and `side`, so the whole branch was dead: measured on real daily
+    windows the shipped resistance rail on RELIANCE was pierced by 16 of the 96
+    bars after its own anchor, and the support rail on INFY by 66 of 100.
+
+    A dead argument is invisible, so the test is at the seam that was broken.
+    `_rails` is the one place either tool fits a line, and it has to hand the
+    bars over.
+    """
+
+    #: A rally into three lower highs, then a decline to a much lower high. The
+    #: line touching the most swings runs from the first high to the last and
+    #: price spends the rally above it; the line that holds starts at the third.
+    LOWER_HIGHS = [80, 70, 121, 100, 119, 98, 117, 60, 91, 55]
+
+    def _bars(self) -> geom.Bars:
+        return bars_from(zigzag_closes(self.LOWER_HIGHS, leg=6), spread=1.0)
+
+    @staticmethod
+    def _pierced(bars: geom.Bars, fit: dict[str, Any]) -> int:
+        """Bars above this line, counted here rather than read off the fit.
+
+        `fit["breaks"]` is 0 whenever containment was not asked for, so trusting
+        it would let an unwired caller pass this file.
+        """
+        slope = fit["slope"]
+        intercept = fit["from"].price - slope * fit["from"].time
+        return sum(
+            1
+            for index, moment in enumerate(bars.times)
+            if moment >= fit["from"].time and bars.highs[index] > slope * moment + intercept
+        )
+
+    def test_ranking_on_touches_alone_draws_a_line_price_lives_above(self):
+        """The defect itself, so the test below cannot pass vacuously."""
+        bars = self._bars()
+        highs, _lows = geom.significant_pivots(bars, 0, len(bars) - 1)
+        loose = geom.fit_line(highs)
+        assert loose is not None
+        assert self._pierced(bars, loose) > 5, (
+            "this window has to punish a touch-only fit, or it proves nothing"
+        )
+
+    def test_the_rail_the_tools_draw_is_the_contained_one(self):
+        from services.agent.tools.chart import _rails
+
+        bars = self._bars()
+        highs, lows = geom.significant_pivots(bars, 0, len(bars) - 1)
+        rails = _rails(bars, highs, lows)
+
+        assert self._pierced(bars, rails["resistance"]) == 0, (
+            "a resistance rail with bars above it is a regression, not a trendline"
+        )
+        assert rails["resistance"]["breaks"] == 0
+        loose = geom.fit_line(highs)
+        assert (rails["resistance"]["from"].index, rails["resistance"]["to"].index) != (
+            loose["from"].index,
+            loose["to"].index,
+        ), "containment has to change the answer here, or the arguments are not reaching it"
+
+    def test_both_anchors_are_still_swings_that_printed(self):
+        from services.agent.tools.chart import _rails
+
+        bars = self._bars()
+        highs, lows = geom.significant_pivots(bars, 0, len(bars) - 1)
+        for fit in _rails(bars, highs, lows).values():
+            assert fit["from"].time in bars.times and fit["to"].time in bars.times
+            assert fit["from"].price in bars.highs or fit["from"].price in bars.lows
+
+
+# ---------------------------------------------------------------------------
+# Consolidation: the whole sideways stretch, and only a sideways one
+# ---------------------------------------------------------------------------
+
+
+class TestAConsolidationIsTheWholeStretch:
+    """Both halves of the rule, because either one alone gets a chart wrong.
+
+    The band has to be wide enough to hold the wick that printed inside the
+    range, or the detector reports a tight sub-window and leaves most of the
+    base outside the box. Measured on RELIANCE NSE daily over 2026-04-01 to
+    2026-09-04, a band capped at a third of the visible move found 1265.90 to
+    1337.00 over 29 bars, inside a stretch a trader boxes as 1249.80 to 1345.90
+    over 68. Widening it alone, though, starts boxing trending legs, because a
+    leg fits in a tall band too. Net progress is what tells them apart.
+    """
+
+    def test_the_band_holds_the_wick_that_printed_inside_the_range(self):
+        # A rally, then a long base whose lowest print is one deep wick. The
+        # base is the answer; the sub-window that dodges the wick is not.
+        closes = [130.0 + n for n in range(20)] + [109.0 if n % 2 else 101.0 for n in range(68)]
+        bars = bars_from(closes, spread=1.0)
+        wick = 30
+        bars = geom.Bars(
+            times=bars.times,
+            opens=bars.opens,
+            highs=bars.highs,
+            lows=bars.lows[:wick] + (96.0,) + bars.lows[wick + 1 :],
+            closes=bars.closes,
+        )
+
+        band = geom.consolidation(bars, 0, len(bars) - 1)
+        assert band is not None
+        assert band["low"] == 96.0, "the deepest print in the range bounds the range"
+        assert band["high"] == 110.0
+        assert band["bars"] >= 60, (
+            "the whole base is the consolidation, not the tightest band inside it"
+        )
+        # Both edges printed, like every other number this module hands out.
+        assert band["low"] in bars.lows and band["high"] in bars.highs
+
+    def test_a_trending_leg_does_not_qualify_just_because_it_fits_the_band(self):
+        bars = bars_from([100.0 + 2 * n for n in range(80)], spread=2.0)
+        visible = max(bars.highs) - min(bars.lows)
+
+        # Not vacuous: without the net-progress rule this window has runs the
+        # band alone would happily accept, so refusing it is that rule's doing
+        # and not the tolerance's.
+        widest_fitting = max(
+            end - start + 1
+            for start in range(len(bars))
+            for end in range(start, len(bars))
+            if max(bars.highs[start : end + 1]) - min(bars.lows[start : end + 1])
+            <= geom._RANGE_BAND_FRACTION * visible
+        )
+        assert widest_fitting >= 12
+
+        assert geom.consolidation(bars, 0, len(bars) - 1) is None, (
+            "price that came out the far side of the box was going somewhere"
+        )
+
+    def test_narrow_is_measured_against_what_is_on_screen(self):
+        """A viewport holding nothing but the range reports no range.
+
+        Deliberate, and the reason the tolerance is a share of the visible move
+        rather than of price: raise it far enough to catch a window that is
+        entirely one band and the whole of a trending chart starts qualifying
+        too. On the RELIANCE window this file measures, the full 107 bars carry
+        a 100 point rally and a 170 point decline, and price still finishes only
+        0.30 of the window from where it started, so net progress alone would
+        wave it through. The band is what refuses it, and the cost of that is
+        this case. The tool says so in prose instead of shading the viewport.
+        """
+        bars = bars_from([104.0 if n % 2 else 96.0 for n in range(40)], spread=1.0)
+        assert geom.consolidation(bars, 0, len(bars) - 1) is None
+
+
 # ---------------------------------------------------------------------------
 # The toolkit
 # ---------------------------------------------------------------------------
@@ -330,7 +482,9 @@ CHART_CONTEXT: dict[str, Any] = {
     "visible_from": None,
     "visible_to": None,
     "last_price": 115.0,
-    "indicators": [{"id": "ema-1", "name": "EMA 20"}],
+    # Both ids, as the panel sends them: `id` is the instance and `indicatorId`
+    # is the descriptor, and only the second is a name a tool can act on.
+    "indicators": [{"id": "ema-1", "indicatorId": "ema", "name": "EMA 20"}],
     "drawings": [
         {
             "tool": "trend-line",
@@ -459,6 +613,114 @@ class TestTheDrawingToolsDraw:
         kit, sink = toolkit
         kit.read_chart()
         kit.analyse_chart()
+        assert commands_of(sink) == []
+
+
+class TestTheIndicatorToolsKnowWhichTierANameLivesIn:
+    """Two catalogues share a domain and neither contains the other.
+
+    `openalgo-charts` draws 102 and the Python `openalgo.ta` computes 127, with
+    only 34 names in common. Asked to add AlphaTrend the agent consulted the
+    only list it had, the Python one, and told the operator the chart did not
+    have it. It does. Everything here exists so a refusal names the right tier.
+    """
+
+    def test_the_catalogue_is_the_chart_tier_and_says_so(self):
+        from services.agent.tools.chart import _chart_indicator_catalogue
+
+        rows = _chart_indicator_catalogue()
+        ids = {row["id"] for row in rows}
+        assert len(rows) == len(ids) > 90, "the generated catalogue did not parse"
+        # Drawable, and absent from openalgo.ta.
+        assert {"alphatrend", "halftrend"} <= ids
+        # Computable, and absent from the chart.
+        assert not ({"bbands", "adxr"} & ids)
+        assert all(row["name"] and row["category"] for row in rows)
+
+    def test_the_file_the_catalogue_is_parsed_from_is_actually_there(self):
+        """The reader degrades silently, so only this notices when it cannot read.
+
+        `_chart_indicator_catalogue` answers with an empty list on any failure
+        and the tools fall back to passing the name straight through, which is
+        the right behaviour for a stale install and the reason nobody spotted
+        that the path was wrong. It was resolved with the `parents[2]` the
+        modules one directory up use, so it pointed at `services/docs/prompt/`
+        and no install has ever read it.
+        """
+        from services.agent.tools.chart import _CHART_INDICATOR_DOC
+
+        assert _CHART_INDICATOR_DOC.is_file(), (
+            f"the generated catalogue is not at {_CHART_INDICATOR_DOC}, so every "
+            "indicator tool is running on its degraded fallback"
+        )
+
+    def test_the_counts_the_model_is_told_are_the_counts_that_are_true(self):
+        """The tool's own docstring states the size of both tiers and the overlap.
+
+        It is prose the model reads and acts on, so it is a claim like any other
+        and it goes stale the moment `openalgo-charts` or `openalgo.ta` gains a
+        name. `chartIndicators.test.ts` pins the generated file against the live
+        JavaScript registry, but that test needs Node, and a production checkout
+        has none. This one runs where the docstring does.
+        """
+        import re
+
+        from services.agent.indicators.registry import REGISTRY
+        from services.agent.tools.chart import ChartToolkit, _chart_indicator_catalogue
+
+        chart = {row["id"] for row in _chart_indicator_catalogue()}
+        quoted = [
+            int(n) for n in re.findall(r"\b(\d+)\b", ChartToolkit.list_chart_indicators.__doc__)
+        ]
+        assert quoted == [len(chart), len(REGISTRY), len(chart & set(REGISTRY))], (
+            "the docstring quotes the chart tier, the Python tier and the overlap, "
+            "in that order, and one of the three has drifted"
+        )
+
+    def test_listing_filters_on_the_id_and_the_name(self, toolkit):
+        kit, sink = toolkit
+        assert "alphatrend" in kit.list_chart_indicators("alphatrend")
+        assert "alphatrend" in kit.list_chart_indicators("AlphaTrend")
+        assert "No chart indicator matches" in kit.list_chart_indicators("bbands")
+        assert commands_of(sink) == [], "listing is a read, not a draw"
+
+    def test_adding_emits_the_command_the_terminal_applies(self, toolkit):
+        kit, sink = toolkit
+        answer = kit.add_chart_indicator("alphatrend", {"period": 14})
+        assert commands_of(sink) == [
+            {"op": "indicator", "action": "add", "id": "alphatrend", "settings": {"period": 14}}
+        ]
+        assert "alphatrend" in answer
+
+    def test_a_name_this_process_has_never_heard_of_is_still_sent(self, toolkit):
+        # The operator's own modules load in the browser from
+        # strategies/indicators/, and no list on this side can see them. The
+        # chart checks its own registry and ignores what it does not know, so
+        # refusing here would block a working indicator.
+        kit, sink = toolkit
+        answer = kit.add_chart_indicator("my-own-study")
+        assert commands_of(sink)[0]["id"] == "my-own-study"
+        assert "not in the built-in catalogue" in answer
+
+    def test_removing_names_the_id_read_chart_reported(self, toolkit):
+        kit, sink = toolkit
+        listed = kit.read_chart()
+        assert '"id":"ema"' in listed.replace(" ", ""), (
+            "read_chart has to report the descriptor id, because the instance id "
+            "is not something remove_chart_indicator can act on"
+        )
+        kit.remove_chart_indicator("ema")
+        assert commands_of(sink) == [{"op": "indicator", "action": "remove", "id": "ema"}]
+
+    @pytest.mark.parametrize("name", ["", "   ", "Ema 20", "a", "x" * 40, "../etc/passwd"])
+    def test_a_string_that_is_not_an_id_is_refused_before_it_reaches_the_chart(self, toolkit, name):
+        from agno.exceptions import RetryAgentRun
+
+        kit, sink = toolkit
+        with pytest.raises(RetryAgentRun):
+            kit.add_chart_indicator(name)
+        with pytest.raises(RetryAgentRun):
+            kit.remove_chart_indicator(name)
         assert commands_of(sink) == []
 
 

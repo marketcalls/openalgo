@@ -70,6 +70,64 @@ describe('hydrateMessages', () => {
     expect(sumUsage([message.usage]).hasUnpricedTurn).toBe(true)
   })
 
+  // The defect this guards is the same shape as the first test in this file and
+  // is invisible in exactly the same way. `toUsage` rebuilds the usage field by
+  // field, so a field it does not name is dropped on reload: a turn that ran on
+  // a ChatGPT plan would come back looking like a turn on a model nobody has
+  // priced, and the badge would render a dash meaning "unknown" for a turn
+  // whose price is perfectly well known to be nothing extra.
+  it('carries the billing path of a plan turn through a reload', () => {
+    const [message] = hydrateMessages([
+      storedMessage({ notices: [{ ...USAGE, cost_usd: null, billing: 'subscription' }] }),
+    ])
+
+    expect(message.usage?.billing).toBe('subscription')
+    expect(message.usage?.cost_usd).toBeNull()
+    expect(message.usage?.total_tokens).toBe(1500)
+  })
+
+  it('counts a plan turn as covered rather than as unpriced', () => {
+    const [onPlan] = hydrateMessages([
+      storedMessage({ notices: [{ ...USAGE, cost_usd: null, billing: 'subscription' }] }),
+    ])
+    const [metered] = hydrateMessages([storedMessage({ id: 2, notices: [USAGE] })])
+
+    const totals = sumUsage([onPlan.usage, metered.usage])
+    expect(totals.subscriptionTurns).toBe(1)
+    // The metered turn had a price, and the plan turn never had one to miss, so
+    // the total is exact rather than a floor.
+    expect(totals.hasUnpricedTurn).toBe(false)
+    expect(totals.costUsd).toBeCloseTo(0.0123)
+    expect(totals.totalTokens).toBe(3000)
+  })
+
+  it('carries a metered turn billing through too', () => {
+    const [message] = hydrateMessages([
+      storedMessage({ notices: [{ ...USAGE, billing: 'metered' }] }),
+    ])
+
+    expect(message.usage?.billing).toBe('metered')
+    expect(sumUsage([message.usage]).subscriptionTurns).toBe(0)
+  })
+
+  // A row written before the field existed, and a row written by something that
+  // put an unrecognised value there. Neither may be read as a plan turn: saying
+  // a turn was covered by a subscription when nobody said so is the reading
+  // that costs somebody money.
+  it('leaves billing unset for an older row, and refuses an unknown value', () => {
+    const [older] = hydrateMessages([storedMessage({ notices: [USAGE] })])
+    expect(older.usage?.billing).toBeUndefined()
+    expect('billing' in (older.usage ?? {})).toBe(false)
+
+    const [odd] = hydrateMessages([
+      storedMessage({
+        notices: [{ ...USAGE, billing: 'free' as unknown as 'metered' }],
+      }),
+    ])
+    expect(odd.usage?.billing).toBeUndefined()
+    expect(sumUsage([odd.usage]).subscriptionTurns).toBe(0)
+  })
+
   it('splits the sidecar into notices, visualizations and prose', () => {
     const [message] = hydrateMessages([
       storedMessage({
@@ -203,6 +261,50 @@ describe('hydrateMessages', () => {
     expect(message.notices).toEqual([{ level: 'info', message: '' }])
     expect(message.usage?.total_tokens).toBe(0)
     expect(message.usage?.cost_usd).toBeNull()
+  })
+
+  it('puts back the files a question carried, and no bytes', () => {
+    const [message] = hydrateMessages([
+      storedMessage({
+        role: 'user',
+        content: 'What is wrong with this chart?',
+        notices: [
+          {
+            type: 'attachments',
+            items: [
+              { name: 'chart.png', kind: 'image', mime: 'image/png', size: 2584, digest: 'bd42' },
+              { name: 'book.csv', kind: 'text', mime: 'text/plain', size: 30, digest: 'cb01' },
+            ],
+          },
+        ],
+      }),
+    ])
+
+    // The same chips the composer showed, rebuilt from metadata alone: the
+    // server stores what a file was and never its content.
+    expect(message.attachments).toEqual([
+      { name: 'chart.png', kind: 'image', mime: 'image/png', size: 2584 },
+      { name: 'book.csv', kind: 'text', mime: 'text/plain', size: 30 },
+    ])
+    expect(message.content).toBe('What is wrong with this chart?')
+  })
+
+  it('reads an attachment entry defensively, like every other stored field', () => {
+    const [message] = hydrateMessages([
+      storedMessage({
+        role: 'user',
+        notices: [
+          {
+            type: 'attachments',
+            items: [{ name: null, kind: 'video', size: 'big' }],
+          } as unknown as ChatMessage['notices'][number],
+        ],
+      }),
+    ])
+
+    // An unknown kind is text, which renders a label rather than trying to
+    // show a picture that was never stored.
+    expect(message.attachments).toEqual([{ name: '', kind: 'text', mime: '', size: 0 }])
   })
 
   it('gives a user turn the user role and a stable id', () => {

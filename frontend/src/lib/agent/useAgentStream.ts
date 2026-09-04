@@ -40,6 +40,12 @@ import {
   type ToolCall,
 } from '@/api/agent'
 import {
+  type AgentAttachment,
+  type AgentAttachmentMeta,
+  attachmentMeta,
+  attachmentPayload,
+} from './attachments'
+import {
   type AgentChartCommand,
   type AgentFrame,
   type AgentStreamPath,
@@ -108,6 +114,15 @@ export interface AgentMessage {
   viz: AgentVizItem[]
   /** In dispatch order. A call with no `ok` yet is still running. */
   tools: ToolCall[]
+  /**
+   * The files this question carried, on a user message.
+   *
+   * Metadata only, and that is what the server keeps too: a stored row records
+   * a file's name, kind, type, size and digest and never its bytes. So the
+   * thread shows that a file was sent and which one, and a reloaded
+   * conversation shows exactly the same thing as the live one.
+   */
+  attachments: AgentAttachmentMeta[]
   notices: AgentNotice[]
   usage: AgentUsage | null
   /** Set when this turn paused for approval; null once it is decided. */
@@ -145,6 +160,7 @@ export function createAgentMessage(
     reasoning: '',
     viz: [],
     tools: [],
+    attachments: [],
     notices: [],
     usage: null,
     pending: null,
@@ -183,13 +199,35 @@ export interface UseAgentStreamOptions {
   onFrame?: (frame: AgentFrame) => void
 }
 
+/**
+ * What one turn carries besides its words.
+ *
+ * Both fields are optional on the wire and both default the way the backend
+ * defaults them: no `attachments` key means none, and an absent `web_search`
+ * means on. So a caller that has neither sends exactly the body it sent before
+ * either existed.
+ */
+export interface AgentTurnOptions {
+  /** Files to send with this message. The bytes travel; nothing is stored. */
+  attachments?: readonly AgentAttachment[]
+  /**
+   * False withholds the web search tools from this turn.
+   *
+   * Only false is transmitted. `/chat/confirm` needs none of this: the server
+   * recovers the switch from the stored row and ANDs it with whatever the body
+   * sends, so approving a paused order cannot hand the resumed run a tool the
+   * question withheld.
+   */
+  webSearch?: boolean
+}
+
 export interface UseAgentStreamResult {
   messages: AgentMessage[]
   running: boolean
   conversationId: number | null
   error: string | null
   /** Send a message and stream the answer. Ignored while a turn is running. */
-  send: (text: string) => Promise<void>
+  send: (text: string, turn?: AgentTurnOptions) => Promise<void>
   /** Abort locally and cancel the run server side. */
   stop: () => Promise<void>
   /** Resume the paused run. Decisions are keyed by requirement or tool call id. */
@@ -469,7 +507,7 @@ export function useAgentStream(options: UseAgentStreamOptions = {}): UseAgentStr
   )
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, turn: AgentTurnOptions = {}) => {
       const message = text.trim()
       if (!message || runningRef.current) return
       setError(null)
@@ -494,7 +532,16 @@ export function useAgentStream(options: UseAgentStreamOptions = {}): UseAgentStr
       if (reasoningEffort) body.reasoning_effort = reasoningEffort
       if (chartContext) body.chart_context = chartContext
 
-      await runTurn('/chat/stream', body, [createAgentMessage('user', message)])
+      const files = turn.attachments ?? []
+      if (files.length > 0) body.attachments = files.map(attachmentPayload)
+      // Only the off case is sent. Absent means on, which is the default the
+      // backend already had, so a caller that never touches the switch sends
+      // the body it always sent.
+      if (turn.webSearch === false) body.web_search = false
+
+      await runTurn('/chat/stream', body, [
+        createAgentMessage('user', message, { attachments: files.map(attachmentMeta) }),
+      ])
     },
     [runTurn]
   )

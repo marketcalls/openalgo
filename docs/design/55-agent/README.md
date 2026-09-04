@@ -30,15 +30,20 @@ them is wrong even if it passes tests.
 ```
 services/agent/
   __init__.py
-  runtime.py            lifecycle; one call from app.py
   settings.py           DB-backed config accessors
   providers.py          provider vocabulary -> LiteLLM kwargs
   catalog.py            model catalog (LiteLLM price/context snapshot)
+  chatgpt_oauth.py      device flow, token custody, billing verdict
+  chatgpt_models.py     plan models LiteLLM's registry does not list
   builder.py            Agent construction + the tool factory
   stream.py             real-thread bridge; agno events -> frames
   frames.py             the wire contract, standalone, no agno import
   viz_sink.py           per-run side channel a viz tool's payload travels on
+  attachments.py        files the operator adds to a turn
   prompts.py            system prompt assembly
+  chart_contract.py     the /trading wire contract, both directions
+  chart_geometry.py     levels and zones computed from real bars
+  indicators/           registry, compute and descriptions for openalgo.ta
   safety/
     __init__.py
     risk.py             pure-python order guard
@@ -46,11 +51,9 @@ services/agent/
   tools/
     __init__.py         registry: build_toolkits(context) -> list
     base.py             OpenAlgoToolkit
-    market.py account.py orders.py symbols.py options.py
-    chart.py viz.py openui.py strategy_gen.py flow_gen.py
-  generators/
-    python_strategy.py  emits a strategies/scripts/*.py
-    flow_json.py        emits + validates Flow JSON
+    market.py account.py orders.py symbols.py options.py instrument.py
+    live.py indicators.py chart.py viz.py option_viz.py openui.py
+    websearch.py strategy_gen.py flow_gen.py
 
 database/agent_db.py    schema + store
 blueprints/agent.py     session API
@@ -60,15 +63,24 @@ frontend/src/
   api/agent.ts
   lib/agent/stream.ts       fetch + ReadableStream SSE client
   lib/agent/useAgentStream.ts
-  pages/agent/*             Chat, Setup, Settings
-  components/agent/*
+  lib/agent/subscription.ts telling a plan row from an API row
+  pages/agent/               AgentIndex, AgentChat, AgentConfig
+  components/agent/          AgentSetupGate is the gate, config/ the settings
 ```
+
+There is no `runtime.py` and no `generators/` package. Generation is two
+toolkits, `tools/strategy_gen.py` and `tools/flow_gen.py`, and the module has no
+lifecycle to start; see **Startup**.
 
 Two things deliberately live outside `services/agent/`:
 
-- **The chart command vocabulary** becomes an `apply(command)` method on the
-  existing `/trading` terminal (`frontend/src/lib/trading/terminal.ts`). The
-  chart already exists; the agent drives it rather than owning a second one.
+- **The chart command vocabulary is applied by the existing terminal.**
+  `terminal.applyChartCommands(commands)`
+  (`frontend/src/lib/trading/terminal.ts`) serialises a frame's commands through
+  one promise queue and delegates the per-command decision to
+  `frontend/src/lib/trading/chartContract.ts`, which is pure and testable
+  without a chart. The chart already exists; the agent drives it rather than
+  owning a second one.
 - **Flow validation** calls `services/flow_workflow_validator.validate_workflow`.
   There is exactly one Flow schema and it is not here.
 
@@ -186,6 +198,15 @@ decision. A write failure here is logged and swallowed; it never blocks a trade.
 | `openai_compatible` | yes | yes | `openai/{model_name}` + `api_base` |
 | `litellm` | yes | no | `{model_name}` verbatim, prefix already inside |
 
+A ChatGPT plan is **not a sixth kind**. It is stored as `litellm` with the
+prefix inside the name, `chatgpt/gpt-5.4`, because that is exactly what the
+`litellm` kind already means: the id is passed through verbatim. One thing
+changes, and it is the key. `providers._is_subscription` carves a `chatgpt/`
+model out of `needs_key`, so the row saves with nothing pasted, and the import
+it does that with is lazy and fails closed: a module that cannot be imported
+answers False and the row is asked for a key as before. See **The ChatGPT
+subscription** below.
+
 `providers.py` exposes one function:
 
 ```python
@@ -210,9 +231,19 @@ at runtime. Verified against `litellm==1.99.0`:
 import litellm
 litellm.LITELLM_CHAT_PROVIDERS   #   94 chat-capable providers
 litellm.provider_list            #  152 providers, all modalities
-litellm.models_by_provider       #   96 providers / 3021 models
-litellm.model_cost               # 3517 entries of per-model metadata
+litellm.models_by_provider       #   96 providers, about 3,000 models
+litellm.model_cost               # about 3,500 entries of per-model metadata
 ```
+
+The first three are fixed by the pinned package. **The model and price counts
+are not, and are given as approximations deliberately.** LiteLLM fetches its
+cost map from a remote URL during `import litellm` unless
+`LITELLM_LOCAL_MODEL_COST_MAP=true` is set, which this repository never sets, so
+the numbers move under a pin that has not changed: measured on one install,
+3,043 models and 3,560 priced entries with the fetch, 2,799 and 3,175 with the
+in-package backup forced. Writing an exact pair here would be a number that goes
+stale without anything in this repository changing, which is the failure the
+whole catalog design exists to avoid.
 
 Three deliberate choices:
 
@@ -229,8 +260,9 @@ Three deliberate choices:
   never goes stale.
 
 Maintenance is therefore one action: **bump `litellm`**. New providers and
-models arrive with the package. No migration, no regeneration script, no
-network call, and no catalog rows to keep in sync.
+models arrive with the package. No migration, no regeneration script, and no
+catalog rows to keep in sync. The one exception is the ChatGPT plan model list,
+which is ours to maintain and whose procedure lives in `CLAUDE.md`.
 
 A model absent from the catalog is still addable by hand, because the catalog is
 advisory. The database stores only operator intent: which models are enabled,
@@ -249,10 +281,13 @@ instead. The layout is what transfers.
 
 - **A provider card grid**, built from `LITELLM_CHAT_PROVIDERS`, searchable,
   each card showing an `n configured` badge when the registry already holds
-  models for it. A small local map supplies display names and icons for the
-  common brands; anything without an entry falls back to the provider id, so a
-  provider added by a future LiteLLM release still appears rather than
-  disappearing until someone updates a table.
+  models for it. `catalog._BRANDS` supplies a display name and an icon slug for
+  the brands an operator recognises; anything without an entry falls back to the
+  provider id, so a provider added by a future LiteLLM release still appears
+  rather than disappearing until someone updates a table. There is no bundled
+  logo set: a company logo is somebody else's mark and the catalog grows with
+  every release, so the tile is a monogram on a per-provider colour, hashed from
+  the id for anything unrecognised.
 - **Clicking a card opens one panel** with a single API-key field, a base-URL
   field only where that provider needs one, and a **checklist of that provider's
   models** from `models_by_provider`, each annotated from `model_cost` with its
@@ -265,11 +300,16 @@ instead. The layout is what transfers.
 - **An "add custom model" escape hatch** in the same panel, because the catalog
   is advisory and an operator must be able to name a model it has never heard of.
 
-The provider list itself is a **static frontend constant**, not a database
-table, exactly as ragz's generated `provider-catalog.ts` is. It maps a brand to a
-`provider_kind`, whether a key or base URL is required, and a suggested model
-list. Nothing about it is sent to the backend; the backend only ever sees the
-five `provider_kind` values.
+**The provider list is served by the backend, not held in the frontend.**
+`catalog.py` decides the display name, the icon slug, the `provider_kind`, and
+whether a key or a base URL is required, and `GET /agent/api/catalog/providers`
+returns it at request time. That is the whole difference from ragz, whose
+equivalent is a 6,700-line generated `provider-catalog.ts`: a generated constant
+is a second source of truth that goes stale between LiteLLM bumps, and the
+information is already in the package the backend has imported. The only local
+map left in the frontend is the accent colour behind a provider's monogram,
+which is decorative. The backend still only ever stores one of the five
+`provider_kind` values.
 
 A registered-models table below the grid lists every configured model with its
 provider, key fingerprint, test status, an `enabled` checkbox and a `default`
@@ -282,11 +322,214 @@ that is missing or disabled is an error, never a silent fall-through to the
 default. Resolution happens **before any stream byte is written**, so a bad
 model id fails as a clean HTTP error rather than mid-stream.
 
+## The ChatGPT subscription
+
+A ChatGPT Plus or Pro plan is a **second billing path, not a second key**.
+LiteLLM 1.99.0 ships it as its own provider, `chatgpt`, authenticating by OAuth
+device flow against **Codex**, not the ChatGPT web app:
+
+```
+openai/gpt-5.4      an API key        -> OpenAI API credits
+chatgpt/gpt-5.4     an OAuth sign-in  -> the operator's plan
+```
+
+LiteLLM lists ten `chatgpt/*` models, newest `gpt-5.4`. **Eight of the ten share
+a bare name with an `openai` model**; only `gpt-5.3-instant` and
+`gpt-5.3-codex-spark` are subscription-only. That collision is the problem this
+whole feature is shaped around: an operator who registers both ends up with two
+rows reading GPT-5.4 that bill to different places, and the prefix is the only
+thing in the data that separates them.
+
+`services/agent/chatgpt_oauth.py` owns the credential and the billing verdict.
+`services/agent/chatgpt_models.py` is the model supplement; its maintenance
+procedure lives in `CLAUDE.md` and is not repeated here.
+
+### The device flow runs on a real OS thread
+
+The flow polls every 5s for up to 900s, LiteLLM's own
+`DEVICE_CODE_POLL_SLEEP_SECONDS` and `DEVICE_CODE_TIMEOUT_SECONDS`. Run on the
+green side, that stops the single production worker for a quarter of an hour,
+orders included, while behaving perfectly on the dev server. It is the trap
+`CLAUDE.md` describes, in its most expensive form.
+
+So `start_login` does exactly one bounded HTTP request on the caller's side,
+returns the verification URL and the user code, and hands the poll to a
+`utils.real_threading.Thread`. Nothing green ever waits on it: `login_status` is
+a frozen copy taken under a real lock held across a dict copy, and `cancel_login`
+joins with `real_threading.join`, which polls and yields.
+
+Proved in a subprocess with eventlet patched, because `monkey_patch()` is global
+and cannot be undone, asserting on elapsed time and hub liveness rather than on
+return values, which were always right. The thresholds the tests hold to:
+
+| | |
+| --- | --- |
+| the same poll inline on the green side | blocks for its whole duration, at most one hub tick, the defect |
+| `start_login` returns | under 0.5s, state `pending` |
+| while the real thread polls | over 20 hub ticks in 0.8s, at least two polls landed |
+| `cancel_login` from a greenlet | the hub keeps ticking throughout |
+
+The first of the three eventlet cases asserts the defect itself, so nothing below
+it can pass vacuously.
+
+**A second `start_login` returns the login already in flight** rather than
+replacing it. The device endpoint applies a five-minute cooldown after issuing a
+code, recorded as `device_code_requested_at`, which LiteLLM's own client
+honours, so a second code inside it gets nowhere. And the first code is already
+on the operator's screen and may be half typed, so invalidating it turns a slow
+login into a failed one. Replacing it is a deliberate act, `force=true`, which
+is what a "start over" control sends.
+
+### Listing a model must not start a login
+
+Sharper than the poll, because it needs no operator at all.
+`litellm.supports_reasoning(model="chatgpt/gpt-5.4")` resolves the provider
+through `ChatGPTConfig._get_openai_compatible_provider_info` to
+`Authenticator.get_access_token`, which with no cached token falls through to
+`_login_device_code`: a code printed to a stdout nobody is reading, then a
+fifteen-minute poll on the calling thread. That call sits behind no gate at all.
+`blueprints/agent.py:_with_resolved_capabilities` runs it for every row on
+`GET /agent/api/models`, so merely **listing** a registered plan model would
+hang the request for a quarter of an hour.
+
+`providers._litellm_opinion` reads the capability out of `litellm.model_cost`
+for a subscription id instead of calling the predicate. It is the same answer,
+because the predicate is a lookup in that same table once the provider has been
+resolved. The lookup has to include LiteLLM's own bare-name fallback: none of
+the ten `chatgpt/` entries carries `supports_reasoning`, so reading the prefixed
+entry alone answered False for all ten against a predicate that answers True for
+eight, silently turning every reasoning model on a plan into a non-reasoning one
+and losing a capability the operator is paying for.
+
+`builder.resolve_model` gates a subscription row on `chatgpt_oauth.ensure_ready()`
+for the same reason one layer down: without it the run reaches LiteLLM with
+nothing to authenticate and starts that same login on the run thread.
+`ensure_ready` does no network work and imports no LiteLLM, which is what makes
+it safe on the green side, and `test_the_gate_does_no_network_work` pins that by
+making the module's own transports raise. A model-registration hook placed there
+was caught by that test and moved to `builder.build_model`.
+
+### Token custody
+
+`ag_secret` under `oauth:chatgpt` is the system of record, encrypted with the
+same Fernet through `agent_db.set_secret`, which compares **decrypted plaintext**
+for the reason the schema section already gives. The file is a cache the module
+rebuilds from it, which is what makes a database restored into a fresh container
+already authorised.
+
+Containment is a fix, not a precaution. LiteLLM's `Authenticator` writes the
+access token, the refresh token and the id token as plain JSON to
+`CHATGPT_TOKEN_DIR`, defaulting to
+`os.path.expanduser("~/.config/litellm/chatgpt")`. Where HOME is unset that
+expansion has already produced a literal `~` directory inside this repository
+holding live credentials, one `git add -A` from being committed; the root
+`.gitignore` carries a `/~/` rule for the folder it left behind.
+`configure_token_dir` **sets** the variable rather than defaulting it, refuses
+any path containing a literal tilde, points it at `db/chatgpt_oauth/`, narrows
+the directory to `0700`, and writes a nested `.gitignore` containing `*`, so the
+directory the module controls needs no tracked file edited to hold a refresh
+token. The test asks `git check-ignore` itself rather than asserting about the
+ignore file's contents.
+
+Three leaks are pinned rather than assumed. Five re-stores of an unchanged
+credential write the row once. `status()`, the `LoginStatus` repr and every log
+line across the whole flow carry neither token nor user code, and the user code
+is absent deliberately: a device code is a standing phishing target, which is
+why LiteLLM's own prompt says so. And a dead transport raised an `OSError` whose
+message quoted the request body, literally containing `refresh_token=<token>`,
+which `_post` reduces to "A ChatGPT sign-in request failed: OSError". The class
+name locates the bug without quoting anything.
+
+Two fingerprints exist for one credential and they differ. The stored value is
+the whole auth record as canonical JSON, so the `ag_secret` row fingerprints a
+blob. `status()` fingerprints the refresh token, so it survives an access-token
+refresh and stays the identifier the operator saw when they signed in. That one
+is the one to show.
+
+### Honest billing: tokens, and no cost
+
+`litellm.model_cost` prices `gpt-5.4` and carries an entry for `chatgpt/gpt-5.4`
+with no price keys at all. That is deliberate and correct, and
+`catalog.estimate_cost` already answers None for it. The bug was downstream:
+`stream._apply_reported_cost` patches a null cost from the provider's reported
+metrics, and LiteLLM's `completion_cost` answers `0.0` rather than None for a
+model it cannot price. A plan turn therefore rendered `$0.00`, which claims the
+turn was free when it consumed plan quota. Falling back to the bare name would
+have shown the API price instead, which is worse: a plausible number nobody
+would question.
+
+The rule is **tokens and no cost, labelled as subscription usage**. `Usage`
+gained `billing: str = "metered"`. `chatgpt_oauth.apply_billing` is the single
+function that settles it, forcing a null cost whatever anybody computed or
+reported, and `_apply_reported_cost` skips a frame already marked
+`subscription`. A metered turn passes through untouched, including a genuine
+`0.0` from a free model, which is a different claim and a true one.
+
+`EventTranslator` keeps the **resolved** model id alongside the reported one,
+because `_usage_frame` overwrites `self._model` with whatever the provider
+named, and a bare subscription name cannot be recognised. Measured against
+`litellm==1.99.0`: `catalog.get_model_meta("gpt-5.3-instant")` answers None,
+because a subscription-only name is in no bare-name entry at all, and
+`get_model_meta("gpt-5.4")` answers **OpenAI's** row, priced, because eight of
+the ten share their bare name with an API model. Neither answer can be read as
+"this turn ran on a plan", and the second reads as the opposite. The `chatgpt/`
+prefix is the only working signal. One prefixed name is therefore enough, and a
+metered row can never report a `chatgpt/` model, so there is no false positive
+to trade against.
+
+The field has to be carried the whole way or a reloaded turn silently loses it:
+`Usage` in `api/agent.ts`, `hydrate.ts:toUsage`, and `UsageBadge.tsx`, which
+renders "included in your ChatGPT plan" where a price would go. Unknown is read
+as metered everywhere, because claiming a turn was covered by a plan when nobody
+said so is the reading that costs somebody money.
+
+### The model test streams, and is drained
+
+`blueprints/agent.py:test_model` passes `stream=True`, for the upstream reason
+`CLAUDE.md` records and because the agent only ever runs `agent.run(stream=True)`:
+a test taking a path the product never takes can fail on a defect no operator
+would meet and pass over one they would. The **drain** is the part that is not
+in `CLAUDE.md` and is equally load-bearing. An unread iterator would report
+success on a credential the provider goes on to reject, which is the one thing
+this route exists to catch.
+
+### Telling the two rows apart
+
+The collision is a naming problem, so the answers are in the UI and in one
+shared module, `frontend/src/lib/agent/subscription.ts`, rather than repeated in
+each component.
+
+- `RegisteredModelsTable` renders `model_name` under `display_name` and badges
+  the `chatgpt/` prefix. A plan row has no `api_key_fingerprint`, because its
+  credential is not in `ag_secret` under `provider:` or `model:`, so the
+  fingerprint it shows comes from the subscription status instead.
+- `suggestSubscriptionDisplayName` yields "ChatGPT Plan: GPT-5.4" rather than
+  "GPT-5.4". An operator accepting both defaults would otherwise hold two
+  identical names billing to different places, and the cheapest place to prevent
+  that is where the name is chosen. The prefix leads because that is the half a
+  reader scans for, and putting it last puts the distinguishing half exactly
+  where the column truncates.
+- **The panel sits above the provider grid** on `/agent/config`. The grid draws
+  24 cards before offering to show more, so anything under it starts a screen
+  and a half down: the trading switch was buried exactly that way once. This
+  panel answers a question an operator arrives with, so it sits where they land.
+
 ## The setup gate
 
 `/agent` is unusable until a model is configured and tested.
 
-- `GET /agent/api/status` returns `{configured: bool, models: [...], default_model_id, trading_enabled}`.
+- `GET /agent/api/status` returns `{configured, model_count, default_model_id,
+  trading_enabled, agent_available, has_openalgo_api_key, chatgpt_authorised}`.
+  It carries a count and not a model list: the picker fetches `/models`, and a
+  gate that ships the registry makes every page load pay for it.
+- `agent_available` and `has_openalgo_api_key` are reported rather than folded
+  into `configured`, because an operator looking at a setup screen after adding
+  a model deserves to be told which of the two is missing.
+- `chatgpt_authorised` is on the gate rather than behind a second request,
+  because a `chatgpt/` model that is registered but not signed in looks
+  configured and is not, and the setup screen has to say so on first paint.
+  `is_authorised()` does no network work and starts no device login, which is
+  what makes it safe to read here.
 - The React route renders **Setup** when `configured` is false, chat otherwise.
 - Every chat route returns **409** with a clear message when unconfigured. The
   frontend must not be the only thing enforcing this.
@@ -331,9 +574,19 @@ a store-cached backend flag, populated once by `AuthSync` from
 first-run precedent, a cheap boolean endpoint checked on mount that navigates to
 a dedicated setup route.
 
-`/agent` follows both: an `AgentRoute` guard renders the setup page when
-`configured` is false, and the nav entry is **always shown, never filtered**,
-matching how Telegram, WhatsApp, Flow and Python Strategies are already listed.
+`/agent` follows both, but the guard is a component rather than a route
+wrapper. `components/agent/AgentSetupGate.tsx` exports the setup screen and
+`useAgentConfigured`, the hook that reads `/status` under one shared query key;
+`AgentIndex` renders the gate when `configured` is false and `AgentChat`
+otherwise, and the `/trading` panel renders the same gate with `compact`. One
+component, so the two surfaces cannot drift, and opening the panel after the
+chat costs no second request. An unreachable status reads as **not
+configured**: a status call nobody could answer is not evidence of a working
+agent behind it, and showing a chat that has nothing to talk to is the failure
+that matters.
+
+The nav entry is **always shown, never filtered**, matching how Telegram,
+WhatsApp, Flow and Python Strategies are already listed.
 Only capability-gated items like Leverage are filtered, and that is a fact about
 the broker rather than about setup state.
 
@@ -375,9 +628,18 @@ yield "data: {...}\n\n"
   sleeps a short interval, so the hub keeps running.
 - A heartbeat comment frame goes out when the queue is empty for a while, so an
   idle stream is not closed by a proxy.
-- On client disconnect (`GeneratorExit`) the route calls `agent.cancel_run(run_id)`
-  and the `finally` block joins the thread with a timeout. Without that a
-  dropped connection leaks a thread per turn in a worker that never restarts.
+- On client disconnect (`GeneratorExit`) the route calls
+  `stream.request_cancel(agent, run_id)` and the `finally` block joins the
+  thread with a timeout. Without that a dropped connection leaks a thread per
+  turn in a worker that never restarts.
+- **Never `agent.cancel_run` directly from a route.** Agno guards its
+  cancellation registry with a `threading.Lock` built after monkey-patching, so
+  that lock is green, and the real thread driving the run takes it on every
+  cancellation check. A greenlet contending on it is how the hub ends up trying
+  to resume a waiter belonging to another OS thread, which raises
+  `greenlet.error: Cannot switch to a different thread` and wedges whichever
+  side lost. `request_cancel` hands the one dictionary write to a throwaway real
+  thread and joins it with a timeout.
 
 Agno's sync `agent.run(stream=True)` returns a plain `Iterator[RunOutputEvent]`.
 We do not use `arun`. There is no asyncio anywhere in this module.
@@ -388,16 +650,17 @@ We do not use `arun`. There is no asyncio anywhere in this module.
 
 | type | payload |
 | --- | --- |
-| `start` | `run_id`, `session_id`, `conversation_id` |
+| `start` | `run_id`, `session_id`, `conversation_id`, `user_message_id` |
 | `token` | `delta` |
 | `tool_start` | `id`, `name`, `args` |
 | `tool_end` | `id`, `name`, `ok`, `result`, `duration` |
 | `reasoning` | `delta` |
+| `viz` | `kind`, `spec`, `title`, `source` (tool-built, see **Visualization**) |
 | `ui` | `delta` (OpenUI Lang text, see below) |
 | `chart_command` | `commands: [...]` |
 | `confirm` | `run_id`, `session_id`, `requirements: [...]` |
 | `notice` | `level`, `message` |
-| `usage` | `input_tokens`, `output_tokens`, `total_tokens`, `cached_tokens`, `reasoning_tokens`, `cost_usd`, `model`, `ttft_ms` |
+| `usage` | `input_tokens`, `output_tokens`, `total_tokens`, `cached_tokens`, `reasoning_tokens`, `cost_usd`, `billing`, `model`, `ttft_ms` |
 | `error` | `message`, `kind` |
 | `done` | `reason` (`stop`/`cancelled`/`incomplete`) |
 
@@ -413,6 +676,15 @@ Agno reports this without extra work: `ModelRequestCompletedEvent` carries
 catalog is read anyway, so cost is arithmetic rather than a second API call.
 A model absent from `model_cost` reports tokens with `cost_usd: null`; showing
 tokens and admitting the price is unknown beats inventing a number.
+
+**A ChatGPT plan turn has no price at all, which is a third case and not the
+second one.** `billing` carries it: `metered` when the turn is billed per token,
+`subscription` when it came out of a plan. A null `cost_usd` therefore means one
+of two things and the field says which, so the UI can render "unknown" and
+"included in your plan" differently instead of collapsing both to a dash. The
+value is decided once by `chatgpt_oauth.apply_billing` and persisted on the
+message row with the rest of the usage, or a reloaded conversation reports a
+plan turn as metered with no price. See **The ChatGPT subscription**.
 
 The UI shows per-turn usage under each answer and a running total for the
 conversation. Usage is persisted on the message row so a reloaded conversation
@@ -467,9 +739,18 @@ so nothing the model or user says can talk past it.
 
 Order of checks: kill switch, trading enabled, analyzer mode if required,
 symbol, exchange, product, quantity, session cap, duplicate window, notional and
-price deviation, affordability against available funds. The affordability check
-**fails open** on a broker error, because refusing a human-approved order
-because a quote endpoint hiccuped is worse than allowing it.
+price deviation, affordability against available funds.
+
+**The guard never fetches a quote.** The reference price, the last traded price
+and the available funds all arrive as arguments, because `services/risk/`'s rule
+holds here too: a pure evaluator is what makes the verdict identical across
+callers and callable from a green thread. The consequence is that the three
+checks that need market data **fail open with a warning** when it is absent, not
+only the affordability one: with no reference price the notional cap and the
+deviation check are both skipped, and with a limit price but no LTP the
+deviation check alone is. Refusing a human-approved order because the feed is
+down is the worse failure, and such an order has already passed every gate that
+does not need a number from outside.
 
 ## Security
 
@@ -524,19 +805,35 @@ be treated as data. That is defence in depth, not the defence.
 #### Delimiting untrusted text
 
 One escaping primitive, used at **every** boundary where text that entered the
-system as data goes back into a prompt. Ported from ragz's `wrap_untrusted_block`:
+system as data goes back into a prompt. Ported from ragz's `wrap_untrusted_block`
+and hardened past it:
 
 ```python
-def wrap_untrusted(tag: str, text: str) -> str:
-    closer = f"</{tag}>"
-    return f"<{tag}>\n{text.replace(closer, f'<\\/{tag}>')}\n</{tag}>"
+def wrap_untrusted(tag: str, text: Any, **attributes: Any) -> str
 ```
 
-The closer is neutralised so the content cannot forge a block boundary and
-escape its own wrapper. Any attribute interpolated into the opening tag, a
-symbol name, a filename, a broker rejection string, is XML-attribute escaped
-first, because an unescaped `"` in an attribute is the same break-out in a
-different position.
+Three properties, each answering a way the ragz shape was escapable:
+
+- **Openers are neutralised as well as closers.** A closer that survives ends
+  the block and everything after it reads as the conversation; an opener that
+  survives is the same break-out one position earlier, and a forged
+  `<tool_result source="platform">` inside a web page would let that page claim
+  the authority of the platform's own service layer.
+- **Every reserved tag is defanged, not only the wrapper's own.** A search
+  snippet carrying an intact `<tool_result>` block never breaks the surrounding
+  `<web_result>`, so it passed straight through and arrived in context as a
+  well-formed block claiming to be the platform's data.
+- **Case and whitespace are tolerated, and so are malformed spellings.** The
+  reader is a language model, not an XML parser: it reads `</ Tool_Result >`,
+  `< /tool_result>` and `<//tool_result>` as the end of the block, and a block
+  that can be ended early is a block that can be escaped.
+
+Any attribute interpolated into the opening tag, a symbol name, a filename, a
+broker rejection string, is XML-attribute escaped first and stripped of control
+characters, because an unescaped `"` in an attribute is the same break-out in a
+different position. A tag or attribute name that is not a plain identifier
+raises: that is a programming error, not user input, and failing loudly beats
+emitting a block whose structure an attacker chose.
 
 This applies to tool results, order rejection text, symbol and instrument names,
 generated code echoed back for review, and **the user's own earlier messages**.
@@ -578,8 +875,22 @@ knowingly.
   placed in the context window**, not in the system prompt, not in a tool
   result, not in an error message. Tools receive credentials through the toolkit
   instance, never through model-visible arguments.
-- Tool results are filtered before returning: any key whose name matches a
-  secret-shaped pattern is dropped rather than serialised.
+- **The order tools pass the broker's payload through
+  `services.agent.safety.audit.redact` before it reaches the model**, so a key
+  that arrives inside a broker response is dropped rather than serialised.
+  `redact` strips both shapes, an argument name that looks like a credential and
+  a value that looks like one. Only the success path in `tools/orders.py`
+  carries a broker structure at all; the refusal and error paths return a
+  message they wrote themselves. **No test pins this**, so per the meta-rule
+  above, read it as a control the code has and nothing guards against a later
+  edit dropping.
+- **NOT IMPLEMENTED for the other toolkits.** `OpenAlgoToolkit.to_json` is
+  `json_safe` plus a size cap, and it copies every mapping key through
+  untouched, so a service payload is serialised verbatim. `redact_arguments` in
+  `tools/base.py` is an exact-name list of twelve argument names applied only to
+  audit rows, never to a result. Extending the order tools' filter to every
+  toolkit is the fix; until it lands this bullet says so, per the meta-rule
+  above.
 
 ### Generated code never runs itself
 
@@ -604,9 +915,23 @@ server will make requests to it.
 
 - Validate the scheme is `http` or `https` and reject anything else.
 - Reject credentials embedded in the URL.
-- The cloud metadata address `169.254.169.254` is refused outright.
-- **Fail closed on the unknown.** An unparseable address and a DNS resolution
-  failure are both treated as blocked, never as "cannot tell, so allow".
+- **The cloud metadata endpoints are refused however they are spelled:**
+  `169.254.169.254`, `fd00:ec2::254`, `metadata.google.internal` and
+  `metadata`. The host is lower-cased, unbracketed and stripped of a trailing
+  dot before the set is consulted, and an IPv4-mapped IPv6 literal is unwrapped
+  to its IPv4 address, because `str()` renders `::ffff:169.254.169.254` as
+  `::ffff:a9fe:a9fe`, which matches nothing in the set. That spelling reached
+  the metadata endpoint until the unwrap was added. Seven spellings are pinned
+  by `test_the_metadata_endpoint_is_refused_however_it_is_spelled`.
+- **Fail closed on what will not parse.** A URL `urlsplit` refuses, a netloc
+  whose hostname raises, and a URL naming no host at all are each blocked rather
+  than passed through.
+- **The host is not resolved. NOT IMPLEMENTED.** A hostname that resolves to a
+  metadata address is not caught, and a hostname that resolves to nothing is
+  allowed rather than blocked: `http://no-such-host.invalid/` is accepted.
+  Resolving would put a DNS lookup in the save path and would refuse a container
+  hostname that is simply not up yet. The guard's own docstring says this; keep
+  the two in step.
 - A private or loopback host is **allowed**, because a local Ollama is the point,
   but the setup UI states that the server will connect to it. This is a
   single-user, self-hosted product where the operator already has server access,
@@ -625,27 +950,39 @@ server will make requests to it.
   a long-lived object.
 - The password input starts empty even when a key is configured; blank on save
   means keep the existing key.
+- **A credential this module did not choose the storage for still gets
+  contained.** LiteLLM writes the ChatGPT plan's access, refresh and id tokens
+  as plain JSON to a directory it picks by expanding `~`, and where HOME is
+  unset that produced a literal `~` folder of live credentials inside this
+  repository, one `git add -A` from a commit.
+  `chatgpt_oauth.configure_token_dir` sets the path rather than defaulting it,
+  refuses a literal tilde, puts the file under `db/`, narrows the directory to
+  `0700` and writes a nested `.gitignore` of `*`, and `ag_secret` under
+  `oauth:chatgpt` is the system of record. Verified by running `git
+  check-ignore` in a throwaway repository, not by reading the ignore file.
 
-#### One decryption path, pinned by a test
+#### Decryption is confined to one module
 
-Decryption of an agent secret happens in **exactly one function**, named with a
-leading underscore, and a test asserts by source scan that no file outside a
-named allowlist contains its name:
+`database/agent_db.py` is the only file in this module that imports
+`safe_decrypt_token`, and it decrypts in exactly two places: the plaintext
+comparison in `set_secret` that stops a pointless rewrite, and `get_secret`.
+Plaintext leaves the module only through `get_secret`, `resolve_api_key` and
+`get_api_key_for_model`. Five files call one of those: the model test route in
+`blueprints/agent.py`, `builder.py` where the model is constructed,
+`chatgpt_oauth.py`, `settings.py` and `tools/websearch.py`. Each takes the value
+into a local, hands it to the provider, and keeps no copy.
 
-```python
-def test_decryption_callers_are_exactly_the_allowlist():
-    offenders = [
-        str(p) for p in SRC.rglob("*.py")
-        if "_decrypt_agent_secret" in p.read_text(encoding="utf-8")
-        and p not in ALLOWED
-    ]
-    assert offenders == []
-```
-
-It is a plain source grep, not import inspection, so aliasing the import does
-not evade it: the alias statement still contains the name. Adding a caller makes
-CI fail until the file is added to the allowlist, which forces a visible,
-deliberate diff line. Adding a caller is a security review, not a refactor.
+**NOT IMPLEMENTED: no test pins that list.** An allowlist test was designed here
+as a source grep for one underscore-prefixed function name, and it cannot be
+written that way: the real funnels are public because they are called across
+modules, and both names are substrings of unrelated functions in this
+repository, `samco_get_secret_key` in `database/auth_db.py` and
+`_resolve_api_key` in the WhatsApp, scalping and tick-feed services, so the grep
+would report offenders that touch no agent secret. Qualifying the substring to
+dodge them is exactly the weakening that makes a grep stop catching an alias. If
+it is written, pin the **import** instead: `safe_decrypt_token` outside
+`database/agent_db.py` is unambiguous to grep, and one decryption module is a
+stronger property than one allowlisted caller list.
 
 #### A traceback can leak a secret
 
@@ -654,10 +991,19 @@ everywhere in this codebase except one narrow case, which the agent module has:
 `exc_info` captures local variables, so a traceback raised from a frame that
 holds a **decrypted API key in a local** writes that key into `errors.jsonl`.
 
-In the credential-set and credential-test paths only, log with
-`logger.error("...", extra={"error": str(exc)})` and no traceback, with a
-comment naming this reason. Everywhere else in the module, `logger.exception()`
-as normal. ragz applies exactly this carve-out around its password paths.
+In every path whose frame holds a decrypted credential in a local, log with
+`logger.error` and no traceback, and put a comment naming this reason next to
+it. That is wider than the credential-set and credential-test routes: it also
+covers the OpenAlgo API-key read, the web-search key and test routes, the
+ChatGPT status, login and sign-out routes, and `builder.build_model`. Everywhere
+else in the module, `logger.exception()` as normal. ragz applies exactly this
+carve-out around its password paths.
+
+The message carries what locates the fault and nothing else. Where the exception
+text can itself quote a credential, it is reduced to the class name:
+`chatgpt_oauth._post` answers "A ChatGPT sign-in request failed: OSError"
+because the transport's own `OSError` quoted the request body, which contained
+the refresh token.
 
 ### Transport and session
 
@@ -693,9 +1039,9 @@ the reason next to it:
 
 | control | direction | why |
 | --- | --- | --- |
-| risk guard, all checks except affordability | **closed** | it is the only thing standing between a confused model and a real order |
-| affordability check with missing market data | **open** | refusing a human-approved order because a quote lookup hiccuped is the worse failure, and it has already passed every other gate |
-| SSRF guard on an unknown host | **closed** | an unknown target is not a safe target |
+| risk guard: kill switch, trading enabled, analyzer, symbol, exchange, product, quantity, session cap, duplicate window | **closed** | it is the only thing standing between a confused model and a real order |
+| risk guard: notional cap, price deviation and affordability with no reference price, no LTP or no funds figure | **open**, warned | the guard never fetches a quote, and refusing a human-approved order because the feed is down is the worse failure; it has already passed every other gate |
+| SSRF guard on a base URL that will not parse | **closed** | an address that cannot be read is not a safe address |
 | unrecognised order status from a broker | treat as **working** | reading an unknown exit as dead lets a second exit open a reverse position |
 | audit write failure | **open**, swallowed | the trail is best effort; the risk guard is what enforces policy |
 | provider unreachable during a credential test | **closed**, reported | the operator is asking a question and deserves the real answer |
@@ -743,11 +1089,18 @@ Call into the existing launcher. Do not duplicate the subprocess machinery.
 ### Flow JSON
 
 `docs/prompt/flow-import-format.md` is written to be fed to an LLM as a system
-prompt; use it directly rather than paraphrasing the schema. Generate, then POST
-to `/flow/api/workflows/import` (new) or `/replace` (iterating on one), and feed
-the returned `errors[]` of `{path, code, message}` straight back as tool
-feedback so the model self-corrects. The validator is the ground truth; an
-invalid workflow cannot ship.
+prompt; use it directly rather than paraphrasing the schema. Generate, then call
+`services.flow_workflow_validator.validate_workflow` **directly**, at the same
+strictness `/flow`'s own import endpoint uses (`require_name=True`,
+`strict=True`), and feed the returned `errors[]` of `{path, code, message}`
+straight back as tool feedback so the model self-corrects. Not over HTTP: an
+HTTP call back into this process is what non-negotiable 2 forbids. The validator
+is the ground truth; an invalid workflow cannot ship.
+
+Two tools, and the split is the point: `validate_flow` writes nothing, so the
+model can iterate as many times as it needs without a confirmation, and
+`save_flow` is the one that mutates and is therefore the one in
+`requires_confirmation_tools`. An imported workflow arrives inactive.
 
 Never invent a node type. If a requirement has no matching node, say so in
 prose.
@@ -764,10 +1117,16 @@ browser against a running instance rather than asserted in a test:
 - Add a second provider with its own key. Both stay configured at once.
 - Press Test and see a real pass or a real provider error message, not a generic failure.
 - Set a default. An untested model is refused as default.
+- Sign in to a ChatGPT Plus or Pro plan with no key pasted, and have the rest of
+  the app keep answering while the code sits on OpenAI's page in another tab.
+- Register a plan model beside the API model of the same name and tell the two
+  apart in the registry without reading the model id.
 
 **Chat**
 - Send a message and watch the answer stream token by token.
-- See per-turn token usage and cost under the answer, and a running conversation total.
+- See per-turn token usage and cost under the answer, and a running conversation
+  total. A plan turn shows tokens and "included in your ChatGPT plan", never
+  `$0.00` and never the API price.
 - Switch model mid-conversation from a picker and see the next turn use it.
 - Stop a running turn and have it actually stop server-side, not just in the browser.
 - Reload and find the conversation, its messages and its usage still there.
@@ -777,15 +1136,16 @@ browser against a running instance rather than asserted in a test:
 - Ask for a full strategy and get a script matching the `strategies/README.md`
   contract: reads `OPENALGO_API_KEY`, `HOST_SERVER` and `WEBSOCKET_URL` from the
   environment, hardcodes no credential.
-- Read it in a real Python editor with highlighting, not a grey `<pre>`.
-- Copy it, and save it to `strategies/scripts/` in one action. **It never runs
+- Read it syntax-highlighted and whole, not as a grey `<pre>` and not behind an
+  inner scroll region that hides the tail.
+- Copy it, and ask for it to be saved to `strategies/scripts/`. **It never runs
   itself**; starting it stays a separate human action in `/python`.
 
 **Flow generation**
 - Ask for a workflow and get JSON validated against the real Flow validator,
   with any `errors[]` fed back so the model self-corrects rather than shipping
   something invalid.
-- Read it in the JSON editor, **copy it**, and import it. An imported workflow
+- Read it highlighted as JSON, **copy it**, and import it. An imported workflow
   arrives inactive.
 
 **Web search**
@@ -801,6 +1161,8 @@ browser against a running instance rather than asserted in a test:
 - The chart is OpenUI's own Recharts component with OpenUI's `ocean` palette,
   its colours assigned by the midpoint-outward rule rather than sequentially,
   and **no entrance animation**, which is what OpenUI's own LLM path does.
+  Holds for every shape in the subset except `PieChart`, whose own default is
+  `true`; see **OpenUI specifics**.
 - It renders progressively as the spec streams, and a half-written block never
   flashes as broken output.
 - Tables, metric cards and callouts render the same way.
@@ -868,8 +1230,13 @@ fourth charting stack.
 | Domain | Renderer | Already used by |
 | --- | --- | --- |
 | Candlesticks, OHLC, price with indicators | `openalgo-charts` 1.9.2 | `/trading` |
-| Option analytics: payoff, greeks, OI, GEX, max pain, vol surface | Plotly, via `lib/Plot2D.tsx` and `lib/Plot3D.tsx` | `/strategybuilder` and twelve option pages |
+| Option analytics: payoff, greeks, OI, GEX, max pain, vol surface | Plotly, via `lib/Plot2D.tsx` and `lib/Plot3D.tsx` | `/strategybuilder` and eight option pages |
 | Everything else: bar, line, area, pie, tables, cards, callouts | OpenUI genui-lib | new here |
+
+`VizBlock` dispatches six `kind` values, not three: `candles`, `plotly`,
+`payoff`, and the three purpose-built cards `instrument`, `live_quotes` and
+`live_combo`. The three engines are what is reused; a card that renders one
+instrument's own fields is not a fourth charting stack.
 
 ### Provenance decides which frame carries it
 
@@ -896,9 +1263,19 @@ backend cannot break an older client mid-turn.
 
 ### OpenUI specifics
 
-- Packages: `@openuidev/react-lang`, `@openuidev/react-ui`,
-  `@openuidev/react-headless`, plus `zod@^4` and `zustand@^4.5.5`. React 19 is
-  supported, and `recharts` and `zod` already matched what OpenUI ships.
+- Three direct dependencies and no others: `@openuidev/react-lang`,
+  `@openuidev/react-ui` and `@openuidev/react-headless`. React 19 is supported.
+  `recharts` and `zod` are **not** pinned here and did not need to be:
+  `recharts` is a dependency of `@openuidev/react-ui`, and `zod` a peer of that
+  package and of `@openuidev/react-lang`, so both arrive with the install.
+- **`zustand` is the one thing that did not reconcile.** It has been a direct
+  dependency of this frontend since the React app was initialised, currently
+  `^5.0.10`, and every store in `src/stores/` is built on it, while
+  `@openuidev/react-ui` and `@openuidev/react-headless` both name it a peer at
+  `^4.5.5`. `npm ls zustand` reports the installed 5.x as `invalid` against
+  those two ranges, and nothing here re-pins or overrides it. Check that before
+  reading a `zustand@4.5.7` in the tree as OpenUI's: that one is a separate
+  nested copy under `@xyflow/react`, for the Flow editor.
 - `<Renderer response={growingString} library={lib} isStreaming={bool} />` is
   the only renderer. Feed it the **whole accumulated string** each token; its
   parser diffs internally and is O(new characters).
@@ -916,15 +1293,33 @@ backend cannot break an older client mid-turn.
   throws `input.components is not iterable`. The per-component `signature` the
   prompt is built from exists only on `toSpec()`. Assert the `undefined` count
   is zero in a test.
-- **Prompt cost, measured.** The full 58-component chat library is 19,096
-  characters; a 24-component trading subset is 11,651. The rest of the system
-  prompt is ~12,768 and `build_agent` caps at `max_prompt_chars=24000`, so the
-  subset only just fits. Inject it on the **chat surface only**: the chart
+- **The prompt is generated, committed, and read by the backend.**
+  `frontend/scripts/generate-openui-prompt.mjs` writes
+  `docs/prompt/openui-lang.md` from the same library object the browser renders
+  with, and `prompts.py` reads that file. It is committed rather than built on
+  demand because a production server has no Node.js and a plain `git pull` has
+  to be enough. `openuiLibrary.test.ts` regenerates and compares, so an
+  `@openuidev` upgrade that changes the prompt fails CI rather than silently
+  describing a library the renderer no longer has.
+- **Prompt cost, measured.** The full 58-component chat library costs 19,096
+  characters with the rules and examples OpenUI ships. The 22-component subset
+  the agent is given costs 8,184, and the committed file is 8,343 with its
+  provenance banner, against the 8,800 the generator enforces. `build_agent`
+  caps the whole system prompt at `DEFAULT_MAX_PROMPT_CHARS = 30000`, and the
+  worst chat configuration renders whole at 28,474 (chart, 20,875). Overshooting
+  does not truncate the section that overshot: `render_sections` drops a
+  **different** whole unpinned section from the end with only a log line, which
+  is why every surface's fit is asserted rather than left for the next addition
+  to find in production. Inject it on the **chat surface only**: the chart
   surface drives the real `/trading` chart and needs none of it.
-- **Do not reimplement animation or palettes.** `isAnimationActive` is a *prop
-  that defaults to `false`*, and is forced false in print context; it is not
-  hardcoded, so charts are still by default and match OpenUI as shipped without
-  anything being passed. `useChartPalette` already calls
+- **Do not reimplement palettes, and pass animation off where it is on.**
+  `isAnimationActive` is a prop, not a hardcoded value, and it defaults to
+  `false` on the area, bar, horizontal bar, line, radar, radial and scatter
+  components, so those match OpenUI as shipped with nothing passed.
+  **`PieChart` defaults it to `true`**, and `PieChart` is in the subset, so a
+  pie the agent draws animates on entry against the acceptance criterion below.
+  `@openuidev/react-lang` never passes the prop, so the component default is
+  what applies. `useChartPalette` already calls
   `getDistributedColors(palette, dataLength)`, which starts at the palette
   midpoint and walks outward with wraparound, so a two-series chart on `ocean`
   uses the middle indices rather than 0 and 1. Sequential assignment is wrong,
@@ -938,12 +1333,11 @@ stay markdown and a visualization is a deliberate act.
 
 ## Rendering generated code
 
-The reference here is deliberately **not** ragz. Its code rendering is minimal:
-no syntax highlighter of any kind, no language badge, no filename, no line
-numbers, no collapse, and a plain `<pre>` in which a Python fence and a JSON
-fence render identically. It also re-parses the entire accumulated message on
-every streamed token with no memoization, which is quadratic and invisible only
-because a RAG answer is short. A generated strategy is not short.
+The reference here is deliberately **not** ragz. Its code rendering is a plain
+`<pre>` with no highlighting of any kind, so a Python fence and a JSON fence look
+identical. It also re-parses the entire accumulated message on every streamed
+token with no memoization, which is quadratic and invisible only because a RAG
+answer is short. A generated strategy is not short.
 
 Two things from it are worth keeping, and they are both security controls:
 
@@ -955,25 +1349,44 @@ Two things from it are worth keeping, and they are both security controls:
   attacker's host. This module feeds tool output back into context, so it is
   exposed to exactly that. Both are pinned by a test.
 
-### The editor, not a code block
+### A highlighter, not an editor
 
-OpenAlgo already ships `@uiw/react-codemirror` with `@codemirror/lang-python`
-and `@codemirror/lang-json`, themed against `useThemeStore`, wrapped as
-`components/ui/python-editor.tsx` and `json-editor.tsx`. **No new dependency is
-needed and none should be added.**
+The plan here was the platform's own `PythonEditor` and `JsonEditor`, so a
+generated artifact would look exactly like the code the operator goes on to
+edit. What shipped is `components/agent/CodeArtifact.tsx`, Prism through
+`react-syntax-highlighter`. Four decisions carry it, and each one is a cost the
+editor route would have paid on every message in a thread that only grows.
 
-A generated strategy renders in the same `PythonEditor` the `/python` page uses,
-and generated Flow JSON in the same `JsonEditor` as Flow's replace-from-JSON
-dialog, both read-only in the message. The code the agent produces therefore
-looks exactly like the code the operator will edit, with the same theme, the
-same font and the same highlighting, rather than like a chat attachment.
+- **Not CodeMirror.** An editor per block is an editor instance per message,
+  each with its own state, extensions and DOM, in a thread that only grows. A
+  highlighter renders once to static markup. The chat needs reading, not
+  editing, and the cheaper thing is also the better-behaved one. It also cost
+  nothing to adopt: `react-syntax-highlighter@^16.1.0` has been a direct
+  dependency since the charts phase, declared and unimported, and
+  `CodeArtifact.tsx` is its first consumer in `src/`. It imports the
+  `PrismLight` build and registers languages one at a time, rather than the
+  bundle that carries every grammar Prism ships.
+- **No line-number gutter.** Numbers earn their place in an editor, where they
+  are how a person cites a line to a colleague or a traceback. In a chat answer
+  nobody cites a line, the block is usually copied whole, and the gutter competes
+  with the code for the eye. `/python` keeps its numbers, because it is a real
+  editor.
+- **No height cap, and a test forbids one.** A fixed row cap hid the tail of a
+  longer script behind an inner scroll region nobody found: the header said "37
+  lines" while the body stopped at 25, so the code read as truncated rather than
+  scrollable. `Message.security.test.tsx` walks every rendered element and
+  asserts none of them constrains its own height.
+- **The header is a language label and a copy button, and nothing else.** No
+  filename, no "Save to strategies", no "Open in editor": saving is what the
+  `strategy_gen` tool does, with a confirmation and a containment check behind
+  it, and putting a second save path in the chrome of a message would be a
+  mutating action with neither.
 
-Around it: a header carrying the filename and language, a copy action, and
-actions that belong to the artifact rather than to the chat, "Save to
-strategies" and "Open in editor". Long output collapses with a line count and
-expands on request, because a 300-line strategy must not bury the conversation.
+Only the languages the agent actually emits are registered. An unregistered
+language falls through to plain monospace rather than being highlighted as
+something it is not, which reads worse than no highlighting at all.
 
-Ordinary prose stays markdown. Only a generated artifact gets the editor.
+Ordinary prose stays markdown. Only a generated artifact gets the highlighter.
 
 ### Streaming without the quadratic cost
 
@@ -986,7 +1399,7 @@ Do not commit React state per token.
   last completed block boundary. Re-parse only the tail; the prefix is rendered
   once and memoized.
 - A code artifact is **not** re-highlighted per token. While its fence is open
-  it renders as plain monospace text, and CodeMirror mounts once the block
+  it renders as plain monospace text, and the highlighter runs once the block
   closes. Highlighting a half-written file on every keystroke is wasted work and
   it flickers.
 - Instruct the model to emit one artifact per fenced block with a real language
@@ -1004,15 +1417,17 @@ the same `PANEL_HEADER` horizon so it reads as shipped rather than bolted on.
 `components/trading/AgentPanel.tsx` holds: a header with the assistant name and
 a close control, an empty state, a row of suggested-prompt chips derived from
 the current chart context ("Analyse this chart", "Draw demand and supply",
-"Identify candlestick patterns", "Analyse my drawings"), the message thread, and
-a composer.
+"Candlestick patterns", "Read my drawings"), the message thread, and a composer.
 
 It shares the chat surface's stream client and frame vocabulary; only the
 rendering differs, because a narrow panel shows one collapsed status line per
 turn rather than a full tool timeline.
 
-The panel reads `terminal.context()` **fresh at send time**, never captured at
-mount, so the agent always sees the chart as it currently is. Commands returning
+The panel calls its `getChartContext` prop **fresh at send time**, never
+capturing at mount, so the agent always sees the chart as it currently is.
+`Trading.tsx` supplies `panelTarget()?.chartContext()`, so the read resolves the
+**focused pane** on every turn exactly as the watchlist and the option chain
+already do, rather than a terminal captured when the panel opened. Commands returning
 from the model are applied through a single promise queue rooted at the
 terminal's own init, so commands from different turns cannot interleave and one
 stalled fetch cannot wedge every later turn.
@@ -1020,17 +1435,33 @@ stalled fetch cannot wedge every later turn.
 `ChartCommand` is a closed union applied by the existing terminal:
 
 ```
-draw | clear | set_symbol | set_interval | set_chart_type
-| add_indicator | remove_indicator | update_indicator | focus
+draw | clear | indicator
 ```
 
-`apply(command)` switches on `op` and **ignores an unknown op** rather than
-throwing, so a newer backend cannot break an older client mid-turn. Drawing ids
-are namespaced `ai:{group}:{index}` so agent markup never collides with the
-user's own drawings and `clear` never removes theirs.
+`draw` replaces one named agent group's shapes, `clear` removes one group or
+every agent group, and `indicator` carries `action: add | remove` with a chart
+indicator id. `set_symbol`, `set_interval`, `set_chart_type` and `focus` were
+never built: the panel reads the operator's symbol and interval as context on
+every turn, and nothing in the vocabulary moves the chart under them. Replacing
+rather than appending is what makes a second call to the same tool redraw rather
+than stack, so an operator asking twice gets one set of levels.
 
-Geometry is computed from real bars server-side. The model narrates; it does not
-invent a price.
+The two halves land on two different surfaces, so
+`terminal.applyChartCommands` filters the indicator ops off to the chart's own
+registry first and passes the rest to `chartContract.applyChartCommands`, whose
+switch **ignores an unknown op** rather than throwing, so a newer backend cannot
+break an older client mid-turn. Drawing ids are namespaced `ai:{group}:{index}`
+so agent markup never collides with the user's own drawings and `clear` never
+removes theirs.
+
+Geometry is computed from real bars server-side, in
+`services/agent/chart_geometry.py`. The model narrates; it does not invent a
+price.
+
+The panel runs the **default** model: `AgentPanel` passes `modelId={null}` and
+`resolve_model(None)` falls through to the `is_default` row. There is no picker
+on this surface, so changing the default changes which billing path the chart
+agent runs on, an API key or a ChatGPT plan, with nothing here saying so.
 
 ## HTTP surface
 
@@ -1040,16 +1471,52 @@ limit, CSRF on by default.
 | method | path | purpose |
 | --- | --- | --- |
 | GET | `/status` | the setup gate |
+| GET | `/catalog/providers` | every chat-capable provider LiteLLM knows |
+| GET | `/catalog/models` | one provider's models. `?provider=` required, `?chat_only=` defaults true |
 | GET/POST | `/models` | list, create |
 | PATCH/DELETE | `/models/<id>` | update, remove |
 | POST | `/models/<id>/test` | validate credentials |
-| GET | `/catalog` | picker metadata |
+| POST | `/models/<id>/default` | make default, refused if untested |
 | GET/PUT | `/settings` | agent settings |
+| GET/PUT | `/websearch` | web-search settings |
+| PUT/DELETE | `/websearch/providers/<provider>/key` | store, remove a search key |
+| POST | `/websearch/providers/<provider>/test` | validate a search key |
+| GET | `/chatgpt/status` | is a plan authorised, plus any login in flight |
+| POST | `/chatgpt/login` | start the device flow; body `{"force": bool}` |
+| POST | `/chatgpt/cancel` | stop a login in flight |
+| DELETE | `/chatgpt/session` | sign the subscription out |
 | GET/POST | `/conversations` | list, create |
 | GET/DELETE | `/conversations/<id>` | fetch, delete |
+| DELETE | `/conversations/<id>/messages/<message_id>` | drop one message |
 | POST | `/chat/stream` | SSE |
 | POST | `/chat/confirm` | SSE, resume a paused run |
 | POST | `/chat/<run_id>/cancel` | cancel |
+
+Twenty-eight routes in all, counting each method separately. The shared limit is
+240 per minute, with 30 on the streaming routes and 12 on the ones that reach
+upstream.
+
+`login.state` is `idle`, `pending`, `authorised`, `expired`, `failed` or
+`cancelled`, and `pending` is the only non-terminal one, so a client stops
+polling on anything else. `user_code` is blank in every non-pending state, so a
+dead code can never sit on screen looking live. `/chatgpt/login` is on the
+tighter 12-per-minute budget because it reaches upstream; it answers 501 when
+LiteLLM has no chatgpt provider and 502 when the device code could not be
+issued, and reports `reused: true` when it handed back a login already in
+flight. `/chatgpt/cancel` answers from `login_status()`, a frozen copy under a
+real lock, and deliberately not from `status()`, which Fernet-decrypts to build
+its fingerprint: that cost is right for a settings card and wrong for anything
+polled. `/chatgpt/session` cancels a login in flight first, so signing out
+mid-sign-in leaves nothing behind polling for a code nobody will enter, and it
+leaves the registered `chatgpt/` rows alone, because those are operator intent
+and only the credential was revoked.
+
+The panel polls `/chatgpt/status` every 2s, but only while `login.state` is
+`pending`, and **in the background**. That last part is not a detail: the panel
+tells the operator to open OpenAI's page in another tab, so this one is hidden
+for the entire wait, and a poll that pauses on a hidden tab is a poll that never
+runs during the only period it is needed. Found in a browser, with the code
+sitting there approved while the panel counted down.
 
 Register the blueprint in `app.py` beside `flow_bp`. Register the React routes
 in `blueprints/react_app.py` as well, or an unauthenticated hit on `/agent`
@@ -1057,16 +1524,18 @@ counts toward an IP ban through `Error404Tracker`.
 
 ## Startup
 
-One call from `app.py`, mirroring `services/strategy_module/runtime.py`:
+**There is no lifecycle call and nothing starts at import.** `app.py` does
+exactly two things for this module: it registers `agent_bp`, and it adds
+`("Agent DB", ensure_agent_tables_exists)` to `db_init_functions`. That is the
+whole wiring.
 
-```python
-from services.agent.runtime import start_agent_module
-```
-
-Nothing starts at import. Every step is guarded independently; a platform that
-will not boot because the agent failed to start is worse than one that boots
-without it. Add `("Agent DB", ensure_agent_tables_exists)` to the
-`db_init_functions` list.
+The alternative, a `runtime.start_agent_module` mirroring
+`services/strategy_module/runtime.py`, was designed and is not built, because
+nothing here needs starting: the catalog is read on first use, the model is
+constructed per run, and `chatgpt_oauth.ensure_ready()` is called lazily by
+`builder.resolve_model`. A platform that will not boot because the agent failed
+to start is worse than one that boots without it, and having nothing to start is
+the strongest form of that.
 
 ## Migration
 
@@ -1136,3 +1605,28 @@ blueprint Flask app, `_log_in()` writing the three session keys
 Never call a real provider in a test. The LiteLLM construction is tested by
 asserting the kwargs, and the stream by feeding synthetic agno events through
 the translator.
+
+Three files carry the ChatGPT subscription, split by what each can prove without
+a network:
+
+- `test/test_agent_chatgpt_oauth.py` owns the module: custody, the whole device
+  flow driven through a `Transport` protocol so no test needs a real login, and
+  the threading. Its eventlet cases run in a **subprocess**, because
+  `monkey_patch()` is global and cannot be undone, and assert on elapsed time
+  and hub ticks rather than on return values, which were always right. The first
+  of them asserts the defect itself, so nothing below it can pass vacuously.
+  Same shape as `test/test_eventlet_cross_thread_locks.py`.
+- `test/test_agent_chatgpt_wiring.py` owns the seams: the keyless carve-out in
+  `providers`, the resolution gate, the capability probe answered from the price
+  table, the billing frames, and the four routes.
+- `test/test_agent_chatgpt_models.py` owns the supplement, including
+  `test_an_openai_entry_for_the_same_name_does_not_block_registration`. A guard
+  written as `name in model_cost` skipped every model it exists to add, because
+  the bare name is already in that map as OpenAI's entry.
+
+**A capability probe is a live device login, so a suite that touches one has to
+neutralise it.** The `no_device_flow` fixture asserts on **recorded calls, never
+on a raised tripwire**: `_supports_factory` wraps the whole resolution in
+`try/except` and `_litellm_opinion` catches too, so a tripwire raised down that
+chain is swallowed twice over and proves nothing. Before the fixture existed the
+run died on a sixty-second test timeout inside `_poll_for_authorization_code`.

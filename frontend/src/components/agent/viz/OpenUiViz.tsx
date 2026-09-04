@@ -29,10 +29,12 @@
  *   the cost is one small style element per block, and it keeps the scope in
  *   the file that needs it instead of coupling it to a page component.
  *
- * Nothing is passed for animation or palette. `isAnimationActive` is a prop
- * that already defaults to false, and `useChartPalette` already assigns colours
- * from the palette's midpoint outwards with wraparound. Re-implementing either
- * would produce charts that do not match OpenUI as shipped.
+ * Nothing is passed for animation or palette. `isAnimationActive` already
+ * defaults to false on every subset component but `PieChart`, and
+ * `useChartPalette` already assigns colours from the palette's midpoint
+ * outwards with wraparound. Re-implementing either would produce charts that do
+ * not match OpenUI as shipped, and overriding the one exception would single
+ * out a pie for treatment its own library does not give it.
  */
 
 import { Renderer } from '@openuidev/react-lang'

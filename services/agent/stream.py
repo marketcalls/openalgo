@@ -92,6 +92,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from services.agent import chatgpt_oauth
 from services.agent.catalog import estimate_cost
 from services.agent.frames import (
     Confirm,
@@ -432,6 +433,15 @@ class EventTranslator:
         self.session_id: str = ""
 
         self._model = model
+        # The id resolved from the operator's own row, kept separately because
+        # `_usage_frame` overwrites `self._model` with whatever the provider
+        # reported. That reported name can arrive bare, and a bare subscription
+        # name is unrecognisable: `catalog.get_model_meta("gpt-5.3-instant")`
+        # answers None, having no bare entry at all, and each of the eight names
+        # shared with the API answers OpenAI's PRICED row, which is worse than
+        # answering nothing. The `chatgpt/` prefix is the only
+        # working signal, and this is where it survives.
+        self._resolved_model = model
         self._tool_frames = tool_frames
 
         self._started = False
@@ -774,6 +784,16 @@ class EventTranslator:
             return []
         self._last_usage = snapshot
 
+        # A plan turn reports tokens and no cost. `estimate_cost` already answers
+        # None for a `chatgpt/` model, but saying so here is what keeps the
+        # frame's own `billing` field honest and stops the reported-cost patch
+        # below from filling the gap back in with a zero.
+        billing, cost_usd = chatgpt_oauth.apply_billing(
+            self._model,
+            _estimate_cost_usd(self._model, self._totals),
+            resolved_model_id=self._resolved_model,
+        )
+
         return [
             Usage(
                 input_tokens=self._totals.input_tokens,
@@ -781,7 +801,8 @@ class EventTranslator:
                 total_tokens=self._totals.total_tokens,
                 cached_tokens=self._totals.cached_tokens,
                 reasoning_tokens=self._totals.reasoning_tokens,
-                cost_usd=_estimate_cost_usd(self._model, self._totals),
+                cost_usd=cost_usd,
+                billing=billing,
                 model=self._model,
                 ttft_ms=self._ttft(),
             )
@@ -879,6 +900,13 @@ def _apply_reported_cost(frames: list[Frame], metrics: Any) -> list[Frame]:
     data and is the same number the settings screen shows. When the model is
     absent from that table but the provider reported a cost, using it beats
     reporting nothing; it is still a computed figure rather than a guess.
+
+    **A subscription turn is skipped entirely.** LiteLLM cannot price a
+    `chatgpt/` model and does not pretend to, but its `completion_cost` answers
+    `0.0` rather than None for a model it has no entry for, and agno hands that
+    straight through as `metrics.cost`. Patching it in would render `$0.00` under
+    an answer that consumed the operator's plan quota, which is the one number
+    less true than no number at all.
     """
     reported = getattr(metrics, "cost", None)
     if reported is None:
@@ -890,7 +918,11 @@ def _apply_reported_cost(frames: list[Frame], metrics: Any) -> list[Frame]:
 
     patched: list[Frame] = []
     for frame in frames:
-        if isinstance(frame, Usage) and frame.cost_usd is None:
+        if (
+            isinstance(frame, Usage)
+            and frame.cost_usd is None
+            and frame.billing != chatgpt_oauth.BILLING_SUBSCRIPTION
+        ):
             patched.append(
                 Usage(
                     input_tokens=frame.input_tokens,
@@ -899,6 +931,7 @@ def _apply_reported_cost(frames: list[Frame], metrics: Any) -> list[Frame]:
                     cached_tokens=frame.cached_tokens,
                     reasoning_tokens=frame.reasoning_tokens,
                     cost_usd=cost,
+                    billing=frame.billing,
                     model=frame.model,
                     ttft_ms=frame.ttft_ms,
                 )

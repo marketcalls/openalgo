@@ -4,6 +4,7 @@ import {
   type AgentDrawingSurface,
   agentGroupOf,
   applyChartCommands,
+  applyIndicatorCommands,
   describeDrawings,
   isAgentDrawingId,
 } from './chartContract'
@@ -279,5 +280,121 @@ describe('describeDrawings', () => {
     const points = Array.from({ length: 50 }, (_, index) => ({ time: index, price: index }))
     const described = describeDrawings([{ id: 'd1', tool: 'path', points, style: {} }])
     expect(described.drawings[0].points).toHaveLength(4)
+  })
+})
+
+/**
+ * The indicator half of the vocabulary.
+ *
+ * Written after the tools that emit these commands shipped unexercised. Three
+ * of the four assertions below failed against the first implementation, all for
+ * one reason: it compared the agent's descriptor id (`ema`) to a live
+ * indicator's INSTANCE id (`ema-1`), which never matches. Remove removed
+ * nothing and the duplicate guard never fired, so asking for AlphaTrend twice
+ * drew two identical lines.
+ */
+describe('applyIndicatorCommands', () => {
+  /** A stand-in for the chart's indicator tier, backed by an array. */
+  function tier(known: string[], live: string[] = []) {
+    let seq = 0
+    const items = live.map((indicatorId) => ({ id: `${indicatorId}-${seq++}`, indicatorId }))
+    const added: { id: string; settings: Record<string, unknown> }[] = []
+    return {
+      items,
+      added,
+      indicators: () => items.map((item) => ({ ...item })),
+      addIndicator: (id: string, settings: Record<string, unknown>) => {
+        added.push({ id, settings })
+        items.push({ id: `${id}-${seq++}`, indicatorId: id })
+      },
+      // The chart's own removal, which is what actually drops the instance.
+      // The instance's own `remove()` is deliberately NOT modelled here: it
+      // clears the drawn series and leaves the instance in `indicators()`,
+      // and a double that spliced on it hid exactly that difference.
+      removeIndicator: (instanceId: string) => {
+        const at = items.findIndex((item) => item.id === instanceId)
+        if (at >= 0) items.splice(at, 1)
+      },
+      hasIndicator: (id: string) => known.includes(id),
+    }
+  }
+
+  it('adds an indicator the chart knows, with the settings it was given', () => {
+    const chart = tier(['alphatrend'])
+    const changed = applyIndicatorCommands(chart, [
+      { op: 'indicator', action: 'add', id: 'alphatrend', settings: { period: 14 } },
+    ])
+    expect(changed).toBe(true)
+    expect(chart.added).toEqual([{ id: 'alphatrend', settings: { period: 14 } }])
+  })
+
+  it('ignores an id the chart does not know rather than throwing', () => {
+    const chart = tier(['alphatrend'])
+    expect(() =>
+      applyIndicatorCommands(chart, [
+        { op: 'indicator', action: 'add', id: 'no-such-indicator' },
+        { op: 'indicator', action: 'add', id: 'alphatrend' },
+      ])
+    ).not.toThrow()
+    expect(chart.added.map((a) => a.id)).toEqual(['alphatrend'])
+  })
+
+  it('adds a custom module the backend catalogue has never heard of', () => {
+    // The chart's registry is the authority, because the operator's own
+    // modules load in the browser and no list on the server can see them.
+    const chart = tier(['my-own-study'])
+    applyIndicatorCommands(chart, [{ op: 'indicator', action: 'add', id: 'my-own-study' }])
+    expect(chart.added.map((a) => a.id)).toEqual(['my-own-study'])
+  })
+
+  it('does not draw a second identical line when asked twice', () => {
+    const chart = tier(['alphatrend'])
+    applyIndicatorCommands(chart, [{ op: 'indicator', action: 'add', id: 'alphatrend' }])
+    const changed = applyIndicatorCommands(chart, [
+      { op: 'indicator', action: 'add', id: 'alphatrend' },
+    ])
+    expect(changed).toBe(false)
+    expect(chart.items).toHaveLength(1)
+  })
+
+  it('can add the same indicator again after removing it', () => {
+    // The removal has to leave `indicators()` empty, not merely blank the
+    // chart. When it did not, the duplicate guard read the leftover instance
+    // as "already there" and skipped the add, so the turn reported success and
+    // drew nothing, while the toolbar went on counting an indicator that was
+    // not visible anywhere.
+    const chart = tier(['alphatrend'], ['alphatrend'])
+    applyIndicatorCommands(chart, [{ op: 'indicator', action: 'remove', id: 'alphatrend' }])
+    expect(chart.items).toHaveLength(0)
+
+    const changed = applyIndicatorCommands(chart, [
+      { op: 'indicator', action: 'add', id: 'alphatrend' },
+    ])
+    expect(changed).toBe(true)
+    expect(chart.items).toHaveLength(1)
+  })
+
+  it('removes by the descriptor id, not the instance id it is stored under', () => {
+    const chart = tier(['ema', 'rsi'], ['ema', 'ema', 'rsi'])
+    expect(chart.items.map((i) => i.id)).toEqual(['ema-0', 'ema-1', 'rsi-2'])
+    const changed = applyIndicatorCommands(chart, [
+      { op: 'indicator', action: 'remove', id: 'ema' },
+    ])
+    expect(changed).toBe(true)
+    expect(chart.items.map((i) => i.indicatorId)).toEqual(['rsi'])
+  })
+
+  it('leaves an unknown action alone by treating it as an add', () => {
+    const chart = tier(['ema'])
+    applyIndicatorCommands(chart, [{ op: 'indicator', action: 'wobble', id: 'ema' }])
+    expect(chart.added.map((a) => a.id)).toEqual(['ema'])
+  })
+
+  it('ignores drawing ops, as the drawing surface ignores indicator ops', () => {
+    const chart = tier(['ema'])
+    expect(applyIndicatorCommands(chart, [drawLevels(), { op: 'clear', group: null }])).toBe(false)
+    const drawings = surface()
+    applyChartCommands(drawings, [{ op: 'indicator', action: 'add', id: 'ema' }])
+    expect(drawings.items).toEqual([])
   })
 })

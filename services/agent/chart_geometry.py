@@ -116,6 +116,23 @@ _DEFAULT_CANDLE_SCAN = 20
 #: bars before the pattern bar.
 _TREND_CONTEXT_BARS = 5
 
+#: How tall a band may be and still be called a range, as a share of the whole
+#: visible move. A consolidation is bounded by its own extremes, so this has to
+#: leave room for the wick that printed inside it: measured on RELIANCE NSE daily
+#: over 2026-04-01 to 2026-09-04, the stretch a trader boxes is 96.10 points of a
+#: 223.60 point window, and the previous third of the range rejected it and
+#: settled for a 29 bar sub-window inside it instead.
+_RANGE_BAND_FRACTION = 0.45
+
+#: How far price may actually get between the two ends of a candidate range, as a
+#: share of that band's own height. This is the half that stops a wider band
+#: turning every trend into a range: a trending leg fits inside a tall box too,
+#: and the difference is that it came out the other side. Measured on TITAN NSE
+#: daily over 2026-06-01 to 2026-09-04, widening alone boxed a 30 bar leg price
+#: crossed 0.86 of top to bottom; with this rule the answer is the genuinely flat
+#: 28 bars beside it, at 0.37.
+_RANGE_DRIFT_FRACTION = 0.5
+
 
 @dataclass(frozen=True, slots=True)
 class Pivot:
@@ -820,6 +837,29 @@ def consolidation(
     disagree about what counts as narrow, and a constant would find a range in
     every quiet chart and none in any volatile one.
 
+    Two rules decide a candidate, and it takes both
+    ------------------------------------------------
+
+    **The band may be up to** :data:`_RANGE_BAND_FRACTION` **of the visible
+    move.** A consolidation is the whole sideways stretch, bounded by its own
+    extremes, not the tightest band that happens to fit inside one. A third of
+    the range was too mean for that: on RELIANCE NSE daily over 2026-04-01 to
+    2026-09-04 the stretch a trader boxes is 1249.80 to 1345.90 across 68 bars,
+    96.10 points of a 223.60 point window, and a third allowed only 74.53, so
+    the long obvious run was refused and a 29 bar sub-window inside it,
+    1265.90 to 1337.00, was reported instead.
+
+    **And price must not have travelled more than**
+    :data:`_RANGE_DRIFT_FRACTION` **of that band's height between the run's two
+    ends.** A trending leg also fits inside a tall box; what makes it a trend is
+    that it came out the far side. Net progress is bounded by the band by
+    construction, both closes being inside it, so the fraction reads directly as
+    how much of its own box price actually crossed: near 1 is a leg, near 0 is a
+    base. Widening the band without this rule starts calling trends ranges,
+    measured: on TITAN NSE daily over 2026-06-01 to 2026-09-04 it boxed 30 bars
+    price crossed 0.86 of, and the rule replaces that with the 28 genuinely flat
+    bars beside it at 0.37.
+
     Args:
         bars: The candle window.
         lo: First bar of the visible span, inclusive.
@@ -828,8 +868,10 @@ def consolidation(
             dozen bars a range is indistinguishable from noise.
 
     Returns:
-        ``low``, ``high``, ``from_time``, ``to_time``, ``bars``, ``width_pct``
-        and ``touches``, or None when nothing in the span held a band that long.
+        ``low``, ``high``, ``from_time``, ``to_time``, ``bars``, ``width_pct``,
+        ``drift_pct`` (net progress as a percentage of the band, the trend test
+        this run passed) and ``touches``, or None when nothing in the span held
+        a band that long without trending out of it.
     """
     total = len(bars)
     if total == 0:
@@ -846,12 +888,9 @@ def consolidation(
     if visible_range <= 0:
         return None
 
-    # A band counts as a range when it is at most this share of the whole
-    # visible move. A third is wide enough to catch a real base without
-    # swallowing a trending leg, which a half comfortably would.
-    tolerance = visible_range / 3.0
+    tolerance = visible_range * _RANGE_BAND_FRACTION
 
-    best: tuple[int, float, int, int] | None = None
+    best: tuple[int, float, int, int, float] | None = None
     for start in range(first, last - min_bars + 2):
         band_high = bars.highs[start]
         band_low = bars.lows[start]
@@ -864,13 +903,18 @@ def consolidation(
             if length < min_bars:
                 continue
             width = band_high - band_low
+            # Net progress across the run. A leg that fits the band is still a
+            # leg, and this is what tells the two apart.
+            drift = abs(bars.closes[end] - bars.closes[start])
+            if width <= 0 or drift > _RANGE_DRIFT_FRACTION * width:
+                continue
             if best is None or length > best[0] or (length == best[0] and width < best[1]):
-                best = (length, width, start, end)
+                best = (length, width, start, end, drift)
 
     if best is None:
         return None
 
-    length, width, start, end = best
+    length, width, start, end, drift = best
     band_high = max(bars.highs[start : end + 1])
     band_low = min(bars.lows[start : end + 1])
     if band_high <= band_low:
@@ -893,6 +937,7 @@ def consolidation(
         "to_time": float(bars.times[end]),
         "bars": int(length),
         "width_pct": round(float((band_high - band_low) / band_low * 100.0), 2),
+        "drift_pct": round(float(drift / (band_high - band_low) * 100.0), 1),
         "touches": int(touches),
     }
 

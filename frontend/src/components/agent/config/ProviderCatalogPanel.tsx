@@ -46,6 +46,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
+import { CHATGPT_PROVIDER_ID, isSubscriptionModel } from '@/lib/agent/subscription'
 import { cn } from '@/lib/utils'
 import { AddModelDialog } from './AddModelDialog'
 import { ProviderIcon } from './providerIcon'
@@ -183,10 +184,19 @@ function formatPricePerMillion(value: number | null): string | null {
  * price and a model being free are different facts and only one of them is
  * safe to assume.
  *
+ * A ChatGPT plan model is the third case, and it is the one this whole section
+ * is here to make visible. LiteLLM prices `gpt-5.4` and deliberately prices
+ * nothing under `chatgpt/`, because a plan turn has no per-token price at all.
+ * Reporting that as "price unknown" would put a `chatgpt/gpt-5.4` row and an
+ * obscure unpriced model in the same category when they are nothing alike.
+ *
  * @param model - The catalog model.
  * @returns A price label for the row.
  */
 function priceLabel(model: CatalogModel): string {
+  if (isSubscriptionModel(model.qualified_id) || isSubscriptionModel(model.id)) {
+    return 'covered by your ChatGPT plan'
+  }
   const input = formatPricePerMillion(model.input_price_per_million)
   const output = formatPricePerMillion(model.output_price_per_million)
   if (input === null && output === null) return 'price unknown'
@@ -366,7 +376,11 @@ export function ProviderCatalogPanel() {
                             key stored
                           </Badge>
                         ) : null}
-                        {!provider.needs_key ? (
+                        {provider.id === CHATGPT_PROVIDER_ID ? (
+                          <Badge variant="outline" className="font-normal">
+                            runs on your plan
+                          </Badge>
+                        ) : !provider.needs_key ? (
                           <Badge variant="outline" className="font-normal">
                             no key needed
                           </Badge>
@@ -486,7 +500,11 @@ function ProviderDetail({ provider, registered, onBack, onAdd }: ProviderDetailP
           <h3 className="text-sm font-semibold">{provider.display_name}</h3>
           <p className="text-xs text-muted-foreground">
             <span className="font-mono">{provider.id}</span>
-            {provider.needs_key ? ', needs an API key' : ', needs no API key'}
+            {provider.id === CHATGPT_PROVIDER_ID
+              ? ', signed in with your ChatGPT plan rather than an API key'
+              : provider.needs_key
+                ? ', needs an API key'
+                : ', needs no API key'}
             {provider.needs_base_url ? ', needs a base URL' : ''}
           </p>
         </div>
@@ -501,6 +519,19 @@ function ProviderDetail({ provider, registered, onBack, onAdd }: ProviderDetailP
           Model not listed
         </Button>
       </div>
+
+      {provider.id === CHATGPT_PROVIDER_ID ? (
+        <Alert>
+          <AlertTitle>These bill to your plan, not to API credits</AlertTitle>
+          <AlertDescription>
+            Most of these models also exist under OpenAI with the same name and a per-token price.
+            The two are told apart by the prefix, so a model added from here is stored as{' '}
+            <span className="font-mono">chatgpt/</span> and the suggested display name says so.
+            Connect the plan in the ChatGPT subscription panel above before adding one; without a
+            sign-in these models cannot run.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-4">
         <div className="min-w-[16rem] flex-1 space-y-2">

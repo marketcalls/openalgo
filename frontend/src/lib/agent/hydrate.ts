@@ -10,6 +10,7 @@
  * | stored entry | where it belongs on an AgentMessage |
  * | --- | --- |
  * | `{type: 'notice', level, message}` | one entry of `notices` |
+ * | `{type: 'attachments', items}` | `attachments`, on the question that carried them |
  * | `{type: 'error', message, kind}` | one entry of `notices`, at error level |
  * | `{type: 'ui', content}` | one `openui` entry of `viz`, already accumulated |
  * | `{type: 'viz', kind, spec, title, source}` | one entry of `viz` |
@@ -42,7 +43,8 @@
  *   a conversation the operator wanted to re-read.
  */
 
-import type { ChatMessage, MessageNotice, NoticeLevel, ToolCall } from '@/api/agent'
+import type { ChatMessage, MessageNotice, NoticeLevel, ToolCall, UsageBilling } from '@/api/agent'
+import type { AgentAttachmentMeta } from './attachments'
 import {
   type AgentMessage,
   type AgentNotice,
@@ -85,16 +87,38 @@ function toLevel(value: unknown): NoticeLevel {
 }
 
 /**
+ * Which billing path a stored turn took, when the row records one.
+ *
+ * Read strictly against the two known values rather than passed through, so a
+ * row carrying anything else falls back to unknown and the badge says what it
+ * always said. Guessing `subscription` from an unrecognised value would tell an
+ * operator a turn was covered by a plan when nobody said it was.
+ *
+ * @param value - Whatever the stored frame carried in that position.
+ * @returns The billing path, or undefined when the row predates the field.
+ */
+function toBilling(value: unknown): UsageBilling | undefined {
+  return value === 'subscription' || value === 'metered' ? value : undefined
+}
+
+/**
  * The stored usage frame as the badge reads it.
  *
  * `cost_usd` stays null when the row has no price, because the backend reports
  * null for a model absent from LiteLLM's price table and a rendered $0.00 would
  * make an expensive turn look free.
  *
+ * **`billing` has to be carried here, or a reloaded turn silently loses it.**
+ * This function rebuilds the usage field by field rather than spreading the
+ * stored entry, so a field it does not name does not survive the round trip. A
+ * turn that ran on a ChatGPT plan would come back looking like a turn on a
+ * model nobody has priced, which is a different and less honest statement.
+ *
  * @param entry - The `usage` entry from a message's notices sidecar.
  * @returns The turn's usage.
  */
 function toUsage(entry: Extract<MessageNotice, { type: 'usage' }>): AgentUsage {
+  const billing = toBilling(entry.billing)
   return {
     input_tokens: toCount(entry.input_tokens),
     output_tokens: toCount(entry.output_tokens),
@@ -104,6 +128,9 @@ function toUsage(entry: Extract<MessageNotice, { type: 'usage' }>): AgentUsage {
     cost_usd: toMeasure(entry.cost_usd),
     model: typeof entry.model === 'string' ? entry.model : null,
     ttft_ms: toMeasure(entry.ttft_ms),
+    // Omitted rather than set to undefined when the row has none, so an older
+    // message hydrates to exactly the object shape it did before this existed.
+    ...(billing ? { billing } : {}),
   }
 }
 
@@ -149,6 +176,7 @@ function hydrateMessage(row: ChatMessage, isLast: boolean): AgentMessage {
 
   const content = toText(row.content)
   const notices: AgentNotice[] = []
+  const attachments: AgentAttachmentMeta[] = []
   const viz: AgentVizItem[] = []
   let markup = ''
   let usage: AgentUsage | null = null
@@ -159,6 +187,19 @@ function hydrateMessage(row: ChatMessage, isLast: boolean): AgentMessage {
     switch (entry.type) {
       case 'notice':
         notices.push({ level: toLevel(entry.level), message: toText(entry.message) })
+        break
+      case 'attachments':
+        // What the question carried. The bytes were never stored, so this
+        // rebuilds the same labelled chips the composer showed and no image.
+        for (const item of entry.items ?? []) {
+          if (!item) continue
+          attachments.push({
+            name: toText(item.name),
+            kind: item.kind === 'image' ? 'image' : 'text',
+            mime: toText(item.mime),
+            size: toCount(item.size),
+          })
+        }
         break
       case 'error':
         // The stream carries an error out of band; a stored one has nowhere
@@ -217,6 +258,7 @@ function hydrateMessage(row: ChatMessage, isLast: boolean): AgentMessage {
     // same conversation reuses React's nodes instead of remounting the thread.
     id: `stored-${row.id}`,
     tools: toTools(row.tools),
+    attachments,
     notices,
     viz,
     usage,

@@ -6,10 +6,17 @@
  * it is read from `.env`; it is all rows in this instance's own database, which
  * is why there is a screen for it at all.
  *
- * The order is deliberate. A returning operator came to change a model that is
- * already there, so the registry is first and the catalog that adds more sits
- * under it. Web search is last because it works with nothing configured, so it
- * is the only section that is never the reason someone opened this page.
+ * The order is deliberate, and it is ranked by what brought someone here. A
+ * returning operator came to change a model that is already there, so the
+ * registry is first. The two things they came to connect, a ChatGPT plan and
+ * the trading switch, come next. The provider catalog follows, because it is
+ * the only section that is browsed rather than read and it draws two dozen
+ * cards before it stops. Web search is last: it works with nothing configured,
+ * so it is the one section that is never the reason someone opened this page.
+ *
+ * That ranking is not a preference. The catalog grid is a screen and a half
+ * tall, and anything placed under it is effectively unfindable, which is how
+ * the trading switch came to be buried once already.
  *
  * The route sits under `FullWidthLayout`, which renders no navigation of its
  * own, so this page renders `Navbar` itself exactly as /agent and /trading do.
@@ -34,6 +41,7 @@ import type { ReactNode } from 'react'
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { AddModelDialog } from '@/components/agent/config/AddModelDialog'
+import { ChatGptSubscriptionPanel } from '@/components/agent/config/ChatGptSubscriptionPanel'
 import { ProviderCatalogPanel } from '@/components/agent/config/ProviderCatalogPanel'
 import { RegisteredModelsTable } from '@/components/agent/config/RegisteredModelsTable'
 import { TradingPanel } from '@/components/agent/config/TradingPanel'
@@ -120,12 +128,22 @@ export default function AgentConfig() {
                 <RegisteredModelsTable />
               </section>
             </Section>
-            <Section name="Web search">
+            {/* Above the provider grid, not below it. The grid draws 24 cards
+                before it offers to show more, so anything under it starts a
+                screen and a half down: the trading switch was buried exactly
+                that way once. This panel is the answer to a question an
+                operator arrives with ("where is my ChatGPT plan"), so it sits
+                where they land. */}
+            <Section name="The ChatGPT subscription">
+              <ChatGptSubscriptionPanel />
+            </Section>
+            <Section name="Trading">
               <TradingPanel />
-
+            </Section>
             <Section name="The provider catalog">
               <ProviderCatalogPanel />
             </Section>
+            <Section name="Web search">
               <WebSearchPanel />
             </Section>
           </div>

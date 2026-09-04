@@ -46,6 +46,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { isSubscriptionModel, SUBSCRIPTION_BADGE } from '@/lib/agent/subscription'
 import { cn } from '@/lib/utils'
 
 /** Effort levels offered per turn, in the order shown. */
@@ -127,6 +128,7 @@ export function ModelPicker({
   if (models.length === 0) return <Placeholder text="No enabled model" className={className} />
 
   const selectedLabel = selected?.display_name || selected?.model_name || 'Select a model'
+  const selectedOnPlan = isSubscriptionModel(selected?.model_name)
   const showSearch = models.length > SEARCH_THRESHOLD
   // Not every model thinks. GPT-4 and GPT-4o take no reasoning effort, and the
   // backend refuses to send one for them whatever is asked, so offering the
@@ -164,6 +166,19 @@ export function ModelPicker({
           <DropdownMenuRadioItem key={model.id} value={String(model.id)} className="text-xs">
             <span className="flex min-w-0 flex-1 items-center gap-2">
               <span className="truncate">{model.display_name || model.model_name}</span>
+              {/* Two rows here can carry the same display name and bill to
+                  different places, because eight of the ten chatgpt/ models
+                  share a bare name with an openai/ one. A turn should never be
+                  ambiguous about which billing path it took, and this is the
+                  moment the operator chooses it. */}
+              {isSubscriptionModel(model.model_name) && (
+                <span
+                  className="shrink-0 rounded bg-muted px-1 py-px text-[10px] text-muted-foreground"
+                  title="Runs on your ChatGPT Plus or Pro plan, not on API credits."
+                >
+                  {SUBSCRIPTION_BADGE}
+                </span>
+              )}
               {model.is_default && (
                 <span className="shrink-0 rounded bg-muted px-1 py-px text-[10px] text-muted-foreground">
                   default
@@ -194,9 +209,22 @@ export function ModelPicker({
           variant="outline"
           size="sm"
           className={cn('h-8 w-auto gap-1.5 px-2.5 text-xs font-normal', className)}
-          aria-label={`Model ${selectedLabel}, reasoning ${effortLabel(effort)}. Change either.`}
+          aria-label={
+            selectedOnPlan
+              ? `Model ${selectedLabel}, on your ChatGPT plan, reasoning ${effortLabel(effort)}. Change either.`
+              : `Model ${selectedLabel}, reasoning ${effortLabel(effort)}. Change either.`
+          }
+          title={
+            selectedOnPlan
+              ? 'The next turn runs on your ChatGPT Plus or Pro plan rather than on API credits.'
+              : undefined
+          }
         >
           <span className="max-w-[12rem] truncate">{selectedLabel}</span>
+          {/* On the trigger, not only in the menu. This is the last thing shown
+              before a question is sent, and it is the only place the billing
+              path of the turn about to run is visible. */}
+          {selectedOnPlan && <span className="shrink-0 text-muted-foreground">on plan</span>}
           {showEffort && (
             <span className="shrink-0 text-muted-foreground">{effortLabel(effort)}</span>
           )}

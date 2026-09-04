@@ -364,6 +364,84 @@ export function applyChartCommands(
 }
 
 // ---------------------------------------------------------------------------
+// Inbound: indicators
+// ---------------------------------------------------------------------------
+
+/** The chart's indicator tier, narrowed to what one turn can ask of it. */
+export interface AgentIndicatorSurface {
+  /** Every live instance, in the order the chart holds them. */
+  indicators(): readonly { readonly id: string; readonly indicatorId: string }[]
+  /** Add one instance of a descriptor. */
+  addIndicator(indicatorId: string, settings: Record<string, unknown>): unknown
+  /**
+   * Take one instance off the chart, by its instance id.
+   *
+   * This is the chart's own removal, the same one the indicator dialog's
+   * Remove uses, and not the instance's `remove()`. The latter clears the
+   * series, levels and legend row an indicator created but leaves the instance
+   * in `indicators()`, so the chart went blank while the toolbar still counted
+   * it, and the duplicate guard below then read that ghost as "already there"
+   * and silently refused to add it back. The turn answered "added" and drew
+   * nothing, which is worse than refusing.
+   */
+  removeIndicator(instanceId: string): void
+  /**
+   * Whether the registry knows this descriptor.
+   *
+   * The chart's own registry, which includes the operator's modules from
+   * `strategies/indicators/`. No list on the server can see those, so a
+   * custom indicator has to be addable by a name the backend catalogue has
+   * never heard of, and this is what makes that safe.
+   */
+  hasIndicator(indicatorId: string): boolean
+}
+
+/**
+ * Add and remove the indicators one turn asked for.
+ *
+ * Unknown ids are skipped quietly, exactly as an unknown `op` is ignored: a
+ * newer backend must not break an older client mid-turn, and throwing would
+ * take the rest of the batch with it.
+ *
+ * @param surface - The chart's indicator tier.
+ * @param commands - One turn's commands. Anything that is not an indicator op
+ *   is ignored, so the caller may pass the whole batch.
+ * @returns Whether the chart changed, which is what the caller persists on.
+ */
+export function applyIndicatorCommands(
+  surface: AgentIndicatorSurface,
+  commands: readonly AgentChartCommand[]
+): boolean {
+  let changed = false
+  for (const command of commands) {
+    if (!command || command.op !== 'indicator') continue
+    const id = text(command.id)
+    if (!id || !surface.hasIndicator(id)) continue
+
+    if (command.action === 'remove') {
+      // A copy, because removing splices the live array under the walk.
+      for (const instance of [...surface.indicators()]) {
+        if (instance.indicatorId !== id) continue
+        surface.removeIndicator(instance.id)
+        changed = true
+      }
+      continue
+    }
+
+    // Asking twice draws two identical lines nobody can tell apart, so a
+    // repeat is a no-op rather than a second instance.
+    if (surface.indicators().some((instance) => instance.indicatorId === id)) continue
+    const settings =
+      command.settings && typeof command.settings === 'object'
+        ? (command.settings as Record<string, unknown>)
+        : {}
+    surface.addIndicator(id, settings)
+    changed = true
+  }
+  return changed
+}
+
+// ---------------------------------------------------------------------------
 // Outbound: the context
 // ---------------------------------------------------------------------------
 

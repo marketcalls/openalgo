@@ -51,7 +51,7 @@ import {
   type ReasoningEffort,
   truncateConversation,
 } from '@/api/agent'
-import { Composer } from '@/components/agent/Composer'
+import { Composer, type ComposerTurn } from '@/components/agent/Composer'
 import { ConversationSidebar } from '@/components/agent/ConversationSidebar'
 import { Message } from '@/components/agent/Message'
 import { ModelPicker } from '@/components/agent/ModelPicker'
@@ -102,9 +102,19 @@ export default function AgentChat() {
 
   usePinNewestQuestion(threadRef, messages)
 
+  /**
+   * The web-search switch as the last sent turn had it.
+   *
+   * The composer owns that switch, so a retry or an edit, which do not go
+   * through the composer, would otherwise silently re-enable search on a
+   * conversation the operator had turned it off for.
+   */
+  const lastWebSearch = useRef(true)
+
   const handleSend = useCallback(
-    (text: string) => {
-      void send(text)
+    (text: string, turn: ComposerTurn) => {
+      lastWebSearch.current = turn.webSearch
+      void send(text, turn)
     },
     [send]
   )
@@ -131,12 +141,12 @@ export default function AgentChat() {
     return null
   }, [messages])
 
-  /** The most recent question, which is what a retry re-sends. */
-  const lastUserText = useMemo(() => {
+  /** The most recent question, which is what a retry replaces. */
+  const lastUserMessage = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
-      if (messages[index].role === 'user') return messages[index].content
+      if (messages[index].role === 'user') return messages[index]
     }
-    return ''
+    return null
   }, [messages])
 
   /**
@@ -175,7 +185,7 @@ export default function AgentChat() {
               messages.findIndex((item) => item.id === messageId)
             )
           )
-          send(text)
+          send(text, { webSearch: lastWebSearch.current })
         })
         .catch((cause) => {
           // The answer is still on screen and the question unchanged, which is
@@ -186,11 +196,21 @@ export default function AgentChat() {
     [conversationId, messages, send, setConversation]
   )
 
-  /** Ask the last question again, after a failure or an unsatisfying answer. */
+  /**
+   * Answer the last question again, after a failure or an unsatisfying answer.
+   *
+   * This is an edit that changes nothing, so it goes through `handleEdit`
+   * rather than beside it. Sending the text again on its own looked right and
+   * was not: it appended a second copy of the question and a second answer, so
+   * one retry left the thread holding the same question twice, and agno was
+   * still carrying the answer the operator had just rejected. Replacing the
+   * question with itself removes the old answer on the server first, which is
+   * what "try again" means.
+   */
   const handleRetry = useCallback(() => {
-    if (!lastUserText) return
-    send(lastUserText)
-  }, [lastUserText, send])
+    if (!lastUserMessage) return
+    handleEdit(lastUserMessage.id, lastUserMessage.content)
+  }, [handleEdit, lastUserMessage])
 
   const handleSelectConversation = useCallback(
     (id: number, loaded: AgentMessage[]) => {
@@ -315,6 +335,9 @@ export default function AgentChat() {
               onSend={handleSend}
               onStop={handleStop}
               running={running}
+              // The same row the picker is showing, so the attach control and
+              // the turn agree about which model has to read the file.
+              modelId={modelId}
               controls={
                 <ModelPicker
                   value={modelId}

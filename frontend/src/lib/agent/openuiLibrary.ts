@@ -112,7 +112,7 @@ const AGENT_UI_RULES: readonly string[] = [
  * The budget for the generated prompt **file**, in characters.
  *
  * `build_agent` caps the whole system prompt at `DEFAULT_MAX_PROMPT_CHARS`
- * (24000) and `render_sections` enforces it by dropping **whole** unpinned
+ * (30000) and `render_sections` enforces it by dropping **whole** unpinned
  * sections from the end, with nothing but a log line to say so. Overshooting
  * therefore does not truncate this section; it silently deletes another one.
  *
@@ -120,7 +120,7 @@ const AGENT_UI_RULES: readonly string[] = [
  *
  * | part | chars |
  * | --- | --- |
- * | cap, `DEFAULT_MAX_PROMPT_CHARS` | 24000 |
+ * | cap, `DEFAULT_MAX_PROMPT_CHARS` | 30000 |
  * | `build_system_prompt(surface='chat', trading_enabled=True)` | 15060 |
  * | section title and the two separators around it | about 45 |
  * | left for this prompt | about 8895 |

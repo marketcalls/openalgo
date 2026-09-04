@@ -40,6 +40,7 @@ need → drill into the specific file. Don't load everything at once.
 
 | Feature | Entry point |
 |---|---|
+| Agent (`/agent`) | [design/55-agent/README.md](design/55-agent/README.md) |
 | Scalping Terminal (`/scalping`) | [scalping/PRD.md](scalping/PRD.md) |
 | Scanner architecture | [scanner-architecture.md](scanner-architecture.md) |
 | WhatsApp alerts | [whatsapp.md](whatsapp.md) |

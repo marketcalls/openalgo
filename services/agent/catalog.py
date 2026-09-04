@@ -70,6 +70,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
+from services.agent import chatgpt_models
 from services.agent.providers import PROVIDER_KINDS
 from utils.logging import get_logger
 
@@ -191,6 +192,11 @@ _BRANDS: Mapping[str, tuple[str, str]] = MappingProxyType(
 # every provider it covers.
 _KEYLESS_PROVIDERS: frozenset[str] = frozenset(
     {
+        # A ChatGPT plan, reached through an OAuth device flow rather than a
+        # pasteable key. See services/agent/chatgpt_oauth.py: the credential is a
+        # refresh token this module never shows and the operator never types, so
+        # a key field on the provider card asks for something that cannot exist.
+        "chatgpt",
         "custom",
         "custom_openai",
         "docker_model_runner",
@@ -694,6 +700,12 @@ def _build() -> None:
         _models = MappingProxyType({})
         _providers = ()
         return
+
+    # Before anything is read: LiteLLM's registry omits several models the
+    # ChatGPT subscription actually serves, and an unregistered one is routed
+    # to the wrong endpoint rather than merely going unlisted. See
+    # services/agent/chatgpt_models.py.
+    chatgpt_models.register(litellm)
 
     entries = _read_cost_entries(litellm)
     _entries = entries

@@ -49,7 +49,9 @@ import {
   type ApiKeyScope,
   agentErrorMessage,
   agentQueryKeys,
+  type ChatGptStatus,
   deleteModel,
+  getChatGptStatus,
   listModels,
   type ModelTestResult,
   type ProviderKind,
@@ -99,6 +101,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { isSubscriptionModel, SUBSCRIPTION_BADGE } from '@/lib/agent/subscription'
 
 /** How many columns a detail row has to span. */
 const COLUMN_COUNT = 8
@@ -171,6 +174,27 @@ function keySourceLabel(model: AgentModel): string {
   return source
 }
 
+/**
+ * Which key answers for a plan model, which is none of them.
+ *
+ * A `chatgpt/` row authenticates with an OAuth refresh token from the
+ * subscription panel, not with anything in `ag_secret` under `provider:` or
+ * `model:`, so `has_api_key` is false and `api_key_fingerprint` is null on the
+ * row itself. Leaving the Key cell reading "No key stored" would be true and
+ * useless: it would look identical to a misconfigured OpenAI row, on the exact
+ * table whose job is telling two identically named GPT-5.4 rows apart.
+ *
+ * The fingerprint therefore comes from where the credential actually is.
+ *
+ * @param status - The subscription status, or undefined while it is loading or
+ *   if the route is not available on this server.
+ * @returns The fingerprint to show, or null when no plan is connected.
+ */
+function subscriptionFingerprint(status: ChatGptStatus | undefined): string | null {
+  if (!status?.authorised) return null
+  return status.fingerprint || null
+}
+
 /** Why the default radio is or is not available, said in the tooltip. */
 function defaultReason(model: AgentModel): string {
   if (model.is_default) return 'This is the default model'
@@ -215,6 +239,18 @@ export function RegisteredModelsTable() {
   })
 
   const models = data ?? []
+
+  // Read only when a plan row is actually on screen. The route is new, an older
+  // server answers 404, and a table full of OpenAI models has no reason to ask.
+  const hasPlanModel = models.some((model) => isSubscriptionModel(model.model_name))
+  const subscription = useQuery({
+    queryKey: agentQueryKeys.chatgpt(),
+    queryFn: getChatGptStatus,
+    enabled: hasPlanModel,
+    retry: false,
+    staleTime: 30_000,
+  })
+  const planFingerprint = subscriptionFingerprint(subscription.data)
 
   const noteError = (id: number, message: string): void => {
     setRowErrors((prev) => ({ ...prev, [id]: message }))
@@ -347,7 +383,8 @@ export function RegisteredModelsTable() {
               const storedError = model.last_test_error?.trim() ?? ''
               const hasDetail = Boolean(rowError) || Boolean(fresh) || Boolean(storedError)
               const canPromote = model.enabled && model.last_test_ok === true
-              const needsKey = NEEDS_KEY.includes(model.provider_kind)
+              const onPlan = isSubscriptionModel(model.model_name)
+              const needsKey = !onPlan && NEEDS_KEY.includes(model.provider_kind)
 
               return (
                 <Fragment key={model.id}>
@@ -356,11 +393,28 @@ export function RegisteredModelsTable() {
                       <div className="truncate font-medium" title={model.display_name}>
                         {model.display_name}
                       </div>
-                      <div
-                        className="truncate font-mono text-xs text-muted-foreground"
-                        title={model.model_name}
-                      >
-                        {model.model_name}
+                      <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                        <div
+                          className="truncate font-mono text-xs text-muted-foreground"
+                          title={model.model_name}
+                        >
+                          {model.model_name}
+                        </div>
+                        {/* The whole reason this badge exists: eight of the ten
+                            chatgpt/ models share a bare name with an openai/
+                            one, so two rows can both read GPT-5.4 and bill to
+                            different places. The prefix is right there in the
+                            id, but an operator scanning a column does not read
+                            it as a billing path until something says so. */}
+                        {onPlan ? (
+                          <Badge
+                            variant="secondary"
+                            className="shrink-0 font-normal"
+                            title="Turns on this model are covered by your ChatGPT Plus or Pro plan, not billed per token against API credits."
+                          >
+                            {SUBSCRIPTION_BADGE}
+                          </Badge>
+                        ) : null}
                       </div>
                     </TableCell>
 
@@ -369,7 +423,28 @@ export function RegisteredModelsTable() {
                     </TableCell>
 
                     <TableCell className="max-w-[14rem]">
-                      {model.has_api_key ? (
+                      {onPlan ? (
+                        // A plan row has no key of its own, so its credential is
+                        // described from where the credential is: the OAuth
+                        // session in the subscription panel above.
+                        planFingerprint ? (
+                          <>
+                            <div
+                              className="truncate font-mono text-xs text-muted-foreground"
+                              title={planFingerprint}
+                            >
+                              {planFingerprint}
+                            </div>
+                            <div className="truncate text-[11px] text-muted-foreground/80">
+                              your ChatGPT plan sign-in
+                            </div>
+                          </>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            No plan connected yet
+                          </span>
+                        )
+                      ) : model.has_api_key ? (
                         <>
                           <div
                             className="truncate font-mono text-xs text-muted-foreground"
@@ -720,7 +795,12 @@ function EditModelDialog({ model, open, onOpenChange, onSaved }: EditModelDialog
   const [error, setError] = useState<string | null>(null)
 
   const needsBaseUrl = NEEDS_BASE_URL.includes(model.provider_kind)
-  const needsKey = NEEDS_KEY.includes(model.provider_kind)
+  // A plan model is registered as `litellm`, which normally does want a key.
+  // This one cannot have one: it runs on the OAuth session from the
+  // subscription panel, so a key field here would take a value that is never
+  // read and quietly overwrite the shared LiteLLM key for every other row.
+  const onPlan = isSubscriptionModel(model.model_name)
+  const needsKey = !onPlan && NEEDS_KEY.includes(model.provider_kind)
   const typedKey = apiKey.trim()
 
   /**
@@ -853,6 +933,14 @@ function EditModelDialog({ model, open, onOpenChange, onSaved }: EditModelDialog
                   : 'No key is stored for this model yet, so it cannot be tested until one is.'}
               </p>
             </div>
+          )}
+
+          {onPlan && (
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              This model runs on your ChatGPT plan, so it has no API key. Its credential is the
+              sign-in in the ChatGPT subscription panel, and disconnecting there stops this model
+              rather than anything typed here.
+            </p>
           )}
 
           {needsKey && typedKey !== '' && (

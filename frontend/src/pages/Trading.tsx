@@ -1,8 +1,14 @@
 import { LayoutGrid, Link2 as LinkIcon } from 'lucide-react'
 import { createLinkGroup, type LinkGroup } from 'openalgo-charts'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import { Navbar } from '@/components/layout/Navbar'
-import { AgentPanel } from '@/components/trading/AgentPanel'
+// Lazy, because the panel pulls the markdown renderer and the syntax
+// highlighter's grammars and themes behind it. Statically imported, every
+// trader loading a chart paid for a chat they may never open. The heavy
+// visualization packages inside it are already lazy for the same reason.
+const AgentPanel = lazy(() =>
+  import('@/components/trading/AgentPanel').then((m) => ({ default: m.AgentPanel }))
+)
 import { ChartPane } from '@/components/trading/ChartPane'
 import { DrawingRail } from '@/components/trading/DrawingRail'
 import { OptionChainPanel } from '@/components/trading/OptionChainPanel'
@@ -266,6 +272,18 @@ export default function Trading() {
     (commands: AgentChartCommand[]) => {
       void panelTarget()?.applyChartCommands(commands)
     },
+    [panelTarget]
+  )
+
+  /**
+   * The focused pane as a PNG, for the agent composer's screenshot item.
+   *
+   * The same capture the camera menu's save and copy use, so what the model is
+   * shown is exactly what saving would have produced: the interaction-only
+   * overlays taken down, the OHLC readout painted in.
+   */
+  const captureChart = useCallback(
+    () => panelTarget()?.snapshotPng() ?? Promise.resolve(null),
     [panelTarget]
   )
   const railStats: DrawStats = { ...stats, tool, magnet }
@@ -589,7 +607,13 @@ export default function Trading() {
             />
           )}
           {apiKey && wsUrl && panel === 'agent' && (
-            <AgentPanel getChartContext={readChartContext} onChartCommand={applyChartCommands} />
+            <Suspense fallback={null}>
+              <AgentPanel
+                getChartContext={readChartContext}
+                onChartCommand={applyChartCommands}
+                onCaptureChart={captureChart}
+              />
+            </Suspense>
           )}
 
           {apiKey && wsUrl && <RightRail active={panel} onSelect={setPanel} />}

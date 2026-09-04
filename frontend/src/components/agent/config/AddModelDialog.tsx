@@ -57,6 +57,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  isSubscriptionModel,
+  SUBSCRIPTION_BADGE,
+  suggestSubscriptionDisplayName,
+} from '@/lib/agent/subscription'
 import { cn } from '@/lib/utils'
 
 /**
@@ -141,10 +146,19 @@ function resolveKind(value: string | undefined): ProviderKind {
  * A suggestion only. It stays editable, and an empty one is allowed because the
  * server falls back to the model name itself.
  *
+ * **A `chatgpt/` model gets its billing path in the name.** Eight of the ten
+ * plan models share a bare name with an `openai` model, so the default
+ * suggestion for `chatgpt/gpt-5.4` and for `openai/gpt-5.4` would otherwise be
+ * the same two words, and an operator who accepted both defaults would end up
+ * with two rows called GPT-5.4 that bill to different places. That is the exact
+ * confusion this whole feature exists to prevent, and it is cheapest to prevent
+ * at the moment the name is chosen.
+ *
  * @param modelName - The model name, possibly carrying a provider prefix.
  * @returns A title-cased last path segment, or an empty string.
  */
 function suggestDisplayName(modelName: string): string {
+  if (isSubscriptionModel(modelName)) return suggestSubscriptionDisplayName(modelName)
   const last = modelName.split('/').pop() ?? modelName
   if (!last.trim()) return ''
   return last
@@ -247,7 +261,17 @@ export function AddModelDialog({
     enabled: open,
   })
 
-  const spec = KIND_BY_VALUE.get(kind) ?? PROVIDER_KIND_SPECS[0]
+  const baseSpec = KIND_BY_VALUE.get(kind) ?? PROVIDER_KIND_SPECS[0]
+  // A ChatGPT plan model is stored as `litellm`, whose spec wants a key, and it
+  // is the one `litellm` model that cannot have one: it authenticates with the
+  // OAuth session from the subscription panel. Offering the field would take a
+  // value that is never read for this model and, at provider scope, silently
+  // replace the shared LiteLLM key every other row of that kind runs on.
+  //
+  // Decided from the model name rather than the kind, because the name is what
+  // carries the prefix and the operator types it here.
+  const onPlan = isSubscriptionModel(modelId)
+  const spec: ProviderKindSpec = onPlan ? { ...baseSpec, needsKey: false } : baseSpec
   const providerSecret = `provider:${kind}`
   const hasStoredProviderKey = (registered.data ?? []).some(
     (model) => model.has_api_key && model.api_key_source === providerSecret
@@ -356,12 +380,17 @@ export function AddModelDialog({
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm font-medium">{created.display_name}</span>
                 <Badge variant="secondary">{created.provider_kind}</Badge>
+                {isSubscriptionModel(created.model_name) ? (
+                  <Badge variant="secondary">{SUBSCRIPTION_BADGE}</Badge>
+                ) : null}
               </div>
               <p className="mt-1 font-mono text-xs text-muted-foreground">{created.model_name}</p>
               <p className="mt-2 text-xs text-muted-foreground">
-                {created.has_api_key
-                  ? `Key stored, shown only as ${created.api_key_fingerprint ?? 'a fingerprint'}.`
-                  : 'No key is stored for this model yet.'}
+                {isSubscriptionModel(created.model_name)
+                  ? 'It runs on your ChatGPT plan sign-in, so there is no key to store.'
+                  : created.has_api_key
+                    ? `Key stored, shown only as ${created.api_key_fingerprint ?? 'a fingerprint'}.`
+                    : 'No key is stored for this model yet.'}
               </p>
             </div>
 
@@ -541,6 +570,15 @@ export function AddModelDialog({
                   ) : null}
                 </div>
               </>
+            ) : onPlan ? (
+              // Not the same sentence as a local model. A ChatGPT plan model
+              // takes no key but every token still reaches OpenAI, so saying
+              // "nothing leaves this machine" here would be false.
+              <p className="text-xs text-muted-foreground">
+                This model runs on your ChatGPT Plus or Pro plan, so it takes no API key. Connect
+                the plan in the ChatGPT subscription panel on this page; turns on it are covered by
+                the plan rather than billed against API credits.
+              </p>
             ) : (
               <p className="text-xs text-muted-foreground">
                 This provider takes no API key, and nothing leaves this machine to reach it.
