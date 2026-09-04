@@ -335,6 +335,61 @@ class TestPlaceOrderIdempotency:
         assert code == 200
         assert response["orderid"] is None
 
+    def test_reserve_store_failure_fails_closed_503(self, monkeypatch):
+        broker = _FakeBrokerModule()
+        monkeypatch.setattr(
+            place_order_service,
+            "get_auth_token_broker",
+            lambda api_key: ("fake-auth-token", "fakebroker"),
+        )
+        monkeypatch.setattr(place_order_service, "get_analyze_mode", lambda: False)
+        monkeypatch.setattr(place_order_service, "import_broker_module", lambda name: broker)
+        monkeypatch.setattr(
+            idempotency_db,
+            "reserve_client_order_id",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("database is locked")),
+        )
+
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY
+        )
+        # Without the store we cannot dedupe, so proceeding would risk a
+        # double placement. Fail closed with a retryable error instead of
+        # leaking the exception as an unstyled 500.
+        assert ok is False
+        assert code == 503
+        assert "unavailable" in response["message"]
+        assert len(broker.calls) == 0
+
+    def test_resolution_read_failure_never_replaces(self, monkeypatch):
+        broker = _FakeBrokerModule()
+        monkeypatch.setattr(
+            place_order_service,
+            "get_auth_token_broker",
+            lambda api_key: ("fake-auth-token", "fakebroker"),
+        )
+        monkeypatch.setattr(place_order_service, "get_analyze_mode", lambda: False)
+        monkeypatch.setattr(place_order_service, "import_broker_module", lambda name: broker)
+        monkeypatch.setattr(
+            idempotency_db,
+            "reserve_client_order_id",
+            lambda *a, **k: ("existing", "placed"),
+        )
+        monkeypatch.setattr(
+            idempotency_db,
+            "get_resolution",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("database is locked")),
+        )
+
+        # The id may already exist at the broker; an unreadable resolution
+        # must block the placement, never fall through to a re-place.
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY
+        )
+        assert ok is False
+        assert code == 503
+        assert len(broker.calls) == 0
+
     def test_no_client_order_id_is_unchanged(self, fake_broker):
         ok, response, code = place_order_service.place_order(BASE_ORDER, api_key=API_KEY)
         assert ok is True

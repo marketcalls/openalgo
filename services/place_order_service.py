@@ -209,30 +209,57 @@ def place_order_with_auth(
     if idempotent:
         from database.idempotency_db import get_resolution, reserve_client_order_id
 
-        state, status = reserve_client_order_id(api_key, client_order_id, tag=order_tag)
-        if state == "vacated":
-            # Reservation vanished (TTL prune) between conflict and re-read:
-            # nothing is in flight, so reclaim and fall through on the result.
+        try:
             state, status = reserve_client_order_id(api_key, client_order_id, tag=order_tag)
-        if state == "existing":
-            if status == "placed":
-                resolution = get_resolution(api_key, client_order_id)
-                if resolution and resolution["orderid"]:
-                    replay_response = {
-                        "status": "success",
-                        "orderid": resolution["orderid"],
-                        "client_order_id": client_order_id,
-                        "duplicate": True,
-                    }
-                    if resolution.get("tag"):
-                        replay_response["tag"] = resolution["tag"]
-                    return True, replay_response, 200
-            # in_flight, or placed without a recorded orderid: never re-place.
+            if state == "vacated":
+                # Reservation vanished (TTL prune) between conflict and re-read:
+                # nothing is in flight, so reclaim and fall through on the result.
+                state, status = reserve_client_order_id(api_key, client_order_id, tag=order_tag)
+            if state == "existing":
+                if status == "placed":
+                    resolution = get_resolution(api_key, client_order_id)
+                    if resolution and resolution["orderid"]:
+                        replay_response = {
+                            "status": "success",
+                            "orderid": resolution["orderid"],
+                            "client_order_id": client_order_id,
+                            "duplicate": True,
+                        }
+                        if resolution.get("tag"):
+                            replay_response["tag"] = resolution["tag"]
+                        return True, replay_response, 200
+                # in_flight, or placed without a recorded orderid: never re-place.
+                error_response = {
+                    "status": "error",
+                    "message": "Order placement with this client_order_id is already in progress",
+                }
+                return False, error_response, 409
+        except Exception:
+            # Store unavailable (SQLite locked/IO error): nothing was committed,
+            # so there is no reservation to release. Proceeding would place the
+            # order without duplicate protection — the caller explicitly opted
+            # in via client_order_id, so refuse the placement instead.
+            logger.exception(
+                "Idempotency store failure while reserving client_order_id %s",
+                client_order_id,
+            )
             error_response = {
                 "status": "error",
-                "message": "Order placement with this client_order_id is already in progress",
+                "message": "Order idempotency store unavailable; order not placed",
             }
-            return False, error_response, 409
+            bus.publish(
+                OrderFailedEvent(
+                    mode="live",
+                    api_type="placeorder",
+                    request_data=order_request_data,
+                    response_data=error_response,
+                    api_key=api_key,
+                    symbol=order_data.get("symbol", ""),
+                    exchange=order_data.get("exchange", ""),
+                    error_message="idempotency store unavailable",
+                )
+            )
+            return False, error_response, 503
 
     # If not in analyze mode, proceed with actual order placement
     broker_module = import_broker_module(broker)
