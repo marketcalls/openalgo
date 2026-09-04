@@ -18,6 +18,7 @@ import {
   type Bar,
   BuySellButtons,
   CandleBuilder,
+  type ChartTheme,
   compactVolume,
   createChart,
   type IPrimitive,
@@ -84,6 +85,12 @@ export interface DrawStats {
    */
   hasSelection: boolean
   magnet: boolean
+  /**
+   * Whether the armed tool survives a placement. Off, the tier disarms after
+   * one drawing and the rail returns to the cursor, which is the tier's
+   * default; on, the tool stays armed until it is turned off.
+   */
+  stay: boolean
   tool: string | null
   /**
    * Tool id -> keyboard chord, from the draw tier. Empty until the tier has
@@ -102,7 +109,13 @@ import {
   describeDrawings,
   isAgentDrawingId,
 } from './chartContract'
-import { buildChartTheme, isLightTheme, resolveCssColor, volumeColor } from './chartTheme'
+import {
+  buildChartTheme,
+  isLightTheme,
+  mutedTradeColors,
+  resolveCssColor,
+  volumeColor,
+} from './chartTheme'
 import { CHART_TYPES } from './chartTypes'
 import { fmtPrice, money, priceDp, snapTick, tickSize } from './format'
 import {
@@ -180,6 +193,46 @@ export interface CtxItem {
   enabled: boolean
 }
 
+/**
+ * An order the terminal has validated but not placed, in the shape the host's
+ * order ticket takes. Produced while One-Click is off: the on-chart buttons and
+ * the context-menu rows start an order but never place one, the way the option
+ * chain's pills do. Quantity is in units (lots already multiplied out), which
+ * is what the ticket and the broker both take.
+ */
+export interface OrderTicketRequest {
+  symbol: string
+  exchange: string
+  action: OrderSide
+  quantity: number
+  lotSize: number
+  tickSize: number
+  product: 'MIS' | 'NRML' | 'CNC'
+  priceType: OrderType
+  /** Limit price, for LIMIT and SL. Absent on a market order. */
+  price?: number
+  /** Trigger, for SL and SL-M. */
+  triggerPrice?: number
+  strategy: string
+}
+
+/**
+ * The order a ticket comes back with, in the placeorder endpoint's field
+ * names: the trader may have changed the side, the quantity, the type or the
+ * product before confirming, so it is taken whole rather than as a patch on
+ * the OrderTicketRequest that opened it.
+ */
+export interface ConfirmedOrder {
+  symbol: string
+  exchange: string
+  action: OrderSide
+  quantity: number
+  pricetype: OrderType
+  product: 'MIS' | 'NRML' | 'CNC'
+  price?: number
+  trigger_price?: number
+}
+
 export interface TerminalCallbacks {
   onReady(info: { intervalGroups: IntervalGroup[]; interval: string; chartType: string }): void
   onToast(msg: string, kind: ToastKind): void
@@ -209,6 +262,13 @@ export interface TerminalCallbacks {
    * but has no DOM to collect it with, so the host prompts.
    */
   onDrawTextEdit?(req: { id: string; tool: string; text: string }): void
+  /**
+   * One-Click is off and an order route was used: the on-chart Buy or Sell,
+   * or a context-menu row. Every guard the armed path applies has already
+   * passed. The engine ships no DOM, so the ticket is the host's to render;
+   * nothing is placed until it confirms.
+   */
+  onOrderTicket?(req: OrderTicketRequest): void
 }
 
 /** Tools whose content is typed rather than dragged. */
@@ -405,6 +465,54 @@ export function dedupeIndicators<T extends { indicatorId: string; settings: unkn
   })
 }
 const STRATEGY = 'chart-trading'
+/**
+ * Minimum gap between two armed fires, the scalping terminal's figure. A
+ * double-click on the on-chart Buy, or a click that lands as the canvas
+ * repaints under it, must be one order and not two.
+ */
+export const ORDER_COOLDOWN_MS = 120
+
+/**
+ * The quantity an order carries, in units. The toolbar box means lots on a
+ * derivative segment and shares on cash equity; the broker takes units either
+ * way. One function so the armed path and the ticket cannot size differently.
+ */
+export function orderUnits(qty: number, lots: boolean, lotsize: number): number {
+  const n = Math.max(1, Math.floor(qty || 1))
+  return lots ? n * lotsize : n
+}
+
+/**
+ * The ticket for an order the chart would otherwise place at once: the same
+ * price mapping `placeFromMenu` sends the broker. A market order carries no
+ * price; a limit carries the clicked price; a stop carries it as the trigger
+ * and, for SL, as the limit too.
+ */
+export function buildOrderTicket(input: {
+  sym: SymbolView
+  qty: number
+  product: string
+  side: OrderSide
+  type: OrderType
+  /** The tick-snapped price the row was clicked at; ignored for MARKET. */
+  price: number
+}): OrderTicketRequest {
+  const { sym, side, type, price } = input
+  const stop = type === 'SL' || type === 'SL-M'
+  return {
+    symbol: sym.symbol,
+    exchange: sym.exchange,
+    action: side,
+    quantity: orderUnits(input.qty, sym.lots, sym.lotsize),
+    lotSize: sym.lots ? sym.lotsize : 1,
+    tickSize: sym.tick,
+    product: input.product as 'MIS' | 'NRML' | 'CNC',
+    priceType: type,
+    price: type === 'MARKET' || type === 'SL-M' ? undefined : price,
+    triggerPrice: stop ? price : undefined,
+    strategy: STRATEGY,
+  }
+}
 const VISIBLE_BARS = 120
 /** Empty bars kept between the newest candle and the price axis. */
 const RIGHT_PAD_BARS = 4
@@ -478,6 +586,7 @@ export class TradingTerminal {
   private drawLegacy: readonly unknown[] | null = null
   private drawTool: string | null = null
   private drawMagnet = false
+  private drawStay = false
   /** True once a drawing control has been touched — gates the lazy tier fetch. */
   private drawEnabled = false
   private activeIndicators: { indicatorId: string; settings: Record<string, unknown> }[] = []
@@ -499,6 +608,28 @@ export class TradingTerminal {
         metaKey?: boolean
         shiftKey?: boolean
       }) => string | null)
+    | null = null
+  /**
+   * What a key means for the selection or the placement in hand. The tier
+   * installs no listener and answers questions instead, so a host that never
+   * asks has a Delete key that does nothing. Null until the tier loads.
+   */
+  private keyAction:
+    | ((
+        e: {
+          key: string
+          ctrlKey?: boolean
+          metaKey?: boolean
+          shiftKey?: boolean
+          altKey?: boolean
+        },
+        ctx: {
+          hasSelection: boolean
+          hasTarget: boolean
+          editingText: boolean
+          placing?: boolean
+        }
+      ) => { type: string; dx?: number; dy?: number } | null)
     | null = null
   /** The tier's tool registry, for a tool's own defaults; null until it loads. */
   private toolOf: ((id: string) => DrawingTool) | null = null
@@ -585,6 +716,16 @@ export class TradingTerminal {
   private ctype = 'candlestick'
   private product = 'MIS'
   private qty = 1
+  /**
+   * One-Click. Off, a Buy or a context-menu row opens the host's ticket; on,
+   * it places at once. The page owns the switch and every pane follows it.
+   * Default off: a fresh terminal must never send an order on one click.
+   */
+  private armed = false
+  /** When the last armed order left, for the double-fire cooldown. */
+  private lastFireAt = 0
+  /** The theme the live chart was built with; the trade buttons derive from it. */
+  private chartTheme: ChartTheme | null = null
 
   private bookTimer: ReturnType<typeof setInterval> | null = null
   private reconcileTimer: ReturnType<typeof setTimeout> | null = null
@@ -955,8 +1096,7 @@ export class TradingTerminal {
 
   /* real order quantity (lots × lotsize for derivatives) */
   private orderQty(): number {
-    const n = Math.max(1, Math.floor(this.qty || 1))
-    return this.sym?.lots ? n * this.sym.lotsize : n
+    return orderUnits(this.qty, this.sym?.lots ?? false, this.sym?.lotsize ?? 1)
   }
   /** Quantity chip text for the inline panel (lots for FnO, else qty). */
   private qtyChip(): string {
@@ -997,6 +1137,33 @@ export class TradingTerminal {
       )
       return
     }
+    // Every guard above has passed on both paths. Disarmed, the click opens
+    // the ticket and stops here; armed, it is the order. The guards are not
+    // moved below this fork on purpose: a ticket pre-filled with a stop on the
+    // wrong side of LTP, or a quantity over the freeze limit, would only be
+    // refused later by the broker, in words that do not say why.
+    if (!this.armed) {
+      if (!this.cb.onOrderTicket) {
+        this.toast('One-Click is off', 'err')
+        return
+      }
+      this.cb.onOrderTicket(
+        buildOrderTicket({
+          sym: this.sym,
+          qty: this.qty,
+          product: this.product,
+          side,
+          type,
+          price: px,
+        })
+      )
+      return
+    }
+    // The scalping terminal's double-fire guard: a second click inside the
+    // window is the same click, not a second order.
+    const now = Date.now()
+    if (now - this.lastFireAt < ORDER_COOLDOWN_MS) return
+    this.lastFireAt = now
     const lotTxt = this.sym.lots ? `${qty / this.sym.lotsize}L (${qty})` : qty
     const summary = `${side} ${type} ${lotTxt} ${this.sym.symbol}${type === 'MARKET' ? '' : ` @ ${this.fmt(px)}`} · ${this.product}`
     try {
@@ -1015,6 +1182,38 @@ export class TradingTerminal {
       this.pollBook()
     } catch (e) {
       this.toast(this.cleanError(e), 'err')
+    }
+  }
+
+  /**
+   * Place the order a ticket confirmed, through the same feed the armed path
+   * uses. The feed asserts the page's mode against the server before it
+   * posts, so a disarmed click has the same refusal an armed one has when
+   * the badge says live and the server has been switched to analyzer. The
+   * caller is the ticket dialog, which shows the thrown message.
+   */
+  async placeTicket(order: ConfirmedOrder): Promise<{ orderId: string }> {
+    // The ticket was refused before it opened; this covers a replay started
+    // while it stood open. No toast here: the dialog shows the reason.
+    if (this.tradingLocked()) throw new Error('Replay is a simulation. Leave replay to trade.')
+    if (!this.trade) throw new Error('trading is not available')
+    const stop = order.pricetype === 'SL' || order.pricetype === 'SL-M'
+    try {
+      const r = await this.trade.place({
+        symbol: order.symbol,
+        exchange: order.exchange,
+        side: order.action,
+        type: order.pricetype,
+        qty: order.quantity,
+        product: order.product,
+        price: order.pricetype === 'MARKET' ? undefined : order.price,
+        triggerPrice: stop ? order.trigger_price : undefined,
+        mode: this.tradeMode(),
+      })
+      this.pollBook()
+      return { orderId: r.orderId }
+    } catch (e) {
+      throw new Error(this.cleanError(e))
     }
   }
 
@@ -1051,9 +1250,11 @@ export class TradingTerminal {
     this.screenshotExcluded.length = 0
     this.container.innerHTML = ''
     const { mode, appMode } = this.getTheme()
+    const theme = buildChartTheme(mode, appMode)
+    this.chartTheme = theme
     this.chart = createChart(this.container, {
       priceAxisWidth: 78,
-      theme: buildChartTheme(mode, appMode),
+      theme,
       // Corner clock and bar countdown. Both are off by default in the engine,
       // deliberately: a countdown repaints every second, and on the historical
       // range a chart usually opens on it counts against a bar that closed months
@@ -1193,6 +1394,7 @@ export class TradingTerminal {
         scale: 0.72,
       })
       if (lp != null) this.tradeBtns.setMark(lp)
+      this.applyTradeColors()
       // Order entry is an affordance, not chart content: it is left out of a
       // saved image (see `screenshotExcluded`).
       this.addExcludedPrimitive(this.tradeBtns, 0)
@@ -1339,6 +1541,7 @@ export class TradingTerminal {
       /* ignore */
     }
     this.drawMagnet = this.lsGet('magnet') === '1'
+    this.drawStay = this.lsGet('stay') === '1'
     const grid = this.lsGet('grid')
     if (grid && grid.length === 2) {
       this.gridV = grid[0] === '1'
@@ -1447,6 +1650,7 @@ export class TradingTerminal {
       DrawingController,
       drawingShortcuts,
       getDrawingTool,
+      keyToDrawingAction,
       matchDrawingShortcut,
       migrateDrawings,
     } = await import('openalgo-charts/draw')
@@ -1455,11 +1659,12 @@ export class TradingTerminal {
     if (this.destroyed || !this.chart || this.draw) return
     const draw = new DrawingController(this.chart, {
       magnet: this.drawMagnet,
-      stayInDrawingMode: false,
+      stayInDrawingMode: this.drawStay,
     })
     this.draw = draw
     this.drawShortcuts = drawingShortcuts()
     this.matchShortcut = matchDrawingShortcut
+    this.keyAction = keyToDrawingAction
     this.toolOf = getDrawingTool
     if (this.drawLegacy) {
       // The 1.9.x array becomes the document every other reader here expects.
@@ -1672,7 +1877,7 @@ export class TradingTerminal {
    * caller can swallow the key. The tier owns the chord table, so this is a
    * no-op until drawing has been attached.
    */
-  armByShortcut(e: {
+  handleDrawKey(e: {
     key: string
     altKey?: boolean
     ctrlKey?: boolean
@@ -1680,8 +1885,48 @@ export class TradingTerminal {
     shiftKey?: boolean
   }): boolean {
     const id = this.matchShortcut?.(e) ?? null
-    if (id === null) return false
-    void this.setDrawTool(id)
+    if (id !== null) {
+      void this.setDrawTool(id)
+      return true
+    }
+    const d = this.draw
+    if (!d || !this.keyAction) return false
+    const action = this.keyAction(e, {
+      hasSelection: d.selected() !== null,
+      // The host tracks no hover target of its own, so a key acts on the
+      // selection alone; a press selects first, which is what makes Delete
+      // reach the drawing the user just clicked.
+      hasTarget: false,
+      editingText: false,
+      placing: d.activeTool() !== null,
+    })
+    if (!action) return false
+    const targets = [...d.selection()]
+    switch (action.type) {
+      case 'delete':
+        if (targets.length === 0) return false
+        d.removeMany(targets)
+        break
+      case 'undo':
+        d.undo()
+        break
+      case 'redo':
+        d.redo()
+        break
+      case 'duplicate':
+        if (targets.length === 0) return false
+        d.duplicate(targets)
+        break
+      case 'nudge':
+        if (targets.length === 0) return false
+        d.nudge(targets, action.dx ?? 0, action.dy ?? 0)
+        break
+      // cancel, finish and popAnchor belong to placement, which the rail's
+      // own Escape already ends; copy, cut and paste are the clipboard's.
+      default:
+        return false
+    }
+    this.afterDrawChange()
     return true
   }
 
@@ -1695,6 +1940,7 @@ export class TradingTerminal {
       canRedo: d ? d.canRedo() : false,
       hasSelection: d ? d.selected() !== null : false,
       magnet: this.drawMagnet,
+      stay: this.drawStay,
       tool: this.drawTool,
       shortcuts: this.drawShortcuts,
     }
@@ -1726,6 +1972,19 @@ export class TradingTerminal {
     this.drawMagnet = on
     this.draw?.setOptions({ magnet: on })
     this.lsSet('magnet', on ? '1' : '0')
+    this.cb.onDrawChange?.(this.drawStats())
+  }
+
+  /**
+   * Keep the armed tool after a placement, instead of returning to the cursor.
+   * Drawing three trend lines is three picks otherwise, and the rail resetting
+   * itself reads as the click having failed rather than as the tool having
+   * done its one job.
+   */
+  setDrawStay(on: boolean): void {
+    this.drawStay = on
+    this.draw?.setOptions({ stayInDrawingMode: on })
+    this.lsSet('stay', on ? '1' : '0')
     this.cb.onDrawChange?.(this.drawStats())
   }
 
@@ -2985,6 +3244,35 @@ export class TradingTerminal {
   setQty(n: number) {
     this.qty = Math.max(1, Math.floor(n || 1))
     if (this.tradeBtns) this.tradeBtns.setQty(this.qtyChip())
+  }
+  /**
+   * One-Click on or off. Nothing here gates a risk-reducing action: the
+   * position pill's close, an order line's cancel and drag-to-modify work the
+   * same either way, as they do on the scalping terminal.
+   */
+  setArmed(on: boolean) {
+    if (this.armed === on) return
+    this.armed = on
+    this.applyTradeColors()
+  }
+  oneClickArmed(): boolean {
+    return this.armed
+  }
+  /**
+   * The Buy and Sell panel says which it is. Armed, the theme's own buy and
+   * sell colours: the click is the order. Off, both are pulled towards the
+   * background so they read as a control that opens something rather than one
+   * that fires. A colour swap on the primitive, not a rebuild: the panel keeps
+   * its prices and its place.
+   */
+  private applyTradeColors(): void {
+    if (!this.tradeBtns) return
+    if (this.armed || !this.chartTheme) {
+      this.tradeBtns.setColors(undefined, undefined)
+      return
+    }
+    const muted = mutedTradeColors(this.chartTheme)
+    this.tradeBtns.setColors(muted.buy, muted.sell)
   }
   private reloadCurrent() {
     if (!this.sym) return
