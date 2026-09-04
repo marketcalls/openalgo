@@ -37,6 +37,11 @@ describe('productOptionsFor', () => {
     expect(productOptionsFor(exchange)).toEqual(['MIS', 'CNC'])
   })
 
+  it('CRYPTO is a derivative segment: NRML, never CNC', () => {
+    expect(productOptionsFor('CRYPTO')).toEqual(['MIS', 'NRML'])
+    expect(usesLots('CRYPTO')).toBe(true)
+  })
+
   it('defaults an unknown segment to cash equity', () => {
     expect(productOptionsFor('NSE_INDEX')).toEqual(['MIS', 'CNC'])
   })

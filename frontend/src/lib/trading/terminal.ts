@@ -343,7 +343,9 @@ export interface TerminalOptions {
   callbacks: TerminalCallbacks
 }
 
-const DERIVATIVE_EXCHANGES = new Set(['NFO', 'BFO', 'CDS', 'BCD', 'MCX', 'NCO', 'NCDEX'])
+// CRYPTO is the broker-agnostic exchange for crypto derivatives (utils/constants.py); a
+// contract there is NRML or MIS in lots, and CNC does not exist for it.
+const DERIVATIVE_EXCHANGES = new Set(['NFO', 'BFO', 'CDS', 'BCD', 'MCX', 'NCO', 'NCDEX', 'CRYPTO'])
 
 /**
  * Products a segment accepts. Derivative segments are NRML/MIS and cash equity
