@@ -492,6 +492,60 @@ app.register_blueprint(intraday_leverage_bp)
 | `services/place_order_service.py` | Strip risk keys before live broker call; pass through to sandbox |
 | `upgrade/migrate_all.py` | Add migration to MIGRATIONS list |
 
+### Latest change (this task): calculator redesign + brokerage fees
+
+User redesign ask: bigger dialog; stock name beside the live trading price on
+top (keep Buy/Sell toggle); trade types directly below; separate Capital and
+Quantity sections with leverage shown as just the number; Market/Limit moved
+down into a "Price" section; the old Risk Management section collapsed behind
+an "Add Stop Loss / Target Price" expander; and a hidden "Brokerage" chip that
+pops up an estimate — only for the brokers whose tariff sheet the platform
+carries (Fyers, Zerodha, Dhan, Groww). The same brokerage estimator backs a
+Charges column in the order book.
+
+**Layout now (top to bottom):** Header (symbol + live price + exchange/product
+badges + Buy/Sell toggle) → Trade Type tiles (Intraday/Overnight/GTT) → Price
+section (Market/Limit tiles; limit price + validation hint when Limit) →
+Capital → Quantity card (Leverage `Nx` inline, lot size, input + Max button,
+max-qty readout, Brokerage chip) → Add Stop Loss / Target Price expander (Stop
+Loss, Target Price, Trailing Stop Loss) → footer CTA. Bid/ask display removed
+(the header price is the live LTP only). Dialog width upgraded to `sm:max-w-lg`
+with an inner scroll so the longer form fits short viewports.
+
+**Brokerage estimator (`services/brokerage_charges.py`):** pure module, no
+I/O beyond reading `data/broker_charges_comparison.csv` once (lru_cache). CSV
+is a committed copy of the user's tariff sheet with a Groww section appended
+(the source file had Fyers/Zerodha/Dhan only). Resolves the trade segment from
+exchange/product/symbol/instrumenttype (`Equity Delivery`, `Equity Intraday`,
+`Futures`, `Options`; Dhan's "Futures (Equity F&O)" aliased), merges global
+rows ("All Equity Segments" GST/SEBI/IPFT, "DP Charges"/"Demat Account" DP)
+into every segment, and returns per-component amounts + total + notes. Three
+parser defects pinned by tests: equities ending in "CE"/"PE" were resolved to
+Options (RELIANCE, BAJFINANCE); STT "on buy and sell" parsed as sell-only;
+GST/SEBI/DP rows under global segments were dropped. Returns 403 for brokers
+outside the supported four.
+
+**API:** `POST /brokerage-charges/api/estimate` (single) and
+`POST /brokerage-charges/api/estimate/batch` (`{orders:[...]}`) under
+`blueprints/brokerage_charges.py`, both `@check_session_validity`, broker read
+from session. Frontend client `frontend/src/api/brokerage.ts`; `webClient`
+handles CSRF automatically.
+
+**Calculator:** Brokerage chip hidden unless `authStore.user.broker` is in the
+supported set. Estimate debounced (400 ms), keyed on quantity / price basis /
+product / action, priced at LTP for Market and the limit price for Limit.
+Opened chip shows the component breakdown + estimated total + turnover.
+
+**Order book:** new "Charges" column (header + cell) rendered only for
+supported brokers and non-crypto; one batch call estimates every priced row
+(`price>0`, `quantity>0`); cell shows the total with a hover tooltip
+(segment + each component); market rows without a price stay blank.
+
+**Backend verification:** `uv run pytest test/test_brokerage_charges.py` — 19
+locked vectors, including Zerodha intraday BUY 100@500 = 21.07 and delivery SELL
+= 67.21 (STT 50 + DP 15.34 included), Fyers options SELL 1 lot @200 lot75 =
+54.00, Groww delivery SELL = 66.87 (DP 15 not clobbered by the zero buy row).
+
 ---
 
 ## Implementation Phases

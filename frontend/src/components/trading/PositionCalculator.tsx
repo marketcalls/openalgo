@@ -1,15 +1,17 @@
 // components/trading/PositionCalculator.tsx
-// Intraday position size calculator that appears before order placement.
+// Position size calculator that appears before order placement.
 // Auto-fills symbol, LTP, capital, and intraday leverage multiplier.
 // Computes: Max Quantity = FLOOR((Capital x Effective Leverage) / Price)
 // The multiplier applies ONLY to the Intraday trade type; Overnight and GTT
-// trades size at 1x (cash only). The user can flip BUY/SELL, choose an order
+// trades size at 1x (cash only). The user can flip BUY/SELL, choose a Price
 // type (Market executes now at LTP; Limit fills when the market reaches the
-// chosen price), pick Intraday/Overnight/GTT, and set optional Stop Loss,
-// Target Price and Trailing Stop Loss. All values are returned to the caller
-// on confirm; the order placement happens after the dialog closes.
+// chosen price), pick Intraday/Overnight/GTT, set optional Stop Loss, Target
+// Price and Trailing Stop Loss, and pop up the estimated broker charges for
+// the current sizing. All values are returned to the caller on confirm; the
+// order placement happens after the dialog closes.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { brokerageApi, BROKERAGE_BROKERS, type BrokerageEstimate } from '@/api/brokerage'
 import { intradayLeverageApi } from '@/api/intradayLeverage'
 import { tradingApi } from '@/api/trading'
 import { Badge } from '@/components/ui/badge'
@@ -24,9 +26,8 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useLiveQuote } from '@/hooks/useLiveQuote'
-import { cn } from '@/lib/utils'
+import { cn, makeFormatCurrency } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
-import { QuoteHeader } from './QuoteHeader'
 
 export type TradeType = 'INTRADAY' | 'OVERNIGHT' | 'GTT'
 export type OrderKind = 'MARKET' | 'LIMIT'
@@ -71,10 +72,26 @@ const TRADE_TYPES: { value: TradeType; label: string }[] = [
   { value: 'GTT', label: 'GTT' },
 ]
 
-const ORDER_TYPES: { value: OrderKind; label: string; hint: string }[] = [
+const PRICE_TYPES: { value: OrderKind; label: string; hint: string }[] = [
   { value: 'MARKET', label: 'Market', hint: 'current price' },
   { value: 'LIMIT', label: 'Limit', hint: 'your price' },
 ]
+
+const COMPONENT_LABELS: [keyof BrokerageEstimate['components'], string][] = [
+  ['brokerage', 'Brokerage'],
+  ['stt', 'STT'],
+  ['exchange_txn', 'Exchange Txn'],
+  ['sebi', 'SEBI'],
+  ['ipft', 'IPFT'],
+  ['clearing_charges', 'Clearing'],
+  ['stamp_duty', 'Stamp Duty'],
+  ['dp_charges', 'DP Charges'],
+  ['gst', 'GST'],
+]
+
+function isBrokerageSupported(broker: string | null | undefined): boolean {
+  return !!broker && BROKERAGE_BROKERS.has(broker.toLowerCase())
+}
 
 /** Box-shadow used for "raised" 3D tiles (light source top-left). */
 const RAISED =
@@ -123,6 +140,8 @@ export function PositionCalculator({
   onConfirm,
 }: PositionCalculatorProps) {
   const apiKey = useAuthStore((s) => s.apiKey)
+  const broker = useAuthStore((s) => s.user?.broker)
+  const formatCurrency = useMemo(() => makeFormatCurrency(broker), [broker])
 
   const [capital, setCapital] = useState<number>(0)
   const [leverage, setLeverage] = useState<number | null>(null)
@@ -130,16 +149,24 @@ export function PositionCalculator({
   const [loading, setLoading] = useState(true)
   const [leverageError, setLeverageError] = useState(false)
 
-  // Action, trade-type and order-type state, reset when the dialog opens.
+  // Action, trade-type and price-type state, reset when the dialog opens.
   const [action, setAction] = useState<'BUY' | 'SELL'>(side)
   const [tradeType, setTradeType] = useState<TradeType>(initialTradeType)
   const [orderType, setOrderType] = useState<OrderKind>('MARKET')
   const [limitPrice, setLimitPrice] = useState<string>('')
 
-  // Risk inputs (optional)
+  // Risk inputs (optional), revealed by the "Add Stop Loss / Target Price" row.
+  const [riskOpen, setRiskOpen] = useState(false)
   const [stoploss, setStoploss] = useState<string>('')
   const [target, setTarget] = useState<string>('')
   const [trailingStoploss, setTrailingStoploss] = useState<string>('')
+
+  // Brokerage estimate (only for Fyers / Zerodha / Dhan / Groww).
+  const brokerageSupported = isBrokerageSupported(broker)
+  const [brokerageOpen, setBrokerageOpen] = useState(false)
+  const [brokerage, setBrokerage] = useState<BrokerageEstimate | null>(null)
+  const [brokerageLoading, setBrokerageLoading] = useState(false)
+  const [brokerageError, setBrokerageError] = useState<string | null>(null)
 
   // Live quote for current price
   const { data: liveQuote, isLoading: quoteLoading } = useLiveQuote(symbol, exchange, {
@@ -164,6 +191,10 @@ export function PositionCalculator({
     setTarget('')
     setTrailingStoploss('')
     setQuantity(0)
+    setRiskOpen(false)
+    setBrokerageOpen(false)
+    setBrokerage(null)
+    setBrokerageError(null)
   }, [open, side, initialTradeType])
 
   // Fetch capital and leverage on open
@@ -237,7 +268,7 @@ export function PositionCalculator({
   }, [capital, effectiveLeverage, orderPriceBasis])
 
   // Set quantity to max when computed; when the sizing inputs (trade type,
-  // order type, limit price) change, clamp so quantity never overshoots.
+  // price type, limit price) change, clamp so quantity never overshoots.
   useEffect(() => {
     if (!open || maxQuantity <= 0) return
     setQuantity((q) => (q <= 0 ? maxQuantity : Math.min(q, maxQuantity)))
@@ -275,6 +306,51 @@ export function PositionCalculator({
     if (ltp == null || ltp <= 0) return true
     return buy ? p < ltp : p > ltp
   }
+
+  // Fetch the brokerage estimate whenever the sizing changes.
+  useEffect(() => {
+    if (!open || !brokerageSupported || quantity <= 0 || !orderPriceBasis || orderPriceBasis <= 0) {
+      if (!open) setBrokerage(null)
+      return
+    }
+
+    let cancelled = false
+    setBrokerageLoading(true)
+    setBrokerageError(null)
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await brokerageApi.estimate({
+          symbol,
+          exchange,
+          product,
+          side: action,
+          quantity,
+          price: orderPriceBasis,
+          ...(lotSize > 1 ? { lotSize } : {}),
+        })
+        if (cancelled) return
+        if (res.status === 'success' && res.data) {
+          setBrokerage(res.data)
+        } else {
+          setBrokerage(null)
+          setBrokerageError('Unable to estimate')
+        }
+      } catch {
+        if (!cancelled) {
+          setBrokerage(null)
+          setBrokerageError('Unable to estimate')
+        }
+      } finally {
+        if (!cancelled) setBrokerageLoading(false)
+      }
+    }, 400)
+
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [open, brokerageSupported, quantity, orderPriceBasis, symbol, exchange, product, action, lotSize])
 
   const handleConfirm = useCallback(() => {
     if (!canConfirm) return
@@ -317,28 +393,37 @@ export function PositionCalculator({
     [canConfirm, handleConfirm]
   )
 
+  const brokerageTotal = brokerage?.total ?? null
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="sm:max-w-md"
+        className="sm:max-w-lg"
         aria-describedby={undefined}
         onKeyDown={handleKeyDown}
       >
         <div className="pointer-events-none absolute inset-x-0 -top-px h-px bg-gradient-to-r from-transparent via-emerald-400/70 to-transparent" />
 
-        <DialogHeader className="flex flex-row items-center justify-between">
-          <DialogTitle className="flex items-center gap-2">
-            Position Calculator
-            <Badge
+        <DialogHeader className="flex flex-row items-center justify-between gap-3">
+          {/* Stock name beside the current trading price */}
+          <DialogTitle className="flex items-center gap-2.5">
+            <span className="text-xl font-extrabold tracking-tight">{symbol}</span>
+            <span
               className={cn(
-                'text-[10px] px-1.5 py-0',
-                isBuy
-                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
-                  : 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                'text-base font-semibold font-mono tabular-nums',
+                currentPrice ? (isBuy ? 'text-emerald-400' : 'text-rose-400') : 'text-muted-foreground'
               )}
             >
-              {action}
-            </Badge>
+              {quoteLoading && !currentPrice ? '…' : formatCurrency(currentPrice ?? 0)}
+            </span>
+            <div className="flex flex-col items-start gap-1">
+              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                {exchange}
+              </Badge>
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-cyan-400 border-cyan-500/30">
+                {product}
+              </Badge>
+            </div>
           </DialogTitle>
           {/* 3D Buy / Sell toggle */}
           <div className="flex gap-1.5 p-1 rounded-xl bg-gradient-to-b from-black/40 to-black/20 ring-1 ring-white/10">
@@ -363,43 +448,7 @@ export function PositionCalculator({
           </div>
         </DialogHeader>
 
-        <div className="space-y-4">
-          {/* Order type: Market / Limit */}
-          <div className="p-3 rounded-2xl bg-gradient-to-b from-zinc-900/90 to-zinc-950/90 ring-1 ring-white/10 shadow-[0_16px_32px_-16px_rgba(0,0,0,0.8)]">
-            <Label className="text-xs uppercase tracking-wider text-muted-foreground">
-              Order Type
-            </Label>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              {ORDER_TYPES.map((o) => {
-                const active = orderType === o.value
-                return (
-                  <Tile
-                    key={o.value}
-                    active={active}
-                    activeClass="bg-gradient-to-b from-sky-500 to-sky-700 ring-1 ring-sky-300/40"
-                    onClick={() => selectOrderType(o.value)}
-                    className="flex flex-col items-start px-3 py-2 rounded-xl"
-                  >
-                    <span className="text-sm">{o.label}</span>
-                    <span
-                      className={cn(
-                        'text-[10px] font-medium',
-                        active ? 'text-white/80' : 'text-muted-foreground'
-                      )}
-                    >
-                      {o.hint}
-                    </span>
-                  </Tile>
-                )
-              })}
-            </div>
-            <div className="mt-2 rounded-lg bg-black/30 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground ring-1 ring-white/5">
-              {orderType === 'MARKET'
-                ? 'Executes immediately at the current market price.'
-                : 'Scheduled order: fills when the market trades at your price.'}
-            </div>
-          </div>
-
+        <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
           {/* Trade Type: Intraday / Overnight / GTT */}
           <div>
             <Label className="text-xs uppercase tracking-wider text-muted-foreground">
@@ -423,82 +472,72 @@ export function PositionCalculator({
             </div>
           </div>
 
-          {/* Symbol, exchange and product */}
-          <div className="flex items-center gap-2">
-            <span className="text-lg font-bold">{symbol}</span>
-            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-              {exchange}
-            </Badge>
-            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-cyan-400 border-cyan-500/30">
-              {product}
-            </Badge>
-          </div>
-
-          {/* Live Quote */}
-          <QuoteHeader
-            exchange={exchange}
-            ltp={currentPrice ?? undefined}
-            bidPrice={liveQuote?.bidPrice}
-            askPrice={liveQuote?.askPrice}
-            bidSize={liveQuote?.bidSize}
-            askSize={liveQuote?.askSize}
-            isLoading={quoteLoading && !currentPrice}
-          />
-
-          {/* Limit price */}
-          {orderType === 'LIMIT' && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-sm text-muted-foreground">Limit Price</Label>
-                {currentPrice && (
-                  <span className="text-xs text-muted-foreground">
-                    LTP: {currentPrice.toFixed(2)}
-                  </span>
+          {/* Price: Market / Limit */}
+          <div className="p-3 rounded-2xl bg-gradient-to-b from-zinc-900/90 to-zinc-950/90 ring-1 ring-white/10 shadow-[0_16px_32px_-16px_rgba(0,0,0,0.8)]">
+            <Label className="text-xs uppercase tracking-wider text-muted-foreground">
+              Price
+            </Label>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {PRICE_TYPES.map((o) => {
+                const active = orderType === o.value
+                return (
+                  <Tile
+                    key={o.value}
+                    active={active}
+                    activeClass="bg-gradient-to-b from-sky-500 to-sky-700 ring-1 ring-sky-300/40"
+                    onClick={() => selectOrderType(o.value)}
+                    className="flex flex-col items-start px-3 py-2 rounded-xl"
+                  >
+                    <span className="text-sm">{o.label}</span>
+                    <span
+                      className={cn(
+                        'text-[10px] font-medium',
+                        active ? 'text-white/80' : 'text-muted-foreground'
+                      )}
+                    >
+                      {o.hint}
+                    </span>
+                  </Tile>
+                )
+              })}
+            </div>
+            {orderType === 'LIMIT' ? (
+              <div className="mt-2 space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm text-muted-foreground">Limit Price</Label>
+                  {currentPrice && (
+                    <span className="text-xs text-muted-foreground">
+                      LTP: {currentPrice.toFixed(2)}
+                    </span>
+                  )}
+                </div>
+                <Input
+                  type="number"
+                  value={limitPrice}
+                  onChange={(e) => setLimitPrice(e.target.value)}
+                  placeholder={currentPrice ? `e.g. ${currentPrice.toFixed(2)}` : 'Price'}
+                  min={0}
+                  step={0.05}
+                />
+                {limitPrice && !limitPriceValid && currentPrice && (
+                  <p className="text-[11px] text-amber-400">
+                    {isBuy
+                      ? 'A buy limit above the market fills immediately. Set a price below LTP to schedule.'
+                      : 'A sell limit below the market fills immediately. Set a price above LTP to schedule.'}
+                  </p>
                 )}
               </div>
-              <Input
-                type="number"
-                value={limitPrice}
-                onChange={(e) => setLimitPrice(e.target.value)}
-                placeholder={currentPrice ? `e.g. ${currentPrice.toFixed(2)}` : 'Price'}
-                min={0}
-                step={0.05}
-              />
-              {limitPrice && !limitPriceValid && currentPrice && (
-                <p className="text-[11px] text-amber-400">
-                  {isBuy
-                    ? 'A buy limit above the market fills immediately. Set a price below LTP to schedule.'
-                    : 'A sell limit below the market fills immediately. Set a price above LTP to schedule.'}
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Leverage (Intraday only) */}
-          <div className="flex items-center justify-between p-3 rounded-xl bg-gradient-to-b from-zinc-900/90 to-zinc-950/90 ring-1 ring-white/10">
-            <Label className="text-sm text-muted-foreground">
-              {isIntraday ? 'Intraday Leverage' : 'Leverage (not applicable)'}
-            </Label>
-            <div className="flex items-center gap-2">
-              {loading ? (
-                <div className="h-5 w-12 bg-muted rounded animate-pulse" />
-              ) : isIntraday && leverage != null ? (
-                <span className="text-lg font-bold text-cyan-400">{leverage}x</span>
-              ) : (
-                <span className="text-sm text-muted-foreground">{isIntraday ? 'N/A' : '1x'}</span>
-              )}
-              {leverageError && isIntraday && (
-                <Badge variant="outline" className="text-[9px] text-amber-400 border-amber-500/30">
-                  Default 1x
-                </Badge>
-              )}
-            </div>
+            ) : (
+              <div className="mt-2 rounded-lg bg-black/30 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground ring-1 ring-white/5">
+                Executes immediately at the current market price.
+              </div>
+            )}
           </div>
 
           {/* Capital */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label className="text-sm text-muted-foreground">Available Capital</Label>
+              <Label className="text-sm text-muted-foreground">Capital</Label>
               {capital > 0 && (
                 <span className="text-xs text-muted-foreground">(Auto-detected from account)</span>
               )}
@@ -522,40 +561,32 @@ export function PositionCalculator({
             )}
           </div>
 
-          {/* Max Quantity Result (formula hidden) */}
-          <div className="relative overflow-hidden p-4 rounded-2xl bg-gradient-to-br from-zinc-900 via-zinc-950 to-black ring-1 ring-white/10 shadow-[0_16px_32px_-16px_rgba(0,0,0,0.9)]">
-            <div
-              className={cn(
-                'pointer-events-none absolute -right-8 -top-8 h-28 w-28 rounded-full blur-3xl opacity-40',
-                isBuy ? 'bg-emerald-600' : 'bg-rose-600'
-              )}
-            />
-            <Label className="text-xs uppercase tracking-wider text-muted-foreground">
-              Max Quantity
-            </Label>
-            <div className="relative mt-1 text-2xl font-bold">
-              {loading ? (
-                <div className="h-8 w-20 bg-muted rounded animate-pulse" />
-              ) : (
-                <span className={isBuy ? 'text-emerald-400' : 'text-rose-400'}>
-                  {maxQuantity.toLocaleString()}
-                </span>
-              )}
-            </div>
-            {!isIntraday && leverage != null && leverage > 1 && (
-              <p className="relative mt-1 text-[10px] text-muted-foreground">
-                {tradeType} trades size at cash value (no {leverage}x leverage)
-              </p>
-            )}
-          </div>
-
-          {/* Quantity Input */}
-          <div className="space-y-2">
+          {/* Quantity + Leverage (just the number) */}
+          <div className="p-3 rounded-2xl bg-gradient-to-b from-zinc-900/90 to-zinc-950/90 ring-1 ring-white/10 shadow-[0_16px_32px_-16px_rgba(0,0,0,0.8)]">
             <div className="flex items-center justify-between">
               <Label className="text-sm">Quantity</Label>
-              {lotSize > 1 && <span className="text-xs text-muted-foreground">Lot size: {lotSize}</span>}
+              <div className="flex items-center gap-2">
+                {lotSize > 1 && (
+                  <span className="text-[11px] text-muted-foreground">Lot · {lotSize}</span>
+                )}
+                <span className="text-[11px] text-muted-foreground">
+                  Leverage{' '}
+                  {loading ? (
+                    '…'
+                  ) : (
+                    <span className="text-base font-bold text-cyan-400 tabular-nums">
+                      {effectiveLeverage}x
+                    </span>
+                  )}
+                </span>
+                {leverageError && isIntraday && (
+                  <Badge variant="outline" className="text-[9px] text-amber-400 border-amber-500/30">
+                    Default
+                  </Badge>
+                )}
+              </div>
             </div>
-            <div className="flex gap-2">
+            <div className="mt-2 flex gap-2">
               <Input
                 type="number"
                 value={quantity || ''}
@@ -574,74 +605,166 @@ export function PositionCalculator({
                 Max
               </Button>
             </div>
-          </div>
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <span className="text-[11px] text-muted-foreground">
+                Max Qty{' '}
+                {loading ? (
+                  '…'
+                ) : (
+                  <span className={cn('font-semibold', isBuy ? 'text-emerald-400' : 'text-rose-400')}>
+                    {maxQuantity.toLocaleString()}
+                  </span>
+                )}
+              </span>
 
-          {/* Risk section: Stop Loss, Target, Trailing SL */}
-          <div className="space-y-3 p-3 rounded-2xl bg-gradient-to-b from-zinc-900/90 to-zinc-950/90 ring-1 ring-white/10">
-            <div className="flex items-center justify-between">
-              <Label className="text-sm text-muted-foreground">Risk Management</Label>
-              {(stoploss || target || trailingStoploss) && (
-                <Badge variant="outline" className="text-[9px] text-cyan-400 border-cyan-500/30">
-                  {isBuy ? 'Below entry' : 'Above entry'}
-                </Badge>
+              {/* Brokerage chip - small section, details pop on click */}
+              {brokerageSupported && (
+                <button
+                  type="button"
+                  onClick={() => setBrokerageOpen((v) => !v)}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 transition-colors',
+                    brokerageOpen
+                      ? 'bg-cyan-500/15 text-cyan-400 ring-cyan-500/30'
+                      : 'bg-muted/60 text-muted-foreground ring-white/10 hover:text-cyan-400 hover:ring-cyan-500/30'
+                  )}
+                  disabled={brokerageLoading || (!brokerage && !!brokerageError)}
+                  title={
+                    brokerageError
+                      ? brokerageError
+                      : brokerage
+                        ? `Estimated ${brokerage.segment} charges for this trade`
+                        : undefined
+                  }
+                >
+                  Brokerage
+                  {brokerageLoading ? (
+                    <span className="h-3 w-8 bg-muted rounded animate-pulse" />
+                  ) : brokerageTotal != null ? (
+                    <span className="font-mono tabular-nums">{formatCurrency(brokerageTotal)}</span>
+                  ) : brokerageError ? (
+                    <span className="text-amber-400">—</span>
+                  ) : null}
+                </button>
               )}
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Stop Loss</Label>
-                <Input
-                  type="number"
-                  value={stoploss}
-                  onChange={(e) => setStoploss(e.target.value)}
-                  placeholder={orderPriceBasis ? `e.g. ${orderPriceBasis.toFixed(2)}` : 'Price'}
-                  min={0}
-                  step={0.05}
-                />
+
+            {/* Brokerage details popup */}
+            {brokerageSupported && brokerageOpen && (
+              <div className="mt-2 rounded-xl bg-black/30 p-3 ring-1 ring-white/5">
+                {brokerage ? (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        {brokerage.segment}
+                      </span>
+                      <Badge variant="outline" className="text-[9px] px-1.5 py-0">
+                        Est. turnover {formatCurrency(brokerage.turnover)}
+                      </Badge>
+                    </div>
+                    <div className="mt-2 space-y-1.5">
+                      {COMPONENT_LABELS.map(([key, label]) => {
+                        const value = brokerage.components[key]
+                        if (value == null || value === 0) return null
+                        return (
+                          <div key={key} className="flex items-center justify-between text-xs">
+                            <span className="text-muted-foreground">{label}</span>
+                            <span className="font-mono tabular-nums">{formatCurrency(value)}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div className="mt-2 flex items-center justify-between border-t border-white/10 pt-2">
+                      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                        Total
+                      </span>
+                      <span className="text-sm font-bold font-mono tabular-nums text-cyan-400">
+                        {formatCurrency(brokerage.total)}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+                      Estimated charges; actual figures levied by the broker may differ.
+                      {brokerage.lot_size === 1 && brokerage.segment !== 'Equity Delivery' && brokerage.segment !== 'Equity Intraday'
+                        ? ' Lot size 1 used - the figure scales with contract size.'
+                        : ''}
+                    </p>
+                  </>
+                ) : brokerageLoading ? (
+                  <div className="space-y-1.5">
+                    <div className="h-2.5 w-2/3 bg-muted rounded animate-pulse" />
+                    <div className="h-2.5 w-1/2 bg-muted rounded animate-pulse" />
+                    <div className="h-2.5 w-3/4 bg-muted rounded animate-pulse" />
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-muted-foreground">Unable to estimate charges.</p>
+                )}
               </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Target Price</Label>
-                <Input
-                  type="number"
-                  value={target}
-                  onChange={(e) => setTarget(e.target.value)}
-                  placeholder={orderPriceBasis ? `e.g. ${orderPriceBasis.toFixed(2)}` : 'Price'}
-                  min={0}
-                  step={0.05}
-                />
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="flex-1 space-y-1.5">
-                <Label className="text-xs text-muted-foreground">Trailing Stop Loss</Label>
-                <Input
-                  type="number"
-                  value={trailingStoploss}
-                  onChange={(e) => setTrailingStoploss(e.target.value)}
-                  placeholder="Points e.g. 20"
-                  min={0}
-                  step={0.05}
-                />
-              </div>
-              <div className="flex items-center gap-2 pt-5">
-                <Label className="text-xs text-muted-foreground">GTT</Label>
-                <div
-                  className={cn(
-                    'w-9 h-5 rounded-full p-0.5 ring-1 transition-colors cursor-pointer',
-                    tradeType === 'GTT'
-                      ? 'bg-gradient-to-b from-indigo-500 to-indigo-700 ring-indigo-300/40'
-                      : 'bg-muted ring-white/10'
-                  )}
-                  onClick={() => setTradeType(tradeType === 'GTT' ? 'OVERNIGHT' : 'GTT')}
-                >
-                  <div
-                    className={cn(
-                      'h-4 w-4 rounded-full bg-white shadow transition-transform',
-                      tradeType === 'GTT' ? 'translate-x-4' : 'translate-x-0'
-                    )}
+            )}
+          </div>
+
+          {/* Add Stop Loss / Target Price */}
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => setRiskOpen((v) => !v)}
+              className="flex w-full items-center justify-between rounded-xl bg-gradient-to-b from-zinc-900/90 to-zinc-950/90 px-3 py-2.5 ring-1 ring-white/10 transition-colors hover:ring-white/20"
+            >
+              <span className="flex items-center gap-2">
+                <Label className="cursor-pointer text-sm">Add Stop Loss / Target Price</Label>
+                {(stoploss || target || trailingStoploss) && (
+                  <Badge variant="outline" className="text-[9px] text-cyan-400 border-cyan-500/30">
+                    {isBuy ? 'Below entry' : 'Above entry'}
+                  </Badge>
+                )}
+              </span>
+              <span
+                className={cn(
+                  'text-muted-foreground transition-transform duration-200',
+                  riskOpen && 'rotate-180'
+                )}
+              >
+                ▼
+              </span>
+            </button>
+            {riskOpen && (
+              <div className="space-y-3 rounded-2xl bg-gradient-to-b from-zinc-900/90 to-zinc-950/90 p-3 ring-1 ring-white/10">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Stop Loss</Label>
+                    <Input
+                      type="number"
+                      value={stoploss}
+                      onChange={(e) => setStoploss(e.target.value)}
+                      placeholder={orderPriceBasis ? `e.g. ${orderPriceBasis.toFixed(2)}` : 'Price'}
+                      min={0}
+                      step={0.05}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs text-muted-foreground">Target Price</Label>
+                    <Input
+                      type="number"
+                      value={target}
+                      onChange={(e) => setTarget(e.target.value)}
+                      placeholder={orderPriceBasis ? `e.g. ${orderPriceBasis.toFixed(2)}` : 'Price'}
+                      min={0}
+                      step={0.05}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs text-muted-foreground">Trailing Stop Loss</Label>
+                  <Input
+                    type="number"
+                    value={trailingStoploss}
+                    onChange={(e) => setTrailingStoploss(e.target.value)}
+                    placeholder="Points e.g. 20"
+                    min={0}
+                    step={0.05}
                   />
                 </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
 

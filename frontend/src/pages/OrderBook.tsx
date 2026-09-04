@@ -14,6 +14,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { BROKERAGE_BROKERS, brokerageApi, type BrokerageEstimate } from '@/api/brokerage'
 import { type QuotesData, tradingApi } from '@/api/trading'
 import GttTab from '@/components/trading/GttTab'
 import {
@@ -128,6 +129,29 @@ const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; l
   open: { icon: Clock, color: 'text-blue-500', label: 'open' },
 }
 
+const COMPONENT_LABELS: Record<string, string> = {
+  brokerage: 'Brokerage',
+  stt: 'STT',
+  exchange_txn: 'Exchange Txn',
+  sebi: 'SEBI',
+  ipft: 'IPFT',
+  clearing_charges: 'Clearing',
+  stamp_duty: 'Stamp Duty',
+  dp_charges: 'DP Charges',
+  gst: 'GST',
+}
+
+function isBrokerageSupported(broker: string | null | undefined): boolean {
+  return !!broker && BROKERAGE_BROKERS.has(broker.toLowerCase())
+}
+
+function chargesTooltip(estimate: BrokerageEstimate): string {
+  const rows = Object.entries(estimate.components)
+    .filter(([, value]) => value > 0)
+    .map(([key, value]) => `${COMPONENT_LABELS[key] ?? key}: Rs ${value.toFixed(2)}`)
+  return [estimate.segment, ...rows, 'Estimated charges'].join('\n')
+}
+
 export default function OrderBook() {
   const { apiKey, user } = useAuthStore()
   const { isCrypto } = useSupportedExchanges()
@@ -137,6 +161,11 @@ export default function OrderBook() {
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Brokerage charges per order (Fyers / Zerodha / Dhan / Groww only).
+  const brokerageSupported = isBrokerageSupported(user?.broker) && !isCrypto
+  const [charges, setCharges] = useState<Record<string, BrokerageEstimate | null>>({})
+  const [chargesLoading, setChargesLoading] = useState(false)
 
   // Filter state
   const [statusFilter, setStatusFilter] = useState<string[]>([])
@@ -253,6 +282,61 @@ export default function OrderBook() {
   useEffect(() => {
     fetchOrders()
   }, [fetchOrders])
+
+  // Estimate charges for every priced order in one batch call. Only rows with
+  // a price and quantity qualify; a market order that reports price 0 cannot
+  // be costed, so it stays blank.
+  useEffect(() => {
+    if (!brokerageSupported) {
+      setCharges({})
+      return
+    }
+    const estimatable = orders.filter(
+      (o) => (Number(o.price) || 0) > 0 && (Number(o.quantity) || 0) > 0
+    )
+    if (estimatable.length === 0) {
+      setCharges({})
+      return
+    }
+
+    let cancelled = false
+    setChargesLoading(true)
+    const payload = estimatable.map((o) => ({
+      symbol: o.symbol,
+      exchange: o.exchange,
+      product: o.product,
+      side: o.action,
+      quantity: o.quantity,
+      price: Number(o.price),
+    }))
+
+    brokerageApi
+      .estimateBatch(payload)
+      .then((res) => {
+        if (cancelled) return
+        if (res.status === 'success' && Array.isArray(res.data)) {
+          const next: Record<string, BrokerageEstimate | null> = {}
+          res.data.forEach((item, index) => {
+            const order = estimatable[index]
+            if (!order) return
+            next[order.orderid] = item.status === 'success' && item.data ? item.data : null
+          })
+          setCharges(next)
+        } else {
+          setCharges({})
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setCharges({})
+      })
+      .finally(() => {
+        if (!cancelled) setChargesLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [orders, brokerageSupported])
 
   // Refresh on order events instead of polling
   useOrderEventRefresh(fetchOrders, {
@@ -675,6 +759,9 @@ export default function OrderBook() {
                         <TableHead className="w-[100px] text-right">Trigger</TableHead>
                         <TableHead className="w-[80px]">Type</TableHead>
                         {!isCrypto && <TableHead className="w-[70px]">Product</TableHead>}
+                        {brokerageSupported && (
+                          <TableHead className="w-[100px] text-right">Charges</TableHead>
+                        )}
                         <TableHead className="w-[140px]">Order ID</TableHead>
                         <TableHead
                           className="w-[100px] cursor-pointer hover:bg-muted/50 transition-colors"
@@ -741,6 +828,29 @@ export default function OrderBook() {
                             {!isCrypto && (
                               <TableCell>
                                 <Badge variant="outline">{order.product}</Badge>
+                              </TableCell>
+                            )}
+                            {brokerageSupported && (
+                              <TableCell className="text-right font-mono text-xs">
+                                {(() => {
+                                  const hasPrice = (Number(order.price) || 0) > 0 && (Number(order.quantity) || 0) > 0
+                                  if (!hasPrice) return <span className="text-muted-foreground">-</span>
+                                  const estimate = charges[order.orderid]
+                                  if (estimate)
+                                    return (
+                                      <span
+                                        className="text-cyan-400/90 tabular-nums"
+                                        title={chargesTooltip(estimate)}
+                                      >
+                                        {formatCurrency(estimate.total)}
+                                      </span>
+                                    )
+                                  if (chargesLoading)
+                                    return (
+                                      <Loader2 className="ml-auto h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                                    )
+                                  return <span className="text-muted-foreground">-</span>
+                                })()}
                               </TableCell>
                             )}
                             <TableCell className="font-mono text-xs">{order.orderid}</TableCell>

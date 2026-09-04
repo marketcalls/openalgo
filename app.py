@@ -69,6 +69,7 @@ from blueprints.gc_json import gc_json_bp
 from blueprints.gex import gex_bp  # Import the GEX blueprint
 from blueprints.health import health_bp  # Import the health monitoring blueprint
 from blueprints.historify import historify_bp  # Import the historify blueprint
+from blueprints.brokerage_charges import brokerage_charges_bp
 from blueprints.intraday_leverage import intraday_leverage_bp
 from blueprints.ivchart import ivchart_bp  # Import the IV chart blueprint
 from blueprints.ivsmile import ivsmile_bp  # Import the IV Smile blueprint
@@ -312,6 +313,7 @@ def create_app():
     app.register_blueprint(latency_bp)
     app.register_blueprint(leverage_bp)  # Register Leverage blueprint
     app.register_blueprint(intraday_leverage_bp)  # Register Intraday Leverage blueprint
+    app.register_blueprint(brokerage_charges_bp)  # Register Brokerage Charges blueprint
     app.register_blueprint(health_bp)  # Register Health monitoring blueprint
     app.register_blueprint(strategy_module_bp)  # Register Strategy Module blueprint
     app.register_blueprint(master_contract_status_bp)

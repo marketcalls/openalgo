@@ -7,8 +7,58 @@ instead of starting from scratch. It is updated at the end of every task.
 
 - Upstream: https://github.com/marketcalls/openalgo (remote `origin`)
 - This fork's push remote: https://github.com/Narasimha722/openalgo_opensource
-- Local branch: `main`. Current HEAD is `255f9099d` (merge of upstream's 43
-  commits onto the local feature commit `ad1e96d21`).
+- Local branch: `main`. Prior HEAD was `fc1088865` (feature commit
+  `ae8dd9dbe` + fork CI dist merge `c9fd8c5f6` + local dist rebuild
+  `fc1088865`), before the TASK 6 commit lands.
+
+## TASK 6 - calculator redesign + brokerage fees - IN PROGRESS (this session)
+
+Ready for commit: backend estimator, API, tests, frontend client, calculator
+redesign, order-book Charges column - all verified. Not yet pushed.
+
+- **`data/broker_charges_comparison.csv`** (new): copy of the user's tariff
+  sheet (`D:\Personal\broker_charges_comparison.csv`) + a Groww section
+  appended (flat Rs 20/order, delivery Rs 0, STT/SEBI/stamp/txn mirroring
+  Zerodha, delivery DP Rs 15 incl GST). Source had Fyers/Zerodha/Dhan only.
+- **`services/brokerage_charges.py`** (new): pure estimator, no Flask. Reads
+  the CSV once (lru_cache), resolves the segment from
+  exchange/product/symbol/instrumenttype (`Equity Delivery`, `Equity Intraday`,
+  `Futures`, `Options`; Dhan "Futures (Equity F&O)"/"Options (Equity F&O)"
+  aliased), merges global rows ("All Equity Segments" GST/SEBI/IPFT and
+  "DP Charges"/"Demat Account" DP) into every segment, returns per-component
+  amounts + total + notes. Supported: `fyers, zerodha, dhan, groww`.
+  Three parser defects fixed mid-task and pinned by tests: equity symbols
+  ending in "CE"/"PE" (RELIANCE, BAJFINANCE) resolving to Options; STT
+  "0.1% on buy and sell" parsing as sell-only; global-segment rows never
+  loading. DP buy-row clash (Groww, Fyers) resolved by keeping the sell row.
+- **`blueprints/brokerage_charges.py`** (new): `POST /brokerage-charges/api/estimate`
+  and `/api/estimate/batch` (`{orders:[...]}`), both `@check_session_validity`,
+  broker from session, 403 outside the supported four. Registered in `app.py`.
+- **`frontend/src/api/brokerage.ts`** (new): `estimate` / `estimateBatch` via
+  `webClient` (auto-CSRF). Exports `BROKERAGE_BROKERS` set for UI gating.
+- **`PositionCalculator.tsx`** redesigned: header = symbol + live price beside
+  it + exchange/product badges + Buy/Sell toggle; Trade Type tiles directly
+  below; "Price" section (Market/Limit tiles + limit input + validation hint);
+  Capital section; Quantity card with Leverage `Nx` as just the number, lot
+  size, input + Max + max-qty readout, and a Brokerage chip that pops open the
+  estimate breakdown. Risk Management is gone - replaced by an "Add Stop Loss /
+  Target Price" expander (SL / Target / Trailing SL). Bid/ask display removed.
+  Dialog widened to `sm:max-w-lg` with inner scroll. Brokerage chip hidden
+  unless `authStore.user.broker` is in the supported set; estimate debounced
+  400 ms, valued at LTP (Market) or the limit price (Limit).
+- **`OrderBook.tsx`**: new "Charges" column (header + cell) only for supported
+  brokers and `!isCrypto`; one batch call estimates every priced row
+  (`price>0 && quantity>0`); cell shows the total with a hover tooltip
+  (segment + per-component breakdown); unpriced rows stay blank.
+- Verification done: `pytest test/test_brokerage_charges.py` 19/19 passed
+  (locked vectors: Zerodha intraday BUY 100@500 = 21.07, delivery SELL =
+  67.21 incl STT 50 + DP 15.34, Fyers options SELL 1 lot @200 lot75 = 54.00,
+  Groww delivery SELL = 66.87 with DP 15, Dhan intraday BUY = 111.23, Zerodha
+  Futures BUY 1 lot @48000 lot35 = 95.46); `ruff check` clean;
+  `tsc -b` clean; `vitest terminal.test.ts` 53/53; biome lint clean;
+  `npm run build` clean (new chunk `brokerage-*.js` contains
+  `brokerage-charges/api`).
+- Docs updated: `Documentation.md` (Task 6 section) + this file.
 
 ## TASK 5 - calculator leverage gate + Market/Limit + 3D UI - DONE
 
@@ -147,17 +197,21 @@ One-Click armed/disarmed ticket system (`onOrderTicket` + `PlaceOrderDialog`
   -> 53 passed. `npm run build` clean; `PositionCalculator-*.js` chunk
   contains Intraday/Overnight/GTT/Risk Management.
 - `frontend/dist` is freshly rebuilt for this merged head and tracks the
-  feature; do not restore it (unlike the previous rule: this fork pushes it
-  because there is no CI `commit-dist` job here; app.py serves it).
+  feature. Note: the fork's CI runs a `chore: auto-build frontend dist [skip ci]`
+  job that pushes its own rebuild; when a push is rejected, merge fork/main
+  (taking their dist), rebuild locally, `git add -A -- frontend/dist` +
+  `git add -f -- frontend/dist`, commit, push (`origin` has no such job).
 
 ## Not yet done / open items
 
-- User's own idea backlog lives in `task.txt` (repo root) - brokerage
-  calculation in calculator/orderbook (uses `D:\Personal\broker_charges_comparison.csv`),
-  crypto calculator, per-stock news section, vertical candle-drag on the
-  chart, scanners. Ask the user which to pick up next rather than guessing.
-- Live-broker runtime verification of the calculator (both analyze/sandbox
-  and live mode) - user tests.
+- User's own idea backlog lives in `task.txt` (repo root) - crypto calculator,
+  per-stock news section, vertical candle-drag on the chart, scanners. Ask the
+  user which to pick up next rather than guessing.
+- Brokers outside Fyers/Zerodha/Dhan/Groww get no brokerage estimate (tariff
+  sheet only covers those four). Treatment for trades on other brokers:
+  hidden chip / blank column - intentional, per the user's list.
+- Live-broker runtime verification of the calculator + Charges column (both
+  analyze/sandbox and live mode) - user tests.
 - Optional: a future broker adapter could opt back in to consume
   stoploss/target/trailing_stoploss on a plain base order (currently only
   sandbox records them; live brokers place a single-leg order).
@@ -175,3 +229,7 @@ One-Click armed/disarmed ticket system (`onOrderTicket` + `PlaceOrderDialog`
    DONE (this task).
 5. Calculator leverage gating + Market/Limit order type + 3D UI redesign -
    DONE (this task; summary at top of file).
+6. Calculator redesign (stock+LTP header, Price section, Capital/Qty split,
+   leverage as a number, Add SL/TP expander) + brokerage fees in calculator and
+   order book (Fyers/Zerodha/Dhan/Groww) - IN PROGRESS: implemented and
+   verified; commit + push pending. Summary at top of file.
