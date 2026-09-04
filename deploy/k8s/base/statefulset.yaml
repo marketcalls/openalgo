@@ -50,7 +50,7 @@ spec:
       - name: seed-bundled-strategies
         image: marketcalls/openalgo:latest
         imagePullPolicy: Always
-        command: ["sh", "-c", "cp -rn /app/strategies/. /seed/"]
+command: ["sh", "-c", "if [ -z \"$(ls -A /seed 2>/dev/null)\" ]; then cp -rn /app/strategies/. /seed/; fi"]
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
