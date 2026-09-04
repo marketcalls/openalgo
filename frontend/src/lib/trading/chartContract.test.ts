@@ -15,6 +15,7 @@ interface Stored {
   tool: string
   points: { time: number; price: number }[]
   style: Record<string, unknown>
+  text?: { value: string; fontSize?: number }
 }
 
 /**
@@ -31,6 +32,7 @@ function surface(initial: Partial<Stored>[] = []) {
     tool: item.tool ?? 'trend-line',
     points: item.points ?? [],
     style: item.style ?? {},
+    ...(item.text ? { text: item.text } : {}),
   }))
   const api: AgentDrawingSurface & { items: Stored[] } = {
     items,
@@ -58,7 +60,7 @@ const OPERATOR: Partial<Stored> = {
     { time: 1775508803, price: 1420 },
     { time: 1787604803, price: 1290 },
   ],
-  style: { text: 'watch this breakout' },
+  text: { value: 'watch this breakout' },
 }
 
 function drawLevels(): AgentChartCommand {
@@ -107,7 +109,7 @@ describe('applyChartCommands', () => {
     expect(chart.items.map((item) => item.tool)).toEqual(['trend-line', 'rectangle', 'price-label'])
     expect(chart.items[0].style.extendRight).toBe(true)
     expect(chart.items[1].style.fill).toBe(true)
-    expect(chart.items[2].style.text).toBe('doji')
+    expect(chart.items[2].text?.value).toBe('doji')
   })
 
   it('anchors a level with no time of its own to the terminal last bar', () => {
@@ -200,7 +202,7 @@ describe('clearing agent markup', () => {
     // The whole point of the namespace. Losing this is losing real work.
     expect(chart.items).toHaveLength(1)
     expect(chart.items[0].id).toBe('d7')
-    expect(chart.items[0].style.text).toBe('watch this breakout')
+    expect(chart.items[0].text?.value).toBe('watch this breakout')
   })
 
   it('removes every agent group, and nothing else, when the group is null', () => {

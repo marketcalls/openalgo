@@ -39,7 +39,13 @@ import {
   tryResolveInterval,
   withBarCache,
 } from 'openalgo-charts'
-import type { DrawingController } from 'openalgo-charts/draw'
+import type {
+  DrawingController,
+  DrawingPatch,
+  DrawingsDocument,
+  DrawingText,
+  DrawingTool,
+} from 'openalgo-charts/draw'
 import { runTransform } from 'openalgo-charts/transform'
 
 // Re-exported so the React layer imports its chart types from this facade
@@ -51,13 +57,31 @@ type ChartInstance = ReturnType<typeof createChart>
 type BuySellButtonsInstance = InstanceType<typeof BuySellButtons>
 type TradeFeedInstance = InstanceType<typeof OpenAlgoTradeFeed>
 type DrawingControllerInstance = InstanceType<typeof DrawingController>
-type DrawingJson = ReturnType<DrawingControllerInstance['toJSON']>[number]
+
+/** The document a pane holds when it has nothing drawn. A fresh one each time, never shared. */
+const emptyDrawings = (): DrawingsDocument => ({ version: 2, drawings: [] })
+
+/**
+ * Whether a stored value is already the 2.0 document. A 1.9.x save is a bare
+ * array; anything else is garbage. The entries are not inspected: the tier's
+ * own migration validates every field when it loads them.
+ */
+function isDrawingsDocument(value: unknown): value is DrawingsDocument {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const doc = value as { version?: unknown; drawings?: unknown }
+  return doc.version === 2 && Array.isArray(doc.drawings)
+}
 
 /** What the toolbar needs to enable/disable its drawing buttons. */
 export interface DrawStats {
   count: number
   canUndo: boolean
   canRedo: boolean
+  /**
+   * Whether anything is selected. The tier supports a shift-click multi-
+   * selection; the rail's delete and the style bar act on all of it, while
+   * `DrawSelection` describes the primary (the first id picked).
+   */
   hasSelection: boolean
   magnet: boolean
   tool: string | null
@@ -189,6 +213,8 @@ export interface TerminalCallbacks {
 
 /** Tools whose content is typed rather than dragged. */
 const TEXT_TOOLS = new Set(['text', 'callout', 'price-label'])
+/** The engine's font size for drawing text that carries none, in media px. */
+const DRAWING_TEXT_PX = 12
 
 /** Everything needed to generate an indicator settings form. */
 export interface IndicatorSettingsRequest {
@@ -289,8 +315,8 @@ export interface DrawSelection {
 
 /**
  * Everything a text-bearing drawing's settings dialog edits. The engine renders
- * all of it already (`TEXT`'s style keys); it ships no DOM, so the form is the
- * host's and needs the current values to open populated rather than blank.
+ * all of it already (a drawing's `text` keys); it ships no DOM, so the form is
+ * the host's and needs the current values to open populated rather than blank.
  */
 export interface DrawTextStyle {
   text: string
@@ -439,7 +465,15 @@ export class TradingTerminal {
      interval / chart-type / theme change, so both round-trip through plain
      data here and are re-applied to the new chart. */
   private draw: DrawingControllerInstance | null = null
-  private drawJson: DrawingJson[] = []
+  private drawJson: DrawingsDocument = emptyDrawings()
+  /**
+   * A 1.9.x save (a bare array) waiting for the draw tier to migrate it. The
+   * migration lives in the tier, which is fetched on first use, so it cannot
+   * run on the boot path without bundling the tier for every pane; the array
+   * waits here and `attachDrawing` lifts it the moment the tier is in hand.
+   * Null once it has, or when the save was already a document.
+   */
+  private drawLegacy: readonly unknown[] | null = null
   private drawTool: string | null = null
   private drawMagnet = false
   /** True once a drawing control has been touched — gates the lazy tier fetch. */
@@ -464,6 +498,8 @@ export class TradingTerminal {
         shiftKey?: boolean
       }) => string | null)
     | null = null
+  /** The tier's tool registry, for a tool's own defaults; null until it loads. */
+  private toolOf: ((id: string) => DrawingTool) | null = null
   private posLine: PriceLine | null = null
   private tradeBtns: BuySellButtonsInstance | null = null
   /** The bar the OHLC readout is currently showing; replayed into the export. */
@@ -1273,8 +1309,20 @@ export class TradingTerminal {
   private restoreChartTools(): void {
     try {
       const raw = this.lsGet('draw')
-      const parsed = raw ? (JSON.parse(raw) as DrawingJson[]) : []
-      if (Array.isArray(parsed) && parsed.length) {
+      const parsed: unknown = raw ? JSON.parse(raw) : null
+      if (Array.isArray(parsed)) {
+        // A 1.9.x save. The migration lives in the draw tier, which is fetched
+        // on first use, so the array cannot be lifted here without bundling the
+        // tier for every pane. It is held apart from `drawJson` so nothing reads
+        // its entries through the version 2 type (their text still sits in the
+        // style bag, where `describeDrawings` would not find it) until
+        // `attachDrawing` migrates it. The migration reads the array as-is, so
+        // wrapping it in a version 2 envelope would gain nothing.
+        if (parsed.length) {
+          this.drawLegacy = parsed
+          this.drawEnabled = true
+        }
+      } else if (isDrawingsDocument(parsed) && parsed.drawings.length) {
         this.drawJson = parsed
         this.drawEnabled = true
       }
@@ -1393,9 +1441,13 @@ export class TradingTerminal {
    */
   private async attachDrawing(): Promise<void> {
     if (this.draw || !this.chart) return
-    const { DrawingController, drawingShortcuts, matchDrawingShortcut } = await import(
-      'openalgo-charts/draw'
-    )
+    const {
+      DrawingController,
+      drawingShortcuts,
+      getDrawingTool,
+      matchDrawingShortcut,
+      migrateDrawings,
+    } = await import('openalgo-charts/draw')
     // The await is a real suspension point: the pane can be destroyed, or the
     // chart rebuilt again, while the tier is in flight.
     if (this.destroyed || !this.chart || this.draw) return
@@ -1406,11 +1458,19 @@ export class TradingTerminal {
     this.draw = draw
     this.drawShortcuts = drawingShortcuts()
     this.matchShortcut = matchDrawingShortcut
-    if (this.drawJson.length) {
+    this.toolOf = getDrawingTool
+    if (this.drawLegacy) {
+      // The 1.9.x array becomes the document every other reader here expects.
+      // Garbage yields an empty document rather than a throw, so a stale entry
+      // still cannot stop the pane.
+      this.drawJson = migrateDrawings(this.drawLegacy)
+      this.drawLegacy = null
+    }
+    if (this.drawJson.drawings.length) {
       try {
         draw.fromJSON(this.drawJson)
       } catch {
-        this.drawJson = [] // a shape from an older build; better empty than broken
+        this.drawJson = emptyDrawings() // a shape from an older build; better empty than broken
       }
     }
     if (this.drawTool) draw.setTool(this.drawTool)
@@ -1419,11 +1479,11 @@ export class TradingTerminal {
     // A text tool is useless until it has text, so placing one asks straight
     // away rather than leaving an empty box on the chart.
     this.chart.on('draw:add', (p) => {
-      const d = (p as { drawing?: { id: string; tool: string; style?: { text?: string } } }).drawing
+      const d = (p as { drawing?: { id: string; tool: string; text?: { value?: string } } }).drawing
       // Agent markup is exempt: it arrives with its caption already written, so
       // prompting for one would open a dialog nobody asked for, once per shape.
       if (d && TEXT_TOOLS.has(d.tool) && !isAgentDrawingId(d.id)) {
-        this.cb.onDrawTextEdit?.({ id: d.id, tool: d.tool, text: d.style?.text ?? '' })
+        this.cb.onDrawTextEdit?.({ id: d.id, tool: d.tool, text: d.text?.value ?? '' })
       }
     })
     this.chart.on('draw:add', () => this.afterDrawChange())
@@ -1488,7 +1548,7 @@ export class TradingTerminal {
   requestDrawTextEdit(id: string): void {
     const d = this.draw?.get(id)
     if (!d || !TEXT_TOOLS.has(d.tool)) return
-    this.cb.onDrawTextEdit?.({ id: d.id, tool: d.tool, text: d.style.text ?? '' })
+    this.cb.onDrawTextEdit?.({ id: d.id, tool: d.tool, text: d.text?.value ?? '' })
   }
 
   /**
@@ -1496,24 +1556,41 @@ export class TradingTerminal {
    * Background and border default OFF, matching the engine's own defaults —
    * text dropped on a chart should be the words, not a filled plate.
    */
+  /** A tool's default text (placeholder and size), or null when it has none. */
+  private toolDefaultText(tool: string): DrawingText | null {
+    try {
+      return this.toolOf?.(tool).defaultText ?? null
+    } catch {
+      return null // a tool the registry no longer knows; the engine's default applies
+    }
+  }
+
   drawTextStyle(id: string): DrawTextStyle | null {
     const d = this.draw?.get(id)
     if (!d) return null
-    const st = (d.style ?? {}) as Record<string, unknown>
+    const t: Partial<DrawingText> = d.text ?? {}
+    // The colour is the drawing's own: the engine paints text in `style.color`
+    // unless the text carries one, and this dialog writes the drawing's, so the
+    // style bar's swatch and this field always agree.
+    const color = t.color ?? d.style.color ?? '#e4e8f4'
     return {
-      text: (st.text as string) ?? '',
-      color: (st.color as string) ?? '#e4e8f4',
-      fontSize: (st.fontSize as number) ?? 14,
-      bold: st.fontWeight === 'bold',
-      italic: st.fontStyle === 'italic',
-      background: st.background === true,
+      text: t.value ?? '',
+      color,
+      // Unset means the tool's own size, which is what the engine paints it at
+      // (a price label is 12px, the text tool 14px). Seeding the dialog with a
+      // host constant instead would enlarge a label whose caption alone was
+      // edited.
+      fontSize: t.fontSize ?? this.toolDefaultText(d.tool)?.fontSize ?? DRAWING_TEXT_PX,
+      bold: t.bold === true,
+      italic: t.italic === true,
+      background: t.background === true,
       // Never the chart's own background: a plate in that colour is invisible,
       // which reads as "Background does nothing". A neutral grey shows on both
       // the dark and light themes.
-      backgroundColor: (st.backgroundColor as string) ?? '#434651',
-      border: st.border === true,
-      borderColor: (st.borderColor as string) ?? (st.color as string) ?? '#e4e8f4',
-      wrap: st.wrap === true,
+      backgroundColor: t.backgroundColor ?? '#434651',
+      border: t.border === true,
+      borderColor: t.borderColor ?? color,
+      wrap: t.wrap === true,
     }
   }
 
@@ -1530,12 +1607,12 @@ export class TradingTerminal {
       return
     }
     this.draw.update(id, {
-      style: {
-        text: trimmed,
-        color: v.color,
+      style: { color: v.color },
+      text: {
+        value: trimmed,
         fontSize: v.fontSize,
-        fontWeight: v.bold ? 'bold' : 'normal',
-        fontStyle: v.italic ? 'italic' : 'normal',
+        bold: v.bold,
+        italic: v.italic,
         background: v.background,
         backgroundColor: v.backgroundColor,
         border: v.border,
@@ -1551,22 +1628,30 @@ export class TradingTerminal {
     if (!this.draw) return
     const trimmed = text.trim()
     if (trimmed === '') this.draw.remove(id)
-    else this.draw.update(id, { style: { text: trimmed } })
+    else this.draw.update(id, { text: { value: trimmed } })
     this.afterDrawChange()
   }
 
-  /** Restyle the selected drawing (colour, width, dash, lock). */
+  /**
+   * Restyle every selected drawing (colour, width, dash, lock). The style bar
+   * shows the primary's values, but a shift-click selection is one edit to the
+   * operator, so the patch lands on all of it as one undo entry.
+   */
   styleSelectedDrawing(patch: {
     color?: string
     lineWidth?: number
     lineStyle?: 'solid' | 'dashed' | 'dotted'
     locked?: boolean
   }): void {
-    const id = this.draw?.selected()
-    if (!this.draw || !id) return
+    const ids = this.draw?.selection() ?? []
+    if (!this.draw || ids.length === 0) return
     const { locked, ...style } = patch
-    if (Object.keys(style).length > 0) this.draw.update(id, { style })
-    if (locked !== undefined) this.draw.update(id, { locked })
+    const fields: DrawingPatch = {}
+    if (Object.keys(style).length > 0) fields.style = style
+    if (locked !== undefined) fields.locked = locked
+    if (Object.keys(fields).length > 0) {
+      this.draw.updateMany(ids.map((id) => ({ id, patch: fields })))
+    }
     this.afterDrawChange()
   }
 
@@ -1601,7 +1686,9 @@ export class TradingTerminal {
   drawStats(): DrawStats {
     const d = this.draw
     return {
-      count: d ? d.drawings().length : this.drawJson.length,
+      // A 1.9.x save counts its raw entries until the tier lifts it: the same
+      // number the rail showed for that save before the upgrade.
+      count: d ? d.drawings().length : (this.drawLegacy?.length ?? this.drawJson.drawings.length),
       canUndo: d ? d.canUndo() : false,
       canRedo: d ? d.canRedo() : false,
       hasSelection: d ? d.selected() !== null : false,
@@ -1621,13 +1708,13 @@ export class TradingTerminal {
     this.afterDrawChange()
   }
 
-  /** Remove the selected drawing, or every drawing when `all` is set. */
+  /** Remove every selected drawing, or every drawing when `all` is set. */
   removeDrawings(all: boolean): void {
     if (!this.draw) return
     if (all) this.draw.clear()
     else {
-      const id = this.draw.selected()
-      if (id) this.draw.remove(id)
+      const ids = this.draw.selection()
+      if (ids.length) this.draw.removeMany(ids)
     }
     this.afterDrawChange()
   }
@@ -1664,7 +1751,7 @@ export class TradingTerminal {
     // The live controller when the tier is up, its snapshot when it is not: a
     // pane whose drawings were restored from storage but never touched has
     // drawings to report and no controller to ask.
-    const drawings = this.draw ? this.draw.toJSON() : this.drawJson
+    const drawings = this.draw ? this.draw.toJSON().drawings : this.drawJson.drawings
     const { drawings: mine, agentGroups } = describeDrawings(drawings)
 
     // The viewport in seconds rather than in logical indices, because that is
@@ -3050,9 +3137,11 @@ export class TradingTerminal {
   private async captureCanvas(chart: ChartInstance): Promise<HTMLCanvasElement | null> {
     const hidden = [...this.screenshotExcluded]
     for (const o of hidden) chart.removePrimitive(o.primitive)
-    // Selection handles are grab targets; the drawing itself stays.
-    const selected = this.draw?.selected() ?? null
-    if (selected) this.draw?.select(null)
+    // Selection handles are grab targets; the drawing itself stays. Every
+    // selected id is kept, not only the primary: a shift-click selection would
+    // otherwise come back as its first member.
+    const selected = this.draw?.selection() ?? []
+    if (selected.length) this.draw?.select(null)
     try {
       await nextPaint()
       // A theme toggle or an interval change during that frame rebuilds the
@@ -3064,7 +3153,7 @@ export class TradingTerminal {
     } finally {
       if (!this.destroyed && this.chart === chart) {
         for (const o of hidden) chart.addPrimitive(o.primitive, o.paneIndex)
-        if (selected) this.draw?.select(selected)
+        if (selected.length) this.draw?.select(selected)
       }
     }
   }

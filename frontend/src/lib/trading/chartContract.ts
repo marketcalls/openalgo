@@ -46,7 +46,13 @@
  * between them.
  */
 
-import type { Drawing, DrawingPoint, DrawingStyle } from 'openalgo-charts/draw'
+import type {
+  Drawing,
+  DrawingInput,
+  DrawingPoint,
+  DrawingStyle,
+  DrawingText,
+} from 'openalgo-charts/draw'
 import type { AgentChartCommand } from '@/lib/agent/stream'
 
 // ---------------------------------------------------------------------------
@@ -162,7 +168,7 @@ export interface AgentDrawingSurface {
   /** Every drawing on the chart, in creation order. */
   drawings(): readonly { id: string }[]
   /** Add a fully specified drawing. The id we pass is the id it keeps. */
-  add(drawing: Omit<Drawing, 'id'> & { id?: string }): unknown
+  add(drawing: DrawingInput): unknown
   /** Remove one drawing by id. */
   remove(id: string): boolean
 }
@@ -180,16 +186,28 @@ export interface ChartCommandOptions {
   anchorTime?: number
 }
 
-/** A drawing ready for the controller, id included. */
-type AgentDrawing = Omit<Drawing, 'id'> & { id: string }
+/**
+ * A drawing ready for the controller, id included. The controller fills in
+ * `zIndex` and `createdAt`, so this is its input shape rather than the stored
+ * one.
+ */
+type AgentDrawing = DrawingInput & { id: string }
 
+/**
+ * The label a shape carries. Text lives beside the style, not in it, so a
+ * label is only attached when there is one: an empty `text` on a shape reads
+ * as a label of nothing rather than no label.
+ */
 function build(
   id: string,
   tool: string,
   points: DrawingPoint[],
-  style: DrawingStyle
+  style: DrawingStyle,
+  label?: DrawingText
 ): AgentDrawing {
-  return { id, tool, points, style, paneIndex: 0 }
+  const drawing: AgentDrawing = { id, tool, points, style, paneIndex: 0 }
+  if (label && label.value !== '') drawing.text = label
+  return drawing
 }
 
 /**
@@ -215,43 +233,58 @@ function toDrawing(
       if (price === null) return null
       // A ray runs right from the bar it was found on; a level with no time of
       // its own spans the pane. Both tools draw the price on the axis, which is
-      // the number that matters, so `label` rides along in the style for a
-      // reader of the saved drawing rather than being drawn twice.
+      // the number that matters, so `label` rides along as the drawing's text
+      // for a reader of the saved drawing rather than being drawn twice.
       const ray = shape.ray === true
       const time = num(shape.time) ?? options.anchorTime ?? 0
-      return build(id, ray ? 'horizontal-ray' : 'horizontal-line', [{ time, price }], {
-        color: colour,
-        lineWidth: 1.5,
-        lineStyle: 'dashed',
-        showLabels: true,
-        text: label,
-      })
+      return build(
+        id,
+        ray ? 'horizontal-ray' : 'horizontal-line',
+        [{ time, price }],
+        {
+          color: colour,
+          lineWidth: 1.5,
+          lineStyle: 'dashed',
+          showLabels: true,
+        },
+        { value: label }
+      )
     }
 
     case 'trendline': {
       const from = point(shape.from)
       const to = point(shape.to)
       if (!from || !to) return null
-      return build(id, 'trend-line', [from, to], {
-        color: colour,
-        lineWidth: 1.5,
-        extendRight: shape.extend_right !== false,
-        text: label,
-      })
+      return build(
+        id,
+        'trend-line',
+        [from, to],
+        {
+          color: colour,
+          lineWidth: 1.5,
+          extendRight: shape.extend_right !== false,
+        },
+        { value: label }
+      )
     }
 
     case 'zone': {
       const from = point(shape.from)
       const to = point(shape.to)
       if (!from || !to) return null
-      return build(id, 'rectangle', [from, to], {
-        color: colour,
-        lineWidth: 1,
-        fill: true,
-        fillColor: colour,
-        fillOpacity: 0.12,
-        text: label,
-      })
+      return build(
+        id,
+        'rectangle',
+        [from, to],
+        {
+          color: colour,
+          lineWidth: 1,
+          fill: true,
+          fillColor: colour,
+          fillOpacity: 0.12,
+        },
+        { value: label }
+      )
     }
 
     case 'marker': {
@@ -259,12 +292,13 @@ function toDrawing(
       if (!at) return null
       // The price label carries its own text and a leader back to the bar, so
       // one drawing names the pattern where it printed.
-      return build(id, 'price-label', [at], {
-        color: colour,
-        lineWidth: 1,
-        text: text(shape.text) || label,
-        fontSize: 11,
-      })
+      return build(
+        id,
+        'price-label',
+        [at],
+        { color: colour, lineWidth: 1 },
+        { value: text(shape.text) || label, fontSize: 11 }
+      )
     }
 
     default:
@@ -498,7 +532,7 @@ export type ChartContext = {
  * @returns The operator's drawings, capped, and the agent groups still present.
  */
 export function describeDrawings(
-  drawings: readonly Pick<Drawing, 'id' | 'tool' | 'points' | 'style'>[]
+  drawings: readonly Pick<Drawing, 'id' | 'tool' | 'points' | 'text'>[]
 ): { drawings: ChartContextDrawing[]; agentGroups: string[] } {
   const mine: ChartContextDrawing[] = []
   const groups = new Set<string>()
@@ -517,7 +551,7 @@ export function describeDrawings(
         price: p.price,
       })),
     }
-    const note = text(drawing.style?.text)
+    const note = text(drawing.text?.value)
     if (note) entry.text = note
     mine.push(entry)
   }
