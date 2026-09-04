@@ -5,6 +5,13 @@
 # the Gateway/HTTPRoute/Services but leaves every reference pointing at the
 # base names — a build that succeeds and a route that 404s. The verification
 # step in deploy/k8s/README.md greps the built output for exactly this.
+#
+# Scope note: kustomize only rewrites a reference when the referenced resource
+# EXISTS in the build. The TLS Secret referenced by the Gateway listener is
+# operator-provided (cert-manager or manual), never a build resource, so its
+# name can never be rewritten here — patches/edge-host-gateway.yaml sets the
+# per-instance certificateRefs name explicitly, and an overlay that skips that
+# patch leaves the base default `openalgo-tls` in place.
 nameReference:
 # HTTPRoute.spec.rules[].backendRefs[].name -> Service
 - kind: Service
@@ -19,11 +26,4 @@ nameReference:
   fieldSpecs:
   - path: spec/parentRefs/name
     kind: HTTPRoute
-    group: gateway.networking.k8s.io
-# Gateway.spec.listeners[].tls.certificateRefs[].name -> Secret
-- kind: Secret
-  version: v1
-  fieldSpecs:
-  - path: spec/listeners/tls/certificateRefs/name
-    kind: Gateway
     group: gateway.networking.k8s.io

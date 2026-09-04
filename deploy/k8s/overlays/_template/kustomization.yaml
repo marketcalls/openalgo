@@ -22,7 +22,10 @@ namePrefix: CHANGE_ME-
 
 resources:
 - ../../base
-# Ingress API variant (default). For a Gateway API cluster swap the line below:
+# Ingress API variant (default). For a Gateway API cluster swap the line below
+# AND the edge-host-ingress.yaml patch entry (edge-host-gateway.yaml instead) -
+# the Gateway edge ships no Ingress resource, so a stale Ingress patch makes
+# the build fail with an unmatched-patch error.
 # - ../../edge/gateway
 - ../../edge/ingress
 
@@ -46,7 +49,10 @@ labels:
 # Generates <namePrefix>openalgo-env-<hash> from secret.env. The content hash
 # means ANY change to secret.env rolls the pod on the next apply — apply
 # secret changes off-hours, never inside the ~03:00 IST token-refresh window.
+# The old hashed Secret is NOT pruned by `kubectl apply -k`; after a rotation
+# delete the previous one once the pod is up on the new Secret (see README,
+# "Secrets").
 secretGenerator:
 - name: openalgo-env
-  env: secret.env
+  envs: [secret.env]
   type: Opaque
