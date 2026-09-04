@@ -8,6 +8,7 @@ import {
   ViewModeToggle,
 } from '@/components/option-chain'
 import { PlaceOrderDialog } from '@/components/trading'
+import { PositionCalculator, type PositionCalculatorOutcome } from '@/components/trading/PositionCalculator'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -582,6 +583,10 @@ export default function OptionChain() {
     tickSize: number
   } | null>(null)
 
+  // Position calculator state
+  const [calcOpen, setCalcOpen] = useState(false)
+  const [calcTarget, setCalcTarget] = useState<PlaceOrderParams | null>(null)
+
   // Re-sync exchange when broker capabilities load asynchronously
   useEffect(() => {
     setSelectedExchange((prev) =>
@@ -729,16 +734,27 @@ export default function OptionChain() {
   }
 
   const handlePlaceOrder = useCallback((params: PlaceOrderParams) => {
-    setOrderDialog({
-      open: true,
-      symbol: params.symbol,
-      exchange: params.exchange,
-      action: params.action,
-      quantity: params.lotSize,
-      lotSize: params.lotSize,
-      tickSize: params.tickSize,
-    })
+    setCalcTarget(params)
+    setCalcOpen(true)
   }, [])
+
+  const handleCalcConfirm = useCallback(
+    (outcome: PositionCalculatorOutcome) => {
+      setCalcOpen(false)
+      if (!calcTarget) return
+      setOrderDialog({
+        open: true,
+        symbol: calcTarget.symbol,
+        exchange: calcTarget.exchange,
+        action: outcome.action,
+        quantity: outcome.quantity,
+        lotSize: calcTarget.lotSize,
+        tickSize: calcTarget.tickSize,
+      })
+      setCalcTarget(null)
+    },
+    [calcTarget]
+  )
 
   // Memoized callback for dialog close to prevent re-renders
   const handleOrderDialogClose = useCallback((open: boolean) => {
@@ -1086,6 +1102,20 @@ export default function OptionChain() {
         <div className="flex items-center justify-center py-16">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
         </div>
+      )}
+
+      {/* Position Calculator */}
+      {calcTarget && (
+        <PositionCalculator
+          open={calcOpen}
+          onOpenChange={setCalcOpen}
+          symbol={calcTarget.symbol}
+          exchange={calcTarget.exchange}
+          side={calcTarget.action}
+          ltp={null}
+          lotSize={calcTarget.lotSize}
+          onConfirm={handleCalcConfirm}
+        />
       )}
 
       {/* Place Order Dialog */}

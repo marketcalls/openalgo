@@ -217,6 +217,14 @@ def place_order_with_auth(
         return False, error_response, 404
 
     try:
+        # Risk params (stoploss / target / trailing_stoploss / gtt) are advisory
+        # metadata attached by the charting terminal's position calculator.
+        # They ride along for logging and the sandbox, but the base broker
+        # placeorder path is a single-leg order: brokers that accept them on a
+        # plain order can opt in per-broker. Stripping here (only in the live
+        # branch) keeps generic brokers safe from rejecting unknown keys.
+        for key in ("stoploss", "target", "trailing_stoploss", "gtt"):
+            order_data.pop(key, None)
         res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)
     except Exception as e:
         logger.exception(f"Error in broker_module.place_order_api: {e}")

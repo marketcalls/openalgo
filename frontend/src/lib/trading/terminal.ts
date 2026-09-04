@@ -177,6 +177,14 @@ export interface TerminalCallbacks {
    * but has no DOM to collect it with, so the host prompts.
    */
   onDrawTextEdit?(req: { id: string; tool: string; text: string }): void
+  /** An order was requested via Buy/Sell button or context menu. */
+  onOrderRequest?(params: {
+    side: OrderSide
+    type: OrderType
+    sym: SymbolView
+    ltp: number | null
+    product: string
+  }): void
 }
 
 /** Tools whose content is typed rather than dragged. */
@@ -935,6 +943,62 @@ export class TradingTerminal {
       this.toast(`${this.sym.exchange} is quote-only — trading is not supported`, 'err')
       return
     }
+    // Intercept: show calculator if callback exists
+    if (this.cb.onOrderRequest) {
+      this.cb.onOrderRequest({
+        side,
+        type,
+        sym: this.sym,
+        ltp: this.marketPrice(),
+        product: this.product,
+      })
+      return
+    }
+    await this._executeOrder(side, type)
+  }
+
+  /**
+   * Extra intent a calculator confirm can attach to an order: a product
+   * override (Intraday/Overnight trade type) and optional risk legs (SL,
+   * target, trailing). ``trade`` is the OpenAlgo REST feed used for order
+   * placement, so these extras are sent as metadata on the same placeorder
+   * request. Brokers that support bracket/cover risk consume them; the rest
+   * place the entry order normally.
+   */
+  confirmOrder(
+    side: OrderSide,
+    type: OrderType,
+    opts?: {
+      product?: 'MIS' | 'NRML' | 'CNC'
+      stoploss?: number
+      target?: number
+      trailingStoploss?: number
+      gtt?: boolean
+    }
+  ) {
+    void this._executeOrder(side, type, opts)
+  }
+
+  private async _executeOrder(
+    side: OrderSide,
+    type: OrderType,
+    opts?: {
+      product?: 'MIS' | 'NRML' | 'CNC'
+      stoploss?: number
+      target?: number
+      trailingStoploss?: number
+      gtt?: boolean
+    }
+  ) {
+    if (this.refuseWhileReplaying()) return
+    if (!this.sym || !this.trade) {
+      this.toast('search a symbol first')
+      return
+    }
+    if (this.sym.quoteOnly) {
+      this.toast(`${this.sym.exchange} is quote-only — trading is not supported`, 'err')
+      return
+    }
     const qty = this.orderQty()
     if (this.sym.freezeQty > 1 && qty > this.sym.freezeQty) {
       this.toast(`qty ${qty} exceeds the freeze limit ${this.sym.freezeQty} — reduce lots`, 'err')
@@ -949,21 +1013,49 @@ export class TradingTerminal {
       )
       return
     }
+    const product = opts?.product ?? this.product
+    const hasRisk = Boolean(
+      opts?.stoploss || opts?.target || opts?.trailingStoploss || opts?.gtt
+    )
     const lotTxt = this.sym.lots ? `${qty / this.sym.lotsize}L (${qty})` : qty
-    const summary = `${side} ${type} ${lotTxt} ${this.sym.symbol}${type === 'MARKET' ? '' : ` @ ${this.fmt(px)}`} · ${this.product}`
+    const summary = `${side} ${type} ${lotTxt} ${this.sym.symbol}${type === 'MARKET' ? '' : ` @ ${this.fmt(px)}`} · ${product}`
     try {
-      const r = await this.trade.place({
-        symbol: this.sym.symbol,
-        exchange: this.sym.exchange,
-        side,
-        type,
-        qty,
-        product: this.product as 'CNC' | 'NRML' | 'MIS',
-        price: type === 'MARKET' ? undefined : px,
-        triggerPrice: type === 'SL' || type === 'SL-M' ? px : undefined,
-        mode: this.tradeMode(),
-      })
-      this.toast(`placed ${summary} (id ${r.orderId})`, 'ok')
+      if (hasRisk) {
+        // The order carries risk legs (SL / target / trailing / GTT), which the
+        // chart feed cannot attach. Route through the public placeorder REST
+        // API in a SINGLE request so the risk params travel with the entry
+        // order (not as a second order). Mode-aware: the backend routes it to
+        // sandbox or live from the analyzer toggle, so both work identically.
+        const r = await this.api<{ status?: string; orderid?: string }>('placeorder', {
+          strategy: 'chart-trading',
+          exchange: this.sym.exchange,
+          symbol: this.sym.symbol,
+          action: side,
+          quantity: qty,
+          pricetype: type,
+          product,
+          price: type === 'MARKET' ? undefined : px,
+          trigger_price: type === 'SL' || type === 'SL-M' ? px : undefined,
+          stoploss: opts?.stoploss,
+          target: opts?.target,
+          trailing_stoploss: opts?.trailingStoploss,
+          gtt: opts?.gtt,
+        })
+        this.toast(`placed ${summary} (id ${r.orderid})`, 'ok')
+      } else {
+        const r = await this.trade.place({
+          symbol: this.sym.symbol,
+          exchange: this.sym.exchange,
+          side,
+          type,
+          qty,
+          product: product as 'CNC' | 'NRML' | 'MIS',
+          price: type === 'MARKET' ? undefined : px,
+          triggerPrice: type === 'SL' || type === 'SL-M' ? px : undefined,
+          mode: this.tradeMode(),
+        })
+        this.toast(`placed ${summary} (id ${r.orderId})`, 'ok')
+      }
       this.pollBook()
     } catch (e) {
       this.toast(this.cleanError(e), 'err')

@@ -36,6 +36,8 @@ import { DrawingStyleBar } from './DrawingStyleBar'
 import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
 import { IndicatorPickerDialog } from './IndicatorPickerDialog'
 import { IndicatorSettingsDialog } from './IndicatorSettingsDialog'
+import type { OrderSide, OrderType } from '@/lib/trading/terminal'
+import { PositionCalculator, type PositionCalculatorOutcome } from './PositionCalculator'
 import { SymbolSearchDialog } from './SymbolSearchDialog'
 
 /** Camera (screenshot) glyph. */
@@ -351,6 +353,15 @@ export function ChartPane({
   /** The confirm shown on leaving: the playhead is the only record of the walk. */
   const [confirmLeave, setConfirmLeave] = useState(false)
 
+  // Position calculator: shown before order placement
+  const [calcOpen, setCalcOpen] = useState(false)
+  const [calcParams, setCalcParams] = useState<{
+    side: OrderSide
+    type: OrderType
+    sym: SymbolView
+    ltp: number | null
+  } | null>(null)
+
   /* ── boot this pane's terminal once ───────────────────────────────────── */
   useEffect(() => {
     aliveRef.current = true
@@ -400,6 +411,11 @@ export function ChartPane({
         // object literal is being built. Callbacks only fire after construction.
         const style = terminalRef.current?.drawTextStyle(r.id)
         if (style) setTextReq({ id: r.id, tool: r.tool, style })
+      },
+      onOrderRequest: (params) => {
+        if (!aliveRef.current) return
+        setCalcParams(params)
+        setCalcOpen(true)
       },
     }
 
@@ -472,6 +488,31 @@ export function ChartPane({
     setQty(v)
     terminalRef.current?.setQty(v)
   }
+
+  /* ── position calculator confirm ──────────────────────────────────────── */
+  const handleCalcConfirm = useCallback(
+    (outcome: PositionCalculatorOutcome) => {
+      setCalcOpen(false)
+      if (!calcParams || !terminalRef.current) return
+      const { quantity, action, product, stoploss, target, trailingStoploss, gtt } = outcome
+      // Update terminal quantity + product so the inline panel matches
+      if (calcParams.sym.lots) {
+        terminalRef.current.setQty(quantity / calcParams.sym.lotsize)
+      } else {
+        terminalRef.current.setQty(quantity)
+      }
+      terminalRef.current.setProduct(product)
+      terminalRef.current.confirmOrder(action, calcParams.type, {
+        product,
+        stoploss,
+        target,
+        trailingStoploss,
+        gtt,
+      })
+      setCalcParams(null)
+    },
+    [calcParams]
+  )
 
   /* ── right-click order menu ───────────────────────────────────────────── */
   const onContextMenu = (e: React.MouseEvent) => {
@@ -1175,6 +1216,19 @@ export function ChartPane({
         onPick={(row) => terminalRef.current?.loadSymbol(row)}
         initialQuery={sym?.symbol}
       />
+
+      {calcParams && (
+        <PositionCalculator
+          open={calcOpen}
+          onOpenChange={setCalcOpen}
+          symbol={calcParams.sym.symbol}
+          exchange={calcParams.sym.exchange}
+          side={calcParams.side}
+          ltp={calcParams.ltp}
+          lotSize={calcParams.sym.lotsize}
+          onConfirm={handleCalcConfirm}
+        />
+      )}
     </section>
   )
 }
