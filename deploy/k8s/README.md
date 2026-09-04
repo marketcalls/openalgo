@@ -119,7 +119,9 @@ Everything below MUST be unique per instance — this is the k8s equivalent of
    `utils/env_check.py` auto-rotates a placeholder `FERNET_SALT` there on
    first boot. An unpinned salt is re-rotated on every pod restart, which
    makes the Fernet-encrypted broker tokens in the persistent database
-   undecryptable.
+   undecryptable. (Requires an image whose `start.sh` persists `FERNET_SALT`
+   into the generated `.env` — included in this PR; older images re-rotate
+   the salt on every restart even when pinned in the Secret.)
 4. Broker credentials (`BROKER_API_KEY`, `BROKER_API_SECRET`, and the
    `_MARKET` pair for XTS brokers).
 5. `VALID_BROKERS: <broker>` (single slug — faster startup, one broker per
@@ -290,6 +292,29 @@ no 5555 outside the env var; no `PORT` env var; Ingress backends and `envFrom`
 refs carry the instance prefix (the Secret also a content hash). For the
 gateway variant also check `parentRefs`/`backendRefs`/`certificateRefs` per
 the section above.
+
+## Smoke-test findings (k3s, 2026-09-04)
+
+The package was exercised end to end on a k3s cluster (Gateway API variant,
+arm64 image, hostPath instead of a PVC). Three findings worth knowing:
+
+1. `ENV_CONFIG_VERSION` — `start.sh` wrote `1.0.4` into the generated `.env`
+   while the image's `.sample.env` said `1.0.7`; `env_check.py` treats the
+   generated env as outdated and prompts interactively, which cancels startup
+   under Kubernetes (no stdin). Fixed by bumping the `start.sh` default; if
+   you pin an older image, set `ENV_CONFIG_VERSION` in the overlay ConfigMap
+   to that image's bundled `.sample.env` version.
+2. `FERNET_SALT` rotation — older `start.sh` templates never wrote
+   `FERNET_SALT` into the generated `.env`, and `env_check.py` consults only
+   the file, so the salt re-rotated on every restart even when pinned in the
+   Secret. Fixed in `start.sh` in this PR; the restart drill passes on images
+   built after that commit.
+3. Gateway listener port — a controller only accepts listeners whose port
+   matches one of its entryPoints. A stock k3s Traefik serves 443 directly,
+   but Helm-style installs often map 443 (service) to 8443 (container). If
+   the Gateway stays `Accepted=False` with `PortUnavailable`, patch the
+   listener port to the controller's entryPoint port — external access
+   typically still uses 443.
 
 ## Troubleshooting
 

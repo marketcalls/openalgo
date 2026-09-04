@@ -34,7 +34,7 @@ else
         cat > "$ENV_FILE" << EOF
 # OpenAlgo Environment Configuration File
 # Auto-generated from environment variables
-ENV_CONFIG_VERSION = '${ENV_CONFIG_VERSION:-1.0.4}'
+ENV_CONFIG_VERSION = '${ENV_CONFIG_VERSION:-1.0.7}'
 
 # Broker Configuration
 BROKER_API_KEY = '${BROKER_API_KEY}'
@@ -53,6 +53,10 @@ VALID_BROKERS = '${VALID_BROKERS:-fivepaisa,fivepaisaxts,aliceblue,angel,arrow,c
 # Security Configuration
 APP_KEY = '${APP_KEY}'
 API_KEY_PEPPER = '${API_KEY_PEPPER}'
+# Persisted so utils/env_check.py sees a stable value across restarts; without
+# this line it rotates a fresh salt on every boot in env-driven deployments
+# (Docker/PaaS/Kubernetes) and Fernet-encrypted data becomes undecryptable.
+FERNET_SALT = '${FERNET_SALT:-OPENALGO_PLACEHOLDER_FERNET_SALT_REGENERATE_BEFORE_USE}'
 
 # Database Configuration
 DATABASE_URL = '${DATABASE_URL:-sqlite:///db/openalgo.db}'
