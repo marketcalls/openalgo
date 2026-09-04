@@ -11,6 +11,17 @@ and OpenAlgo's standard format.
 from datetime import UTC, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from broker.zerodha.mapping.mcx_contract_size import from_kite_quantity
+
+
+def _units(data, field):
+    """Kite order-stream quantity -> OpenAlgo units (MCX only, else unchanged)."""
+    return int(
+        from_kite_quantity(
+            data.get(field, 0), data.get("tradingsymbol", ""), data.get("exchange", "")
+        )
+    )
+
 
 class ZerodhaExchangeMapper:
     """Maps exchange codes between Zerodha and OpenAlgo formats"""
@@ -243,9 +254,10 @@ class ZerodhaDataTransformer:
                 ),
                 "price": float(data.get("price", 0)),
                 "trigger_price": float(data.get("trigger_price", 0)),
-                "quantity": int(data.get("quantity", 0)),
-                "filled_quantity": int(data.get("filled_quantity", 0)),
-                "pending_quantity": int(data.get("pending_quantity", 0)),
+                # MCX arrives in contracts; normalise to OpenAlgo units.
+                "quantity": _units(data, "quantity"),
+                "filled_quantity": _units(data, "filled_quantity"),
+                "pending_quantity": _units(data, "pending_quantity"),
                 "average_price": float(data.get("average_price", 0)),
                 "order_timestamp": data.get("order_timestamp", ""),
                 "exchange_timestamp": data.get("exchange_timestamp", ""),
