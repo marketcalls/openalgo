@@ -27,6 +27,7 @@ from .mode_utils import (
     normalize_mode_or_none,
 )
 from .port_check import find_available_port, is_port_in_use
+from .tick_contract import MODE_QUOTE, normalize_quote_tick
 
 # Initialize logger
 logger = get_logger("websocket_proxy")
@@ -2072,6 +2073,14 @@ class WebSocketProxy:
                     logger.warning(f"Invalid mode in topic: {mode_str}")
                     continue
                 mode, _ = normalized
+
+                # Quote-mode field contract: adapters forward broker payloads
+                # verbatim, and several mappers only add OHLC when the broker
+                # snapshot carries it. Guarantee the documented Quote fields
+                # with null (never 0) so clients can chart without per-broker
+                # key checks. See websocket_proxy/tick_contract.py.
+                if mode == MODE_QUOTE:
+                    normalize_quote_tick(market_data)
 
                 # No server-side LTP throttling: the previous time-based
                 # throttle dropped intra-window ticks instead of coalescing
