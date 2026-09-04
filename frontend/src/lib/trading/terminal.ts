@@ -30,12 +30,12 @@ import {
   type PriceLine,
   ReplayController,
   ReplayShade,
-  TextWatermark,
   type ReplayState,
   readChartSettings,
   type SeriesApi,
   type SeriesStyle,
   type SeriesType,
+  TextWatermark,
   tryResolveInterval,
   withBarCache,
 } from 'openalgo-charts'
@@ -69,7 +69,15 @@ export interface DrawStats {
   shortcuts: Record<string, string>
 }
 
+import type { AgentChartCommand } from '@/lib/agent/stream'
 import type { AppMode, ThemeMode } from '@/stores/themeStore'
+import {
+  applyChartCommands,
+  applyIndicatorCommands,
+  type ChartContext,
+  describeDrawings,
+  isAgentDrawingId,
+} from './chartContract'
 import { buildChartTheme, isLightTheme, resolveCssColor, volumeColor } from './chartTheme'
 import { CHART_TYPES } from './chartTypes'
 import { fmtPrice, money, priceDp, snapTick, tickSize } from './format'
@@ -543,6 +551,8 @@ export class TradingTerminal {
   private bookTimer: ReturnType<typeof setInterval> | null = null
   private reconcileTimer: ReturnType<typeof setTimeout> | null = null
   private ltpPollTimer: ReturnType<typeof setInterval> | null = null
+  /** Serialises agent chart commands. See {@link applyChartCommands}. */
+  private chartCommandQueue: Promise<void> = Promise.resolve()
   private destroyed = false
 
   constructor(opts: TerminalOptions) {
@@ -765,19 +775,19 @@ export class TradingTerminal {
    */
   private wireLegendActions(): void {
     const act = (e: Event): void => {
-      const el = (e.target as HTMLElement | null)?.closest?.("[data-legend-action]")
+      const el = (e.target as HTMLElement | null)?.closest?.('[data-legend-action]')
       if (!el) return
-      if (el.getAttribute("data-legend-action") !== "volume") return
+      if (el.getAttribute('data-legend-action') !== 'volume') return
       e.preventDefault()
       e.stopPropagation()
       this.setVolumeVisible(!this.volumeOn)
       this.setLegend(this.legendBar)
       this.cb.onVolumeChange?.(this.volumeOn)
     }
-    this.legendEl.addEventListener("click", act)
-    this.legendEl.addEventListener("keydown", (e) => {
+    this.legendEl.addEventListener('click', act)
+    this.legendEl.addEventListener('keydown', (e) => {
       const k = (e as KeyboardEvent).key
-      if (k === "Enter" || k === " ") act(e)
+      if (k === 'Enter' || k === ' ') act(e)
     })
   }
 
@@ -1410,7 +1420,9 @@ export class TradingTerminal {
     // away rather than leaving an empty box on the chart.
     this.chart.on('draw:add', (p) => {
       const d = (p as { drawing?: { id: string; tool: string; style?: { text?: string } } }).drawing
-      if (d && TEXT_TOOLS.has(d.tool)) {
+      // Agent markup is exempt: it arrives with its caption already written, so
+      // prompting for one would open a dialog nobody asked for, once per shape.
+      if (d && TEXT_TOOLS.has(d.tool) && !isAgentDrawingId(d.id)) {
         this.cb.onDrawTextEdit?.({ id: d.id, tool: d.tool, text: d.style?.text ?? '' })
       }
     })
@@ -1626,6 +1638,138 @@ export class TradingTerminal {
     this.draw?.setOptions({ magnet: on })
     this.lsSet('magnet', on ? '1' : '0')
     this.cb.onDrawChange?.(this.drawStats())
+  }
+
+  /* The agent view of this chart, and the markup it puts on it. */
+
+  /**
+   * What the agent panel reports about this chart, read fresh at send time.
+   *
+   * Never captured and reused: the operator changes the symbol and then asks
+   * about it, so a context snapshotted when the panel mounted would have the
+   * agent analysing the instrument they used to be looking at.
+   *
+   * The shape is the wire's, defined once in `chartContract.ts` against
+   * `services/agent/chart_contract.py`, so what is built here is posted as it
+   * stands.
+   *
+   * @returns The context, or null when no instrument is loaded. Null means the
+   *   panel sends no context at all and every reading tool says so plainly,
+   *   which is better than a context naming an instrument that is not there.
+   */
+  chartContext(): ChartContext | null {
+    const chart = this.chart
+    if (!chart || !this.sym) return null
+
+    // The live controller when the tier is up, its snapshot when it is not: a
+    // pane whose drawings were restored from storage but never touched has
+    // drawings to report and no controller to ask.
+    const drawings = this.draw ? this.draw.toJSON() : this.drawJson
+    const { drawings: mine, agentGroups } = describeDrawings(drawings)
+
+    // The viewport in seconds rather than in logical indices, because that is
+    // what the bars the backend fetches are keyed by. indexToTimeFloat answers
+    // for a fractional index and for one past the last bar, which is exactly
+    // where a right edge sits.
+    const range = chart.getVisibleLogicalRange()
+    const layer = chart.dataLayer
+    const from = Number(layer.indexToTimeFloat(range.from))
+    const to = Number(layer.indexToTimeFloat(range.to))
+    const last = this.rawBars[this.rawBars.length - 1]
+
+    return {
+      symbol: this.sym.symbol,
+      exchange: this.sym.exchange,
+      interval: this.interval,
+      chart_type: this.ctype,
+      bars_loaded: this.rawBars.length,
+      visible_bars: Math.max(0, Math.round(range.to - range.from)),
+      visible_from: Number.isFinite(from) ? Math.round(from) : null,
+      visible_to: Number.isFinite(to) ? Math.round(to) : null,
+      last_price: this.lastLtp ?? last?.close ?? null,
+      indicators: this.listIndicators(),
+      drawings: mine,
+      agent_groups: agentGroups,
+    }
+  }
+
+  /**
+   * Apply one turn's chart commands.
+   *
+   * Queued rather than run on arrival. Attaching the drawing tier is a dynamic
+   * import, so two frames landing close together would both await it and race
+   * to draw into a controller that did not exist when either of them started;
+   * chaining onto the previous promise makes the second wait for the first and
+   * keeps the ops in the order the model sent them. A failure is swallowed
+   * into the chain rather than rejecting it, so one bad frame cannot wedge
+   * every later turn.
+   *
+   * @param commands - The `commands` list from one chart_command frame.
+   * @returns Resolves once these commands have been applied.
+   */
+  applyChartCommands(commands: AgentChartCommand[]): Promise<void> {
+    this.chartCommandQueue = this.chartCommandQueue
+      .then(() => this.runChartCommands(commands))
+      .catch((e) => {
+        console.error('[trading] chart command', e)
+      })
+    return this.chartCommandQueue
+  }
+
+  private async runChartCommands(commands: AgentChartCommand[]): Promise<void> {
+    if (this.destroyed || commands.length === 0) return
+
+    // The two halves of the vocabulary land on two different surfaces: an
+    // indicator is not a drawing, and a clear must never reach one.
+    const indicators = commands.filter((c) => c.op === 'indicator')
+    const rest = commands.filter((c) => c.op !== 'indicator')
+    if (indicators.length) await this.runIndicatorCommands(indicators)
+    if (this.destroyed || rest.length === 0) return
+
+    // Agent markup is a drawing control being used, so the tier is fetched the
+    // same way arming a tool fetches it.
+    this.drawEnabled = true
+    await this.attachDrawing()
+    if (this.destroyed || !this.draw) return
+    // Every add and remove emits its own event, and afterDrawChange is already
+    // bound to those, so persistence and the rail's counter follow from this
+    // without a second write here.
+    applyChartCommands(this.draw, commands, { anchorTime: this.rawBars.at(-1)?.time })
+  }
+
+  /**
+   * Add or remove the indicators the agent asked for.
+   *
+   * The decision is `chartContract.applyIndicatorCommands`, which is pure and
+   * testable without a chart; this supplies the live tier and persists the
+   * result. `loadIndicators` runs first so the operator's own modules from
+   * `strategies/indicators/` have registered: the id is checked against the
+   * chart's OWN registry, which is what lets a custom indicator be added by a
+   * name no list on the server has ever heard of.
+   */
+  private async runIndicatorCommands(commands: AgentChartCommand[]): Promise<void> {
+    await this.loadIndicators()
+    if (this.destroyed) return
+    const { hasIndicator } = await import('openalgo-charts')
+    // Two awaits above, and the terminal can be torn down inside either, so the
+    // chart is re-checked rather than asserted.
+    if (this.destroyed || !this.chart) return
+    const chart = this.chart
+
+    const changed = applyIndicatorCommands(
+      {
+        indicators: () => chart.indicators(),
+        addIndicator: (id, settings) => chart.addIndicator(id, settings),
+        // The same call `removeIndicatorById` makes for the dialog's Remove,
+        // so the agent's removal and the operator's are one behaviour.
+        removeIndicator: (instanceId) => {
+          chart.removeIndicator(instanceId)
+        },
+        hasIndicator,
+      },
+      commands
+    )
+    if (changed) this.syncIndicators()
   }
 
   /* ── indicators + grid (top-menu extras) ───────────────────────────────── */
@@ -1945,8 +2089,21 @@ export class TradingTerminal {
     this.syncIndicators()
   }
 
-  listIndicators(): { id: string; name: string }[] {
-    return this.chart ? this.chart.indicators().map((i) => ({ id: i.id, name: i.name })) : []
+  /**
+   * The live indicators, carrying both ids because its two callers need
+   * different ones.
+   *
+   * The rail's list removes one overlay of several, so it needs the instance
+   * `id`. The agent names a descriptor it can add and remove, so it needs
+   * `indicatorId`: handed `ema-1` it would ask the chart to remove an
+   * indicator no registry has ever heard of, and the command would be dropped
+   * without a word. One shape carrying both is what keeps that from becoming
+   * two functions that drift.
+   */
+  listIndicators(): { id: string; indicatorId: string; name: string }[] {
+    return this.chart
+      ? this.chart.indicators().map((i) => ({ id: i.id, indicatorId: i.indicatorId, name: i.name }))
+      : []
   }
 
   /**
@@ -2048,9 +2205,19 @@ export class TradingTerminal {
    * with no rung below it replays bar by bar, as it always did.
    */
   private static readonly REPLAY_SUB: Record<string, string> = {
-    '3m': '1m', '5m': '1m', '10m': '5m', '15m': '5m', '30m': '15m',
-    '1h': '15m', '60m': '15m', '2h': '30m', '4h': '1h',
-    'D': '1h', '1d': '1h', 'W': 'D', '1w': 'D',
+    '3m': '1m',
+    '5m': '1m',
+    '10m': '5m',
+    '15m': '5m',
+    '30m': '15m',
+    '1h': '15m',
+    '60m': '15m',
+    '2h': '30m',
+    '4h': '1h',
+    D: '1h',
+    '1d': '1h',
+    W: 'D',
+    '1w': 'D',
   }
 
   /* ── market replay ──────────────────────────────────────────────────────
@@ -2825,6 +2992,29 @@ export class TradingTerminal {
   }
 
   /**
+   * The chart as a named PNG file, or null when there is nothing to capture.
+   *
+   * A `File` rather than a `Blob` because every caller needs the name as well
+   * as the bytes, and a File is a Blob, so the clipboard takes it unchanged.
+   * The name is the same `SYMBOL-interval-timestamp.png` the saved image uses,
+   * which is what makes an attached screenshot say in the conversation which
+   * chart it was.
+   *
+   * This is the one place a PNG is produced. Copying to the clipboard and
+   * attaching one to an agent turn both come through here, so a change to what
+   * is composited, or to which overlays are taken down first, reaches both.
+   */
+  async snapshotPng(): Promise<File | null> {
+    const chart = this.chart
+    if (!chart || !this.sym) return null
+    const canvas = await this.captureCanvas(chart)
+    if (!canvas) return null
+    const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/png'))
+    if (!blob) return null
+    return new File([blob], this.screenshotName(), { type: 'image/png' })
+  }
+
+  /**
    * Put the chart on the clipboard as an image, ready to paste.
    *
    * The image clipboard is the only form that pastes into a post composer or a
@@ -2834,17 +3024,14 @@ export class TradingTerminal {
    * OpenAlgo qualifies. Anything else is reported rather than failing silently.
    */
   async copyScreenshot(): Promise<void> {
-    const chart = this.chart
-    if (!chart || !this.sym) return
+    if (!this.chart || !this.sym) return
     try {
       if (!navigator.clipboard || typeof ClipboardItem === 'undefined') {
         throw new Error('Copying images needs https or localhost')
       }
-      const canvas = await this.captureCanvas(chart)
-      if (!canvas) return
-      const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/png'))
-      if (!blob) throw new Error('The chart produced no image')
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+      const file = await this.snapshotPng()
+      if (!file) throw new Error('The chart produced no image')
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': file })])
       this.toast('Chart copied, paste it anywhere', 'ok')
     } catch (e) {
       this.toast(this.cleanError(e), 'err')

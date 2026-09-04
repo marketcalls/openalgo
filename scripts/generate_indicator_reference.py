@@ -23,8 +23,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from openalgo import ta  # noqa: E402
 
 from services.indicator_service import (  # noqa: E402
-    _REQUIRED_PARAM_DEFAULTS,
     _SERIES_PARAM_TO_COLUMN,
+    REQUIRED_PARAM_DEFAULTS,
     compute_indicator,
     list_supported_indicators,
 )
@@ -68,8 +68,8 @@ def describe(name: str, records: list[dict]) -> dict | None:
             # Required, no default. Omitting these produced call examples like
             # `ta.sma(close)` that raise TypeError when run directly, and implied
             # no configuration was needed. The service supplies a value from
-            # _REQUIRED_PARAM_DEFAULTS; show what it actually uses.
-            supplied = _REQUIRED_PARAM_DEFAULTS.get(name, {}).get(param.name)
+            # REQUIRED_PARAM_DEFAULTS; show what it actually uses.
+            supplied = REQUIRED_PARAM_DEFAULTS.get(name, {}).get(param.name)
             params.append((param.name, supplied if supplied is not None else "required"))
 
     try:

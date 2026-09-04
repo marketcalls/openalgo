@@ -1,11 +1,18 @@
 import { LayoutGrid, Link2 as LinkIcon } from 'lucide-react'
 import { createLinkGroup, type LinkGroup } from 'openalgo-charts'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
 import { Navbar } from '@/components/layout/Navbar'
+// Lazy, because the panel pulls the markdown renderer and the syntax
+// highlighter's grammars and themes behind it. Statically imported, every
+// trader loading a chart paid for a chat they may never open. The heavy
+// visualization packages inside it are already lazy for the same reason.
+const AgentPanel = lazy(() =>
+  import('@/components/trading/AgentPanel').then((m) => ({ default: m.AgentPanel }))
+)
 import { ChartPane } from '@/components/trading/ChartPane'
 import { DrawingRail } from '@/components/trading/DrawingRail'
 import { OptionChainPanel } from '@/components/trading/OptionChainPanel'
-import { type PanelId, RightRail } from '@/components/trading/RightRail'
+import { isPanelId, type PanelId, RightRail } from '@/components/trading/RightRail'
 import { TickBox } from '@/components/trading/TickBox'
 import { WatchlistPanel } from '@/components/trading/WatchlistPanel'
 import { Button } from '@/components/ui/button'
@@ -15,6 +22,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import type { AgentChartCommand } from '@/lib/agent/stream'
 import type { DrawStats, SearchRow, TradingTerminal } from '@/lib/trading/terminal'
 import { cn } from '@/lib/utils'
 
@@ -182,7 +190,9 @@ export default function Trading() {
   /* ── side panels ─────────────────────────────────────────────────────── */
   const [panel, setPanel] = useState<PanelId | null>(() => {
     const saved = localStorage.getItem(PANEL_KEY)
-    return saved === 'watchlist' || saved === 'options' ? saved : null
+    // Checked against the rail's own list rather than a second copy of it, so
+    // a panel added or renamed there cannot leave this reading a stale name.
+    return isPanelId(saved) ? saved : null
   })
   /**
    * Which pane a panel click loads into, and whose instrument the watchlist
@@ -244,6 +254,36 @@ export default function Trading() {
   const searchFromFocusedPane = useCallback(
     (query: string, exchange?: string, limit?: number) =>
       panelTarget()?.search(query, exchange, limit) ?? Promise.resolve([]),
+    [panelTarget]
+  )
+
+  /**
+   * The agent's two ends, both resolved through `panelTarget` at call time.
+   *
+   * That is what makes the chart context fresh: the pane is looked up when the
+   * message is sent, not when the panel mounted, so loading a symbol and then
+   * asking about it asks about the symbol that is there. It also means the
+   * agent follows the focused pane in a grid layout, the same way the
+   * watchlist and the option chain already do.
+   */
+  const readChartContext = useCallback(() => panelTarget()?.chartContext() ?? null, [panelTarget])
+
+  const applyChartCommands = useCallback(
+    (commands: AgentChartCommand[]) => {
+      void panelTarget()?.applyChartCommands(commands)
+    },
+    [panelTarget]
+  )
+
+  /**
+   * The focused pane as a PNG, for the agent composer's screenshot item.
+   *
+   * The same capture the camera menu's save and copy use, so what the model is
+   * shown is exactly what saving would have produced: the interaction-only
+   * overlays taken down, the OHLC readout painted in.
+   */
+  const captureChart = useCallback(
+    () => panelTarget()?.snapshotPng() ?? Promise.resolve(null),
     [panelTarget]
   )
   const railStats: DrawStats = { ...stats, tool, magnet }
@@ -565,6 +605,15 @@ export default function Trading() {
               onPick={sendToFocusedPane}
               activeSymbol={paneSymbols[focusedPane] ?? null}
             />
+          )}
+          {apiKey && wsUrl && panel === 'agent' && (
+            <Suspense fallback={null}>
+              <AgentPanel
+                getChartContext={readChartContext}
+                onChartCommand={applyChartCommands}
+                onCaptureChart={captureChart}
+              />
+            </Suspense>
           )}
 
           {apiKey && wsUrl && <RightRail active={panel} onSelect={setPanel} />}

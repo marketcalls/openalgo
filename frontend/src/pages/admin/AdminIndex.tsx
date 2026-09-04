@@ -1,6 +1,7 @@
 import {
   Activity,
   ArrowRight,
+  Bot,
   Calendar,
   Clock,
   Gauge,
@@ -94,6 +95,14 @@ export default function AdminIndex() {
       href: '/admin/diagnostics',
       countLabel: 'troubleshoot',
       color: 'bg-indigo-500',
+    },
+    {
+      title: 'Agent Config',
+      description: 'LLM providers and models, API keys, trading switch, and web search',
+      icon: Bot,
+      href: '/agent/config',
+      countLabel: 'models and keys',
+      color: 'bg-violet-500',
     },
     {
       title: 'Remote MCP',
