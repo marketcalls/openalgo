@@ -54,8 +54,11 @@ deploy/k8s/
 
 ## Prerequisites
 
-- kubectl >= 1.27 (bundles kustomize v5; the `labels:` field used here needs
-  kustomize >= 5.3) or a standalone kustomize v5.x.
+- kustomize >= 5.3 — the `labels:` field the base uses needs it. Check the
+  version your kubectl bundles with `kubectl version --client` (older kubectl
+  releases ship kustomize 5.0.x-5.2.x, which reject the base); if it is older,
+  install a standalone kustomize v5.3+ and apply with
+  `kustomize build deploy/k8s/overlays/<broker> | kubectl apply -f -`.
 - A namespace: `kubectl create namespace openalgo` (the manifests set
   `namespace: openalgo` but do not create it — one namespace per instance is
   the recommended isolation; see "Multiple instances" below).
@@ -81,12 +84,13 @@ deploy/k8s/
 # 1. Namespace
 kubectl create namespace openalgo
 
-# 2. Instance dir (copy the template; zerodha already exists as an example)
-cp -r deploy/k8s/overlays/_template deploy/k8s/overlays/zerodha
+# 2. Instance dir (copy the template to a NEW directory; overlays/zerodha
+#    already exists as the worked example)
+cp -r deploy/k8s/overlays/_template deploy/k8s/overlays/<broker>
 
-# 3. Secrets: copy secret.env.example to secret.env and fill it in
-cd deploy/k8s/overlays/zerodha
-cp secret.env.example secret.env
+# 3. Secrets: copy the shared example to secret.env and fill it in
+cd deploy/k8s/overlays/<broker>
+cp ../_template/secret.env.example secret.env
 python3 -c "import secrets; print(secrets.token_hex(32))"   # APP_KEY
 python3 -c "import secrets; print(secrets.token_hex(32))"   # API_KEY_PEPPER
 python3 -c "import secrets; print(secrets.token_hex(16))"   # FERNET_SALT
@@ -141,6 +145,11 @@ appends a content hash to its name. Consequences:
 - Any change to `secret.env` creates a new Secret and **rolls the pod on the
   next apply** — apply secret changes off-hours, never inside the 02:30-03:30
   IST window.
+- The old hashed Secret is **not pruned** by `kubectl apply -k`; rotated
+  Secrets accumulate in the namespace. After the pod is up on the new Secret,
+  delete the previous one:
+  `kubectl -n openalgo get secrets --sort-by=.metadata.creationTimestamp`
+  (the second-newest `<broker>-openalgo-env-<hash>` once the newest is live).
 - `kubectl kustomize` output contains the base64 secret values. Never paste
   build output into issues or PRs.
 
@@ -234,14 +243,19 @@ patches:
 ```
 
 `edge/gateway/kustomizeconfig.yaml` carries the `nameReference` rules that
-make `namePrefix` rewrite Gateway API references — kustomize's built-in table
-covers **none** of them (`HTTPRoute.backendRefs`, `HTTPRoute.parentRefs`,
-`Gateway` TLS `certificateRefs`). Without those rules the build succeeds and
-the route 404s; verify your build:
+make `namePrefix` rewrite the Gateway API references kustomize's built-in
+table misses entirely (`HTTPRoute.backendRefs`, `HTTPRoute.parentRefs`). The
+Gateway's TLS `certificateRefs` are **not** rewritten by any rule — the
+referenced Secret is operator-provided and never a build resource — so the
+overlay's `patches/edge-host-gateway.yaml` sets the per-instance certificate
+name explicitly. Skipping that patch leaves the base default `openalgo-tls`
+in place, and the listener never becomes ready; verify your build:
 
 ```bash
 kubectl kustomize deploy/k8s/overlays/<broker> | grep -A2 'backendRefs:\|parentRefs:'
 # names must carry the instance prefix, e.g. zerodha-openalgo-ws
+kubectl kustomize deploy/k8s/overlays/<broker> | grep -B1 -A1 'certificateRefs:' 
+# name must match the TLS Secret you provisioned, e.g. zerodha-openalgo-tls
 ```
 
 Each overlay creates its own namespaced Gateway (its own LoadBalancer). To
