@@ -26,9 +26,11 @@ path: it mutates the freshly-parsed tick dict in place and does no work
 when the contract is already satisfied.
 """
 
-# Numeric Quote mode, mirroring websocket_proxy.mode_utils (kept as a
-# literal here so this module stays dependency-free).
-QUOTE_MODE = 2
+# Numeric Quote mode. The value mirrors websocket_proxy.mode_utils
+# (QUOTE = 2); the MODE_* name follows the constant convention used across
+# the broker adapters, which server.py shares. Kept as a literal here so
+# this module stays dependency-free.
+MODE_QUOTE = 2
 
 # Fields a Quote-mode tick guarantees after normalisation.
 QUOTE_REQUIRED_FIELDS = ("ltp", "open", "high", "low", "close", "volume", "timestamp")

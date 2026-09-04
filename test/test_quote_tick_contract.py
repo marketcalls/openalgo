@@ -27,7 +27,7 @@ def _load_tick_contract():
 
 _mod = _load_tick_contract()
 normalize_quote_tick = _mod.normalize_quote_tick
-QUOTE_MODE = _mod.QUOTE_MODE
+MODE_QUOTE = _mod.MODE_QUOTE
 QUOTE_REQUIRED_FIELDS = _mod.QUOTE_REQUIRED_FIELDS
 
 
@@ -103,7 +103,7 @@ class TestQuoteModeContract:
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        assert QUOTE_MODE == mod.MODE_BY_UPPER_LABEL["QUOTE"]
+        assert MODE_QUOTE == mod.MODE_BY_UPPER_LABEL["QUOTE"]
 
     def test_mutates_in_place_and_returns_same_object(self):
         tick = {"ltp": 1.0}
