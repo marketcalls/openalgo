@@ -440,6 +440,10 @@ egress notes.
 # Build
 docker build -t openalgo:latest .
 
+# Push to registry
+docker tag openalgo:latest your-registry/openalgo:latest
+docker push your-registry/openalgo:latest
+
 # Deploy an instance (fill in overlays/<broker>/secret.env first)
 kubectl apply -k deploy/k8s/overlays/zerodha
 ```
