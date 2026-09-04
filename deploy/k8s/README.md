@@ -149,6 +149,8 @@ appends a content hash to its name. Consequences:
   Secrets accumulate in the namespace. After the pod is up on the new Secret,
   delete the previous one:
   `kubectl -n openalgo get secrets --sort-by=.metadata.creationTimestamp`
+  then delete it with:
+  `kubectl -n openalgo delete secret <second-newest-name>` (e.g. zerodha-openalgo-env-<hash>)
   (the second-newest `<broker>-openalgo-env-<hash>` once the newest is live).
 - `kubectl kustomize` output contains the base64 secret values. Never paste
   build output into issues or PRs.
