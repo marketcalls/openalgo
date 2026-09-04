@@ -83,9 +83,16 @@ export function TradingDock({
     () => orders.filter((o) => isWorking(o.order_status)).length,
     [orders]
   )
+  /**
+   * A tab's badge is the number of rows behind it, nothing cleverer. Counting
+   * working orders instead read as a defect: four completed orders on screen
+   * under a tab saying 0. The figures that are about live risk have their own
+   * places, the working count beside Cancel all and the open count beside the
+   * P&L, where they are labelled.
+   */
   const counts = useMemo(
-    () => ({ orders: workingOrders, positions: openPnl.open, trades: trades.length }),
-    [workingOrders, openPnl.open, trades.length]
+    () => ({ orders: orders.length, positions: positions.length, trades: trades.length }),
+    [orders.length, positions.length, trades.length]
   )
 
   /**
