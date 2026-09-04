@@ -34,7 +34,8 @@ import os
 import threading
 from datetime import datetime, timedelta
 
-from sqlalchemy import Column, DateTime, Integer, String, UniqueConstraint, create_engine
+from sqlalchemy import Column, DateTime, Index, Integer, String, UniqueConstraint, create_engine
+from sqlalchemy import text as sa_text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -89,6 +90,16 @@ class ClientOrderId(IdempotencyBase):
     )
 
 
+Index("ix_client_order_ids_created_at", ClientOrderId.created_at)
+# The orderbook echoes labels per orderid on every poll; (api_key_hash,
+# orderid) covers that lookup without scanning the user's partition.
+Index(
+    "ix_client_order_ids_api_key_hash_orderid",
+    ClientOrderId.api_key_hash,
+    ClientOrderId.orderid,
+)
+
+
 _init_lock = threading.Lock()
 _initialized = False
 
@@ -106,6 +117,18 @@ def init_idempotency_db() -> None:
         if _initialized:
             return
         IdempotencyBase.metadata.create_all(bind=idempotency_engine)
+        # create_all only builds indexes for new tables. Existing installs
+        # created client_order_ids without the created_at / (api_key_hash,
+        # orderid) indexes, so add them explicitly (IF NOT EXISTS semantics).
+        with idempotency_engine.connect() as conn:
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_client_order_ids_created_at "
+                "ON client_order_ids (created_at)",
+                "CREATE INDEX IF NOT EXISTS ix_client_order_ids_api_key_hash_orderid "
+                "ON client_order_ids (api_key_hash, orderid)",
+            ):
+                conn.execute(sa_text(stmt))
+            conn.commit()
         _initialized = True
 
 

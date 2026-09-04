@@ -119,6 +119,22 @@ class TestReservationStore:
         assert labels["ORD2"] == {"client_order_id": "plain-cid", "tag": None}
         assert "ORD9" not in labels
 
+    def test_prune_and_label_lookups_are_indexed(self):
+        # _prune_expired runs a created_at-range DELETE on every reserve and
+        # get_labels_for_orderids maps orderids on every orderbook poll; on a
+        # growing table both are full scans unless the columns are indexed.
+        # Assert at the metadata level so the check needs no query planner.
+        client_order_ids = idempotency_db.ClientOrderId.__table__
+        index_cols = {
+            ix.name: {c.name for c in ix.columns} for ix in client_order_ids.indexes
+        }
+        assert any(cols == {"created_at"} for cols in index_cols.values()), (
+            "created_at must be indexed for TTL pruning"
+        )
+        assert any(
+            cols == {"api_key_hash", "orderid"} for cols in index_cols.values()
+        ), "(api_key_hash, orderid) must be indexed for orderbook label echo"
+
 
 class _FakeResponse:
     def __init__(self, status):
