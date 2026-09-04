@@ -23,6 +23,7 @@ import {
   type DrawSelection,
   type DrawStats,
   type IndicatorSettingsRequest,
+  type OrderTicketRequest,
   type ReplayState,
   type SymbolView,
   type TerminalCallbacks,
@@ -36,14 +37,23 @@ import { DrawingStyleBar } from './DrawingStyleBar'
 import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
 import { IndicatorPickerDialog } from './IndicatorPickerDialog'
 import { IndicatorSettingsDialog } from './IndicatorSettingsDialog'
+import { PlaceOrderDialog } from './PlaceOrderDialog'
 import { SymbolSearchDialog } from './SymbolSearchDialog'
 
 /** Camera (screenshot) glyph. */
 /** Hand-drawn to sit at the same 1.7 stroke as the camera beside them. */
 function DownloadIcon({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7}
-      strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
       <path d="M12 3v11m0 0 4-4m-4 4-4-4" />
       <path d="M4 17v3h16v-3" />
     </svg>
@@ -52,8 +62,16 @@ function DownloadIcon({ className }: { className?: string }) {
 
 function CopyIcon({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7}
-      strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
       <rect x="8" y="8" width="12" height="12" rx="2" />
       <path d="M16 5.5H6A1.5 1.5 0 0 0 4.5 7v10" />
     </svg>
@@ -203,6 +221,7 @@ interface Props {
    */
   sharedTool?: string | null
   sharedMagnet?: boolean
+  sharedStay?: boolean
   /** This pane became the drawing target (pointer went down inside it). */
   onFocusPane?(terminal: TradingTerminal | null, paneId?: string): void
   /**
@@ -224,6 +243,13 @@ interface Props {
   onDrawStats?(stats: DrawStats): void
   /** Workspace link group this pane joins, if the page made one. */
   linkGroup?: LinkGroup | null
+  /**
+   * One-Click, from the page's switch. Off (the default), the on-chart Buy
+   * and Sell and the context-menu rows open an order ticket in this pane; on,
+   * they place at once. One switch for every pane, like sync: a grid where
+   * one chart fires and the next one asks is a grid that will be misread.
+   */
+  armed?: boolean
   /** Show/hide the page-level rail — the action lives in each pane's menu. */
   onToggleRail?(): void
   railVisible?: boolean
@@ -248,11 +274,13 @@ export function ChartPane({
   style,
   sharedTool,
   sharedMagnet,
+  sharedStay,
   onFocusPane,
   onSymbolChange,
   onTerminalChange,
   onDrawStats,
   linkGroup,
+  armed = false,
   onToggleRail,
   railVisible,
   layoutPicker,
@@ -276,6 +304,11 @@ export function ChartPane({
   symbolCbRef.current = onSymbolChange
   const terminalCbRef = useRef(onTerminalChange)
   terminalCbRef.current = onTerminalChange
+  // The flag as it stands when the terminal boots; the effect below tracks it
+  // from then on. Read through a ref so the boot effect does not re-run and
+  // rebuild the terminal on every toggle.
+  const armedRef = useRef(armed)
+  armedRef.current = armed
   const { mode, appMode } = useThemeStore()
 
   const [ready, setReady] = useState(false)
@@ -343,6 +376,13 @@ export function ChartPane({
 
   // right-click menu: order entry, then the view actions
   const [ctx, setCtx] = useState<{ x: number; y: number; items: CtxItem[] } | null>(null)
+  /**
+   * The order ticket, while One-Click is off. The terminal validates the
+   * click and hands over what it would have sent; the same dialog the option
+   * chain opens confirms it, so a chart button starts an order but never
+   * places one until the trader says so.
+   */
+  const [ticket, setTicket] = useState<OrderTicketRequest | null>(null)
   // Null whenever the chart is live. The transport bar renders only while
   // replay owns the data, so there is nothing to hide when it does not.
   const [replay, setReplay] = useState<ReplayState | null>(null)
@@ -401,6 +441,7 @@ export function ChartPane({
         const style = terminalRef.current?.drawTextStyle(r.id)
         if (style) setTextReq({ id: r.id, tool: r.tool, style })
       },
+      onOrderTicket: (req) => aliveRef.current && setTicket(req),
     }
 
     if (chartRef.current && legendRef.current) {
@@ -418,6 +459,7 @@ export function ChartPane({
       })
       terminalRef.current = terminal
       terminalCbRef.current?.(paneId, terminal)
+      terminal.setArmed(armedRef.current)
       terminal.init()
       terminal.setLinkGroup(linkGroup ?? null)
       const stats0 = terminal.drawStats()
@@ -446,6 +488,15 @@ export function ChartPane({
     if (sharedMagnet === undefined) return
     terminalRef.current?.setMagnet(sharedMagnet)
   }, [sharedMagnet])
+
+  useEffect(() => {
+    if (sharedStay === undefined) return
+    terminalRef.current?.setDrawStay(sharedStay)
+  }, [sharedStay])
+  /* ── follow the page-level One-Click switch ───────────────────────────── */
+  useEffect(() => {
+    terminalRef.current?.setArmed(armed)
+  }, [armed])
 
   /* ── keep the canvas theme in sync with the app theme ─────────────────── */
   // biome-ignore lint/correctness/useExhaustiveDependencies: mode/appMode are the trigger — the effect re-themes the canvas whenever the app theme changes
@@ -788,60 +839,63 @@ export function ChartPane({
           {/* Positioned, so the menu below anchors to the camera and not to
               whatever ancestor happens to be relative. */}
           <div className="relative">
-          <Button
-            variant="ghost"
-            size="icon"
-            className={cn('h-8 w-8', snapOpen && 'text-primary')}
-            ref={snapBtnRef}
-            onClick={(e) => {
-              // Shift skips the menu and saves, for anyone who only ever saves.
-              if (e.shiftKey) { void terminalRef.current?.screenshot(); return }
-              if (snapOpen) setSnapOpen(false)
-              else openSnapMenu()
-            }}
-            title="Chart snapshot"
-            aria-label="Chart snapshot"
-          >
-            <CameraIcon className="h-[17px] w-[17px]" />
-          </Button>
-          {snapOpen && (
-            <>
-              {/* Catches the click that dismisses, so the menu closes on any
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn('h-8 w-8', snapOpen && 'text-primary')}
+              ref={snapBtnRef}
+              onClick={(e) => {
+                // Shift skips the menu and saves, for anyone who only ever saves.
+                if (e.shiftKey) {
+                  void terminalRef.current?.screenshot()
+                  return
+                }
+                if (snapOpen) setSnapOpen(false)
+                else openSnapMenu()
+              }}
+              title="Chart snapshot"
+              aria-label="Chart snapshot"
+            >
+              <CameraIcon className="h-[17px] w-[17px]" />
+            </Button>
+            {snapOpen && (
+              <>
+                {/* Catches the click that dismisses, so the menu closes on any
                   outside press without a document listener that would also
                   swallow the press that opened it. */}
-              <div className="fixed inset-0 z-40" onClick={() => setSnapOpen(false)} />
-              <div
-                className="fixed z-50 w-56 rounded-md border bg-popover p-1 shadow-lg"
-                style={{ top: snapAt?.top ?? 0, right: snapAt?.right ?? 0 }}
-              >
-                <div className="px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Chart snapshot
+                <div className="fixed inset-0 z-40" onClick={() => setSnapOpen(false)} />
+                <div
+                  className="fixed z-50 w-56 rounded-md border bg-popover p-1 shadow-lg"
+                  style={{ top: snapAt?.top ?? 0, right: snapAt?.right ?? 0 }}
+                >
+                  <div className="px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Chart snapshot
+                  </div>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
+                    onClick={() => {
+                      setSnapOpen(false)
+                      void terminalRef.current?.screenshot()
+                    }}
+                  >
+                    <DownloadIcon className="h-3.5 w-3.5 opacity-70" />
+                    Download image
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
+                    onClick={() => {
+                      setSnapOpen(false)
+                      void terminalRef.current?.copyScreenshot()
+                    }}
+                  >
+                    <CopyIcon className="h-3.5 w-3.5 opacity-70" />
+                    Copy image
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
-                  onClick={() => {
-                    setSnapOpen(false)
-                    void terminalRef.current?.screenshot()
-                  }}
-                >
-                  <DownloadIcon className="h-3.5 w-3.5 opacity-70" />
-                  Download image
-                </button>
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
-                  onClick={() => {
-                    setSnapOpen(false)
-                    void terminalRef.current?.copyScreenshot()
-                  }}
-                >
-                  <CopyIcon className="h-3.5 w-3.5 opacity-70" />
-                  Copy image
-                </button>
-              </div>
-            </>
-          )}
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -1174,6 +1228,38 @@ export function ChartPane({
         }
         onPick={(row) => terminalRef.current?.loadSymbol(row)}
         initialQuery={sym?.symbol}
+      />
+
+      {/* The order ticket One-Click off opens: the same dialog the option chain
+          and pages/OptionChain.tsx use, so quantity, product and price are
+          confirmed in one place and analyze mode is honoured the same way.
+          A success needs no toast here; the socket provider shows the broker's
+          order event once, for every surface. The confirmed order goes out
+          through the terminal's own feed, never straight to the API: the
+          feed asserts the page's mode against the server first, the way the
+          armed path does. Portalled into the pane while it is the fullscreen
+          element, as the menus are, or it would open unseen behind it. */}
+      <PlaceOrderDialog
+        open={ticket !== null}
+        onOpenChange={(next) => !next && setTicket(null)}
+        container={menuHost}
+        place={(order) => {
+          const terminal = terminalRef.current
+          if (!terminal) return Promise.reject(new Error('chart is not ready'))
+          return terminal.placeTicket(order)
+        }}
+        symbol={ticket?.symbol}
+        exchange={ticket?.exchange}
+        action={ticket?.action}
+        quantity={ticket?.quantity}
+        lotSize={ticket?.lotSize}
+        tickSize={ticket?.tickSize}
+        product={ticket?.product}
+        priceType={ticket?.priceType}
+        price={ticket?.price}
+        triggerPrice={ticket?.triggerPrice}
+        strategy={ticket?.strategy}
+        onSuccess={() => setTicket(null)}
       />
     </section>
   )

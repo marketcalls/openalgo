@@ -8,25 +8,45 @@
  * closes it.
  */
 
-import { List, Table2 } from 'lucide-react'
+import { Bot, List, Table2 } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { cn } from '@/lib/utils'
 import { RAIL_BTN, RAIL_BTN_ON, RAIL_ICON_STROKE, RailTip } from './railStyles'
 
-/** Which panel the rail is showing, or null when the workspace is all chart. */
-export type PanelId = 'watchlist' | 'options'
+const PANELS = [
+  // A plain list and a table. Nothing here is a metaphor: the watchlist is a
+  // list of instruments and the option chain is a table of strikes. The
+  // assistant is the one thing on the rail that is not a view of the market,
+  // so it is last rather than wedged between two that are.
+  { id: 'watchlist', label: 'Watchlist', icon: List },
+  { id: 'options', label: 'Option chain', icon: Table2 },
+  { id: 'agent', label: 'Assistant', icon: Bot },
+] as const
+
+/**
+ * Which panel the rail is showing, or null when the workspace is all chart.
+ *
+ * Derived from the list rather than written beside it, so adding a panel is
+ * one entry above and nothing else: the page that restores a remembered panel
+ * and the page that renders one both narrow through this union.
+ */
+export type PanelId = (typeof PANELS)[number]['id']
+
+/**
+ * Whether a remembered value still names a panel.
+ *
+ * Storage outlives a release, so a panel that is renamed or removed leaves a
+ * string behind that no longer resolves. Exported so the page reopening a
+ * panel checks the same list the rail renders.
+ */
+export function isPanelId(value: string | null): value is PanelId {
+  return PANELS.some((panel) => panel.id === value)
+}
 
 interface Props {
   active: PanelId | null
   onSelect(panel: PanelId | null): void
 }
-
-const PANELS: Array<{ id: PanelId; label: string; icon: typeof List }> = [
-  // A plain list and a table. Nothing here is a metaphor: the watchlist is a
-  // list of instruments and the option chain is a table of strikes.
-  { id: 'watchlist', label: 'Watchlist', icon: List },
-  { id: 'options', label: 'Option chain', icon: Table2 },
-]
 
 export function RightRail({ active, onSelect }: Props) {
   /**
