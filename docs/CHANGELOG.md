@@ -6,6 +6,51 @@ Each release adds a stanza here summarising what changed and who contributed.
 The full notes for a release, with commit SHAs and the reasoning behind each
 fix, live in [docs/releases](releases/).
 
+## [Unreleased]
+
+### Charting Terminal
+
+- **One-click trading is now an explicit armed mode, and it is off by default.**
+  A click on the chart used to send a live market order with no confirmation and
+  no way to switch that off. Disarmed, the same click opens an order ticket
+  prefilled with what the chart would have sent. Arming gates new risk only:
+  closing a position, cancelling an order and dragging one to a new price work
+  either way.
+- **A bottom dock shows orders, positions, trades and GTT across every symbol.**
+  Working orders and the open position previously existed only as lines on the
+  charted symbol. Rows update live from the account order stream and reconcile
+  against the broker book. Cancel, modify and per-position close act on one row;
+  cancel all and close all sit behind a confirmation. Every write refuses while a
+  pane is replaying.
+- **A drawing tool can stay armed.** A padlock beside the magnet keeps the tool
+  after a drawing instead of returning to the cursor.
+- **The Delete key removes the selected drawing**, and brings duplicate and
+  arrow-key nudge with it. The host never asked the drawing tier what a key
+  meant, so only the rail button worked.
+- **Alt+V and Alt+H arm the vertical and horizontal line tools only.** Both were
+  bound twice, so one press moved a grid line and armed a tool. The grid stays on
+  the toolbar button and the right-click menu.
+- **A double-click on the chart no longer resets the view.** Reset fits every
+  loaded bar, which lands on the oldest one and woke the history loader, so the
+  gesture quietly fetched another page. It now maximizes the pane under the
+  pointer, and a second press puts the stack back. Reset stays on the toolbar
+  button, the right-click menu and Home. Double-clicking a text drawing still
+  opens its editor.
+- **Upgraded to openalgo-charts 2.0.2** from 1.9.2. Drawings saved by the old
+  version are upgraded on load, with their text, styling and Fibonacci ratios
+  intact.
+- **CRYPTO is treated as a derivative segment**, so a Delta Exchange contract is
+  offered NRML rather than CNC and takes quantity in lots.
+- **The user guide gains a chapter for the terminal**, covering one-click, the
+  dock, drawing tools and every keyboard shortcut:
+  [32 - Charting Terminal](userguide/32-charting-terminal/README.md).
+
+### WebSocket Proxy
+
+- **A depth subscription is read under either key.** The proxy read the requested
+  book depth from `depth` only, while the chart library sent `depth_level`, so a
+  client asking for 20, 30 or 50 levels was served 5 with no error.
+
 ## [2.0.2.2] - 2026-08-29
 
 ### Stability and Security Release

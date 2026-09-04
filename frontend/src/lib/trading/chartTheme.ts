@@ -67,3 +67,54 @@ export function buildChartTheme(mode: ThemeMode, appMode: AppMode): ChartTheme {
 export function volumeColor(mode: ThemeMode, appMode: AppMode): string {
   return isLightTheme(mode, appMode) ? '#d4d4d8' : '#33415e'
 }
+
+/**
+ * The two colour forms this module ever meets: the library palette's hex and
+ * the `rgb()` the token rasterizer produces. Anything else reads as null and
+ * the caller keeps the colour it had; a guess here would be painted.
+ */
+function parseRgb(color: string): [number, number, number] | null {
+  const hex = /^#([0-9a-f]{6})$/i.exec(color.trim())
+  if (hex) {
+    const n = Number.parseInt(hex[1], 16)
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+  }
+  const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(color.trim())
+  if (rgb) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])]
+  return null
+}
+
+/**
+ * `color` moved `amount` of the way towards `towards`, in sRGB. At 0 it is the
+ * colour itself, at 1 it is the target. Opaque on purpose: the trade buttons
+ * derive their label colour from the fill's luminance, and a translucent fill
+ * would give that reader nothing to go on.
+ */
+export function mixColors(color: string, towards: string, amount: number): string {
+  const a = parseRgb(color)
+  const b = parseRgb(towards)
+  if (!a || !b) return color
+  const t = Math.min(1, Math.max(0, amount))
+  const ch = (i: number) => Math.round(a[i] + (b[i] - a[i]) * t)
+  return `rgb(${ch(0)},${ch(1)},${ch(2)})`
+}
+
+/** How far the disarmed Buy and Sell sink towards the chart background. */
+const DISARMED_BLEND = 0.55
+
+/**
+ * The Buy and Sell panel's colours while One-Click is off: the theme's own
+ * pair pulled towards its background, so the buttons still say which is which
+ * but no longer look like a thing that fires. Derived from the theme rather
+ * than fixed so the same blend reads right on the light, dark and analyzer
+ * palettes.
+ */
+export function mutedTradeColors(theme: Pick<ChartTheme, 'buy' | 'sell' | 'background'>): {
+  buy: string
+  sell: string
+} {
+  return {
+    buy: mixColors(theme.buy, theme.background, DISARMED_BLEND),
+    sell: mixColors(theme.sell, theme.background, DISARMED_BLEND),
+  }
+}

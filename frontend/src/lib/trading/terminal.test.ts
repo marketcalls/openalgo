@@ -12,11 +12,23 @@
  * so the guard cannot be reintroduced without failing here.
  */
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 import { CandleBuilder } from 'openalgo-charts'
 import { describe, expect, it } from 'vitest'
 
 import { priceDp } from './format'
-import { dedupeIndicators, productOptionsFor, resolveTick, usesLots } from './terminal'
+import {
+  buildOrderTicket,
+  dedupeIndicators,
+  ORDER_COOLDOWN_MS,
+  orderUnits,
+  productOptionsFor,
+  resolveTick,
+  type SymbolView,
+  usesLots,
+} from './terminal'
 
 /** Every segment whose contracts carry lotsize 1 in the master. */
 const LOTSIZE_ONE_SEGMENTS = ['MCX', 'NCO', 'CDS', 'BCD', 'NCDEX']
@@ -35,6 +47,11 @@ describe('productOptionsFor', () => {
 
   it.each(CASH_EQUITY)('%s keeps CNC and must never be given NRML', (exchange) => {
     expect(productOptionsFor(exchange)).toEqual(['MIS', 'CNC'])
+  })
+
+  it('CRYPTO is a derivative segment: NRML, never CNC', () => {
+    expect(productOptionsFor('CRYPTO')).toEqual(['MIS', 'NRML'])
+    expect(usesLots('CRYPTO')).toBe(true)
   })
 
   it('defaults an unknown segment to cash equity', () => {
@@ -213,5 +230,213 @@ describe('dedupeIndicators', () => {
 
   it('leaves an empty list alone', () => {
     expect(dedupeIndicators([])).toEqual([])
+  })
+})
+
+/**
+ * One-Click off: a click opens a ticket instead of placing. The ticket has to
+ * carry exactly what the armed path would have sent, or a trader who reads
+ * the chart, disarms, and confirms is confirming a different order from the
+ * one the chart was about to fire. These pin the two against each other
+ * through the one sizing function and the one price mapping they share.
+ */
+describe('orderUnits', () => {
+  it('multiplies lots out on a derivative segment', () => {
+    expect(orderUnits(2, true, 75)).toBe(150)
+  })
+
+  it('passes shares through on cash equity', () => {
+    expect(orderUnits(7, false, 1)).toBe(7)
+  })
+
+  it('floors to whole lots and never below one', () => {
+    expect(orderUnits(2.9, true, 50)).toBe(100)
+    expect(orderUnits(0, true, 50)).toBe(50)
+    expect(orderUnits(Number.NaN, false, 1)).toBe(1)
+  })
+})
+
+describe('buildOrderTicket', () => {
+  const fno: SymbolView = {
+    symbol: 'NIFTY28MAR2420800CE',
+    exchange: 'NFO',
+    name: 'NIFTY',
+    lots: true,
+    lotsize: 75,
+    tick: 0.05,
+    freezeQty: 1800,
+    quoteOnly: false,
+    productOptions: ['MIS', 'NRML'],
+    product: 'NRML',
+  }
+  const cash: SymbolView = {
+    ...fno,
+    symbol: 'SBIN',
+    exchange: 'NSE',
+    lots: false,
+    lotsize: 1,
+    productOptions: ['MIS', 'CNC'],
+    product: 'CNC',
+  }
+
+  it('sizes the ticket the way the armed path sizes the order', () => {
+    const t = buildOrderTicket({
+      sym: fno,
+      qty: 2,
+      product: 'NRML',
+      side: 'BUY',
+      type: 'MARKET',
+      price: 0,
+    })
+    expect(t.quantity).toBe(orderUnits(2, fno.lots, fno.lotsize))
+    expect(t.quantity).toBe(150)
+    expect(t.lotSize).toBe(75)
+    expect(t.tickSize).toBe(0.05)
+  })
+
+  it('carries the pane product and the terminal strategy tag through', () => {
+    const t = buildOrderTicket({
+      sym: cash,
+      qty: 10,
+      product: 'MIS',
+      side: 'SELL',
+      type: 'MARKET',
+      price: 0,
+    })
+    expect(t).toMatchObject({
+      symbol: 'SBIN',
+      exchange: 'NSE',
+      action: 'SELL',
+      quantity: 10,
+      lotSize: 1,
+      product: 'MIS',
+      strategy: 'chart-trading',
+    })
+  })
+
+  it('sends no price on a market order, the way placeFromMenu does', () => {
+    const t = buildOrderTicket({
+      sym: fno,
+      qty: 1,
+      product: 'MIS',
+      side: 'BUY',
+      type: 'MARKET',
+      price: 123.45,
+    })
+    expect(t.priceType).toBe('MARKET')
+    expect(t.price).toBeUndefined()
+    expect(t.triggerPrice).toBeUndefined()
+  })
+
+  it('puts the clicked price on a limit and nothing on its trigger', () => {
+    const t = buildOrderTicket({
+      sym: fno,
+      qty: 1,
+      product: 'MIS',
+      side: 'BUY',
+      type: 'LIMIT',
+      price: 123.45,
+    })
+    expect(t.priceType).toBe('LIMIT')
+    expect(t.price).toBe(123.45)
+    expect(t.triggerPrice).toBeUndefined()
+  })
+
+  it('puts the clicked price on both fields of a stop, as the armed path does', () => {
+    // placeFromMenu sends price and triggerPrice both equal to the row's price
+    // for SL; the ticket must show the trader the same two numbers.
+    const t = buildOrderTicket({
+      sym: fno,
+      qty: 1,
+      product: 'MIS',
+      side: 'SELL',
+      type: 'SL',
+      price: 120,
+    })
+    expect(t.priceType).toBe('SL')
+    expect(t.price).toBe(120)
+    expect(t.triggerPrice).toBe(120)
+  })
+
+  it('gives a stop-market only its trigger', () => {
+    const t = buildOrderTicket({
+      sym: fno,
+      qty: 1,
+      product: 'MIS',
+      side: 'SELL',
+      type: 'SL-M',
+      price: 120,
+    })
+    expect(t.price).toBeUndefined()
+    expect(t.triggerPrice).toBe(120)
+  })
+})
+
+/**
+ * Where the fork sits. Read from the source, the way replayTradingLock.test.ts
+ * does, because driving a terminal needs a DOM and a broker: every guard the
+ * armed path applies has to run before the ticket opens, and the cooldown has
+ * to sit on the armed placement alone.
+ */
+describe('placeFromMenu forks after its guards', () => {
+  const SRC = readFileSync(join(process.cwd(), 'src/lib/trading/terminal.ts'), 'utf8')
+  const at = SRC.indexOf('private async placeFromMenu(')
+  const body = at === -1 ? '' : SRC.slice(at, SRC.indexOf('async exitPosition()', at))
+  const ticketAt = body.indexOf('onOrderTicket(')
+  const placeAt = body.indexOf('trade.place(')
+
+  it('opens the ticket only after replay, quote-only, freeze and stop-side checks', () => {
+    expect(at).toBeGreaterThan(-1)
+    expect(ticketAt).toBeGreaterThan(-1)
+    for (const guard of ['refuseWhileReplaying()', 'quoteOnly', 'freezeQty', 'stop must be']) {
+      const guardAt = body.indexOf(guard)
+      expect(guardAt, guard).toBeGreaterThan(-1)
+      expect(guardAt, guard).toBeLessThan(ticketAt)
+    }
+  })
+
+  it('never reaches the broker on the disarmed path', () => {
+    expect(placeAt).toBeGreaterThan(ticketAt)
+    expect(body.slice(ticketAt, placeAt)).toContain('return')
+    const forkAt = body.indexOf('this.armed')
+    expect(forkAt).toBeGreaterThan(-1)
+    expect(forkAt).toBeLessThan(ticketAt)
+  })
+
+  it('applies the scalping cooldown to the armed placement', () => {
+    expect(ORDER_COOLDOWN_MS).toBe(120)
+    const coolAt = body.indexOf('ORDER_COOLDOWN_MS')
+    expect(coolAt).toBeGreaterThan(ticketAt)
+    expect(coolAt).toBeLessThan(placeAt)
+  })
+})
+
+/**
+ * The confirmed ticket goes back out through the terminal's feed, which
+ * asserts the page's mode against the server before it posts, exactly as
+ * the armed path does. A ticket that posted straight to the API would be
+ * the one order route on the page deciding on the server's global switch.
+ */
+describe('placeTicket keeps the mode assertion', () => {
+  const SRC = readFileSync(join(process.cwd(), 'src/lib/trading/terminal.ts'), 'utf8')
+  const at = SRC.indexOf('async placeTicket(')
+  const body = at === -1 ? '' : SRC.slice(at, SRC.indexOf('async exitPosition()', at))
+
+  it('places through the trade feed with the page mode', () => {
+    expect(at).toBeGreaterThan(-1)
+    expect(body).toContain('this.trade.place(')
+    expect(body).toContain('mode: this.tradeMode()')
+    expect(body).toContain('this.tradingLocked()')
+  })
+
+  it('is the route the pane hands its ticket', () => {
+    const pane = readFileSync(join(process.cwd(), 'src/components/trading/ChartPane.tsx'), 'utf8')
+    const dialogAt = pane.indexOf('<PlaceOrderDialog')
+    expect(dialogAt).toBeGreaterThan(-1)
+    const dialog = pane.slice(dialogAt, pane.indexOf('/>', dialogAt))
+    expect(dialog).toContain('place={')
+    expect(dialog).toContain('.placeTicket(')
+    expect(dialog).toContain('container={menuHost}')
+    expect(pane).not.toContain('tradingApi.placeOrder')
   })
 })
