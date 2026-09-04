@@ -292,12 +292,41 @@ def place_order_with_auth(
         return False, error_response, 500
 
     if res.status == 200:
+        if idempotent and not order_id:
+            # Broker ACKed but named no order — unknown at the broker. Not a
+            # failure (a retry could double-place) and not a success (there is
+            # no orderid to report or record). Keep the reservation in-flight:
+            # retries of this id keep getting 409 instead of re-placing, and a
+            # human or the ack reconciler can resolve the true orderid.
+            error_response = {
+                "status": "error",
+                "message": (
+                    "Order accepted by broker but no order id was returned; "
+                    "placement unresolved, retries with this client_order_id "
+                    "are blocked"
+                ),
+            }
+            if emit_event:
+                bus.publish(
+                    OrderFailedEvent(
+                        mode="live",
+                        api_type="placeorder",
+                        request_data=order_request_data,
+                        response_data=error_response,
+                        api_key=api_key,
+                        symbol=order_data.get("symbol", ""),
+                        exchange=order_data.get("exchange", ""),
+                        error_message="broker returned 200 without an order id",
+                    )
+                )
+            return False, error_response, 500
+
         order_response_data = {"status": "success", "orderid": order_id}
         if client_order_id:
             order_response_data["client_order_id"] = client_order_id
             if order_tag:
                 order_response_data["tag"] = order_tag
-        if idempotent and order_id:
+        if idempotent:
             from database.idempotency_db import record_success
 
             record_success(api_key, client_order_id, str(order_id))
