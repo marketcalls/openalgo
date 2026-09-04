@@ -259,6 +259,66 @@ class TestPlaceOrderIdempotency:
         assert ok is False
         assert code == 409
 
+    def test_200_without_orderid_is_reported_unresolved(self, monkeypatch):
+        broker = _FakeBrokerModule(status=200, order_id=None)
+        monkeypatch.setattr(
+            place_order_service,
+            "get_auth_token_broker",
+            lambda api_key: ("fake-auth-token", "fakebroker"),
+        )
+        monkeypatch.setattr(place_order_service, "get_analyze_mode", lambda: False)
+        monkeypatch.setattr(place_order_service, "import_broker_module", lambda name: broker)
+
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY
+        )
+        # The broker ACCEPTED the request, so this is not a plain failure:
+        # reporting success would lie about the orderid, and releasing the
+        # reservation would let a retry double-place. The placement must come
+        # back as an explicit unresolved error and the key must stay claimed.
+        assert ok is False
+        assert code == 500
+        assert "unresolved" in response["message"]
+        resolution = idempotency_db.get_resolution(API_KEY, CID)
+        assert resolution is not None and resolution["status"] == "in_flight"
+
+    def test_200_without_orderid_retry_stays_blocked(self, monkeypatch):
+        broker = _FakeBrokerModule(status=200, order_id=None)
+        monkeypatch.setattr(
+            place_order_service,
+            "get_auth_token_broker",
+            lambda api_key: ("fake-auth-token", "fakebroker"),
+        )
+        monkeypatch.setattr(place_order_service, "get_analyze_mode", lambda: False)
+        monkeypatch.setattr(place_order_service, "import_broker_module", lambda name: broker)
+
+        place_order_service.place_order({**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY)
+        broker.order_id = "250106000012345"
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY
+        )
+        # Even after the broker recovers, a retry with the same id must not
+        # re-place: the first request may already exist at the broker.
+        assert ok is False
+        assert code == 409
+        assert len(broker.calls) == 1
+
+    def test_200_without_orderid_non_idempotent_unchanged(self, monkeypatch):
+        broker = _FakeBrokerModule(status=200, order_id=None)
+        monkeypatch.setattr(
+            place_order_service,
+            "get_auth_token_broker",
+            lambda api_key: ("fake-auth-token", "fakebroker"),
+        )
+        monkeypatch.setattr(place_order_service, "get_analyze_mode", lambda: False)
+        monkeypatch.setattr(place_order_service, "import_broker_module", lambda name: broker)
+
+        # Legacy behaviour without a client_order_id is untouched.
+        ok, response, code = place_order_service.place_order(BASE_ORDER, api_key=API_KEY)
+        assert ok is True
+        assert code == 200
+        assert response["orderid"] is None
+
     def test_no_client_order_id_is_unchanged(self, fake_broker):
         ok, response, code = place_order_service.place_order(BASE_ORDER, api_key=API_KEY)
         assert ok is True
