@@ -42,10 +42,31 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+      # A Kubernetes volume mount shadows the image's /app/strategies content
+      # (Docker named volumes copy on first use; k8s volumes do not), so seed
+      # the bundled strategy example and chart-indicator example into the PVC.
+      # cp -n never overwrites user files; the mount is the strategies subPath.
+      - name: seed-bundled-strategies
+        image: marketcalls/openalgo:latest
+        imagePullPolicy: Always
+        command: ["sh", "-c", "cp -rn /app/strategies/. /seed/"]
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: [ALL]
+          readOnlyRootFilesystem: false
+        volumeMounts:
+        - name: data
+          mountPath: /seed
+          subPath: strategies
       containers:
       - name: openalgo
         image: marketcalls/openalgo:latest
-        imagePullPolicy: IfNotPresent
+        # Always pairs with the mutable :latest tag (a node would otherwise run
+        # the first latest it pulled forever). Pin a tag per release in the
+        # overlay and switch this to IfNotPresent then.
+        imagePullPolicy: Always
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
