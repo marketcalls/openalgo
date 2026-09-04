@@ -25,6 +25,7 @@ interface Props {
   onRedo(): void
   onRemove(all: boolean): void
   onMagnet(on: boolean): void
+  onStay(on: boolean): void
   /**
    * Where to portal the flyouts. Menus default to `document.body`, which is
    * invisible while the pane is in the Fullscreen API's top layer — so in full
@@ -57,6 +58,7 @@ export function DrawingRail({
   onRedo,
   onRemove,
   onMagnet,
+  onStay,
   portalHost,
   onShortcut,
 }: Props) {
@@ -230,6 +232,23 @@ export function DrawingRail({
           <span className="h-[18px] w-[18px]">{drawToolIcon('magnet')}</span>
         </button>
         <RailTip text="Magnet: snap to O/H/L/C" />
+      </div>
+      {/*
+        The tier disarms a tool once it has drawn, so three trend lines are
+        three trips to the rail. This latches the armed tool instead, and the
+        cursor button is still one press away.
+      */}
+      <div className="group relative">
+        <button
+          type="button"
+          aria-label="Keep tool armed"
+          aria-pressed={stats.stay}
+          onClick={() => onStay(!stats.stay)}
+          className={cn(btn, stats.stay && on)}
+        >
+          <span className="h-[18px] w-[18px]">{drawToolIcon('lock')}</span>
+        </button>
+        <RailTip text="Keep the tool armed after drawing" />
       </div>
       <div className="group relative">
         <button
