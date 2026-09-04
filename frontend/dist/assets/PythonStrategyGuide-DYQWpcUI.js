@@ -1,4 +1,4 @@
-import{f as e,n as t}from"./react-vendor-LH7mBByU.js";import{t as n}from"./button-BPjCAppj.js";import{$ as r,n as i}from"./index-C1Jv600N.js";import{n as a,r as o,t as s}from"./alert-CjL2RtLV.js";import{a as c,i as l,n as u,r as d,t as f}from"./card-zhjvVM2i.js";import{i as p,n as m,r as h,t as g}from"./accordion-DWgo4vV1.js";import{t as _}from"./useStrategyExchanges-Ca4mC5Ll.js";var v=e(),y=`"""
+import{f as e,n as t}from"./react-vendor-LH7mBByU.js";import{t as n}from"./button-BPjCAppj.js";import{$ as r,n as i}from"./index-Dp3UbwOw.js";import{n as a,r as o,t as s}from"./alert-CjL2RtLV.js";import{a as c,i as l,n as u,r as d,t as f}from"./card-zhjvVM2i.js";import{i as p,n as m,r as h,t as g}from"./accordion-DWgo4vV1.js";import{t as _}from"./useStrategyExchanges-Ca4mC5Ll.js";var v=e(),y=`"""
 ===============================================================================
                 EMA CROSSOVER WITH FIXED DATETIME HANDLING
                             OpenAlgo Trading Bot
