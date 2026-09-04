@@ -1151,6 +1151,8 @@ export class TradingTerminal {
     type: OrderType,
     opts?: {
       product?: 'MIS' | 'NRML' | 'CNC'
+      /** Limit price; used when type === 'LIMIT'. */
+      price?: number
       stoploss?: number
       target?: number
       trailingStoploss?: number
@@ -1165,6 +1167,7 @@ export class TradingTerminal {
     type: OrderType,
     opts?: {
       product?: 'MIS' | 'NRML' | 'CNC'
+      price?: number
       stoploss?: number
       target?: number
       trailingStoploss?: number
@@ -1185,7 +1188,14 @@ export class TradingTerminal {
       this.toast(`qty ${qty} exceeds the freeze limit ${this.sym.freezeQty} — reduce lots`, 'err')
       return
     }
-    const px = type === 'MARKET' ? 0 : this.snap(this.ctxPrice)
+    // A calculator LIMIT order carries its own price; everything else snaps
+    // to the chart context price (market orders carry no price at all).
+    const px =
+      type === 'LIMIT' && opts?.price != null
+        ? Number(opts.price)
+        : type === 'MARKET'
+          ? 0
+          : this.snap(this.ctxPrice)
     const m = this.marketPrice()
     if (m != null && (type === 'SL' || type === 'SL-M') && (side === 'BUY' ? px <= m : px >= m)) {
       this.toast(

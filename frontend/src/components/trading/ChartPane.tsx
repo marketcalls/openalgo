@@ -545,7 +545,8 @@ onOrderRequest: (params) => {
     (outcome: PositionCalculatorOutcome) => {
       setCalcOpen(false)
       if (!calcParams || !terminalRef.current) return
-      const { quantity, action, product, stoploss, target, trailingStoploss, gtt } = outcome
+      const { quantity, action, product, orderType, price, stoploss, target, trailingStoploss, gtt } =
+      outcome
       // Update terminal quantity + product so the inline panel matches
       if (calcParams.sym.lots) {
         terminalRef.current.setQty(quantity / calcParams.sym.lotsize)
@@ -553,8 +554,9 @@ onOrderRequest: (params) => {
         terminalRef.current.setQty(quantity)
       }
       terminalRef.current.setProduct(product)
-      terminalRef.current.confirmOrder(action, calcParams.type, {
+      terminalRef.current.confirmOrder(action, orderType, {
         product,
+        ...(price != null ? { price } : {}),
         stoploss,
         target,
         trailingStoploss,

@@ -201,12 +201,15 @@ interface PositionCalculatorProps {
 
 ```typescript
 type TradeType = 'INTRADAY' | 'OVERNIGHT' | 'GTT'
+type OrderKind = 'MARKET' | 'LIMIT'
 
 interface PositionCalculatorOutcome {
   quantity: number
   action: 'BUY' | 'SELL'
   product: 'MIS' | 'NRML' | 'CNC'        // derived from tradeType + exchange
   tradeType: TradeType
+  orderType: OrderKind                    // MARKET executes now; LIMIT schedules
+  price?: number                          // limit price when orderType === 'LIMIT'
   gtt?: boolean                           // true when GTT selected
   stoploss?: number                       // trigger price for the stop
   target?: number                         // target price
@@ -223,8 +226,13 @@ interface PositionCalculatorOutcome {
 | Capital | `tradingApi.getFunds(apiKey)` → `availablecash` |
 | Leverage | `intradayLeverageApi.getMultiplier(symbol, exchange)` → `multiplier` |
 
-> The leverage ledger only carries intraday multipliers. In Overnight / GTT
-> mode the multiplier falls back to `1x` and capital is used as-is.
+> **Leverage applies only to INTRADAY.**
+> The intraday multiplier is used for sizing only when the trade type is
+> `INTRADAY`. For `OVERNIGHT` and `GTT` the effective multiplier is `1x` (cash
+> only): with Rs 100 capital and a Rs 100 share, max quantity is exactly 1.
+> The UI labels the row "Leverage (not applicable)" in those modes and the Max
+> Quantity card shows an explanatory note when the API returned a real
+> multiplier that is being ignored.
 
 **Trade type -> product mapping** (`defaultProductFor(exchange, tradeType)`):
 
@@ -234,43 +242,73 @@ interface PositionCalculatorOutcome {
 | OVERNIGHT | NRML                                           | CNC          |
 | GTT       | NRML (+ `gtt: true`)                          | CNC (+ `gtt: true`) |
 
+**Order type:**
+
+| OrderKind | Meaning | Sizing basis |
+|-----------|---------|--------------|
+| MARKET    | Execute immediately at the current market price. | Live LTP |
+| LIMIT     | Scheduled: fills only when the market trades at the chosen price. | The limit price (cash reserved at limit) |
+
+For a LIMIT buy the price must be below LTP (a buy limit above LTP fills
+immediately — it is not a scheduled order); a LIMIT sell must be above LTP. An
+invalid limit blocks confirm and explains why.
+
 **Computed quantity:**
 
 ```typescript
-const maxQty = useMemo(() => {
-  if (!capital || !multiplier || !currentPrice || currentPrice <= 0) return 0
-  return Math.floor((capital * multiplier) / currentPrice)
-}, [capital, multiplier, currentPrice])
+const effectiveLeverage = tradeType === 'INTRADAY' ? leverage : 1
+const priceBasis =
+  orderType === 'LIMIT' && parseFloat(limitPrice) > 0
+    ? parseFloat(limitPrice)
+    : currentPrice
+const maxQty = Math.floor((capital * effectiveLeverage) / priceBasis)
 ```
 
-**UI Layout:**
+The user's quantity is clamped to `maxQty` whenever the trade type, order type
+or limit price changes, so it can never oversize against the new basis.
+
+**UI Layout (3D-style, dark glass):**
 
 ```
-+--------------------------------------------------------------+
-|  Position Calculator                                 [Buy][Sell] [X] |
-|--------------------------------------------------------------|
-|  SBIN (NSE)                                                  |
-|  LTP: 842.50  (+1.23%)                  [Live]               |
-|  [ Intraday ]  [ Overnight ]  [ GTT ]                        |
-|--------------------------------------------------------------|
-|  Available Capital:  1,00,000  (editable)                     |
-|--------------------------------------------------------------|
-|  Max Quantity:  593                                          |
-|  [Quantity: [  593  ]]  [Max]                                |
-|--------------------------------------------------------------|
-|  Risk Management                                              |
-|  Stop Loss:     [ ______ ]  Target Price: [ ______ ]          |
-|  Trailing Stop: [ ______ ]  pts                            |
-|--------------------------------------------------------------|
-|  [Cancel]              [Place BUY Order]                     |
-+--------------------------------------------------------------+
++------------------------------------------------------------------+
+|  Position Calculator                                    [BUY][SELL] [X] |
+|------------------------------------------------------------------|
+|  Order Type                                            (3D tiles) |
+|  [ Market ]  [ Limit ]                              current/your px |
+|  Executes immediately ... / Scheduled order fills at your price   |
+|------------------------------------------------------------------|
+|  Trade Type                                           (3D tiles) |
+|  [ Intraday ]  [ Overnight ]  [ GTT ]                            |
+|------------------------------------------------------------------|
+|  SBIN (NSE)  [CNC]                                               |
+|  LTP: 842.50  (+1.23%)                 [Live]                    |
+|  (Limit only) Limit Price: [ ______ ]  LTP: 842.50                |
+|------------------------------------------------------------------|
+|  Intraday Leverage:  5x        (Overnight/GTT -> "1x" + note)    |
+|  Available Capital:  1,00,000  (editable)                        |
+|  Max Quantity:  593                    (glow card, formula hidden)|
+|  [Quantity: [  593  ]]  [Max]                                    |
+|------------------------------------------------------------------|
+|  Risk Management                                                  |
+|  Stop Loss:     [ ______ ]  Target Price: [ ______ ]              |
+|  Trailing Stop: [ ______ ]  pts        [GTT switch]              |
+|------------------------------------------------------------------|
+|  [Cancel]              [BUY 593 · CNC · Market / · Limit]        |
++------------------------------------------------------------------+
 ```
 
 Key points:
 
+- **3D UI treatment**: raised/inset (pressed) tiles for Buy/Sell, order type
+  and trade type; gradient depth cards with glows for Order Type, Max
+  Quantity and Risk Management; gradient ctas with drop shadows. Pure CSS
+  (Tailwind), no new dependencies; still a shadcn Dialog.
 - **Buy/Sell toggle** sits top-right; the confirm button label follows it.
+- The **order type** selector breaks confirmation into **Market** (now) vs
+  **Limit** (scheduled at a price).
 - A **Trade Type segmented control** (`Intraday` / `Overnight` / `GTT`)
-  drives the derived product and the GTT flag.
+  drives the derived product, the GTT flag and, via the leverage gate, the
+  sizing multiplier.
 - The **Max Quantity formula is hidden** — only the computed number is shown.
 - **Risk Management** block adds optional Stop Loss (trigger price), Target
   Price, and Trailing Stop Loss (points). These are sent attached to the same
@@ -308,9 +346,15 @@ placeFromMenu(side, type)
   → else: call _executeOrder(side, type)
 
 confirmOrder(side, type, opts?)   // called by PositionCalculator
-  opts: { product?, stoploss?, target?, trailingStoploss?, gtt? }
+  opts: { product?, price?, stoploss?, target?, trailingStoploss?, gtt? }
   → _executeOrder(side, type, opts)
 ```
+
+**Limit orders carry their own price.** `_executeOrder` prices a LIMIT order
+from `opts.price` (the calculator's Limit Price field); every other type keeps
+the chart context price (`snap(ctxPrice)`) and market orders send no price.
+The price is forwarded as `price` on the REST risk path and the feed path, so
+a LIMIT order fills only when the market trades at the chosen price.
 
 **Risk params change `_executeOrder`'s transport.** `OpenAlgoTradeFeed.place`
 carries a fixed `PlaceRequest` shape (symbol/exchange/side/type/qty/price/
@@ -337,7 +381,7 @@ unchanged, preserving on-chart order lines and position markers.
 
 - Add `calcOpen` / `calcParams` state
 - Add `onOrderRequest` callback to `TerminalCallbacks` — sets calcParams, opens calculator
-- `handleCalcConfirm(outcome)` — updates terminal qty (lot-aware), sets terminal product from `outcome.product`, calls `terminal.confirmOrder(action, type, { product, stoploss, target, trailingStoploss, gtt })`
+- `handleCalcConfirm(outcome)` — updates terminal qty (lot-aware), sets terminal product from `outcome.product`, calls `terminal.confirmOrder(action, outcome.orderType, { product, price, stoploss, target, trailingStoploss, gtt })`
 - Renders `<PositionCalculator>` when calcParams is set
 
 #### OptionChain Page
@@ -423,11 +467,27 @@ app.register_blueprint(intraday_leverage_bp)
 
 | File | Change |
 |------|--------|
-| `frontend/src/lib/trading/terminal.ts` | Add onOrderRequest callback, refactor placeFromMenu, risk-aware `_executeOrder` REST path |
-| `frontend/src/components/trading/ChartPane.tsx` | Wire calculator to chart buy/sell, handle `PositionCalculatorOutcome` |
+| `frontend/src/lib/trading/terminal.ts` | Add onOrderRequest callback, refactor placeFromMenu, risk-aware `_executeOrder` REST path, LIMIT price from `opts.price` |
+| `frontend/src/components/trading/ChartPane.tsx` | Wire calculator to chart buy/sell, handle `PositionCalculatorOutcome`, pass outcome orderType+price |
 | `frontend/src/pages/OptionChain.tsx` | Wire calculator to option chain buy/sell, outcome-based confirm |
 | `frontend/src/pages/Holdings.tsx` | Wire calculator to holdings exit/add, outcome-based confirm |
 | `app.py` | Register blueprint + init_db |
+| `context.md` | AI-agent handover notes (per-task plan + history) |
+
+### Latest change (this task): leverage gate + Market/Limit + 3D UI
+
+- **Leverage gate**: the intraday multiplier sizes orders only for `INTRADAY`;
+  `OVERNIGHT` and `GTT` size at cash value (`1x`). The UI labels the row
+  "Leverage (not applicable)" and the Max Quantity card explains the ignored
+  multiplier. User quantity is clamped whenever trade type / order type /
+  limit price changes.
+- **Order type selector**: `MARKET` executes now at LTP; `LIMIT` schedules at
+  a user-chosen price (buy below LTP, sell above LTP), used as the sizing
+  basis and sent as the order `price` (pricetype `LIMIT`).
+- **3D UI redesign**: dark-glass depth styling — raised/inset 3D tiles for
+  Buy/Sell, order type and trade type; gradient glow cards for Order Type,
+  Max Quantity and Risk Management; gradient confirm CTA. Pure Tailwind/CSS,
+  no new dependencies, existing prop/outcome contracts preserved.
 | `restx_api/schemas.py` | `OrderSchema` + stoploss/target/trailing_stoploss/gtt fields |
 | `services/place_order_service.py` | Strip risk keys before live broker call; pass through to sandbox |
 | `upgrade/migrate_all.py` | Add migration to MIGRATIONS list |

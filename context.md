@@ -10,6 +10,75 @@ instead of starting from scratch. It is updated at the end of every task.
 - Local branch: `main`. Current HEAD is `255f9099d` (merge of upstream's 43
   commits onto the local feature commit `ad1e96d21`).
 
+## TASK 5 - calculator leverage gate + Market/Limit + 3D UI - DONE
+
+All plan items from the previous section are implemented, verified and
+committed. Implementation summary (what changed vs the plan):
+
+- `PositionCalculator.tsx`: `effectiveLeverage = tradeType === 'INTRADAY' ?
+  leverage : 1`. Sizing basis is the LIMIT price when a Limit order is chosen
+  with a valid price, else live LTP. `maxQuantity = floor(capital *
+  effectiveLeverage / priceBasis)`. Outcome now carries `orderType` and
+  `price?`. New 3D dark-glass styling (raised/inset `Tile` component, gradient
+  glow cards, gradient CTAs) - pure Tailwind CSS, no new deps. Limit price
+  must be beyond the market (buy below LTP, sell above LTP) or confirm is
+  blocked with an explanation; the "scheduled order" semantics the user asked
+  for.
+- `terminal.ts`: `confirmOrder`/`_executeOrder` opts gain `price?: number`;
+  `_executeOrder` prices LIMIT orders from `opts.price` instead of snapping
+  to the chart context price.
+- `ChartPane.tsx`: `handleCalcConfirm` passes `outcome.orderType` (was
+  `calcParams.type`) and `outcome.price` into `confirmOrder`.
+- Verified: `tsc -b` clean; `vitest terminal.test.ts` 53/53; biome lint
+  clean; `npm run build` clean; rebuilt `PositionCalculator-*.js` chunk
+  contains Market/Limit/"not applicable"/"cash value".
+- Docs updated: `Documentation.md` (outcome/order-type/quantity/layout
+  sections, terminal LIMIT-price note, change summary) and this file.
+
+Existing plan section below is kept for reference history.
+
+Goals (user requirements, verbatim intent):
+
+1. Leverage must apply ONLY to INTRADAY. For OVERNIGHT and GTT the multiplier
+   is not applicable: capital/price only (SBI at Rs 100, capital Rs 100 ->
+   exactly 1 share). Current code fetches the intraday multiplier and uses it
+   for every trade type - GATE IT.
+2. New order-type selector in the calculator: MARKET vs LIMIT.
+   - MARKET = execute now at current market price (leverage applies for
+     Intraday, not for Overnight/GTT).
+   - LIMIT = schedule at a chosen price; executes when the market reaches it
+     (e.g. buy SBI only when it comes down to 80). Same leverage rules.
+3. Rebuild the calculator UI as a "3D UI" (depth/raised-inset controls,
+   glass gradients, glow). Keep every existing prop/outcome contract and the
+   wiring below intact unless the plan says otherwise.
+
+Design decisions:
+
+- Effective multiplier = tradeType === 'INTRADAY' ? apiMultiplier : 1.
+- Order price basis for sizing: LIMIT + valid price use the limit price;
+  MARKET uses live LTP (currentPrice).
+- maxQuantity = floor(capital * effectiveMultiplier / priceBasis). Clamp/
+  reset user quantity when tradeType or orderType changes so it never exceeds
+  the new max.
+- Outcome gains `orderType: 'MARKET' | 'LIMIT'` and `price?: number` (limit
+  price; required when LIMIT). Product/stoploss/target/trailingStoploss/gtt
+  unchanged.
+- Terminal: `confirmOrder`/`_executeOrder` opts gain `price?: number`;
+  `_executeOrder` uses it for LIMIT px instead of snapping to ctx price.
+  Both the REST risk path and the feed path already send px as `price`, so a
+  LIMIT order with a user price flows through unchanged.
+- ChartPane `handleCalcConfirm` passes `outcome.orderType` as the order type
+  and `outcome.price` through opts (currently it forwards calcParams.type,
+  which is always MARKET - change this).
+
+Files to change: `frontend/src/components/trading/PositionCalculator.tsx`,
+`frontend/src/lib/trading/terminal.ts`, `frontend/src/components/trading/
+ChartPane.tsx`, `Documentation.md`, `context.md`.
+
+Verification: `npx tsc -b`, `npx vitest run src/lib/trading/terminal.test.ts`,
+`npm run build` (re-verify PositionCalculator chunk), then rebuild/commit
+frontend/dist and update Documentation.md + this file.
+
 ## What this fork adds on top of upstream (feature: Intraday Position Calculator)
 
 The charting terminal's Buy/Sell (One-Click off) opens a Position Calculator
@@ -83,6 +152,10 @@ One-Click armed/disarmed ticket system (`onOrderTicket` + `PlaceOrderDialog`
 
 ## Not yet done / open items
 
+- User's own idea backlog lives in `task.txt` (repo root) - brokerage
+  calculation in calculator/orderbook (uses `D:\Personal\broker_charges_comparison.csv`),
+  crypto calculator, per-stock news section, vertical candle-drag on the
+  chart, scanners. Ask the user which to pick up next rather than guessing.
 - Live-broker runtime verification of the calculator (both analyze/sandbox
   and live mode) - user tests.
 - Optional: a future broker adapter could opt back in to consume
@@ -100,5 +173,5 @@ One-Click armed/disarmed ticket system (`onOrderTicket` + `PlaceOrderDialog`
    kotak fixes) - DONE.
 4. Rebuild dist, create this file, push to Narasimha722/openalgo_opensource -
    DONE (this task).
-
-Next task will be described in the next session.
+5. Calculator leverage gating + Market/Limit order type + 3D UI redesign -
+   DONE (this task; summary at top of file).
