@@ -1,0 +1,29 @@
+# Transformer configuration for the Gateway API edge variant.
+#
+# kustomize's built-in nameReference table has NO entries for Gateway API
+# resources: without these rules, a namePrefix (zerodha-, groww-, ...) renames
+# the Gateway/HTTPRoute/Services but leaves every reference pointing at the
+# base names — a build that succeeds and a route that 404s. The verification
+# step in deploy/k8s/README.md greps the built output for exactly this.
+nameReference:
+# HTTPRoute.spec.rules[].backendRefs[].name -> Service
+- kind: Service
+  version: v1
+  fieldSpecs:
+  - path: spec/rules/backendRefs/name
+    kind: HTTPRoute
+    group: gateway.networking.k8s.io
+# HTTPRoute.spec.parentRefs[].name -> Gateway
+- kind: Gateway
+  group: gateway.networking.k8s.io
+  fieldSpecs:
+  - path: spec/parentRefs/name
+    kind: HTTPRoute
+    group: gateway.networking.k8s.io
+# Gateway.spec.listeners[].tls.certificateRefs[].name -> Secret
+- kind: Secret
+  version: v1
+  fieldSpecs:
+  - path: spec/listeners/tls/certificateRefs/name
+    kind: Gateway
+    group: gateway.networking.k8s.io

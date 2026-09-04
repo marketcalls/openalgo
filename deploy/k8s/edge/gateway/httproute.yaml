@@ -1,0 +1,36 @@
+# Per-instance HTTPRoute. hostname is patched by the consuming overlay
+# (patches/edge-host-gateway.yaml). Service backend names and the Gateway
+# parentRef are rewritten by the nameReference rules in kustomizeconfig.yaml —
+# verify in the built output that they carry the overlay prefix.
+#
+# Standard channel only. WebSocket upgrade needs nothing extra (supported in
+# the Standard channel since Gateway API v1.2): both /ws and /socket.io/
+# upgrade over these rules. TCPRoute/TLSRoute/UDPRoute are Experimental-channel
+# resources and deliberately not used.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: openalgo
+spec:
+  parentRefs:
+  - name: openalgo
+    sectionName: https
+  hostnames:
+  - openalgo.example.com
+  rules:
+  # Market-data WebSocket; path passed through unmodified (the proxy ignores it).
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /ws
+    backendRefs:
+    - name: openalgo-ws
+      port: 8765
+  # Everything else: UI, REST API, Socket.IO, health endpoints.
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    backendRefs:
+    - name: openalgo-http
+      port: 5000

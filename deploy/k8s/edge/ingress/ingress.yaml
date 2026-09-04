@@ -1,0 +1,51 @@
+# Per-instance Ingress. The host, TLS secret and class are patched by the
+# consuming overlay (patches/edge-host-ingress.yaml). Service backend names are
+# rewritten automatically by the overlay's namePrefix — no overlay work needed
+# for the backends.
+#
+# Host/subdomain routing only. OpenAlgo serves absolute paths (/, /api/v1/,
+# /socket.io/, /react) and ships a strict CSP with a derived wss://host —
+# path-prefix rewriting breaks asset URLs, Socket.IO and CSP. Do NOT add a
+# rewrite-target annotation.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openalgo
+  annotations:
+    # Uncomment when cert-manager manages certificates:
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Uncomment to pin the k3s Traefik entrypoint (websecure is already the
+    # default; keep for clarity or to target a custom entrypoint):
+    # traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  # Patch for nginx or other controllers (e.g. ingressClassName: nginx).
+  ingressClassName: traefik
+  tls:
+  - hosts:
+    - openalgo.example.com
+    secretName: openalgo-tls
+  rules:
+  - host: openalgo.example.com
+    http:
+      paths:
+      # Market-data WebSocket. The proxy ignores the request path, so the
+      # full path is passed through without stripping. Prefix /ws also matches
+      # /wsfoo — harmless here.
+      - path: /ws
+        pathType: Prefix
+        backend:
+          service:
+            name: openalgo-ws
+            port:
+              number: 8765
+      # Everything else: UI, REST API, Socket.IO, health endpoints. Traefik and
+      # nginx both upgrade WebSocket connections on this rule (/socket.io/).
+      # Long-lived WS clients may need an edge idle timeout >= 86400s or a
+      # client heartbeat.
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: openalgo-http
+            port:
+              number: 5000
