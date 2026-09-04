@@ -59,6 +59,9 @@ This guide takes you from zero to automated trading, covering everything from ba
 ### Analytics Tools (Module 31)
 - [31 - Tools (Options & Strategy Analytics Suite)](./31-tools/README.md)
 
+### Charting (Module 32)
+- [32 - Charting Terminal](./32-charting-terminal/README.md) - trade from the chart, the order dock, drawing tools and every keyboard shortcut
+
 ## Quick Navigation
 
 | I want to... | Go to |

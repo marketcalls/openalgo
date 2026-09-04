@@ -1267,8 +1267,14 @@ export class TradingTerminal {
       // OHLC readout or its trade panel. Unbind it and claim the same chord for
       // `screenshot()` below, so the keyboard and the toolbar button produce the
       // same image instead of two different ones.
+      // Alt+V and Alt+H were bound twice: the engine toggles a grid, the draw
+      // tier arms the vertical and horizontal line. Both fired, so one press
+      // moved the grid and armed a tool. The drawing tools keep the chords,
+      // being the ones a trader reaches for mid-analysis and the ones the rail
+      // advertises; the grid stays on the toolbar button and the right-click
+      // menu, where it was already reachable.
       shortcuts: {
-        disabledCommands: ['screenshot'],
+        disabledCommands: ['screenshot', 'toggleGridVert', 'toggleGridHorz'],
         customShortcuts: [
           {
             command: 'app:screenshot',
