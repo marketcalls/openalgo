@@ -1,0 +1,18 @@
+# Market-data WebSocket service (websocket_proxy.server).
+#
+# The proxy serves plain WebSocket at the root path of port 8765 and ignores the
+# request path, so the edge's /ws route passes the path through unmodified.
+# Clients authenticate after connecting (API key message within the grace
+# window), so no auth plumbing is needed at the edge.
+apiVersion: v1
+kind: Service
+metadata:
+  name: openalgo-ws
+spec:
+  type: ClusterIP
+  ports:
+  - name: ws
+    port: 8765
+    targetPort: ws
+  selector:
+    app.kubernetes.io/name: openalgo

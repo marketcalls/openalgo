@@ -1,0 +1,30 @@
+# OpenAlgo Kubernetes base (Kustomize).
+#
+# This directory is a library consumed by overlays under ../../overlays — it is
+# not directly deployable: it declares no Secret (each overlay generates its own
+# per-instance secret via secretGenerator), so a bare build emits a StatefulSet
+# referencing a Secret that does not exist.
+#
+# Requires kustomize >= 5.3 (or kubectl >= 1.27 bundling it) for the `labels`
+# field syntax used below.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Default namespace for all resources. Overlays MUST restate this — the base's
+# namespace does not reach sibling resources contributed by an edge variant
+# (../../edge/ingress or ../../edge/gateway).
+namespace: openalgo
+
+resources:
+- statefulset.yaml
+- service-http.yaml
+- service-ws.yaml
+- configmap.yaml
+
+labels:
+- pairs:
+    app.kubernetes.io/name: openalgo
+    app.kubernetes.io/component: trading-api
+    app.kubernetes.io/part-of: openalgo
+  includeSelectors: true
+  includeTemplates: true
