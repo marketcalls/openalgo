@@ -430,16 +430,18 @@ Platforms auto-detect Dockerfile and build automatically.
 - Configure volumes in render.yaml
 
 ### Kubernetes
+Deployments are packaged as Kustomize base manifests + per-broker overlays in
+[`deploy/k8s/`](../../deploy/k8s/) — see the
+[operator guide](../../deploy/k8s/README.md) for prerequisites, the
+Ingress/Gateway API edge variants, secrets handling and the SEBI static-IP
+egress notes.
+
 ```bash
 # Build
 docker build -t openalgo:latest .
 
-# Push to registry
-docker tag openalgo:latest your-registry/openalgo:latest
-docker push your-registry/openalgo:latest
-
-# Deploy with kubectl
-kubectl apply -f k8s/deployment.yaml
+# Deploy an instance (fill in overlays/<broker>/secret.env first)
+kubectl apply -k deploy/k8s/overlays/zerodha
 ```
 
 ## Security Considerations
