@@ -123,8 +123,14 @@ def get_contract_size(underlying: str | None) -> int | None:
     MCX dump. Unknown is returned rather than a default of 1 on purpose: 1 is a
     real lot size here (GOLD is 1 KG, SILVERMIC is 1 KG), so a caller cannot
     otherwise tell "one unit per contract" from "we have no idea".
+
+    Anything that is not a string is unknown. The type check is not decoration:
+    Kite ships rows with a blank ``name`` (8,000-odd of them on NSE, BSE and
+    NCO), pandas reads those as float NaN, and NaN is *truthy* -- a falsiness
+    check passes it straight through to ``.strip()`` and takes the whole master
+    contract download down with an AttributeError.
     """
-    if not underlying:
+    if not isinstance(underlying, str):
         return None
     return MCX_CONTRACT_SIZES.get(underlying.strip().upper())
 
@@ -142,7 +148,9 @@ def units_per_contract(symbol: str | None, exchange: str | None) -> int:
     to fail: quantity reaches Kite unchanged rather than scaled by a number we
     are not sure of.
     """
-    if not symbol or (exchange or "").strip().upper() != "MCX":
+    if not isinstance(symbol, str) or not symbol:
+        return 1
+    if not isinstance(exchange, str) or exchange.strip().upper() != "MCX":
         return 1
     text = symbol.strip().upper()
     for root, size in _ROOTS_LONGEST_FIRST:
@@ -151,8 +159,16 @@ def units_per_contract(symbol: str | None, exchange: str | None) -> int:
     return 1
 
 
-def to_kite_quantity(quantity, symbol: str | None, exchange: str | None) -> int:
+def to_kite_quantity(
+    quantity, symbol: str | None, exchange: str | None, field: str = "Quantity"
+) -> int:
     """OpenAlgo units -> the contract count Kite expects. Outbound only.
+
+    Args:
+        field: what to call the offending value if it will not convert. An
+            order carries more than one quantity, and reporting a bad
+            ``disclosed_quantity`` as "Quantity" sends the user looking at the
+            one field that was fine.
 
     Raises:
         McxQuantityError: the quantity is not a whole number of contracts.
@@ -166,7 +182,7 @@ def to_kite_quantity(quantity, symbol: str | None, exchange: str | None) -> int:
     contracts, remainder = divmod(abs(qty), size)
     if remainder:
         raise McxQuantityError(
-            f"Quantity must be in multiples of lot size {size} for {symbol}, got {abs(qty)}"
+            f"{field} must be in multiples of lot size {size} for {symbol}, got {abs(qty)}"
         )
     return -contracts if qty < 0 else contracts
 

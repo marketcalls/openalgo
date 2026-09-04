@@ -5,15 +5,17 @@ from broker.zerodha.mapping.mcx_contract_size import to_kite_quantity
 from database.token_db import get_br_symbol
 
 
-def _kite_qty(value, symbol, exchange, default="0"):
+def _kite_qty(value, symbol, exchange, default="0", field="Quantity"):
     """Convert an outbound quantity field from OpenAlgo units to Kite contracts.
 
     A no-op off MCX. Blank and missing values fall back to the default rather
-    than raising, since disclosed_quantity is routinely absent.
+    than raising, since disclosed_quantity is routinely absent. ``field`` names
+    the value in the error, so a disclosed_quantity that will not divide is not
+    reported as a problem with the order quantity.
     """
     if value in (None, ""):
         value = default
-    return to_kite_quantity(value, symbol, exchange)
+    return to_kite_quantity(value, symbol, exchange, field=field)
 
 
 def transform_data(data):
@@ -36,7 +38,10 @@ def transform_data(data):
         "price": data.get("price", "0"),
         "trigger_price": data.get("trigger_price", "0"),
         "disclosed_quantity": _kite_qty(
-            data.get("disclosed_quantity"), data["symbol"], data["exchange"]
+            data.get("disclosed_quantity"),
+            data["symbol"],
+            data["exchange"],
+            field="Disclosed quantity",
         ),
         "validity": "DAY",
         "market_protection": "-1",
@@ -56,7 +61,9 @@ def transform_modify_order_data(data):
         "quantity": _kite_qty(data["quantity"], symbol, exchange),
         "price": data["price"],
         "trigger_price": data.get("trigger_price", "0"),
-        "disclosed_quantity": _kite_qty(data.get("disclosed_quantity"), symbol, exchange),
+        "disclosed_quantity": _kite_qty(
+            data.get("disclosed_quantity"), symbol, exchange, field="Disclosed quantity"
+        ),
         "validity": "DAY",
     }
 

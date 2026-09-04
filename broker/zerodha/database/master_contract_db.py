@@ -230,7 +230,10 @@ def process_zerodha_csv(path):
     # See mapping/mcx_contract_size.py for both halves.
     is_mcx = df['exchange'] == 'MCX'
     if is_mcx.any():
-        sizes = df.loc[is_mcx, 'name'].map(get_contract_size)
+        # na_action skips null names outright. get_contract_size handles
+        # them too, but a blank name is 'unknown underlying', not an input
+        # worth a lookup -- Kite ships thousands of them on other segments.
+        sizes = df.loc[is_mcx, 'name'].map(get_contract_size, na_action='ignore')
         # An unmapped underlying keeps Kite's 1, which is what shipped before
         # this table existed: orders still size correctly in contracts, they
         # just do not read like the other brokers. A wrong lot is far worse

@@ -19,6 +19,7 @@ from broker.zerodha.mapping.mcx_contract_size import (
     MCX_CONTRACT_SIZES,
     McxQuantityError,
     from_kite_quantity,
+    get_contract_size,
     to_kite_quantity,
     units_per_contract,
 )
@@ -87,6 +88,18 @@ class TestUnitsPerContract:
         assert units_per_contract(None, "MCX") == 1
         assert units_per_contract("", "MCX") == 1
         assert units_per_contract("CRUDEOIL26SEPFUT", None) == 1
+
+    def test_a_null_name_does_not_raise(self):
+        """NaN is truthy, so a falsiness check lets it reach .strip().
+
+        Kite ships blank names in the thousands on other segments; one on MCX
+        would abort the whole master contract download rather than leaving a
+        single row unmapped.
+        """
+        assert get_contract_size(float("nan")) is None
+        assert get_contract_size(None) is None
+        assert units_per_contract(float("nan"), "MCX") == 1
+        assert units_per_contract("CRUDEOIL26SEPFUT", float("nan")) == 1
 
 
 class TestOutboundToKite:
@@ -197,6 +210,37 @@ class TestOrderPayloadBoundary:
 
         assert transform_data(self._order())["disclosed_quantity"] == 0
 
+    def test_present_disclosed_quantity_is_converted_too(self):
+        from broker.zerodha.mapping.transform_data import transform_data
+
+        payload = transform_data(self._order(quantity="300", disclosed_quantity="100"))
+        assert payload["quantity"] == 3
+        assert payload["disclosed_quantity"] == 1
+
+    def test_a_bad_disclosed_quantity_names_itself_in_the_error(self):
+        """Not "Quantity": the order quantity here is a clean 3 contracts."""
+        from broker.zerodha.mapping.transform_data import transform_data
+
+        with pytest.raises(McxQuantityError) as exc:
+            transform_data(self._order(quantity="300", disclosed_quantity="50"))
+        assert "Disclosed quantity must be in multiples of lot size 100" in str(exc.value)
+
+    def test_modify_names_disclosed_quantity_too(self):
+        from broker.zerodha.mapping.transform_data import transform_modify_order_data
+
+        with pytest.raises(McxQuantityError) as exc:
+            transform_modify_order_data(
+                {
+                    "symbol": "CRUDEOIL17SEP268650CE",
+                    "exchange": "MCX",
+                    "pricetype": "LIMIT",
+                    "price": 340.0,
+                    "quantity": 200,
+                    "disclosed_quantity": 50,
+                }
+            )
+        assert "Disclosed quantity" in str(exc.value)
+
     def test_modify_converts_using_the_symbol_on_the_request(self):
         from broker.zerodha.mapping.transform_data import transform_modify_order_data
 
@@ -237,6 +281,9 @@ class TestResponseBoundary:
                         "quantity": -1,
                         "buy_quantity": 1,
                         "sell_quantity": 2,
+                        "overnight_quantity": 3,
+                        "day_buy_quantity": 1,
+                        "day_sell_quantity": 2,
                         "average_price": 323.10,
                         "last_price": 323.50,
                         "pnl": -2578.0,
@@ -254,9 +301,14 @@ class TestResponseBoundary:
             }
         }
         mapped = map_position_data(raw)
+        # Every field in _POSITION_QTY_FIELDS, so a member added to that tuple
+        # without a conversion, or one dropped from it, fails here.
         assert mapped[0]["quantity"] == -100
         assert mapped[0]["buy_quantity"] == 100
         assert mapped[0]["sell_quantity"] == 200
+        assert mapped[0]["overnight_quantity"] == 300
+        assert mapped[0]["day_buy_quantity"] == 100
+        assert mapped[0]["day_sell_quantity"] == 200
         # Kite reports P&L and per-unit prices in rupees already; scaling those
         # too would double-count the lot size.
         assert mapped[0]["pnl"] == -2578.0
@@ -275,9 +327,11 @@ class TestResponseBoundary:
                     "exchange": "MCX",
                     "transaction_type": "BUY",
                     "status": "COMPLETE",
-                    "quantity": 1,
+                    "quantity": 3,
                     "filled_quantity": 1,
-                    "pending_quantity": 0,
+                    "pending_quantity": 2,
+                    "disclosed_quantity": 1,
+                    "cancelled_quantity": 0,
                     "order_type": "MARKET",
                     "product": "NRML",
                     "order_id": "26090407046951",
@@ -286,11 +340,63 @@ class TestResponseBoundary:
                 }
             ]
         }
+        # Every field in _ORDER_QTY_FIELDS. filled + pending must still add up
+        # to quantity after conversion, which a per-field slip would break.
+        mapped = map_order_data(raw)
+        assert mapped[0]["quantity"] == 300
+        assert mapped[0]["filled_quantity"] == 100
+        assert mapped[0]["pending_quantity"] == 200
+        assert mapped[0]["filled_quantity"] + mapped[0]["pending_quantity"] == 300
+        assert mapped[0]["disclosed_quantity"] == 100
+        assert mapped[0]["cancelled_quantity"] == 0
+        assert transform_order_data(mapped)[0]["quantity"] == 300
+
+    def test_absent_quantity_fields_are_not_invented(self):
+        """The mapper converts in place; it must not add keys Kite did not send."""
+        from broker.zerodha.mapping.order_data import map_order_data
+
+        raw = {
+            "data": [
+                {
+                    "tradingsymbol": "CRUDEOIL26SEP8650CE",
+                    "exchange": "MCX",
+                    "transaction_type": "BUY",
+                    "status": "COMPLETE",
+                    "quantity": 1,
+                    "order_id": "1",
+                }
+            ]
+        }
         mapped = map_order_data(raw)
         assert mapped[0]["quantity"] == 100
-        assert mapped[0]["filled_quantity"] == 100
-        assert mapped[0]["pending_quantity"] == 0
-        assert transform_order_data(mapped)[0]["quantity"] == 100
+        assert "disclosed_quantity" not in mapped[0]
+        assert "cancelled_quantity" not in mapped[0]
+
+    def test_non_mcx_order_fields_are_all_untouched(self):
+        from broker.zerodha.mapping.order_data import map_order_data
+
+        raw = {
+            "data": [
+                {
+                    "tradingsymbol": "NIFTY26SEP24800CE",
+                    "exchange": "NFO",
+                    "transaction_type": "BUY",
+                    "status": "OPEN",
+                    "quantity": 150,
+                    "filled_quantity": 75,
+                    "pending_quantity": 75,
+                    "disclosed_quantity": 75,
+                    "cancelled_quantity": 0,
+                    "order_id": "1",
+                }
+            ]
+        }
+        mapped = map_order_data(raw)
+        assert mapped[0]["quantity"] == 150
+        assert mapped[0]["filled_quantity"] == 75
+        assert mapped[0]["pending_quantity"] == 75
+        assert mapped[0]["disclosed_quantity"] == 75
+        assert mapped[0]["cancelled_quantity"] == 0
 
     def test_tradebook_value_uses_converted_quantity(self):
         from broker.zerodha.mapping.order_data import map_trade_data, transform_tradebook_data
