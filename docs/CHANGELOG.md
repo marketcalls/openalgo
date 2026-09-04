@@ -30,7 +30,13 @@ fix, live in [docs/releases](releases/).
 - **Alt+V and Alt+H arm the vertical and horizontal line tools only.** Both were
   bound twice, so one press moved a grid line and armed a tool. The grid stays on
   the toolbar button and the right-click menu.
-- **Upgraded to openalgo-charts 2.0.1** from 1.9.2. Drawings saved by the old
+- **A double-click on the chart no longer resets the view.** Reset fits every
+  loaded bar, which lands on the oldest one and woke the history loader, so the
+  gesture quietly fetched another page. It now maximizes the pane under the
+  pointer, and a second press puts the stack back. Reset stays on the toolbar
+  button, the right-click menu and Home. Double-clicking a text drawing still
+  opens its editor.
+- **Upgraded to openalgo-charts 2.0.2** from 1.9.2. Drawings saved by the old
   version are upgraded on load, with their text, styling and Fibonacci ratios
   intact.
 - **CRYPTO is treated as a derivative segment**, so a Delta Exchange contract is

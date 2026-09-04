@@ -1273,6 +1273,12 @@ export class TradingTerminal {
       // being the ones a trader reaches for mid-analysis and the ones the rail
       // advertises; the grid stays on the toolbar button and the right-click
       // menu, where it was already reachable.
+      // A double-click used to reset the view, which fits every loaded bar and
+      // so lands on the oldest one -- which is exactly where the history loader
+      // wakes, so the gesture quietly fetched another page. It now maximizes the
+      // pane under the pointer instead, and a second press puts the stack back.
+      // Reset stays on the toolbar button, the right-click menu and Home.
+      doubleClick: 'maximize',
       shortcuts: {
         disabledCommands: ['screenshot', 'toggleGridVert', 'toggleGridHorz'],
         customShortcuts: [
@@ -1704,8 +1710,10 @@ export class TradingTerminal {
     // Double-click a text drawing to open its settings. The chart's own
     // double-click resets the view, which it must not do when the gesture was
     // aimed at a drawing -- editSelectedText() reports whether it claimed it.
-    this.chart.on('dblclick', () => {
-      this.editSelectedText()
+    // Double-click a text drawing to open its settings. Saying the press was
+    // claimed keeps the chart from also maximizing the pane under it.
+    this.chart.on('dblclick', (p) => {
+      if (this.editSelectedText()) (p as { handled?: boolean }).handled = true
     })
     this.chart.on('draw:update', () => this.afterDrawChange())
   }

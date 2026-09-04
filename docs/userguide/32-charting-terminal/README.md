@@ -127,9 +127,9 @@ focus, so two panes never both respond to one press.
 | `Alt` + `M` | Toggle crosshair magnet |
 | `Alt` + `Shift` + `S` | Save a chart image |
 
-Double-clicking the chart also resets the view. Because a reset fits every bar
-you have loaded, it lands on the oldest one and pulls in another page of
-history.
+Double-clicking a pane maximizes it, and a second double-click puts the stack
+back. On a chart with one pane nothing moves. Double-clicking a text drawing
+opens its editor instead.
 
 ### Drawing tools
 
