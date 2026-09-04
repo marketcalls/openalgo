@@ -65,7 +65,11 @@ docker run -d \
 
 ### What Gets Built
 
-The Dockerfile uses **multi-stage builds** for optimization:
+The Dockerfile uses **multi-stage builds** for optimization. Each base image
+below is pinned to an immutable digest in the [`Dockerfile`](../../Dockerfile)
+itself for supply-chain reproducibility. The tag names here are for
+readability. See the [`Dockerfile`](../../Dockerfile) for the exact pinned
+digest currently in use.
 
 1. **Python Builder Stage** (`python:3.12-bullseye`)
    - Installs `uv` package manager
@@ -84,6 +88,10 @@ The Dockerfile uses **multi-stage builds** for optimization:
      - `libopenblas0` - BLAS/LAPACK for linear algebra
      - `libgomp1` - OpenMP for parallel operations
      - `libgfortran5` - Fortran runtime for scipy
+   - **Installs chart export libraries:**
+     - `chromium` and `fonts-liberation` - headless Chromium driven by Kaleido
+       for Plotly static image export, used by the Telegram bot's `/chart`
+       command
    - Copies virtual environment from builder stage
    - Copies built frontend from builder stage
    - **Configures numba/scipy support:**

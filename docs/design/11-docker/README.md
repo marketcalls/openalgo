@@ -20,7 +20,7 @@ OpenAlgo provides Docker support for containerized deployment with **3-stage bui
 │  │  2. Copy pyproject.toml                                               │  │
 │  │  3. Create virtual environment with uv                                │  │
 │  │  4. Install dependencies: uv sync                                     │  │
-│  │  5. Add gunicorn + eventlet>=0.40.3                                   │  │
+│  │  5. Add gunicorn (>=25,<26) + eventlet                                │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
                                      │
@@ -44,7 +44,8 @@ OpenAlgo provides Docker support for containerized deployment with **3-stage bui
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │  1. Set timezone to IST (Asia/Kolkata)                                │  │
 │  │  2. Install runtime dependencies (curl, libopenblas0, libgomp1,       │  │
-│  │     libgfortran5) for scipy/numba                                     │  │
+│  │     libgfortran5, chromium, fonts-liberation) for scipy/numba and     │  │
+│  │     Kaleido chart export                                              │  │
 │  │  3. Create non-root user (appuser)                                    │  │
 │  │  4. Copy venv from python-builder                                     │  │
 │  │  5. Copy application source                                           │  │
@@ -83,125 +84,17 @@ OpenAlgo provides Docker support for containerized deployment with **3-stage bui
 
 ## Dockerfile
 
-```dockerfile
-# ------------------------------ Python Builder Stage ----------------------- #
-FROM python:3.12-bullseye AS python-builder
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl build-essential && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-WORKDIR /app
-COPY pyproject.toml .
-# Create isolated virtual-env with uv, then add gunicorn and eventlet
-RUN pip install --no-cache-dir uv && \
-    uv venv .venv && \
-    uv pip install --upgrade pip && \
-    uv sync && \
-    uv pip install gunicorn eventlet>=0.40.3 && \
-    rm -rf /root/.cache
-
-# ------------------------------ Frontend Builder Stage --------------------- #
-FROM node:22-bullseye-slim AS frontend-builder
-WORKDIR /app
-COPY frontend/package*.json ./frontend/
-RUN cd frontend && npm ci
-COPY frontend/ ./frontend/
-RUN cd frontend && npm run build
-
-# ------------------------------ Production Stage --------------------------- #
-FROM python:3.12-slim-bullseye AS production
-
-# Set timezone to IST and install runtime dependencies for scipy/numba
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    tzdata \
-    curl \
-    libopenblas0 \
-    libgomp1 \
-    libgfortran5 && \
-    ln -fs /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && \
-    dpkg-reconfigure -f noninteractive tzdata && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Create non-root user
-RUN useradd --create-home appuser
-WORKDIR /app
-
-# Copy venv from python-builder
-COPY --from=python-builder --chown=appuser:appuser /app/.venv /app/.venv
-COPY --chown=appuser:appuser . .
-
-# Copy built frontend from frontend-builder
-COPY --from=frontend-builder --chown=appuser:appuser /app/frontend/dist /app/frontend/dist
-
-# Create directories with proper permissions (including tmp for numba/matplotlib)
-RUN mkdir -p /app/log /app/log/strategies /app/db /app/tmp /app/tmp/numba_cache \
-             /app/tmp/matplotlib /app/strategies /app/strategies/scripts \
-             /app/strategies/examples /app/keys && \
-    chown -R appuser:appuser /app/log /app/db /app/tmp /app/strategies /app/keys && \
-    chmod -R 755 /app/strategies /app/log /app/tmp && \
-    chmod 700 /app/keys && \
-    touch /app/.env && chown appuser:appuser /app/.env && chmod 666 /app/.env
-
-# Entrypoint script (fix line endings for Windows compatibility)
-COPY --chown=appuser:appuser start.sh /app/start.sh
-RUN sed -i 's/\r$//' /app/start.sh && chmod +x /app/start.sh
-
-# Environment variables
-ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    TZ=Asia/Kolkata \
-    APP_MODE=standalone \
-    TMPDIR=/app/tmp \
-    NUMBA_CACHE_DIR=/app/tmp/numba_cache \
-    LLVMLITE_TMPDIR=/app/tmp \
-    MPLCONFIGDIR=/app/tmp/matplotlib
-
-USER appuser
-EXPOSE 5000
-CMD ["/app/start.sh"]
-```
+The full multi-stage build lives in [`Dockerfile`](../../../Dockerfile) at the
+repo root. Treat it as the source of truth rather than a copy in this doc. The
+architecture diagram above summarizes what each stage does. Open the
+Dockerfile itself for exact commands, versions, and the current base image
+pins.
 
 ## Docker Compose
 
-```yaml
-# docker-compose.yaml (note: .yaml extension, not .yml)
-version: '3.8'
-
-services:
-  openalgo:
-    build: .
-    ports:
-      - "5000:5000"
-      - "8765:8765"
-    volumes:
-      # Named volumes for better persistence management
-      - openalgo_db:/app/db
-      - openalgo_log:/app/log
-      - openalgo_strategies:/app/strategies
-      - openalgo_keys:/app/keys
-      - openalgo_tmp:/app/tmp
-      - ./.env:/app/.env:ro       # Environment config (read-only)
-    environment:
-      - FLASK_HOST_IP=0.0.0.0
-      - FLASK_PORT=5000
-      - WEBSOCKET_HOST=0.0.0.0
-      - WEBSOCKET_PORT=8765
-    shm_size: '2gb'                # Required for scipy/numba operations
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    restart: unless-stopped
-
-volumes:
-  openalgo_db:
-  openalgo_log:
-  openalgo_strategies:
-  openalgo_keys:
-  openalgo_tmp:
-```
+The full Compose configuration lives in
+[`docker-compose.yaml`](../../../docker-compose.yaml) at the repo root. Treat
+it as the source of truth rather than a copy in this doc.
 
 ### Named Volumes vs Bind Mounts
 
