@@ -24,7 +24,14 @@ holidays_schema = MarketHolidaysSchema()
 class MarketHolidays(Resource):
     @limiter.limit(API_RATE_LIMIT)
     def post(self):
-        """Get market holidays for a specific year"""
+        """
+        Get market holidays for a specific year dynamically.
+        
+        Fetches the active market calendar and parses valid Indian stock market dates avoiding weekends.
+
+        Returns:
+            flask.Response: A JSON formatted response containing standard payload statuses mirroring OpenAlgo REST responses securely.
+        """
         try:
             # Validate request data
             holidays_data = holidays_schema.load(request.json)
