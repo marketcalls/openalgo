@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openalgo-config
+  namespace: openalgo
+  labels:
+    app: openalgo
+data:
+  # Flask configuration
+  FLASK_ENV: "production"
+  FLASK_DEBUG: "0"
+  
+  # Port configuration (for reference, actual ports in Deployment)
+  FLASK_PORT: "5000"
+  WEBSOCKET_PORT: "8765"
+  
+  # Timezone
+  TZ: "Asia/Kolkata"
+  # Thread limiting for scientific libraries (numpy, scipy, pandas)
+  # Prevents thread oversubscription in containerized environments
+  # Ref: Issue #787 - limits each library to single-threaded mode
+  OPENBLAS_NUM_THREADS: "1"
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  NUMEXPR_NUM_THREADS: "1"
+  NUMBA_NUM_THREADS: "1"
+  
+  # Add other non-sensitive environment variables here
+  # Example:
+  # LOG_LEVEL: "INFO"
+  # MAX_WORKERS: "4"

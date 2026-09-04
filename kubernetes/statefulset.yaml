@@ -1,0 +1,126 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: openalgo
+  namespace: openalgo
+  labels:
+    app: openalgo
+    component: application
+spec:
+  serviceName: openalgo
+  replicas: 1  # Single instance due to SQLite
+  selector:
+    matchLabels:
+      app: openalgo
+  template:
+    metadata:
+      labels:
+        app: openalgo
+        component: application
+    spec:
+      containers:
+      - name: openalgo
+        image:  marketcalls/openalgo:latest
+        imagePullPolicy: Always
+        
+        ports:
+        - name: http
+          containerPort: 5000
+          protocol: TCP
+        - name: websocket
+          containerPort: 8765
+          protocol: TCP
+        
+        # Environment variables from ConfigMap
+        envFrom:
+        - configMapRef:
+            name: openalgo-config
+        
+        # Volume mounts
+        volumeMounts:
+        - name: db
+          mountPath: /app/db
+        - name: logs
+          mountPath: /app/log
+        - name: strategies
+          mountPath: /app/strategies
+        - name: keys
+          mountPath: /app/keys
+        - name: tmp
+          mountPath: /app/tmp
+        - name: shm
+          mountPath: /dev/shm
+        - name: env-secret
+          mountPath: /app/.env
+          subPath: .env
+          readOnly: true
+        
+        # Health checks
+        livenessProbe:
+          httpGet:
+            path: /auth/check-setup
+            port: 5000
+          initialDelaySeconds: 120
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /auth/check-setup
+            port: 5000
+          initialDelaySeconds: 40
+          periodSeconds: 10
+          timeoutSeconds: 10
+          failureThreshold: 3
+        
+        # Resource limits
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        
+        # Security context
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false  # Application needs to write to certain dirs
+          capabilities:
+            drop:
+            - ALL
+      
+      # Volumes
+      volumes:
+      - name: db
+        persistentVolumeClaim:
+          claimName: openalgo-db
+      - name: logs
+        persistentVolumeClaim:
+          claimName: openalgo-logs
+      - name: strategies
+        persistentVolumeClaim:
+          claimName: openalgo-strategies
+      - name: keys
+        persistentVolumeClaim:
+          claimName: openalgo-keys
+      - name: tmp
+        persistentVolumeClaim:
+          claimName: openalgo-tmp
+      - name: shm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 2Gi
+      - name: env-secret
+        secret:
+          secretName: openalgo-secret
+          items:
+          - key: .env
+            path: .env
+      
+      # Restart policy
+      restartPolicy: Always
