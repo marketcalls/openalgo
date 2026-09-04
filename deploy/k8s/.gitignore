@@ -1,0 +1,8 @@
+# Never commit real credentials: these are secretGenerator / kubeseal INPUTS.
+secret.env
+secret.yaml
+*.secret.env
+
+# Note: a SEALED secret (kubeseal output, e.g. sealed-secret.yaml) is safe to
+# commit and is the intended way to store per-instance credentials in git —
+# only its plain input above is ignored.

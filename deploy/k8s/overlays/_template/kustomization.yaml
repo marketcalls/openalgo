@@ -1,0 +1,52 @@
+# Copy-me overlay template for one OpenAlgo instance (one broker account).
+#
+# Copy this directory to overlays/<broker>/, replace every CHANGE_ME, copy
+# secret.env.example to secret.env and fill it in, then:
+#
+#   kubectl apply -k deploy/k8s/overlays/<broker>
+#
+# secret.env is gitignored; the build fails until it exists, which is the point.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# MUST be restated here: the base's namespace does not reach the sibling edge
+# resources; without it the Ingress/HTTPRoute lands in `default`.
+namespace: openalgo
+
+# DNS-1123 label with a trailing dash, unique per instance (e.g. zerodha-).
+# Renames every resource of this instance; references are rewritten via
+# kustomize's built-in nameReference rules (Services, envFrom, StatefulSet
+# serviceName, Ingress backends) plus edge/gateway/kustomizeconfig.yaml for the
+# Gateway API resources.
+namePrefix: CHANGE_ME-
+
+resources:
+- ../../base
+# Ingress API variant (default). For a Gateway API cluster swap the line below:
+# - ../../edge/gateway
+- ../../edge/ingress
+
+patches:
+- path: patches/config.yaml
+- path: patches/edge-host-ingress.yaml
+# For the Gateway API variant use this host patch instead:
+# - path: patches/edge-host-gateway.yaml
+# Pin the image tag per release (base ships :latest):
+# - path: patches/statefulset-image.yaml
+# Swap StorageClass/size — MUST be enabled before the FIRST apply (the
+# volumeClaimTemplate is immutable afterwards):
+# - path: patches/storage.yaml
+
+labels:
+- pairs:
+    app.kubernetes.io/instance: CHANGE_ME
+  includeSelectors: true
+  includeTemplates: true
+
+# Generates <namePrefix>openalgo-env-<hash> from secret.env. The content hash
+# means ANY change to secret.env rolls the pod on the next apply — apply
+# secret changes off-hours, never inside the ~03:00 IST token-refresh window.
+secretGenerator:
+- name: openalgo-env
+  env: secret.env
+  type: Opaque

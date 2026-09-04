@@ -1,0 +1,43 @@
+# OpenAlgo instance for the fyers broker account (one account = one instance).
+# Copy the pattern from overlays/_template. Fill in secret.env (copy from
+# secret.env.example) before applying:
+#   kubectl apply -k deploy/k8s/overlays/fyers
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Restated so the sibling edge resources land here too (see _template notes).
+namespace: openalgo
+
+# Unique per instance; rewrites every resource name and its references.
+namePrefix: fyers-
+
+resources:
+- ../../base
+# Gateway API variant: swap the line below for `- ../../edge/gateway`
+# (its kustomizeconfig.yaml carries the required nameReference rules).
+- ../../edge/ingress
+
+patches:
+- path: patches/config.yaml
+- path: patches/edge-host-ingress.yaml
+# Pin the image tag per tested release (base ships :latest):
+# images:
+# - name: marketcalls/openalgo
+#   newTag: CHANGE_ME_TAG
+# Swap StorageClass/size BEFORE the first apply:
+# - path: patches/storage.yaml        # copy it from ../_template/patches/ first
+# SEBI static-IP egress pin (see README "Egress / SEBI static-IP"):
+# - path: patches/node-egress.yaml     # copy it from ../_template/patches/ first
+
+labels:
+- pairs:
+    app.kubernetes.io/instance: fyers
+  includeSelectors: true
+  includeTemplates: true
+
+# Content hash in the generated Secret name: any secret.env change rolls the
+# pod on the next apply — apply off-hours, never in the ~03:00 IST window.
+secretGenerator:
+- name: openalgo-env
+  env: secret.env
+  type: Opaque
