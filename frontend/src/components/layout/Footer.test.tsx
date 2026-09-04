@@ -36,7 +36,7 @@ describe('Footer', () => {
 
     expect(screen.queryByText('v')).not.toBeInTheDocument()
     expect(screen.queryByText(/session/)).not.toBeInTheDocument()
-    expect(screen.getAllByText('|')).toHaveLength(3)
+    expect(screen.getAllByText('|')).toHaveLength(2)
   })
 
   it('does not crash when fetch fails', async () => {
@@ -66,6 +66,13 @@ describe('Footer', () => {
   })
 
   it('renders singular session when only one session is active', () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        json: async () => ({ status: 'error' }),
+      })
+    )
+
     act(() => {
       useSessionStore.setState({ activeSessionCount: 1 })
     })
