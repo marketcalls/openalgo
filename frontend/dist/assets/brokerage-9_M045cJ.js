@@ -1,0 +1,1 @@
+import{i as e}from"./client-CNMEkqNR.js";var t=new Set([`fyers`,`zerodha`,`dhan`,`groww`]),n={estimate:async t=>(await e.post(`/brokerage-charges/api/estimate`,t)).data,estimateBatch:async t=>(await e.post(`/brokerage-charges/api/estimate/batch`,{orders:t})).data};export{n,t};

@@ -46,6 +46,10 @@ class OrderSchema(Schema):
     underlying_ltp = fields.Float(
         missing=None, allow_none=True
     )  # Optional: passed from options order for execution reference
+    stoploss = fields.Float(missing=None, allow_none=True)
+    target = fields.Float(missing=None, allow_none=True)
+    trailing_stoploss = fields.Float(missing=None, allow_none=True)
+    gtt = fields.Boolean(missing=False, allow_none=True)
 
     @post_load
     def coerce_quantity(self, data, **kwargs):

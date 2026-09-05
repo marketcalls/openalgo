@@ -8,6 +8,7 @@ import {
   ViewModeToggle,
 } from '@/components/option-chain'
 import { PlaceOrderDialog } from '@/components/trading'
+import { PositionCalculator, type PositionCalculatorOutcome } from '@/components/trading/PositionCalculator'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -573,6 +574,7 @@ export default function OptionChain() {
   // Use ref for previous data to avoid causing re-renders and enable proper flash animation
   const previousDataRef = useRef<Map<number, OptionStrike>>(new Map())
   const [orderDialog, setOrderDialog] = useState<{
+    outcome: PositionCalculatorOutcome
     open: boolean
     symbol: string
     exchange: string
@@ -581,6 +583,10 @@ export default function OptionChain() {
     lotSize: number
     tickSize: number
   } | null>(null)
+
+  // Position calculator state
+  const [calcOpen, setCalcOpen] = useState(false)
+  const [calcTarget, setCalcTarget] = useState<PlaceOrderParams | null>(null)
 
   // Re-sync exchange when broker capabilities load asynchronously
   useEffect(() => {
@@ -729,16 +735,28 @@ export default function OptionChain() {
   }
 
   const handlePlaceOrder = useCallback((params: PlaceOrderParams) => {
-    setOrderDialog({
-      open: true,
-      symbol: params.symbol,
-      exchange: params.exchange,
-      action: params.action,
-      quantity: params.lotSize,
-      lotSize: params.lotSize,
-      tickSize: params.tickSize,
-    })
+    setCalcTarget(params)
+    setCalcOpen(true)
   }, [])
+
+  const handleCalcConfirm = useCallback(
+    (outcome: PositionCalculatorOutcome) => {
+      setCalcOpen(false)
+      if (!calcTarget) return
+      setOrderDialog({
+        open: true,
+        symbol: calcTarget.symbol,
+        exchange: outcome.exchange,
+        action: outcome.action,
+        quantity: outcome.quantity,
+        lotSize: calcTarget.lotSize,
+        tickSize: calcTarget.tickSize,
+        outcome,
+      })
+      setCalcTarget(null)
+    },
+    [calcTarget]
+  )
 
   // Memoized callback for dialog close to prevent re-renders
   const handleOrderDialogClose = useCallback((open: boolean) => {
@@ -1088,6 +1106,20 @@ export default function OptionChain() {
         </div>
       )}
 
+      {/* Position Calculator */}
+      {calcTarget && (
+        <PositionCalculator
+          open={calcOpen}
+          onOpenChange={setCalcOpen}
+          symbol={calcTarget.symbol}
+          exchange={calcTarget.exchange}
+          side={calcTarget.action}
+          ltp={null}
+          lotSize={calcTarget.lotSize}
+          onConfirm={handleCalcConfirm}
+        />
+      )}
+
       {/* Place Order Dialog */}
       <PlaceOrderDialog
         open={orderDialog?.open ?? false}
@@ -1098,6 +1130,12 @@ export default function OptionChain() {
         quantity={orderDialog?.quantity}
         lotSize={orderDialog?.lotSize}
         tickSize={orderDialog?.tickSize}
+        product={orderDialog?.outcome.product}
+        priceType={orderDialog?.outcome.orderType}
+        price={orderDialog?.outcome.price}
+        stoploss={orderDialog?.outcome.stoploss}
+        target={orderDialog?.outcome.target}
+        trailingStoploss={orderDialog?.outcome.trailingStoploss}
         strategy="OptionChain"
       />
     </div>

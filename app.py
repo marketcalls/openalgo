@@ -69,6 +69,8 @@ from blueprints.gc_json import gc_json_bp
 from blueprints.gex import gex_bp  # Import the GEX blueprint
 from blueprints.health import health_bp  # Import the health monitoring blueprint
 from blueprints.historify import historify_bp  # Import the historify blueprint
+from blueprints.brokerage_charges import brokerage_charges_bp
+from blueprints.intraday_leverage import intraday_leverage_bp
 from blueprints.ivchart import ivchart_bp  # Import the IV chart blueprint
 from blueprints.ivsmile import ivsmile_bp  # Import the IV Smile blueprint
 from blueprints.latency import latency_bp  # Import the latency blueprint
@@ -122,6 +124,7 @@ from database.auth_db import init_db as ensure_auth_tables_exists
 from database.chartink_db import init_db as ensure_chartink_tables_exists
 from database.flow_db import init_db as ensure_flow_tables_exists
 from database.historify_db import init_database as ensure_historify_tables_exists
+from database.intraday_leverage_db import init_db as ensure_intraday_leverage_tables_exists
 from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.leverage_db import init_db as ensure_leverage_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
@@ -129,6 +132,7 @@ from database.scalping_db import init_db as ensure_scalping_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.strategy_module_db import init_db as ensure_strategy_module_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
+from database.symbol_exit_db import init_db as ensure_symbol_exit_tables_exists
 from database.telegram_db import get_bot_config
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
 from database.user_db import init_db as ensure_user_tables_exists
@@ -309,6 +313,8 @@ def create_app():
     app.register_blueprint(traffic_bp)
     app.register_blueprint(latency_bp)
     app.register_blueprint(leverage_bp)  # Register Leverage blueprint
+    app.register_blueprint(intraday_leverage_bp)  # Register Intraday Leverage blueprint
+    app.register_blueprint(brokerage_charges_bp)  # Register Brokerage Charges blueprint
     app.register_blueprint(health_bp)  # Register Health monitoring blueprint
     app.register_blueprint(strategy_module_bp)  # Register Strategy Module blueprint
     app.register_blueprint(master_contract_status_bp)
@@ -756,9 +762,11 @@ def setup_environment(app):
                 ("Qty Freeze DB", ensure_qty_freeze_tables_exists),
                 ("Historify DB", ensure_historify_tables_exists),
                 ("Flow DB", ensure_flow_tables_exists),
-                ("Scalping DB", ensure_scalping_tables_exists),
-                ("Watchlist DB", ensure_watchlist_tables_exists),
+("Scalping DB", ensure_scalping_tables_exists),
+("Watchlist DB", ensure_watchlist_tables_exists),
+("Symbol Exit DB", ensure_symbol_exit_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),
+                ("Intraday Leverage DB", ensure_intraday_leverage_tables_exists),
                 ("Strategy Portfolio DB", ensure_strategy_portfolio_tables_exists),
                 ("Agent DB", ensure_agent_tables_exists),
                 # Created here, not left to APScheduler's own CREATE TABLE in
@@ -898,6 +906,17 @@ def setup_environment(app):
                 logger.debug("Scalping risk monitor initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize Scalping risk monitor: {e}")
+
+            try:
+                # Position-calculator exit watches (SL / target / trailing).
+                # Browser-independently squares the position off when a level is
+                # reached. Idles when no watch is set.
+                from services.symbol_exit_monitor_service import start_symbol_exit_monitor
+
+                start_symbol_exit_monitor()
+                logger.debug("Symbol exit monitor initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize Symbol exit monitor: {e}")
 
             # Auto-reconnect the WhatsApp bot if a paired session is persisted.
             # Without this, every server restart would leave is_ready()=False

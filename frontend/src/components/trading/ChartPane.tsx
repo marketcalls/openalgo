@@ -37,7 +37,9 @@ import { DrawingStyleBar } from './DrawingStyleBar'
 import { DrawingTextDialog, type TextRequest } from './DrawingTextDialog'
 import { IndicatorPickerDialog } from './IndicatorPickerDialog'
 import { IndicatorSettingsDialog } from './IndicatorSettingsDialog'
+import type { OrderSide, OrderType } from '@/lib/trading/terminal'
 import { PlaceOrderDialog } from './PlaceOrderDialog'
+import { PositionCalculator, type PositionCalculatorOutcome } from './PositionCalculator'
 import { SymbolSearchDialog } from './SymbolSearchDialog'
 
 /** Camera (screenshot) glyph. */
@@ -391,6 +393,17 @@ export function ChartPane({
   /** The confirm shown on leaving: the playhead is the only record of the walk. */
   const [confirmLeave, setConfirmLeave] = useState(false)
 
+  // Position calculator: shown before order placement
+  const [calcOpen, setCalcOpen] = useState(false)
+  const [calcParams, setCalcParams] = useState<{
+    side: OrderSide
+    type: OrderType
+    sym: SymbolView
+    ltp: number | null
+    price?: number
+    product: string
+  } | null>(null)
+
   /* ── boot this pane's terminal once ───────────────────────────────────── */
   useEffect(() => {
     aliveRef.current = true
@@ -440,6 +453,11 @@ export function ChartPane({
         // object literal is being built. Callbacks only fire after construction.
         const style = terminalRef.current?.drawTextStyle(r.id)
         if (style) setTextReq({ id: r.id, tool: r.tool, style })
+      },
+      onOrderRequest: (params) => {
+        if (!aliveRef.current) return
+        setCalcParams(params)
+        setCalcOpen(true)
       },
       onOrderTicket: (req) => aliveRef.current && setTicket(req),
     }
@@ -523,6 +541,44 @@ export function ChartPane({
     setQty(v)
     terminalRef.current?.setQty(v)
   }
+
+  /* ── position calculator confirm ──────────────────────────────────────── */
+  const handleCalcConfirm = useCallback(
+    (outcome: PositionCalculatorOutcome) => {
+      setCalcOpen(false)
+      if (!calcParams || !terminalRef.current) return
+      const {
+        quantity,
+        action,
+        product,
+        orderType,
+        exchange,
+        price,
+        stoploss,
+        target,
+        trailingStoploss,
+        gtt,
+      } = outcome
+      // Update terminal quantity + product so the inline panel matches
+      if (calcParams.sym.lots) {
+        terminalRef.current.setQty(quantity / calcParams.sym.lotsize)
+      } else {
+        terminalRef.current.setQty(quantity)
+      }
+      terminalRef.current.setProduct(product)
+      terminalRef.current.confirmOrder(action, orderType, {
+        product,
+        exchange,
+        ...(price != null ? { price } : {}),
+        stoploss,
+        target,
+        trailingStoploss,
+        gtt,
+      })
+      setCalcParams(null)
+    },
+    [calcParams]
+  )
 
   /* ── right-click order menu ───────────────────────────────────────────── */
   const onContextMenu = (e: React.MouseEvent) => {
@@ -1230,15 +1286,31 @@ export function ChartPane({
         initialQuery={sym?.symbol}
       />
 
-      {/* The order ticket One-Click off opens: the same dialog the option chain
-          and pages/OptionChain.tsx use, so quantity, product and price are
-          confirmed in one place and analyze mode is honoured the same way.
-          A success needs no toast here; the socket provider shows the broker's
-          order event once, for every surface. The confirmed order goes out
-          through the terminal's own feed, never straight to the API: the
-          feed asserts the page's mode against the server first, the way the
-          armed path does. Portalled into the pane while it is the fullscreen
-          element, as the menus are, or it would open unseen behind it. */}
+      {calcParams && (
+        <PositionCalculator
+          open={calcOpen}
+          onOpenChange={setCalcOpen}
+          symbol={calcParams.sym.symbol}
+          exchange={calcParams.sym.exchange}
+          side={calcParams.side}
+          ltp={calcParams.ltp}
+          lotSize={calcParams.sym.lotsize}
+          orderType={calcParams.type === 'LIMIT' ? 'LIMIT' : 'MARKET'}
+          price={calcParams.price}
+          tradeType={calcParams.product === 'MIS' ? 'INTRADAY' : 'OVERNIGHT'}
+          onConfirm={handleCalcConfirm}
+        />
+      )}
+
+      {/* The classic order ticket, for hosts that use onOrderTicket instead of
+          the position calculator. This pane registers both callbacks; the
+          terminal prefers the calculator when One-Click is off and it exists,
+          so this dialog opens only for a ticket fired by a host without the
+          calculator. The confirmed order goes out through the terminal's own
+          feed, never straight to the API: the feed asserts the page's mode
+          against the server first, the way the armed path does. Portalled
+          into the pane while it is the fullscreen element, as the menus are,
+          or it would open unseen behind it. */}
       <PlaceOrderDialog
         open={ticket !== null}
         onOpenChange={(next) => !next && setTicket(null)}

@@ -1,0 +1,33 @@
+i wantdiff same calculator for crypto trading when user trading in crypto 
+
+one more change is when i watching candles.if
+i drag candle ,canlde are moving horizontoly like <- -> this ways , i want to add chat has to move in upword and downwords.
+ 
+.Add news section for each stock.using dhan skills imran YT video.
+
+heatmap
+
+srenner for top gainer,looser,volume shockers.https://github.com/marketcalls/fyers-scanner
+
+autoreaserch
+
+by using ai user can automate stratagy in orderflow and backtest in UI.
+
+global markets view ,vix...india indices
+
+sector rotaion map.
+
+Swing/Postional/Longterm watchlist
+
+build watch watchlist to add and track stocks
+
+if user open then user can able to see bid/ask price,support/resistance of the stock,Bullish/bearish signals,...etc
+
+
+
+future implenetation
+-------------------------------------
+mobile app
+pinets
+algomorror
+bot integration

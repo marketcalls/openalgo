@@ -113,6 +113,10 @@ def set_analyze_mode(mode: bool):
     if "analyze_mode" in _settings_cache:
         del _settings_cache["analyze_mode"]
 
+    from services.symbol_exit_monitor_service import get_symbol_exit_monitor
+
+    get_symbol_exit_monitor().request_sync()
+
 
 # SMTP password encryption.
 #

@@ -156,6 +156,7 @@ interface OrderLineRec {
 }
 
 interface PositionState {
+  exchange: string
   net: number
   avg: number
   product: string
@@ -262,11 +263,21 @@ export interface TerminalCallbacks {
    * but has no DOM to collect it with, so the host prompts.
    */
   onDrawTextEdit?(req: { id: string; tool: string; text: string }): void
+  /** An order was requested while One-Click is off; a host with the position
+   * calculator opens it instead of the classic ticket. */
+  onOrderRequest?(params: {
+    side: OrderSide
+    type: OrderType
+    sym: SymbolView
+    price?: number
+    ltp: number | null
+    product: string
+  }): void
   /**
-   * One-Click is off and an order route was used: the on-chart Buy or Sell,
-   * or a context-menu row. Every guard the armed path applies has already
-   * passed. The engine ships no DOM, so the ticket is the host's to render;
-   * nothing is placed until it confirms.
+   * One-Click is off, the host has no position calculator, and an order route
+   * was used: the on-chart Buy or Sell, or a context-menu row. Every guard the
+   * armed path applies has already passed. The engine ships no DOM, so the
+   * ticket is the host's to render; nothing is placed until it confirms.
    */
   onOrderTicket?(req: OrderTicketRequest): void
 }
@@ -710,6 +721,7 @@ export class TradingTerminal {
   private lastLtp: number | null = null
   private sym: SymbolView | null = null
   private position: PositionState | null = null
+  private positionExchange: string | null = null
   private readonly orderLines = new Map<string, OrderLineRec>()
 
   private interval = '5m'
@@ -1026,6 +1038,7 @@ export class TradingTerminal {
     this.position = pos
       ? {
           net: Number(pos.quantity),
+          exchange: String(pos.exchange),
           avg: Number(pos.average_price),
           product: String(pos.product ?? ''),
         }
@@ -1085,7 +1098,7 @@ export class TradingTerminal {
         (j.data || []).find(
           (p) =>
             p.symbol === this.sym!.symbol &&
-            p.exchange === this.sym!.exchange &&
+            p.exchange === (this.positionExchange ?? this.sym!.exchange) &&
             Number(p.quantity) !== 0
         )
       )
@@ -1123,12 +1136,74 @@ export class TradingTerminal {
       this.toast(`${this.sym.exchange} is quote-only — trading is not supported`, 'err')
       return
     }
+    // The armed/disarmed fork and the calculator/ticket confirmation live in
+    // _executeOrder, so both a One-Click-off click and an armed click reach
+    // the same guards.
+    await this._executeOrder(side, type)
+  }
+
+  /**
+   * Extra intent a calculator confirm can attach to an order: a product
+   * override (Intraday/Overnight trade type) and optional risk legs (SL,
+   * target, trailing). ``trade`` is the OpenAlgo REST feed used for order
+   * placement, so these extras are sent as metadata on the same placeorder
+   * request. Brokers that support bracket/cover risk consume them; the rest
+   * place the entry order normally.
+   */
+  confirmOrder(
+    side: OrderSide,
+    type: OrderType,
+    opts?: {
+      product?: 'MIS' | 'NRML' | 'CNC'
+      /** Routing venue override. Cash equity may switch NSE/BSE; for everything
+       *  else this is the instrument's own exchange and the chart symbol wins. */
+      exchange?: string
+      /** Limit price; used when type === 'LIMIT'. */
+      price?: number
+      stoploss?: number
+      target?: number
+      trailingStoploss?: number
+      gtt?: boolean
+    }
+  ) {
+    void this._executeOrder(side, type, opts)
+  }
+
+  private async _executeOrder(
+    side: OrderSide,
+    type: OrderType,
+    opts?: {
+      product?: 'MIS' | 'NRML' | 'CNC'
+      exchange?: string
+      price?: number
+      stoploss?: number
+      target?: number
+      trailingStoploss?: number
+      gtt?: boolean
+    }
+  ) {
+    if (this.refuseWhileReplaying()) return
+    if (!this.sym || !this.trade) {
+      this.toast('search a symbol first')
+      return
+    }
+    if (this.sym.quoteOnly) {
+      this.toast(`${this.sym.exchange} is quote-only — trading is not supported`, 'err')
+      return
+    }
     const qty = this.orderQty()
     if (this.sym.freezeQty > 1 && qty > this.sym.freezeQty) {
       this.toast(`qty ${qty} exceeds the freeze limit ${this.sym.freezeQty} — reduce lots`, 'err')
       return
     }
-    const px = type === 'MARKET' ? 0 : this.snap(this.ctxPrice)
+    // A calculator LIMIT order carries its own price; everything else snaps
+    // to the chart context price (market orders carry no price at all).
+    const px =
+      type === 'LIMIT' && opts?.price != null
+        ? Number(opts.price)
+        : type === 'MARKET'
+          ? 0
+          : this.snap(this.ctxPrice)
     const m = this.marketPrice()
     if (m != null && (type === 'SL' || type === 'SL-M') && (side === 'BUY' ? px <= m : px >= m)) {
       this.toast(
@@ -1137,12 +1212,38 @@ export class TradingTerminal {
       )
       return
     }
-    // Every guard above has passed on both paths. Disarmed, the click opens
-    // the ticket and stops here; armed, it is the order. The guards are not
-    // moved below this fork on purpose: a ticket pre-filled with a stop on the
-    // wrong side of LTP, or a quantity over the freeze limit, would only be
-    // refused later by the broker, in words that do not say why.
-    if (!this.armed) {
+    // A calculator confirm (opts present) is the order, never a ticket: the
+    // calculator already served as the confirmation surface. A plain menu
+    // click carries no opts, so the armed/disarmed fork applies. The guards
+    // above ran for both so a ticket never pre-fills a stop on the wrong side
+    // of LTP or a quantity over the freeze limit.
+    const product = opts?.product ?? this.product
+    // The calculator may have switched the routing venue (NSE/BSE for cash
+    // equity); the symbol itself stays the chart's. Everything else on the
+    // symbol (lots, freeze, LTP) remains the chart's — only the exchange sent
+    // with the order changes.
+    const exch = opts?.exchange ?? this.sym.exchange
+    const hasRisk = Boolean(opts?.stoploss || opts?.target || opts?.trailingStoploss || opts?.gtt)
+    if (opts?.gtt) {
+      this.toast('GTT orders are not supported by this order route.', 'err')
+      return
+    }
+    if (!opts && !this.armed) {
+      // A host with the position calculator (onOrderRequest) gets the richer
+      // confirmation surface; one with the classic ticket (onOrderTicket)
+      // gets that; otherwise there is no confirm path and the click is
+      // refused, in the same words the logger ships.
+      if (this.cb.onOrderRequest && (type === 'MARKET' || type === 'LIMIT')) {
+        this.cb.onOrderRequest({
+          side,
+          type,
+          price: type === 'LIMIT' ? px : undefined,
+          sym: this.sym,
+          ltp: this.marketPrice(),
+          product: this.product,
+        })
+        return
+      }
       if (!this.cb.onOrderTicket) {
         this.toast('One-Click is off', 'err')
         return
@@ -1165,20 +1266,46 @@ export class TradingTerminal {
     if (now - this.lastFireAt < ORDER_COOLDOWN_MS) return
     this.lastFireAt = now
     const lotTxt = this.sym.lots ? `${qty / this.sym.lotsize}L (${qty})` : qty
-    const summary = `${side} ${type} ${lotTxt} ${this.sym.symbol}${type === 'MARKET' ? '' : ` @ ${this.fmt(px)}`} · ${this.product}`
+    const summary = `${side} ${type} ${lotTxt} ${this.sym.symbol}${type === 'MARKET' ? '' : ` @ ${this.fmt(px)}`} · ${product}`
     try {
-      const r = await this.trade.place({
-        symbol: this.sym.symbol,
-        exchange: this.sym.exchange,
-        side,
-        type,
-        qty,
-        product: this.product as 'CNC' | 'NRML' | 'MIS',
-        price: type === 'MARKET' ? undefined : px,
-        triggerPrice: type === 'SL' || type === 'SL-M' ? px : undefined,
-        mode: this.tradeMode(),
-      })
-      this.toast(`placed ${summary} (id ${r.orderId})`, 'ok')
+      if (hasRisk) {
+        // The order carries risk legs (SL / target / trailing / GTT), which the
+        // chart feed cannot attach. Route through the public placeorder REST
+        // API in a SINGLE request so the risk params travel with the entry
+        // order (not as a second order). The backend turns them into a symbol
+        // exit watch, and mode-aware routing sends the entry itself to sandbox
+        // or live from the analyzer toggle, so both work identically.
+        const r = await this.api<{ status?: string; orderid?: string }>('placeorder', {
+          strategy: 'chart-trading',
+          exchange: exch,
+          symbol: this.sym.symbol,
+          action: side,
+          quantity: qty,
+          pricetype: type,
+          product,
+          price: type === 'MARKET' ? undefined : px,
+          trigger_price: type === 'SL' || type === 'SL-M' ? px : undefined,
+          stoploss: opts?.stoploss,
+          target: opts?.target,
+          trailing_stoploss: opts?.trailingStoploss,
+          gtt: opts?.gtt,
+        })
+        this.toast(`placed ${summary} (id ${r.orderid})`, 'ok')
+      } else {
+        const r = await this.trade.place({
+          symbol: this.sym.symbol,
+          exchange: exch,
+          side,
+          type,
+          qty,
+          product: product as 'CNC' | 'NRML' | 'MIS',
+          price: type === 'MARKET' ? undefined : px,
+          triggerPrice: type === 'SL' || type === 'SL-M' ? px : undefined,
+          mode: this.tradeMode(),
+        })
+        this.toast(`placed ${summary} (id ${r.orderId})`, 'ok')
+      }
+      this.positionExchange = exch
       this.pollBook()
     } catch (e) {
       this.toast(this.cleanError(e), 'err')
@@ -1227,7 +1354,7 @@ export class TradingTerminal {
       // never placesmartorder.
       await this.trade.place({
         symbol: this.sym.symbol,
-        exchange: this.sym.exchange,
+        exchange: this.position.exchange,
         side,
         type: 'MARKET',
         qty,
@@ -3121,6 +3248,7 @@ export class TradingTerminal {
 
   /* ── symbol selection ─────────────────────────────────────────────────── */
   async loadSymbol(pick: SearchRow, opts: { silent?: boolean } = {}): Promise<boolean> {
+    this.positionExchange = null
     if (!this.rest) return false
     /**
      * Claim this load. Two awaits follow -- the symbol lookup and the bars --

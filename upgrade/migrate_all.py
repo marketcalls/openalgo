@@ -87,7 +87,9 @@ MIGRATIONS = [
     ("migrate_watchlist.py", "Charting Terminal Watchlists"),
     ("migrate_strategy_module.py", "Strategy Module (multi-leg options + RMS)"),
     ("migrate_strategy_universe_tab.py", "Strategy Module Universe Tab Normalization"),
+    ("migrate_intraday_leverage.py", "Intraday Leverage Multipliers for NSE Stocks"),
     ("migrate_agent.py", "Agent Module (LLM chat and chart surfaces)"),
+    ("migrate_symbol_exit_watch.py", "Symbol Exit Watch (SL/Target auto-exit)"),
 ]
 
 # Legacy migrations historically used non-zero exits for best-effort warnings,
@@ -95,7 +97,14 @@ MIGRATIONS = [
 # required schema migrations are listed explicitly: their failure must reach
 # this runner's summary and process exit code instead of being reported as a
 # successful warning.
-REQUIRED_MIGRATIONS = frozenset({"migrate_strategy_module.py", "migrate_strategy_universe_tab.py"})
+REQUIRED_MIGRATIONS = frozenset(
+    {
+        "migrate_strategy_module.py",
+        "migrate_strategy_universe_tab.py",
+        "migrate_intraday_leverage.py",
+        "migrate_symbol_exit_watch.py",
+    }
+)
 
 
 def run_migration(script_name, description):

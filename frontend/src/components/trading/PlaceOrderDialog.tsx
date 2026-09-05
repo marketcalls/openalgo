@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/select'
 import { useLiveQuote } from '@/hooks/useLiveQuote'
 import { cn } from '@/lib/utils'
+import { riskError } from '@/lib/trading/riskValidation'
 import { useAuthStore } from '@/stores/authStore'
 import { showToast } from '@/utils/toast'
 import { MarketDepthPanel } from './MarketDepthPanel'
@@ -66,6 +67,9 @@ export interface PlaceOrderDialogProps {
    */
   price?: number
   triggerPrice?: number
+  stoploss?: number
+  target?: number
+  trailingStoploss?: number
   strategy?: string
   /**
    * Where to send the confirmed order. Left out, it posts through
@@ -95,6 +99,9 @@ export interface TicketOrder {
   product: 'MIS' | 'NRML' | 'CNC'
   price?: number
   trigger_price?: number
+  stoploss?: number
+  target?: number
+  trailing_stoploss?: number
 }
 
 /**
@@ -144,6 +151,9 @@ export function PlaceOrderDialog({
   priceType: initialPriceType = 'MARKET',
   price: initialPrice,
   triggerPrice: initialTriggerPrice,
+  stoploss,
+  target,
+  trailingStoploss,
   strategy = 'OptionChain',
   place,
   container,
@@ -250,7 +260,10 @@ export function PlaceOrderDialog({
   // Set price to LTP when switching to LIMIT and LTP is available
   useEffect(() => {
     if (formPriceType !== 'MARKET' && mergedData.ltp && formPrice === 0) {
-      setFormPrice(roundToTick(mergedData.ltp, tickSize))
+      const quotePrice = roundToTick(mergedData.ltp, tickSize)
+      // The reset effect may have just queued the caller's limit price.
+      // Check the latest state so this quote cannot overwrite that price.
+      setFormPrice((price) => (price === 0 ? quotePrice : price))
     }
   }, [formPriceType, mergedData.ltp, formPrice, tickSize])
 
@@ -281,6 +294,17 @@ export function PlaceOrderDialog({
 
   // Submit order
   const handleSubmit = async () => {
+    const invalidRisk = riskError(
+      formAction,
+      needsPrice ? formPrice : (mergedData.ltp ?? null),
+      stoploss,
+      target,
+      trailingStoploss
+    )
+    if (invalidRisk) {
+      showToast.error(invalidRisk, 'orders')
+      return
+    }
     if (!isValid()) {
       showToast.error('Please fill all required fields')
       return
@@ -305,6 +329,9 @@ export function PlaceOrderDialog({
         quantity: formQuantity,
         pricetype: apiPriceType,
         product: formProduct,
+        ...(stoploss !== undefined && { stoploss }),
+        ...(target !== undefined && { target }),
+        ...(trailingStoploss !== undefined && { trailing_stoploss: trailingStoploss }),
         ...(needsPrice && { price: formPrice }),
         ...(needsTrigger && { trigger_price: formTriggerPrice }),
       }

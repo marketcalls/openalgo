@@ -25,6 +25,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { PlaceOrderDialog } from '@/components/trading'
+import { PositionCalculator, type PositionCalculatorOutcome } from '@/components/trading/PositionCalculator'
 import { calculateLiveStats, useLivePrice } from '@/hooks/useLivePrice'
 import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
@@ -46,6 +47,7 @@ interface HoldingOrderIntent {
   exchange: string
   action: 'BUY' | 'SELL'
   quantity: number
+  outcome?: PositionCalculatorOutcome
 }
 
 export default function Holdings() {
@@ -58,6 +60,10 @@ export default function Holdings() {
   const [error, setError] = useState<string | null>(null)
   const [showStaleWarning, setShowStaleWarning] = useState(false)
   const [orderIntent, setOrderIntent] = useState<HoldingOrderIntent | null>(null)
+
+  // Position calculator state
+  const [calcOpen, setCalcOpen] = useState(false)
+  const [calcTarget, setCalcTarget] = useState<HoldingOrderIntent | null>(null)
 
   // Page visibility tracking for resource optimization
   const { isVisible, wasHidden, timeSinceHidden } = usePageVisibility()
@@ -135,6 +141,27 @@ export default function Holdings() {
   useOrderEventRefresh(fetchHoldings, {
     events: ['order_event', 'analyzer_update'],
   })
+
+  // Open calculator when calcTarget is set
+  useEffect(() => {
+    if (calcTarget) setCalcOpen(true)
+  }, [calcTarget])
+
+  const handleCalcConfirm = useCallback(
+    (outcome: PositionCalculatorOutcome) => {
+      setCalcOpen(false)
+      if (!calcTarget) return
+      setOrderIntent({
+        symbol: calcTarget.symbol,
+        exchange: outcome.exchange,
+        action: outcome.action,
+        quantity: outcome.quantity,
+        outcome,
+      })
+      setCalcTarget(null)
+    },
+    [calcTarget]
+  )
 
   // Refresh data when tab becomes visible after being hidden
   useEffect(() => {
@@ -406,7 +433,7 @@ export default function Holdings() {
                             variant="outline"
                             className="h-7 px-3 border-green-600/40 text-green-600 hover:bg-green-600/10"
                             onClick={() =>
-                              setOrderIntent({
+                              setCalcTarget({
                                 symbol: holding.symbol,
                                 exchange: holding.exchange,
                                 action: 'BUY',
@@ -421,7 +448,7 @@ export default function Holdings() {
                             variant="outline"
                             className="h-7 px-3 border-red-600/40 text-red-600 hover:bg-red-600/10"
                             onClick={() =>
-                              setOrderIntent({
+                              setCalcTarget({
                                 symbol: holding.symbol,
                                 exchange: holding.exchange,
                                 action: 'SELL',
@@ -473,10 +500,26 @@ export default function Holdings() {
         </CardContent>
       </Card>
 
+      {/* Position Calculator */}
+      {calcTarget && (
+        <PositionCalculator
+          open={calcOpen}
+          onOpenChange={setCalcOpen}
+          symbol={calcTarget.symbol}
+          exchange={calcTarget.exchange}
+          side={calcTarget.action}
+          ltp={null}
+          quantity={calcTarget.quantity}
+          maxExitQuantity={calcTarget.action === 'SELL' ? calcTarget.quantity : undefined}
+          tradeType="OVERNIGHT"
+          onConfirm={handleCalcConfirm}
+        />
+      )}
+
       {/* Same order dialog the Option Chain uses, prefilled from the holding.
           Exit defaults to the full held quantity; Add starts from the same
-          number so the user only has to change it when topping up. CNC is
-          forced because a holding is by definition a delivery position. */}
+          number so the user only has to change it when topping up. The
+          calculator defaults to delivery and forwards any confirmed changes. */}
       <PlaceOrderDialog
         open={orderIntent !== null}
         onOpenChange={(open) => {
@@ -486,8 +529,12 @@ export default function Holdings() {
         exchange={orderIntent?.exchange ?? ''}
         action={orderIntent?.action ?? 'BUY'}
         quantity={orderIntent?.quantity}
-        product="CNC"
-        priceType="MARKET"
+        product={orderIntent?.outcome?.product ?? 'CNC'}
+        priceType={orderIntent?.outcome?.orderType ?? 'MARKET'}
+        price={orderIntent?.outcome?.price}
+        stoploss={orderIntent?.outcome?.stoploss}
+        target={orderIntent?.outcome?.target}
+        trailingStoploss={orderIntent?.outcome?.trailingStoploss}
         strategy="Holdings"
         onSuccess={(orderId) => {
           showToast.success(`Order ${orderId} placed`, 'orders')

@@ -1,0 +1,262 @@
+Broker,Segment,Charge Type,Value
+Fyers,Mutual Funds & IPO,Brokerage,Zero
+Fyers,Equity Delivery,Brokerage,20 or 0.3% per order (whichever lower)
+Fyers,Equity Intraday,Brokerage,20 or 0.03% per order (whichever lower)
+Fyers,Equity MTF,Brokerage,20 or 0.3% per order (whichever lower)
+Fyers,Options,Brokerage,Flat 20 per executed order
+Fyers,Futures,Brokerage,20 or 0.03% per order (whichever lower)
+Fyers,General,Call & Trade,50 + GST per executed order
+Fyers,General,Admin Square Off,50 + GST per executed order
+Fyers,General,Physical Contract Note,20 per note + courier
+Fyers,General,Physical Delivery,20 per order or 0.3% (whichever lower)
+Fyers,General,OFS/Buyback,20 per order or 0.3% (whichever lower)
+Fyers,General,Expired/Exercised/Assigned F&O,0
+Fyers,General,Cheque Bounce,0
+Fyers,General,Payment Gateway,0
+Fyers,General,Interest on Ledger Debit,0.041% per day
+Fyers,General,Interest on Cash-to-Collateral Violation,0.041% per day
+Fyers,MTF Interest,Funding up to 1000,0% p.a.
+Fyers,MTF Interest,Funding 1000.01-100000,16.49% p.a.
+Fyers,MTF Interest,Funding 100000.01-1000000,15.49% p.a.
+Fyers,MTF Interest,Funding 1000000.01-2500000,14.49% p.a.
+Fyers,MTF Interest,Funding above 2500000,12.49% p.a.
+Fyers,DP Charges,Account Opening,0
+Fyers,DP Charges,Demat AMC,0
+Fyers,DP Charges,Debit Charges (Sell),12.5 + GST per scrip
+Fyers,DP Charges,Credit Charges (Buy),0
+Fyers,DP Charges,Margin Pledge Request,5 + GST
+Fyers,DP Charges,Margin Unpledge Request,0
+Fyers,DP Charges,Margin Pledge Invocation,5 + GST
+Fyers,DP Charges,Margin Re-pledge,1 + GST
+Fyers,DP Charges,MTF Pledge Request,12 + GST
+Fyers,DP Charges,MTF Unpledge Request,12 + GST
+Fyers,DP Charges,Dematerialization,0
+Fyers,DP Charges,Erroneous Transfer Reversal,100 + GST per transaction
+Fyers,DP Charges,DDPI Offline,150 incl GST
+Fyers,DP Charges,DDPI Online,0
+Fyers,Equity Delivery,STT/CTT,0.1% on buy and sell
+Fyers,Equity Intraday,STT/CTT,0.025% on sell
+Fyers,Futures,STT/CTT,0.05% on sell
+Fyers,Options,STT/CTT,0.15% on sell (premium) / on exercise
+Fyers,Equity Delivery,Exchange Txn Charges NSE,0.0030699%
+Fyers,Equity Intraday,Exchange Txn Charges NSE,0.0030699%
+Fyers,Futures,Exchange Txn Charges NSE,0.0018299%
+Fyers,Options,Exchange Txn Charges NSE,0.0355299% on premium
+Fyers,Equity Delivery,Exchange Txn Charges BSE,0.00375%
+Fyers,Equity Intraday,Exchange Txn Charges BSE,0.00375%
+Fyers,Futures,Exchange Txn Charges BSE,0.0325% (Sensex/Bankex) / 0.005% (Sensex50/Stock)
+Fyers,Options,Exchange Txn Charges BSE,0.0325% (Sensex/Bankex) / 0.005% (Sensex50/Stock)
+Fyers,All Equity Segments,SEBI Turnover Fee,10 per Crore
+Fyers,All Equity Segments,GST,18% on (Brokerage+Txn Charges+Clearing+SEBI+NSE IPFT)
+Fyers,Equity Delivery,Stamp Duty,0.015% on buy value
+Fyers,Equity Intraday,Stamp Duty,0.003% on buy value
+Fyers,Futures,Stamp Duty,0.002% on buy value
+Fyers,Options,Stamp Duty,0.003% on buy value
+Fyers,All Equity Segments,NSE IPFT,0.01 per Crore (Options: per Crore on premium)
+Fyers,Futures,Clearing Charges,0.0005%
+Fyers,Options,Clearing Charges,0.009%
+Fyers,Currency Futures,Brokerage,implied same as F&O flat 20/0.03%
+Fyers,Currency Futures,STT/CTT,0
+Fyers,Currency Options,STT/CTT,0
+Fyers,Currency Futures,Exchange Txn Charges NSE,0.00035%
+Fyers,Currency Options,Exchange Txn Charges NSE,0.0311%
+Fyers,Currency Futures,Exchange Txn Charges BSE,0.00045%
+Fyers,Currency Options,Exchange Txn Charges BSE,0.001%
+Fyers,Currency Futures,Stamp Duty,0.0001% on buy value
+Fyers,Currency Options,Stamp Duty,0.0001% on buy value
+Fyers,Currency Futures,NSE IPFT,5 per Crore
+Fyers,Currency Options,NSE IPFT,200 per Crore
+Fyers,Currency Futures,Clearing Charges,0.0005%
+Fyers,Currency Options,Clearing Charges NSE,0.009%
+Fyers,Currency Options,Clearing Charges BSE,0.0005%
+Fyers,Commodity Futures,STT/CTT,0
+Fyers,Commodity Options,STT/CTT,0
+Fyers,Commodity Futures,Exchange Txn Charges NSE,0.00035%
+Fyers,Commodity Options,Exchange Txn Charges NSE,0.0311%
+Fyers,Commodity Futures,Exchange Txn Charges BSE,0.00045%
+Fyers,Commodity Options,Exchange Txn Charges BSE,0.001%
+Fyers,Commodity Futures,Stamp Duty,0.0001% on buy value
+Fyers,Commodity Options,Stamp Duty,0.0001% on buy value
+Fyers,Commodity Futures,NSE IPFT,5 per Crore
+Fyers,Commodity Options,NSE IPFT,200 per Crore
+Fyers,Commodity Futures,Clearing Charges,0.0005%
+Fyers,Commodity Options,Clearing Charges NSE,0.009%
+Fyers,Commodity Options,Clearing Charges BSE,0.0005%
+Zerodha,Equity Delivery,Brokerage,Zero
+Zerodha,Equity Intraday,Brokerage,0.03% or 20/order (whichever lower)
+Zerodha,Futures,Brokerage,0.03% or 20/order (whichever lower)
+Zerodha,Options,Brokerage,Flat 20 per executed order
+Zerodha,Direct MF,Brokerage,Zero
+Zerodha,Equity Delivery,STT/CTT,0.1% on buy and sell
+Zerodha,Equity Intraday,STT/CTT,0.025% on sell
+Zerodha,Futures,STT/CTT,0.05% on sell
+Zerodha,Options,STT/CTT,0.15% on exercised intrinsic value / on sell premium
+Zerodha,Equity Delivery,Exchange Txn Charges NSE,0.00307%
+Zerodha,Equity Intraday,Exchange Txn Charges NSE,0.00307%
+Zerodha,Futures,Exchange Txn Charges NSE,0.00183%
+Zerodha,Options,Exchange Txn Charges NSE,0.03553% on premium
+Zerodha,Equity Delivery,Exchange Txn Charges BSE,0.00375%
+Zerodha,Equity Intraday,Exchange Txn Charges BSE,0.00375%
+Zerodha,Futures,Exchange Txn Charges BSE,0%
+Zerodha,Options,Exchange Txn Charges BSE,0.0325% on premium
+Zerodha,All Equity Segments,GST,18% on (brokerage+SEBI+txn charges)
+Zerodha,All Equity Segments,SEBI Charges,10 per Crore
+Zerodha,Equity Delivery,Stamp Charges,0.015% or 1500/crore on buy
+Zerodha,Equity Intraday,Stamp Charges,0.003% or 300/crore on buy
+Zerodha,Futures,Stamp Charges,0.002% or 200/crore on buy
+Zerodha,Options,Stamp Charges,0.003% or 300/crore on buy
+Zerodha,Account Opening,Individual,Free
+Zerodha,Account Opening,Minor,Free
+Zerodha,Account Opening,NRI,500
+Zerodha,Account Opening,HUF,Free online / 500 offline
+Zerodha,Account Opening,Partnership/LLP/Corporate,500 (offline only)
+Zerodha,Demat AMC,First Year,Free (resident individual only)
+Zerodha,Demat AMC,BSDA up to 4 lakh,Free
+Zerodha,Demat AMC,BSDA 4-10 lakh,100/yr + 18% GST quarterly
+Zerodha,Demat AMC,BSDA above 10 lakh,300/yr + 18% GST quarterly
+Zerodha,Demat AMC,Non-BSDA,300/yr + 18% GST quarterly
+Zerodha,Value Added Services,Tickertape,Free / Pro 249-2399 monthly-annual
+Zerodha,Value Added Services,Smallcase,100 per buy txn / 10 per SIP
+Zerodha,Value Added Services,Kite Connect,"500/month Connect, Free Personal"
+Zerodha,General,Call & Trade,50 per order extra
+Zerodha,General,NRI Non-PIS,0.5% or 50/order (whichever lower)
+Zerodha,General,NRI PIS,0.5% or 200/order (whichever lower) + 500+GST AMC
+Zerodha,General,Debit Balance Account,extra 20 per order
+Zerodha,General,IPFT Equity/Futures,0.01 per crore + GST
+Zerodha,General,IPFT Options,0.01 per crore + GST on premium
+Zerodha,General,IPFT Currency,"0.05/lakh futures, 2/lakh options (premium) + GST"
+Zerodha,MTF,Interest,0.04% per day (40 per lakh) from T+1
+Zerodha,MTF,Brokerage,0.3% or 20/order (whichever lower)
+Zerodha,MTF,Pledge Charge,15 + GST per pledge/unpledge per ISIN
+Zerodha,DP Charges,Debit (Sell),15.34 per scrip (3.5 CDSL+9.5 Zerodha+GST)
+Zerodha,DP Charges,Pledging,30 + GST per request per ISIN
+Zerodha,General,Corporate Action Orders,20 + GST (OFS/buyback/takeover/delisting)
+Zerodha,General,Off-market Transfer,25 per transaction
+Zerodha,General,Physical CMR Request,"First free, then 20+100 courier+18% GST"
+Zerodha,General,Payment Gateway,9 + GST (free on UPI)
+Zerodha,General,Delayed Payment Interest,18% p.a. / 0.05% per day
+Zerodha,3-in-1 Block Account,Delivery & MTF Brokerage,0.5% per order
+Zerodha,3-in-1 Block Account,Intraday Brokerage,0.05% per order
+Zerodha,Currency Futures,Brokerage,0.03% or 20/order (whichever lower)
+Zerodha,Currency Options,Brokerage,20 per executed order
+Zerodha,Currency Futures,STT/CTT,No STT
+Zerodha,Currency Options,STT/CTT,No STT
+Zerodha,Currency Futures,Exchange Txn Charges NSE,0.00035%
+Zerodha,Currency Options,Exchange Txn Charges NSE,0.0311%
+Zerodha,Currency Futures,Exchange Txn Charges BSE,0.00045%
+Zerodha,Currency Options,Exchange Txn Charges BSE,0.001%
+Zerodha,Currency Futures,SEBI Charges,10 per crore
+Zerodha,Currency Options,SEBI Charges,10 per crore
+Zerodha,Currency Futures,Stamp Charges,0.0001% or 10/crore on buy
+Zerodha,Currency Options,Stamp Charges,0.0001% or 10/crore on buy
+Zerodha,Commodity Futures,Brokerage,0.03% or 20/order (whichever lower)
+Zerodha,Commodity Options,Brokerage,20 per executed order
+Zerodha,Commodity Futures,STT/CTT,0.01% on sell (non-agri)
+Zerodha,Commodity Options,STT/CTT,0.05% on sell
+Zerodha,Commodity Futures,Exchange Txn Charges MCX,0.0021%
+Zerodha,Commodity Futures,Exchange Txn Charges NSE,0.0001%
+Zerodha,Commodity Options,Exchange Txn Charges MCX,0.0418%
+Zerodha,Commodity Options,Exchange Txn Charges NSE,0.001%
+Zerodha,Commodity Futures,SEBI Charges,Agri 1/crore Non-agri 10/crore
+Zerodha,Commodity Options,SEBI Charges,10 per crore
+Zerodha,Commodity Futures,Stamp Charges,0.002% or 200/crore on buy
+Zerodha,Commodity Options,Stamp Charges,0.003% or 300/crore on buy
+Dhan,Equity Delivery,Brokerage,Zero
+Dhan,Equity Intraday,Brokerage,20 or 0.03% per order (whichever lower)
+Dhan,Equity MTF,Brokerage,20 or 0.03% per order (whichever lower)
+Dhan,Equity Delivery,Exchange Txn Charges BSE,0.00375%
+Dhan,Equity Delivery,Exchange Txn Charges NSE,0.0030699%
+Dhan,Equity Intraday,Exchange Txn Charges BSE,0.00375%
+Dhan,Equity Intraday,Exchange Txn Charges NSE,0.0030699%
+Dhan,Equity MTF,Exchange Txn Charges BSE,0.00375%
+Dhan,Equity MTF,Exchange Txn Charges NSE,0.0030699%
+Dhan,All Equity Segments,GST,18% on brokerage+txn charges+SEBI+IPFT/other
+Dhan,Equity Delivery,STT,0.1% on buy and sell
+Dhan,Equity Intraday,STT,0.025% on sell
+Dhan,Equity MTF,STT,0.1% on buy and sell
+Dhan,All Equity Segments,SEBI Turnover Fee,0.0001% of turnover
+Dhan,Equity Delivery,Stamp Duty,0.015% on buy turnover
+Dhan,Equity Intraday,Stamp Duty,0.003% on buy turnover
+Dhan,Equity MTF,Stamp Duty,0.015% on buy turnover
+Dhan,All Equity Segments,IPFT Contribution,0.0000001% of turnover
+Dhan,General,OFS Transaction Charges,300 per crore
+Dhan,General,Physical Delivery F&O,0.10% of contract value + exchange charges
+Dhan,General,Expired/Exercised/Assigned Options,20 per executed order
+Dhan,General,MF Redemption DP Charge,12.50 per ISIN + GST
+Dhan,Demat Account,Account Opening (Individual/HUF),0
+Dhan,Demat Account,AMC (Individual/HUF),0
+Dhan,Demat Account,AMC (NRI/Corporate/LLP/Partnership/Trust),800 + GST
+Dhan,Demat Account,DP Transaction Charge,12.50 per instruction per ISIN + GST
+Dhan,Demat Account,Pledge Charges,15 per txn per ISIN + GST (pledge/unpledge/invocation)
+Dhan,General,Platform Charges,0
+Dhan,General,Auto Square Off,20 per order + GST
+Dhan,General,Call & Trade,50 per order + GST
+Dhan,General,Payment Gateway,0 (UPI/net banking)
+Dhan,General,Interest Charges (non-MTF debit),0.0438% per day
+Dhan,General,CUSPA Charges,15 per instruction per ISIN + GST
+Dhan,General,Bounced Contract Note,5 + GST digital re-attempt / 100 + GST physical
+Dhan,MTF Interest,Up to 500000,12.49% p.a.
+Dhan,MTF Interest,500000.01-1000000,13.49% p.a.
+Dhan,MTF Interest,1000000.01-2500000,14.49% p.a.
+Dhan,MTF Interest,2500000.01-50000000,15.49% p.a.
+Dhan,Futures (Equity F&O),Brokerage,20 per executed order
+Dhan,Options (Equity F&O),Brokerage,20 per executed order
+Dhan,Futures (Equity F&O),Exchange Txn Charges NSE,0.0018299%
+Dhan,Futures (Equity F&O),Exchange Txn Charges BSE,0
+Dhan,Options (Equity F&O),Exchange Txn Charges NSE,0.0355299% on premium
+Dhan,Options (Equity F&O),Exchange Txn Charges BSE Index,0.0325% on premium
+Dhan,Options (Equity F&O),Exchange Txn Charges BSE Stock,0.005% on premium
+Dhan,Futures (Equity F&O),STT,0.05% on sell
+Dhan,Options (Equity F&O),STT,0.15% on sell premium / 0.15% on exercised intrinsic value
+Dhan,Futures (Equity F&O),SEBI Turnover Fee,0.0001% of turnover
+Dhan,Options (Equity F&O),SEBI Turnover Fee,0.0001% of turnover
+Dhan,Futures (Equity F&O),Stamp Duty,0.002% on buy turnover
+Dhan,Options (Equity F&O),Stamp Duty,0.003% on buy turnover
+Dhan,Commodity Futures,Brokerage,20 per executed order
+Dhan,Commodity Options,Brokerage,20 per executed order
+Dhan,Commodity Futures,Exchange Txn Charges NSE,0.0001%
+Dhan,Commodity Futures,Exchange Txn Charges MCX,0.0021%
+Dhan,Commodity Options,Exchange Txn Charges NSE,0.001%
+Dhan,Commodity Options,Exchange Txn Charges MCX,0.0418%
+Dhan,Commodity Futures,CTT,0.01% on sell
+Dhan,Commodity Options,CTT,0.05% on sell
+Dhan,Commodity Futures,SEBI Turnover Fee,0.0001% of turnover
+Dhan,Commodity Options,SEBI Turnover Fee,0.0001% of turnover
+Dhan,Commodity Futures,Stamp Duty,0.002% on buy turnover
+Dhan,Commodity Options,Stamp Duty,0.003% on buy turnover
+Dhan,ETF Delivery,Brokerage,Zero
+Dhan,ETF Intraday,Brokerage,20 or 0.03% per order (whichever lower)
+Dhan,ETF Delivery,STT,0.001% on sell turnover
+Dhan,ETF Intraday,STT,0.025% on sell turnover
+Dhan,ETF Delivery,Stamp Duty,0.015% on buy turnover
+Dhan,ETF Intraday,Stamp Duty,0.003% on buy turnover
+Dhan,Mutual Funds,Account Opening,0
+Dhan,Mutual Funds,Platform Fees,0
+Dhan,Mutual Funds,Brokerage,0
+Dhan,Mutual Funds,Commission,0% (direct MF)
+Dhan,Mutual Funds,Payment,0
+Groww,Equity Delivery,Brokerage,Zero
+Groww,Equity Intraday,Brokerage,Flat 20 per executed order
+Groww,Futures,Brokerage,Flat 20 per executed order
+Groww,Options,Brokerage,Flat 20 per executed order
+Groww,Equity Delivery,STT/CTT,0.1% on buy and sell
+Groww,Equity Intraday,STT/CTT,0.025% on sell
+Groww,Futures,STT/CTT,0.05% on sell
+Groww,Options,STT/CTT,0.15% on sell (premium)
+Groww,Equity Delivery,Exchange Txn Charges NSE,0.003069%
+Groww,Equity Intraday,Exchange Txn Charges NSE,0.003069%
+Groww,Futures,Exchange Txn Charges NSE,0.00182%
+Groww,Options,Exchange Txn Charges NSE,0.03553% on premium
+Groww,Equity Delivery,Exchange Txn Charges BSE,0.00375%
+Groww,Equity Intraday,Exchange Txn Charges BSE,0.00375%
+Groww,All Equity Segments,GST,18% on (brokerage+SEBI+txn charges)
+Groww,All Equity Segments,SEBI Charges,10 per Crore
+Groww,Equity Delivery,Stamp Charges,0.015% or 1500/crore on buy
+Groww,Equity Intraday,Stamp Charges,0.003% or 300/crore on buy
+Groww,Futures,Stamp Charges,0.002% or 200/crore on buy
+Groww,Options,Stamp Charges,0.003% or 300/crore on buy
+Groww,All Equity Segments,NSE IPFT,0.01 per Crore
+Groww,Futures,Clearing Charges,0.0005%
+Groww,Options,Clearing Charges,0.009%
+Groww,DP Charges,Debit Charges (Sell),15 per scrip incl GST
+Groww,DP Charges,Debit Charges (Buy),0
