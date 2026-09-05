@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { axe, toHaveNoViolations } from 'jest-axe'
 import { describe, expect, it } from 'vitest'
 import { render, screen, userEvent } from '@/test/test-utils'
 import {
@@ -6,6 +7,8 @@ import {
   type ChargeState,
 } from '@/lib/portfolioRequest'
 import { ChargeControls } from './ChargeControls'
+
+expect.extend(toHaveNoViolations)
 
 function Harness() {
   const [value, setValue] = useState<ChargeState>(DEFAULT_CHARGES)
@@ -21,6 +24,70 @@ function Harness() {
 }
 
 describe('ChargeControls', () => {
+  describe('accessibility', () => {
+    it('associates every visible charge label with a uniquely identified control', () => {
+      render(<Harness />)
+
+      expect(screen.getByRole('group', { name: 'Exchange' })).toBeInTheDocument()
+      expect(screen.getByRole('group', { name: 'Brokerage' })).toBeInTheDocument()
+
+      const labelledControls = [
+        ['Per order (₹)', 'portfolio-charge-brokerage-flat'],
+        ['STT (%)', 'portfolio-charge-stt'],
+        ['Exchange txn (%)', 'portfolio-charge-exchangeTxn'],
+        ['Stamp duty (%)', 'portfolio-charge-stampDuty'],
+        ['GST (%)', 'portfolio-charge-gst'],
+        ['SEBI (₹/crore)', 'portfolio-charge-sebiPerCrore'],
+        ['Slippage (%)', 'portfolio-charge-slippage'],
+      ]
+
+      const ids = labelledControls.map(([label, id]) => {
+        const control = screen.getByLabelText(label)
+        expect(control).toHaveAttribute('id', id)
+        return control.id
+      })
+
+      expect(new Set(ids).size).toBe(ids.length)
+    })
+
+    it('reports active exchange and brokerage options as pressed', () => {
+      render(<Harness />)
+
+      expect(screen.getByRole('button', { name: 'NSE' })).toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByRole('button', { name: 'BSE' })).toHaveAttribute('aria-pressed', 'false')
+      expect(screen.getByRole('button', { name: '₹ / order' })).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      )
+      expect(screen.getByRole('button', { name: '% of order' })).toHaveAttribute(
+        'aria-pressed',
+        'false'
+      )
+    })
+
+    it('associates the percent brokerage controls with their visible labels', async () => {
+      const user = userEvent.setup()
+      render(<Harness />)
+
+      await user.click(screen.getByRole('button', { name: '% of order' }))
+
+      expect(screen.getByLabelText('Rate (%)')).toHaveAttribute(
+        'id',
+        'portfolio-charge-brokerage-pct'
+      )
+      expect(screen.getByLabelText('Cap / order (₹)')).toHaveAttribute(
+        'id',
+        'portfolio-charge-brokerage-cap'
+      )
+    })
+
+    it('has no accessibility violations', async () => {
+      const { container } = render(<Harness />)
+
+      expect(await axe(container)).toHaveNoViolations()
+    })
+  })
+
   it('updates the exchange transaction rate with the venue', async () => {
     const user = userEvent.setup()
     render(<Harness />)
@@ -29,5 +96,16 @@ describe('ChargeControls', () => {
     await user.click(screen.getByRole('button', { name: 'BSE' }))
 
     expect(screen.getByDisplayValue('0.00375')).toBeInTheDocument()
+  })
+
+  it('updates a charge control found by its visible label', async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+
+    const stt = screen.getByLabelText('STT (%)')
+    await user.clear(stt)
+    await user.type(stt, '0.2')
+
+    expect(stt).toHaveValue(0.2)
   })
 })

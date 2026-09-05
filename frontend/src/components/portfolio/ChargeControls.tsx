@@ -40,7 +40,7 @@ export function ChargeControls({ value, onChange, exchange, onExchange }: Props)
 
       <div>
         <Label className="text-[11px]">Exchange</Label>
-        <div className="mt-1 flex gap-1">
+        <fieldset aria-label="Exchange" className="mt-1 flex min-w-0 gap-1">
           {(['NSE', 'BSE'] as const).map((ex) => (
             <button
               key={ex}
@@ -57,16 +57,17 @@ export function ChargeControls({ value, onChange, exchange, onExchange }: Props)
                   ? 'border-primary/50 bg-primary/15 text-primary'
                   : 'hover:bg-accent'
               )}
+              aria-pressed={exchange === ex}
             >
               {ex}
             </button>
           ))}
-        </div>
+        </fieldset>
       </div>
 
       <div className="space-y-2 border-t pt-2">
         <Label className="text-[11px]">Brokerage</Label>
-        <div className="flex gap-1">
+        <fieldset aria-label="Brokerage" className="flex min-w-0 gap-1">
           {(['flat', 'percent'] as const).map((m) => (
             <button
               key={m}
@@ -78,15 +79,22 @@ export function ChargeControls({ value, onChange, exchange, onExchange }: Props)
                   ? 'border-primary/50 bg-primary/15 text-primary'
                   : 'hover:bg-accent'
               )}
+              aria-pressed={value.brokerageMode === m}
             >
               {m === 'flat' ? '₹ / order' : '% of order'}
             </button>
           ))}
-        </div>
+        </fieldset>
         {value.brokerageMode === 'flat' ? (
           <div className={row}>
-            <span className="text-xs text-muted-foreground">Per order (₹)</span>
+            <Label
+              htmlFor="portfolio-charge-brokerage-flat"
+              className="text-xs text-muted-foreground"
+            >
+              Per order (₹)
+            </Label>
             <Input
+              id="portfolio-charge-brokerage-flat"
               type="number"
               className={num}
               value={value.brokerageFlat}
@@ -96,8 +104,14 @@ export function ChargeControls({ value, onChange, exchange, onExchange }: Props)
         ) : (
           <>
             <div className={row}>
-              <span className="text-xs text-muted-foreground">Rate (%)</span>
+              <Label
+                htmlFor="portfolio-charge-brokerage-pct"
+                className="text-xs text-muted-foreground"
+              >
+                Rate (%)
+              </Label>
               <Input
+                id="portfolio-charge-brokerage-pct"
                 type="number"
                 step="0.001"
                 className={num}
@@ -106,8 +120,14 @@ export function ChargeControls({ value, onChange, exchange, onExchange }: Props)
               />
             </div>
             <div className={row}>
-              <span className="text-xs text-muted-foreground">Cap / order (₹)</span>
+              <Label
+                htmlFor="portfolio-charge-brokerage-cap"
+                className="text-xs text-muted-foreground"
+              >
+                Cap / order (₹)
+              </Label>
               <Input
+                id="portfolio-charge-brokerage-cap"
                 type="number"
                 className={num}
                 value={value.brokerageCap}
@@ -133,8 +153,14 @@ export function ChargeControls({ value, onChange, exchange, onExchange }: Props)
         ].map(([label, key, note, step]) => (
           <div key={key as string}>
             <div className={row}>
-              <span className="text-xs">{label}</span>
+              <Label
+                htmlFor={`portfolio-charge-${key as string}`}
+                className="text-xs"
+              >
+                {label}
+              </Label>
               <Input
+                id={`portfolio-charge-${key as string}`}
                 type="number"
                 step={step as number}
                 className={num}
