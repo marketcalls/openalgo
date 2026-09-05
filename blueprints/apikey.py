@@ -1,5 +1,6 @@
 import os
 import secrets
+from functools import wraps
 from pathlib import Path
 
 from argon2 import PasswordHasher
@@ -42,8 +43,26 @@ def generate_api_key():
     return secrets.token_hex(32)
 
 
+def no_store_headers(f):
+    """Add no-store cache headers to credential-bearing responses.
+
+    Prevents browser history, shared proxies, and debugging caches from
+    retaining decrypted/newly generated API keys.
+    """
+
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        resp = f(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        return resp
+
+    return wrapper
+
+
 @api_key_bp.route("/apikey", methods=["GET", "POST"])
 @check_session_validity
+@no_store_headers
 def manage_api_key():
     if request.method == "GET":
         login_username = session["user"]
