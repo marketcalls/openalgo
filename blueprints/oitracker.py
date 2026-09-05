@@ -9,13 +9,13 @@ Endpoints:
 
 import re
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, g, jsonify, request, session
 from flask_cors import cross_origin
 
 from database.auth_db import get_api_key_for_tradingview
 from services.oi_tracker_service import calculate_max_pain, get_oi_data
 from utils.logging import get_logger
-from utils.session import check_session_validity
+from utils.session import check_session_validity, apikey_or_session
 
 logger = get_logger(__name__)
 
@@ -24,11 +24,11 @@ oitracker_bp = Blueprint("oitracker_bp", __name__, url_prefix="/")
 
 @oitracker_bp.route("/oitracker/api/oi-data", methods=["POST"])
 @cross_origin()
-@check_session_validity
+@apikey_or_session
 def oi_data():
     """Get Open Interest data for all strikes."""
     try:
-        login_username = session.get("user")
+        login_username = getattr(g, "openalgo_user", None) or session.get("user")
         if not login_username:
             return jsonify({"status": "error", "message": "Authentication required"}), 401
 
@@ -76,11 +76,11 @@ def oi_data():
 
 @oitracker_bp.route("/oitracker/api/maxpain", methods=["POST"])
 @cross_origin()
-@check_session_validity
+@apikey_or_session
 def maxpain():
     """Calculate Max Pain for an underlying/expiry."""
     try:
-        login_username = session.get("user")
+        login_username = getattr(g, "openalgo_user", None) or session.get("user")
         if not login_username:
             return jsonify({"status": "error", "message": "Authentication required"}), 401
 

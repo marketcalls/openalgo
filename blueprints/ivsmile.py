@@ -8,13 +8,13 @@ Endpoints:
 
 import re
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, g, jsonify, request, session
 from flask_cors import cross_origin
 
 from database.auth_db import get_api_key_for_tradingview
 from services.iv_smile_service import get_iv_smile_data
 from utils.logging import get_logger
-from utils.session import check_session_validity
+from utils.session import check_session_validity, apikey_or_session
 
 logger = get_logger(__name__)
 
@@ -23,11 +23,11 @@ ivsmile_bp = Blueprint("ivsmile_bp", __name__, url_prefix="/")
 
 @ivsmile_bp.route("/ivsmile/api/iv-smile-data", methods=["POST"])
 @cross_origin()
-@check_session_validity
+@apikey_or_session
 def iv_smile_data():
     """Get IV Smile data for all strikes."""
     try:
-        login_username = session.get("user")
+        login_username = getattr(g, "openalgo_user", None) or session.get("user")
         if not login_username:
             return jsonify({"status": "error", "message": "Authentication required"}), 401
 

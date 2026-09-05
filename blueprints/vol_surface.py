@@ -3,13 +3,13 @@ Volatility Surface Blueprint
 Serves 3D implied volatility surface data for index options.
 """
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, g, jsonify, request, session
 from flask_cors import cross_origin
 
-from database.auth_db import get_api_key_for_tradingview, get_auth_token
+from database.auth_db import get_api_key_for_tradingview, get_auth_token, get_broker_name
 from services.vol_surface_service import get_vol_surface_data
 from utils.logging import get_logger
-from utils.session import check_session_validity
+from utils.session import check_session_validity, apikey_or_session
 
 logger = get_logger(__name__)
 
@@ -18,15 +18,17 @@ vol_surface_bp = Blueprint("vol_surface_bp", __name__, url_prefix="/")
 
 @vol_surface_bp.route("/volsurface/api/surface-data", methods=["POST"])
 @cross_origin()
-@check_session_validity
+@apikey_or_session
 def surface_data():
     """Get 3D volatility surface data across strikes and expiries."""
     try:
-        broker = session.get("broker")
+        data0 = request.get_json(silent=True) or {}
+        body_apikey = data0.get("apikey") if isinstance(data0, dict) else None
+        broker = get_broker_name(body_apikey) if body_apikey else session.get("broker")
         if not broker:
             return jsonify({"status": "error", "message": "Broker not set in session"}), 400
 
-        login_username = session["user"]
+        login_username = getattr(g, "openalgo_user", None) or session.get("user")
         auth_token = get_auth_token(login_username)
         if auth_token is None:
             return jsonify({"status": "error", "message": "Authentication required"}), 401

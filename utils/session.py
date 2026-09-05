@@ -54,6 +54,48 @@ def set_session_login_time():
     logger.info(f"Session login time set to: {now_ist}")
 
 
+def apikey_or_session(f):
+    """
+    Accept either a valid Flask session OR a valid API key in the request
+    body (`{"apikey": ...}`). Resolves the authenticated username into
+    `flask.g.openalgo_user` so the wrapped route can use
+    `g.openalgo_user or session.get("user")`.
+
+    Stream B1 (2026-08-08): the analytics blueprints (gex/gamma_density/
+    ivchart/ivsmile/vol_surface/oiprofile/oitracker) were session-only, so
+    the gateway's apikey-based client could not proxy them. This decorator
+    reuses the SAME credential verification as the /api/v1 restx surface
+    (`get_username_by_apikey`), so an apikey grants exactly the data reads
+    it already grants on /api/v1/* — nothing more.
+    """
+
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        from flask import g, jsonify, request
+        from database.auth_db import get_username_by_apikey
+
+        # 1. apikey path: verify against the same store the restx API uses.
+        if request.is_json:
+            body = request.get_json(silent=True) or {}
+            provided = body.get("apikey") if isinstance(body, dict) else None
+            if isinstance(provided, str) and provided:
+                username = get_username_by_apikey(provided)
+                if username is None:
+                    return jsonify({"status": "error", "message": "Invalid openalgo apikey"}), 401
+                g.openalgo_user = username
+                return f(*args, **kwargs)
+
+        # 2. session fallback: unchanged behavior.
+        if is_session_valid():
+            g.openalgo_user = session.get("user")
+            return f(*args, **kwargs)
+
+        # 3. neither: match check_session_validity's AJAX JSON response.
+        return jsonify({"status": "error", "message": "Authentication required"}), 401
+
+    return decorated_function
+
+
 def is_session_valid():
     """Check if the current session is valid"""
     if not session.get("logged_in"):

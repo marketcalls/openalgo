@@ -8,13 +8,13 @@ Endpoints:
 
 import re
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, g, jsonify, request, session
 from flask_cors import cross_origin
 
 from database.auth_db import get_api_key_for_tradingview
 from services.gex_service import get_gex_data
 from utils.logging import get_logger
-from utils.session import check_session_validity
+from utils.session import check_session_validity, apikey_or_session
 
 logger = get_logger(__name__)
 
@@ -23,11 +23,11 @@ gex_bp = Blueprint("gex_bp", __name__, url_prefix="/")
 
 @gex_bp.route("/gex/api/gex-data", methods=["POST"])
 @cross_origin()
-@check_session_validity
+@apikey_or_session
 def gex_data():
     """Get GEX data for all strikes."""
     try:
-        login_username = session.get("user")
+        login_username = getattr(g, "openalgo_user", None) or session.get("user")
         if not login_username:
             return jsonify({"status": "error", "message": "Authentication required"}), 401
 

@@ -9,14 +9,14 @@ Endpoints:
 
 import re
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, g, jsonify, request, session
 from flask_cors import cross_origin
 
 from database.auth_db import get_api_key_for_tradingview
 from services.intervals_service import get_intervals
 from services.oi_profile_service import get_oi_profile_data
 from utils.logging import get_logger
-from utils.session import check_session_validity
+from utils.session import check_session_validity, apikey_or_session
 
 logger = get_logger(__name__)
 
@@ -28,11 +28,11 @@ oiprofile_bp = Blueprint("oiprofile_bp", __name__, url_prefix="/")
 
 @oiprofile_bp.route("/oiprofile/api/profile-data", methods=["POST"])
 @cross_origin()
-@check_session_validity
+@apikey_or_session
 def profile_data():
     """Get OI Profile data (futures candles + OI + OI change)."""
     try:
-        login_username = session.get("user")
+        login_username = getattr(g, "openalgo_user", None) or session.get("user")
         if not login_username:
             return jsonify({"status": "error", "message": "Authentication required"}), 401
 
@@ -97,11 +97,11 @@ def profile_data():
 
 @oiprofile_bp.route("/oiprofile/api/intervals", methods=["GET"])
 @cross_origin()
-@check_session_validity
+@apikey_or_session
 def intervals():
     """Get broker-supported intervals filtered to 1m, 5m, 15m."""
     try:
-        login_username = session.get("user")
+        login_username = getattr(g, "openalgo_user", None) or session.get("user")
         if not login_username:
             return jsonify({"status": "error", "message": "Authentication required"}), 401
 
