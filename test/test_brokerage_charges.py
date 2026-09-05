@@ -29,15 +29,25 @@ def test_supported_brokers():
 def test_unsupported_broker_rejected():
     with pytest.raises(ValueError):
         estimate_brokerage(
-            broker="flattrade", exchange="NSE", product="MIS", symbol="SBIN",
-            side="BUY", quantity=1, price=500,
+            broker="flattrade",
+            exchange="NSE",
+            product="MIS",
+            symbol="SBIN",
+            side="BUY",
+            quantity=1,
+            price=500,
         )
 
 
 def test_zerodha_intraday_buy():
     r = estimate_brokerage(
-        broker="zerodha", exchange="NSE", product="MIS", symbol="SBIN",
-        side="BUY", quantity=100, price=500,
+        broker="zerodha",
+        exchange="NSE",
+        product="MIS",
+        symbol="SBIN",
+        side="BUY",
+        quantity=100,
+        price=500,
     )
     assert r["segment"] == "Equity Intraday"
     assert r["components"] == {
@@ -56,8 +66,13 @@ def test_zerodha_intraday_buy():
 
 def test_zerodha_delivery_sell_includes_stt_and_dp():
     r = estimate_brokerage(
-        broker="zerodha", exchange="NSE", product="CNC", symbol="SBIN",
-        side="SELL", quantity=100, price=500,
+        broker="zerodha",
+        exchange="NSE",
+        product="CNC",
+        symbol="SBIN",
+        side="SELL",
+        quantity=100,
+        price=500,
     )
     assert r["segment"] == "Equity Delivery"
     assert r["total"] == 67.21
@@ -67,8 +82,14 @@ def test_zerodha_delivery_sell_includes_stt_and_dp():
 
 def test_fyers_options_sell_includes_clearing():
     r = estimate_brokerage(
-        broker="fyers", exchange="NFO", product="NRML", symbol="NIFTY26AUG2024200CE",
-        side="SELL", quantity=1, price=200, lot_size=75,
+        broker="fyers",
+        exchange="NFO",
+        product="NRML",
+        symbol="NIFTY26AUG2024200CE",
+        side="SELL",
+        quantity=1,
+        price=200,
+        lot_size=75,
     )
     assert r["segment"] == "Options"
     assert r["total"] == 54.00
@@ -79,8 +100,13 @@ def test_fyers_options_sell_includes_clearing():
 
 def test_groww_delivery_sell_dp_not_overwritten_by_buy_row():
     r = estimate_brokerage(
-        broker="groww", exchange="NSE", product="CNC", symbol="SBIN",
-        side="SELL", quantity=100, price=500,
+        broker="groww",
+        exchange="NSE",
+        product="CNC",
+        symbol="SBIN",
+        side="SELL",
+        quantity=100,
+        price=500,
     )
     assert r["segment"] == "Equity Delivery"
     assert r["components"]["dp_charges"] == 15.00
@@ -89,19 +115,55 @@ def test_groww_delivery_sell_dp_not_overwritten_by_buy_row():
 
 def test_dhan_intraday_buy():
     r = estimate_brokerage(
-        broker="dhan", exchange="NSE", product="MIS", symbol="RELIANCE",
-        side="BUY", quantity=500, price=2600,
+        broker="dhan",
+        exchange="NSE",
+        product="MIS",
+        symbol="RELIANCE",
+        side="BUY",
+        quantity=500,
+        price=2600,
     )
     assert r["segment"] == "Equity Intraday"
     assert r["total"] == 111.23
     assert r["components"]["stamp_duty"] == 39.00
 
 
+def test_tariff_rows_preserve_all_four_columns():
+    import csv
+
+    from services.brokerage_charges import CHARGES_CSV
+
+    with CHARGES_CSV.open(encoding="utf-8-sig", newline="") as fh:
+        rows = list(csv.reader(fh))
+    assert all(len(row) == 4 for row in rows if row)
+    assert any(row[-1] == "500/month Connect, Free Personal" for row in rows)
+
+
+def test_orderbook_units_equal_equivalent_lots():
+    common = {
+        "broker": "zerodha",
+        "exchange": "NFO",
+        "product": "MIS",
+        "symbol": "BANKNIFTY26AUG2449000FUT",
+        "side": "BUY",
+        "price": 48000,
+    }
+    assert (
+        estimate_brokerage(**common, quantity=35)["total"]
+        == estimate_brokerage(**common, quantity=1, lot_size=35)["total"]
+    )
+
+
 def test_zerodha_futures_buy_scales_by_lot_size():
     r = estimate_brokerage(
-        broker="zerodha", exchange="NFO", product="MIS",
-        symbol="BANKNIFTY26AUG2449000FUT", side="BUY",
-        quantity=1, price=48000, lot_size=35,
+        broker="zerodha",
+        exchange="NFO",
+        product="MIS",
+        symbol="BANKNIFTY26AUG2449000FUT",
+        side="BUY",
+        quantity=1,
+        price=48000,
+        lot_size=35,
     )
     assert r["segment"] == "Futures"
     assert r["total"] == 95.46
@@ -112,8 +174,13 @@ def test_zerodha_futures_buy_scales_by_lot_size():
 def test_equity_symbol_ending_in_ce_is_not_options():
     for symbol in ("RELIANCE", "BAJFINANCE", "NIFTY"):
         r = estimate_brokerage(
-            broker="zerodha", exchange="NSE", product="MIS", symbol=symbol,
-            side="BUY", quantity=1, price=500,
+            broker="zerodha",
+            exchange="NSE",
+            product="MIS",
+            symbol=symbol,
+            side="BUY",
+            quantity=1,
+            price=500,
         )
         assert r["segment"] == "Equity Intraday", symbol
 

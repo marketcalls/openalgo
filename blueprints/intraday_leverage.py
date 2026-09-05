@@ -58,12 +58,16 @@ def get_leverage_batch():
     Request body: { symbols: ["SBIN", "RELIANCE", ...] }
     Returns: { status, data: [{ symbol, exchange, multiplier }, ...] }
     """
-    data = request.get_json()
-    if data is None or "symbols" not in data:
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or "symbols" not in data:
         return jsonify({"status": "error", "message": "Missing symbols field"}), 400
 
     symbols = data["symbols"]
-    if not isinstance(symbols, list) or len(symbols) > 100:
+    if (
+        not isinstance(symbols, list)
+        or len(symbols) > 100
+        or any(not isinstance(s, str) or not s.strip() for s in symbols)
+    ):
         return jsonify(
             {
                 "status": "error",
@@ -71,7 +75,10 @@ def get_leverage_batch():
             }
         ), 400
 
-    exchange = data.get("exchange", "NSE").upper()
+    exchange = data.get("exchange", "NSE")
+    if not isinstance(exchange, str) or not exchange.strip():
+        return jsonify({"status": "error", "message": "exchange must be a non-empty string"}), 400
+    exchange = exchange.strip().upper()
     results = get_multipliers_bulk(symbols, exchange)
 
     response = [

@@ -156,6 +156,7 @@ interface OrderLineRec {
 }
 
 interface PositionState {
+  exchange: string
   net: number
   avg: number
   product: string
@@ -268,6 +269,7 @@ export interface TerminalCallbacks {
     side: OrderSide
     type: OrderType
     sym: SymbolView
+    price?: number
     ltp: number | null
     product: string
   }): void
@@ -719,6 +721,7 @@ export class TradingTerminal {
   private lastLtp: number | null = null
   private sym: SymbolView | null = null
   private position: PositionState | null = null
+  private positionExchange: string | null = null
   private readonly orderLines = new Map<string, OrderLineRec>()
 
   private interval = '5m'
@@ -1035,6 +1038,7 @@ export class TradingTerminal {
     this.position = pos
       ? {
           net: Number(pos.quantity),
+          exchange: String(pos.exchange),
           avg: Number(pos.average_price),
           product: String(pos.product ?? ''),
         }
@@ -1094,7 +1098,7 @@ export class TradingTerminal {
         (j.data || []).find(
           (p) =>
             p.symbol === this.sym!.symbol &&
-            p.exchange === this.sym!.exchange &&
+            p.exchange === (this.positionExchange ?? this.sym!.exchange) &&
             Number(p.quantity) !== 0
         )
       )
@@ -1220,15 +1224,20 @@ export class TradingTerminal {
     // with the order changes.
     const exch = opts?.exchange ?? this.sym.exchange
     const hasRisk = Boolean(opts?.stoploss || opts?.target || opts?.trailingStoploss || opts?.gtt)
+    if (opts?.gtt) {
+      this.toast('GTT orders are not supported by this order route.', 'err')
+      return
+    }
     if (!opts && !this.armed) {
       // A host with the position calculator (onOrderRequest) gets the richer
       // confirmation surface; one with the classic ticket (onOrderTicket)
       // gets that; otherwise there is no confirm path and the click is
       // refused, in the same words the logger ships.
-      if (this.cb.onOrderRequest) {
+      if (this.cb.onOrderRequest && (type === 'MARKET' || type === 'LIMIT')) {
         this.cb.onOrderRequest({
           side,
           type,
+          price: type === 'LIMIT' ? px : undefined,
           sym: this.sym,
           ltp: this.marketPrice(),
           product: this.product,
@@ -1296,6 +1305,7 @@ export class TradingTerminal {
         })
         this.toast(`placed ${summary} (id ${r.orderId})`, 'ok')
       }
+      this.positionExchange = exch
       this.pollBook()
     } catch (e) {
       this.toast(this.cleanError(e), 'err')
@@ -1344,7 +1354,7 @@ export class TradingTerminal {
       // never placesmartorder.
       await this.trade.place({
         symbol: this.sym.symbol,
-        exchange: this.sym.exchange,
+        exchange: this.position.exchange,
         side,
         type: 'MARKET',
         qty,
@@ -3238,6 +3248,7 @@ export class TradingTerminal {
 
   /* ── symbol selection ─────────────────────────────────────────────────── */
   async loadSymbol(pick: SearchRow, opts: { silent?: boolean } = {}): Promise<boolean> {
+    this.positionExchange = null
     if (!this.rest) return false
     /**
      * Claim this load. Two awaits follow -- the symbol lookup and the bars --

@@ -1,6 +1,7 @@
 import copy
 import importlib
-from typing import Any, Dict, Optional, Tuple
+import math
+from typing import Any
 
 from database.auth_db import get_auth_token_broker
 from database.settings_db import get_analyze_mode
@@ -64,6 +65,31 @@ def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dic
     return error_response
 
 
+def _risk_error(data: dict[str, Any]) -> str | None:
+    if data.get("gtt") not in (None, False, 0, "", "false", "False"):
+        return "GTT requires the dedicated GTT placement API; placeorder cannot create GTT orders"
+    for key in ("stoploss", "target", "trailing_stoploss"):
+        value = data.get(key)
+        if value is None:
+            continue
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return f"{key} must be a positive finite number"
+        if not math.isfinite(value) or value <= 0:
+            return f"{key} must be a positive finite number"
+        if key == "trailing_stoploss" or data.get("pricetype") != "LIMIT":
+            continue
+        try:
+            entry = float(data.get("price") or 0)
+        except (TypeError, ValueError):
+            continue  # The order schema validates the limit price.
+        below = (str(data.get("action")).upper() == "BUY") == (key == "stoploss")
+        if entry > 0 and (value >= entry if below else value <= entry):
+            return f"{key} must be {'below' if below else 'above'} the entry price"
+    return None
+
+
 def validate_order_data(data: dict[str, Any]) -> tuple[bool, dict[str, Any] | None, str | None]:
     """
     Validate order data against required fields and valid values
@@ -77,6 +103,9 @@ def validate_order_data(data: dict[str, Any]) -> tuple[bool, dict[str, Any] | No
         - Validated order data (dict) or None if validation failed
         - Error message (str) or None if validation succeeded
     """
+    error = _risk_error(data)
+    if error:
+        return False, None, error
     # Check for missing mandatory fields
     missing_fields = [field for field in REQUIRED_ORDER_FIELDS if field not in data]
     if missing_fields:
@@ -147,16 +176,16 @@ def place_order_with_auth(
         order_request_data.pop("apikey", None)
 
     api_key = original_data.get("apikey", "")
+    error = _risk_error(order_data)
+    if error:
+        return False, {"status": "error", "message": error}, 400
 
     # The calculator's risk legs (stoploss / target / trailing_stoploss) are
     # advisory on the wire: the broker gets a clean single-leg order. They are
     # recorded here as an exit watch instead, before the live branch pops them,
     # so the symbol exit monitor can square the position off when a level is
     # reached — for every trade type, in sandbox and live alike.
-    risk_meta = {
-        key: order_data.get(key)
-        for key in ("stoploss", "target", "trailing_stoploss")
-    }
+    risk_meta = {key: order_data.get(key) for key in ("stoploss", "target", "trailing_stoploss")}
 
     # If in analyze mode, route to sandbox for sandbox trading.
     #
@@ -359,6 +388,9 @@ def place_order(
         - Response data (dict)
         - HTTP status code (int)
     """
+    error = _risk_error(order_data)
+    if error:
+        return False, {"status": "error", "message": error}, 400
     original_data = copy.deepcopy(order_data)
     if api_key:
         original_data["apikey"] = api_key

@@ -81,6 +81,38 @@ describe('lotsFor', () => {
 })
 
 describe('PlaceOrderDialog', () => {
+  it('forwards calculator product, price, venue and risk legs to placement', async () => {
+    const place = vi.fn(async () => ({ orderId: 'risk-order' }))
+    render(
+      <PlaceOrderDialog
+        {...nifty}
+        exchange="BFO"
+        product="MIS"
+        priceType="LIMIT"
+        price={99}
+        stoploss={90}
+        target={110}
+        trailingStoploss={2}
+        place={place}
+      />
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Place BUY Order' }))
+    await waitFor(() =>
+      expect(place).toHaveBeenCalledWith(
+        expect.objectContaining({
+          exchange: 'BFO',
+          product: 'MIS',
+          pricetype: 'LIMIT',
+          price: 99,
+          quantity: 150,
+          stoploss: 90,
+          target: 110,
+          trailing_stoploss: 2,
+        })
+      )
+    )
+  })
+
   beforeEach(() => {
     placeOrder.mockReset()
   })

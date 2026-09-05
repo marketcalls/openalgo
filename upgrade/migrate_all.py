@@ -97,7 +97,14 @@ MIGRATIONS = [
 # required schema migrations are listed explicitly: their failure must reach
 # this runner's summary and process exit code instead of being reported as a
 # successful warning.
-REQUIRED_MIGRATIONS = frozenset({"migrate_strategy_module.py", "migrate_strategy_universe_tab.py"})
+REQUIRED_MIGRATIONS = frozenset(
+    {
+        "migrate_strategy_module.py",
+        "migrate_strategy_universe_tab.py",
+        "migrate_intraday_leverage.py",
+        "migrate_symbol_exit_watch.py",
+    }
+)
 
 
 def run_migration(script_name, description):

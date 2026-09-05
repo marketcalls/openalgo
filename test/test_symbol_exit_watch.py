@@ -6,6 +6,8 @@ decides whether a placed order is worth watching at all. DB-touching paths are
 thin ORM wrappers already exercised by scalping tests, so they stay out.
 """
 
+from unittest.mock import Mock
+
 import pytest
 
 from services.risk.position import evaluate_position_state
@@ -116,6 +118,151 @@ class TestEntryClassification:
     def test_rejected_and_cancelled_drop_the_watch(self):
         assert _classify_entry({"order_status": "rejected"}) == "dead"
         assert _classify_entry({"order_status": "cancelled"}) == "dead"
+
+
+class TestPendingResolution:
+    def test_filled_entry_waits_for_positionbook_propagation(self, monkeypatch):
+        monitor = SymbolExitMonitor()
+        monkeypatch.setattr(monitor, "_mode", lambda: "live")
+        monkeypatch.setattr(monitor, "_resolve_api_key", lambda: "k")
+        monkeypatch.setattr(monitor, "_find_entry_order", lambda *a: {"order_status": "complete"})
+        monkeypatch.setattr(monitor, "_position_open", lambda *a: False)
+        activate = Mock()
+        monkeypatch.setattr(monitor, "_set_active", activate)
+        monitor._resolve_pending(1, build(base_row(status="pending")))
+        activate.assert_not_called()
+
+    @pytest.mark.parametrize("status", ["open", "cancelled"])
+    def test_partial_fill_without_orderbook_quantity_activates(self, monkeypatch, status):
+        monitor = SymbolExitMonitor()
+        state = build(base_row(status="pending"))
+        monkeypatch.setattr(monitor, "_mode", lambda: "live")
+        monkeypatch.setattr(monitor, "_resolve_api_key", lambda: "k")
+        monkeypatch.setattr(monitor, "_find_entry_order", lambda *a: {"order_status": status})
+        monkeypatch.setattr(monitor, "_position_open", lambda *a: True)
+        monkeypatch.setattr(
+            "services.tradebook_service.get_tradebook",
+            lambda **kw: (
+                True,
+                {
+                    "data": [
+                        {
+                            "orderid": "o1",
+                            "symbol": "SBI",
+                            "exchange": "NSE",
+                            "product": "MIS",
+                            "action": "BUY",
+                            "quantity": 5,
+                            "average_price": 101,
+                        },
+                        {
+                            "orderid": "o1",
+                            "symbol": "SBI",
+                            "exchange": "NSE",
+                            "product": "MIS",
+                            "action": "BUY",
+                            "quantity": 5,
+                            "average_price": 103,
+                        },
+                    ]
+                },
+                200,
+            ),
+        )
+        seed, activate = Mock(), Mock()
+        monkeypatch.setattr(monitor, "_seed_fill_price", seed)
+        monkeypatch.setattr(monitor, "_set_active", activate)
+        monitor._resolve_pending(1, state)
+        seed.assert_called_once_with(1, state, 102)
+        activate.assert_called_once_with(1, state)
+
+    @pytest.mark.parametrize("trades", [[], None])
+    def test_open_entry_does_not_borrow_unrelated_position(self, monkeypatch, trades):
+        monitor = SymbolExitMonitor()
+        monkeypatch.setattr(monitor, "_mode", lambda: "live")
+        monkeypatch.setattr(monitor, "_resolve_api_key", lambda: "k")
+        monkeypatch.setattr(monitor, "_find_entry_order", lambda *a: {"order_status": "open"})
+        monkeypatch.setattr(monitor, "_entry_trades", lambda *a: trades)
+        activate, position = Mock(), Mock(return_value=True)
+        monkeypatch.setattr(monitor, "_set_active", activate)
+        monkeypatch.setattr(monitor, "_position_open", position)
+        monitor._resolve_pending(1, build(base_row(status="pending")))
+        activate.assert_not_called()
+        position.assert_not_called()
+
+    def test_trade_lookup_excludes_other_entries(self, monkeypatch):
+        monkeypatch.setattr(
+            "services.tradebook_service.get_tradebook",
+            lambda **kw: (
+                True,
+                {"data": [{"orderid": "another-order", "quantity": 50, "average_price": 100}]},
+                200,
+            ),
+        )
+        assert SymbolExitMonitor()._entry_trades(build(base_row()), "k") == []
+
+
+class TestAutomaticExitRouting:
+    def test_partial_entry_remainder_is_cancelled_before_exit(self, monkeypatch):
+        monitor = SymbolExitMonitor()
+        lookup = Mock(
+            side_effect=[
+                {"order_status": "open", "filled_quantity": 5},
+                {"order_status": "cancelled", "filled_quantity": 5},
+            ]
+        )
+        monkeypatch.setattr(monitor, "_find_entry_order", lookup)
+        monkeypatch.setattr("database.auth_db.get_auth_token_broker", lambda key: ("token", "test"))
+        cancel = Mock(return_value=(True, {}, 200))
+        monkeypatch.setattr("services.cancel_order_service.cancel_order", cancel)
+        assert monitor._cancel_entry_remainder(build(base_row()), "k")
+        cancel.assert_called_once_with("o1", api_key="k", auth_token="token", broker="test")
+
+    def test_unconfirmed_entry_cancellation_keeps_protection(self, monkeypatch):
+        monitor = SymbolExitMonitor()
+        monkeypatch.setattr(monitor, "_find_entry_order", lambda *a: {"order_status": "open"})
+        monkeypatch.setattr("database.auth_db.get_auth_token_broker", lambda key: ("token", "test"))
+        monkeypatch.setattr(
+            "services.cancel_order_service.cancel_order", Mock(return_value=(True, {}, 200))
+        )
+        assert not monitor._cancel_entry_remainder(build(base_row()), "k")
+
+    def test_semi_auto_queue_is_bypassed_with_broker_auth(self, monkeypatch):
+        monkeypatch.setattr("database.auth_db.get_auth_token_broker", lambda key: ("token", "test"))
+        monkeypatch.setattr(
+            "services.place_order_service.validate_order_data", lambda data: (True, data, None)
+        )
+        queue = Mock(return_value=True)
+        place = Mock(return_value=(True, {"orderid": "exit"}, 200))
+        monkeypatch.setattr("services.order_router_service.should_route_to_pending", queue)
+        monkeypatch.setattr("services.place_order_service.place_order_with_auth", place)
+        assert SymbolExitMonitor()._place_exit(build(base_row()), "SELL", 5, "k")[0]
+        queue.assert_not_called()
+        assert place.call_args.args[1:3] == ("token", "test")
+        assert place.call_args.args[3]["apikey"] == "k"
+
+    def test_subscribe_only_records_accepted_symbols(self, monkeypatch):
+        monitor = SymbolExitMonitor()
+        ws = Mock()
+        ws.subscribe.return_value = {
+            "status": "partial",
+            "subscriptions": [
+                {"symbol": "SBI", "exchange": "NSE", "status": "success"},
+                {"symbol": "BAD", "exchange": "NSE", "status": "error"},
+            ],
+        }
+        monkeypatch.setattr(monitor, "_ws", ws)
+        monkeypatch.setattr(monitor, "_subscribed", set())
+        monitor._subscribe({"NSE:SBI", "NSE:BAD"})
+        assert monitor._subscribed == {"NSE:SBI"}
+
+    def test_closed_watch_requests_subscription_reconciliation(self, monkeypatch):
+        monitor = SymbolExitMonitor()
+        monkeypatch.setattr("database.symbol_exit_db.mark_watch_executed", Mock())
+        reconcile = Mock()
+        monkeypatch.setattr(monitor, "request_sync", reconcile)
+        monitor._closed(999, "sl", 80)
+        reconcile.assert_called_once()
 
 
 class TestExitSizing:

@@ -8,11 +8,7 @@ no logging. Every input arrives as an argument and every charge leaves as a
 return value, so the estimation can be unit-tested, called from a green thread
 or a real one, and served under HTTP without a service layer.
 
-The CSV is the source of truth (the same file the user keeps at
-D:\\Personal\\broker_charges_comparison.csv, copied into the repo because the
-file lives outside the deployment). Groww was added to the repo copy because the
-upstream sheet has no Groww section - Groww is flat Rs 20/order, zero for
-delivery, so those rows are added by hand.
+The versioned CSV is the source of truth for the estimator's tariff rules.
 """
 
 import csv

@@ -574,6 +574,7 @@ export default function OptionChain() {
   // Use ref for previous data to avoid causing re-renders and enable proper flash animation
   const previousDataRef = useRef<Map<number, OptionStrike>>(new Map())
   const [orderDialog, setOrderDialog] = useState<{
+    outcome: PositionCalculatorOutcome
     open: boolean
     symbol: string
     exchange: string
@@ -745,11 +746,12 @@ export default function OptionChain() {
       setOrderDialog({
         open: true,
         symbol: calcTarget.symbol,
-        exchange: calcTarget.exchange,
+        exchange: outcome.exchange,
         action: outcome.action,
         quantity: outcome.quantity,
         lotSize: calcTarget.lotSize,
         tickSize: calcTarget.tickSize,
+        outcome,
       })
       setCalcTarget(null)
     },
@@ -1128,6 +1130,12 @@ export default function OptionChain() {
         quantity={orderDialog?.quantity}
         lotSize={orderDialog?.lotSize}
         tickSize={orderDialog?.tickSize}
+        product={orderDialog?.outcome.product}
+        priceType={orderDialog?.outcome.orderType}
+        price={orderDialog?.outcome.price}
+        stoploss={orderDialog?.outcome.stoploss}
+        target={orderDialog?.outcome.target}
+        trailingStoploss={orderDialog?.outcome.trailingStoploss}
         strategy="OptionChain"
       />
     </div>

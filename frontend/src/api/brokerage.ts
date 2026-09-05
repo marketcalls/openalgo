@@ -25,6 +25,7 @@ export interface BrokerageEstimateRequest {
   exchange?: string
   product?: string
   side?: 'BUY' | 'SELL'
+  /** Quantity is in units. Only supply lotSize when quantity is a lot count. */
   quantity?: number
   price?: number
   instrumenttype?: string

@@ -2,10 +2,10 @@
 // Position size calculator that appears before order placement.
 // Auto-fills symbol, LTP, capital, and intraday leverage multiplier.
 // Computes: Max Quantity = FLOOR((Capital x Effective Leverage) / Price)
-// The multiplier applies ONLY to the Intraday trade type; Overnight and GTT
-// trades size at 1x (cash only). The user can flip BUY/SELL, choose a Price
+// The multiplier applies ONLY to the Intraday trade type; Overnight trades
+// size at 1x. The user can flip BUY/SELL, choose a Price
 // type (Market executes now at LTP; Limit fills when the market reaches the
-// chosen price), pick Intraday/Overnight/GTT, set optional Stop Loss, Target
+// chosen price), pick Intraday/Overnight, set optional Stop Loss, Target
 // Price and Trailing Stop Loss, and pop up the estimated broker charges for
 // the current sizing. All values are returned to the caller on confirm; the
 // order placement happens after the dialog closes.
@@ -34,6 +34,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useLiveQuote } from '@/hooks/useLiveQuote'
 import { cn, makeFormatCurrency } from '@/lib/utils'
+import { riskError } from '@/lib/trading/riskValidation'
 import { useAuthStore } from '@/stores/authStore'
 import { XIcon } from 'lucide-react'
 
@@ -65,12 +66,16 @@ export interface PositionCalculatorProps {
   side: 'BUY' | 'SELL'
   ltp: number | null
   lotSize?: number
+  quantity?: number
+  maxExitQuantity?: number
+  orderType?: OrderKind
+  price?: number
   /** Default trade type for the session's default product. */
   tradeType?: TradeType
   onConfirm: (outcome: PositionCalculatorOutcome) => void
 }
 
-const FNO_EXCHANGES = new Set(['NFO', 'BFO', 'CDS', 'BCD', 'MCX', 'NCO', 'NCDEX'])
+const FNO_EXCHANGES = new Set(['NFO', 'BFO', 'CDS', 'BCD', 'MCX', 'NCO', 'NCDEX', 'CRYPTO'])
 
 /** The same scrip is listed on both cash exchanges, so routing is switchable. */
 const CASH_EXCHANGES = new Set(['NSE', 'BSE'])
@@ -84,7 +89,6 @@ function defaultProductFor(exchange: string, tradeType: TradeType): 'MIS' | 'NRM
 const TRADE_TYPES: { value: TradeType; label: string }[] = [
   { value: 'INTRADAY', label: 'Intraday' },
   { value: 'OVERNIGHT', label: 'Overnight' },
-  { value: 'GTT', label: 'GTT' },
 ]
 
 const PRICE_TYPES: { value: OrderKind; label: string; hint: string }[] = [
@@ -191,6 +195,10 @@ export function PositionCalculator({
   side,
   ltp: initialLtp,
   lotSize = 1,
+  quantity: initialQuantity,
+  maxExitQuantity,
+  orderType: initialOrderType = 'MARKET',
+  price: initialPrice,
   tradeType: initialTradeType = 'INTRADAY',
   onConfirm,
 }: PositionCalculatorProps) {
@@ -244,27 +252,36 @@ export function PositionCalculator({
   // Use live LTP from WebSocket, fallback to prop
   const currentPrice = useMemo(() => {
     if (liveQuote?.ltp && liveQuote.ltp > 0) return liveQuote.ltp
-    if (initialLtp && initialLtp > 0) return initialLtp
+    if (calcExchange === exchange && initialLtp && initialLtp > 0) return initialLtp
     return null
-  }, [liveQuote?.ltp, initialLtp])
+  }, [liveQuote?.ltp, initialLtp, calcExchange, exchange])
 
   // Reset state each time the dialog opens with a fresh intent.
   useEffect(() => {
     if (!open) return
     setAction(side)
     setTradeType(initialTradeType)
-    setOrderType('MARKET')
-    setLimitPrice('')
+    setOrderType(initialOrderType)
+    setLimitPrice(initialPrice == null ? '' : String(initialPrice))
     setCalcExchange(exchange)
     setStoploss('')
     setTarget('')
     setTrailingStoploss('')
-    setQuantity(0)
+    setQuantity(initialQuantity ?? 0)
     setRiskOpen(false)
     setBrokerageOpen(false)
     setBrokerage(null)
     setBrokerageError(null)
-  }, [open, side, initialTradeType, exchange])
+  }, [
+    open,
+    side,
+    initialTradeType,
+    exchange,
+    symbol,
+    initialQuantity,
+    initialOrderType,
+    initialPrice,
+  ])
 
   // Keep the dragged offset in storage so the dialog reopens where it was left.
   useEffect(() => {
@@ -342,18 +359,19 @@ export function PositionCalculator({
   // order dialog) rounds to lots, and an unmatching maximum would confirm at
   // a different quantity than the one ordered.
   const maxQuantity = useMemo(() => {
+    if (maxExitQuantity !== undefined && action === 'SELL') return maxExitQuantity
     if (!capital || !effectiveLeverage || !orderPriceBasis || orderPriceBasis <= 0) return 0
     const raw = Math.floor((capital * effectiveLeverage) / orderPriceBasis)
     if (lotSize > 1) return Math.floor(raw / lotSize) * lotSize
     return raw
-  }, [capital, effectiveLeverage, orderPriceBasis, lotSize])
+  }, [capital, effectiveLeverage, orderPriceBasis, lotSize, maxExitQuantity, action])
 
   // Set quantity to max when computed; when the sizing inputs (trade type,
   // price type, limit price) change, clamp so quantity never overshoots.
   useEffect(() => {
-    if (!open || maxQuantity <= 0) return
+    if (!open || maxQuantity <= 0 || initialQuantity !== undefined) return
     setQuantity((q) => (q <= 0 ? maxQuantity : Math.min(q, maxQuantity)))
-  }, [open, maxQuantity])
+  }, [open, maxQuantity, initialQuantity])
 
   const handleMaxClick = useCallback(() => {
     setQuantity(maxQuantity)
@@ -361,17 +379,14 @@ export function PositionCalculator({
 
   const selectTradeType = useCallback((t: TradeType) => {
     setTradeType(t)
-    setQuantity(0)
   }, [])
 
   const selectOrderType = useCallback((o: OrderKind) => {
     setOrderType(o)
-    setQuantity(0)
   }, [])
 
   const selectExchange = useCallback((ex: string) => {
     setCalcExchange(ex)
-    setQuantity(0)
     setBrokerageOpen(false)
     setBrokerage(null)
     setBrokerageError(null)
@@ -421,8 +436,7 @@ export function PositionCalculator({
     [dragPos, clampDragPos]
   )
 
-  // Product follows the trade type; GTT keeps the overnight product but marks
-  // the order as valid-till-triggered on confirm.
+  // Product follows the trade type. GTT is unavailable on this order route.
   const product = useMemo(
     () => defaultProductFor(calcExchange, tradeType),
     [calcExchange, tradeType]
@@ -431,18 +445,22 @@ export function PositionCalculator({
   const isBuy = action === 'BUY'
 
   const limitParsed = parseFloat(limitPrice)
-  const limitPriceValid =
-    orderType !== 'LIMIT' || limitPriceValidForSide(limitParsed, isBuy, currentPrice)
-  const canConfirm = quantity > 0 && quantity <= maxQuantity && !loading && limitPriceValid
-
-  // A buy limit below LTP (or sell limit above) is the only layout in which
-  // the market can cross the price; everything else fills immediately, so the
-  // helper exists to explain what a valid limit is rather than to block.
-  function limitPriceValidForSide(p: number, buy: boolean, ltp: number | null): boolean {
-    if (!(p > 0)) return false
-    if (ltp == null || ltp <= 0) return true
-    return buy ? p < ltp : p > ltp
-  }
+  const limitPriceValid = orderType !== 'LIMIT' || (Number.isFinite(limitParsed) && limitParsed > 0)
+  const validationError = riskError(
+    action,
+    orderPriceBasis,
+    stoploss ? Number(stoploss) : undefined,
+    target ? Number(target) : undefined,
+    trailingStoploss ? Number(trailingStoploss) : undefined
+  )
+  const quantityValid =
+    Number.isInteger(quantity) &&
+    quantity > 0 &&
+    quantity % lotSize === 0 &&
+    quantity <= maxQuantity &&
+    (maxExitQuantity === undefined || action !== 'SELL' || quantity <= maxExitQuantity)
+  const canConfirm =
+    quantityValid && !loading && limitPriceValid && !validationError && tradeType !== 'GTT'
 
   // Fetch the brokerage estimate whenever the sizing changes.
   useEffect(() => {
@@ -486,16 +504,7 @@ export function PositionCalculator({
       cancelled = true
       clearTimeout(timer)
     }
-  }, [
-    open,
-    brokerageSupported,
-    quantity,
-    orderPriceBasis,
-    symbol,
-    calcExchange,
-    product,
-    action,
-  ])
+  }, [open, brokerageSupported, quantity, orderPriceBasis, symbol, calcExchange, product, action])
 
   const handleConfirm = useCallback(() => {
     if (!canConfirm) return
@@ -507,7 +516,7 @@ export function PositionCalculator({
       orderType,
       exchange: calcExchange,
       ...(orderType === 'LIMIT' && limitPriceValid ? { price: parseFloat(limitPrice) } : {}),
-      gtt: tradeType === 'GTT',
+      gtt: false,
       ...(stoploss ? { stoploss: parseFloat(stoploss) } : {}),
       ...(target ? { target: parseFloat(target) } : {}),
       ...(trailingStoploss ? { trailingStoploss: parseFloat(trailingStoploss) } : {}),
@@ -716,11 +725,7 @@ export function PositionCalculator({
                     step={0.05}
                   />
                   {limitPrice && !limitPriceValid && currentPrice && (
-                    <p className="text-[11px] text-amber-400">
-                      {isBuy
-                        ? 'A buy limit above the market fills immediately. Set a price below LTP to schedule.'
-                        : 'A sell limit below the market fills immediately. Set a price above LTP to schedule.'}
-                    </p>
+                    <p className="text-[11px] text-amber-400">Enter a positive limit price.</p>
                   )}
                 </div>
               ) : (
@@ -791,7 +796,7 @@ export function PositionCalculator({
                 <Input
                   type="number"
                   value={quantity || ''}
-                  onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  onChange={(e) => setQuantity(Number(e.target.value))}
                   className="flex-1"
                   min={1}
                   step={lotSize > 1 ? lotSize : 1}
@@ -979,6 +984,16 @@ export function PositionCalculator({
             </div>
           </div>
 
+          {validationError && (
+            <p role="alert" className="px-6 pb-3 text-sm text-destructive">
+              {validationError}
+            </p>
+          )}
+          {!quantityValid && quantity > 0 && !loading && (
+            <p role="alert" className="px-6 pb-3 text-sm text-destructive">
+              Quantity must be a whole multiple of {lotSize} and no greater than {maxQuantity}.
+            </p>
+          )}
           <DialogFooter className="gap-2 px-6 pb-5 pt-0 sm:gap-0">
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Cancel

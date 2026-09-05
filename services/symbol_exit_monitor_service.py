@@ -8,8 +8,8 @@ advisory on the wire — every broker gets a clean single-leg entry. This
 service is what makes them real: it records each entry order as an "exit
 watch" (``database/symbol_exit_db.py``), subscribes the symbol's LTP on the
 WebSocket proxy, and squares the position off with a market order when the
-level is reached. It works for every trade type (intraday MIS, overnight,
-GTT) in both sandbox (analyze) and live mode.
+level is reached. It works for intraday and overnight entries in both
+sandbox (analyze) and live mode. GTT placement uses its dedicated API.
 
 A broker accepts an entry before it fills it, so watches are born
 ``pending``: levels are only evaluated, and an entry price only seeded, once
@@ -32,6 +32,7 @@ Designed after ``services/scalping_risk_monitor_service.py``:
 from __future__ import annotations
 
 import atexit
+import math
 import time
 
 from utils.logging import get_logger
@@ -52,7 +53,7 @@ def _symkey(exchange: str, symbol: str) -> str:
 
 def _is_usable_price(value) -> bool:
     try:
-        return float(value) > 0.0
+        return math.isfinite(float(value)) and float(value) > 0.0
     except (TypeError, ValueError):
         return False
 
@@ -280,9 +281,21 @@ class SymbolExitMonitor:
             return
         symbols = [{"exchange": k.split(":", 1)[0], "symbol": k.split(":", 1)[1]} for k in symkeys]
         try:
-            self._ws.subscribe(symbols, mode=SUBSCRIBE_MODE)
+            response = self._ws.subscribe(symbols, mode=SUBSCRIBE_MODE)
+            accepted = (
+                {
+                    _symkey(item["exchange"], item["symbol"])
+                    for item in (response.get("subscriptions") or [])
+                    if isinstance(item, dict)
+                    and item.get("status") == "success"
+                    and item.get("exchange")
+                    and item.get("symbol")
+                }
+                if isinstance(response, dict)
+                else set()
+            )
             with self._lock:
-                self._subscribed |= symkeys
+                self._subscribed |= accepted & symkeys
         except Exception as e:
             logger.warning("Symbol exit monitor subscribe failed: %s", e)
 
@@ -301,10 +314,8 @@ class SymbolExitMonitor:
         if data.get("status") != "success":
             return
         with self._lock:
-            syms = set(self._subscribed)
             self._subscribed.clear()
-        if syms:
-            self._subscribe(syms)
+        self.request_sync()
 
     # ------------------------------------------------------------------ tick handler
     def _on_tick(self, data: dict) -> None:
@@ -395,9 +406,8 @@ class SymbolExitMonitor:
 
         The authoritative signal is the entry order's own broker state: a
         filled (or partially filled) order activates the watch, a rejected or
-        cancelled one drops it for good, an order still open leaves it pending.
-        When the orderbook does not surface the entry (paginated result, or a
-        GTT id the orderbook does not track), fall back to position presence.
+        cancelled one without fills drops it. Trades matched to the entry
+        resolve partial fills and entries missing from the orderbook.
         """
         watch_mode = state.get("mode")
         current_mode = self._mode()
@@ -409,15 +419,70 @@ class SymbolExitMonitor:
             return
 
         entry = self._find_entry_order(state, api_key)
-        if entry is not None:
-            verdict = _classify_entry(entry)
-            if verdict == "filled":
-                self._set_active(watch_id, state)
-            elif verdict == "dead":
-                self._drop_cancelled(watch_id, state)
-            return
-        if self._position_open(state, api_key):
+        verdict = _classify_entry(entry) if entry is not None else "open"
+        if entry is not None and verdict == "filled":
+            if not self._position_open(state, api_key):
+                return  # Filled orders can precede the positionbook update.
+            self._seed_fill_price(watch_id, state, entry.get("average_price"))
             self._set_active(watch_id, state)
+            return
+        # Normalized orderbooks often omit filled_quantity. Match trades
+        # to THIS entry; aggregate positions may belong to another order.
+        trades = self._entry_trades(state, api_key)
+        if trades:
+            if not self._position_open(state, api_key):
+                return
+            quantity = sum(float(t["quantity"]) for t in trades)
+            price = sum(float(t["quantity"]) * float(t["average_price"]) for t in trades)
+            self._seed_fill_price(watch_id, state, price / quantity)
+            self._set_active(watch_id, state)
+        elif verdict == "dead" and trades is not None:
+            self._drop_cancelled(watch_id, state)
+
+    def _entry_trades(self, state: dict, api_key: str) -> list[dict] | None:
+        """Executed fills for the guarded order; None means lookup unavailable."""
+        from services.tradebook_service import get_tradebook
+
+        try:
+            ok, response, _ = get_tradebook(api_key=api_key)
+            rows = response.get("data") if isinstance(response, dict) else None
+            if not ok or not isinstance(rows, list):
+                return None
+            fills = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get("orderid") or row.get("order_id") or "") != str(state["order_id"]):
+                    continue
+                if (
+                    row.get("symbol") != state["symbol"]
+                    or row.get("exchange") != state["exchange"]
+                    or row.get("action") != state["side"]
+                    or row.get("product") != state["product"]
+                ):
+                    continue
+                if _is_usable_price(row.get("quantity")) and _is_usable_price(
+                    row.get("average_price")
+                ):
+                    fills.append(row)
+            return fills
+        except Exception as exc:
+            logger.debug("Symbol exit tradebook fetch error: %s", exc)
+            return None
+        finally:
+            self._remove_session("services.tradebook_service")
+
+    def _seed_fill_price(self, watch_id: int, state: dict, price) -> None:
+        if not _is_usable_price(price):
+            return
+        from database.symbol_exit_db import set_watch_entry_price
+
+        try:
+            set_watch_entry_price(watch_id, float(price))
+            with self._lock:
+                state["entry_price"] = float(price)
+        finally:
+            self._remove_session("database.symbol_exit_db")
 
     def _find_entry_order(self, state: dict, api_key: str) -> dict | None:
         """Locate the guarded entry order inside the broker orderbook."""
@@ -472,6 +537,7 @@ class SymbolExitMonitor:
             from database.symbol_exit_db import cancel_watch
 
             cancel_watch(state.get("order_id", ""), state.get("mode", "analyze"))
+            self.request_sync()
         finally:
             self._remove_session("database.symbol_exit_db")
         logger.info(
@@ -537,6 +603,8 @@ class SymbolExitMonitor:
                 logger.error("Symbol exit for %s: no api key - will retry", symbol)
                 return
 
+            if not self._cancel_entry_remainder(state, api_key):
+                return  # Keep protection until the unfilled remainder stops working.
             net_qty = self._net_qty(state, api_key)
             if net_qty is None:
                 logger.debug(
@@ -575,9 +643,39 @@ class SymbolExitMonitor:
             self._remove_session("database.auth_db")
             self._remove_session("database.user_db")
 
+    def _cancel_entry_remainder(self, state: dict, api_key: str) -> bool:
+        """Do not leave a partially filled entry working after its risk exit."""
+        entry = self._find_entry_order(state, api_key)
+        if entry is None:
+            return True  # Older filled entries may have aged out of the daily book.
+        status_only = {k: v for k, v in entry.items() if k != "filled_quantity"}
+        if _classify_entry(status_only) != "open":
+            return True
+        from database.auth_db import get_auth_token_broker
+        from services.cancel_order_service import cancel_order
+
+        try:
+            auth_token, broker = get_auth_token_broker(api_key)
+            if not auth_token or not broker:
+                return False
+            ok, _, _ = cancel_order(
+                state["order_id"], api_key=api_key, auth_token=auth_token, broker=broker
+            )
+            if not ok:
+                return False
+            updated = self._find_entry_order(state, api_key)
+            return (
+                updated is not None
+                and _classify_entry({k: v for k, v in updated.items() if k != "filled_quantity"})
+                != "open"
+            )
+        finally:
+            self._remove_session("services.cancel_order_service")
+
     def _place_exit(
         self, state: dict, action: str, qty: int, api_key: str
     ) -> tuple[bool, dict, int]:
+        from database.auth_db import get_auth_token_broker
         from services.place_order_service import place_order
 
         try:
@@ -590,7 +688,16 @@ class SymbolExitMonitor:
                 "pricetype": "MARKET",
                 "product": state["product"],
             }
-            return place_order(order_data, api_key=api_key)
+            auth_token, broker = get_auth_token_broker(api_key)
+            if not auth_token or not broker:
+                return (
+                    False,
+                    {"status": "error", "message": "Broker authentication unavailable"},
+                    403,
+                )
+            # Automatic protection bypasses the semi-auto entry queue. Keep
+            # the API key so analyze mode still routes to the sandbox.
+            return place_order(order_data, api_key=api_key, auth_token=auth_token, broker=broker)
         finally:
             self._remove_session("services.place_order_service")
 
@@ -651,6 +758,7 @@ class SymbolExitMonitor:
             from database.symbol_exit_db import mark_watch_executed
 
             mark_watch_executed(watch_id, reason, ltp)
+            self.request_sync()
         finally:
             self._remove_session("database.symbol_exit_db")
 

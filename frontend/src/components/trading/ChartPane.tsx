@@ -400,6 +400,8 @@ export function ChartPane({
     type: OrderType
     sym: SymbolView
     ltp: number | null
+    price?: number
+    product: string
   } | null>(null)
 
   /* ── boot this pane's terminal once ───────────────────────────────────── */
@@ -1293,6 +1295,9 @@ export function ChartPane({
           side={calcParams.side}
           ltp={calcParams.ltp}
           lotSize={calcParams.sym.lotsize}
+          orderType={calcParams.type === 'LIMIT' ? 'LIMIT' : 'MARKET'}
+          price={calcParams.price}
+          tradeType={calcParams.product === 'MIS' ? 'INTRADAY' : 'OVERNIGHT'}
           onConfirm={handleCalcConfirm}
         />
       )}

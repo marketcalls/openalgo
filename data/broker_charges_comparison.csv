@@ -117,14 +117,14 @@ Zerodha,Demat AMC,BSDA above 10 lakh,300/yr + 18% GST quarterly
 Zerodha,Demat AMC,Non-BSDA,300/yr + 18% GST quarterly
 Zerodha,Value Added Services,Tickertape,Free / Pro 249-2399 monthly-annual
 Zerodha,Value Added Services,Smallcase,100 per buy txn / 10 per SIP
-Zerodha,Value Added Services,Kite Connect,500/month Connect, Free Personal
+Zerodha,Value Added Services,Kite Connect,"500/month Connect, Free Personal"
 Zerodha,General,Call & Trade,50 per order extra
 Zerodha,General,NRI Non-PIS,0.5% or 50/order (whichever lower)
 Zerodha,General,NRI PIS,0.5% or 200/order (whichever lower) + 500+GST AMC
 Zerodha,General,Debit Balance Account,extra 20 per order
 Zerodha,General,IPFT Equity/Futures,0.01 per crore + GST
 Zerodha,General,IPFT Options,0.01 per crore + GST on premium
-Zerodha,General,IPFT Currency,0.05/lakh futures, 2/lakh options (premium) + GST
+Zerodha,General,IPFT Currency,"0.05/lakh futures, 2/lakh options (premium) + GST"
 Zerodha,MTF,Interest,0.04% per day (40 per lakh) from T+1
 Zerodha,MTF,Brokerage,0.3% or 20/order (whichever lower)
 Zerodha,MTF,Pledge Charge,15 + GST per pledge/unpledge per ISIN
@@ -132,7 +132,7 @@ Zerodha,DP Charges,Debit (Sell),15.34 per scrip (3.5 CDSL+9.5 Zerodha+GST)
 Zerodha,DP Charges,Pledging,30 + GST per request per ISIN
 Zerodha,General,Corporate Action Orders,20 + GST (OFS/buyback/takeover/delisting)
 Zerodha,General,Off-market Transfer,25 per transaction
-Zerodha,General,Physical CMR Request,First free, then 20+100 courier+18% GST
+Zerodha,General,Physical CMR Request,"First free, then 20+100 courier+18% GST"
 Zerodha,General,Payment Gateway,9 + GST (free on UPI)
 Zerodha,General,Delayed Payment Interest,18% p.a. / 0.05% per day
 Zerodha,3-in-1 Block Account,Delivery & MTF Brokerage,0.5% per order

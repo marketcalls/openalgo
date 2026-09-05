@@ -37,6 +37,7 @@ SCOPED_SESSION_MODULES = [
     ("database.scalping_db", "db_session"),
     ("database.watchlist_db", "db_session"),
     ("database.leverage_db", "db_session"),
+    ("database.intraday_leverage_db", "db_session"),
     ("database.strategy_portfolio_db", "db_session"),
     ("database.market_calendar_db", "db_session"),
     ("database.telegram_db", "db_session"),

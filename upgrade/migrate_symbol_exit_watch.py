@@ -167,7 +167,7 @@ def create_indexes(engine):
 
         print(f"  [CREATE] Creating {index_name}...")
         with engine.connect() as conn:
-            conn.execute(text(f"CREATE INDEX {index_name} ON {table_name} ({column})"))
+            conn.execute(text(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table_name} ({column})"))
             conn.commit()
         print(f"  [OK] {index_name} created")
     return True

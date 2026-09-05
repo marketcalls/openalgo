@@ -136,3 +136,6 @@ workspace/**/.sample.env
 # there) creates the tilde as a real folder here instead of in the profile.
 # It holds credentials, so it must never be committed.
 /~/
+
+# Local agent session notes.
+/context.md

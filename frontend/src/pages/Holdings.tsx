@@ -47,6 +47,7 @@ interface HoldingOrderIntent {
   exchange: string
   action: 'BUY' | 'SELL'
   quantity: number
+  outcome?: PositionCalculatorOutcome
 }
 
 export default function Holdings() {
@@ -152,9 +153,10 @@ export default function Holdings() {
       if (!calcTarget) return
       setOrderIntent({
         symbol: calcTarget.symbol,
-        exchange: calcTarget.exchange,
+        exchange: outcome.exchange,
         action: outcome.action,
         quantity: outcome.quantity,
+        outcome,
       })
       setCalcTarget(null)
     },
@@ -507,14 +509,17 @@ export default function Holdings() {
           exchange={calcTarget.exchange}
           side={calcTarget.action}
           ltp={null}
+          quantity={calcTarget.quantity}
+          maxExitQuantity={calcTarget.action === 'SELL' ? calcTarget.quantity : undefined}
+          tradeType="OVERNIGHT"
           onConfirm={handleCalcConfirm}
         />
       )}
 
       {/* Same order dialog the Option Chain uses, prefilled from the holding.
           Exit defaults to the full held quantity; Add starts from the same
-          number so the user only has to change it when topping up. CNC is
-          forced because a holding is by definition a delivery position. */}
+          number so the user only has to change it when topping up. The
+          calculator defaults to delivery and forwards any confirmed changes. */}
       <PlaceOrderDialog
         open={orderIntent !== null}
         onOpenChange={(open) => {
@@ -524,8 +529,12 @@ export default function Holdings() {
         exchange={orderIntent?.exchange ?? ''}
         action={orderIntent?.action ?? 'BUY'}
         quantity={orderIntent?.quantity}
-        product="CNC"
-        priceType="MARKET"
+        product={orderIntent?.outcome?.product ?? 'CNC'}
+        priceType={orderIntent?.outcome?.orderType ?? 'MARKET'}
+        price={orderIntent?.outcome?.price}
+        stoploss={orderIntent?.outcome?.stoploss}
+        target={orderIntent?.outcome?.target}
+        trailingStoploss={orderIntent?.outcome?.trailingStoploss}
         strategy="Holdings"
         onSuccess={(orderId) => {
           showToast.success(`Order ${orderId} placed`, 'orders')
