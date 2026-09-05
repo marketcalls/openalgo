@@ -48,9 +48,7 @@ class SymbolExitWatch(Base):
     __tablename__ = "symbol_exit_watch"
     # One watch per entry order so re-entries on the same leg sit side by side
     # instead of overwriting each other's stop/target.
-    __table_args__ = (
-        UniqueConstraint("order_id", "mode", name="uq_symbol_exit_watch_order"),
-    )
+    __table_args__ = (UniqueConstraint("order_id", "mode", name="uq_symbol_exit_watch_order"),)
 
     id = Column(Integer, primary_key=True, index=True)
     symbol = Column(String(60), nullable=False)
@@ -67,7 +65,9 @@ class SymbolExitWatch(Base):
     order_id = Column(String(64), nullable=False)
     strategy = Column(String(60), nullable=False, default="")
 
-    entry_price = Column(Float, nullable=False, default=0.0)  # 0 = market fill (seeded from first tick)
+    entry_price = Column(
+        Float, nullable=False, default=0.0
+    )  # 0 = market fill (seeded from first tick)
     quantity = Column(Integer, nullable=False, default=0)
 
     stop_loss = Column(Float, nullable=True)  # configured stop price
@@ -124,14 +124,15 @@ def create_exit_watch(data: dict) -> dict:
 
     Returns the stored row; idempotent on ``(order_id, mode)`` so a retried
     placement or a duplicate event never stacks two watches for one order.
+
+    New watches start ``pending``: the broker accepted the entry order but has
+    not filled it yet, so the monitor must not evaluate levels (or seed an
+    entry price) against a position that does not exist. The monitor flips the
+    row to ``active`` only once the entry order is confirmed filled.
     """
     order_id = data.get("order_id", "")
     mode = data.get("mode", "analyze")
-    existing = (
-        db_session.query(SymbolExitWatch)
-        .filter_by(order_id=order_id, mode=mode)
-        .first()
-    )
+    existing = db_session.query(SymbolExitWatch).filter_by(order_id=order_id, mode=mode).first()
     if existing is not None:
         return _row_to_dict(existing)
 
@@ -151,6 +152,7 @@ def create_exit_watch(data: dict) -> dict:
         current_stop=_as_float_or_none(data.get("current_stop")),
         highest_price=_as_float_or_none(data.get("highest_price")),
         lowest_price=_as_float_or_none(data.get("lowest_price")),
+        status=data.get("status", "pending"),
     )
     db_session.add(row)
     db_session.flush()
@@ -160,8 +162,14 @@ def create_exit_watch(data: dict) -> dict:
 
 
 def get_active_watches(mode: str | None = None) -> list[dict]:
-    """All active exit watches, optionally scoped to one mode."""
-    q = db_session.query(SymbolExitWatch).filter(SymbolExitWatch.status == "active")
+    """Watch rows the monitor still needs to manage.
+
+    Returns everything that is not finished: ``active`` rows (entry confirmed
+    filled, levels being evaluated) and ``pending`` rows (entry accepted but
+    not yet filled - the monitor resolves them against the broker once filled,
+    and drops them on rejection/cancellation).
+    """
+    q = db_session.query(SymbolExitWatch).filter(SymbolExitWatch.status.in_(("active", "pending")))
     if mode is not None:
         q = q.filter(SymbolExitWatch.mode == mode)
     rows = q.order_by(SymbolExitWatch.id.asc()).all()
@@ -194,6 +202,16 @@ def set_watch_entry_price(watch_id: int, entry_price: float) -> None:
     db_session.commit()
 
 
+def set_watch_active(watch_id: int) -> bool:
+    """Promote a pending watch to active once its entry order has filled."""
+    row = db_session.query(SymbolExitWatch).filter_by(id=watch_id).first()
+    if row is None or row.status != "pending":
+        return False
+    row.status = "active"
+    db_session.commit()
+    return True
+
+
 def mark_watch_executed(watch_id: int, reason: str, exit_price: float | None = None) -> bool:
     row = db_session.query(SymbolExitWatch).filter_by(id=watch_id).first()
     if row is None:
@@ -207,11 +225,7 @@ def mark_watch_executed(watch_id: int, reason: str, exit_price: float | None = N
 
 
 def cancel_watch(order_id: str, mode: str) -> bool:
-    row = (
-        db_session.query(SymbolExitWatch)
-        .filter_by(order_id=order_id, mode=mode)
-        .first()
-    )
+    row = db_session.query(SymbolExitWatch).filter_by(order_id=order_id, mode=mode).first()
     if row is None:
         return False
     row.status = "cancelled"

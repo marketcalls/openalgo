@@ -40,6 +40,7 @@ _TXN_EXCHANGE = {
     "NCDEX": "NCDEX",
 }
 
+
 @dataclass(frozen=True)
 class Rule:
     """One parsed tariff row."""
@@ -115,7 +116,9 @@ def _parse_rule(charge_type: str, value: str) -> Rule:
     # "12.50 per instruction per ISIN + GST", "15 per scrip incl GST".
     # The Zerodha figure already includes GST (inside parentheses); Fyers and
     # Dhan add it on top. Decide by whether "+ GST" sits outside parentheses.
-    if ("per scrip" in low or "per instruction" in low or "per isin" in low) and not low.startswith("zero"):
+    if ("per scrip" in low or "per instruction" in low or "per isin" in low) and not low.startswith(
+        "zero"
+    ):
         outside_parens = re.sub(r"\([^)]*\)", "", low)
         gst_on_top = "+ gst" in outside_parens
         return Rule("dp", _first_num(low), side="SELL", gst=gst_on_top)
@@ -160,7 +163,18 @@ _GLOBAL_SEGMENTS = {"All Equity Segments", "DP Charges", "Demat Account"}
 def _load_charges() -> dict:
     """Parse the CSV into {broker_key: {segment: _ChargeSet}}. Cached forever."""
     tables: dict[str, dict[str, _ChargeSet]] = {}
-    with open(CHARGES_CSV, encoding="utf-8-sig", newline="") as fh:
+    try:
+        fh = open(CHARGES_CSV, encoding="utf-8-sig", newline="")
+    except FileNotFoundError:
+        # The tariff table ships with the repo; a deployment that predates it
+        # gets an explicit client error here (the blueprint maps ValueError to
+        # a 400) instead of a frontend-side HTTP 500 from a raw OSError, and
+        # the lru_cache does not cache exceptions so a later git pull heals it.
+        raise ValueError(
+            f"Brokerage tariff table not found: {CHARGES_CSV}. "
+            "Reinstall or update OpenAlgo so the charges file is present."
+        ) from None
+    with fh:
         for row in csv.DictReader(fh):
             broker = (row.get("Broker") or "").strip()
             segment = (row.get("Segment") or "").strip()
@@ -256,7 +270,9 @@ def resolve_segment(exchange: str, product: str, symbol: str, instrumenttype: st
     if _is_derivative(exchange, symbol, instrumenttype):
         if instrumenttype and instrumenttype.upper() in ("CE", "PE"):
             return "Options"
-        if (symbol or "").upper().endswith(("CE", "PE")) and (exchange or "").upper() in FNO_EXCHANGES:
+        if (symbol or "").upper().endswith(("CE", "PE")) and (
+            exchange or ""
+        ).upper() in FNO_EXCHANGES:
             return "Options"
         return "Futures"
     product_upper = (product or "").upper()
@@ -384,9 +400,13 @@ def estimate_brokerage(
 
     notes = ["Estimated figures; actual charges levied by the broker may differ."]
     if derivative and lot == 1:
-        notes.append("Using contract size 1 - for derivatives pass the lot size for an exact turnover.")
+        notes.append(
+            "Using contract size 1 - for derivatives pass the lot size for an exact turnover."
+        )
     if charge_exchange != exchange_upper:
-        notes.append(f"Charges estimated on the {charge_exchange} tariff for {exchange_upper} instruments.")
+        notes.append(
+            f"Charges estimated on the {charge_exchange} tariff for {exchange_upper} instruments."
+        )
 
     return {
         "broker": _BROKER_LABELS[ticker],

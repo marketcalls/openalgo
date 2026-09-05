@@ -336,11 +336,17 @@ export function PositionCalculator({
     return currentPrice
   }, [orderType, limitPrice, currentPrice])
 
-  // Compute max quantity: FLOOR((Capital x Effective Leverage) / Price)
+  // Compute max quantity: FLOOR((Capital x Effective Leverage) / Price).
+  // For derivatives the quantity is a contract count, which must be a whole
+  // multiple of the lot size - every consumer (ChartPane lot count, the
+  // order dialog) rounds to lots, and an unmatching maximum would confirm at
+  // a different quantity than the one ordered.
   const maxQuantity = useMemo(() => {
     if (!capital || !effectiveLeverage || !orderPriceBasis || orderPriceBasis <= 0) return 0
-    return Math.floor((capital * effectiveLeverage) / orderPriceBasis)
-  }, [capital, effectiveLeverage, orderPriceBasis])
+    const raw = Math.floor((capital * effectiveLeverage) / orderPriceBasis)
+    if (lotSize > 1) return Math.floor(raw / lotSize) * lotSize
+    return raw
+  }, [capital, effectiveLeverage, orderPriceBasis, lotSize])
 
   // Set quantity to max when computed; when the sizing inputs (trade type,
   // price type, limit price) change, clamp so quantity never overshoots.
@@ -458,7 +464,6 @@ export function PositionCalculator({
           side: action,
           quantity,
           price: orderPriceBasis,
-          ...(lotSize > 1 ? { lotSize } : {}),
         })
         if (cancelled) return
         if (res.status === 'success' && res.data) {
@@ -490,7 +495,6 @@ export function PositionCalculator({
     calcExchange,
     product,
     action,
-    lotSize,
   ])
 
   const handleConfirm = useCallback(() => {
@@ -887,11 +891,6 @@ export function PositionCalculator({
                       </div>
                       <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
                         Estimated charges; actual figures levied by the broker may differ.
-                        {brokerage.lot_size === 1 &&
-                        brokerage.segment !== 'Equity Delivery' &&
-                        brokerage.segment !== 'Equity Intraday'
-                          ? ' Lot size 1 used - the figure scales with contract size.'
-                          : ''}
                       </p>
                     </>
                   ) : brokerageLoading ? (

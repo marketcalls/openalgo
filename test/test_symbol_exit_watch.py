@@ -11,6 +11,8 @@ import pytest
 from services.risk.position import evaluate_position_state
 from services.symbol_exit_monitor_service import (
     SymbolExitMonitor,
+    _classify_entry,
+    _exit_sizing,
     _is_usable_price,
     _symkey,
     register_exit_watch,
@@ -88,6 +90,126 @@ class TestTranslation:
     def test_build_state_falls_back_to_sl_for_current_stop(self):
         state = build(base_row(current_stop=None, stop_loss=80.0))
         assert state["current_sl"] == 80.0
+
+    def test_build_state_carries_watch_status(self):
+        assert build(base_row())["status"] == "active"
+        assert build(base_row(status="pending"))["status"] == "pending"
+
+
+class TestEntryClassification:
+    """A broker accepts an order before filling it; the watch must only become
+    active once the entry order is confirmed filled."""
+
+    def test_complete_status_activates(self):
+        assert _classify_entry({"order_status": "complete"}) == "filled"
+        assert _classify_entry({"order_status": "filled"}) == "filled"
+
+    def test_partial_fill_activates(self):
+        assert _classify_entry({"order_status": "open", "filled_quantity": 25}) == "filled"
+
+    def test_open_and_trigger_pending_stay_waiting(self):
+        assert _classify_entry({"order_status": "open"}) == "open"
+        assert _classify_entry({"order_status": "trigger pending"}) == "open"
+        assert _classify_entry({"order_status": "unknown"}) == "open"
+        assert _classify_entry({"order_status": ""}) == "open"
+
+    def test_rejected_and_cancelled_drop_the_watch(self):
+        assert _classify_entry({"order_status": "rejected"}) == "dead"
+        assert _classify_entry({"order_status": "cancelled"}) == "dead"
+
+
+class TestExitSizing:
+    """An exit protects its watched entry; it must never square an aggregate
+    position that shares the symbol/exchange/product with other exposure."""
+
+    def test_exit_capped_to_watched_quantity(self):
+        state = build(base_row(quantity=10, side="BUY"))
+        assert _exit_sizing(state, 110) == ("SELL", 10)
+
+    def test_exit_uses_remaining_net_when_less_than_watch(self):
+        state = build(base_row(quantity=10, side="BUY"))
+        assert _exit_sizing(state, 6) == ("SELL", 6)
+
+    def test_buy_flat_nothing_to_exit(self):
+        state = build(base_row(quantity=10, side="BUY"))
+        assert _exit_sizing(state, 0) is None
+
+    def test_sell_side_exits_buy_capped(self):
+        state = build(base_row(quantity=75, side="SELL"))
+        assert _exit_sizing(state, -110) == ("BUY", 75)
+
+    def test_sell_flat_or_flipped_nothing_to_exit(self):
+        state = build(base_row(quantity=75, side="SELL"))
+        assert _exit_sizing(state, 0) is None
+        assert _exit_sizing(state, 20) is None
+
+
+class TestNetQtyNeverReadsFailureAsFlat:
+    """A transient positionbook failure must keep the watch open, not clear it
+    as a flat position without placing the exit."""
+
+    def test_broker_error_is_not_flat(self, monkeypatch):
+        def fake(api_key=None, **kwargs):
+            return False, {"status": "error", "message": "down"}, 500
+
+        monkeypatch.setattr("services.positionbook_service.get_positionbook", fake)
+        assert SymbolExitMonitor()._net_qty(build(base_row()), "k") is None
+
+    def test_exception_is_not_flat(self, monkeypatch):
+        def fake(api_key=None, **kwargs):
+            raise RuntimeError("connection reset")
+
+        monkeypatch.setattr("services.positionbook_service.get_positionbook", fake)
+        assert SymbolExitMonitor()._net_qty(build(base_row()), "k") is None
+
+    def test_malformed_response_is_not_flat(self, monkeypatch):
+        def fake(api_key=None, **kwargs):
+            return True, {"status": "success", "data": "oops"}, 200
+
+        monkeypatch.setattr("services.positionbook_service.get_positionbook", fake)
+        assert SymbolExitMonitor()._net_qty(build(base_row()), "k") is None
+
+    def test_genuine_flat_returns_zero(self, monkeypatch):
+        def fake(api_key=None, **kwargs):
+            return True, {"status": "success", "data": []}, 200
+
+        monkeypatch.setattr("services.positionbook_service.get_positionbook", fake)
+        assert SymbolExitMonitor()._net_qty(build(base_row()), "k") == 0
+
+    def test_matching_position_returns_signed_quantity(self, monkeypatch):
+        def fake(api_key=None, **kwargs):
+            return (
+                True,
+                {
+                    "status": "success",
+                    "data": [
+                        {"symbol": "SBI", "exchange": "NSE", "product": "MIS", "quantity": 75}
+                    ],
+                },
+                200,
+            )
+
+        monkeypatch.setattr("services.positionbook_service.get_positionbook", fake)
+        assert SymbolExitMonitor()._net_qty(build(base_row()), "k") == 75
+
+    def test_position_open_only_when_net_matches_watch_side(self, monkeypatch):
+        def fake(api_key=None, **kwargs):
+            return (
+                True,
+                {
+                    "status": "success",
+                    "data": [
+                        {"symbol": "SBI", "exchange": "NSE", "product": "MIS", "quantity": -90}
+                    ],
+                },
+                200,
+            )
+
+        monkeypatch.setattr("services.positionbook_service.get_positionbook", fake)
+        monitor = SymbolExitMonitor()
+        # A short net of -90 is not a BUY watch's position: do not activate it.
+        assert monitor._position_open(build(base_row(side="BUY")), "k") is False
+        assert monitor._position_open(build(base_row(side="SELL")), "k") is True
 
 
 class TestLevelBreach:
@@ -170,9 +292,7 @@ class TestRegistrationGate:
             )
             is None
         )
-        assert (
-            register_exit_watch(order_data, {}, "o1", "live") is None
-        )
+        assert register_exit_watch(order_data, {}, "o1", "live") is None
 
     def test_stop_loss_alone_gates_in(self, monkeypatch):
         order_data = {
@@ -195,9 +315,7 @@ class TestRegistrationGate:
         # register_exit_watch does `from database.symbol_exit_db import create_exit_watch`
         # at call time, so the monkeypatch already covers it. The feed reconcile
         # must not run (it would hit the real DB / proxy), so drop it here.
-        monkeypatch.setattr(
-            monitor_mod.SymbolExitMonitor, "request_sync", lambda self: None
-        )
+        monkeypatch.setattr(monitor_mod.SymbolExitMonitor, "request_sync", lambda self: None)
 
         result = register_exit_watch(
             order_data,
