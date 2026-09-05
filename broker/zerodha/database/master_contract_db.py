@@ -12,6 +12,7 @@ from sqlalchemy import Column, Float, Index, Integer, Sequence, String
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
+from broker.zerodha.mapping.mcx_contract_size import get_contract_size
 from database.auth_db import get_auth_token
 from database.engine_factory import create_db_engine
 from extensions import socketio  # Import SocketIO
@@ -217,6 +218,33 @@ def process_zerodha_csv(path):
     df['symbol'] = df.apply(reformat_symbol, axis=1)
     df['brexchange'] = df['_kite_exchange']
     df = df.drop(columns=['_kite_exchange'])
+
+    # Kite reports lot_size = 1 for every MCX instrument because it denominates
+    # MCX order quantity in contracts rather than units. Every other Indian
+    # broker ships the real market lot, so keeping Kite's 1 here would mean the
+    # same one-lot crude order is quantity 100 on Angel and 1 on Zerodha.
+    #
+    # OpenAlgo's API is one request body for any broker, so the real lot goes
+    # here and broker/zerodha converts back to contracts at the Kite boundary,
+    # the same way it already translates symbol, product and price type.
+    # See mapping/mcx_contract_size.py for both halves.
+    is_mcx = df['exchange'] == 'MCX'
+    if is_mcx.any():
+        # na_action skips null names outright. get_contract_size handles
+        # them too, but a blank name is 'unknown underlying', not an input
+        # worth a lookup -- Kite ships thousands of them on other segments.
+        sizes = df.loc[is_mcx, 'name'].map(get_contract_size, na_action='ignore')
+        # An unmapped underlying keeps Kite's 1, which is what shipped before
+        # this table existed: orders still size correctly in contracts, they
+        # just do not read like the other brokers. A wrong lot is far worse
+        # than an inconsistent one, so it is never guessed -- it is logged.
+        df.loc[is_mcx, 'lotsize'] = sizes.fillna(df.loc[is_mcx, 'lotsize']).astype(int)
+        unmapped = sorted(df.loc[is_mcx, 'name'][sizes.isna()].dropna().unique())
+        logger.info(
+            f"MCX lot sizes applied to {int(sizes.notna().sum())} of {int(is_mcx.sum())} rows"
+        )
+        if unmapped:
+            logger.warning(f"No MCX contract size for: {', '.join(unmapped)}")
 
     # Fill NaN values in the 'expiry' column with an empty string
     df['expiry'] = df['expiry'].fillna('')

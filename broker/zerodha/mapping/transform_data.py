@@ -1,7 +1,21 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Zerodha Broking Parameters https://kite.trade/docs/connect/v3/
 
+from broker.zerodha.mapping.mcx_contract_size import to_kite_quantity
 from database.token_db import get_br_symbol
+
+
+def _kite_qty(value, symbol, exchange, default="0", field="Quantity"):
+    """Convert an outbound quantity field from OpenAlgo units to Kite contracts.
+
+    A no-op off MCX. Blank and missing values fall back to the default rather
+    than raising, since disclosed_quantity is routinely absent. ``field`` names
+    the value in the error, so a disclosed_quantity that will not divide is not
+    reported as a problem with the order quantity.
+    """
+    if value in (None, ""):
+        value = default
+    return to_kite_quantity(value, symbol, exchange, field=field)
 
 
 def transform_data(data):
@@ -16,30 +30,40 @@ def transform_data(data):
         "exchange": data["exchange"],
         "transaction_type": data["action"].upper(),
         "order_type": data["pricetype"],
-        "quantity": data["quantity"],
+        # MCX only: OpenAlgo counts units like every other broker, Kite counts
+        # contracts, so one lot of crude leaves here as 1 rather than 100.
+        # See mapping/mcx_contract_size.py.
+        "quantity": _kite_qty(data["quantity"], data["symbol"], data["exchange"]),
         "product": data["product"],
         "price": data.get("price", "0"),
         "trigger_price": data.get("trigger_price", "0"),
-        "disclosed_quantity": data.get("disclosed_quantity", "0"),
+        "disclosed_quantity": _kite_qty(
+            data.get("disclosed_quantity"),
+            data["symbol"],
+            data["exchange"],
+            field="Disclosed quantity",
+        ),
         "validity": "DAY",
         "market_protection": "-1",
         "tag": "openalgo",
     }
 
     # Extended mapping for fields that might need conditional logic or additional processing
-    transformed["disclosed_quantity"] = data.get("disclosed_quantity", "0")
     transformed["trigger_price"] = data.get("trigger_price", "0")
 
     return transformed
 
 
 def transform_modify_order_data(data):
+    symbol, exchange = data.get("symbol"), data.get("exchange")
     return {
         "order_type": map_order_type(data["pricetype"]),
-        "quantity": data["quantity"],
+        "quantity": _kite_qty(data["quantity"], symbol, exchange),
         "price": data["price"],
         "trigger_price": data.get("trigger_price", "0"),
-        "disclosed_quantity": data.get("disclosed_quantity", "0"),
+        "disclosed_quantity": _kite_qty(
+            data.get("disclosed_quantity"), symbol, exchange, field="Disclosed quantity"
+        ),
         "validity": "DAY",
     }
 

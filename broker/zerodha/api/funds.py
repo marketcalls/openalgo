@@ -2,6 +2,7 @@
 
 import os
 
+from broker.zerodha.mapping.mcx_contract_size import from_kite_quantity
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -110,7 +111,12 @@ def get_margin_data(auth_token):
                             ltp_map[key] = val.get("last_price", 0)
 
                     for p in open_positions:
-                        qty = p.get("quantity", 0)
+                        # Raw Kite response: on MCX this is a contract count, so
+                        # the P&L below comes out short by the lot size (100x for
+                        # crude) unless it is converted to units first.
+                        qty = from_kite_quantity(
+                            p.get("quantity", 0), p.get("tradingsymbol"), p.get("exchange")
+                        )
                         avg_price = p.get("average_price", 0)
                         inst_key = f"{p['exchange']}:{p['tradingsymbol']}"
                         live_ltp = ltp_map.get(inst_key, p.get("last_price", 0))
