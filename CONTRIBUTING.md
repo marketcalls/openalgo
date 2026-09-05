@@ -156,9 +156,19 @@ If you are configuring a broker, edit `.env` to set `BROKER_API_KEY`, `BROKER_AP
 > [!NOTE]
 > **Static IP whitelisting:** Many Indian brokers require you to whitelist a static IP address when generating API keys and secrets. If you are developing locally, you may need to whitelist your public IP. For cloud/VPS deployments, use the server's static IP. Check your broker's API documentation for specific requirements.
 
-#### Recovery / manual rotation
+#### Recovery after an exposed or compromised secret
 
-If you ever need to regenerate `APP_KEY` or `API_KEY_PEPPER` by hand (for example, after accidentally sharing an `.env` or rotating a compromised secret), follow the manual rotation steps in `docs/devsprint/README.md#configuration` or run `uv run python -c "import secrets; print(secrets.token_hex(32))"` and paste the output into `.env`.
+The safe procedure depends on which key was exposed:
+
+- **`APP_KEY` only** — safe to regenerate at any time. `APP_KEY` only signs session cookies and CSRF tokens, so rotating it just ends current browser sessions (users log in once more). Generate a fresh value with `uv run python -c "import secrets; print(secrets.token_hex(32))"` and update `APP_KEY` in `.env`.
+- **`API_KEY_PEPPER` on a fresh install** (no users in the database yet) — safe to regenerate the same way, because nothing is encrypted with it yet.
+- **`API_KEY_PEPPER` on a populated installation** — do **not** paste a new value into `.env` by hand. The pepper feeds the Argon2 password hashes and the Fernet encryption of broker credentials and TOTP secrets, so replacing it directly invalidates every stored password hash and encrypted secret. Use the dedicated migration instead — it creates a database backup and re-encrypts every pepper-derived field so data survives the rotation:
+
+  ```bash
+  uv run python upgrade/rotate_pepper.py
+  ```
+
+  Afterwards, restart the app; each user sets a new password at `/auth/reset-password` with their TOTP code (TOTP secrets survive the rotation; external integrations holding the API key value keep working). The first-run check in `utils/env_check.py` runs this same analysis automatically and refuses to touch the pepper when users already exist.
 
 ---
 
