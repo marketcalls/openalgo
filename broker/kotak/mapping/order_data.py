@@ -226,6 +226,17 @@ def transform_tradebook_data(tradebook_data):
             "average_price": trade.get("avgPrc", 0.0),
             "trade_value": float(trade.get("fldQty", 0.0)) * float(trade.get("avgPrc", 0.0)),
             "orderid": trade.get("nOrdNo", ""),
+            # "flId" is Kotak's own per-fill trade ID (Kotak-Neo/kotak-neo-api-v2
+            # docs/Trade_report.md - two fills under the same order carry two
+            # distinct flId values). Previously dropped entirely, leaving no
+            # stable per-fill identity for a consumer to dedup repeated
+            # tradebook pulls against - only "orderid", shared by every fill
+            # under one order. Emitted under OpenAlgo's own established key
+            # "tradeid" (no underscore) - the documented tradebook contract
+            # (docs/prompt/flow-import-format.md) and existing consumers
+            # (services/telegram_bot_service*.py, broker/groww's own
+            # adapter) already expect that exact key.
+            "tradeid": trade.get("flId", ""),
             "timestamp": trade.get("exTm", ""),
         }
         transformed_data.append(transformed_trade)

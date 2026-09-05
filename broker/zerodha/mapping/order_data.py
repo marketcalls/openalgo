@@ -163,7 +163,30 @@ def transform_tradebook_data(tradebook_data):
             "average_price": trade.get("average_price", 0.0),
             "trade_value": trade.get("quantity", 0) * trade.get("average_price", 0.0),
             "orderid": trade.get("order_id", ""),
-            "timestamp": trade.get("order_timestamp", ""),
+            # Kite's own docs (kite.trade/docs/connect/v3/orders/) document
+            # three separate timestamps on a trade: order_timestamp ("when
+            # the order was registered by the API" - order-placement time,
+            # shared by every fill under one order), exchange_timestamp
+            # ("when the order was registered by the exchange"), and
+            # fill_timestamp ("when the trade was filled at the exchange") -
+            # the one actually correct for a TRADE record. order_timestamp
+            # was used here instead, which is very likely the root cause of
+            # a known bug (AlgoMirror KNOWN_ISSUES.md #2): one account's
+            # Trade Book rows showed time-only values with no date, while an
+            # identical code path on another account showed full datetimes -
+            # order_timestamp is the field genuinely liable to do that for a
+            # multi-fill order, since it's an order-level field being reused
+            # per fill.  "trade_id" is Kite's own per-fill identifier,
+            # previously dropped entirely - only "orderid" survived, shared
+            # by every fill under one order, giving no stable per-fill
+            # identity for a consumer to dedup repeated tradebook pulls
+            # against. Emitted under OpenAlgo's own established key
+            # "tradeid" (no underscore) - the documented tradebook contract
+            # (docs/prompt/flow-import-format.md) and existing consumers
+            # (services/telegram_bot_service*.py, broker/groww's own
+            # adapter) already expect that exact key.
+            "tradeid": trade.get("trade_id", ""),
+            "timestamp": trade.get("fill_timestamp") or trade.get("order_timestamp", ""),
         }
         transformed_data.append(transformed_trade)
     return transformed_data
