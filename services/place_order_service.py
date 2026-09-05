@@ -198,9 +198,76 @@ def place_order_with_auth(
 
         return success, response, status_code
 
+    # Application-level idempotency (live path only): claim the caller-supplied
+    # client_order_id BEFORE the broker call, so a network-timeout retry with
+    # the same id replays the recorded orderid instead of double-placing.
+    # Sandbox placements are simulated, so the field is accepted but not
+    # recorded there; the claim is keyed by the apikey hash, never plaintext.
+    client_order_id = order_data.get("client_order_id")
+    order_tag = order_data.get("tag")
+    idempotent = bool(client_order_id and api_key)
+    if idempotent:
+        from database.idempotency_db import get_resolution, reserve_client_order_id
+
+        try:
+            state, status = reserve_client_order_id(api_key, client_order_id, tag=order_tag)
+            if state == "vacated":
+                # Reservation vanished (TTL prune) between conflict and re-read:
+                # nothing is in flight, so reclaim and fall through on the result.
+                state, status = reserve_client_order_id(api_key, client_order_id, tag=order_tag)
+            if state == "existing":
+                if status == "placed":
+                    resolution = get_resolution(api_key, client_order_id)
+                    if resolution and resolution["orderid"]:
+                        replay_response = {
+                            "status": "success",
+                            "orderid": resolution["orderid"],
+                            "client_order_id": client_order_id,
+                            "duplicate": True,
+                        }
+                        if resolution.get("tag"):
+                            replay_response["tag"] = resolution["tag"]
+                        return True, replay_response, 200
+                # in_flight, or placed without a recorded orderid: never re-place.
+                error_response = {
+                    "status": "error",
+                    "message": "Order placement with this client_order_id is already in progress",
+                }
+                return False, error_response, 409
+        except Exception:
+            # Store unavailable (SQLite locked/IO error): nothing was committed,
+            # so there is no reservation to release. Proceeding would place the
+            # order without duplicate protection — the caller explicitly opted
+            # in via client_order_id, so refuse the placement instead.
+            logger.exception(
+                "Idempotency store failure while reserving client_order_id %s",
+                client_order_id,
+            )
+            error_response = {
+                "status": "error",
+                "message": "Order idempotency store unavailable; order not placed",
+            }
+            bus.publish(
+                OrderFailedEvent(
+                    mode="live",
+                    api_type="placeorder",
+                    request_data=order_request_data,
+                    response_data=error_response,
+                    api_key=api_key,
+                    symbol=order_data.get("symbol", ""),
+                    exchange=order_data.get("exchange", ""),
+                    error_message="idempotency store unavailable",
+                )
+            )
+            return False, error_response, 503
+
     # If not in analyze mode, proceed with actual order placement
     broker_module = import_broker_module(broker)
     if broker_module is None:
+        if idempotent:
+            from database.idempotency_db import release_client_order_id
+
+            release_client_order_id(api_key, client_order_id)
         error_response = {"status": "error", "message": "Broker-specific module not found"}
         bus.publish(
             OrderFailedEvent(
@@ -217,9 +284,22 @@ def place_order_with_auth(
         return False, error_response, 404
 
     try:
-        res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)
+        # client_order_id is an application-level idempotency key, never a
+        # broker field: hand the broker a payload without it. (Broker mappers
+        # build explicit payloads and would ignore it, but stripping keeps the
+        # contract explicit.)
+        broker_order_data = (
+            {k: v for k, v in order_data.items() if k != "client_order_id"}
+            if "client_order_id" in order_data
+            else order_data
+        )
+        res, response_data, order_id = broker_module.place_order_api(broker_order_data, auth_token)
     except Exception as e:
         logger.exception(f"Error in broker_module.place_order_api: {e}")
+        if idempotent:
+            from database.idempotency_db import release_client_order_id
+
+            release_client_order_id(api_key, client_order_id)
         error_response = {
             "status": "error",
             "message": "Failed to place order due to internal error",
@@ -239,7 +319,44 @@ def place_order_with_auth(
         return False, error_response, 500
 
     if res.status == 200:
+        if idempotent and not order_id:
+            # Broker ACKed but named no order — unknown at the broker. Not a
+            # failure (a retry could double-place) and not a success (there is
+            # no orderid to report or record). Keep the reservation in-flight:
+            # retries of this id keep getting 409 instead of re-placing, and a
+            # human or the ack reconciler can resolve the true orderid.
+            error_response = {
+                "status": "error",
+                "message": (
+                    "Order accepted by broker but no order id was returned; "
+                    "placement unresolved, retries with this client_order_id "
+                    "are blocked"
+                ),
+            }
+            if emit_event:
+                bus.publish(
+                    OrderFailedEvent(
+                        mode="live",
+                        api_type="placeorder",
+                        request_data=order_request_data,
+                        response_data=error_response,
+                        api_key=api_key,
+                        symbol=order_data.get("symbol", ""),
+                        exchange=order_data.get("exchange", ""),
+                        error_message="broker returned 200 without an order id",
+                    )
+                )
+            return False, error_response, 500
+
         order_response_data = {"status": "success", "orderid": order_id}
+        if client_order_id:
+            order_response_data["client_order_id"] = client_order_id
+            if order_tag:
+                order_response_data["tag"] = order_tag
+        if idempotent:
+            from database.idempotency_db import record_success
+
+            record_success(api_key, client_order_id, str(order_id))
 
         if emit_event:
             bus.publish(
@@ -262,6 +379,10 @@ def place_order_with_auth(
 
         return True, order_response_data, 200
     else:
+        if idempotent:
+            from database.idempotency_db import release_client_order_id
+
+            release_client_order_id(api_key, client_order_id)
         message = (
             response_data.get("message", "Failed to place order")
             if isinstance(response_data, dict)
