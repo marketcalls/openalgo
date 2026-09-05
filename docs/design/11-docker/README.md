@@ -456,7 +456,7 @@ fi
 | Aspect | Implementation |
 |--------|----------------|
 | Non-root user | Runs as `appuser` |
-| `.env` mount | Writable so v2.0.0.8+ automatic `APP_KEY`/`FERNET_SALT` key-rotation can atomically write `.env.tmp`. Mounting it `:ro` would crash the worker in a restart loop. If you don't use auto-rotation, apply host-side `chmod 600` and rely on filesystem permissions for at-rest confidentiality. |
+| `.env` mount | Writable so v2.0.0.8+ automatic `APP_KEY`/`FERNET_SALT` key-rotation can persist new keys to `.env`. The rewrite normally goes through a temp file + atomic rename, but when `.env` is a single-file bind mount (`./.env:/app/.env`) `utils/env_check.py` detects the cross-device case and deliberately rewrites the file in place through the host inode instead — persistence is guaranteed, atomicity is not. Mounting it `:ro` would crash the worker in a restart loop. If you don't use auto-rotation, apply host-side `chmod 600` and rely on filesystem permissions for at-rest confidentiality. |
 | Keys directory | 700 permissions |
 | No build tools | Slim production image |
 | Minimal packages | Only runtime dependencies |
