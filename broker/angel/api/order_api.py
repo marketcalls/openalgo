@@ -215,8 +215,21 @@ def place_order_api(data, auth):
     # as the rest of the codebase expects .status instead of .status_code
     response.status = response.status_code
 
-    # Parse the JSON response
-    response_data = response.json()
+    # Parse the JSON response. Angel can return a NON-JSON body under an HTTP 403
+    # rate-limit ("Access denied because of exceeding access rate"); .json() would
+    # then raise and crash order placement. Guard it and treat a non-JSON body as a
+    # failed order. Do NOT retry here — a placeOrder that reached the exchange
+    # before the error must never be re-sent (double-order risk).
+    try:
+        response_data = response.json()
+    except (json.JSONDecodeError, ValueError):
+        logger.error(
+            f"Non-JSON placeOrder response (HTTP {response.status_code}): {response.text[:200]}"
+        )
+        response_data = {
+            "status": False,
+            "message": f"Invalid JSON response (HTTP {response.status_code})",
+        }
 
     # Use .get() so a malformed / non-conforming response (gateway error
     # envelope, partial response, network blip) returns a clean
@@ -413,7 +426,19 @@ def cancel_order(orderid, auth):
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
 
-    data = json.loads(response.text)
+    # Guard against a non-JSON body (e.g. an HTTP 403 rate-limit "Access denied
+    # because of exceeding access rate"), which would otherwise raise. No retry —
+    # surface a clean error to the caller.
+    try:
+        data = json.loads(response.text)
+    except json.JSONDecodeError:
+        logger.error(
+            f"Non-JSON cancelOrder response (HTTP {response.status_code}): {response.text[:200]}"
+        )
+        return {
+            "status": "error",
+            "message": f"Invalid JSON response (HTTP {response.status_code})",
+        }, response.status
 
     # Check if the request was successful
     if data.get("status"):
@@ -465,7 +490,18 @@ def modify_order(data, auth):
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
 
-    data = json.loads(response.text)
+    # Guard against a non-JSON body (e.g. an HTTP 403 rate-limit), which would
+    # otherwise raise. No retry — surface a clean error to the caller.
+    try:
+        data = json.loads(response.text)
+    except json.JSONDecodeError:
+        logger.error(
+            f"Non-JSON modifyOrder response (HTTP {response.status_code}): {response.text[:200]}"
+        )
+        return {
+            "status": "error",
+            "message": f"Invalid JSON response (HTTP {response.status_code})",
+        }, response.status
 
     if data.get("status") == "true" or data.get("message") == "SUCCESS":
         return {"status": "success", "orderid": data["data"]["orderid"]}, 200
