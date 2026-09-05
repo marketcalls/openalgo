@@ -180,8 +180,12 @@ def transform_tradebook_data(tradebook_data):
             # previously dropped entirely - only "orderid" survived, shared
             # by every fill under one order, giving no stable per-fill
             # identity for a consumer to dedup repeated tradebook pulls
-            # against.
-            "trade_id": trade.get("trade_id", ""),
+            # against. Emitted under OpenAlgo's own established key
+            # "tradeid" (no underscore) - the documented tradebook contract
+            # (docs/prompt/flow-import-format.md) and existing consumers
+            # (services/telegram_bot_service*.py, broker/groww's own
+            # adapter) already expect that exact key.
+            "tradeid": trade.get("trade_id", ""),
             "timestamp": trade.get("fill_timestamp") or trade.get("order_timestamp", ""),
         }
         transformed_data.append(transformed_trade)

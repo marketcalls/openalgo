@@ -231,8 +231,12 @@ def transform_tradebook_data(tradebook_data):
             # distinct flId values). Previously dropped entirely, leaving no
             # stable per-fill identity for a consumer to dedup repeated
             # tradebook pulls against - only "orderid", shared by every fill
-            # under one order.
-            "trade_id": trade.get("flId", ""),
+            # under one order. Emitted under OpenAlgo's own established key
+            # "tradeid" (no underscore) - the documented tradebook contract
+            # (docs/prompt/flow-import-format.md) and existing consumers
+            # (services/telegram_bot_service*.py, broker/groww's own
+            # adapter) already expect that exact key.
+            "tradeid": trade.get("flId", ""),
             "timestamp": trade.get("exTm", ""),
         }
         transformed_data.append(transformed_trade)
