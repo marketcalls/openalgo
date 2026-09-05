@@ -564,7 +564,7 @@ describe('StrategyBuilder live request orchestration', () => {
     expect(screen.getAllByText('₹125.00').length).toBeGreaterThan(0)
     expect(screen.queryByText('₹225.00')).not.toBeInTheDocument()
 
-    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+    await user.click(await screen.findByRole('tab', { name: 'Greeks' }))
     const rows = await screen.findAllByRole('row')
     const row = rows.find((item) => item.textContent?.includes('24600CE'))
     expect(row).toBeDefined()
@@ -922,7 +922,7 @@ describe('StrategyBuilder live request orchestration', () => {
 
     expect(screen.getAllByText('₹125.00').length).toBeGreaterThan(0)
 
-    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+    await user.click(await screen.findByRole('tab', { name: 'Greeks' }))
     const greekRows = await screen.findAllByRole('row')
     const positionRow = greekRows.find((row) => row.textContent?.includes('13AUG26 24600CE'))
     expect(positionRow).toBeDefined()
@@ -1004,7 +1004,7 @@ describe('StrategyBuilder live request orchestration', () => {
     expect(screen.getAllByText('18AUG26').length).toBeGreaterThan(0)
     expect(screen.getAllByText('₹225.00').length).toBeGreaterThan(0)
 
-    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+    await user.click(await screen.findByRole('tab', { name: 'Greeks' }))
     const greekRows = await screen.findAllByRole('row')
     const farGreekRow = greekRows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
     expect(farGreekRow).toBeDefined()
@@ -1055,7 +1055,7 @@ describe('StrategyBuilder live request orchestration', () => {
       { withGreeks: true }
     )
 
-    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+    await user.click(await screen.findByRole('tab', { name: 'Greeks' }))
     let rows = await screen.findAllByRole('row')
     let farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
     const nearRow = rows.find((row) => row.textContent?.includes('13AUG26 24600CE'))
@@ -1152,7 +1152,7 @@ describe('StrategyBuilder live request orchestration', () => {
       expect(screen.getAllByRole('button', { name: 'Remove position' })).toHaveLength(2)
     )
 
-    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+    await user.click(await screen.findByRole('tab', { name: 'Greeks' }))
     let rows = await screen.findAllByRole('row')
     let farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
     const initialGreeks = within(farRow as HTMLElement)
@@ -1305,7 +1305,7 @@ describe('StrategyBuilder live request orchestration', () => {
     fireEvent.click(await screen.findByRole('option', { name: 'PE' }))
     await user.click(within(dialog).getByRole('button', { name: 'Modify' }))
 
-    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+    await user.click(await screen.findByRole('tab', { name: 'Greeks' }))
     const rows = await screen.findAllByRole('row')
     const editedRow = rows.find((row) => row.textContent?.includes('18AUG26 24600PE'))
     expect(editedRow).toBeDefined()
