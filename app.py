@@ -132,6 +132,7 @@ from database.scalping_db import init_db as ensure_scalping_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.strategy_module_db import init_db as ensure_strategy_module_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
+from database.symbol_exit_db import init_db as ensure_symbol_exit_tables_exists
 from database.telegram_db import get_bot_config
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
 from database.user_db import init_db as ensure_user_tables_exists
@@ -761,8 +762,9 @@ def setup_environment(app):
                 ("Qty Freeze DB", ensure_qty_freeze_tables_exists),
                 ("Historify DB", ensure_historify_tables_exists),
                 ("Flow DB", ensure_flow_tables_exists),
-                ("Scalping DB", ensure_scalping_tables_exists),
-                ("Watchlist DB", ensure_watchlist_tables_exists),
+("Scalping DB", ensure_scalping_tables_exists),
+("Watchlist DB", ensure_watchlist_tables_exists),
+("Symbol Exit DB", ensure_symbol_exit_tables_exists),
                 ("Leverage DB", ensure_leverage_tables_exists),
                 ("Intraday Leverage DB", ensure_intraday_leverage_tables_exists),
                 ("Strategy Portfolio DB", ensure_strategy_portfolio_tables_exists),
@@ -904,6 +906,17 @@ def setup_environment(app):
                 logger.debug("Scalping risk monitor initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize Scalping risk monitor: {e}")
+
+            try:
+                # Position-calculator exit watches (SL / target / trailing).
+                # Browser-independently squares the position off when a level is
+                # reached. Idles when no watch is set.
+                from services.symbol_exit_monitor_service import start_symbol_exit_monitor
+
+                start_symbol_exit_monitor()
+                logger.debug("Symbol exit monitor initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize Symbol exit monitor: {e}")
 
             # Auto-reconnect the WhatsApp bot if a paired session is persisted.
             # Without this, every server restart would leave is_ready()=False

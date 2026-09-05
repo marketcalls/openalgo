@@ -262,7 +262,7 @@ export interface TerminalCallbacks {
    * but has no DOM to collect it with, so the host prompts.
    */
   onDrawTextEdit?(req: { id: string; tool: string; text: string }): void
-/** An order was requested while One-Click is off; a host with the position
+  /** An order was requested while One-Click is off; a host with the position
    * calculator opens it instead of the classic ticket. */
   onOrderRequest?(params: {
     side: OrderSide
@@ -1151,6 +1151,9 @@ export class TradingTerminal {
     type: OrderType,
     opts?: {
       product?: 'MIS' | 'NRML' | 'CNC'
+      /** Routing venue override. Cash equity may switch NSE/BSE; for everything
+       *  else this is the instrument's own exchange and the chart symbol wins. */
+      exchange?: string
       /** Limit price; used when type === 'LIMIT'. */
       price?: number
       stoploss?: number
@@ -1167,6 +1170,7 @@ export class TradingTerminal {
     type: OrderType,
     opts?: {
       product?: 'MIS' | 'NRML' | 'CNC'
+      exchange?: string
       price?: number
       stoploss?: number
       target?: number
@@ -1204,15 +1208,18 @@ export class TradingTerminal {
       )
       return
     }
-// A calculator confirm (opts present) is the order, never a ticket: the
+    // A calculator confirm (opts present) is the order, never a ticket: the
     // calculator already served as the confirmation surface. A plain menu
     // click carries no opts, so the armed/disarmed fork applies. The guards
     // above ran for both so a ticket never pre-fills a stop on the wrong side
     // of LTP or a quantity over the freeze limit.
     const product = opts?.product ?? this.product
-    const hasRisk = Boolean(
-      opts?.stoploss || opts?.target || opts?.trailingStoploss || opts?.gtt
-    )
+    // The calculator may have switched the routing venue (NSE/BSE for cash
+    // equity); the symbol itself stays the chart's. Everything else on the
+    // symbol (lots, freeze, LTP) remains the chart's — only the exchange sent
+    // with the order changes.
+    const exch = opts?.exchange ?? this.sym.exchange
+    const hasRisk = Boolean(opts?.stoploss || opts?.target || opts?.trailingStoploss || opts?.gtt)
     if (!opts && !this.armed) {
       // A host with the position calculator (onOrderRequest) gets the richer
       // confirmation surface; one with the classic ticket (onOrderTicket)
@@ -1256,11 +1263,12 @@ export class TradingTerminal {
         // The order carries risk legs (SL / target / trailing / GTT), which the
         // chart feed cannot attach. Route through the public placeorder REST
         // API in a SINGLE request so the risk params travel with the entry
-        // order (not as a second order). Mode-aware: the backend routes it to
-        // sandbox or live from the analyzer toggle, so both work identically.
+        // order (not as a second order). The backend turns them into a symbol
+        // exit watch, and mode-aware routing sends the entry itself to sandbox
+        // or live from the analyzer toggle, so both work identically.
         const r = await this.api<{ status?: string; orderid?: string }>('placeorder', {
           strategy: 'chart-trading',
-          exchange: this.sym.exchange,
+          exchange: exch,
           symbol: this.sym.symbol,
           action: side,
           quantity: qty,
@@ -1277,7 +1285,7 @@ export class TradingTerminal {
       } else {
         const r = await this.trade.place({
           symbol: this.sym.symbol,
-          exchange: this.sym.exchange,
+          exchange: exch,
           side,
           type,
           qty,

@@ -312,8 +312,10 @@ Key points:
 - The **Max Quantity formula is hidden** — only the computed number is shown.
 - **Risk Management** block adds optional Stop Loss (trigger price), Target
   Price, and Trailing Stop Loss (points). These are sent attached to the same
-  single `placeorder` request; they are NOT separate risk orders. Brokers that
-  do not consume them simply ignore them (graceful degradation).
+  single `placeorder` request; they are NOT separate risk orders. The backend
+  turns them into a **symbol exit watch** that squares the position off when
+  the level is reached, so no broker needs to consume the keys (see the
+  Symbol Exit Watch section below).
 
 ---
 
@@ -364,13 +366,17 @@ terminal places the order through a **single** REST `POST /api/v1/placeorder`
 (`this.api('placeorder', {...})`) instead of the SocketIO feed. The request
 body carries the extra keys and the backend routes them by mode:
 
-- **Live mode** → `place_order_with_auth(...)` →
-  `place_order_api(order_data, auth_token)`. The risk keys
-  (`stoploss`, `target`, `trailing_stoploss`, `gtt`) are **stripped** just
-  before the broker call so generic brokers never reject unknown keys; they
-  remain in `original_data` for the persisted/audit log.
-- **Analyze mode** → `sandbox_place_order(...)`, which records the extras as
-  order metadata.
+- **Any mode** → `place_order_with_auth(...)` snapshots the risk legs before
+  sending. On a successful placement (analyze **or** live) it records a
+  **symbol exit watch** and a background monitor subscribes the symbol's LTP,
+  evaluates it with the shared `services/risk` core, and markets a square-off
+  order when the stop, target or trailed stop is reached — for every trade
+  type (MIS, NRML/CNC overnight, GTT) in both modes.
+- **Live mode** → the broker still receives a clean single-leg order: the risk
+  keys are **stripped** just before `place_order_api(order_data, auth_token)`
+  so generic brokers never reject unknown keys.
+- **Analyze mode** → `sandbox_place_order(...)` executes the simulated entry;
+  the watch squares off the sandbox position the same way.
 
 When no risk params are present the original feed path (`trade.place`) is used
 unchanged, preserving on-chart order lines and position markers.
@@ -423,13 +429,17 @@ trailing_stoploss: number (float, optional)
 gtt:             boolean (default false)
 ```
 
-`place_order_with_auth` passes the validated `order_data` through to the
-sandbox verbatim (recorded as order metadata) and, in the **live** branch only,
-pops the four risk keys just before `broker_module.place_order_api(...)`. This
-keeps every current broker adapter safe: five adapters forward the whole data
-dict to their API and would otherwise reject the unknown `gtt` key. The keys
-stay in `original_data`, so the audit/log trail keeps them. A future broker
-that consumes these on a plain order can opt back in per-broker.
+`place_order_with_auth` snapshots the risk legs before branching. On a
+successful placement in either branch it records a **symbol exit watch**
+(`_register_exit_watch` → `register_exit_watch` in
+`services/symbol_exit_monitor_service.py`), which persists only when a
+stop/target/trailing leg was present. In the **live** branch only it then pops
+the four risk keys just before `broker_module.place_order_api(...)`. This keeps
+every current broker adapter safe: five adapters forward the whole data dict to
+their API and would otherwise reject the unknown `gtt` key. The keys stay in
+`original_data`, so the audit/log trail keeps them, and the exit watch — not
+the broker — is what acts on them. A future broker that consumes these on a
+plain order can opt back in per-broker.
 
 ---
 
@@ -545,6 +555,95 @@ supported brokers and non-crypto; one batch call estimates every priced row
 locked vectors, including Zerodha intraday BUY 100@500 = 21.07 and delivery SELL
 = 67.21 (STT 50 + DP 15.34 included), Fyers options SELL 1 lot @200 lot75 =
 54.00, Groww delivery SELL = 66.87 (DP 15 not clobbered by the zero buy row).
+
+### Latest change (this session): calculator UX refinements + Symbol Exit Watch
+
+Two strands landed together: polish on the calculator's UI/UX, and a backend
+feature that makes the Risk Management block actually trade.
+
+**Calculator UX (frontend)**
+
+- **NSE/BSE routing toggle.** The calculator header carries an NSE/BSE switch
+  for **cash equity** (`CASH_EXCHANGES = {NSE, BSE}`). Every downstream value —
+  live quote, leverage, max quantity, brokerage estimate — follows the chosen
+  exchange, and `onConfirm` reports the exchange so `ChartPane` passes it into
+  `terminal.confirmOrder(action, orderType, { exchange, product, price, ... })`
+  and the order is routed accordingly. F&O instruments (`FNO_EXCHANGES`) always
+  resolve to their native exchange; the toggle only appears for cash equity.
+- **Draggable dialog.** The calculator can be grabbed anywhere on its frame and
+  repositioned; the position is persisted in localStorage
+  (`openalgo:position-calculator-pos`) and reopened where it was left, clamped
+  to the viewport. A drag bug was fixed along the way: the card frame
+  (background, border, shadow) had been styled on `DialogContent` while the
+  drag transform applied to an inner wrapper, so only the text moved out of a
+  static shell. The frame now lives on the transformed element
+  (`rounded-lg border bg-background shadow-lg`), and `DialogContent` is the
+  transparent wrapper.
+- **3D Market/Limit tiles.** The Price section's Market/Limit selector is now a
+  pair of text-only 3D tiles styled identically to the NSE/BSE toggle — beveled
+  container shadows, pressed-state inset on the active tile, hover lift on the
+  inactive one. Tooltips ("Executes immediately ..." / "Scheduled order fills
+  at your price") are kept via a `title` prop on the shared `Tile`.
+
+**Symbol Exit Watch (backend)** — SL/target/trailing are now real, not
+decorative. Verified before this work: the frontend already sent `stoploss` /
+`target` / `trailing_stoploss` on the single REST `placeorder`, the live branch
+stripped them, and the sandbox dropped them — so neither mode ever fired an
+exit. That is fixed with a platform-side watcher that works for every broker
+and every trade type (MIS, overnight NRML/CNC, GTT) in both analyze and live
+mode:
+
+- **`database/symbol_exit_db.py`** — `symbol_exit_watch` table: one row per
+  placed entry order that carried risk legs, keyed `UNIQUE(order_id, mode)`.
+  Columns: symbol, exchange, product, side, mode, order_id, strategy,
+  entry_price, quantity, stop_loss, target, trailing_step, current_stop,
+  highest_price, lowest_price, status, exit_reason, exit_price, timestamps.
+  `init_db()` (idempotent) plus accessors for create, list-active-by-mode,
+  persist a trailed tick, seed the entry price, mark executed, cancel. SQLite
+  via `create_db_engine()` (NullPool); `db_session` registered in
+  `utils/db_sessions.py` so teardown releases it.
+- **`services/symbol_exit_monitor_service.py`** — singleton monitor, modeled on
+  the scalping risk monitor. Background coalesced sync (`request_sync`) loads
+  active watches for the **current** mode only, subscribes each symbol's LTP on
+  the shared WebSocket proxy client (`register_callback`), and per tick calls
+  the mandatory shared core `evaluate_position_state` (`services/risk`). On a
+  breach it dispatches a **market** square-off (opposite side, same
+  symbol/exchange/product). Guards:
+  - a watch never acts across modes — the tick handler and the exit worker both
+    re-check the analyzer toggle (exit placement also routes through
+    `place_order`, which honours that toggle);
+  - net-position guard — if the position comes back flat, the watch closes
+    itself as `flat` instead of double-exiting;
+  - market entries (no fill price) seed `entry_price` from the first tick so
+    trailing has an anchor;
+  - per-watch persist throttle (1.5 s) and exit retry cooldown (3 s); a failed
+    or refused exit leaves the run **open and managed** and retries;
+  - per-watch bookkeeping is evicted when a watch closes (fd-audit).
+  - the million-dollar correctness rules from CLAUDE.md are inherited for free:
+    the exit is claimed and dispatched once (`_exit_inflight` + cooldown), and
+    the shared `services/risk` core decides — the monitor only translates.
+- **`services/place_order_service.py`** — `place_order_with_auth` snapshots the
+  risk legs at the top (before the live branch pops them) and calls
+  `_register_exit_watch(...)` on the success path of **both** the analyze
+  (sandbox) and live branches. `_register_exit_watch` is best-effort: a watch
+  that fails to persist never fails an order that already succeeded.
+- **`app.py`** — `ensure_symbol_exit_tables_exists` added to the DB-init tuple;
+  `start_symbol_exit_monitor()` starts beside the scalping monitor (wrapped in
+  the same try/except so a feed absence cannot block boot; it idles when no
+  watch is set).
+- **`upgrade/migrate_symbol_exit_watch.py`** — idempotent, `--status`-aware
+  migration creating the table + the two indexes the ORM declares; registered
+  in `upgrade/migrate_all.py`.
+- **`test/test_symbol_exit_watch.py`** — 15 tests, DB-free: row→risk-state
+  translation, long/short SL and target breaches, trailing-stop tightening on a
+  new high, flat (non-trailing) stop, and the registration gate (no risk legs →
+  no watch). Locked against the same `services/risk` core the scalping and
+  strategy modules use.
+
+Exit rationale fields: a closed watch records `exit_reason` of `sl`, `target`,
+or `flat` plus `exit_price`. Both the `analyze` and `live` surfaces emit
+`order_update` events through the existing event bus on the square-off, so the
+frontend dashboards reflect the exit like any other order.
 
 ---
 

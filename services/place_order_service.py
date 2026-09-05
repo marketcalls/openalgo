@@ -148,6 +148,16 @@ def place_order_with_auth(
 
     api_key = original_data.get("apikey", "")
 
+    # The calculator's risk legs (stoploss / target / trailing_stoploss) are
+    # advisory on the wire: the broker gets a clean single-leg order. They are
+    # recorded here as an exit watch instead, before the live branch pops them,
+    # so the symbol exit monitor can square the position off when a level is
+    # reached — for every trade type, in sandbox and live alike.
+    risk_meta = {
+        key: order_data.get(key)
+        for key in ("stoploss", "target", "trailing_stoploss")
+    }
+
     # If in analyze mode, route to sandbox for sandbox trading.
     #
     # force_live opts out, for a caller that already decided the pipe. The
@@ -196,6 +206,9 @@ def place_order_with_auth(
                 )
             )
 
+        if success:
+            _register_exit_watch(order_data, risk_meta, response.get("orderid", ""), "analyze")
+
         return success, response, status_code
 
     # If not in analyze mode, proceed with actual order placement
@@ -219,10 +232,11 @@ def place_order_with_auth(
     try:
         # Risk params (stoploss / target / trailing_stoploss / gtt) are advisory
         # metadata attached by the charting terminal's position calculator.
-        # They ride along for logging and the sandbox, but the base broker
-        # placeorder path is a single-leg order: brokers that accept them on a
-        # plain order can opt in per-broker. Stripping here (only in the live
-        # branch) keeps generic brokers safe from rejecting unknown keys.
+        # They ride along for logging, but the base broker placeorder path is a
+        # single-leg order: brokers that accept them on a plain order can opt in
+        # per-broker. The exit watch already recorded them (see risk_meta
+        # above), so stripping here keeps generic brokers safe from rejecting
+        # unknown keys while the symbol exit monitor still acts on them.
         for key in ("stoploss", "target", "trailing_stoploss", "gtt"):
             order_data.pop(key, None)
         res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)
@@ -268,6 +282,8 @@ def place_order_with_auth(
                 )
             )
 
+        _register_exit_watch(order_data, risk_meta, str(order_id), "live")
+
         return True, order_response_data, 200
     else:
         message = (
@@ -289,6 +305,31 @@ def place_order_with_auth(
             )
         )
         return False, error_response, res.status if res.status != 200 else 500
+
+
+def _register_exit_watch(
+    order_data: dict,
+    risk_meta: dict,
+    order_id: str,
+    mode: str,
+) -> None:
+    """Persist an exit watch when the request carried risk legs.
+
+    Best-effort: a watch that fails to persist must not fail the order that
+    already succeeded. The monitor (symbol_exit_monitor_service) turns the
+    watch into automatic square-off orders when a level is reached.
+    """
+    try:
+        from services.symbol_exit_monitor_service import register_exit_watch
+
+        register_exit_watch(
+            order_data=order_data,
+            risk_meta=risk_meta,
+            order_id=order_id,
+            mode=mode,
+        )
+    except Exception:
+        logger.exception("Failed to register symbol exit watch")
 
 
 def place_order(
