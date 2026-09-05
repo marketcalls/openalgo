@@ -1,25 +1,33 @@
- one more change is when i watching candles.if 
+i wantdiff same calculator for crypto trading when user trading in crypto 
+
+one more change is when i watching candles.if
 i drag candle ,canlde are moving horizontoly like <- -> this ways , i want to add chat has to move in upword and downwords.
-
- one more change is when i watching candles.if
- i drag candle ,canlde are moving horizontoly like <- -> this ways , i want to add chat has to move in upword and downwords.
  
-3.Brokerage calulation in calculator and and orderbook also.(FYERS<ZERODHA<GROWW<DHAN) use "D:\Personal\broker_charges_comparison.csv" file.
+.Add news section for each stock.using dhan skills imran YT video.
 
-4.i wantdiff same calculator for crypto trading when user trading in crypto 
+heatmap
 
-5.Add news section for each stock.using dhan skills imran YT video.
+srenner for top gainer,looser,volume shockers.https://github.com/marketcalls/fyers-scanner
+
+autoreaserch
+
+by using ai user can automate stratagy in orderflow and backtest in UI.
+
+global markets view ,vix...india indices
+
+sector rotaion map.
+
+Swing/Postional/Longterm watchlist
+
+build watch watchlist to add and track stocks
+
+if user open then user can able to see bid/ask price,support/resistance of the stock,Bullish/bearish signals,...etc
+
+
 
 future implenetation
+-------------------------------------
 mobile app
 pinets
 algomorror
-heatmap
-srenner for top gainer,looser,volume shockers.https://github.com/marketcalls/fyers-scanner
-autoreaserch
 bot integration
-by using ai user can automate stratagy in orderflow and backtest in UI.
-global markets view ,vix...india indices
-sector rotaion map.
-
-mainly pull chnages from openalgo later push changes to repo.
