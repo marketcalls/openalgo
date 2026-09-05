@@ -433,7 +433,7 @@ export function PositionCalculator({
   const limitParsed = parseFloat(limitPrice)
   const limitPriceValid =
     orderType !== 'LIMIT' || limitPriceValidForSide(limitParsed, isBuy, currentPrice)
-  const canConfirm = quantity > 0 && !loading && limitPriceValid
+  const canConfirm = quantity > 0 && quantity <= maxQuantity && !loading && limitPriceValid
 
   // A buy limit below LTP (or sell limit above) is the only layout in which
   // the market can cross the price; everything else fills immediately, so the
