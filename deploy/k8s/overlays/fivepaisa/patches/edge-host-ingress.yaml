@@ -1,0 +1,33 @@
+# Ingress host patch (Ingress API variant). Pre-prefix base name.
+#
+# Strategic-merge patches REPLACE lists wholesale (Ingress rules have no merge
+# key), so the full rules list is repeated here — editing only `host` would
+# silently drop the /ws and / backends. The backend service names are the
+# PRE-prefix base names; the overlay's namePrefix rewrites them in the build.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openalgo
+spec:
+  tls:
+  - hosts:
+    - fivepaisa.example.com
+    secretName: fivepaisa-openalgo-tls
+  rules:
+  - host: fivepaisa.example.com
+    http:
+      paths:
+      - path: /ws
+        pathType: Prefix
+        backend:
+          service:
+            name: openalgo-ws
+            port:
+              number: 8765
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: openalgo-http
+            port:
+              number: 5000

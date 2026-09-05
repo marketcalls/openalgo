@@ -1,0 +1,17 @@
+# StorageClass / size swap. Enable via the overlay's kustomization.yaml BEFORE
+# THE FIRST APPLY — a StatefulSet's volumeClaimTemplates are immutable, so the
+# API server rejects edits afterwards. Resizing an existing PVC afterwards
+# requires kubectl patch pvc (and a StorageClass with allowVolumeExpansion).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: openalgo
+spec:
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      storageClassName: CHANGE_ME_SC   # e.g. longhorn
+      resources:
+        requests:
+          storage: 20Gi
