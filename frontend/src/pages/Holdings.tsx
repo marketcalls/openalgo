@@ -30,6 +30,7 @@ import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
+import { useThemeStore } from '@/stores/themeStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Holding, HoldingsStats } from '@/types/trading'
 import { showToast } from '@/utils/toast'
@@ -48,8 +49,25 @@ interface HoldingOrderIntent {
   quantity: number
 }
 
+// These holdings adapters hard-code pnl/pnlpercent to 0 and rely on the browser
+// to derive them from the live LTP -- their own comments say so ("LTP is
+// missing", "Would need current price to calculate P&L", "Will be calculated
+// when market price is available"). Refetching the book cannot fix it, because
+// the zero originates in the adapter. Keep in step with the holdings blocks in
+// broker/*/mapping/order_data.py.
+const HOLDINGS_PLACEHOLDER_PNL_BROKERS = new Set([
+  'flattrade',
+  'motilal',
+  'shoonya',
+  'tradesmart',
+])
+
 export default function Holdings() {
   const { apiKey, user } = useAuthStore()
+  const { appMode } = useThemeStore()
+  const shouldRecalculatePnl =
+    appMode === 'analyzer' ||
+    HOLDINGS_PLACEHOLDER_PNL_BROKERS.has(user?.broker?.toLowerCase() ?? '')
   const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [holdings, setHoldings] = useState<Holding[]>([])
   const [stats, setStats] = useState<HoldingsStats | null>(null)
@@ -75,6 +93,7 @@ export default function Holdings() {
     staleThreshold: 5000,
     multiQuotesRefreshInterval: 30000,
     pauseWhenHidden: true,
+    recalculatePnl: shouldRecalculatePnl,
   })
 
   // Calculate enhanced stats based on real-time data
