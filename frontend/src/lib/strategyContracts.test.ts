@@ -49,12 +49,12 @@ const chain18Aug = {
 describe('strategy contract resolution', () => {
   it('matches a chain only when exchange, underlying, and expiry all match', () => {
     expect(chainIdentity('NFO', 'NIFTY', '18-AUG-2026')).toBe('NFO:NIFTY:18AUG26')
-    expect(chainMatches(chain18Aug, { exchange: 'NFO', underlying: 'NIFTY', expiry: '18AUG26' })).toBe(
-      true
-    )
-    expect(chainMatches(chain18Aug, { exchange: 'NFO', underlying: 'NIFTY', expiry: '25AUG26' })).toBe(
-      false
-    )
+    expect(
+      chainMatches(chain18Aug, { exchange: 'NFO', underlying: 'NIFTY', expiry: '18AUG26' })
+    ).toBe(true)
+    expect(
+      chainMatches(chain18Aug, { exchange: 'NFO', underlying: 'NIFTY', expiry: '25AUG26' })
+    ).toBe(false)
   })
 
   it('returns only the canonical listed symbol and its market snapshot', () => {

@@ -1,11 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import {
-  getViewportForBounds,
-  type ReactFlowProps,
-  type FitViewOptions,
-} from '@xyflow/react'
-import type { PropsWithChildren, ReactNode } from 'react'
 import { render, waitFor } from '@testing-library/react'
+import { type FitViewOptions, getViewportForBounds, type ReactFlowProps } from '@xyflow/react'
+import type { PropsWithChildren, ReactNode } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import FlowEditor from './FlowEditor'

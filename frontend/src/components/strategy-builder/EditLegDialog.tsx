@@ -1,5 +1,6 @@
 import { Minus, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { ResolveLegContract } from '@/components/strategy-builder/ManualLegBuilder'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -17,7 +18,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import type { ResolveLegContract } from '@/components/strategy-builder/ManualLegBuilder'
 import { parseFinitePrice, type ResolvedLegMarket } from '@/lib/strategyContracts'
 import type { StrategyLeg } from '@/lib/strategyMath'
 import { strikeMoneyness } from '@/lib/strategyMath'

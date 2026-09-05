@@ -85,11 +85,12 @@ describe('buildChartLegend', () => {
 
   it("reports the bar's own change, absolute and percent, signed and toned", () => {
     // close 24451 against a previous close of 24455.5: down 4.50, or 0.02%.
-    expect(buildChartLegend(input()).at(-1))
-      .toEqual({ text: '-4.50 (-0.02%)', tone: 'down' })
+    expect(buildChartLegend(input()).at(-1)).toEqual({ text: '-4.50 (-0.02%)', tone: 'down' })
     // close 24451 against 24400: up 51.00, or 0.21%.
-    expect(buildChartLegend(input({ prevClose: 24400 })).at(-1))
-      .toEqual({ text: '+51.00 (+0.21%)', tone: 'up' })
+    expect(buildChartLegend(input({ prevClose: 24400 })).at(-1)).toEqual({
+      text: '+51.00 (+0.21%)',
+      tone: 'up',
+    })
   })
 
   it('shows no change at all when there is no bar behind this one', () => {

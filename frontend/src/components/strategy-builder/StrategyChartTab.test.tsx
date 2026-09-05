@@ -112,7 +112,9 @@ describe('StrategyChartTab request sequencing', () => {
   it('keeps request B displayed when request A resolves later', async () => {
     const requestA = deferred<StrategyChartResponse>()
     const requestB = deferred<StrategyChartResponse>()
-    mocks.getStrategyChart.mockReturnValueOnce(requestA.promise).mockReturnValueOnce(requestB.promise)
+    mocks.getStrategyChart
+      .mockReturnValueOnce(requestA.promise)
+      .mockReturnValueOnce(requestB.promise)
 
     const view = render(renderTab('BTC'))
     await act(async () => vi.advanceTimersByTimeAsync(300))
@@ -133,7 +135,9 @@ describe('StrategyChartTab request sequencing', () => {
   it('ignores an obsolete error and sends the backend-resolved reference', async () => {
     const requestA = deferred<StrategyChartResponse>()
     const requestB = deferred<StrategyChartResponse>()
-    mocks.getStrategyChart.mockReturnValueOnce(requestA.promise).mockReturnValueOnce(requestB.promise)
+    mocks.getStrategyChart
+      .mockReturnValueOnce(requestA.promise)
+      .mockReturnValueOnce(requestB.promise)
 
     const view = render(renderTab('BTC'))
     await act(async () => vi.advanceTimersByTimeAsync(300))

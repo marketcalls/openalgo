@@ -5,15 +5,16 @@
  * simulation, so re-fetching per tab would risk two tabs disagreeing about
  * the same portfolio.
  */
+
+import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { useQuery } from '@tanstack/react-query'
 import {
+  downloadTearsheet,
+  listBenchmarks,
   type PortfolioHolding,
   type PriceSource,
   type RebalanceRule,
-  downloadTearsheet,
-  listBenchmarks,
   runPortfolioBacktest,
 } from '@/api/portfolio'
 import { ChargeControls } from '@/components/portfolio/ChargeControls'
@@ -29,10 +30,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { buildPortfolioRequest, type ChargeState, DEFAULT_CHARGES } from '@/lib/portfolioRequest'
+import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { usePortfolioBacktestStore } from '@/stores/portfolioBacktestStore'
-import { cn } from '@/lib/utils'
-import { DEFAULT_CHARGES, buildPortfolioRequest, type ChargeState } from '@/lib/portfolioRequest'
 
 const REBALANCE: { value: RebalanceRule; label: string; note: string }[] = [
   { value: 'never', label: 'Never', note: 'Buy & Hold' },
@@ -92,20 +93,13 @@ export default function PortfolioBacktester() {
     setHoldings((prev) => {
       const newWeight = Math.max(0, Math.min(100, Number.isFinite(raw) ? raw : 0))
       const remaining = 100 - newWeight
-      const othersSum = prev.reduce(
-        (s, h, n) => (n === i ? s : s + (Number(h.weight) || 0)),
-        0
-      )
+      const othersSum = prev.reduce((s, h, n) => (n === i ? s : s + (Number(h.weight) || 0)), 0)
       const otherCount = prev.length - 1
       return prev.map((h, n) => {
         if (n === i) return { ...h, weight: newWeight }
         const w = Number(h.weight) || 0
         const scaled =
-          othersSum > 0
-            ? (w * remaining) / othersSum
-            : otherCount > 0
-              ? remaining / otherCount
-              : 0
+          othersSum > 0 ? (w * remaining) / othersSum : otherCount > 0 ? remaining / otherCount : 0
         return { ...h, weight: Number(scaled.toFixed(2)) }
       })
     })
@@ -193,8 +187,8 @@ export default function PortfolioBacktester() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Portfolio Backtester</h1>
         <p className="text-sm text-muted-foreground">
-          Build a portfolio, set weights, pick a benchmark, and see how it would have
-          performed. Costs and rebalancing are modelled, not assumed away.
+          Build a portfolio, set weights, pick a benchmark, and see how it would have performed.
+          Costs and rebalancing are modelled, not assumed away.
         </p>
       </div>
 
@@ -222,8 +216,8 @@ export default function PortfolioBacktester() {
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              Indices only, from your broker's instrument master -- alpha and
-              beta against a single stock would not mean anything.
+              Indices only, from your broker's instrument master -- alpha and beta against a single
+              stock would not mean anything.
             </p>
           </CardContent>
         </Card>
@@ -233,10 +227,7 @@ export default function PortfolioBacktester() {
             <CardTitle className="text-sm">Rebalancing</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            <Select
-              value={rebalance}
-              onValueChange={(v) => setRebalance(v as RebalanceRule)}
-            >
+            <Select value={rebalance} onValueChange={(v) => setRebalance(v as RebalanceRule)}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -261,19 +252,11 @@ export default function PortfolioBacktester() {
           <CardContent className="grid grid-cols-2 gap-2">
             <div>
               <Label className="text-xs">Start</Label>
-              <Input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-              />
+              <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
             </div>
             <div>
               <Label className="text-xs">End</Label>
-              <Input
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-              />
+              <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
             </div>
           </CardContent>
         </Card>
@@ -285,9 +268,7 @@ export default function PortfolioBacktester() {
           <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
             <div>
               <CardTitle className="text-base">Portfolio Holdings</CardTitle>
-              <p className="text-sm text-muted-foreground">
-                NSE and BSE cash equity and ETFs.
-              </p>
+              <p className="text-sm text-muted-foreground">NSE and BSE cash equity and ETFs.</p>
             </div>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={addHolding}>
@@ -307,10 +288,7 @@ export default function PortfolioBacktester() {
                   exchange={h.exchange as 'NSE' | 'BSE'}
                   onSelect={(sym) => setHolding(i, { symbol: sym })}
                 />
-                <Select
-                  value={h.exchange}
-                  onValueChange={(v) => setHolding(i, { exchange: v })}
-                >
+                <Select value={h.exchange} onValueChange={(v) => setHolding(i, { exchange: v })}>
                   <SelectTrigger className="w-20">
                     <SelectValue />
                   </SelectTrigger>

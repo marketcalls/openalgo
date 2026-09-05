@@ -160,27 +160,30 @@ export default function GoCharting() {
     setShowResults(false)
   }
 
-  const generateJson = useCallback((showError = true) => {
-    if (!symbol || !exchange) {
-      if (showError) {
-        showToast.error('Please select a symbol and exchange', 'system')
+  const generateJson = useCallback(
+    (showError = true) => {
+      if (!symbol || !exchange) {
+        if (showError) {
+          showToast.error('Please select a symbol and exchange', 'system')
+        }
+        return
       }
-      return
-    }
 
-    const json = {
-      apikey: apiKey || 'YOUR_API_KEY',
-      strategy: 'GoCharting Alert',
-      symbol: symbol,
-      exchange: exchange,
-      action: action,
-      product: product,
-      pricetype: 'MARKET',
-      quantity: quantity,
-    }
+      const json = {
+        apikey: apiKey || 'YOUR_API_KEY',
+        strategy: 'GoCharting Alert',
+        symbol: symbol,
+        exchange: exchange,
+        action: action,
+        product: product,
+        pricetype: 'MARKET',
+        quantity: quantity,
+      }
 
-    setGeneratedJson(JSON.stringify(json, null, 2))
-  }, [symbol, exchange, apiKey, action, product, quantity])
+      setGeneratedJson(JSON.stringify(json, null, 2))
+    },
+    [symbol, exchange, apiKey, action, product, quantity]
+  )
 
   // Auto-generate JSON when values change
   useEffect(() => {

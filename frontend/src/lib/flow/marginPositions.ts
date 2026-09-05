@@ -12,11 +12,11 @@
 // are rejected outright on the REST path.
 
 import {
+  defaultProductForExchange,
   EXCHANGES,
   ORDER_ACTIONS,
   PRICE_TYPES,
   PRODUCT_TYPES,
-  defaultProductForExchange,
 } from '@/lib/flow/constants'
 
 export interface MarginLeg {

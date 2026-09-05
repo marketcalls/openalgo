@@ -131,8 +131,8 @@ export default function ChartTest() {
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-bold">Chart Test</h1>
         <p className="text-sm text-muted-foreground">
-          History (1m=1d, 5m=3d, 15m=9d) + live forming candle. The timeframe switches all charts
-          at once. Add multiple charts. Testing only.
+          History (1m=1d, 5m=3d, 15m=9d) + live forming candle. The timeframe switches all charts at
+          once. Add multiple charts. Testing only.
         </p>
       </div>
 
@@ -377,7 +377,10 @@ function LiveChart({
           `/chart/test/api/history?symbol=${encodeURIComponent(symbol)}` +
           `&exchange=${encodeURIComponent(exchange)}&interval=${encodeURIComponent(interval)}` +
           `${date ? `&date=${encodeURIComponent(date)}` : ''}`
-        const res = await fetch(url, { credentials: 'include', headers: { Accept: 'application/json' } })
+        const res = await fetch(url, {
+          credentials: 'include',
+          headers: { Accept: 'application/json' },
+        })
         const d = await res.json()
         if (disposed || d.status !== 'success') return
         const fetched: Candle[] = d.candles || []
@@ -487,7 +490,9 @@ function LiveChart({
     if (!series || !readyRef.current || ltp == null || !Number.isFinite(ltp)) return
 
     const parsed = ts ? Date.parse(ts) : Number.NaN
-    const epochUtc = Number.isNaN(parsed) ? Math.floor(Date.now() / 1000) : Math.floor(parsed / 1000)
+    const epochUtc = Number.isNaN(parsed)
+      ? Math.floor(Date.now() / 1000)
+      : Math.floor(parsed / 1000)
     const sec = intervalSecRef.current
     const bucket = Math.floor((epochUtc + IST_OFFSET) / sec) * sec
     const cur = currentBucketRef.current
@@ -538,7 +543,9 @@ function LiveChart({
         <span
           className={`ml-auto font-semibold tabular-nums ${up ? 'text-green-500' : 'text-red-500'}`}
         >
-          {last != null ? last.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'}
+          {last != null
+            ? last.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : '-'}
         </span>
         <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onRemove} title="Remove">
           <X className="h-4 w-4" />

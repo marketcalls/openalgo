@@ -30,7 +30,9 @@ describe('TemplateDialog payoff topology guard', () => {
     )
 
     const dialog = screen.getByRole('dialog', { name: 'Long Call' })
-    expect(within(dialog).getByRole('combobox', { name: /strike for buy call leg 1/i })).toBeVisible()
+    expect(
+      within(dialog).getByRole('combobox', { name: /strike for buy call leg 1/i })
+    ).toBeVisible()
     expect(within(dialog).getByRole('combobox', { name: /strategy expiry/i })).toBeVisible()
     expect(within(dialog).getByRole('spinbutton', { name: /strategy lot quantity/i })).toBeVisible()
     expect(within(dialog).getByRole('button', { name: /decrease strategy lots/i })).toBeVisible()
