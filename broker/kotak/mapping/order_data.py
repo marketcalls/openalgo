@@ -382,6 +382,10 @@ def transform_holdings_data(holdings_data):
             "exchange": holding.get("exchangeSegment", ""),
             "quantity": holding.get("quantity", 0),
             "product": holding.get("instrumentType", ""),
+            # Kotak's holdings API does return a per-share averagePrice
+            # directly -- unlike LTP (deliberately omitted, see order_api.py's
+            # _backfill_ltp), so no workaround is needed here.
+            "average_price": round(float(holding.get("averagePrice", 0.0)), 2),
             "pnl": round(
                 (float(holding.get("mktValue", 0.0)) - float(holding.get("holdingCost", 0.0))), 2
             ),
