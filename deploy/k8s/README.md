@@ -142,6 +142,11 @@ Everything below MUST be unique per instance — this is the k8s equivalent of
 The overlay's `secretGenerator` builds the Secret from `secret.env` and
 appends a content hash to its name. Consequences:
 
+- `secret.env` is excluded from both git (`deploy/k8s/.gitignore`) and Docker
+  image builds (recursive `**/secret.env` in the root `.dockerignore`, pinned
+  by `test/test_dockerignore_secret_inputs.py`) — building the application
+  image from a checkout with live secrets does not leak them into the image.
+
 - Any change to `secret.env` creates a new Secret and **rolls the pod on the
   next apply** — apply secret changes off-hours, never inside the 02:30-03:30
   IST window.
