@@ -708,6 +708,10 @@ EOF
     fi
 fi
 
+# Instances whose image failed to build. Collected so one bad instance does
+# not abort the others, and so the final banner can tell the truth.
+FAILED_DOMAINS=()
+
 for i in "${!CONF_DOMAINS[@]}"; do
     DOMAIN="${CONF_DOMAINS[$i]}"
     BROKER="${CONF_BROKERS[$i]}"
@@ -1054,8 +1058,22 @@ EOF
     log "Starting Container for $DOMAIN..." "$BLUE"
     log "Building Docker image (includes automated frontend build, may take 2-5 minutes)..." "$YELLOW"
     cd "$INSTANCE_DIR"
-    docker compose build
-    docker compose up -d
+    # Never start a container from a stale image. A failed build leaves the
+    # PREVIOUS image still tagged, so an unconditional `docker compose up -d`
+    # restarts the old code and every later message -- including
+    # "INSTALLATION COMPLETE" -- reports success while nothing was updated.
+    if ! docker compose build; then
+        log "Error: Docker image build FAILED for $DOMAIN." "$RED"
+        log "       Its container was left untouched and is still running the" "$RED"
+        log "       previous image. This instance was NOT updated." "$RED"
+        FAILED_DOMAINS+=("$DOMAIN")
+        continue
+    fi
+    if ! docker compose up -d; then
+        log "Error: Container failed to start for $DOMAIN." "$RED"
+        FAILED_DOMAINS+=("$DOMAIN")
+        continue
+    fi
     
 done
 
@@ -1144,9 +1162,21 @@ EOF
 chmod +x /usr/local/bin/openalgo-ctl
 
 
-log "\n==============================================" "$GREEN"
-log " INSTALLATION COMPLETE" "$GREEN"
-log "==============================================" "$GREEN"
+if [ ${#FAILED_DOMAINS[@]} -gt 0 ]; then
+    log "\n==============================================" "$RED"
+    log " INSTALLATION COMPLETED WITH ERRORS" "$RED"
+    log "==============================================" "$RED"
+    log "These instances were NOT updated and are still running their" "$RED"
+    log "previous image:" "$RED"
+    for FAILED in "${FAILED_DOMAINS[@]}"; do
+        log "  - $FAILED" "$RED"
+    done
+    log "Scroll up for the build error, fix it, then re-run this script." "$YELLOW"
+else
+    log "\n==============================================" "$GREEN"
+    log " INSTALLATION COMPLETE" "$GREEN"
+    log "==============================================" "$GREEN"
+fi
 log "Management Command: openalgo-ctl" "$BLUE"
 log "  openalgo-ctl list" "$BLUE"
 log "  openalgo-ctl restart <domain.com>" "$BLUE"
@@ -1163,3 +1193,7 @@ if [[ $INSTALL_PORTAINER =~ ^[Yy]$ ]]; then
     fi
 fi
 log "\nAccess your instances via their respective HTTPS domains." "$GREEN"
+
+if [ ${#FAILED_DOMAINS[@]} -gt 0 ]; then
+    exit 1
+fi
