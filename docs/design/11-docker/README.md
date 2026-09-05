@@ -180,7 +180,7 @@ services:
       - openalgo_strategies:/app/strategies
       - openalgo_keys:/app/keys
       - openalgo_tmp:/app/tmp
-      - ./.env:/app/.env:ro       # Environment config (read-only)
+      - ./.env:/app/.env        # Environment config (writable, required for v2.0.0.8+ key rotation)
     environment:
       - FLASK_HOST_IP=0.0.0.0
       - FLASK_PORT=5000
@@ -339,7 +339,7 @@ docker run -d \
   -p 8765:8765 \
   -v $(pwd)/db:/app/db \
   -v $(pwd)/log:/app/log \
-  -v $(pwd)/.env:/app/.env:ro \
+  -v $(pwd)/.env:/app/.env \
   openalgo
 
 # View logs
@@ -456,7 +456,7 @@ fi
 | Aspect | Implementation |
 |--------|----------------|
 | Non-root user | Runs as `appuser` |
-| Read-only .env | Mounted with `:ro` flag |
+| `.env` mount | Writable so v2.0.0.8+ automatic `APP_KEY`/`FERNET_SALT` key-rotation can atomically write `.env.tmp`. Mounting it `:ro` would crash the worker in a restart loop. If you don't use auto-rotation, apply host-side `chmod 600` and rely on filesystem permissions for at-rest confidentiality. |
 | Keys directory | 700 permissions |
 | No build tools | Slim production image |
 | Minimal packages | Only runtime dependencies |
