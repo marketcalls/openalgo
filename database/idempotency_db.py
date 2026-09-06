@@ -222,11 +222,36 @@ def release_client_order_id(api_key: str, client_order_id: str) -> None:
             idempotency_session.commit()
 
 
+def mark_unresolved(api_key: str, client_order_id: str) -> None:
+    """Flag an in-flight reservation whose outcome is unknowable.
+
+    Used when the broker call failed ambiguously (transport error, 5xx, an
+    accepted-but-unacknowledged order): the order may exist at the broker,
+    so the reservation is kept — a retry must reconcile with the broker
+    before another placement instead of re-placing blindly. Never touches
+    a row that already resolved to "placed".
+    """
+    init_idempotency_db()
+    key_hash = _hash_api_key(api_key)
+    with _init_lock:
+        row = (
+            idempotency_session.query(ClientOrderId)
+            .filter_by(api_key_hash=key_hash, client_order_id=client_order_id)
+            .one_or_none()
+        )
+        if row is not None and row.status == "in_flight":
+            row.status = "unresolved"
+            idempotency_session.commit()
+
+
 def get_resolution(api_key: str, client_order_id: str) -> dict | None:
     """Return the recorded resolution for a key, or None if unknown.
 
-    Shape: {"orderid": str|None, "status": "in_flight"|"placed", "tag": str|None}
-    An in_flight resolution means a placement is racing right now.
+    Shape: {"orderid": str|None, "status": "in_flight"|"placed"|"unresolved",
+    "tag": str|None}
+    An in_flight resolution means a placement is racing right now; an
+    unresolved one means a previous attempt may or may not have reached the
+    broker.
     """
     init_idempotency_db()
     key_hash = _hash_api_key(api_key)

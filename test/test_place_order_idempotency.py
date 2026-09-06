@@ -206,7 +206,7 @@ class TestPlaceOrderIdempotency:
         assert fake_broker.calls, "broker should have been called"
         assert "client_order_id" not in fake_broker.calls[0]
 
-    def test_broker_failure_releases_reservation(self, monkeypatch):
+    def test_broker_exception_keeps_reservation_unresolved(self, monkeypatch):
         broker = _FakeBrokerModule(exc=RuntimeError("broker down"))
         monkeypatch.setattr(
             place_order_service,
@@ -221,10 +221,66 @@ class TestPlaceOrderIdempotency:
         )
         assert ok is False
         assert code == 500
-        # The retry after a failure must be allowed to proceed.
+        # The exception is ambiguous — it may have hit after the broker
+        # accepted the order. The reservation must survive as unresolved and
+        # the same-id retry must be blocked instead of double-placing.
+        resolution = idempotency_db.get_resolution(API_KEY, CID)
+        assert resolution is not None and resolution["status"] == "unresolved"
+
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY
+        )
+        assert ok is False
+        assert code == 409
+        assert len(broker.calls) == 1
+
+    def test_ambiguous_500_keeps_reservation_unresolved(self, monkeypatch):
+        # A transport failure converted into an adapter 500 is the exact
+        # lost-ack shape the review reproduced: the request may have been
+        # accepted, so the retry must not re-place.
+        broker = _FakeBrokerModule(status=500, order_id=None)
+        monkeypatch.setattr(
+            place_order_service,
+            "get_auth_token_broker",
+            lambda api_key: ("fake-auth-token", "fakebroker"),
+        )
+        monkeypatch.setattr(place_order_service, "get_analyze_mode", lambda: False)
+        monkeypatch.setattr(place_order_service, "import_broker_module", lambda name: broker)
+
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY
+        )
+        assert ok is False
+        resolution = idempotency_db.get_resolution(API_KEY, CID)
+        assert resolution is not None and resolution["status"] == "unresolved"
+
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY
+        )
+        assert ok is False
+        assert code == 409
+        assert len(broker.calls) == 1
+
+    def test_rate_limited_429_releases_reservation(self, monkeypatch):
+        broker = _FakeBrokerModule(status=429, order_id=None)
+        monkeypatch.setattr(
+            place_order_service,
+            "get_auth_token_broker",
+            lambda api_key: ("fake-auth-token", "fakebroker"),
+        )
+        monkeypatch.setattr(place_order_service, "get_analyze_mode", lambda: False)
+        monkeypatch.setattr(place_order_service, "import_broker_module", lambda name: broker)
+
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY
+        )
+        assert ok is False
+        # 429 proves the broker refused the order: a retry with a fresh
+        # placement is safe and must be allowed.
         assert idempotency_db.get_resolution(API_KEY, CID) is None
 
-        broker.exc = None
+        broker.status = 200
+        broker.order_id = "250106000012345"
         ok, response, code = place_order_service.place_order(
             {**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY
         )
@@ -296,7 +352,7 @@ class TestPlaceOrderIdempotency:
         assert code == 500
         assert "unresolved" in response["message"]
         resolution = idempotency_db.get_resolution(API_KEY, CID)
-        assert resolution is not None and resolution["status"] == "in_flight"
+        assert resolution is not None and resolution["status"] == "unresolved"
 
     def test_200_without_orderid_retry_stays_blocked(self, monkeypatch):
         broker = _FakeBrokerModule(status=200, order_id=None)

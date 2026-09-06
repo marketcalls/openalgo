@@ -116,6 +116,15 @@ def validate_order_data(data: dict[str, Any]) -> tuple[bool, dict[str, Any] | No
         return False, None, str(err)
 
 
+# Broker/adapter statuses that prove the order was NOT placed: the request
+# was refused before acceptance (validation, auth, rate limit, unknown
+# route). Anything else — 5xx (including transport failures converted to
+# 500 inside adapters) and unknown codes — is ambiguous: the request may
+# have reached the broker and been accepted, so the idempotency reservation
+# must stay and the key must be reconciled before another placement.
+CONFIRMED_REJECTION_STATUSES = frozenset({400, 401, 403, 404, 405, 409, 422, 429})
+
+
 def place_order_with_auth(
     order_data: dict[str, Any],
     auth_token: str,
@@ -297,12 +306,19 @@ def place_order_with_auth(
     except Exception as e:
         logger.exception(f"Error in broker_module.place_order_api: {e}")
         if idempotent:
-            from database.idempotency_db import release_client_order_id
+            # Ambiguous outcome: the exception may have hit mid-call, after
+            # the broker accepted the order. Releasing the reservation would
+            # let a retry double-place, so the key is kept as unresolved.
+            from database.idempotency_db import mark_unresolved
 
-            release_client_order_id(api_key, client_order_id)
+            mark_unresolved(api_key, client_order_id)
         error_response = {
             "status": "error",
-            "message": "Failed to place order due to internal error",
+            "message": (
+                "Failed to place order due to internal error; placement "
+                "unresolved — retries with this client_order_id are blocked "
+                "until the order is reconciled"
+            ),
         }
         bus.publish(
             OrderFailedEvent(
@@ -322,9 +338,9 @@ def place_order_with_auth(
         if idempotent and not order_id:
             # Broker ACKed but named no order — unknown at the broker. Not a
             # failure (a retry could double-place) and not a success (there is
-            # no orderid to report or record). Keep the reservation in-flight:
-            # retries of this id keep getting 409 instead of re-placing, and a
-            # human or the ack reconciler can resolve the true orderid.
+            # no orderid to report or record). The reservation moves to the
+            # unresolved state: retries of this id keep getting 409 instead
+            # of re-placing, and reconciliation can resolve the true orderid.
             error_response = {
                 "status": "error",
                 "message": (
@@ -346,6 +362,10 @@ def place_order_with_auth(
                         error_message="broker returned 200 without an order id",
                     )
                 )
+            if idempotent:
+                from database.idempotency_db import mark_unresolved
+
+                mark_unresolved(api_key, client_order_id)
             return False, error_response, 500
 
         order_response_data = {"status": "success", "orderid": order_id}
@@ -379,15 +399,30 @@ def place_order_with_auth(
 
         return True, order_response_data, 200
     else:
+        # Release only when the broker/adapter provably refused the order;
+        # for inconclusive statuses the key stays reserved (see
+        # CONFIRMED_REJECTION_STATUSES) so a retry cannot double-place.
+        unresolved = idempotent and res.status not in CONFIRMED_REJECTION_STATUSES
         if idempotent:
-            from database.idempotency_db import release_client_order_id
+            if unresolved:
+                from database.idempotency_db import mark_unresolved
 
-            release_client_order_id(api_key, client_order_id)
+                mark_unresolved(api_key, client_order_id)
+            else:
+                from database.idempotency_db import release_client_order_id
+
+                release_client_order_id(api_key, client_order_id)
         message = (
             response_data.get("message", "Failed to place order")
             if isinstance(response_data, dict)
             else "Failed to place order"
         )
+        if unresolved:
+            message = (
+                f"{message}; placement unresolved — the broker response was "
+                "inconclusive, so retries with this client_order_id are "
+                "blocked until the order is reconciled"
+            )
         error_response = {"status": "error", "message": message}
         bus.publish(
             OrderFailedEvent(
