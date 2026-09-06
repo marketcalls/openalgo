@@ -1,5 +1,11 @@
 # ------------------------------ Python Builder Stage ----------------------- #
-FROM python:3.12-bullseye AS python-builder
+# Base images track Debian 13 "trixie". Debian 11 "bullseye" reached end of LTS
+# on 2026-08-31 and its security pool was drained days later, so every build
+# began failing with 404s on systemd, tzdata, libtiff5 and libgbm1 while the
+# package index still advertised them. Debian 12 "bookworm" is not the fix --
+# its regular security support ended 2026-07-11 and it is already LTS-only.
+# Trixie has security support to 2028-08-09 (LTS to 2030-06-30).
+FROM python:3.12-trixie AS python-builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl build-essential && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -14,7 +20,7 @@ RUN pip install --no-cache-dir uv && \
     rm -rf /root/.cache
 
 # ------------------------------ Frontend Builder Stage --------------------- #
-FROM node:22-bullseye-slim AS frontend-builder
+FROM node:22-trixie-slim AS frontend-builder
 WORKDIR /app
 COPY frontend/package*.json ./frontend/
 RUN cd frontend && npm ci
@@ -23,7 +29,7 @@ RUN cd frontend && npm run build
 
 # --------------------------------------------------------------------------- #
 # ------------------------------ Production Stage --------------------------- #
-FROM python:3.12-slim-bullseye AS production
+FROM python:3.12-slim-trixie AS production
 # 0 – set timezone to IST (Asia/Kolkata) & install runtime dependencies
 #     chromium + fonts-liberation are required by Kaleido 1.x (plotly static
 #     image export) which drives a real headless Chromium via choreographer.

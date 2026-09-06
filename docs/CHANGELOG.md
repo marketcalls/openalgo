@@ -8,6 +8,26 @@ fix, live in [docs/releases](releases/).
 
 ## [Unreleased]
 
+## [2.0.2.3] - 2026-09-06
+
+### Strategy Module, Agent and Charting Release
+
+217 commits since 2.0.2.2. Full notes: [version-2.0.2.3-released.md](releases/version-2.0.2.3-released.md).
+
+---
+
+### Highlights
+
+- **Strategy Module and RMS at `/strategy`** - multi-leg options strategies with stop loss, target and trailing stop per leg and in aggregate, driven by the live tick feed. Two kinds share one engine: `batch` enters and exits every leg together, `signal` moves one leg per alert, so a TradingView alert can trade a single leg. Kill switch flattens, crash recovery and checkpointing survive a restart mid-run, and the books are served from the broker rather than from stored rows
+- **A broker-agnostic risk core in `services/risk/`** - decides stops, targets, trailing and aggregate limits, and performs no I/O of any kind, so it is exercised by golden vectors rather than a running platform. The four defects in the evaluator it replaced are each pinned by a test marked `PORTED DEFECT`
+- **Order-path safety** - a claim is written under the same lock that checks it and before dispatch, a fill is matched to its order rather than to its leg, and a caller that has already resolved the pipe says so, so an analyzer toggle mid-run cannot send live exits to the sandbox. A stop whose exits were refused leaves the run open and managed
+- **The OpenAlgo Agent at `/agent`** - an LLM assistant wired to OpenAlgo's service layer, reading order book, positions, holdings, funds, quotes, history, indicators, Greeks and payoff diagrams, and placing orders only when the operator turns trading on. Runs on any LiteLLM provider, or on a ChatGPT Plus or Pro subscription by OAuth device flow (#1997)
+- **Charting terminal on openalgo-charts 2.0.2** - a bottom dock for orders, positions, trades and GTT across every symbol; one-click trading as an explicit armed mode, off by default; watchlist and option chain side panels; and a chart-side agent panel
+- **Kotak Neo historical data** - the plugin previously served none. Now 1m to 30m, 1h, D and W across NSE, BSE, NFO, BFO, NSE_INDEX and BSE_INDEX, as a direct REST integration. MCX and CDS are refused by the broker and error clearly rather than returning an empty series (#2008, #2010)
+- **Broker fixes** - Fyers HSM authentication timeout (#1950), Shoonya socket and thread leak (#1988), mstock subscribe recovery (#1983, #1974), Upstox order-type price fields (#1966), Flattrade order socket evicting the feed (#1961)
+
+---
+
 ### Charting Terminal
 
 - **One-click trading is now an explicit armed mode, and it is off by default.**
@@ -50,6 +70,49 @@ fix, live in [docs/releases](releases/).
 - **A depth subscription is read under either key.** The proxy read the requested
   book depth from `depth` only, while the chart library sent `depth_level`, so a
   client asking for 20, 30 or 50 levels was served 5 with no error.
+
+### Brokers
+
+- **Kotak Neo serves historical data.** `get_history` was a placeholder returning
+  an empty frame and the interval lists were empty. Now 1m, 3m, 5m, 10m, 15m,
+  30m, 1h, D and W across NSE, BSE, NFO, BFO, NSE_INDEX and BSE_INDEX, as a
+  direct REST integration on the shared pooled client rather than an SDK wrapper.
+  Paced at four requests per second against a measured ceiling of five, with an
+  empty range recognised as a 400 fault rather than treated as a failure
+  (#2008, #2010).
+- **MCX and CDS have no Kotak historical data.** The broker refuses both segments
+  outright, so the request errors clearly instead of returning an empty series
+  that would read as a market holiday. Quotes, depth, orders and streaming are
+  unaffected.
+- **Kotak account data** - positions backfill LTP via batched multiquotes
+  (#1973), realized P&L is reported for fully-closed positions (#1971),
+  `availablecash` reports cash only (#1955), and the scripmaster fallback check
+  uses a ranged GET instead of HEAD (#1730).
+- **Fyers** HSM WebSocket authentication timeout resolved (#1950).
+- **Shoonya** abandoned WebSocket clients no longer leak sockets and threads
+  (#1988), and `get_history` raises on session errors instead of returning an
+  empty success (#1952).
+- **mstock** recovers dropped subscribes and stands down on dead tokens (#1983),
+  with corrected order handling and the one-off quote socket closed on every exit
+  path (#1974).
+- **Upstox** sends price and trigger price only where the order type allows
+  (#1966).
+- **Flattrade** order socket no longer evicts the market-data feed (#1961).
+
+### Dependencies
+
+- **New**: `litellm==1.99.0`, `agno==3.0.5`, `ddgs>=9.16.0`, all for the Agent
+- `openalgo-charts`: **1.8.2** to **2.0.2**
+- Docker base images moved from EOL bullseye to trixie (#2004)
+- npm and pip advisories flagged by Dependabot patched (#1968)
+- The pinned `openalgo` SDK stays at **2.0.3**
+
+### Contributors
+
+- **@marketcalls (Rajandran R)** - release management; the Strategy Module and RMS including the risk core, signal mode, webhook, scheduler, crash recovery and order-path safety (#1976); the OpenAlgo Agent with ChatGPT subscription support (#1997); the charting terminal upgrade to openalgo-charts 2.0.2 with the bottom dock, armed one-click trading and side panels; Kotak Neo historical data (#2008, #2010); retirement of the legacy `/strategy` module
+- **@Kalaiviswa** - Fyers HSM authentication timeout (#1950); Shoonya socket and thread leak (#1988) and `get_history` session errors (#1952); mstock subscribe recovery (#1983) and quote socket cleanup (#1974); Upstox order-type price fields (#1966); Flattrade order socket and Kotak multiquote batching (#1961); Flow strike offsets and QA fixture cleanup (#1953); underlying picker on cash exchanges (#1989); Kotak follow-ups (#1985); Dependabot advisory patches (#1968)
+- **@arsalanansari17** - Kotak LTP backfill via batched multiquotes (#1973), realized P&L for closed positions (#1971), `availablecash` as cash only (#1955), ranged GET for the scripmaster check (#1730)
+- **@aravindgandavadi (Aravind Gandavadi)** - Docker base images from EOL bullseye to trixie (#2004)
 
 ## [2.0.2.2] - 2026-08-29
 
