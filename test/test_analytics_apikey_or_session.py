@@ -45,6 +45,12 @@ def app(monkeypatch):
     def _csrf_token():
         return jsonify({"token": generate_csrf()})
 
+    # check_session_validity parity: the unauthenticated non-AJAX branch
+    # redirects to auth.login, which the real app provides.
+    @app.route("/login", endpoint="auth.login")
+    def _login_page():
+        return "login page", 200
+
     # Patch the credential lookups and the data call; the auth layer must
     # be exercised through the real decorator and real blueprint routes.
     monkeypatch.setattr(
@@ -88,9 +94,24 @@ class TestApikeyPath:
 
 class TestSessionPath:
     def test_missing_auth_rejected(self, client):
+        # Mirrors check_session_validity: JSON requests get the
+        # session_expired contract instead of a bare message.
         resp = client.post("/oitracker/api/oi-data", json=VALID_PARAMS)
         assert resp.status_code == 401
-        assert resp.get_json()["message"] == "Authentication required"
+        body = resp.get_json()
+        assert body["error"] == "session_expired"
+        assert body["status"] == "error"
+
+    def test_missing_auth_non_ajax_redirects_to_login(self, client):
+        # Non-AJAX callers get the same redirect check_session_validity
+        # produced before the apikey path existed.
+        resp = client.post(
+            "/oitracker/api/oi-data",
+            data="",
+            content_type="text/plain",
+        )
+        assert resp.status_code == 302
+        assert "/login" in resp.headers["Location"]
 
     def test_expired_session_rejected(self, client):
         expired = datetime.now(pytz.timezone("Asia/Kolkata")) - timedelta(days=2)
@@ -122,3 +143,53 @@ class TestSessionPath:
         _login(client)
         resp = client.post("/oitracker/api/oi-data", json=VALID_PARAMS)
         assert resp.status_code == 200
+
+
+class TestApikeySources:
+    """The apikey may arrive in the JSON body, the query string, or the
+    X-API-Key header (needed for the GET endpoints, e.g. the interval
+    lists, which cannot carry a JSON body)."""
+
+    def _patch_capture(self, monkeypatch):
+        from flask import g
+
+        import blueprints.oitracker as oitracker_module
+
+        captured = {}
+
+        def _capture(**kwargs):
+            captured["user"] = getattr(g, "openalgo_user", None)
+            captured["apikey"] = getattr(g, "openalgo_apikey", None)
+            return True, {"status": "success", "data": []}, 200
+
+        monkeypatch.setattr(oitracker_module, "get_oi_data", _capture)
+        return captured
+
+    def test_apikey_from_query_param(self, client, monkeypatch):
+        captured = self._patch_capture(monkeypatch)
+        resp = client.post(
+            "/oitracker/api/oi-data?apikey=valid-key", json=VALID_PARAMS
+        )
+        assert resp.status_code == 200
+        assert captured["user"] == "testuser"
+        assert captured["apikey"] == "valid-key"
+
+    def test_apikey_from_header(self, client, monkeypatch):
+        captured = self._patch_capture(monkeypatch)
+        resp = client.post(
+            "/oitracker/api/oi-data",
+            json=VALID_PARAMS,
+            headers={"X-API-Key": "valid-key"},
+        )
+        assert resp.status_code == 200
+        assert captured["user"] == "testuser"
+        assert captured["apikey"] == "valid-key"
+
+    def test_invalid_apikey_from_header_rejected(self, client):
+        resp = client.post(
+            "/oitracker/api/oi-data",
+            json=VALID_PARAMS,
+            headers={"X-API-Key": "wrong-key"},
+        )
+        assert resp.status_code == 401
+        assert resp.get_json()["message"] == "Invalid openalgo apikey"
