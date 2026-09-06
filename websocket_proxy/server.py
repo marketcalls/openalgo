@@ -1956,6 +1956,160 @@ class WebSocketProxy:
         except Exception as e:
             logger.exception(f"Error clearing auth cache for user {user_id}: {e}")
 
+    async def _handle_market_data(self, topic_str: str, data_str: str) -> None:
+        """Parse, normalize and fan out one EXCHANGE_SYMBOL_MODE market-data topic.
+
+        Extracted verbatim from zmq_listener so the mode routing — including
+        the higher-mode-to-lower-mode downgrade delivery — is testable without
+        opening a socket or ZMQ context.
+        """
+        market_data = json.loads(data_str)
+
+        # Extract topic components from ZMQ topic string.
+        # All adapters publish: EXCHANGE_SYMBOL_MODE
+        # Mode (LTP/QUOTE/DEPTH) is always the LAST segment.
+        # Exchange is the first segment (NSE, BSE, NFO, MCX, CRYPTO, …)
+        #   except NSE_INDEX / BSE_INDEX which span two segments.
+        # Symbol is everything between exchange and mode — may contain
+        # underscores for crypto spot pairs (e.g. CRYPTO_SOL_INR_LTP).
+        parts = topic_str.split("_")
+
+        if len(parts) < 3:
+            logger.warning(f"Invalid topic format: {topic_str}")
+            return
+
+        broker_name = "unknown"
+
+        # Mode is always the last segment
+        mode_str = parts[-1]
+        remaining = parts[:-1]  # everything except mode
+
+        # Detect two-segment exchange prefixes (NSE_INDEX, BSE_INDEX,
+        # MCX_INDEX, GLOBAL_INDEX, NSEIX_INDEX). Add new index/multi-segment
+        # exchanges here when introducing them.
+        _MULTI_SEGMENT_EXCHANGE_PREFIXES = (
+            ("NSE", "INDEX"),
+            ("BSE", "INDEX"),
+            ("MCX", "INDEX"),
+            ("GLOBAL", "INDEX"),
+        )
+        if len(remaining) >= 2 and (remaining[0], remaining[1]) in _MULTI_SEGMENT_EXCHANGE_PREFIXES:
+            exchange = f"{remaining[0]}_{remaining[1]}"
+            symbol = "_".join(remaining[2:])
+        else:
+            exchange = remaining[0]
+            symbol = "_".join(remaining[1:])
+
+        if not symbol:
+            logger.warning(f"Invalid topic format (no symbol): {topic_str}")
+            return
+
+        # Route through the single normalizer so topic parsing stays
+        # consistent with client-side mode handling.
+        normalized = normalize_mode_or_none(mode_str)
+        if normalized is None:
+            logger.warning(f"Invalid mode in topic: {mode_str}")
+            return
+        mode, _ = normalized
+
+        # Quote-mode field contract: adapters forward broker payloads
+        # verbatim, and several mappers only add OHLC when the broker
+        # snapshot carries it. Guarantee the documented Quote fields
+        # with null (never 0) so clients can chart without per-broker
+        # key checks. The fan-out below delivers every higher mode to
+        # lower-mode subscribers (a Depth tick reaches Quote subscribers
+        # relabeled as mode 2), so the contract must hold for every mode
+        # >= QUOTE, not just QUOTE topics. See websocket_proxy/tick_contract.py.
+        if mode >= MODE_QUOTE:
+            normalize_quote_tick(market_data)
+
+        # No server-side LTP throttling: the previous time-based
+        # throttle dropped intra-window ticks instead of coalescing
+        # them, so clients could miss the latest price during bursts
+        # (e.g. NIFTY expiry, circuit triggers). With the O(1)
+        # subscription_index, fan-out is cheap enough to forward every
+        # tick. If CPU pressure ever returns, replace this with a
+        # trailing-edge coalescer that emits the latest pending tick.
+        sub_key = (symbol, exchange, mode)
+        current_time = time.time()
+        self.last_message_time[sub_key] = current_time
+
+        # Feed market data to MarketDataService for backend consumers
+        # (sandbox execution engine, position MTM, RMS, etc.)
+        # This runs regardless of whether WebSocket clients are subscribed
+        try:
+            mds_data = {
+                "symbol": symbol,
+                "exchange": exchange,
+                "mode": mode,
+                "data": market_data,
+            }
+            market_data_service = get_market_data_service()
+            market_data_service.process_market_data(mds_data)
+        except Exception as mds_error:
+            # Don't block WebSocket delivery if MarketDataService has issues
+            logger.debug(f"MarketDataService processing error: {mds_error}")
+
+        # OPTIMIZATION 2: O(1) lookup using subscription index
+        # Higher modes include all lower-mode data (Depth > Quote > LTP),
+        # so also deliver to subscribers at lower modes.
+        # Maps client_id -> the mode they subscribed to (for correct message tagging)
+        all_client_modes = {}
+        for m in range(1, mode + 1):
+            for cid in self.subscription_index.get((symbol, exchange, m), set()):
+                all_client_modes[cid] = m
+
+        if not all_client_modes:
+            return  # No WebSocket clients subscribed, skip delivery
+
+        # OPTIMIZATION 3: Batch message sends for parallel delivery
+        send_tasks = []
+
+        # OPTIMIZATION 4: Pre-create base message (reused for all clients)
+        # This avoids creating the same dict 1000 times
+        base_message = {
+            "type": "market_data",
+            "symbol": symbol,
+            "exchange": exchange,
+            "mode": mode,
+            "data": market_data,
+        }
+
+        for client_id, client_mode in all_client_modes.items():
+            # Verify client still exists
+            if client_id not in self.clients:
+                continue
+
+            # Verify user mapping exists
+            user_id = self.user_mapping.get(client_id)
+            if not user_id:
+                continue
+
+            # OBSERVABILITY: record that this user's feed is live (a tick
+            # was delivered). Cheap dict write; lets _log_stale_adapters()
+            # detect connected-but-silent adapters.
+            self.last_tick_time[user_id] = current_time
+
+            # Check broker match (important for multi-broker setups)
+            client_broker = self.user_broker_mapping.get(user_id)
+            if broker_name != "unknown" and client_broker and client_broker != broker_name:
+                continue
+
+            # Tag message with client's subscribed mode so frontend renders correctly
+            message = base_message.copy()
+            message["mode"] = client_mode
+            message["broker"] = broker_name if broker_name != "unknown" else client_broker
+
+            # Add to batch
+            send_tasks.append(self.send_message(client_id, message))
+
+        # Send all messages in parallel (non-blocking)
+        if send_tasks:
+            await aio.gather(*send_tasks, return_exceptions=True)
+
+        # METRICS: Track message count for health monitoring
+        self._messages_processed += 1
+
     async def zmq_listener(self):
         """
         OPTIMIZED: Listen for messages from broker adapters via ZeroMQ and forward to clients
@@ -2025,149 +2179,8 @@ class WebSocketProxy:
                     logger.debug(f"Skipping private event topic: {topic_str}")
                     continue
 
-                market_data = json.loads(data_str)
-
-                # Extract topic components from ZMQ topic string.
-                # All adapters publish: EXCHANGE_SYMBOL_MODE
-                # Mode (LTP/QUOTE/DEPTH) is always the LAST segment.
-                # Exchange is the first segment (NSE, BSE, NFO, MCX, CRYPTO, …)
-                #   except NSE_INDEX / BSE_INDEX which span two segments.
-                # Symbol is everything between exchange and mode — may contain
-                # underscores for crypto spot pairs (e.g. CRYPTO_SOL_INR_LTP).
-                parts = topic_str.split("_")
-
-                if len(parts) < 3:
-                    logger.warning(f"Invalid topic format: {topic_str}")
-                    continue
-
-                broker_name = "unknown"
-
-                # Mode is always the last segment
-                mode_str = parts[-1]
-                remaining = parts[:-1]  # everything except mode
-
-                # Detect two-segment exchange prefixes (NSE_INDEX, BSE_INDEX,
-                # MCX_INDEX, GLOBAL_INDEX, NSEIX_INDEX). Add new index/multi-segment
-                # exchanges here when introducing them.
-                _MULTI_SEGMENT_EXCHANGE_PREFIXES = (
-                    ("NSE", "INDEX"),
-                    ("BSE", "INDEX"),
-                    ("MCX", "INDEX"),
-                    ("GLOBAL", "INDEX"),
-                )
-                if len(remaining) >= 2 and (remaining[0], remaining[1]) in _MULTI_SEGMENT_EXCHANGE_PREFIXES:
-                    exchange = f"{remaining[0]}_{remaining[1]}"
-                    symbol = "_".join(remaining[2:])
-                else:
-                    exchange = remaining[0]
-                    symbol = "_".join(remaining[1:])
-
-                if not symbol:
-                    logger.warning(f"Invalid topic format (no symbol): {topic_str}")
-                    continue
-
-                # Route through the single normalizer so topic parsing stays
-                # consistent with client-side mode handling.
-                normalized = normalize_mode_or_none(mode_str)
-                if normalized is None:
-                    logger.warning(f"Invalid mode in topic: {mode_str}")
-                    continue
-                mode, _ = normalized
-
-                # Quote-mode field contract: adapters forward broker payloads
-                # verbatim, and several mappers only add OHLC when the broker
-                # snapshot carries it. Guarantee the documented Quote fields
-                # with null (never 0) so clients can chart without per-broker
-                # key checks. See websocket_proxy/tick_contract.py.
-                if mode == MODE_QUOTE:
-                    normalize_quote_tick(market_data)
-
-                # No server-side LTP throttling: the previous time-based
-                # throttle dropped intra-window ticks instead of coalescing
-                # them, so clients could miss the latest price during bursts
-                # (e.g. NIFTY expiry, circuit triggers). With the O(1)
-                # subscription_index, fan-out is cheap enough to forward every
-                # tick. If CPU pressure ever returns, replace this with a
-                # trailing-edge coalescer that emits the latest pending tick.
-                sub_key = (symbol, exchange, mode)
-                current_time = time.time()
-                self.last_message_time[sub_key] = current_time
-
-                # Feed market data to MarketDataService for backend consumers
-                # (sandbox execution engine, position MTM, RMS, etc.)
-                # This runs regardless of whether WebSocket clients are subscribed
-                try:
-                    mds_data = {
-                        "symbol": symbol,
-                        "exchange": exchange,
-                        "mode": mode,
-                        "data": market_data,
-                    }
-                    market_data_service = get_market_data_service()
-                    market_data_service.process_market_data(mds_data)
-                except Exception as mds_error:
-                    # Don't block WebSocket delivery if MarketDataService has issues
-                    logger.debug(f"MarketDataService processing error: {mds_error}")
-
-                # OPTIMIZATION 2: O(1) lookup using subscription index
-                # Higher modes include all lower-mode data (Depth > Quote > LTP),
-                # so also deliver to subscribers at lower modes.
-                # Maps client_id -> the mode they subscribed to (for correct message tagging)
-                all_client_modes = {}
-                for m in range(1, mode + 1):
-                    for cid in self.subscription_index.get((symbol, exchange, m), set()):
-                        all_client_modes[cid] = m
-
-                if not all_client_modes:
-                    continue  # No WebSocket clients subscribed, skip delivery
-
-                # OPTIMIZATION 3: Batch message sends for parallel delivery
-                send_tasks = []
-
-                # OPTIMIZATION 4: Pre-create base message (reused for all clients)
-                # This avoids creating the same dict 1000 times
-                base_message = {
-                    "type": "market_data",
-                    "symbol": symbol,
-                    "exchange": exchange,
-                    "mode": mode,
-                    "data": market_data,
-                }
-
-                for client_id, client_mode in all_client_modes.items():
-                    # Verify client still exists
-                    if client_id not in self.clients:
-                        continue
-
-                    # Verify user mapping exists
-                    user_id = self.user_mapping.get(client_id)
-                    if not user_id:
-                        continue
-
-                    # OBSERVABILITY: record that this user's feed is live (a tick
-                    # was delivered). Cheap dict write; lets _log_stale_adapters()
-                    # detect connected-but-silent adapters.
-                    self.last_tick_time[user_id] = current_time
-
-                    # Check broker match (important for multi-broker setups)
-                    client_broker = self.user_broker_mapping.get(user_id)
-                    if broker_name != "unknown" and client_broker and client_broker != broker_name:
-                        continue
-
-                    # Tag message with client's subscribed mode so frontend renders correctly
-                    message = base_message.copy()
-                    message["mode"] = client_mode
-                    message["broker"] = broker_name if broker_name != "unknown" else client_broker
-
-                    # Add to batch
-                    send_tasks.append(self.send_message(client_id, message))
-
-                # Send all messages in parallel (non-blocking)
-                if send_tasks:
-                    await aio.gather(*send_tasks, return_exceptions=True)
-
-                # METRICS: Track message count for health monitoring
-                self._messages_processed += 1
+                # Market-data topic: parse, normalize and fan out.
+                await self._handle_market_data(topic_str, data_str)
 
             except Exception as e:
                 logger.exception(f"Error in ZeroMQ listener: {e}")
