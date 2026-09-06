@@ -137,6 +137,12 @@ def _params_match_reservation(resolution: dict, order_data: dict) -> bool:
     def _norm_str(value) -> str:
         return str(value or "").strip().upper()
 
+    from database.idempotency_db import (
+        DEFAULT_PRICETYPE,
+        DEFAULT_PRODUCT,
+        MARKETISH_PRICETYPES,
+    )
+
     if _norm_str(resolution.get("symbol")) != _norm_str(order_data.get("symbol")):
         return False
     if _norm_str(resolution.get("exchange")) != _norm_str(order_data.get("exchange")):
@@ -150,20 +156,29 @@ def _params_match_reservation(resolution: dict, order_data: dict) -> bool:
             return False
     except (TypeError, ValueError):
         return False
+    # Rows created before product/pricetype/trigger_price existed (ALTER
+    # migration leaves existing rows NULL) were stored under the original
+    # five-field semantics: compare them with exactly those semantics.
+    if resolution.get("pricetype") is None and resolution.get("product") is None:
+        return True
     # Request-shaping parameters: a corrected retry must not reuse an
     # unresolved reservation (a LIMIT retry must not slip through a MARKET
-    # reservation, a CNC retry through an MIS one, etc.).
-    stored_pricetype = _norm_str(resolution.get("pricetype"))
-    if stored_pricetype != _norm_str(order_data.get("pricetype")):
+    # reservation, a CNC retry through an MIS one, etc.). BOTH sides are
+    # normalized with the schema defaults: the retry may repeat the original
+    # raw request, which omitted these fields (the reserve path recorded the
+    # defaults), and broker book rows always carry them explicitly.
+    stored_pricetype = _norm_str(resolution.get("pricetype") or DEFAULT_PRICETYPE)
+    if stored_pricetype != _norm_str(order_data.get("pricetype") or DEFAULT_PRICETYPE):
         return False
-    if _norm_str(resolution.get("product")) != _norm_str(order_data.get("product")):
+    if _norm_str(resolution.get("product") or DEFAULT_PRODUCT) != _norm_str(
+        order_data.get("product") or DEFAULT_PRODUCT
+    ):
         return False
     # For price-fixed types the recorded limit price must match the request.
     # For MARKET/SL-M the order book's "price" is the broker's average fill
-    # (see broker/*/mapping/order_data.py), so a stored default price must
-    # not be compared against it (mirrors MARKETISH_PRICETYPES in
-    # database/idempotency_db.py).
-    if stored_pricetype not in ("", "MARKET", "SL-M"):
+    # (see broker/*/mapping/order_data.py), so a recorded default price must
+    # not be compared against it.
+    if stored_pricetype not in MARKETISH_PRICETYPES:
         stored_price = resolution.get("price")
         if stored_price is not None:
             try:

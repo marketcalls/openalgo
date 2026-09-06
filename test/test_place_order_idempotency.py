@@ -588,6 +588,52 @@ class TestUnresolvedReconciliation:
         assert code == 200
         assert response["reconciled"] is True
 
+    def test_identical_raw_retry_reconciles_not_409(self, monkeypatch):
+        # THE raw-request P1: a retry that repeats the original request must
+        # reconcile, not 409. Both sides normalize with the schema defaults
+        # — the pre-fix matcher compared the stored defaults against the
+        # retry's ABSENT fields and refused the identical request.
+        broker = _FakeBrokerModule(status=500, order_id=None)
+        raw_request = {
+            k: v for k, v in BASE_ORDER.items() if k not in ("pricetype", "product")
+        }
+        self._make_unresolved(monkeypatch, broker, **{
+            k: v for k, v in raw_request.items() if k != "client_order_id"
+        })
+        self._stub_orderbook(monkeypatch, [dict(self.MATCHING_ORDER)])
+
+        ok, response, code = place_order_service.place_order(
+            {**raw_request, "client_order_id": CID}, api_key=API_KEY
+        )
+        assert ok is True
+        assert code == 200
+        assert response["reconciled"] is True
+        assert len(broker.calls) == 1
+
+    def test_legacy_null_shaping_rows_keep_five_field_semantics(self, monkeypatch):
+        # Rows created before product/pricetype/trigger_price existed (the
+        # ALTER migration leaves them NULL) must stay reconcilable: the
+        # matcher compares them with the original five-field semantics
+        # instead of inventing defaults the original request never had.
+        broker = _FakeBrokerModule(status=500, order_id=None)
+        self._make_unresolved(monkeypatch, broker)
+        self._stub_orderbook(monkeypatch, [dict(self.MATCHING_ORDER)])
+        sess = idempotency_db.idempotency_session
+        row = sess.query(idempotency_db.ClientOrderId).filter_by(
+            api_key_hash=idempotency_db._hash_api_key(API_KEY), client_order_id=CID
+        ).one()
+        row.product = None
+        row.pricetype = None
+        row.trigger_price = None
+        sess.commit()
+
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY
+        )
+        assert ok is True
+        assert code == 200
+        assert response["reconciled"] is True
+
     def _make_unresolved(self, monkeypatch, broker, **param_overrides):
         monkeypatch.setattr(
             place_order_service,
