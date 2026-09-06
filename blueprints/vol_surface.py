@@ -22,11 +22,13 @@ vol_surface_bp = Blueprint("vol_surface_bp", __name__, url_prefix="/")
 def surface_data():
     """Get 3D volatility surface data across strikes and expiries."""
     try:
-        data0 = request.get_json(silent=True) or {}
-        body_apikey = data0.get("apikey") if isinstance(data0, dict) else None
-        if not isinstance(body_apikey, str):
-            body_apikey = None
-        broker = get_broker_name(body_apikey) if body_apikey else session.get("broker")
+        # Broker comes from the apikey the decorator already verified (body,
+        # ?apikey or X-API-Key — all surfaced as g.openalgo_apikey), falling
+        # back to the session only for browser logins. Reading session['broker']
+        # first left apikey-only clients with a spurious 400 (P1, cubic review
+        # 2026-09-06).
+        decorator_api_key = getattr(g, "openalgo_apikey", None)
+        broker = get_broker_name(decorator_api_key) if decorator_api_key else session.get("broker")
         if not broker:
             return jsonify({"status": "error", "message": "Broker not set in session"}), 400
 
