@@ -8,6 +8,7 @@ logins — reading session['broker'] first left apikey-only clients with a
 spurious 400 "Broker not set in session" (cubic review, 2026-09-06).
 """
 
+import types
 from datetime import datetime
 
 import pytest
@@ -40,11 +41,9 @@ def app(monkeypatch):
 
     username_for_key = lambda key: "testuser" if key == "valid-key" else None  # noqa: E731
     monkeypatch.setattr(auth_db_module, "get_username_by_apikey", username_for_key)
-    monkeypatch.setattr(ivchart_module, "get_username_by_apikey", username_for_key)
-    monkeypatch.setattr(vol_surface_module, "get_username_by_apikey", username_for_key)
     # Broker lookup: patched per-test via _patch_broker_capture(); the routes
-    # resolve the broker from the VERIFIED USERNAME (never the raw key), so
-    # default to a registered broker for the known user only.
+    # resolve the broker from the decorator's VERIFIED USERNAME (g.openalgo_user,
+    # never the raw key), so default to a registered broker for the known user.
     monkeypatch.setattr(
         ivchart_module, "get_broker_name_for_user", lambda user: "zerodha" if user else None
     )
@@ -150,6 +149,37 @@ class TestIvchartBrokerSource:
         resp = client.post("/ivchart/api/iv-data", json=IV_PARAMS, headers={"X-API-Key": "valid-key"})
         assert resp.status_code == 400
         assert resp.get_json()["message"] == "Broker not set in session"
+
+
+class TestBrokerUsernameCache:
+    """get_broker_name_for_user caches by verified username (cubic round 3:
+    chart polling must not hit the database per request, and broker_cache
+    must never key on the raw API key)."""
+
+    def test_caches_by_username_never_by_key(self, monkeypatch):
+        calls = {"n": 0}
+
+        class _FakeQuery:
+            def filter_by(self, **kwargs):
+                calls["n"] += 1
+                return self
+
+            def first(self):
+                return types.SimpleNamespace(is_revoked=False, broker="zerodha")
+
+        class _FakeAuth:
+            query = _FakeQuery()
+
+        monkeypatch.setattr(auth_db_module, "Auth", _FakeAuth)
+        auth_db_module.broker_cache.clear()
+        try:
+            assert auth_db_module.get_broker_name_for_user("testuser") == "zerodha"
+            assert auth_db_module.get_broker_name_for_user("testuser") == "zerodha"
+            assert calls["n"] == 1  # second call served from the cache
+            assert auth_db_module.broker_cache["testuser"] == "zerodha"
+            assert "valid-key" not in auth_db_module.broker_cache
+        finally:
+            auth_db_module.broker_cache.clear()
 
 
 class TestVolSurfaceBrokerSource:

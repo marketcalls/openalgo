@@ -977,16 +977,25 @@ def get_username_by_apikey(provided_api_key):
 
 
 def get_broker_name_for_user(username):
-    """Get the broker name for a verified username (no API key involved).
+    """Get the broker name for a verified username, cached by that username.
 
     For callers that already hold a VERIFIED username (e.g. the
-    apikey_or_session decorator), this avoids both a redundant key
-    verification and any use of the raw key as a cache key (cubic review,
-    2026-09-06: broker_cache must not accumulate usable credentials).
+    apikey_or_session decorator), this avoids a redundant key verification,
+    and the cache is keyed by the username — never by an API key — so
+    broker_cache cannot accumulate usable credentials (cubic review,
+    2026-09-06). Cleared by the existing broker_cache.clear() paths on
+    token upsert/revoke.
     """
+    if not username:
+        return None
+
+    if username in broker_cache:
+        return broker_cache[username]
+
     try:
         auth_obj = Auth.query.filter_by(name=username).first()
         if auth_obj and not auth_obj.is_revoked:
+            broker_cache[username] = auth_obj.broker
             return auth_obj.broker
         logger.warning(f"No valid broker found for user_id '{username}'.")
         return None
@@ -1001,16 +1010,10 @@ def get_broker_name(provided_api_key):
     if not user_id:
         return None
 
-    # Cache keyed by the verified user_id, never the raw API key: keying by
-    # the key itself would leave usable credentials inspectable in
-    # broker_cache for its full TTL.
-    if user_id in broker_cache:
-        return broker_cache[user_id]
-
-    broker = get_broker_name_for_user(user_id)
-    if broker is not None:
-        broker_cache[user_id] = broker
-    return broker
+    # broker_cache is keyed by the verified user_id, never the raw API key:
+    # keying by the key itself would leave usable credentials inspectable in
+    # the cache for its full TTL.
+    return get_broker_name_for_user(user_id)
 
 
 def get_auth_token_broker(provided_api_key, include_feed_token=False):
