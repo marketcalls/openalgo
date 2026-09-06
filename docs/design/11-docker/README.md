@@ -13,7 +13,7 @@ OpenAlgo provides Docker support for containerized deployment with **3-stage bui
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        Stage 1: Python Builder                               │
-│                        (python:3.12-bullseye)                                │
+│                        (python:3.12-trixie)                                  │
 │                                                                              │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │  1. Install build dependencies (curl, build-essential)                │  │
@@ -26,7 +26,7 @@ OpenAlgo provides Docker support for containerized deployment with **3-stage bui
                                      │
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        Stage 2: Frontend Builder                             │
-│                        (node:22-bullseye-slim)                               │
+│                        (node:22-trixie-slim)                                 │
 │                                                                              │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │  1. Copy frontend/package*.json                                       │  │
@@ -39,7 +39,7 @@ OpenAlgo provides Docker support for containerized deployment with **3-stage bui
                                      ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        Stage 3: Production                                   │
-│                        (python:3.12-slim-bullseye)                           │
+│                        (python:3.12-slim-trixie)                             │
 │                                                                              │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │  1. Set timezone to IST (Asia/Kolkata)                                │  │
@@ -85,7 +85,7 @@ OpenAlgo provides Docker support for containerized deployment with **3-stage bui
 
 ```dockerfile
 # ------------------------------ Python Builder Stage ----------------------- #
-FROM python:3.12-bullseye AS python-builder
+FROM python:3.12-trixie AS python-builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl build-essential && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -100,7 +100,7 @@ RUN pip install --no-cache-dir uv && \
     rm -rf /root/.cache
 
 # ------------------------------ Frontend Builder Stage --------------------- #
-FROM node:22-bullseye-slim AS frontend-builder
+FROM node:22-trixie-slim AS frontend-builder
 WORKDIR /app
 COPY frontend/package*.json ./frontend/
 RUN cd frontend && npm ci
@@ -108,7 +108,7 @@ COPY frontend/ ./frontend/
 RUN cd frontend && npm run build
 
 # ------------------------------ Production Stage --------------------------- #
-FROM python:3.12-slim-bullseye AS production
+FROM python:3.12-slim-trixie AS production
 
 # Set timezone to IST and install runtime dependencies for scipy/numba
 RUN apt-get update && apt-get install -y --no-install-recommends \

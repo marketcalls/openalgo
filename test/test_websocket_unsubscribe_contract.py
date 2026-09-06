@@ -1454,3 +1454,46 @@ def test_subscribe_rejection_is_a_partial_ack_with_a_per_symbol_error() -> None:
             "broker": "angel",
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("frame", "expected_depth"),
+    [
+        ({"depth": 20}, 20),
+        ({"depth_level": 20}, 20),
+        ({"depth": 30, "depth_level": 20}, 30),
+        ({}, 5),
+    ],
+)
+def test_subscribe_reads_depth_under_either_key_before_defaulting(
+    frame: dict[str, int], expected_depth: int
+) -> None:
+    proxy = WebSocketProxy.__new__(WebSocketProxy)
+    adapter = _Adapter()
+    proxy.user_mapping = {7: "alice"}
+    proxy.broker_adapters = {"alice": adapter}
+    proxy.user_broker_mapping = {"alice": "angel"}
+    proxy.subscriptions = {7: set()}
+    proxy.subscription_index = defaultdict(set)
+    responses: list[dict[str, Any]] = []
+
+    async def capture(_client_id: int, response: dict[str, Any]) -> None:
+        responses.append(response)
+
+    proxy.send_message = capture
+    asyncio.run(
+        proxy.subscribe_client(
+            7,
+            {
+                "action": "subscribe",
+                "mode": "Depth",
+                "symbols": [{"symbol": "RELIANCE", "exchange": "NSE"}],
+                **frame,
+            },
+        )
+    )
+
+    assert adapter.subscribe_calls == [("RELIANCE", "NSE", 3, expected_depth)]
+    assert responses[0]["subscriptions"][0]["depth"] == expected_depth
+    stored = json.loads(next(iter(proxy.subscriptions[7])))
+    assert stored["depth_level"] == expected_depth

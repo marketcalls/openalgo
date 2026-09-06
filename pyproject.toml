@@ -1,7 +1,7 @@
 [project]
 requires-python = ">=3.12"
 name = "openalgoUI"
-version = "2.0.2.2"
+version = "2.0.2.3"
 description = "Broker-agnostic open-source trading automation"
 dependencies = [
   "aniso8601==9.0.1",
@@ -155,6 +155,9 @@ dependencies = [
   "openpyxl>=3.1.5",
   "playwright>=1.60.0",
   "openstatz==0.4.1",
+  "litellm==1.99.0",
+  "agno==3.0.5",
+  "ddgs>=9.16.0",
 ]
 
 [build-system]

@@ -14,7 +14,7 @@ import time
 from typing import Any
 
 from broker.mstock.api.data import BrokerData
-from broker.mstock.api.mstockwebsocket import MstockWebSocket
+from broker.mstock.api.mstockwebsocket import MstockWebSocket, _env_float
 from database.auth_db import get_auth_token
 from database.token_db import get_token
 from utils.logging import get_logger
@@ -52,7 +52,16 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # tokens per exchangeType, so the whole batch fits in one message.
         self.subscription_queue: list[dict] = []
         self.batch_timer: threading.Timer | None = None
-        self.batch_delay = 0.5  # seconds - matches the zerodha/angel fleet pattern
+        # Per-token requeue budget. A refused send is retried, but a socket that
+        # keeps refusing while still reporting connected would otherwise requeue
+        # and re-arm every batch_delay forever, spinning the timer and filling
+        # the log. After the budget is spent the token is left for the resync,
+        # which runs on the next login.
+        self.send_retries: dict[str, int] = {}
+        self.max_send_retries = max(1, int(_env_float("MSTOCK_WS_SEND_RETRIES", 3)))
+        # Coalescing window; overridable from .env for deployments that want a
+        # tighter or looser batch than the fleet default.
+        self.batch_delay = _env_float("MSTOCK_WS_BATCH_DELAY", 0.5)
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -77,7 +86,11 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # the database before each reconnect; Indian broker tokens roll over
         # daily (~3 AM IST) and the construction-time token is dead after rollover.
         self.ws_client = MstockWebSocket(
-            auth_token=auth_token, token_provider=self._get_fresh_auth_token
+            auth_token=auth_token,
+            token_provider=self._get_fresh_auth_token,
+            # is_auth_error() is inherited from BaseBrokerWebSocketAdapter, so
+            # mstock shares the fleet's 401/403 vocabulary instead of its own.
+            auth_error_check=self.is_auth_error,
         )
         self.running = True
         self.logger.info(f"mstock adapter initialized for user {user_id}")
@@ -107,10 +120,39 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.info("Connecting to mstock WebSocket in streaming mode...")
         self.running = True
 
-        # Start streaming — returns immediately (same as Angel/Upstox pattern)
-        self.ws_client.connect_stream(self._on_data)
+        # Set before the thread starts. connect_stream() returns immediately but
+        # the worker is already live, and a connection that fails outright can
+        # reach _on_feed_dead() first - setting the flag afterwards would
+        # overwrite its False and hand the proxy a feed whose thread has exited.
         self.connected = True
+
+        # Start streaming — returns immediately (same as Angel/Upstox pattern)
+        self.ws_client.connect_stream(
+            self._on_data,
+            resync_callback=self._resync_subscriptions,
+            auth_failure_callback=self._on_feed_dead,
+        )
+
+        # And re-check, in case the worker died between the two statements.
+        if not self.ws_client.running:
+            self.connected = False
+            self.logger.error("mstock feed died during connect; adapter left disconnected")
+            return
+
         self.logger.info("mstock WebSocket adapter connected")
+
+    def _on_feed_dead(self) -> None:
+        """Stop advertising a feed that will not recover without a new login.
+
+        Reached on an expired credential and on an exhausted reconnect budget.
+        Without this the proxy keeps serving a cached adapter whose thread has
+        already exited, so subscribes succeed and no tick ever arrives.
+        """
+        self.connected = False
+        self.logger.error(
+            "mstock feed is terminally down; marking the adapter disconnected "
+            "so it is rebuilt on the next login"
+        )
 
     def _on_data(self, quote_data: dict) -> None:
         """Callback function called when data is received from WebSocket"""
@@ -154,7 +196,7 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.debug(f"Published data for {symbol} on {exchange} mode {mode}")
 
         except Exception as e:
-            self.logger.error(f"Error processing data: {str(e)}", exc_info=True)
+            self.logger.exception(f"Error processing data: {str(e)}")
 
     def disconnect(self) -> None:
         """Disconnect from mstock WebSocket"""
@@ -218,16 +260,27 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if sub["token"] == token:
                     max_mode_for_token = max(max_mode_for_token, sub["mode"])
 
+            # token_modes records what the BROKER has confirmed, so it is written
+            # by the flush once a frame is actually sent - never here. Writing it
+            # optimistically made a dropped subscribe permanent: this branch
+            # would never fire again for the token, and the reconnect path walks
+            # the SDK's dict, which never received the entry either.
             current_mstock_mode = self.token_modes.get(token, 0)
-            if max_mode_for_token > current_mstock_mode:
+            queued_mode = max(
+                (q["mode"] for q in self.subscription_queue if q["token"] == token),
+                default=0,
+            )
+            if max_mode_for_token > max(current_mstock_mode, queued_mode):
                 needs_ws_subscribe = True
                 subscribe_mode = max_mode_for_token
-                self.token_modes[token] = max_mode_for_token
 
         if needs_ws_subscribe and self.ws_client and self.running:
             if not self.ws_client.is_connected():
+                # Held in self.subscriptions only. token_modes stays unset, so
+                # the resync on the next successful login sends it.
                 self.logger.warning(
-                    f"WebSocket not connected, subscription for {symbol} stored locally but not sent to broker"
+                    f"WebSocket not connected; subscription for {symbol} held locally "
+                    f"and will be sent on reconnect"
                 )
             else:
                 # Queue for batched subscribe. The actual send is emitted by
@@ -254,7 +307,9 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         if len(self.subscription_queue) == 1:
                             self._start_batch_timer()
                 except Exception as e:
-                    self.logger.error(f"Error queuing subscription for {symbol}.{exchange}: {e}")
+                    self.logger.exception(
+                        f"Error queuing subscription for {symbol}.{exchange}: {e}"
+                    )
                     return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
 
         return {
@@ -339,8 +394,47 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return normalized
 
         except Exception as e:
-            self.logger.error(f"Error normalizing market data: {str(e)}")
+            self.logger.exception(f"Error normalizing market data: {str(e)}")
             return {"ltp": 0}
+
+    def _resync_subscriptions(self) -> None:
+        """
+        Re-send every desired subscription after a successful login.
+
+        self.subscriptions is the desired state and is authoritative; the
+        broker holds nothing after a reconnect, so confirmed state is cleared
+        and each token is queued again at its highest requested mode. This is
+        what recovers a subscription made while the socket was down, or one
+        whose batch was dropped - both leave token_modes unset and would
+        otherwise never be retried.
+        """
+        with self.lock:
+            desired: dict[str, dict] = {}
+            for sub in self.subscriptions.values():
+                token = str(sub["token"])
+                if token not in desired or sub["mode"] > desired[token]["mode"]:
+                    desired[token] = sub
+
+            # The broker retains nothing across a reconnect.
+            self.token_modes.clear()
+            self.token_correlation_ids.clear()
+            self.send_retries.clear()
+            self.subscription_queue = [
+                {
+                    "token": token,
+                    "mode": sub["mode"],
+                    "exchange_type": sub["exchange_type"],
+                    "symbol": sub["symbol"],
+                    "exchange": sub["exchange"],
+                    "old_correlation_id": None,
+                }
+                for token, sub in desired.items()
+            ]
+            if self.subscription_queue:
+                self._start_batch_timer()
+
+        if desired:
+            self.logger.info(f"Resyncing {len(desired)} subscription(s) after login")
 
     def _start_batch_timer(self) -> None:
         """
@@ -383,6 +477,32 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         for sub in pending:
             latest[str(sub["token"])] = sub
 
+        # Revalidate against current state before sending: a token unsubscribed
+        # after being queued must not be subscribed at the broker. unsubscribe()
+        # already prunes the queue, so this only catches an unsubscribe that
+        # landed between the drain above and here.
+        with self.lock:
+            desired_mode: dict[str, int] = {}
+            for sub in self.subscriptions.values():
+                token = str(sub["token"])
+                desired_mode[token] = max(desired_mode.get(token, 0), sub["mode"])
+
+        # Compare the queued mode against the highest mode still wanted, not
+        # merely whether the token survives: unsubscribing a depth stream while
+        # an LTP one remains leaves the token live but its queued mode stale,
+        # and sending it would resubscribe depth nobody asked for.
+        dropped = [
+            token for token, sub in latest.items() if sub["mode"] > desired_mode.get(token, 0)
+        ]
+        for token in dropped:
+            del latest[token]
+        if dropped:
+            self.logger.info(
+                f"Skipping {len(dropped)} queued subscription(s) no longer wanted at that mode"
+            )
+        if not latest:
+            return
+
         try:
             stale = [
                 sub["old_correlation_id"]
@@ -407,17 +527,67 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             for mode, subs in by_mode.items():
                 if self.ws_client.subscribe_batch(subs, mode):
+                    # Confirmed at the broker: record it only now, so a failed
+                    # or dropped send leaves token_modes unset and the resync
+                    # (or a later subscribe) retries the token.
                     with self.lock:
                         for entry in subs:
                             self.token_correlation_ids[entry["token"]] = entry["correlation_id"]
+                            self.token_modes[entry["token"]] = mode
+                            self.send_retries.pop(entry["token"], None)
                     self.logger.info(f"Batch subscribed {len(subs)} token(s) in mode {mode}")
                 else:
-                    self.logger.warning(
-                        f"Batch subscription failed for {len(subs)} token(s) in mode {mode}"
-                    )
+                    # Requeue rather than wait for a resync: the client is still
+                    # connected, so no login is coming and nothing else would
+                    # ever send these. token_modes stays unset either way.
+                    with self.lock:
+                        queued_tokens = {q["token"] for q in self.subscription_queue}
+                        requeued, exhausted = [], []
+                        for entry in subs:
+                            token = entry["token"]
+                            if token in queued_tokens:
+                                continue
+                            sub = latest.get(token)
+                            if sub is None:
+                                continue
+
+                            attempts = self.send_retries.get(token, 0) + 1
+                            if attempts > self.max_send_retries:
+                                # Spent: leave it unconfirmed for the resync
+                                # rather than re-arming the timer forever.
+                                exhausted.append(token)
+                                continue
+
+                            self.send_retries[token] = attempts
+                            requeued.append(token)
+                            self.subscription_queue.append(
+                                {
+                                    "token": token,
+                                    "mode": mode,
+                                    "exchange_type": entry["exchange_type"],
+                                    "symbol": sub["symbol"],
+                                    "exchange": sub["exchange"],
+                                    "old_correlation_id": None,
+                                }
+                            )
+                        if self.subscription_queue and self.batch_timer is None:
+                            self._start_batch_timer()
+
+                    if requeued:
+                        self.logger.warning(
+                            f"Batch subscription failed for {len(subs)} token(s) in mode {mode}; "
+                            f"requeued {len(requeued)} (attempt "
+                            f"{max(self.send_retries[t] for t in requeued)} of "
+                            f"{self.max_send_retries})"
+                        )
+                    if exhausted:
+                        self.logger.error(
+                            f"Giving up sending {len(exhausted)} token(s) in mode {mode} after "
+                            f"{self.max_send_retries} attempts; left unconfirmed for the resync"
+                        )
 
         except Exception as e:
-            self.logger.error(f"Error processing subscription batch: {str(e)}")
+            self.logger.exception(f"Error processing subscription batch: {str(e)}")
 
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> dict[str, Any]:
         correlation_id = f"{symbol}_{exchange}_{mode}"
@@ -443,6 +613,21 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             for sub in self.subscriptions.values():
                 if sub["token"] == token:
                     max_mode_for_token = max(max_mode_for_token, sub["mode"])
+
+            # Drop any entry still waiting in the coalescing window. Without
+            # this, a subscribe followed by an unsubscribe inside the 500ms
+            # window clears local state but leaves the queued entry, so the
+            # flush would still subscribe the token at mStock and every tick
+            # would arrive for a token this adapter no longer tracks.
+            if max_mode_for_token == 0:
+                self.subscription_queue = [
+                    queued for queued in self.subscription_queue if queued["token"] != token
+                ]
+                # Drop the retry budget with the subscription. Kept, a token
+                # that had exhausted it would come back already spent, so a
+                # later subscribe got its one send and no retry at all - and
+                # the dict would grow a permanent entry per token ever seen.
+                self.send_retries.pop(token, None)
 
             current_mstock_mode = self.token_modes.get(token, 0)
             if max_mode_for_token < current_mstock_mode:
@@ -480,7 +665,7 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     )
 
             except Exception as e:
-                self.logger.error(f"Error updating WebSocket subscription: {str(e)}")
+                self.logger.exception(f"Error updating WebSocket subscription: {str(e)}")
 
         return {
             "status": "success",

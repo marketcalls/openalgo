@@ -387,6 +387,23 @@ def react_straddlepnl():
     return serve_react_app()
 
 
+# Agent - the LLM agent surface. Registered even though React Router would serve
+# it anyway through the 404 fallback: an unregistered path counts against
+# Error404Tracker for unauthenticated visitors, so a bookmark opened while
+# logged out would push that address toward an IP ban.
+@react_bp.route("/agent", strict_slashes=False)
+def react_agent():
+    return serve_react_app()
+
+
+# Agent configuration - models, provider keys and web search. A separate React
+# route under the same surface, so it needs its own registration for the same
+# Error404Tracker reason as /agent above.
+@react_bp.route("/agent/config", strict_slashes=False)
+def react_agent_config():
+    return serve_react_app()
+
+
 # Strategy Builder - multi-leg option strategy builder with payoff diagram
 @react_bp.route("/strategybuilder", strict_slashes=False)
 def react_strategybuilder():

@@ -368,6 +368,23 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         self.logger.info(f"Using Shoonya credentials - User ID: {self.actid}")
 
+        # Stop any client left over from a previous initialize() before
+        # replacing it. Overwriting a live client orphans it: its socket stays
+        # ESTABLISHED and its threads keep running with nothing left holding a
+        # reference to call stop().
+        with self.lock:
+            stale_ws = self.ws_client
+            self.ws_client = None
+        if stale_ws is not None:
+            self.logger.warning(
+                "initialize() called with an existing WebSocket client; "
+                "stopping it before creating a replacement"
+            )
+            try:
+                stale_ws.stop()
+            except Exception as e:
+                self.logger.error(f"Error stopping previous WebSocket client: {e}")
+
         # Initialize WebSocket client
         self.ws_client = ShoonyaWebSocket(
             user_id=self.actid,

@@ -161,3 +161,9 @@ graph-target/
 SURVIVOR_PRO_PACKAGE/
 survivor_state/
 survivor_*_results/
+
+# A literal "~" directory in the repo root. On Windows HOME is often unset, so
+# a library that expands "~/.config/..." itself (litellm caches an auth token
+# there) creates the tilde as a real folder here instead of in the profile.
+# It holds credentials, so it must never be committed.
+/~/

@@ -853,6 +853,36 @@ describe('collapseToUnderlyings', () => {
       collapseToUnderlyings([{ symbol: '', name: '', exchange: 'NFO', instrumenttype: '' }], 'X')
     ).toEqual([])
   })
+
+  it('names a cash row by its symbol, not the company behind it', () => {
+    // NSE rows carry the company name in `name`, so collapsing on `name` put
+    // "RELIANCE INDUSTRIES LTD" in the picker and stored it as the underlying.
+    const results = collapseToUnderlyings(
+      [
+        { symbol: 'RELIANCE', name: 'RELIANCE INDUSTRIES LTD', exchange: 'NSE', instrumenttype: 'EQ' },
+        { symbol: 'RELINFRA', name: 'RELIANCE INFRASTRUCTU LTD', exchange: 'NSE', instrumenttype: 'EQ' },
+      ],
+      'RELIANCE'
+    )
+    expect(results.map((result) => result.symbol)).toEqual(['RELIANCE', 'RELINFRA'])
+    expect(results[0].instruments).toBe('EQ')
+  })
+
+  it('names an index row by its symbol, not its description', () => {
+    const results = collapseToUnderlyings(
+      [{ symbol: 'NIFTY', name: 'NIFTY 50', exchange: 'NSE_INDEX', instrumenttype: 'INDEX' }],
+      'NIFTY'
+    )
+    expect(results[0].symbol).toBe('NIFTY')
+  })
+
+  it('still collapses derivative contracts onto their root', () => {
+    const results = collapseToUnderlyings(
+      [{ symbol: 'CRUDEOIL25SEPFUT', name: 'CRUDEOIL', exchange: 'MCX', instrumenttype: 'FUT' }],
+      'CRUDEOIL'
+    )
+    expect(results[0].symbol).toBe('CRUDEOIL')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -1383,6 +1413,23 @@ describe('lotSizeFromRows', () => {
       )
     ).toBeNull()
     expect(lotSizeFromRows([], 'NIFTY')).toBeNull()
+  })
+
+  it('matches a cash row on its symbol, where the name is the company', () => {
+    expect(
+      lotSizeFromRows(
+        [
+          {
+            symbol: 'RELIANCE',
+            name: 'RELIANCE INDUSTRIES LTD',
+            exchange: 'NSE',
+            instrumenttype: 'EQ',
+            lotsize: 1,
+          },
+        ],
+        'RELIANCE'
+      )
+    ).toBe(1)
   })
 })
 

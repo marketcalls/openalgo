@@ -905,6 +905,27 @@ def terminate_popen_safely(process, pid, terminate_timeout=5, kill_timeout=2):
         return process.poll() is not None
 
 
+def _strategy_may_still_be_running(strategy_id) -> bool:
+    """Whether anything suggests this strategy still has a live process.
+
+    A failed stop is not by itself evidence of one. `is_running` in the config
+    goes stale whenever the app exits without running its cleanup, a crash or a
+    hard restart, and the process it names is long gone. Refusing to delete on
+    that would leave the strategy permanently undeletable, since every later
+    attempt takes the same path and fails the same way.
+
+    So the question is asked of the actual state rather than of the stop's
+    return value: is it still tracked, is a stop still in flight, or does the
+    recorded PID answer. Only then is there something to protect.
+    """
+    with PROCESS_LOCK:
+        if strategy_id in RUNNING_STRATEGIES or strategy_id in STOPPING_STRATEGIES:
+            return True
+        pid = (STRATEGY_CONFIGS.get(strategy_id) or {}).get("pid")
+
+    return bool(pid) and check_process_status(pid)
+
+
 def terminate_process_cross_platform(pid):
     """Terminate a process in a cross-platform way"""
     try:
@@ -2106,7 +2127,7 @@ def delete_strategy(strategy_id):
         )
     if needs_stop:
         stopped, stop_message = stop_strategy_process(strategy_id)
-        if not stopped:
+        if not stopped and _strategy_may_still_be_running(strategy_id):
             # Deleting now would take the config and the file with it while the
             # process is still running, leaving a live strategy with nothing
             # tracking it and no route to stop it. Two ways to get here: the

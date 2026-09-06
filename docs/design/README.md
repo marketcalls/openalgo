@@ -58,6 +58,7 @@ The current plugin inventory contains 36 broker directories with `plugin.json`. 
 | [38 Python Strategies](./38-python-strategies/) | Hosted-process model and logs |
 | [42 Action Center](./42-action-center/) | Semi-auto order approval |
 | [54 Scalping Terminal](./54-scalping-terminal/) | Keyboard trading, charts, persisted stops, risk monitor |
+| [55 Agent](./55-agent/) | LLM agent on chat and chart: providers, tools, streaming, generators |
 
 ## UI, Tools, And Integrations
 
