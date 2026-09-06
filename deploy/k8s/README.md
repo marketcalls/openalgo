@@ -146,7 +146,6 @@ appends a content hash to its name. Consequences:
   image builds (recursive `**/secret.env` in the root `.dockerignore`, pinned
   by `test/test_dockerignore_secret_inputs.py`) — building the application
   image from a checkout with live secrets does not leak them into the image.
-
 - Any change to `secret.env` creates a new Secret and **rolls the pod on the
   next apply** — apply secret changes off-hours, never inside the 02:30-03:30
   IST window.
@@ -261,7 +260,7 @@ in place, and the listener never becomes ready; verify your build:
 ```bash
 kubectl kustomize deploy/k8s/overlays/<broker> | grep -A2 'backendRefs:\|parentRefs:'
 # names must carry the instance prefix, e.g. zerodha-openalgo-ws
-kubectl kustomize deploy/k8s/overlays/<broker> | grep -B1 -A1 'certificateRefs:' 
+kubectl kustomize deploy/k8s/overlays/<broker> | grep -B1 -A1 'certificateRefs:'
 # name must match the TLS Secret you provisioned, e.g. zerodha-openalgo-tls
 ```
 
