@@ -146,7 +146,7 @@ cd ..
 cp .sample.env .env
 ```
 
-OpenAlgo ships `.sample.env` with placeholder values for `APP_KEY` and `API_KEY_PEPPER`. On first run, the app detects those placeholders and automatically rotates them to fresh `secrets.token_hex(32)` values, writing the real secrets back into your `.env`. You will see a one-time `[OpenAlgo first-run setup]` message when this happens. This is also described in `.sample.env` and in `docs/devsprint/README.md#configuration`.
+OpenAlgo ships `.sample.env` with placeholder values for `APP_KEY` and `API_KEY_PEPPER`. On first run, the app detects those placeholders and automatically rotates them to fresh `secrets.token_hex(32)` values, writing the real secrets back into your `.env`. You will see a one-time `[OpenAlgo first-run setup]` message when this happens. This is also described in `.sample.env` and in `docs/devsprint/README.md#53-configuration`.
 
 If you are configuring a broker, edit `.env` to set `BROKER_API_KEY`, `BROKER_API_SECRET`, `REDIRECT_URL`, and `VALID_BROKERS` for the broker(s) you want to enable.
 
@@ -162,13 +162,14 @@ The safe procedure depends on which key was exposed:
 
 - **`APP_KEY` only** — safe to regenerate at any time. `APP_KEY` only signs session cookies and CSRF tokens, so rotating it just ends current browser sessions (users log in once more). Generate a fresh value with `uv run python -c "import secrets; print(secrets.token_hex(32))"` and update `APP_KEY` in `.env`.
 - **`API_KEY_PEPPER` on a fresh install** (no users in the database yet) — safe to regenerate the same way, because nothing is encrypted with it yet.
-- **`API_KEY_PEPPER` on a populated installation** — do **not** paste a new value into `.env` by hand. The pepper feeds the Argon2 password hashes and the Fernet encryption of broker credentials and TOTP secrets, so replacing it directly invalidates every stored password hash and encrypted secret. Use the dedicated migration instead — it creates a database backup and re-encrypts every pepper-derived field so data survives the rotation:
+- **`API_KEY_PEPPER` on a populated installation** — do **not** paste a new value into `.env` by hand, and do **not** rotate while the app is running. The pepper feeds the Argon2 password hashes and the Fernet encryption of broker credentials and TOTP secrets, so replacing it directly invalidates every stored password hash and encrypted secret. Use the dedicated migration instead — it creates a database backup and re-encrypts every pepper-derived field (broker/auth tokens, API keys, TOTP secrets, SMTP passwords, Telegram/bot tokens, flow API keys, and the WhatsApp session) under the install's `FERNET_SALT`:
 
   ```bash
-  uv run python upgrade/rotate_pepper.py
+  uv run python upgrade/rotate_pepper.py            # interactive; attests the app is stopped
+  uv run python upgrade/rotate_pepper.py --app-stopped --yes   # non-interactive
   ```
 
-  Afterwards, restart the app; each user sets a new password at `/auth/reset-password` with their TOTP code (TOTP secrets survive the rotation; external integrations holding the API key value keep working). The first-run check in `utils/env_check.py` runs this same analysis automatically and refuses to touch the pepper when users already exist.
+  Afterwards, restart the app; each user sets a new password at `/auth/reset-password` with their TOTP code (TOTP secrets survive the rotation; external integrations holding the API key value keep working). Two things the migration **cannot** carry over: OAuth/MCP client secrets and refresh tokens are stored as `Argon2(secret + PEPPER)` hashes, which are not re-derivable — re-register those clients after rotating; and if the script warns it could not decrypt a WhatsApp session blob, re-pair the bot. The first-run check in `utils/env_check.py` runs this same analysis automatically and refuses to touch the pepper when users already exist.
 
 ---
 
