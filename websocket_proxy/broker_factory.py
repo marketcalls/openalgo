@@ -215,9 +215,17 @@ class _PooledAdapterWrapper:
     @property
     def connected(self) -> bool:
         """Check if pool is connected"""
-        if self._pool:
-            return self._pool.connected
-        return False
+        if not self._pool or not self._pool.connected:
+            return False
+
+        # Some broker adapters establish their socket asynchronously. The pool
+        # marks itself connected when it starts that work (ref ConnectionPool.connect()),
+        # so also inspect the underlying adapters before reusing a cached pool
+        # or reporting health.
+        return bool(self._pool.adapters) and all(
+            bool(getattr(adapter, "connected", False))
+            for adapter in self._pool.adapters
+        )
 
     def publish_market_data(self, topic: str, data: dict):
         """Publish market data through the pool"""

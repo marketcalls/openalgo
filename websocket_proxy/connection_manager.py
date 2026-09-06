@@ -571,6 +571,12 @@ class ConnectionPool:
                                 self._recovering = False
                         self.logger.error(f"Adapter connection failed: {error_msg}")
                         return {"success": False, "error": error_msg}
+                    # Note: adapter.connect() above may have started an async thread
+                    #       to do the connection, but we mark connected as True to
+                    #       indicate pool is connected, but that doesn't necessarily mean the
+                    #       underlying adapter is fully connected yet. The adapter's
+                    #       is_connected() method must be used to check the actual
+                    #       connection state if needed.
                     self.connected = True
                     return {"success": True, "message": "Connected"}
                 else:
@@ -1060,6 +1066,7 @@ class ConnectionPool:
                         "index": idx + 1,
                         "symbols": count,
                         "capacity_percent": (count / self.max_symbols * 100),
+                        "connected": bool(getattr(self.adapters[idx], "connected", False)),
                     }
                     for idx, count in enumerate(self.adapter_symbol_counts)
                 ],

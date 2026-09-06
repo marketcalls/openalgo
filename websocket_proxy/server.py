@@ -30,6 +30,8 @@ from .port_check import find_available_port, is_port_in_use
 
 # Initialize logger
 logger = get_logger("websocket_proxy")
+WS_CONNECT_READY_TIMEOUT = 30
+WS_CONNECT_READY_POLL_INTERVAL = 1
 
 
 class WebSocketProxy:
@@ -382,6 +384,7 @@ class WebSocketProxy:
                     "total_symbols": health["subscriptions"]["unique_symbols"],
                     "clients_connected": health["clients"]["connected_count"],
                     "brokers": health["broker_adapters"]["brokers"],
+                    "adapter_health": self.get_adapter_health(),
                 }
                 with open(tmp_path, "w") as f:
                     json.dump(snapshot, f)
@@ -1105,6 +1108,42 @@ class WebSocketProxy:
                     logger.exception(f"Broker error for {broker_name}: {error_str}")
                     await self.send_error(client_id, "BROKER_ERROR", error_str)
                     return
+
+        # Some adapters return from connect() before their broker handshake has
+        # completed. Do not report a successful auth handshake until the
+        # adapter's underlying connection is actually ready; otherwise a broker
+        # HTTP 401/403 is hidden behind a locally successful WebSocket login.
+        adapter = self.broker_adapters.get(user_id)
+        if adapter is not None:
+            for _ in range(WS_CONNECT_READY_TIMEOUT):
+                if bool(getattr(adapter, "connected", False)):
+                    break
+                await aio.sleep(WS_CONNECT_READY_POLL_INTERVAL)
+        if adapter is None or not bool(getattr(adapter, "connected", False)):
+            self.broker_adapters.pop(user_id, None)
+            if adapter is not None:
+                try:
+                    adapter.disconnect()
+                except Exception as disconnect_error:
+                    logger.warning(
+                        f"Error disconnecting unready adapter for user {user_id}: "
+                        f"{disconnect_error}"
+                    )
+            try:
+                from .broker_factory import cleanup_pools_for_user
+
+                cleanup_pools_for_user(user_id, broker_name=broker_name)
+            except Exception as cleanup_error:
+                logger.warning(
+                    f"Error cleaning unready adapter pool for user {user_id}: "
+                    f"{cleanup_error}"
+                )
+            await self.send_error(
+                client_id,
+                "BROKER_CONNECTION_ERROR",
+                "Upstream broker WebSocket did not become ready after authentication",
+            )
+            return
 
         # Send success response with broker information
         await self.send_message(
