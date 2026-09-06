@@ -125,6 +125,134 @@ def validate_order_data(data: dict[str, Any]) -> tuple[bool, dict[str, Any] | No
 CONFIRMED_REJECTION_STATUSES = frozenset({400, 401, 403, 404, 405, 409, 422, 429})
 
 
+def _params_match_reservation(resolution: dict, order_data: dict) -> bool:
+    """True when the retry's parameters equal the reservation's originals.
+
+    A retry that changes parameters (a "corrected" order) must never reuse
+    an unresolved key: the ambiguous attempt may still be live with the
+    original parameters, so releasing or replaying on its behalf would be
+    wrong either way.
+    """
+
+    def _norm_str(value) -> str:
+        return str(value or "").strip().upper()
+
+    if _norm_str(resolution.get("symbol")) != _norm_str(order_data.get("symbol")):
+        return False
+    if _norm_str(resolution.get("exchange")) != _norm_str(order_data.get("exchange")):
+        return False
+    if _norm_str(resolution.get("action")) != _norm_str(order_data.get("action")):
+        return False
+    try:
+        if int(resolution.get("quantity") or 0) != int(order_data.get("quantity") or 0):
+            return False
+    except (TypeError, ValueError):
+        return False
+    stored_price = resolution.get("price")
+    if stored_price is not None:
+        try:
+            if abs(float(stored_price) - float(order_data.get("price") or 0)) > 1e-9:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def _reconcile_unresolved_key(
+    auth_token: str, broker: str, api_key: str, client_order_id: str, order_data: dict
+):
+    """Best-effort broker reconciliation for an unresolved idempotency key.
+
+    Returns ``(ok, response, status_code)`` to answer the retry with, or
+    ``None`` when reconciliation proved the original attempt never reached
+    the broker (the key is released; the caller may place fresh). The
+    outcome is deliberately conservative: replaying a matching order is
+    safe (it already exists), while any ambiguity blocks the key instead
+    of risking a double placement.
+    """
+    from database.idempotency_db import (
+        get_resolution,
+        record_success,
+        release_client_order_id,
+    )
+    from services.orderbook_service import get_orderbook_with_auth
+
+    original = get_resolution(api_key, client_order_id)
+    if original is None:
+        # Key vanished (TTL prune) since the reserve: nothing to protect.
+        return None
+
+    if not _params_match_reservation(original, order_data):
+        return False, {
+            "status": "error",
+            "message": (
+                "Previous placement with this client_order_id is unresolved "
+                "and the new request parameters differ; verify the order book "
+                "and use a new client_order_id"
+            ),
+        }, 409
+
+    ok, book, _code = get_orderbook_with_auth(auth_token, broker, original_data=None)
+    if not ok or not isinstance(book, dict) or book.get("status") != "success":
+        return False, {
+            "status": "error",
+            "message": (
+                "Previous placement with this client_order_id is unresolved "
+                "and the broker order book is unavailable; verify the order "
+                "book before reusing this id"
+            ),
+        }, 409
+
+    orders = (book.get("data") or {}).get("orders") or []
+    candidates = []
+    for order in orders:
+        if not isinstance(order, dict):
+            continue
+        status = str(order.get("order_status", "")).strip().upper()
+        if status in ("REJECTED", "CANCELLED"):
+            continue
+        if _params_match_reservation(original, order):
+            candidates.append(order)
+
+    if len(candidates) > 1:
+        return False, {
+            "status": "error",
+            "message": (
+                "Previous placement with this client_order_id is unresolved "
+                "and multiple matching orders were found in the order book; "
+                "reconcile manually before reusing this id"
+            ),
+        }, 409
+
+    if len(candidates) == 1:
+        orderid = str(candidates[0].get("orderid", "") or "")
+        if not orderid:
+            return False, {
+                "status": "error",
+                "message": (
+                    "Previous placement with this client_order_id is "
+                    "unresolved; the matching order has no id to replay"
+                ),
+            }, 409
+        record_success(api_key, client_order_id, orderid)
+        replay_response = {
+            "status": "success",
+            "orderid": orderid,
+            "client_order_id": client_order_id,
+            "duplicate": True,
+            "reconciled": True,
+        }
+        if original.get("tag"):
+            replay_response["tag"] = original["tag"]
+        return True, replay_response, 200
+
+    # No live candidate: the broker book proves the attempt never placed an
+    # order (rejected/cancelled entries are excluded above). Release the key
+    # and let the caller place fresh.
+    release_client_order_id(api_key, client_order_id)
+    return None
+
+
 def place_order_with_auth(
     order_data: dict[str, Any],
     auth_token: str,
@@ -218,12 +346,27 @@ def place_order_with_auth(
     if idempotent:
         from database.idempotency_db import get_resolution, reserve_client_order_id
 
+        # Recorded on the reservation so an unresolved key can be reconciled
+        # against the broker order book, and so a corrected retry (different
+        # parameters) is refused instead of silently double-placing.
+        order_params = {
+            "symbol": order_data.get("symbol"),
+            "exchange": order_data.get("exchange"),
+            "action": order_data.get("action"),
+            "quantity": order_data.get("quantity"),
+            "price": order_data.get("price"),
+        }
+
         try:
-            state, status = reserve_client_order_id(api_key, client_order_id, tag=order_tag)
+            state, status = reserve_client_order_id(
+                api_key, client_order_id, tag=order_tag, order_params=order_params
+            )
             if state == "vacated":
                 # Reservation vanished (TTL prune) between conflict and re-read:
                 # nothing is in flight, so reclaim and fall through on the result.
-                state, status = reserve_client_order_id(api_key, client_order_id, tag=order_tag)
+                state, status = reserve_client_order_id(
+                    api_key, client_order_id, tag=order_tag, order_params=order_params
+                )
             if state == "existing":
                 if status == "placed":
                     resolution = get_resolution(api_key, client_order_id)
@@ -237,12 +380,40 @@ def place_order_with_auth(
                         if resolution.get("tag"):
                             replay_response["tag"] = resolution["tag"]
                         return True, replay_response, 200
-                # in_flight, or placed without a recorded orderid: never re-place.
-                error_response = {
-                    "status": "error",
-                    "message": "Order placement with this client_order_id is already in progress",
-                }
-                return False, error_response, 409
+                if status == "unresolved":
+                    # A previous attempt ended ambiguously: ask the broker
+                    # order book what actually happened before re-placing.
+                    # Reconciliation must never surface as a store failure —
+                    # any error means the key stays blocked, never released.
+                    try:
+                        reconciled = _reconcile_unresolved_key(
+                            auth_token, broker, api_key, client_order_id, order_data
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Reconciliation failed for client_order_id %s", client_order_id
+                        )
+                        reconciled = False, {
+                            "status": "error",
+                            "message": (
+                                "Previous placement with this client_order_id "
+                                "is unresolved and could not be reconciled with "
+                                "the broker; verify the order book before "
+                                "reusing this id"
+                            ),
+                        }, 409
+                    if reconciled is not None:
+                        return reconciled
+                    # Reconciliation proved the order never reached the broker
+                    # and released the key: fall through to a fresh placement.
+                else:
+                    # in_flight, or placed without a recorded orderid: never
+                    # re-place.
+                    error_response = {
+                        "status": "error",
+                        "message": "Order placement with this client_order_id is already in progress",
+                    }
+                    return False, error_response, 409
         except Exception:
             # Store unavailable (SQLite locked/IO error): nothing was committed,
             # so there is no reservation to release. Proceeding would place the

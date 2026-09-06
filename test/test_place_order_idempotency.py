@@ -483,3 +483,137 @@ class TestSessionHygiene:
         from sqlalchemy.pool import NullPool
 
         assert isinstance(idempotency_db.idempotency_engine.pool, NullPool)
+
+
+class TestUnresolvedReconciliation:
+    """A retry of an unresolved key must reconcile with the broker first.
+
+    The reconciliation compares the reservation's original parameters
+    against the broker order book: exactly one live match replays that
+    order, zero live matches (book reachable) releases the key for a fresh
+    placement, and anything ambiguous keeps blocking the key.
+    """
+
+    MATCHING_ORDER = {
+        "orderid": "250106000099999",
+        "symbol": "RELIANCE",
+        "exchange": "NSE",
+        "action": "BUY",
+        "quantity": 1,
+        "price": 0.0,
+        "order_status": "OPEN",
+    }
+
+    def _make_unresolved(self, monkeypatch, broker):
+        monkeypatch.setattr(
+            place_order_service,
+            "get_auth_token_broker",
+            lambda api_key: ("fake-auth-token", "fakebroker"),
+        )
+        monkeypatch.setattr(place_order_service, "get_analyze_mode", lambda: False)
+        monkeypatch.setattr(place_order_service, "import_broker_module", lambda name: broker)
+        broker.status = 500  # ambiguous adapter failure -> unresolved
+        place_order_service.place_order({**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY)
+        assert idempotency_db.get_resolution(API_KEY, CID)["status"] == "unresolved"
+        broker.status = 200
+        broker.order_id = "250106000012345"
+
+    def _stub_orderbook(self, monkeypatch, orders, ok=True):
+        from services import orderbook_service
+
+        def fake_get_orderbook_with_auth(auth_token, broker, original_data=None):
+            if not ok:
+                return False, {"status": "error", "message": "order book unavailable"}, 503
+            return True, {"status": "success", "data": {"orders": orders, "statistics": {}}}, 200
+
+        monkeypatch.setattr(
+            orderbook_service, "get_orderbook_with_auth", fake_get_orderbook_with_auth
+        )
+
+    def test_single_live_match_is_replayed(self, monkeypatch):
+        broker = _FakeBrokerModule(status=500, order_id=None)
+        self._make_unresolved(monkeypatch, broker)
+        self._stub_orderbook(monkeypatch, [dict(self.MATCHING_ORDER)])
+
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY
+        )
+        assert ok is True
+        assert code == 200
+        assert response["duplicate"] is True
+        assert response["reconciled"] is True
+        assert response["orderid"] == "250106000099999"
+        # The broker was never asked to place again.
+        assert len(broker.calls) == 1
+        resolution = idempotency_db.get_resolution(API_KEY, CID)
+        assert resolution["status"] == "placed"
+        assert resolution["orderid"] == "250106000099999"
+
+    def test_no_match_releases_key_and_places_fresh(self, monkeypatch):
+        broker = _FakeBrokerModule(status=500, order_id=None)
+        self._make_unresolved(monkeypatch, broker)
+        self._stub_orderbook(monkeypatch, [])
+
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY
+        )
+        # The book proves the attempt never placed: the retry places fresh.
+        assert ok is True
+        assert code == 200
+        assert response["orderid"] == "250106000012345"
+        assert "duplicate" not in response
+        assert len(broker.calls) == 2
+
+    def test_rejected_only_book_releases_key(self, monkeypatch):
+        broker = _FakeBrokerModule(status=500, order_id=None)
+        self._make_unresolved(monkeypatch, broker)
+        rejected = dict(self.MATCHING_ORDER, order_status="REJECTED")
+        self._stub_orderbook(monkeypatch, [rejected])
+
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY
+        )
+        assert ok is True
+        assert code == 200
+        assert len(broker.calls) == 2
+
+    def test_unavailable_book_keeps_key_blocked(self, monkeypatch):
+        broker = _FakeBrokerModule(status=500, order_id=None)
+        self._make_unresolved(monkeypatch, broker)
+        self._stub_orderbook(monkeypatch, [], ok=False)
+
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY
+        )
+        assert ok is False
+        assert code == 409
+        assert len(broker.calls) == 1
+
+    def test_multiple_matches_keeps_key_blocked(self, monkeypatch):
+        broker = _FakeBrokerModule(status=500, order_id=None)
+        self._make_unresolved(monkeypatch, broker)
+        self._stub_orderbook(
+            monkeypatch, [dict(self.MATCHING_ORDER), dict(self.MATCHING_ORDER)]
+        )
+
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY
+        )
+        assert ok is False
+        assert code == 409
+        assert len(broker.calls) == 1
+
+    def test_corrected_params_are_refused(self, monkeypatch):
+        broker = _FakeBrokerModule(status=500, order_id=None)
+        self._make_unresolved(monkeypatch, broker)
+        self._stub_orderbook(monkeypatch, [dict(self.MATCHING_ORDER)])
+
+        # A "corrected" retry (different quantity) must never reuse the key:
+        # the ambiguous attempt may still be live with the original params.
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID, "quantity": 5}, api_key=API_KEY
+        )
+        assert ok is False
+        assert code == 409
+        assert "parameters differ" in response["message"]
+        assert len(broker.calls) == 1

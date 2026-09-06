@@ -65,6 +65,16 @@ INDEX_SQL = [
     "ON client_order_ids (api_key_hash, orderid)",
 ]
 
+# Reconciliation parameter columns added after the initial release; existing
+# stores are upgraded in place (mirrors database/idempotency_db.py).
+RECONCILIATION_COLUMNS = (
+    ("symbol", "VARCHAR(64)"),
+    ("exchange", "VARCHAR(32)"),
+    ("action", "VARCHAR(16)"),
+    ("quantity", "INTEGER"),
+    ("price", "FLOAT"),
+)
+
 
 def get_idempotency_db_engine():
     """Get the idempotency store engine (db/idempotency.db by default)."""
@@ -83,10 +93,11 @@ def get_idempotency_db_engine():
 
 
 def migration_status(engine):
-    """Return (table_exists, missing_index_names)."""
+    """Return (table_exists, missing_index_names, missing_column_names)."""
     insp = inspect(engine)
     table_exists = insp.has_table("client_order_ids")
     missing = []
+    missing_cols = []
     if table_exists:
         existing = {ix["name"] for ix in insp.get_indexes("client_order_ids")}
         missing = [
@@ -98,7 +109,9 @@ def migration_status(engine):
             )
             if name not in existing
         ]
-    return table_exists, missing
+        present_cols = {col["name"] for col in insp.get_columns("client_order_ids")}
+        missing_cols = [name for name, _ddl in RECONCILIATION_COLUMNS if name not in present_cols]
+    return table_exists, missing, missing_cols
 
 
 def migrate(engine):
@@ -107,6 +120,10 @@ def migrate(engine):
         conn.execute(text(TABLE_SQL))
         for stmt in INDEX_SQL:
             conn.execute(text(stmt))
+        present_cols = {col[1] for col in conn.execute(text("PRAGMA table_info(client_order_ids)"))}
+        for name, ddl in RECONCILIATION_COLUMNS:
+            if name not in present_cols:
+                conn.execute(text(f"ALTER TABLE client_order_ids ADD COLUMN {name} {ddl}"))
         conn.commit()
         applied = True
     return applied
@@ -121,7 +138,7 @@ def main():
 
     engine = get_idempotency_db_engine()
 
-    table_exists, missing = migration_status(engine)
+    table_exists, missing, missing_cols = migration_status(engine)
 
     if args.status:
         print(f"Migration: {MIGRATION_NAME}")
@@ -130,10 +147,13 @@ def main():
         else:
             print("  Table client_order_ids: present")
             print(f"  Missing indexes: {', '.join(missing)}" if missing else "  Indexes: present")
-        print(f"  Status: {'applied' if table_exists and not missing else 'pending'}")
+            if missing_cols:
+                print(f"  Missing columns: {', '.join(missing_cols)}")
+        applied = table_exists and not missing and not missing_cols
+        print(f"  Status: {'applied' if applied else 'pending'}")
         return 0
 
-    if table_exists and not missing:
+    if table_exists and not missing and not missing_cols:
         print(f"[{MIGRATION_NAME}] already applied, skipping")
         return 0
 

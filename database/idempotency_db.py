@@ -34,7 +34,7 @@ import os
 import threading
 from datetime import datetime, timedelta
 
-from sqlalchemy import Column, DateTime, Index, Integer, String, UniqueConstraint
+from sqlalchemy import Column, DateTime, Float, Index, Integer, String, UniqueConstraint
 from sqlalchemy import text as sa_text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
@@ -75,7 +75,17 @@ class ClientOrderId(IdempotencyBase):
         String(128), nullable=True
     )  # caller's original `tag` passthrough, echoed in the orderbook
     # in_flight: broker call not yet resolved. placed: orderid recorded.
+    # unresolved: an ambiguous failure (transport error, 5xx, 200 without an
+    # orderid) — the order may exist at the broker; a retry must reconcile.
     status = Column(String(16), nullable=False, default="in_flight")
+    # Original order parameters, recorded so an unresolved key can be
+    # reconciled against the broker order book on retry, and so a corrected
+    # retry (different parameters) can be refused instead of double-placing.
+    symbol = Column(String(64), nullable=True)
+    exchange = Column(String(32), nullable=True)
+    action = Column(String(16), nullable=True)
+    quantity = Column(Integer, nullable=True)
+    price = Column(Float, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.now)
     updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
 
@@ -124,7 +134,30 @@ def init_idempotency_db() -> None:
             ):
                 conn.execute(sa_text(stmt))
             conn.commit()
+        if IDEMPOTENCY_DATABASE_URL.startswith("sqlite"):
+            # Existing installs: add the reconciliation parameter columns
+            # (create_all only adds columns to brand-new tables).
+            _add_missing_columns()
         _initialized = True
+
+
+_RECONCILIATION_COLUMNS = (
+    ("symbol", "VARCHAR(64)"),
+    ("exchange", "VARCHAR(32)"),
+    ("action", "VARCHAR(16)"),
+    ("quantity", "INTEGER"),
+    ("price", "FLOAT"),
+)
+
+
+def _add_missing_columns() -> None:
+    """Add the reconciliation parameter columns when upgrading an existing store."""
+    with idempotency_engine.connect() as conn:
+        cols = {row[1] for row in conn.execute(sa_text("PRAGMA table_info(client_order_ids)"))}
+        for name, ddl in _RECONCILIATION_COLUMNS:
+            if name not in cols:
+                conn.execute(sa_text(f"ALTER TABLE client_order_ids ADD COLUMN {name} {ddl}"))
+        conn.commit()
 
 
 def _prune_expired(session) -> None:
@@ -135,22 +168,32 @@ def _prune_expired(session) -> None:
 
 
 def reserve_client_order_id(
-    api_key: str, client_order_id: str, tag: str | None = None
+    api_key: str,
+    client_order_id: str,
+    tag: str | None = None,
+    order_params: dict | None = None,
 ) -> tuple[str, str | None]:
     """Claim (api_key, client_order_id) before the broker call.
 
     INSERT-first: the unique constraint on (api_key_hash, client_order_id)
     makes the claim atomic, so two concurrent retries cannot both proceed.
 
+    Args:
+        order_params: the original request parameters (symbol/exchange/
+            action/quantity/price) recorded for broker reconciliation of
+            unresolved keys.
+
     Returns:
         ("reserved", None) — this call created the reservation and must
         proceed with the placement, then record_success() or release it.
         ("existing", status) — another call already claimed the key; status
-        is "placed" (replay the recorded orderid) or "in_flight" (a placement
-        is racing right now; caller should report 409).
+        is "placed" (replay the recorded orderid), "unresolved" (a previous
+        ambiguous attempt may have placed; reconcile first) or "in_flight"
+        (a placement is racing right now; caller should report 409).
     """
     init_idempotency_db()
     key_hash = _hash_api_key(api_key)
+    params = order_params or {}
     with _init_lock:
         try:
             row = ClientOrderId(
@@ -158,6 +201,11 @@ def reserve_client_order_id(
                 client_order_id=client_order_id,
                 tag=tag,
                 status="in_flight",
+                symbol=params.get("symbol"),
+                exchange=params.get("exchange"),
+                action=params.get("action"),
+                quantity=int(params["quantity"]) if params.get("quantity") is not None else None,
+                price=float(params["price"]) if params.get("price") else None,
             )
             idempotency_session.add(row)
             _prune_expired(idempotency_session)
@@ -265,7 +313,16 @@ def get_resolution(api_key: str, client_order_id: str) -> dict | None:
     idempotency_session.commit()
     if row is None:
         return None
-    return {"orderid": row.orderid, "status": row.status, "tag": row.tag}
+    return {
+        "orderid": row.orderid,
+        "status": row.status,
+        "tag": row.tag,
+        "symbol": row.symbol,
+        "exchange": row.exchange,
+        "action": row.action,
+        "quantity": row.quantity,
+        "price": row.price,
+    }
 
 
 def get_labels_for_orderids(api_key: str, orderids: list[str]) -> dict[str, dict[str, str]]:
