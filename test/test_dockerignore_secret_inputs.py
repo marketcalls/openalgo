@@ -117,27 +117,27 @@ def _docker_daemon_available() -> bool:
 
 @pytest.fixture(scope="module")
 def docker_daemon():
-    """Skip-at-setup daemon probe.
+    """Skip-at-setup daemon probe (applied via usefixtures; side-effect only).
 
     Deliberately NOT a skipif marker: marker arguments evaluate at collection
     time, which would spawn `docker info` (blocking up to its timeout on a
     hung socket) for every pytest run that merely collects this file. A
     module-scoped fixture runs the probe once, at this test's setup, and only
-    when the test is actually selected to run.
+    when the test is actually selected to run; pytest.skip() aborts setup when
+    no daemon answers, so the test body needs no availability guard.
     """
     if not _docker_daemon_available():
         pytest.skip("docker daemon not reachable")
-    return True
 
 
-def test_docker_build_context_excludes_secret_inputs(docker_daemon):
+@pytest.mark.usefixtures("docker_daemon")
+def test_docker_build_context_excludes_secret_inputs():
     """Synthetic-marker check against the real Docker context.
 
     Plants marker files matching every secret input pattern inside a fake
     overlay, builds a one-step image that copies the context, and fails the
     build if any marker survived .dockerignore (or if the template vanished).
     """
-    assert docker_daemon, "fixture skips when no daemon is reachable"
     marker_dir = REPO_ROOT / "deploy" / "k8s" / "overlays" / "_dockerignore_marker"
     markers = ["secret.env", "secret.yaml", "marker.secret.env"]
     dockerfile = (
