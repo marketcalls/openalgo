@@ -157,11 +157,11 @@ class TestBrokerUsernameCache:
     must never key on the raw API key)."""
 
     def test_caches_by_username_never_by_key(self, monkeypatch):
-        calls = {"n": 0}
+        seen_filters = []
 
         class _FakeQuery:
             def filter_by(self, **kwargs):
-                calls["n"] += 1
+                seen_filters.append(kwargs)
                 return self
 
             def first(self):
@@ -171,13 +171,29 @@ class TestBrokerUsernameCache:
             query = _FakeQuery()
 
         monkeypatch.setattr(auth_db_module, "Auth", _FakeAuth)
+        monkeypatch.setattr(
+            auth_db_module,
+            "verify_api_key",
+            lambda key: "testuser" if key == "valid-key" else None,
+        )
         auth_db_module.broker_cache.clear()
         try:
+            # Username path (what the analytics routes use): the lookup filters
+            # on the verified username exactly, and the repeat is cached.
             assert auth_db_module.get_broker_name_for_user("testuser") == "zerodha"
             assert auth_db_module.get_broker_name_for_user("testuser") == "zerodha"
-            assert calls["n"] == 1  # second call served from the cache
+            assert seen_filters == [{"name": "testuser"}]  # 2nd call: cache hit
             assert auth_db_module.broker_cache["testuser"] == "zerodha"
+
+            # API-key path through the REAL helper chain: verify once, then the
+            # username helper + its cache — the raw key is never a cache key.
+            assert auth_db_module.get_broker_name("valid-key") == "zerodha"
+            assert seen_filters == [{"name": "testuser"}]  # served from cache
             assert "valid-key" not in auth_db_module.broker_cache
+
+            # An unverifiable key never touches the database or the cache.
+            assert auth_db_module.get_broker_name("bad-key") is None
+            assert seen_filters == [{"name": "testuser"}]
         finally:
             auth_db_module.broker_cache.clear()
 
