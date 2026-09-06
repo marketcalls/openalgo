@@ -16,7 +16,7 @@ from database.auth_db import get_api_key_for_tradingview
 from services.intervals_service import get_intervals
 from services.oi_profile_service import get_oi_profile_data
 from utils.logging import get_logger
-from utils.session import check_session_validity, apikey_or_session
+from utils.session import apikey_or_session, check_session_validity
 
 logger = get_logger(__name__)
 

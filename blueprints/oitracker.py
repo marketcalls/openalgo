@@ -15,7 +15,7 @@ from flask_cors import cross_origin
 from database.auth_db import get_api_key_for_tradingview
 from services.oi_tracker_service import calculate_max_pain, get_oi_data
 from utils.logging import get_logger
-from utils.session import check_session_validity, apikey_or_session
+from utils.session import apikey_or_session, check_session_validity
 
 logger = get_logger(__name__)
 

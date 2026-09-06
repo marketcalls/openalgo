@@ -14,7 +14,7 @@ from flask_cors import cross_origin
 from database.auth_db import get_api_key_for_tradingview
 from services.iv_smile_service import get_iv_smile_data
 from utils.logging import get_logger
-from utils.session import check_session_validity, apikey_or_session
+from utils.session import apikey_or_session, check_session_validity
 
 logger = get_logger(__name__)
 

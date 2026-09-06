@@ -9,7 +9,7 @@ from flask_cors import cross_origin
 from database.auth_db import get_api_key_for_tradingview, get_auth_token, get_broker_name
 from services.vol_surface_service import get_vol_surface_data
 from utils.logging import get_logger
-from utils.session import check_session_validity, apikey_or_session
+from utils.session import apikey_or_session, check_session_validity
 
 logger = get_logger(__name__)
 

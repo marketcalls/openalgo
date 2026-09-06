@@ -54,6 +54,30 @@ def set_session_login_time():
     logger.info(f"Session login time set to: {now_ist}")
 
 
+def _enforce_csrf_for_session() -> None:
+    """Run the app's CSRF check for a session-authenticated request.
+
+    The analytics blueprints are exempted wholesale in app.py — headless
+    apikey clients carry no token, and a bearer credential in the body is
+    not CSRF-able — so without this the exemption would also drop the token
+    check for browser users. Raises flask_wtf.csrf.CSRFError (a 400) on a
+    missing/invalid token, exactly what Flask-WTF enforced on these routes
+    before the exemption existed.
+
+    Mirrors the gate CSRFProtect's own before_request hook applies before
+    protect(): CSRFProtect.protect() itself no longer checks the enabled
+    flag, so a disabled deployment (CSRF_ENABLED=FALSE) must be honored
+    here. Safe methods are already skipped inside protect().
+    """
+    from flask import current_app
+
+    if not current_app.config["WTF_CSRF_ENABLED"]:
+        return
+    csrf = current_app.extensions.get("csrf")
+    if csrf is not None:
+        csrf.protect()
+
+
 def apikey_or_session(f):
     """
     Accept either a valid Flask session OR a valid API key in the request
@@ -72,6 +96,7 @@ def apikey_or_session(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         from flask import g, jsonify, request
+
         from database.auth_db import get_username_by_apikey
 
         # 1. apikey path: verify against the same store the restx API uses.
@@ -85,8 +110,11 @@ def apikey_or_session(f):
                 g.openalgo_user = username
                 return f(*args, **kwargs)
 
-        # 2. session fallback: unchanged behavior.
+        # 2. session fallback: unchanged browser behavior — CSRF included.
+        #    The blueprint-level exemption in app.py removed the automatic
+        #    token check from this branch, so it is re-applied here.
         if is_session_valid():
+            _enforce_csrf_for_session()
             g.openalgo_user = session.get("user")
             return f(*args, **kwargs)
 
