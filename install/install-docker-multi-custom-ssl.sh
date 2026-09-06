@@ -14,6 +14,10 @@ NC='\033[0m' # No Color
 INSTALL_BASE="/opt/openalgo"
 START_FLASK_PORT=5000
 START_WS_PORT=8765
+# Overridable so the deployment failure path can be exercised by tests without
+# writing to the real Nginx configuration.
+NGINX_SITES_AVAILABLE="${NGINX_SITES_AVAILABLE:-/etc/nginx/sites-available}"
+NGINX_SITES_ENABLED="${NGINX_SITES_ENABLED:-/etc/nginx/sites-enabled}"
 
 # Script Banner
 echo -e "${BLUE}"
@@ -91,6 +95,54 @@ get_next_ports() {
     # Return next available pair
     echo "$((max_flask + 1)) $((max_ws + 1))"
 }
+
+# An instance's reachability depends on two generated files agreeing: the port
+# mappings in its compose file, and the upstreams in its Nginx vhost. Both are
+# rewritten before the image is built, and the single Nginx reload at the end of
+# the run activates whatever is on disk by then. When a build fails we skip
+# `docker compose up -d`, so the running container keeps the ports it already
+# had -- and without putting these files back, that reload would point the
+# domain at ports nothing is listening on, taking a working instance offline.
+snapshot_instance_config() {
+    local instance_dir="$1" domain="$2"
+    discard_instance_snapshot "$instance_dir" "$domain"
+    if [ -f "$instance_dir/docker-compose.yaml" ]; then
+        cp -p "$instance_dir/docker-compose.yaml" "$instance_dir/docker-compose.yaml.pre-deploy"
+    fi
+    if [ -f "$NGINX_SITES_AVAILABLE/$domain" ]; then
+        cp -p "$NGINX_SITES_AVAILABLE/$domain" "$NGINX_SITES_AVAILABLE/$domain.pre-deploy"
+    fi
+    return 0
+}
+
+restore_instance_config() {
+    local instance_dir="$1" domain="$2"
+    if [ -f "$instance_dir/docker-compose.yaml.pre-deploy" ]; then
+        mv -f "$instance_dir/docker-compose.yaml.pre-deploy" "$instance_dir/docker-compose.yaml"
+    fi
+    if [ -f "$NGINX_SITES_AVAILABLE/$domain.pre-deploy" ]; then
+        mv -f "$NGINX_SITES_AVAILABLE/$domain.pre-deploy" "$NGINX_SITES_AVAILABLE/$domain"
+    else
+        # Fresh install: there is no working configuration to return to, so
+        # leave no vhost behind pointing at a port that will never be served.
+        rm -f "$NGINX_SITES_ENABLED/$domain" "$NGINX_SITES_AVAILABLE/$domain"
+    fi
+    return 0
+}
+
+discard_instance_snapshot() {
+    local instance_dir="$1" domain="$2"
+    rm -f "$instance_dir/docker-compose.yaml.pre-deploy" \
+          "$NGINX_SITES_AVAILABLE/$domain.pre-deploy"
+    return 0
+}
+
+# Tests source this script to exercise the helpers above in isolation:
+#   OPENALGO_INSTALLER_LIB_ONLY=1 source install-docker-multi-custom-ssl.sh
+# Nothing past this point runs in that mode.
+if [ "${OPENALGO_INSTALLER_LIB_ONLY:-0}" = "1" ]; then
+    return 0 2>/dev/null || exit 0
+fi
 
 # -----------------
 # System Prep
@@ -891,6 +943,11 @@ for i in "${!CONF_DOMAINS[@]}"; do
     fi
 
     # 6. Docker Compose
+    # Both files below are about to be regenerated, possibly onto new ports.
+    # Keep a copy so a failed build can hand the instance back its working
+    # routing before the shared Nginx reload at the end of the run.
+    snapshot_instance_config "$INSTANCE_DIR" "$DOMAIN"
+
     cat <<EOF > "$INSTANCE_DIR/docker-compose.yaml"
 services:
   openalgo:
@@ -945,7 +1002,7 @@ volumes:
 EOF
 
     # 7. Nginx Config
-    cat <<EOF > "/etc/nginx/sites-available/$DOMAIN"
+    cat <<EOF > "$NGINX_SITES_AVAILABLE/$DOMAIN"
 upstream openalgo_flask_${SANITIZED_NAME} {
     server 127.0.0.1:${FLASK_PORT};
     keepalive 64;
@@ -1052,7 +1109,7 @@ server {
 EOF
     
     # Activate Nginx
-    ln -sf "/etc/nginx/sites-available/$DOMAIN" "/etc/nginx/sites-enabled/"
+    ln -sf "$NGINX_SITES_AVAILABLE/$DOMAIN" "$NGINX_SITES_ENABLED/"
     
     # 8. Service Start
     log "Starting Container for $DOMAIN..." "$BLUE"
@@ -1063,17 +1120,33 @@ EOF
     # restarts the old code and every later message -- including
     # "INSTALLATION COMPLETE" -- reports success while nothing was updated.
     if ! docker compose build; then
+        # Put the previous compose/Nginx files back before the reload, so this
+        # domain keeps pointing at the ports its container is actually on.
+        restore_instance_config "$INSTANCE_DIR" "$DOMAIN"
         log "Error: Docker image build FAILED for $DOMAIN." "$RED"
-        log "       Its container was left untouched and is still running the" "$RED"
-        log "       previous image. This instance was NOT updated." "$RED"
+        if [ "$IS_UPDATE_MODE" == "true" ]; then
+            log "       This instance was NOT updated. Its previous configuration" "$RED"
+            log "       has been restored, so the container that was already" "$RED"
+            log "       running stays reachable on its existing ports." "$RED"
+        else
+            log "       This instance was NOT installed. No container exists for" "$RED"
+            log "       it, and its Nginx site has been removed." "$RED"
+        fi
         FAILED_DOMAINS+=("$DOMAIN")
         continue
     fi
+    # Deliberately no restore here. Compose has already acted on the new file,
+    # so a container may exist -- stopped, or partially recreated -- on the new
+    # ports. Reverting Nginx alone would guarantee a mismatch, and we cannot
+    # claim the previous image is still serving.
     if ! docker compose up -d; then
+        discard_instance_snapshot "$INSTANCE_DIR" "$DOMAIN"
         log "Error: Container failed to start for $DOMAIN." "$RED"
+        log "       Check: cd $INSTANCE_DIR && docker compose logs" "$RED"
         FAILED_DOMAINS+=("$DOMAIN")
         continue
     fi
+    discard_instance_snapshot "$INSTANCE_DIR" "$DOMAIN"
     
 done
 
@@ -1166,8 +1239,7 @@ if [ ${#FAILED_DOMAINS[@]} -gt 0 ]; then
     log "\n==============================================" "$RED"
     log " INSTALLATION COMPLETED WITH ERRORS" "$RED"
     log "==============================================" "$RED"
-    log "These instances were NOT updated and are still running their" "$RED"
-    log "previous image:" "$RED"
+    log "The following instances did not deploy successfully:" "$RED"
     for FAILED in "${FAILED_DOMAINS[@]}"; do
         log "  - $FAILED" "$RED"
     done
