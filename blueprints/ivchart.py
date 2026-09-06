@@ -6,7 +6,12 @@ Serves intraday Implied Volatility chart data for ATM options.
 from flask import Blueprint, g, jsonify, request, session
 from flask_cors import cross_origin
 
-from database.auth_db import get_api_key_for_tradingview, get_auth_token, get_broker_name
+from database.auth_db import (
+    get_api_key_for_tradingview,
+    get_auth_token,
+    get_broker_name_for_user,
+    get_username_by_apikey,
+)
 from services.intervals_service import get_intervals
 from services.iv_chart_service import get_default_symbols, get_iv_chart_data
 from utils.logging import get_logger
@@ -23,13 +28,17 @@ ivchart_bp = Blueprint("ivchart_bp", __name__, url_prefix="/")
 def iv_data():
     """Get intraday IV time series for ATM CE and PE options."""
     try:
-        # Broker comes from the apikey the decorator already verified (body,
-        # ?apikey or X-API-Key — all surfaced as g.openalgo_apikey), falling
-        # back to the session only for browser logins. Reading session['broker']
-        # first left apikey-only clients with a spurious 400 (P1, cubic review
-        # 2026-09-06).
+        # Broker comes from the identity the decorator already verified (the
+        # apikey arrived via body, ?apikey or X-API-Key — all surfaced as
+        # g.openalgo_apikey); browser logins fall back to the session, which
+        # stores the broker name directly. Resolving via the verified
+        # username (not the raw key) keeps usable credentials out of
+        # broker_cache (cubic review, 2026-09-06).
         decorator_api_key = getattr(g, "openalgo_apikey", None)
-        broker = get_broker_name(decorator_api_key) if decorator_api_key else session.get("broker")
+        if decorator_api_key:
+            broker = get_broker_name_for_user(get_username_by_apikey(decorator_api_key))
+        else:
+            broker = session.get("broker")
         if not broker:
             return jsonify({"status": "error", "message": "Broker not set in session"}), 400
 

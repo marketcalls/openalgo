@@ -6,7 +6,12 @@ Serves 3D implied volatility surface data for index options.
 from flask import Blueprint, g, jsonify, request, session
 from flask_cors import cross_origin
 
-from database.auth_db import get_api_key_for_tradingview, get_auth_token, get_broker_name
+from database.auth_db import (
+    get_api_key_for_tradingview,
+    get_auth_token,
+    get_broker_name_for_user,
+    get_username_by_apikey,
+)
 from services.vol_surface_service import get_vol_surface_data
 from utils.logging import get_logger
 from utils.session import apikey_or_session, check_session_validity
@@ -22,13 +27,17 @@ vol_surface_bp = Blueprint("vol_surface_bp", __name__, url_prefix="/")
 def surface_data():
     """Get 3D volatility surface data across strikes and expiries."""
     try:
-        # Broker comes from the apikey the decorator already verified (body,
-        # ?apikey or X-API-Key — all surfaced as g.openalgo_apikey), falling
-        # back to the session only for browser logins. Reading session['broker']
-        # first left apikey-only clients with a spurious 400 (P1, cubic review
-        # 2026-09-06).
+        # Broker comes from the identity the decorator already verified (the
+        # apikey arrived via body, ?apikey or X-API-Key — all surfaced as
+        # g.openalgo_apikey); browser logins fall back to the session, which
+        # stores the broker name directly. Resolving via the verified
+        # username (not the raw key) keeps usable credentials out of
+        # broker_cache (cubic review, 2026-09-06).
         decorator_api_key = getattr(g, "openalgo_apikey", None)
-        broker = get_broker_name(decorator_api_key) if decorator_api_key else session.get("broker")
+        if decorator_api_key:
+            broker = get_broker_name_for_user(get_username_by_apikey(decorator_api_key))
+        else:
+            broker = session.get("broker")
         if not broker:
             return jsonify({"status": "error", "message": "Broker not set in session"}), 400
 

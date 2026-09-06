@@ -976,29 +976,41 @@ def get_username_by_apikey(provided_api_key):
     return verify_api_key(provided_api_key)
 
 
+def get_broker_name_for_user(username):
+    """Get the broker name for a verified username (no API key involved).
+
+    For callers that already hold a VERIFIED username (e.g. the
+    apikey_or_session decorator), this avoids both a redundant key
+    verification and any use of the raw key as a cache key (cubic review,
+    2026-09-06: broker_cache must not accumulate usable credentials).
+    """
+    try:
+        auth_obj = Auth.query.filter_by(name=username).first()
+        if auth_obj and not auth_obj.is_revoked:
+            return auth_obj.broker
+        logger.warning(f"No valid broker found for user_id '{username}'.")
+        return None
+    except Exception as e:
+        logger.exception(f"Error while querying the database for broker name: {e}")
+        return None
+
+
 def get_broker_name(provided_api_key):
     """Get only the broker name for a valid API key with caching"""
-    # Check if broker name is in cache
-    if provided_api_key in broker_cache:
-        return broker_cache[provided_api_key]
-
-    # Not in cache, need to look it up
     user_id = verify_api_key(provided_api_key)
+    if not user_id:
+        return None
 
-    if user_id:
-        try:
-            auth_obj = Auth.query.filter_by(name=user_id).first()
-            if auth_obj and not auth_obj.is_revoked:
-                # Cache the broker name
-                broker_cache[provided_api_key] = auth_obj.broker
-                return auth_obj.broker
-            else:
-                logger.warning(f"No valid broker found for user_id '{user_id}'.")
-                return None
-        except Exception as e:
-            logger.exception(f"Error while querying the database for broker name: {e}")
-            return None
-    return None
+    # Cache keyed by the verified user_id, never the raw API key: keying by
+    # the key itself would leave usable credentials inspectable in
+    # broker_cache for its full TTL.
+    if user_id in broker_cache:
+        return broker_cache[user_id]
+
+    broker = get_broker_name_for_user(user_id)
+    if broker is not None:
+        broker_cache[user_id] = broker
+    return broker
 
 
 def get_auth_token_broker(provided_api_key, include_feed_token=False):
