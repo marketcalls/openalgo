@@ -19,8 +19,9 @@ This script is NOT registered in upgrade/migrate_all.py because of (1).
 It must be run explicitly by the operator at a controlled moment:
 
     cd upgrade
-    uv run rotate_pepper.py            # interactive prompt
-    uv run rotate_pepper.py --yes      # non-interactive
+    uv run rotate_pepper.py                      # interactive prompt
+    uv run rotate_pepper.py --app-stopped --yes  # non-interactive
+    # (--yes alone refuses to run: it must attest the app is stopped.)
 
 Pre-flight:
   1. Stop OpenAlgo (kill the running process / systemctl stop openalgo).
@@ -36,7 +37,9 @@ Post-flight:
   3. Confirm you can log in with the new password.
 
 Columns rotated:
-  auth_db Fernet (PBKDF2-SHA256, salt=b"openalgo_static_salt"):
+  auth_db Fernet (PBKDF2-SHA256, salt=FERNET_SALT — the per-install hex from
+  .env; falls back to the legacy static salt with a loud warning, matching
+  database/auth_db.py:_resolve_fernet_salt()):
     - auth.auth
     - auth.feed_token
     - auth.secret_api_key  (was plaintext for some installs)
@@ -136,6 +139,21 @@ def _whatsapp_db_fernet(pepper: str) -> Fernet:
         algorithm=hashes.SHA256(),
         length=32,
         salt=_resolve_fernet_salt() + b":whatsapp-session",
+        iterations=100000,
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(pepper.encode()))
+    return Fernet(key)
+
+
+def _legacy_whatsapp_db_fernet(pepper: str) -> Fernet:
+    """Pre-FERNET_SALT whatsapp_db key: the legacy static salt plus the same
+    ':whatsapp-session' domain separator. Decrypt-fallback only — a session
+    stored before FERNET_SALT was provisioned is re-encrypted under the
+    current salt, matching runtime's single-salt read path."""
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=b"openalgo_static_salt:whatsapp-session",
         iterations=100000,
     )
     key = base64.urlsafe_b64encode(kdf.derive(pepper.encode()))
@@ -273,6 +291,9 @@ class Rotator:
         self.new_settings = _settings_db_fernet(new_pepper)
         self.old_whatsapp = _whatsapp_db_fernet(old_pepper)
         self.new_whatsapp = _whatsapp_db_fernet(new_pepper)
+        # Decrypt-only fallback for sessions stored before FERNET_SALT was
+        # provisioned (same pattern as old_settings_legacy below).
+        self.old_whatsapp_legacy = _legacy_whatsapp_db_fernet(old_pepper)
         # Decrypt-only fallback for SMTP passwords stored before the KDF upgrade.
         self.old_settings_legacy = _legacy_settings_db_fernet(old_pepper)
         # ph for re-hashing api_key_hash. Argon2 verifier needs the new pepper
@@ -496,12 +517,16 @@ class Rotator:
                 try:
                     pt = self.old_whatsapp.decrypt(bytes(blob_v))
                 except (InvalidToken, ValueError):
-                    print(
-                        f"  WARN: whatsapp_config.session_blob row {row_id}: "
-                        "cannot decrypt, leaving alone (re-pair WhatsApp after "
-                        "the rotation)"
-                    )
-                    continue
+                    # Blob may predate FERNET_SALT provisioning (legacy salt).
+                    try:
+                        pt = self.old_whatsapp_legacy.decrypt(bytes(blob_v))
+                    except (InvalidToken, ValueError):
+                        print(
+                            f"  WARN: whatsapp_config.session_blob row {row_id}: "
+                            "cannot decrypt, leaving alone (re-pair WhatsApp after "
+                            "the rotation)"
+                        )
+                        continue
                 self.conn.execute(
                     "UPDATE whatsapp_config SET session_blob = ? WHERE id = ?",
                     (self.new_whatsapp.encrypt(pt), row_id),
@@ -519,11 +544,15 @@ class Rotator:
                 try:
                     pt = self.old_whatsapp.decrypt(wa_v.encode()).decode()
                 except (InvalidToken, ValueError):
-                    print(
-                        f"  WARN: whatsapp_users.encrypted_api_key row {row_id}: "
-                        "cannot decrypt, leaving alone"
-                    )
-                    continue
+                    # Value may predate FERNET_SALT provisioning (legacy salt).
+                    try:
+                        pt = self.old_whatsapp_legacy.decrypt(wa_v.encode()).decode()
+                    except (InvalidToken, ValueError):
+                        print(
+                            f"  WARN: whatsapp_users.encrypted_api_key row {row_id}: "
+                            "cannot decrypt, leaving alone"
+                        )
+                        continue
                 self.conn.execute(
                     "UPDATE whatsapp_users SET encrypted_api_key = ? WHERE id = ?",
                     (self.new_whatsapp.encrypt(pt.encode()).decode(), row_id),
@@ -547,10 +576,16 @@ def main():
     args = parser.parse_args()
 
     env_path = args.env or ENV_PATH
+    # Load the chosen env file BEFORE resolving the DB path or deriving any
+    # key. Module import already loaded the project-root .env without override,
+    # so a plain reload could neither redirect DATABASE_URL nor replace
+    # already-loaded values — the script would rotate one installation's
+    # database with another installation's pepper and then write the new
+    # pepper into the wrong .env. override=True makes the selected file the
+    # authority for everything this run reads (DATABASE_URL, API_KEY_PEPPER,
+    # FERNET_SALT, SMTP_KEY_SALT, TELEGRAM_KEY_SALT).
+    load_dotenv(env_path, override=True)
     db_path = args.db or _resolve_db_path()
-    # Re-load the chosen env file so FERNET_SALT / API_KEY_PEPPER / salt
-    # overrides come from the same file the rotation will update.
-    load_dotenv(env_path)
 
     if args.yes and not args.dry_run and not args.app_stopped:
         sys.stderr.write(
