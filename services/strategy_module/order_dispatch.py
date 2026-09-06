@@ -344,18 +344,22 @@ def _dispatch_sandbox(api_key: str, order: dict[str, Any]) -> DispatchResult:
 
 
 def _dispatch_live(api_key: str, order: dict[str, Any]) -> DispatchResult:
-    auth_token, broker, error = resolve_live_auth(api_key)
-    if error:
-        # Deliberately not attempted. See the module docstring: refusing and
-        # saying so leaves a recoverable situation, and a silent failure does
-        # not.
-        return DispatchResult(ok=False, error=error)
-
     from services.place_order_service import place_order_with_auth
 
-    original = dict(order)
-    original["apikey"] = api_key
     try:
+        # Inside the try so the finally below releases the scoped sessions
+        # resolve_live_auth opens (auth_db) even on the early-return path —
+        # strategy dispatch runs on the tick-feed green thread, where no
+        # teardown_appcontext ever fires (see utils/db_sessions.py).
+        auth_token, broker, error = resolve_live_auth(api_key)
+        if error:
+            # Deliberately not attempted. See the module docstring: refusing and
+            # saying so leaves a recoverable situation, and a silent failure does
+            # not.
+            return DispatchResult(ok=False, error=error)
+
+        original = dict(order)
+        original["apikey"] = api_key
         ok, response, _status = place_order_with_auth(
             dict(order),
             auth_token,

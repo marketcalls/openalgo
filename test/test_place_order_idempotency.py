@@ -43,6 +43,19 @@ API_KEY = "test-api-key-1234"
 OTHER_API_KEY = "other-api-key-5678"
 CID = "retry-abc-123"
 
+# The order_params shape reserve_client_order_id records (mirrors the
+# place-order schema defaults: price/trigger_price default to 0.0, not NULL).
+PARAMS = {
+    "symbol": "RELIANCE",
+    "exchange": "NSE",
+    "action": "BUY",
+    "quantity": 1,
+    "price": 0.0,
+    "pricetype": "MARKET",
+    "product": "MIS",
+    "trigger_price": 0.0,
+}
+
 BASE_ORDER = {
     "apikey": API_KEY,
     "symbol": "RELIANCE",
@@ -113,6 +126,42 @@ class TestReservationStore:
 
     def test_unknown_key_returns_none(self):
         assert idempotency_db.get_resolution(API_KEY, CID) is None
+
+    def test_fractional_quantity_is_preserved(self):
+        # Crypto/USDT perps trade fractional lots; the old Integer column plus
+        # int() coercion made 1.1 and 1.9 indistinguishable.
+        idempotency_db.reserve_client_order_id(
+            API_KEY, CID, order_params={**PARAMS, "quantity": 1.1}
+        )
+        assert idempotency_db.get_resolution(API_KEY, CID)["quantity"] == 1.1
+
+    def test_zero_price_is_recorded_not_nulled(self):
+        # The old truthiness recording turned price 0.0 into NULL, which made
+        # the replay check silently skip the price comparison.
+        idempotency_db.reserve_client_order_id(
+            API_KEY, CID, order_params={**PARAMS, "price": 0.0}
+        )
+        assert idempotency_db.get_resolution(API_KEY, CID)["price"] == 0.0
+
+    def test_absent_shaping_params_get_schema_defaults(self):
+        # place_order_with_auth sees the RAW request (validate_order_data
+        # discards the schema-loaded dict), so the store must apply the
+        # schema defaults itself or LIMIT-vs-MARKET corrections would
+        # compare NULL against values.
+        raw = {k: v for k, v in PARAMS.items() if k not in ("pricetype", "product", "price", "trigger_price")}
+        idempotency_db.reserve_client_order_id(API_KEY, CID, order_params=raw)
+        resolution = idempotency_db.get_resolution(API_KEY, CID)
+        assert resolution["pricetype"] == "MARKET"
+        assert resolution["product"] == "MIS"
+        assert resolution["price"] == 0.0
+        assert resolution["trigger_price"] == 0.0
+
+    def test_request_shaping_params_are_recorded(self):
+        idempotency_db.reserve_client_order_id(API_KEY, CID, order_params=PARAMS)
+        resolution = idempotency_db.get_resolution(API_KEY, CID)
+        assert resolution["product"] == "MIS"
+        assert resolution["pricetype"] == "MARKET"
+        assert resolution["trigger_price"] == 0.0
 
     def test_labels_lookup_by_orderid(self):
         idempotency_db.reserve_client_order_id(API_KEY, CID, tag="scalp-1")
@@ -506,10 +555,40 @@ class TestUnresolvedReconciliation:
         "action": "BUY",
         "quantity": 1,
         "price": 0.0,
+        "pricetype": "MARKET",
+        "product": "MIS",
+        "trigger_price": 0.0,
         "order_status": "OPEN",
     }
 
-    def _make_unresolved(self, monkeypatch, broker):
+    def test_raw_request_defaults_do_not_block_reconciliation(self, monkeypatch):
+        # A request that omitted pricetype/product must reconcile against the
+        # book once the store applied the schema defaults — the pre-fix code
+        # stored NULL and the strict compare would then reject every match.
+        broker = _FakeBrokerModule(status=500, order_id=None)
+        raw_request = {
+            k: v for k, v in BASE_ORDER.items() if k not in ("pricetype", "product")
+        }
+        monkeypatch.setattr(
+            place_order_service,
+            "get_auth_token_broker",
+            lambda api_key: ("fake-auth-token", "fakebroker"),
+        )
+        monkeypatch.setattr(place_order_service, "get_analyze_mode", lambda: False)
+        monkeypatch.setattr(place_order_service, "import_broker_module", lambda name: broker)
+        broker.status = 500
+        place_order_service.place_order({**raw_request, "client_order_id": CID}, api_key=API_KEY)
+        assert idempotency_db.get_resolution(API_KEY, CID)["status"] == "unresolved"
+        self._stub_orderbook(monkeypatch, [dict(self.MATCHING_ORDER)])
+
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY
+        )
+        assert ok is True
+        assert code == 200
+        assert response["reconciled"] is True
+
+    def _make_unresolved(self, monkeypatch, broker, **param_overrides):
         monkeypatch.setattr(
             place_order_service,
             "get_auth_token_broker",
@@ -518,7 +597,9 @@ class TestUnresolvedReconciliation:
         monkeypatch.setattr(place_order_service, "get_analyze_mode", lambda: False)
         monkeypatch.setattr(place_order_service, "import_broker_module", lambda name: broker)
         broker.status = 500  # ambiguous adapter failure -> unresolved
-        place_order_service.place_order({**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY)
+        place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID, **param_overrides}, api_key=API_KEY
+        )
         assert idempotency_db.get_resolution(API_KEY, CID)["status"] == "unresolved"
         broker.status = 200
         broker.order_id = "250106000012345"
@@ -622,3 +703,97 @@ class TestUnresolvedReconciliation:
         assert code == 409
         assert "parameters differ" in response["message"]
         assert len(broker.calls) == 1
+
+    def test_fractional_quantities_never_compare_equal(self, monkeypatch):
+        broker = _FakeBrokerModule(status=500, order_id=None)
+        self._make_unresolved(monkeypatch, broker, quantity=1.1, exchange="CRYPTO")
+        book_row = dict(self.MATCHING_ORDER, exchange="CRYPTO", quantity=1.1)
+        self._stub_orderbook(monkeypatch, [book_row])
+
+        # 1.1 vs 1.9 must not collapse to the same int and slip through.
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "exchange": "CRYPTO", "quantity": 1.9, "client_order_id": CID},
+            api_key=API_KEY,
+        )
+        assert ok is False
+        assert code == 409
+        assert "parameters differ" in response["message"]
+        assert len(broker.calls) == 1
+
+        # Same fractional quantity reconciles to the existing order.
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "exchange": "CRYPTO", "quantity": 1.1, "client_order_id": CID},
+            api_key=API_KEY,
+        )
+        assert ok is True
+        assert code == 200
+        assert response["reconciled"] is True
+        assert len(broker.calls) == 1
+
+    def test_limit_price_must_match_for_price_fixed_types(self, monkeypatch):
+        broker = _FakeBrokerModule(status=500, order_id=None)
+        self._make_unresolved(monkeypatch, broker, pricetype="LIMIT", price=1500.5)
+        self._stub_orderbook(
+            monkeypatch, [dict(self.MATCHING_ORDER, pricetype="LIMIT", price=1500.5)]
+        )
+
+        # Same limit price reconciles.
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "pricetype": "LIMIT", "price": 1500.5, "client_order_id": CID},
+            api_key=API_KEY,
+        )
+        assert ok is True
+        assert code == 200
+        assert len(broker.calls) == 1
+
+    def test_different_limit_price_is_refused(self, monkeypatch):
+        broker = _FakeBrokerModule(status=500, order_id=None)
+        self._make_unresolved(monkeypatch, broker, pricetype="LIMIT", price=1500.5)
+        self._stub_orderbook(
+            monkeypatch, [dict(self.MATCHING_ORDER, pricetype="LIMIT", price=1500.5)]
+        )
+
+        # A different limit price is a corrected order, not a retry.
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "pricetype": "LIMIT", "price": 1600.0, "client_order_id": CID},
+            api_key=API_KEY,
+        )
+        assert ok is False
+        assert code == 409
+        assert "parameters differ" in response["message"]
+        assert len(broker.calls) == 1
+
+    @pytest.mark.parametrize("field,value", [
+        ("pricetype", "LIMIT"),
+        ("product", "CNC"),
+    ])
+    def test_corrected_shaping_params_are_refused(self, monkeypatch, field, value):
+        broker = _FakeBrokerModule(status=500, order_id=None)
+        self._make_unresolved(monkeypatch, broker)
+        self._stub_orderbook(monkeypatch, [dict(self.MATCHING_ORDER)])
+
+        # A retry that changes pricetype/product must be refused: the
+        # unresolved attempt may still be live with the original shape
+        # (e.g. a LIMIT retry must not slip through a MARKET reservation).
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID, field: value}, api_key=API_KEY
+        )
+        assert ok is False
+        assert code == 409
+        assert "parameters differ" in response["message"]
+        assert len(broker.calls) == 1
+
+    def test_canceled_single_l_book_row_is_skipped(self, monkeypatch):
+        broker = _FakeBrokerModule(status=500, order_id=None)
+        self._make_unresolved(monkeypatch, broker)
+        # Single-L 'CANCELED' appears on some broker adapters; it must be
+        # treated as dead exactly like 'CANCELLED'.
+        canceled = dict(self.MATCHING_ORDER, order_status="CANCELED")
+        self._stub_orderbook(monkeypatch, [canceled])
+
+        ok, response, code = place_order_service.place_order(
+            {**BASE_ORDER, "client_order_id": CID}, api_key=API_KEY
+        )
+        assert ok is True
+        assert code == 200
+        assert len(broker.calls) == 2

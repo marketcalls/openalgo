@@ -47,6 +47,17 @@ logger = get_logger(__name__)
 
 IDEMPOTENCY_DATABASE_URL = os.getenv("IDEMPOTENCY_DATABASE_URL", "sqlite:///db/idempotency.db")
 
+# Defaults mirroring restx_api.schemas.OrderSchema, applied when a raw request
+# omits the field: the reserve path sees the raw payload (validate_order_data
+# discards the schema-loaded dict), so the store normalises here to keep
+# records faithful to what the broker will actually execute.
+DEFAULT_PRODUCT = "MIS"
+DEFAULT_PRICETYPE = "MARKET"
+# Price types with no caller-fixed execution price: for these the order book's
+# "price" is the broker's average fill, not a limit price, so a recorded
+# default price must not be compared against it.
+MARKETISH_PRICETYPES = frozenset({"", "MARKET", "SL-M"})
+
 # Project-wide pooling policy (database/engine_factory.py): SQLite engines
 # use NullPool so no descriptor is held between operations.
 idempotency_engine = create_db_engine(IDEMPOTENCY_DATABASE_URL)
@@ -84,11 +95,19 @@ class ClientOrderId(IdempotencyBase):
     symbol = Column(String(64), nullable=True)
     exchange = Column(String(32), nullable=True)
     action = Column(String(16), nullable=True)
-    quantity = Column(Integer, nullable=True)
+    # Float, not Integer: crypto/USDT perps trade fractional lots (0.001 BTC);
+    # an Integer column plus int() coercion made 1.1 and 1.9 compare equal.
+    quantity = Column(Float, nullable=True)
     price = Column(Float, nullable=True)
-    # naive local now(): the project-wide convention (see auth_db et al.);
-    # utcnow here would silently skew TTL pruning against rows written by
-    # earlier versions.
+    # Remaining request-shaping parameters recorded so a corrected retry
+    # changing any of them is refused instead of double-placing (a LIMIT
+    # retry must not slip through a MARKET reservation, etc.).
+    product = Column(String(16), nullable=True)
+    pricetype = Column(String(16), nullable=True)
+    trigger_price = Column(Float, nullable=True)
+    # naive local now(): the project-wide convention (see strategy_book_db /
+    # master_contract_status_db); utcnow here would silently skew TTL pruning
+    # against rows written by earlier versions.
     created_at = Column(DateTime, nullable=False, default=datetime.now)
     updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
 
@@ -148,8 +167,11 @@ _RECONCILIATION_COLUMNS = (
     ("symbol", "VARCHAR(64)"),
     ("exchange", "VARCHAR(32)"),
     ("action", "VARCHAR(16)"),
-    ("quantity", "INTEGER"),
+    ("quantity", "FLOAT"),
     ("price", "FLOAT"),
+    ("product", "VARCHAR(16)"),
+    ("pricetype", "VARCHAR(16)"),
+    ("trigger_price", "FLOAT"),
 )
 
 
@@ -207,8 +229,16 @@ def reserve_client_order_id(
                 symbol=params.get("symbol"),
                 exchange=params.get("exchange"),
                 action=params.get("action"),
-                quantity=int(params["quantity"]) if params.get("quantity") is not None else None,
-                price=float(params["price"]) if params.get("price") else None,
+                quantity=float(params["quantity"])
+                if params.get("quantity") is not None
+                else None,
+                # Absent ≡ schema default (see DEFAULT_* above); a LIMIT price
+                # of 0.0 must be recorded as 0.0, never NULL, or the replay
+                # check would silently skip the comparison.
+                price=float(params.get("price") or 0.0),
+                product=params.get("product") or DEFAULT_PRODUCT,
+                pricetype=params.get("pricetype") or DEFAULT_PRICETYPE,
+                trigger_price=float(params.get("trigger_price") or 0.0),
             )
             idempotency_session.add(row)
             _prune_expired(idempotency_session)
@@ -325,6 +355,9 @@ def get_resolution(api_key: str, client_order_id: str) -> dict | None:
         "action": row.action,
         "quantity": row.quantity,
         "price": row.price,
+        "product": row.product,
+        "pricetype": row.pricetype,
+        "trigger_price": row.trigger_price,
     }
 
 

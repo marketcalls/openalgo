@@ -144,14 +144,37 @@ def _params_match_reservation(resolution: dict, order_data: dict) -> bool:
     if _norm_str(resolution.get("action")) != _norm_str(order_data.get("action")):
         return False
     try:
-        if int(resolution.get("quantity") or 0) != int(order_data.get("quantity") or 0):
+        # Float (not int()) compare: fractional crypto lots must not compare
+        # equal (1.1 vs 1.9), which a plain int() coercion produced.
+        if abs(float(resolution.get("quantity") or 0) - float(order_data.get("quantity") or 0)) > 1e-9:
             return False
     except (TypeError, ValueError):
         return False
-    stored_price = resolution.get("price")
-    if stored_price is not None:
+    # Request-shaping parameters: a corrected retry must not reuse an
+    # unresolved reservation (a LIMIT retry must not slip through a MARKET
+    # reservation, a CNC retry through an MIS one, etc.).
+    stored_pricetype = _norm_str(resolution.get("pricetype"))
+    if stored_pricetype != _norm_str(order_data.get("pricetype")):
+        return False
+    if _norm_str(resolution.get("product")) != _norm_str(order_data.get("product")):
+        return False
+    # For price-fixed types the recorded limit price must match the request.
+    # For MARKET/SL-M the order book's "price" is the broker's average fill
+    # (see broker/*/mapping/order_data.py), so a stored default price must
+    # not be compared against it (mirrors MARKETISH_PRICETYPES in
+    # database/idempotency_db.py).
+    if stored_pricetype not in ("", "MARKET", "SL-M"):
+        stored_price = resolution.get("price")
+        if stored_price is not None:
+            try:
+                if abs(float(stored_price) - float(order_data.get("price") or 0)) > 1e-9:
+                    return False
+            except (TypeError, ValueError):
+                return False
+    stored_trigger = resolution.get("trigger_price")
+    if stored_trigger is not None:
         try:
-            if abs(float(stored_price) - float(order_data.get("price") or 0)) > 1e-9:
+            if abs(float(stored_trigger) - float(order_data.get("trigger_price") or 0)) > 1e-9:
                 return False
         except (TypeError, ValueError):
             return False
@@ -209,7 +232,8 @@ def _reconcile_unresolved_key(
         if not isinstance(order, dict):
             continue
         status = str(order.get("order_status", "")).strip().upper()
-        if status in ("REJECTED", "CANCELLED"):
+        # Both cancellation spellings appear across broker adapters.
+        if status in ("REJECTED", "CANCELLED", "CANCELED"):
             continue
         if _params_match_reservation(original, order):
             candidates.append(order)
@@ -355,6 +379,9 @@ def place_order_with_auth(
             "action": order_data.get("action"),
             "quantity": order_data.get("quantity"),
             "price": order_data.get("price"),
+            "product": order_data.get("product"),
+            "pricetype": order_data.get("pricetype"),
+            "trigger_price": order_data.get("trigger_price"),
         }
 
         try:

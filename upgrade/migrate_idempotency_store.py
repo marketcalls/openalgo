@@ -71,8 +71,11 @@ RECONCILIATION_COLUMNS = (
     ("symbol", "VARCHAR(64)"),
     ("exchange", "VARCHAR(32)"),
     ("action", "VARCHAR(16)"),
-    ("quantity", "INTEGER"),
+    ("quantity", "FLOAT"),
     ("price", "FLOAT"),
+    ("product", "VARCHAR(16)"),
+    ("pricetype", "VARCHAR(16)"),
+    ("trigger_price", "FLOAT"),
 )
 
 
@@ -80,8 +83,14 @@ def get_idempotency_db_engine():
     """Get the idempotency store engine (db/idempotency.db by default)."""
     db_url = os.getenv("IDEMPOTENCY_DATABASE_URL", "sqlite:///db/idempotency.db")
 
-    if db_url.startswith("sqlite:///"):
-        db_path = db_url.replace("sqlite:///", "")
+    # SQLAlchemy accepts both the bare sqlite scheme and the fully qualified
+    # dialect scheme (sqlite+pysqlite); handle both so the relative db/ path
+    # resolves against the repo root instead of the CWD the migration was
+    # invoked from.
+    sqlite_schemes = ("sqlite:///", "sqlite+pysqlite:///")
+    matched_scheme = next((s for s in sqlite_schemes if db_url.startswith(s)), None)
+    if matched_scheme:
+        db_path = db_url[len(matched_scheme):]
         if not os.path.isabs(db_path):
             # Resolve relative paths against the repo root, not the CWD the
             # migration was invoked from (upgrade/ per migrate_all.py).
