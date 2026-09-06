@@ -590,16 +590,32 @@ class TestUnresolvedReconciliation:
 
     def test_identical_raw_retry_reconciles_not_409(self, monkeypatch):
         # THE raw-request P1: a retry that repeats the original request must
-        # reconcile, not 409. Both sides normalize with the schema defaults
-        # — the pre-fix matcher compared the stored defaults against the
-        # retry's ABSENT fields and refused the identical request.
+        # reconcile, not 409. The ORIGINAL placement goes in raw too (no
+        # pricetype/product): the store records the schema defaults, and the
+        # pre-fix matcher compared those stored defaults against the retry's
+        # ABSENT fields and refused the identical request.
         broker = _FakeBrokerModule(status=500, order_id=None)
         raw_request = {
             k: v for k, v in BASE_ORDER.items() if k not in ("pricetype", "product")
         }
-        self._make_unresolved(monkeypatch, broker, **{
-            k: v for k, v in raw_request.items() if k != "client_order_id"
-        })
+        monkeypatch.setattr(
+            place_order_service,
+            "get_auth_token_broker",
+            lambda api_key: ("fake-auth-token", "fakebroker"),
+        )
+        monkeypatch.setattr(place_order_service, "get_analyze_mode", lambda: False)
+        monkeypatch.setattr(place_order_service, "import_broker_module", lambda name: broker)
+        broker.status = 500  # ambiguous adapter failure -> unresolved
+        place_order_service.place_order(
+            {**raw_request, "client_order_id": CID}, api_key=API_KEY
+        )
+        reservation = idempotency_db.get_resolution(API_KEY, CID)
+        assert reservation["status"] == "unresolved"
+        # The store applied the schema defaults to the raw original.
+        assert reservation["pricetype"] == "MARKET"
+        assert reservation["product"] == "MIS"
+        broker.status = 200
+        broker.order_id = "250106000012345"
         self._stub_orderbook(monkeypatch, [dict(self.MATCHING_ORDER)])
 
         ok, response, code = place_order_service.place_order(
