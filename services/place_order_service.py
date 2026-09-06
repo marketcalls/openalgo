@@ -367,6 +367,14 @@ def place_order_with_auth(
                 state, status = reserve_client_order_id(
                     api_key, client_order_id, tag=order_tag, order_params=order_params
                 )
+            if state not in ("reserved", "existing"):
+                # Could not obtain a reservation after retry — refuse placement
+                # rather than proceeding without duplicate protection.
+                error_response = {
+                    "status": "error",
+                    "message": "Could not reserve idempotency key; please retry",
+                }
+                return False, error_response, 503
             if state == "existing":
                 if status == "placed":
                     resolution = get_resolution(api_key, client_order_id)
@@ -545,9 +553,18 @@ def place_order_with_auth(
             if order_tag:
                 order_response_data["tag"] = order_tag
         if idempotent:
-            from database.idempotency_db import record_success
+            try:
+                from database.idempotency_db import record_success
 
-            record_success(api_key, client_order_id, str(order_id))
+                record_success(api_key, client_order_id, str(order_id))
+            except Exception:
+                logger.exception(
+                    "CRITICAL: Order %s placed at broker but idempotency DB "
+                    "write failed for client_order_id=%s — row will remain "
+                    "in_flight until TTL expiry",
+                    order_id,
+                    client_order_id,
+                )
 
         if emit_event:
             bus.publish(

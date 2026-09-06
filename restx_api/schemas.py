@@ -68,6 +68,9 @@ class OrderSchema(Schema):
         """Drop the idempotency fields when absent so the broker payload stays unchanged."""
         if data.get("client_order_id") is None:
             data.pop("client_order_id", None)
+            # tag is only persisted alongside client_order_id; drop it when
+            # the idempotency key is absent so callers don't silently lose it.
+            data.pop("tag", None)
         if data.get("tag") is None:
             data.pop("tag", None)
         return data

@@ -174,8 +174,11 @@ def get_orderbook_with_auth(
             from database.idempotency_db import get_labels_for_orderids
 
             api_key = original_data.get("apikey") if original_data else None
-            orderids = [str(o.get("orderid", "")) for o in formatted_orders]
-            labels = get_labels_for_orderids(api_key, orderids)
+            if api_key:
+                orderids = [str(o.get("orderid", "")) for o in formatted_orders]
+                labels = get_labels_for_orderids(api_key, orderids)
+            else:
+                labels = {}
             if labels:
                 for order_row in formatted_orders:
                     row_labels = labels.get(str(order_row.get("orderid", "")))

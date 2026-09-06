@@ -13,8 +13,9 @@ Covers:
 import os
 
 # Isolate the idempotency store before the module (and its engine) is imported.
-os.environ.setdefault("IDEMPOTENCY_DATABASE_URL", "sqlite:///db/idempotency-test.db")
-os.makedirs("db", exist_ok=True)
+# Unconditional assignment: an exported env var must never point clean_store
+# at the real database.
+os.environ["IDEMPOTENCY_DATABASE_URL"] = "sqlite://"
 
 import pytest  # noqa: E402
 from marshmallow import ValidationError  # noqa: E402
