@@ -24,6 +24,8 @@ def surface_data():
     try:
         data0 = request.get_json(silent=True) or {}
         body_apikey = data0.get("apikey") if isinstance(data0, dict) else None
+        if not isinstance(body_apikey, str):
+            body_apikey = None
         broker = get_broker_name(body_apikey) if body_apikey else session.get("broker")
         if not broker:
             return jsonify({"status": "error", "message": "Broker not set in session"}), 400

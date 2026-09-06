@@ -71,7 +71,7 @@ def _enforce_csrf_for_session() -> None:
     """
     from flask import current_app
 
-    if not current_app.config["WTF_CSRF_ENABLED"]:
+    if not current_app.config.get("WTF_CSRF_ENABLED", True):
         return
     csrf = current_app.extensions.get("csrf")
     if csrf is not None:
@@ -81,9 +81,10 @@ def _enforce_csrf_for_session() -> None:
 def apikey_or_session(f):
     """
     Accept either a valid Flask session OR a valid API key in the request
-    body (`{"apikey": ...}`). Resolves the authenticated username into
-    `flask.g.openalgo_user` so the wrapped route can use
-    `g.openalgo_user or session.get("user")`.
+    body (`{"apikey": ...}`), query parameter (`?apikey=...`), or header
+    (`X-API-Key: ...`). Resolves the authenticated username into
+    `flask.g.openalgo_user` and `flask.g.openalgo_apikey` so the wrapped
+    route can use `g.openalgo_user or session.get("user")`.
 
     Stream B1 (2026-08-08): the analytics blueprints (gex/gamma_density/
     ivchart/ivsmile/vol_surface/oiprofile/oitracker) were session-only, so
@@ -99,16 +100,22 @@ def apikey_or_session(f):
 
         from database.auth_db import get_username_by_apikey
 
-        # 1. apikey path: verify against the same store the restx API uses.
+        # 1. apikey path: check JSON body, then query param, then header.
+        provided = None
         if request.is_json:
             body = request.get_json(silent=True) or {}
             provided = body.get("apikey") if isinstance(body, dict) else None
-            if isinstance(provided, str) and provided:
-                username = get_username_by_apikey(provided)
-                if username is None:
-                    return jsonify({"status": "error", "message": "Invalid openalgo apikey"}), 401
-                g.openalgo_user = username
-                return f(*args, **kwargs)
+        if not isinstance(provided, str) or not provided:
+            provided = request.args.get("apikey")
+        if not isinstance(provided, str) or not provided:
+            provided = request.headers.get("X-API-Key")
+        if isinstance(provided, str) and provided:
+            username = get_username_by_apikey(provided)
+            if username is None:
+                return jsonify({"status": "error", "message": "Invalid openalgo apikey"}), 401
+            g.openalgo_user = username
+            g.openalgo_apikey = provided
+            return f(*args, **kwargs)
 
         # 2. session fallback: unchanged browser behavior — CSRF included.
         #    The blueprint-level exemption in app.py removed the automatic
@@ -118,8 +125,24 @@ def apikey_or_session(f):
             g.openalgo_user = session.get("user")
             return f(*args, **kwargs)
 
-        # 3. neither: match check_session_validity's AJAX JSON response.
-        return jsonify({"status": "error", "message": "Authentication required"}), 401
+        # 3. neither: replicate check_session_validity's cleanup and response.
+        revoke_user_tokens()
+        session.clear()
+
+        is_ajax = (
+            request.headers.get("X-Requested-With") == "XMLHttpRequest"
+            or request.headers.get("Accept", "").startswith("application/json")
+            or request.content_type == "application/json"
+            or request.is_json
+        )
+        if is_ajax:
+            return jsonify({
+                "status": "error",
+                "error": "session_expired",
+                "message": "Your session has expired. Please log in again.",
+            }), 401
+
+        return redirect(url_for("auth.login"))
 
     return decorated_function
 
