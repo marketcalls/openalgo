@@ -197,8 +197,14 @@ def _legacy_settings_db_fernet(pepper: str) -> Fernet:
 
 # ---------- Helpers ----------
 
-def _resolve_db_path() -> str:
-    """Resolve DATABASE_URL to an absolute SQLite path."""
+def _resolve_db_path(env_path: str) -> str:
+    """Resolve DATABASE_URL to an absolute SQLite path.
+
+    Relative SQLite paths resolve against the directory of the selected
+    .env (matching utils/env_check.py:_resolve_sqlite_path), so pointing
+    --env at another installation's .env targets that installation's
+    database — not this checkout's.
+    """
     db_url = os.getenv("DATABASE_URL", "sqlite:///db/openalgo.db")
     m = re.match(r"sqlite:///(.+)", db_url)
     if not m:
@@ -209,7 +215,8 @@ def _resolve_db_path() -> str:
         sys.exit(2)
     db_path = m.group(1)
     if not os.path.isabs(db_path):
-        db_path = os.path.join(PROJECT_ROOT, db_path)
+        env_dir = os.path.dirname(os.path.abspath(env_path))
+        db_path = os.path.join(env_dir, db_path)
     return db_path
 
 
@@ -585,7 +592,7 @@ def main():
     # authority for everything this run reads (DATABASE_URL, API_KEY_PEPPER,
     # FERNET_SALT, SMTP_KEY_SALT, TELEGRAM_KEY_SALT).
     load_dotenv(env_path, override=True)
-    db_path = args.db or _resolve_db_path()
+    db_path = args.db or _resolve_db_path(env_path)
 
     if args.yes and not args.dry_run and not args.app_stopped:
         sys.stderr.write(
