@@ -89,8 +89,7 @@ def test_dockerignore_patterns_keep_usable_templates():
     patterns = _load_patterns()
     for path in MUST_KEEP:
         assert not _is_excluded(patterns, path), (
-            f"{path} is excluded from the Docker build context — templates "
-            f"must remain usable"
+            f"{path} is excluded from the Docker build context — templates must remain usable"
         )
 
 
@@ -116,17 +115,29 @@ def _docker_daemon_available() -> bool:
         return False
 
 
-@pytest.mark.skipif(
-    not _docker_daemon_available(),
-    reason="docker daemon not reachable",
-)
-def test_docker_build_context_excludes_secret_inputs():
+@pytest.fixture(scope="module")
+def docker_daemon():
+    """Skip-at-setup daemon probe.
+
+    Deliberately NOT a skipif marker: marker arguments evaluate at collection
+    time, which would spawn `docker info` (blocking up to its timeout on a
+    hung socket) for every pytest run that merely collects this file. A
+    module-scoped fixture runs the probe once, at this test's setup, and only
+    when the test is actually selected to run.
+    """
+    if not _docker_daemon_available():
+        pytest.skip("docker daemon not reachable")
+    return True
+
+
+def test_docker_build_context_excludes_secret_inputs(docker_daemon):
     """Synthetic-marker check against the real Docker context.
 
     Plants marker files matching every secret input pattern inside a fake
     overlay, builds a one-step image that copies the context, and fails the
     build if any marker survived .dockerignore (or if the template vanished).
     """
+    assert docker_daemon, "fixture skips when no daemon is reachable"
     marker_dir = REPO_ROOT / "deploy" / "k8s" / "overlays" / "_dockerignore_marker"
     markers = ["secret.env", "secret.yaml", "marker.secret.env"]
     dockerfile = (
@@ -134,7 +145,7 @@ def test_docker_build_context_excludes_secret_inputs():
         "COPY . /ctx\n"
         "RUN for f in "
         + " ".join(f"ctx/deploy/k8s/overlays/_dockerignore_marker/{m}" for m in markers)
-        + "; do [ ! -e \"$f\" ] || { echo \"LEAKED: $f\"; exit 1; }; done "
+        + '; do [ ! -e "$f" ] || { echo "LEAKED: $f"; exit 1; }; done '
         "&& [ -e ctx/deploy/k8s/overlays/_template/secret.env.example ] "
         "|| { echo 'MISSING: secret.env.example template'; exit 1; }\n"
     )
@@ -151,7 +162,9 @@ def test_docker_build_context_excludes_secret_inputs():
             text=True,
             timeout=900,
         )
-        leaked = [line for line in result.stdout.splitlines() if "LEAKED" in line or "MISSING" in line]
+        leaked = [
+            line for line in result.stdout.splitlines() if "LEAKED" in line or "MISSING" in line
+        ]
         assert result.returncode == 0, (
             "secret marker(s) entered the Docker build context:\n"
             + "\n".join(leaked or result.stdout[-2000:] + result.stderr[-2000:])
