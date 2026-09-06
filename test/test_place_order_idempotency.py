@@ -11,11 +11,15 @@ Covers:
 """
 
 import os
+import tempfile
 
-# Isolate the idempotency store before the module (and its engine) is imported.
-# Unconditional assignment: an exported env var must never point clean_store
-# at the real database.
-os.environ["IDEMPOTENCY_DATABASE_URL"] = "sqlite://"
+# Isolate the idempotency store before the module (and its engine) is
+# imported. Unconditional assignment: an exported IDEMPOTENCY_DATABASE_URL
+# must never point clean_store at a real database. File-backed, not in
+# memory: the store engine uses NullPool, so sqlite:// would hand every
+# operation a fresh, empty database.
+_TMP_STORE_DIR = tempfile.mkdtemp(prefix="idempotency-test-")
+os.environ["IDEMPOTENCY_DATABASE_URL"] = f"sqlite:///{_TMP_STORE_DIR}/idempotency-test.db"
 
 import pytest  # noqa: E402
 from marshmallow import ValidationError  # noqa: E402

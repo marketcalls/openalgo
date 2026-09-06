@@ -86,8 +86,11 @@ class ClientOrderId(IdempotencyBase):
     action = Column(String(16), nullable=True)
     quantity = Column(Integer, nullable=True)
     price = Column(Float, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # naive local now(): the project-wide convention (see auth_db et al.);
+    # utcnow here would silently skew TTL pruning against rows written by
+    # earlier versions.
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
 
     __table_args__ = (
         # The idempotency key is (user, client id) — one resolution per pair.
@@ -162,7 +165,7 @@ def _add_missing_columns() -> None:
 
 def _prune_expired(session) -> None:
     """Delete rows older than the TTL. Called opportunistically on writes."""
-    cutoff = datetime.utcnow() - timedelta(hours=IDEMPOTENCY_TTL_HOURS)
+    cutoff = datetime.now() - timedelta(hours=IDEMPOTENCY_TTL_HOURS)
     session.query(ClientOrderId).filter(ClientOrderId.created_at < cutoff).delete()
     session.commit()
 
