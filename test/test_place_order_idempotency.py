@@ -396,3 +396,34 @@ class TestPlaceOrderIdempotency:
         assert code == 200
         assert set(response) == {"status", "orderid"}
         assert "client_order_id" not in response
+
+
+class TestSessionHygiene:
+    """The store must not hold NullPool connections between operations.
+
+    Registered in utils/db_sessions.SCOPED_SESSION_MODULES so request
+    teardown releases it, and read helpers end their own transactions so
+    background callers (strategy dispatch) never pin a connection.
+    """
+
+    def test_session_registered_in_central_cleanup_registry(self):
+        from utils.db_sessions import SCOPED_SESSION_MODULES, remove_all_scoped_sessions
+
+        assert ("database.idempotency_db", "idempotency_session") in SCOPED_SESSION_MODULES
+        # Must not raise with the idempotency module loaded.
+        remove_all_scoped_sessions()
+
+    def test_reads_do_not_hold_transaction_open(self):
+        idempotency_db.init_idempotency_db()
+        idempotency_db.get_resolution(API_KEY, "unknown-id")
+        assert not idempotency_db.idempotency_session().in_transaction()
+
+    def test_label_reads_do_not_hold_transaction_open(self):
+        idempotency_db.init_idempotency_db()
+        idempotency_db.get_labels_for_orderids(API_KEY, ["123"])
+        assert not idempotency_db.idempotency_session().in_transaction()
+
+    def test_engine_uses_project_pooling_policy(self):
+        from sqlalchemy.pool import NullPool
+
+        assert isinstance(idempotency_db.idempotency_engine.pool, NullPool)

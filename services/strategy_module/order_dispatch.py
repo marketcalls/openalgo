@@ -369,6 +369,15 @@ def _dispatch_live(api_key: str, order: dict[str, Any]) -> DispatchResult:
     except Exception:
         logger.exception("Live order placement raised for %s", order.get("symbol"))
         return DispatchResult(ok=False, error="Live order placement failed")
+    finally:
+        # Strategy dispatch runs on the tick-feed green thread, outside any
+        # Flask request context — no teardown_appcontext ever fires here, so
+        # the scoped sessions opened for the placement (including the
+        # idempotency store) are released explicitly per the contract in
+        # utils/db_sessions.py.
+        from utils.db_sessions import remove_all_scoped_sessions
+
+        remove_all_scoped_sessions()
 
     return _normalise(ok, response)
 

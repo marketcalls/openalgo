@@ -34,27 +34,22 @@ import os
 import threading
 from datetime import datetime, timedelta
 
-from sqlalchemy import Column, DateTime, Index, Integer, String, UniqueConstraint, create_engine
+from sqlalchemy import Column, DateTime, Index, Integer, String, UniqueConstraint
 from sqlalchemy import text as sa_text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.pool import NullPool
 
+from database.engine_factory import create_db_engine
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 IDEMPOTENCY_DATABASE_URL = os.getenv("IDEMPOTENCY_DATABASE_URL", "sqlite:///db/idempotency.db")
 
-if IDEMPOTENCY_DATABASE_URL and "sqlite" in IDEMPOTENCY_DATABASE_URL:
-    # SQLite: NullPool to prevent connection pool exhaustion (project-wide policy)
-    idempotency_engine = create_engine(
-        IDEMPOTENCY_DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
-    )
-else:
-    # For other databases like PostgreSQL, use connection pooling
-    idempotency_engine = create_engine(IDEMPOTENCY_DATABASE_URL, pool_size=10, max_overflow=20)
+# Project-wide pooling policy (database/engine_factory.py): SQLite engines
+# use NullPool so no descriptor is held between operations.
+idempotency_engine = create_db_engine(IDEMPOTENCY_DATABASE_URL)
 
 IDEMPOTENCY_TTL_HOURS = int(os.getenv("ORDER_IDEMPOTENCY_TTL_HOURS", "24"))
 
@@ -175,6 +170,10 @@ def reserve_client_order_id(
                 .filter_by(api_key_hash=key_hash, client_order_id=client_order_id)
                 .one_or_none()
             )
+            # End the read transaction: with NullPool the checked-out
+            # connection is held until the transaction closes, and the
+            # caller may not touch this thread's session again for a while.
+            idempotency_session.commit()
             if existing is None:
                 # Row vanished between the conflict and the re-read (TTL prune).
                 # Nothing is in flight, so the caller may retry the reserve.
@@ -236,6 +235,9 @@ def get_resolution(api_key: str, client_order_id: str) -> dict | None:
         .filter_by(api_key_hash=key_hash, client_order_id=client_order_id)
         .one_or_none()
     )
+    # End the read transaction so the NullPool connection is not held until
+    # this thread's next DB use (see utils/db_sessions.py).
+    idempotency_session.commit()
     if row is None:
         return None
     return {"orderid": row.orderid, "status": row.status, "tag": row.tag}
@@ -259,4 +261,7 @@ def get_labels_for_orderids(api_key: str, orderids: list[str]) -> dict[str, dict
         )
         .all()
     )
+    # End the read transaction so the NullPool connection is not held until
+    # this thread's next DB use (see utils/db_sessions.py).
+    idempotency_session.commit()
     return {row.orderid: {"client_order_id": row.client_order_id, "tag": row.tag} for row in rows}
