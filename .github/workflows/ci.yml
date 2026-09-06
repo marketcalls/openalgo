@@ -64,6 +64,7 @@ jobs:
             test/test_precompress_assets.py \
             test/test_broker_credential_logging.py \
             test/test_option_symbol_service_validation.py \
+            test/test_fyers_hsm_multiplier_sentinel.py \
             -v --timeout=60
 
   # Frontend linting

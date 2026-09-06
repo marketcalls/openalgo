@@ -57,6 +57,16 @@ class FyersDataMapper:
             multiplier = fyers_data.get("multiplier", 100)  # Default 100
             precision = fyers_data.get("precision", 2)  # Default 2
 
+            # The HSM wire sends multiplier=0 for instruments with no
+            # lot-multiplier scaling (currency futures among them). 0 is a
+            # sentinel for "no scaling", never a divisor: skipping the
+            # conversion leaked raw paisa prices (caught live 2026-08:
+            # USDINR tick 9574.25 vs REST ~96.1; the REST-quote path masks
+            # it because REST returns rupees). Normalize to 1 so the
+            # segment divisor below still applies.
+            if multiplier <= 0:
+                multiplier = 1
+
             # Apply segment-specific conversion
             segment_divisor = 1
             if exchange in ["BSE", "MCX", "NSE", "NFO", "CDS", "BCD"]:
@@ -68,8 +78,7 @@ class FyersDataMapper:
                 segment_divisor = 100
 
             # Convert to actual price
-            if multiplier > 0:
-                ltp = ltp / multiplier / segment_divisor
+            ltp = ltp / multiplier / segment_divisor
 
             # Round to precision
             ltp = round(ltp, precision)
@@ -121,6 +130,12 @@ class FyersDataMapper:
             multiplier = fyers_data.get("multiplier", 100)
             precision = fyers_data.get("precision", 2)
 
+            # Sentinel normalization as in map_to_openalgo_ltp: 0 (or any
+            # non-positive value) means "no scaling" — without this the
+            # quote path zeroed every price field for currency instruments.
+            if multiplier <= 0:
+                multiplier = 1
+
             # Check if this is an index based on symbol or type
             is_index = (
                 "-INDEX" in symbol
@@ -137,7 +152,7 @@ class FyersDataMapper:
                 segment_divisor = 100
 
             def convert_price(value):
-                if not value or multiplier <= 0:
+                if not value:
                     return 0.0
                 # Apply multiplier and segment conversion
                 return round(value / multiplier / segment_divisor, precision)
@@ -209,6 +224,12 @@ class FyersDataMapper:
             multiplier = fyers_data.get("multiplier", 100)
             precision = fyers_data.get("precision", 2)
 
+            # Sentinel normalization as in map_to_openalgo_ltp: 0 (or any
+            # non-positive value) means "no scaling" — without this the
+            # depth path zeroed every level for currency instruments.
+            if multiplier <= 0:
+                multiplier = 1
+
             # Apply segment-specific conversion based on exchange
             segment_divisor = 1
             if exchange in ("BSE", "MCX", "NSE", "NFO", "CDS", "BCD"):
@@ -218,7 +239,7 @@ class FyersDataMapper:
                 segment_divisor = 100
 
             def convert_price(value):
-                if value and multiplier > 0:
+                if value:
                     # First apply the multiplier conversion, then segment-specific conversion
                     price = value / multiplier / segment_divisor
                     return round(price, precision)
