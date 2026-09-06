@@ -94,7 +94,32 @@ def test_dockerignore_patterns_keep_usable_templates():
         )
 
 
-@pytest.mark.skipif(shutil.which("docker") is None, reason="docker daemon not available")
+def _docker_daemon_available() -> bool:
+    """True only when the CLI exists AND a daemon answers (`docker info`).
+
+    Binary presence alone is not enough: runner images that ship the docker
+    CLI without a daemon would otherwise false-fail the marker check with
+    "Cannot connect to the Docker daemon".
+    """
+    if shutil.which("docker") is None:
+        return False
+    try:
+        return (
+            subprocess.run(
+                ["docker", "info"],
+                capture_output=True,
+                timeout=30,
+            ).returncode
+            == 0
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+@pytest.mark.skipif(
+    not _docker_daemon_available(),
+    reason="docker daemon not reachable",
+)
 def test_docker_build_context_excludes_secret_inputs():
     """Synthetic-marker check against the real Docker context.
 
