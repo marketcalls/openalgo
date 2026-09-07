@@ -8,7 +8,7 @@ from .base_adapter import (
     MAX_WEBSOCKET_CONNECTIONS,
     BaseBrokerWebSocketAdapter,
 )
-from .connection_manager import ConnectionPool
+from .connection_manager import ConnectionPool, adapter_is_connected
 
 logger = get_logger(__name__)
 
@@ -223,7 +223,7 @@ class _PooledAdapterWrapper:
         # so also inspect the underlying adapters before reusing a cached pool
         # or reporting health.
         return bool(self._pool.adapters) and all(
-            bool(getattr(adapter, "connected", False))
+            adapter_is_connected(adapter)
             for adapter in self._pool.adapters
         )
 

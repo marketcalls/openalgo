@@ -39,6 +39,16 @@ def get_shared_publisher_for_pooled_creation():
     return getattr(_pooled_creation_context, "shared_publisher", None)
 
 
+def adapter_is_connected(adapter: Any) -> bool:
+    """Return an adapter's actual connection state when it exposes one."""
+    readiness = getattr(adapter, "is_connected", None)
+    if callable(readiness):
+        return bool(readiness())
+    if readiness is not None:
+        return bool(readiness)
+    return bool(getattr(adapter, "connected", False))
+
+
 # Default configuration - can be overridden via environment variables
 DEFAULT_MAX_SYMBOLS_PER_WEBSOCKET = 1000
 DEFAULT_MAX_WEBSOCKET_CONNECTIONS = 3
@@ -1066,7 +1076,7 @@ class ConnectionPool:
                         "index": idx + 1,
                         "symbols": count,
                         "capacity_percent": (count / self.max_symbols * 100),
-                        "connected": bool(getattr(self.adapters[idx], "connected", False)),
+                        "connected": adapter_is_connected(self.adapters[idx]),
                     }
                     for idx, count in enumerate(self.adapter_symbol_counts)
                 ],
