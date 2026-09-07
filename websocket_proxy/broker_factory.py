@@ -222,7 +222,7 @@ class _PooledAdapterWrapper:
         # marks itself connected when it starts that work (ref ConnectionPool.connect()),
         # so also inspect the underlying adapters before reusing a cached pool
         # or reporting health.
-        return bool(self._pool.adapters) and all(
+        return bool(self._pool.adapters) and any(
             adapter_is_connected(adapter)
             for adapter in self._pool.adapters
         )
