@@ -46,7 +46,9 @@ describe('parseCustomLegs', () => {
 
   it('derives the expiry mode from whichever expiry field is present', () => {
     expect(parseCustomLegs([{ offset: 'ATM' }])[0].expiryMode).toBe('INHERIT')
-    expect(parseCustomLegs([{ offset: 'ATM', expiryType: 'next_month' }])[0].expiryMode).toBe('TYPE')
+    expect(parseCustomLegs([{ offset: 'ATM', expiryType: 'next_month' }])[0].expiryMode).toBe(
+      'TYPE'
+    )
     expect(parseCustomLegs([{ offset: 'ATM', expiry: '28oct25' }])[0].expiryMode).toBe('DATE')
   })
 
@@ -146,10 +148,7 @@ describe('seedLegsFromStrategy', () => {
   })
 
   it('uses the configured strangle width', () => {
-    expect(seedLegsFromStrategy('strangle', options).map((l) => l.offset)).toEqual([
-      'OTM3',
-      'OTM3',
-    ])
+    expect(seedLegsFromStrategy('strangle', options).map((l) => l.offset)).toEqual(['OTM3', 'OTM3'])
   })
 
   it('falls back to OTM2 when no width is set', () => {
@@ -170,16 +169,18 @@ describe('seedLegsFromStrategy', () => {
   })
 
   it('expands both vertical spreads', () => {
-    expect(seedLegsFromStrategy('bull_call_spread', options).map((l) => [l.offset, l.action]))
-      .toEqual([
-        ['ATM', 'BUY'],
-        ['OTM2', 'SELL'],
-      ])
-    expect(seedLegsFromStrategy('bear_put_spread', options).map((l) => [l.offset, l.action]))
-      .toEqual([
-        ['ATM', 'BUY'],
-        ['OTM2', 'SELL'],
-      ])
+    expect(
+      seedLegsFromStrategy('bull_call_spread', options).map((l) => [l.offset, l.action])
+    ).toEqual([
+      ['ATM', 'BUY'],
+      ['OTM2', 'SELL'],
+    ])
+    expect(
+      seedLegsFromStrategy('bear_put_spread', options).map((l) => [l.offset, l.action])
+    ).toEqual([
+      ['ATM', 'BUY'],
+      ['OTM2', 'SELL'],
+    ])
   })
 
   it('seeds legs that inherit the node expiry, so a template is unchanged until edited', () => {
@@ -272,8 +273,9 @@ describe('validateCustomLegs', () => {
 
 describe('describeLeg', () => {
   it('summarises an offset leg', () => {
-    expect(describeLeg(leg({ action: 'SELL', quantity: '2', offset: 'OTM2', optionType: 'PE' })))
-      .toBe('SELL 2x OTM2 PE')
+    expect(
+      describeLeg(leg({ action: 'SELL', quantity: '2', offset: 'OTM2', optionType: 'PE' }))
+    ).toBe('SELL 2x OTM2 PE')
   })
 
   it('shows the strike and expiry a leg overrides', () => {

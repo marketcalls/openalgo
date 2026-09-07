@@ -24,8 +24,14 @@ interface Props {
 }
 
 const SWATCHES = [
-  '#4f8cff', '#26a69a', '#ef5350', '#f5a623', '#ab47bc',
-  '#26c6da', '#9aa0b4', '#ffffff',
+  '#4f8cff',
+  '#26a69a',
+  '#ef5350',
+  '#f5a623',
+  '#ab47bc',
+  '#26c6da',
+  '#9aa0b4',
+  '#ffffff',
 ]
 const WIDTHS = [1, 1.5, 2, 3, 4]
 const DASHES: { value: 'solid' | 'dashed' | 'dotted'; label: string }[] = [
@@ -167,8 +173,22 @@ export function DrawingStyleBar({ sel, onStyle, onDelete, onEditText }: Props) {
       {sel.hasText && (
         <>
           <div className="mx-0.5 h-5 w-px bg-border" />
-          <button type="button" title="Edit text" aria-label="Edit text" onClick={onEditText} className={btn}>
-            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" aria-hidden="true">
+          <button
+            type="button"
+            title="Edit text"
+            aria-label="Edit text"
+            onClick={onEditText}
+            className={btn}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.7}
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
               <path d="M5 5.5h14M12 5.5V19" />
             </svg>
           </button>
@@ -184,7 +204,16 @@ export function DrawingStyleBar({ sel, onStyle, onDelete, onEditText }: Props) {
         onClick={() => onStyle({ locked: !sel.locked })}
         className={cn(btn, sel.locked && 'text-primary')}
       >
-        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <svg
+          viewBox="0 0 24 24"
+          className="h-4 w-4"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.7}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
           <rect x="4.5" y="10.5" width="15" height="9.5" rx="2" />
           {sel.locked ? (
             <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
@@ -194,8 +223,23 @@ export function DrawingStyleBar({ sel, onStyle, onDelete, onEditText }: Props) {
         </svg>
       </button>
 
-      <button type="button" title="Delete" aria-label="Delete drawing" onClick={onDelete} className={btn}>
-        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <button
+        type="button"
+        title="Delete"
+        aria-label="Delete drawing"
+        onClick={onDelete}
+        className={btn}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          className="h-4 w-4"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.7}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
           <path d="M3.5 6.5h17M9.5 6.5v-3h5v3M6 6.5l1 14h10l1-14" />
         </svg>
       </button>

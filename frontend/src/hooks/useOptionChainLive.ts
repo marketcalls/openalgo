@@ -134,8 +134,7 @@ export function mergeOptionChainMarketData(
       return {
         ...contract,
         ltp: roundToTickSize(tick.ltp, contract.tick_size) ?? contract.ltp,
-        bid:
-          roundToTickSize(depthBuy?.price ?? tick.bid_price, contract.tick_size) ?? contract.bid,
+        bid: roundToTickSize(depthBuy?.price ?? tick.bid_price, contract.tick_size) ?? contract.bid,
         ask:
           roundToTickSize(depthSell?.price ?? tick.ask_price, contract.tick_size) ?? contract.ask,
         bid_qty: depthBuy?.quantity ?? tick.bid_size ?? contract.bid_qty ?? 0,
@@ -152,13 +151,7 @@ export function mergeOptionChainMarketData(
 
   const underlyingTick = marketData.get(underlyingKey)
   const underlyingLtp = underlyingTick?.data?.ltp ?? fallbackUnderlyingLtp
-  const repriced = withGreeks(
-    mergedChain,
-    polledData,
-    underlyingLtp,
-    clockOffsetMs,
-    interestRate
-  )
+  const repriced = withGreeks(mergedChain, polledData, underlyingLtp, clockOffsetMs, interestRate)
 
   return {
     ...polledData,
@@ -182,7 +175,8 @@ export function currentWebSocketMarketData(
     Array.from(marketData).filter(
       ([key, symbolData]) =>
         (relevantKeys === undefined || relevantKeys.has(key.toUpperCase())) &&
-        symbolData.updateSource === 'websocket' && symbolData.connectionEpoch === connectionEpoch
+        symbolData.updateSource === 'websocket' &&
+        symbolData.connectionEpoch === connectionEpoch
     )
   )
 }
@@ -365,12 +359,7 @@ export function useOptionChainLive(
         interestRate
       )
     )
-  }, [
-    polledData,
-    currentWsData,
-    optionExchange,
-    interestRate,
-  ])
+  }, [polledData, currentWsData, optionExchange, interestRate])
 
   // Determine streaming status
   const isStreaming = enabled && isWsConnected && isWsAuthenticated && wsSymbols.length > 0

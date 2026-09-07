@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { render, screen, userEvent, waitFor } from '@/test/test-utils'
-import { useBrokerStore } from '@/stores/brokerStore'
 import type { SearchRow } from '@/lib/trading/terminal'
+import { useBrokerStore } from '@/stores/brokerStore'
+import { render, screen, userEvent, waitFor } from '@/test/test-utils'
 import { SymbolSearchDialog } from './SymbolSearchDialog'
 
 const ROWS: SearchRow[] = [
@@ -12,12 +12,7 @@ const ROWS: SearchRow[] = [
 
 function renderDialog() {
   return render(
-    <SymbolSearchDialog
-      open
-      onOpenChange={() => {}}
-      search={async () => ROWS}
-      onPick={() => {}}
-    />
+    <SymbolSearchDialog open onOpenChange={() => {}} search={async () => ROWS} onPick={() => {}} />
   )
 }
 

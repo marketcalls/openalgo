@@ -19,12 +19,20 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_NODE_DATA,
   DERIVATIVE_EXCHANGES,
+  defaultProductForExchange,
   EXCHANGES,
   OPTION_NODE_PRODUCT,
-  defaultProductForExchange,
 } from './constants'
 
-const CASH_AND_INDEX = ['NSE', 'BSE', 'NSE_INDEX', 'BSE_INDEX', 'MCX_INDEX', 'GLOBAL_INDEX', 'CRYPTO']
+const CASH_AND_INDEX = [
+  'NSE',
+  'BSE',
+  'NSE_INDEX',
+  'BSE_INDEX',
+  'MCX_INDEX',
+  'GLOBAL_INDEX',
+  'CRYPTO',
+]
 
 describe('the rule', () => {
   it.each([...DERIVATIVE_EXCHANGES])('carries a position on %s', (exchange) => {

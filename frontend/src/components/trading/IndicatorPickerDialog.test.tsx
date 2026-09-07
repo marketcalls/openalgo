@@ -34,8 +34,11 @@ function renderPicker(over: Partial<Parameters<typeof IndicatorPickerDialog>[0]>
 }
 
 /** The scrollable list, so a rail button named 'Trend' is not mistaken for a row. */
-const list = () => screen.getByLabelText('Search indicators').closest('div')?.parentElement
-  ?.parentElement?.querySelector('.min-w-0') as HTMLElement
+const list = () =>
+  screen
+    .getByLabelText('Search indicators')
+    .closest('div')
+    ?.parentElement?.parentElement?.querySelector('.min-w-0') as HTMLElement
 
 beforeEach(() => localStorage.clear())
 
@@ -88,7 +91,9 @@ describe('IndicatorPickerDialog', () => {
     const props = renderPicker()
     await user.click(within(list()).getByTitle('Add MACD'))
     expect(props.onAdd).toHaveBeenCalledWith('macd')
-    expect(JSON.parse(localStorage.getItem('oa-trading-recent-indicators') ?? '[]')).toEqual(['macd'])
+    expect(JSON.parse(localStorage.getItem('oa-trading-recent-indicators') ?? '[]')).toEqual([
+      'macd',
+    ])
     await user.click(screen.getByRole('button', { name: 'Recent, 1 indicators' }))
     expect(within(list()).getByTitle('Add MACD')).toBeInTheDocument()
   })

@@ -287,9 +287,10 @@ export default function StrategyBuilder() {
   const requiredSupplementalChainKeys = useMemo(() => {
     const derivativeExchange = optionExchangeFor(selectedExchange)
     return new Set(
-      supplementalExpiryKey.split('|').filter(Boolean).map((expiry) =>
-        chainIdentity(derivativeExchange, selectedUnderlying, expiry)
-      )
+      supplementalExpiryKey
+        .split('|')
+        .filter(Boolean)
+        .map((expiry) => chainIdentity(derivativeExchange, selectedUnderlying, expiry))
     )
   }, [selectedExchange, selectedUnderlying, supplementalExpiryKey])
 
@@ -361,13 +362,7 @@ export default function StrategyBuilder() {
         })
       )
     },
-    [
-      apiKey,
-      rememberSupplementalChain,
-      selectedExchange,
-      selectedUnderlying,
-      supplementalExpiryKey,
-    ]
+    [apiKey, rememberSupplementalChain, selectedExchange, selectedUnderlying, supplementalExpiryKey]
   )
 
   useEffect(() => {
@@ -375,9 +370,7 @@ export default function StrategyBuilder() {
     const requiredKeys = new Set(requiredSupplementalChainKeys)
     supplementalChainKeysRef.current = requiredKeys
     setSupplementalChains((previous) => {
-      const retained = new Map(
-        Array.from(previous).filter(([key]) => requiredKeys.has(key))
-      )
+      const retained = new Map(Array.from(previous).filter(([key]) => requiredKeys.has(key)))
       return retained.size === previous.size ? previous : retained
     })
     for (const key of supplementalClockOffsetsRef.current.keys()) {
@@ -397,10 +390,7 @@ export default function StrategyBuilder() {
       window.clearInterval(interval)
       document.removeEventListener('visibilitychange', handleVisibility)
     }
-  }, [
-    refreshSupplementalChains,
-    requiredSupplementalChainKeys,
-  ])
+  }, [refreshSupplementalChains, requiredSupplementalChainKeys])
 
   const supplementalWsSymbols = useMemo(() => {
     const symbols = new Map<string, { symbol: string; exchange: string }>()
@@ -469,11 +459,7 @@ export default function StrategyBuilder() {
         isSupplementalWsAuthenticated,
         supplementalWsConnectionEpoch
       ),
-    [
-      supplementalMarketData,
-      isSupplementalWsAuthenticated,
-      supplementalWsConnectionEpoch,
-    ]
+    [supplementalMarketData, isSupplementalWsAuthenticated, supplementalWsConnectionEpoch]
   )
 
   const liveSupplementalChains = useMemo(() => {
@@ -928,10 +914,7 @@ export default function StrategyBuilder() {
     const generation = rehydrationGenerationRef.current
     const candidates = legs.filter((leg) => {
       if (!leg.active || isLegClosed(leg) || leg.contractValid) return false
-      if (
-        leg.segment === 'FUTURE' &&
-        !futureExpiries.includes(normalizeExpiryCode(leg.expiry))
-      ) {
+      if (leg.segment === 'FUTURE' && !futureExpiries.includes(normalizeExpiryCode(leg.expiry))) {
         return false
       }
       const selectionKey = `${leg.id}|${leg.segment}|${leg.expiry}|${leg.strike ?? ''}|${leg.optionType ?? ''}`
@@ -1156,17 +1139,15 @@ export default function StrategyBuilder() {
   const marginRequestKey = useMemo(() => {
     const exchange = optionExchangeFor(selectedExchange)
     return JSON.stringify(
-      legs
-        .filter(isLegExecutable)
-        .map((leg) => ({
-          exchange: leg.exchange ?? exchange,
-          symbol: leg.symbol,
-          action: leg.side,
-          quantity: String(leg.lots * leg.lotSize),
-          product: 'NRML',
-          pricetype: leg.price > 0 ? 'LIMIT' : 'MARKET',
-          price: leg.price > 0 ? String(leg.price) : '0',
-        }))
+      legs.filter(isLegExecutable).map((leg) => ({
+        exchange: leg.exchange ?? exchange,
+        symbol: leg.symbol,
+        action: leg.side,
+        quantity: String(leg.lots * leg.lotSize),
+        product: 'NRML',
+        pricetype: leg.price > 0 ? 'LIMIT' : 'MARKET',
+        price: leg.price > 0 ? String(leg.price) : '0',
+      }))
     )
   }, [legs, selectedExchange])
 
@@ -1881,41 +1862,41 @@ export default function StrategyBuilder() {
                   className="min-w-0 max-w-full flex-1 overflow-x-auto pb-1"
                 >
                   <TabsList className="inline-flex h-10 w-max min-w-max gap-1 rounded-xl border bg-card p-1 shadow-sm">
-                  <TabsTrigger
-                    value="payoff"
-                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
-                  >
-                    <LineChart className="mr-1.5 h-3.5 w-3.5" />
-                    Payoff
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="greeks"
-                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
-                  >
-                    <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-                    Greeks
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="pnl"
-                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
-                  >
-                    <TrendingUp className="mr-1.5 h-3.5 w-3.5" />
-                    P&amp;L
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="strategychart"
-                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
-                  >
-                    <Activity className="mr-1.5 h-3.5 w-3.5" />
-                    Strategy Chart
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="multistrikeoi"
-                    className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
-                  >
-                    <Layers className="mr-1.5 h-3.5 w-3.5" />
-                    Multi Strike OI
-                  </TabsTrigger>
+                    <TabsTrigger
+                      value="payoff"
+                      className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                    >
+                      <LineChart className="mr-1.5 h-3.5 w-3.5" />
+                      Payoff
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="greeks"
+                      className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                    >
+                      <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+                      Greeks
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="pnl"
+                      className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                    >
+                      <TrendingUp className="mr-1.5 h-3.5 w-3.5" />
+                      P&amp;L
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="strategychart"
+                      className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                    >
+                      <Activity className="mr-1.5 h-3.5 w-3.5" />
+                      Strategy Chart
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="multistrikeoi"
+                      className="rounded-lg px-4 text-xs font-semibold data-[state=active]:bg-gradient-to-br data-[state=active]:from-background data-[state=active]:to-muted/60 data-[state=active]:shadow-sm"
+                    >
+                      <Layers className="mr-1.5 h-3.5 w-3.5" />
+                      Multi Strike OI
+                    </TabsTrigger>
                   </TabsList>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">

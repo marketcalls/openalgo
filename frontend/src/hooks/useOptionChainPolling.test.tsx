@@ -8,7 +8,10 @@ describe('useOptionChainPolling request identity', () => {
   })
 
   it('clears loading when an in-flight request is invalidated and polling is disabled', async () => {
-    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => undefined)))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise<Response>(() => undefined))
+    )
 
     const { result, rerender } = renderHook(
       ({ expiry, enabled }) =>

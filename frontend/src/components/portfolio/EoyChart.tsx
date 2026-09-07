@@ -42,8 +42,7 @@ export function EoyChart({ rows, benchmarkLabel = 'Benchmark', height = 300 }: P
 
   const y = (v: number) => ((top - v) / range) * 100
   const zero = y(0)
-  const average =
-    years.reduce((sum, r) => sum + (r.portfolio ?? 0), 0) / years.length
+  const average = years.reduce((sum, r) => sum + (r.portfolio ?? 0), 0) / years.length
 
   const ticks: number[] = []
   for (let v = bottom; v <= top + 1e-9; v += step) ticks.push(Number(v.toFixed(4)))

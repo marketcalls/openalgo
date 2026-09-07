@@ -25,16 +25,15 @@ export function ChargeControls({ value, onChange, exchange, onExchange }: Props)
     onChange({ ...value, [k]: v })
 
   const row = 'grid grid-cols-[1fr_auto] items-center gap-2'
-  const num =
-    'h-7 w-20 px-2 text-right text-xs tabular-nums'
+  const num = 'h-7 w-20 px-2 text-right text-xs tabular-nums'
 
   return (
     <div className="space-y-3 rounded-lg border p-3">
       <div>
         <div className="text-sm font-semibold">Transaction costs</div>
         <p className="mt-0.5 text-[11px] leading-tight text-muted-foreground">
-          Charged on the value actually traded at each rebalance. Edit any line to
-          match your contract note.
+          Charged on the value actually traded at each rebalance. Edit any line to match your
+          contract note.
         </p>
       </div>
 
@@ -53,9 +52,7 @@ export function ChargeControls({ value, onChange, exchange, onExchange }: Props)
               }}
               className={cn(
                 'flex-1 rounded border px-2 py-1 text-xs transition-colors',
-                exchange === ex
-                  ? 'border-primary/50 bg-primary/15 text-primary'
-                  : 'hover:bg-accent'
+                exchange === ex ? 'border-primary/50 bg-primary/15 text-primary' : 'hover:bg-accent'
               )}
             >
               {ex}
@@ -117,8 +114,7 @@ export function ChargeControls({ value, onChange, exchange, onExchange }: Props)
           </>
         )}
         <p className="text-[11px] leading-tight text-muted-foreground">
-          Delivery is free at most discount brokers, set 0 for a true delivery
-          portfolio.
+          Delivery is free at most discount brokers, set 0 for a true delivery portfolio.
         </p>
       </div>
 
@@ -139,9 +135,7 @@ export function ChargeControls({ value, onChange, exchange, onExchange }: Props)
                 step={step as number}
                 className={num}
                 value={value[key as keyof ChargeState] as number}
-                onChange={(e) =>
-                  set(key as keyof ChargeState, Number(e.target.value) as never)
-                }
+                onChange={(e) => set(key as keyof ChargeState, Number(e.target.value) as never)}
               />
             </div>
             <div className="text-[10px] text-muted-foreground">{note}</div>

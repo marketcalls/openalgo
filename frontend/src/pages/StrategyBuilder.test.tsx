@@ -355,20 +355,11 @@ describe('StrategyBuilder live request orchestration', () => {
 
     await waitFor(() => expect(mocks.getUnderlyings).toHaveBeenCalledWith('NCDEX'))
     await waitFor(() =>
-      expect(mocks.getExpiries).toHaveBeenCalledWith(
-        'test-api-key',
-        'GUARSEED',
-        'NCDEX',
-        'options'
-      )
+      expect(mocks.getExpiries).toHaveBeenCalledWith('test-api-key', 'GUARSEED', 'NCDEX', 'options')
     )
-    expect(screen.getByRole('combobox', { name: 'Derivative exchange' })).toHaveTextContent(
-      'NCDEX'
-    )
+    expect(screen.getByRole('combobox', { name: 'Derivative exchange' })).toHaveTextContent('NCDEX')
     await waitFor(() =>
-      expect(screen.getByRole('combobox', { name: 'Option expiry' })).toHaveTextContent(
-        '13AUG26'
-      )
+      expect(screen.getByRole('combobox', { name: 'Option expiry' })).toHaveTextContent('13AUG26')
     )
   })
 
@@ -417,14 +408,10 @@ describe('StrategyBuilder live request orchestration', () => {
     await user.click(screen.getByRole('tab', { name: 'Multi Strike OI' }))
 
     expect(
-      mocks.strategyChartProps.some(
-        (props) => !props.underlyingSymbol || !props.underlyingExchange
-      )
+      mocks.strategyChartProps.some((props) => !props.underlyingSymbol || !props.underlyingExchange)
     ).toBe(false)
     expect(
-      mocks.multiStrikeOIProps.some(
-        (props) => !props.underlyingSymbol || !props.underlyingExchange
-      )
+      mocks.multiStrikeOIProps.some((props) => !props.underlyingSymbol || !props.underlyingExchange)
     ).toBe(false)
 
     await act(async () => {
@@ -1015,307 +1002,319 @@ describe('StrategyBuilder live request orchestration', () => {
     expect(farGreekRow).toHaveTextContent('450.00')
   })
 
-  it('refreshes each calendar expiry from its own option-chain Greeks response', async () => {
-    const user = userEvent.setup()
-    const intervalSpy = vi.spyOn(window, 'setInterval')
-    let farIv = 33
-    let farDelta = 0.44
-    mocks.getOptionChain.mockImplementation(
-      async (_apiKey: string, underlying: string, _exchange: string, expiry: string) => {
-        const response = chainFixture(underlying, expiry)
-        if (expiry === '18AUG26' && response.chain[0].ce) {
-          response.chain[0].ce.symbol = 'NIFTY18AUG2624600CE'
-          response.chain[0].ce.ltp = farIv === 33 ? 225 : 245
-          response.chain[0].ce.implied_volatility = farIv
-          response.chain[0].ce.delta = farDelta
-          response.chain[0].ce.gamma = farIv === 33 ? 0.0012 : 0.0015
-          response.chain[0].ce.theta = farIv === 33 ? -8 : -9
-          response.chain[0].ce.vega = farIv === 33 ? 9 : 10
+  it(
+    'refreshes each calendar expiry from its own option-chain Greeks response',
+    async () => {
+      const user = userEvent.setup()
+      const intervalSpy = vi.spyOn(window, 'setInterval')
+      let farIv = 33
+      let farDelta = 0.44
+      mocks.getOptionChain.mockImplementation(
+        async (_apiKey: string, underlying: string, _exchange: string, expiry: string) => {
+          const response = chainFixture(underlying, expiry)
+          if (expiry === '18AUG26' && response.chain[0].ce) {
+            response.chain[0].ce.symbol = 'NIFTY18AUG2624600CE'
+            response.chain[0].ce.ltp = farIv === 33 ? 225 : 245
+            response.chain[0].ce.implied_volatility = farIv
+            response.chain[0].ce.delta = farDelta
+            response.chain[0].ce.gamma = farIv === 33 ? 0.0012 : 0.0015
+            response.chain[0].ce.theta = farIv === 33 ? -8 : -9
+            response.chain[0].ce.vega = farIv === 33 ? 9 : 10
+          }
+          return response
         }
-        return response
-      }
-    )
+      )
 
-    renderBuilder()
-    await waitForAddButton()
-    fireEvent.click(screen.getByRole('button', { name: /Neutral/ }))
-    fireEvent.click(screen.getByRole('button', { name: /Call Calendar/ }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Add Strategy' }))
+      renderBuilder()
+      await waitForAddButton()
+      fireEvent.click(screen.getByRole('button', { name: /Neutral/ }))
+      fireEvent.click(screen.getByRole('button', { name: /Call Calendar/ }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Add Strategy' }))
 
-    await waitFor(() =>
-      expect(screen.getAllByRole('button', { name: 'Remove position' })).toHaveLength(2)
-    )
-    await waitFor(() => expect(mocks.getOptionChain).toHaveBeenCalledTimes(1))
-    expect(mocks.getOptionChain).toHaveBeenLastCalledWith(
-      'test-api-key',
-      'NIFTY',
-      'NSE_INDEX',
-      '18AUG26',
-      20,
-      { withGreeks: true }
-    )
+      await waitFor(() =>
+        expect(screen.getAllByRole('button', { name: 'Remove position' })).toHaveLength(2)
+      )
+      await waitFor(() => expect(mocks.getOptionChain).toHaveBeenCalledTimes(1))
+      expect(mocks.getOptionChain).toHaveBeenLastCalledWith(
+        'test-api-key',
+        'NIFTY',
+        'NSE_INDEX',
+        '18AUG26',
+        20,
+        { withGreeks: true }
+      )
 
-    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
-    let rows = await screen.findAllByRole('row')
-    let farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
-    const nearRow = rows.find((row) => row.textContent?.includes('13AUG26 24600CE'))
-    expect(farRow).toHaveTextContent('33.00')
-    expect(nearRow).not.toHaveTextContent('33.00')
-    const initialFarGreeks = within(farRow as HTMLElement)
-      .getAllByRole('cell')
-      .slice(1)
-      .map((cell) => cell.textContent)
-    const initialNearGreeks = within(nearRow as HTMLElement)
-      .getAllByRole('cell')
-      .slice(1)
-      .map((cell) => cell.textContent)
-    expect(initialFarGreeks).not.toEqual(initialNearGreeks)
-
-    farIv = 41
-    farDelta = 0.52
-    const supplementalTimer = intervalSpy.mock.calls
-      .filter(([, delay]) => delay === 30_000)
-      .at(-1)?.[0]
-    expect(typeof supplementalTimer).toBe('function')
-    act(() => {
-      if (typeof supplementalTimer === 'function') supplementalTimer()
-    })
-
-    await waitFor(() => expect(mocks.getOptionChain).toHaveBeenCalledTimes(2))
-    rows = await screen.findAllByRole('row')
-    farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
-    expect(farRow).toHaveTextContent('41.00')
-    expect(farRow).not.toHaveTextContent('12.00')
-    const refreshedFarGreeks = within(farRow as HTMLElement)
-      .getAllByRole('cell')
-      .slice(1)
-      .map((cell) => cell.textContent)
-    expect(refreshedFarGreeks).toHaveLength(initialFarGreeks.length)
-    refreshedFarGreeks.forEach((value, index) => {
-      expect(value).not.toBe(initialFarGreeks[index])
-    })
-
-    farIv = 47
-    farDelta = 0.57
-    await user.click(screen.getByRole('button', { name: 'Refresh' }))
-    await waitFor(() => expect(mocks.getOptionChain).toHaveBeenCalledTimes(3))
-    rows = await screen.findAllByRole('row')
-    farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
-    expect(farRow).toHaveTextContent('47.00')
-
-    farIv = 53
-    farDelta = 0.61
-    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
-    act(() => document.dispatchEvent(new Event('visibilitychange')))
-    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
-    act(() => document.dispatchEvent(new Event('visibilitychange')))
-
-    await waitFor(() => expect(mocks.getOptionChain).toHaveBeenCalledTimes(4))
-    rows = await screen.findAllByRole('row')
-    farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
-    expect(farRow).toHaveTextContent('53.00')
-  }, SLOW_INTEGRATION_TEST_TIMEOUT)
-
-  it('recalculates a supplemental-expiry leg from its exact WebSocket contract and parity ticks', async () => {
-    const user = userEvent.setup()
-    const farChain = chainFixture('NIFTY', '18AUG26')
-    farChain.expiry_ts = 1_786_900_000
-    farChain.server_ts = 1_786_000_000
-    farChain.forward_price = 24_620
-    farChain.atm_strike = 24_500
-    if (farChain.chain[0].ce) {
-      farChain.chain[0].ce.symbol = 'NIFTY18AUG2624600CE'
-      farChain.chain[0].ce.ltp = 225
-      farChain.chain[0].ce.implied_volatility = 33
-      farChain.chain[0].ce.delta = 0.44
-      farChain.chain[0].ce.gamma = 0.0012
-      farChain.chain[0].ce.theta = -8
-      farChain.chain[0].ce.vega = 9
-    }
-    if (farChain.chain[0].pe) {
-      farChain.chain[0].pe.symbol = 'NIFTY18AUG2624600PE'
-      farChain.chain[0].pe.ltp = 105
-    }
-    farChain.chain.push({
-      strike: 24_500,
-      ce: option('NIFTY18AUG2624500CE', 260),
-      pe: option('NIFTY18AUG2624500PE', 140),
-    })
-    mocks.getOptionChain.mockResolvedValue(farChain)
-
-    const view = renderBuilder()
-    await waitForAddButton()
-    fireEvent.click(screen.getByRole('button', { name: /Neutral/ }))
-    fireEvent.click(screen.getByRole('button', { name: /Call Calendar/ }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Add Strategy' }))
-    await waitFor(() =>
-      expect(screen.getAllByRole('button', { name: 'Remove position' })).toHaveLength(2)
-    )
-
-    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
-    let rows = await screen.findAllByRole('row')
-    let farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
-    const initialGreeks = within(farRow as HTMLElement)
-      .getAllByRole('cell')
-      .slice(1)
-      .map((cell) => cell.textContent)
-
-    mocks.marketConnected = true
-    mocks.marketAuthenticated = true
-    mocks.marketConnectionEpoch = 1
-    mocks.marketData = new Map([
-      [
-        'NFO:NIFTY18AUG2624600CE',
-        {
-          exchange: 'NFO',
-          symbol: 'NIFTY18AUG2624600CE',
-          lastUpdate: 1_786_000_099_000,
-          updateSource: 'rest' as const,
-          data: { ltp: 999 },
-        },
-      ],
-    ])
-    view.rerender(
-      <MemoryRouter initialEntries={['/strategybuilder']}>
-        <StrategyBuilder />
-      </MemoryRouter>
-    )
-    rows = await screen.findAllByRole('row')
-    farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
-    expect(
-      within(farRow as HTMLElement)
+      await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+      let rows = await screen.findAllByRole('row')
+      let farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
+      const nearRow = rows.find((row) => row.textContent?.includes('13AUG26 24600CE'))
+      expect(farRow).toHaveTextContent('33.00')
+      expect(nearRow).not.toHaveTextContent('33.00')
+      const initialFarGreeks = within(farRow as HTMLElement)
         .getAllByRole('cell')
         .slice(1)
         .map((cell) => cell.textContent)
-    ).toEqual(initialGreeks)
+      const initialNearGreeks = within(nearRow as HTMLElement)
+        .getAllByRole('cell')
+        .slice(1)
+        .map((cell) => cell.textContent)
+      expect(initialFarGreeks).not.toEqual(initialNearGreeks)
 
-    mocks.marketData = new Map([
-      [
-        'NFO:NIFTY18AUG2624600CE',
-        {
-          exchange: 'NFO',
-          symbol: 'NIFTY18AUG2624600CE',
-          lastUpdate: 1_786_000_100_000,
-          updateSource: 'websocket' as const,
-          connectionEpoch: 1,
-          data: {
-            ltp: 250,
-            depth: {
-              buy: [{ price: 249, quantity: 75 }],
-              sell: [{ price: 251, quantity: 75 }],
-            },
-          },
-        },
-      ],
-      [
-        'NFO:NIFTY18AUG2624500CE',
-        {
-          exchange: 'NFO',
-          symbol: 'NIFTY18AUG2624500CE',
-          lastUpdate: 1_786_000_100_000,
-          updateSource: 'websocket' as const,
-          connectionEpoch: 1,
-          data: {
-            ltp: 280,
-            depth: {
-              buy: [{ price: 279, quantity: 75 }],
-              sell: [{ price: 281, quantity: 75 }],
-            },
-          },
-        },
-      ],
-      [
-        'NFO:NIFTY18AUG2624500PE',
-        {
-          exchange: 'NFO',
-          symbol: 'NIFTY18AUG2624500PE',
-          lastUpdate: 1_786_000_100_000,
-          updateSource: 'websocket' as const,
-          connectionEpoch: 1,
-          data: {
-            ltp: 130,
-            depth: {
-              buy: [{ price: 129, quantity: 75 }],
-              sell: [{ price: 131, quantity: 75 }],
-            },
-          },
-        },
-      ],
-    ])
-    view.rerender(
-      <MemoryRouter initialEntries={['/strategybuilder']}>
-        <StrategyBuilder />
-      </MemoryRouter>
-    )
+      farIv = 41
+      farDelta = 0.52
+      const supplementalTimer = intervalSpy.mock.calls
+        .filter(([, delay]) => delay === 30_000)
+        .at(-1)?.[0]
+      expect(typeof supplementalTimer).toBe('function')
+      act(() => {
+        if (typeof supplementalTimer === 'function') supplementalTimer()
+      })
 
-    await waitFor(() =>
+      await waitFor(() => expect(mocks.getOptionChain).toHaveBeenCalledTimes(2))
+      rows = await screen.findAllByRole('row')
+      farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
+      expect(farRow).toHaveTextContent('41.00')
+      expect(farRow).not.toHaveTextContent('12.00')
+      const refreshedFarGreeks = within(farRow as HTMLElement)
+        .getAllByRole('cell')
+        .slice(1)
+        .map((cell) => cell.textContent)
+      expect(refreshedFarGreeks).toHaveLength(initialFarGreeks.length)
+      refreshedFarGreeks.forEach((value, index) => {
+        expect(value).not.toBe(initialFarGreeks[index])
+      })
+
+      farIv = 47
+      farDelta = 0.57
+      await user.click(screen.getByRole('button', { name: 'Refresh' }))
+      await waitFor(() => expect(mocks.getOptionChain).toHaveBeenCalledTimes(3))
+      rows = await screen.findAllByRole('row')
+      farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
+      expect(farRow).toHaveTextContent('47.00')
+
+      farIv = 53
+      farDelta = 0.61
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+      act(() => document.dispatchEvent(new Event('visibilitychange')))
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+      act(() => document.dispatchEvent(new Event('visibilitychange')))
+
+      await waitFor(() => expect(mocks.getOptionChain).toHaveBeenCalledTimes(4))
+      rows = await screen.findAllByRole('row')
+      farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
+      expect(farRow).toHaveTextContent('53.00')
+    },
+    SLOW_INTEGRATION_TEST_TIMEOUT
+  )
+
+  it(
+    'recalculates a supplemental-expiry leg from its exact WebSocket contract and parity ticks',
+    async () => {
+      const user = userEvent.setup()
+      const farChain = chainFixture('NIFTY', '18AUG26')
+      farChain.expiry_ts = 1_786_900_000
+      farChain.server_ts = 1_786_000_000
+      farChain.forward_price = 24_620
+      farChain.atm_strike = 24_500
+      if (farChain.chain[0].ce) {
+        farChain.chain[0].ce.symbol = 'NIFTY18AUG2624600CE'
+        farChain.chain[0].ce.ltp = 225
+        farChain.chain[0].ce.implied_volatility = 33
+        farChain.chain[0].ce.delta = 0.44
+        farChain.chain[0].ce.gamma = 0.0012
+        farChain.chain[0].ce.theta = -8
+        farChain.chain[0].ce.vega = 9
+      }
+      if (farChain.chain[0].pe) {
+        farChain.chain[0].pe.symbol = 'NIFTY18AUG2624600PE'
+        farChain.chain[0].pe.ltp = 105
+      }
+      farChain.chain.push({
+        strike: 24_500,
+        ce: option('NIFTY18AUG2624500CE', 260),
+        pe: option('NIFTY18AUG2624500PE', 140),
+      })
+      mocks.getOptionChain.mockResolvedValue(farChain)
+
+      const view = renderBuilder()
+      await waitForAddButton()
+      fireEvent.click(screen.getByRole('button', { name: /Neutral/ }))
+      fireEvent.click(screen.getByRole('button', { name: /Call Calendar/ }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Add Strategy' }))
+      await waitFor(() =>
+        expect(screen.getAllByRole('button', { name: 'Remove position' })).toHaveLength(2)
+      )
+
+      await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+      let rows = await screen.findAllByRole('row')
+      let farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
+      const initialGreeks = within(farRow as HTMLElement)
+        .getAllByRole('cell')
+        .slice(1)
+        .map((cell) => cell.textContent)
+
+      mocks.marketConnected = true
+      mocks.marketAuthenticated = true
+      mocks.marketConnectionEpoch = 1
+      mocks.marketData = new Map([
+        [
+          'NFO:NIFTY18AUG2624600CE',
+          {
+            exchange: 'NFO',
+            symbol: 'NIFTY18AUG2624600CE',
+            lastUpdate: 1_786_000_099_000,
+            updateSource: 'rest' as const,
+            data: { ltp: 999 },
+          },
+        ],
+      ])
+      view.rerender(
+        <MemoryRouter initialEntries={['/strategybuilder']}>
+          <StrategyBuilder />
+        </MemoryRouter>
+      )
+      rows = await screen.findAllByRole('row')
+      farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
       expect(
-        mocks.marketSubscriptions.some(
-          (symbols) =>
-            symbols.some(
-              (item) => item.exchange === 'NFO' && item.symbol === 'NIFTY18AUG2624600CE'
-            ) &&
-            symbols.some(
-              (item) => item.exchange === 'NFO' && item.symbol === 'NIFTY18AUG2624500CE'
-            ) &&
-            symbols.some(
-              (item) => item.exchange === 'NFO' && item.symbol === 'NIFTY18AUG2624500PE'
-            )
-        )
-      ).toBe(true)
-    )
-    rows = await screen.findAllByRole('row')
-    farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
-    const liveGreeks = within(farRow as HTMLElement)
-      .getAllByRole('cell')
-      .slice(1)
-      .map((cell) => cell.textContent)
-    expect(liveGreeks).toHaveLength(initialGreeks.length)
-    liveGreeks.forEach((value, index) => {
-      expect(value).not.toBe(initialGreeks[index])
-    })
-  }, SLOW_INTEGRATION_TEST_TIMEOUT)
+        within(farRow as HTMLElement)
+          .getAllByRole('cell')
+          .slice(1)
+          .map((cell) => cell.textContent)
+      ).toEqual(initialGreeks)
 
-  it('does not show a prior contract Greek snapshot after editing a calendar leg', async () => {
-    const user = userEvent.setup()
-    const farChain = chainFixture('NIFTY', '18AUG26')
-    if (farChain.chain[0].ce) {
-      farChain.chain[0].ce.symbol = 'NIFTY18AUG2624600CE'
-      farChain.chain[0].ce.implied_volatility = 33
-      farChain.chain[0].ce.delta = 0.44
-      farChain.chain[0].ce.gamma = 0.0012
-      farChain.chain[0].ce.theta = -8
-      farChain.chain[0].ce.vega = 9
-    }
-    mocks.getOptionChain.mockResolvedValue(farChain)
+      mocks.marketData = new Map([
+        [
+          'NFO:NIFTY18AUG2624600CE',
+          {
+            exchange: 'NFO',
+            symbol: 'NIFTY18AUG2624600CE',
+            lastUpdate: 1_786_000_100_000,
+            updateSource: 'websocket' as const,
+            connectionEpoch: 1,
+            data: {
+              ltp: 250,
+              depth: {
+                buy: [{ price: 249, quantity: 75 }],
+                sell: [{ price: 251, quantity: 75 }],
+              },
+            },
+          },
+        ],
+        [
+          'NFO:NIFTY18AUG2624500CE',
+          {
+            exchange: 'NFO',
+            symbol: 'NIFTY18AUG2624500CE',
+            lastUpdate: 1_786_000_100_000,
+            updateSource: 'websocket' as const,
+            connectionEpoch: 1,
+            data: {
+              ltp: 280,
+              depth: {
+                buy: [{ price: 279, quantity: 75 }],
+                sell: [{ price: 281, quantity: 75 }],
+              },
+            },
+          },
+        ],
+        [
+          'NFO:NIFTY18AUG2624500PE',
+          {
+            exchange: 'NFO',
+            symbol: 'NIFTY18AUG2624500PE',
+            lastUpdate: 1_786_000_100_000,
+            updateSource: 'websocket' as const,
+            connectionEpoch: 1,
+            data: {
+              ltp: 130,
+              depth: {
+                buy: [{ price: 129, quantity: 75 }],
+                sell: [{ price: 131, quantity: 75 }],
+              },
+            },
+          },
+        ],
+      ])
+      view.rerender(
+        <MemoryRouter initialEntries={['/strategybuilder']}>
+          <StrategyBuilder />
+        </MemoryRouter>
+      )
 
-    renderBuilder()
-    await waitForAddButton()
-    fireEvent.click(screen.getByRole('button', { name: /Neutral/ }))
-    fireEvent.click(screen.getByRole('button', { name: /Call Calendar/ }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Add Strategy' }))
-    await waitFor(() =>
-      expect(screen.getAllByRole('button', { name: 'Edit position' })).toHaveLength(2)
-    )
+      await waitFor(() =>
+        expect(
+          mocks.marketSubscriptions.some(
+            (symbols) =>
+              symbols.some(
+                (item) => item.exchange === 'NFO' && item.symbol === 'NIFTY18AUG2624600CE'
+              ) &&
+              symbols.some(
+                (item) => item.exchange === 'NFO' && item.symbol === 'NIFTY18AUG2624500CE'
+              ) &&
+              symbols.some(
+                (item) => item.exchange === 'NFO' && item.symbol === 'NIFTY18AUG2624500PE'
+              )
+          )
+        ).toBe(true)
+      )
+      rows = await screen.findAllByRole('row')
+      farRow = rows.find((row) => row.textContent?.includes('18AUG26 24600CE'))
+      const liveGreeks = within(farRow as HTMLElement)
+        .getAllByRole('cell')
+        .slice(1)
+        .map((cell) => cell.textContent)
+      expect(liveGreeks).toHaveLength(initialGreeks.length)
+      liveGreeks.forEach((value, index) => {
+        expect(value).not.toBe(initialGreeks[index])
+      })
+    },
+    SLOW_INTEGRATION_TEST_TIMEOUT
+  )
 
-    await user.click(screen.getAllByRole('button', { name: 'Edit position' })[1])
-    const dialog = await screen.findByRole('dialog', { name: 'Edit Position' })
-    const optionType = within(dialog).getAllByRole('combobox')[2]
-    fireEvent.keyDown(optionType, { key: 'ArrowDown' })
-    fireEvent.click(await screen.findByRole('option', { name: 'PE' }))
-    await user.click(within(dialog).getByRole('button', { name: 'Modify' }))
+  it(
+    'does not show a prior contract Greek snapshot after editing a calendar leg',
+    async () => {
+      const user = userEvent.setup()
+      const farChain = chainFixture('NIFTY', '18AUG26')
+      if (farChain.chain[0].ce) {
+        farChain.chain[0].ce.symbol = 'NIFTY18AUG2624600CE'
+        farChain.chain[0].ce.implied_volatility = 33
+        farChain.chain[0].ce.delta = 0.44
+        farChain.chain[0].ce.gamma = 0.0012
+        farChain.chain[0].ce.theta = -8
+        farChain.chain[0].ce.vega = 9
+      }
+      mocks.getOptionChain.mockResolvedValue(farChain)
 
-    await user.click(screen.getByRole('tab', { name: 'Greeks' }))
-    const rows = await screen.findAllByRole('row')
-    const editedRow = rows.find((row) => row.textContent?.includes('18AUG26 24600PE'))
-    expect(editedRow).toBeDefined()
-    const greekCells = within(editedRow as HTMLElement)
-      .getAllByRole('cell')
-      .slice(1)
-    expect(greekCells[0]).toHaveTextContent('12.00')
-    for (const cell of greekCells.slice(1)) expect(cell).toHaveTextContent('-')
-    expect(editedRow).not.toHaveTextContent('0.4400')
-  }, SLOW_INTEGRATION_TEST_TIMEOUT)
+      renderBuilder()
+      await waitForAddButton()
+      fireEvent.click(screen.getByRole('button', { name: /Neutral/ }))
+      fireEvent.click(screen.getByRole('button', { name: /Call Calendar/ }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Add Strategy' }))
+      await waitFor(() =>
+        expect(screen.getAllByRole('button', { name: 'Edit position' })).toHaveLength(2)
+      )
+
+      await user.click(screen.getAllByRole('button', { name: 'Edit position' })[1])
+      const dialog = await screen.findByRole('dialog', { name: 'Edit Position' })
+      const optionType = within(dialog).getAllByRole('combobox')[2]
+      fireEvent.keyDown(optionType, { key: 'ArrowDown' })
+      fireEvent.click(await screen.findByRole('option', { name: 'PE' }))
+      await user.click(within(dialog).getByRole('button', { name: 'Modify' }))
+
+      await user.click(screen.getByRole('tab', { name: 'Greeks' }))
+      const rows = await screen.findAllByRole('row')
+      const editedRow = rows.find((row) => row.textContent?.includes('18AUG26 24600PE'))
+      expect(editedRow).toBeDefined()
+      const greekCells = within(editedRow as HTMLElement)
+        .getAllByRole('cell')
+        .slice(1)
+      expect(greekCells[0]).toHaveTextContent('12.00')
+      for (const cell of greekCells.slice(1)) expect(cell).toHaveTextContent('-')
+      expect(editedRow).not.toHaveTextContent('0.4400')
+    },
+    SLOW_INTEGRATION_TEST_TIMEOUT
+  )
 })
 
 describe('StrategyBuilder identity orchestration', () => {
@@ -1411,112 +1410,120 @@ describe('StrategyBuilder identity orchestration', () => {
     await waitForAddButton()
   })
 
-  it('keeps a controlled identity and legs on cancel, then clears legs and scenarios on acceptance', async () => {
-    renderBuilder()
-    await addOneLeg()
-    const spotShift = screen.getAllByRole('slider')[0]
-    fireEvent.change(spotShift, { target: { value: '5' } })
-    expect(spotShift).toHaveValue('5')
+  it(
+    'keeps a controlled identity and legs on cancel, then clears legs and scenarios on acceptance',
+    async () => {
+      renderBuilder()
+      await addOneLeg()
+      const spotShift = screen.getAllByRole('slider')[0]
+      fireEvent.change(spotShift, { target: { value: '5' } })
+      expect(spotShift).toHaveValue('5')
 
-    await chooseUnderlying('BANKNIFTY')
-    expect(screen.getByRole('alertdialog')).toHaveTextContent('Clear the current strategy')
-    expect(screen.getByRole('combobox', { name: 'Underlying', hidden: true })).toHaveTextContent(
-      'NIFTY'
-    )
+      await chooseUnderlying('BANKNIFTY')
+      expect(screen.getByRole('alertdialog')).toHaveTextContent('Clear the current strategy')
+      expect(screen.getByRole('combobox', { name: 'Underlying', hidden: true })).toHaveTextContent(
+        'NIFTY'
+      )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    expect(screen.getByRole('combobox', { name: 'Underlying' })).toHaveTextContent('NIFTY')
-    expect(screen.getByRole('button', { name: 'Remove position' })).toBeInTheDocument()
-    expect(screen.getAllByRole('slider')[0]).toHaveValue('5')
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      expect(screen.getByRole('combobox', { name: 'Underlying' })).toHaveTextContent('NIFTY')
+      expect(screen.getByRole('button', { name: 'Remove position' })).toBeInTheDocument()
+      expect(screen.getAllByRole('slider')[0]).toHaveValue('5')
 
-    await chooseUnderlying('BANKNIFTY')
-    fireEvent.click(screen.getByRole('button', { name: 'Clear strategy' }))
+      await chooseUnderlying('BANKNIFTY')
+      fireEvent.click(screen.getByRole('button', { name: 'Clear strategy' }))
 
-    await waitFor(() =>
-      expect(screen.getByRole('combobox', { name: 'Underlying' })).toHaveTextContent('BANKNIFTY')
-    )
-    expect(screen.queryByRole('button', { name: 'Remove position' })).not.toBeInTheDocument()
+      await waitFor(() =>
+        expect(screen.getByRole('combobox', { name: 'Underlying' })).toHaveTextContent('BANKNIFTY')
+      )
+      expect(screen.queryByRole('button', { name: 'Remove position' })).not.toBeInTheDocument()
 
-    await addOneLeg()
-    expect(screen.getAllByRole('slider')[0]).toHaveValue('0')
-    // Slow for the same reason as its neighbours: it drives the full builder
-    // through two identity changes and rebuilds the legs each time. It fits in
-    // the default 5s on a plain run and does not under `vitest --coverage`,
-    // where v8 instrumentation pushed this file to 65s in CI. The work is real,
-    // so the timeout is what is wrong, not the test.
-  }, SLOW_INTEGRATION_TEST_TIMEOUT)
+      await addOneLeg()
+      expect(screen.getAllByRole('slider')[0]).toHaveValue('0')
+      // Slow for the same reason as its neighbours: it drives the full builder
+      // through two identity changes and rebuilds the legs each time. It fits in
+      // the default 5s on a plain run and does not under `vitest --coverage`,
+      // where v8 instrumentation pushed this file to 65s in CI. The work is real,
+      // so the timeout is what is wrong, not the test.
+    },
+    SLOW_INTEGRATION_TEST_TIMEOUT
+  )
 
-  it('does not let an in-flight margin response repopulate state after an identity reset', async () => {
-    const staleMargin = deferred<{
-      status: number
-      data: { status: string; data: { total_margin_required: number } }
-    }>()
-    // The post-reset request is deferred too, so the assertion below is not
-    // racing it. Returning an immediate 20,000 here made the tile appear on its
-    // own once the margin effect's 400ms debounce fired, which is what the
-    // slower `vitest --coverage` run was losing to.
-    const freshMargin = deferred<{
-      status: number
-      data: { status: string; data: { total_margin_required: number } }
-    }>()
-    let marginRequestCount = 0
-    mocks.apiPost.mockImplementation(async (url: string) => {
-      if (url === '/margin') {
-        marginRequestCount += 1
-        if (marginRequestCount === 1) return staleMargin.promise
-        return freshMargin.promise
-      }
-      if (url === '/optiongreeks') {
-        return { status: 200, data: { status: 'success', implied_volatility: 12 } }
-      }
-      if (url === '/syntheticfuture') {
-        return { status: 200, data: { status: 'success', synthetic_future_price: 24_620 } }
-      }
-      return { status: 200, data: { status: 'success' } }
-    })
-
-    renderBuilder()
-    await addOneLeg()
-    await waitFor(
-      () => expect(mocks.apiPost.mock.calls.some(([url]) => url === '/margin')).toBe(true),
-      { timeout: 2_000 }
-    )
-
-    await chooseUnderlying('BANKNIFTY')
-    fireEvent.click(screen.getByRole('button', { name: 'Clear strategy' }))
-    await waitFor(() =>
-      expect(screen.getByRole('combobox', { name: 'Underlying' })).toHaveTextContent('BANKNIFTY')
-    )
-
-    await act(async () => {
-      staleMargin.resolve({
-        status: 200,
-        data: { status: 'success', data: { total_margin_required: 10_000 } },
+  it(
+    'does not let an in-flight margin response repopulate state after an identity reset',
+    async () => {
+      const staleMargin = deferred<{
+        status: number
+        data: { status: string; data: { total_margin_required: number } }
+      }>()
+      // The post-reset request is deferred too, so the assertion below is not
+      // racing it. Returning an immediate 20,000 here made the tile appear on its
+      // own once the margin effect's 400ms debounce fired, which is what the
+      // slower `vitest --coverage` run was losing to.
+      const freshMargin = deferred<{
+        status: number
+        data: { status: string; data: { total_margin_required: number } }
+      }>()
+      let marginRequestCount = 0
+      mocks.apiPost.mockImplementation(async (url: string) => {
+        if (url === '/margin') {
+          marginRequestCount += 1
+          if (marginRequestCount === 1) return staleMargin.promise
+          return freshMargin.promise
+        }
+        if (url === '/optiongreeks') {
+          return { status: 200, data: { status: 'success', implied_volatility: 12 } }
+        }
+        if (url === '/syntheticfuture') {
+          return { status: 200, data: { status: 'success', synthetic_future_price: 24_620 } }
+        }
+        return { status: 200, data: { status: 'success' } }
       })
-      await staleMargin.promise
-    })
 
-    await addOneLeg()
+      renderBuilder()
+      await addOneLeg()
+      await waitFor(
+        () => expect(mocks.apiPost.mock.calls.some(([url]) => url === '/margin')).toBe(true),
+        { timeout: 2_000 }
+      )
 
-    // With the post-reset request still in flight, nothing legitimate can
-    // populate this tile: its presence could only mean the stale in-flight
-    // response repopulated state after the identity reset.
-    expect(screen.queryByText('Margin Req.')).not.toBeInTheDocument()
+      await chooseUnderlying('BANKNIFTY')
+      fireEvent.click(screen.getByRole('button', { name: 'Clear strategy' }))
+      await waitFor(() =>
+        expect(screen.getByRole('combobox', { name: 'Underlying' })).toHaveTextContent('BANKNIFTY')
+      )
 
-    // Non-vacuity: the tile is absent because the stale response was discarded,
-    // not because nothing is able to render it. Let the fresh request land and
-    // the fresh figure appears - never the stale 10,000.
-    await act(async () => {
-      freshMargin.resolve({
-        status: 200,
-        data: { status: 'success', data: { total_margin_required: 20_000 } },
+      await act(async () => {
+        staleMargin.resolve({
+          status: 200,
+          data: { status: 'success', data: { total_margin_required: 10_000 } },
+        })
+        await staleMargin.promise
       })
-      await freshMargin.promise
-    })
-    const marginTile = (await screen.findByText('Margin Req.')).closest('div')
-    await waitFor(() => expect(marginTile).toHaveTextContent('₹20,000.00'))
-    expect(marginTile).not.toHaveTextContent('₹10,000.00')
-  }, SLOW_INTEGRATION_TEST_TIMEOUT)
+
+      await addOneLeg()
+
+      // With the post-reset request still in flight, nothing legitimate can
+      // populate this tile: its presence could only mean the stale in-flight
+      // response repopulated state after the identity reset.
+      expect(screen.queryByText('Margin Req.')).not.toBeInTheDocument()
+
+      // Non-vacuity: the tile is absent because the stale response was discarded,
+      // not because nothing is able to render it. Let the fresh request land and
+      // the fresh figure appears - never the stale 10,000.
+      await act(async () => {
+        freshMargin.resolve({
+          status: 200,
+          data: { status: 'success', data: { total_margin_required: 20_000 } },
+        })
+        await freshMargin.promise
+      })
+      const marginTile = (await screen.findByText('Margin Req.')).closest('div')
+      await waitFor(() => expect(marginTile).toHaveTextContent('₹20,000.00'))
+      expect(marginTile).not.toHaveTextContent('₹10,000.00')
+    },
+    SLOW_INTEGRATION_TEST_TIMEOUT
+  )
 
   it('hydrates a saved non-default identity and legs before defaulting or fetch effects run', async () => {
     const portfolio = deferred<PortfolioEntry>()

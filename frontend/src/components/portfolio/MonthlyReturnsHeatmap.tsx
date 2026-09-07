@@ -47,9 +47,7 @@ export function MonthlyReturnsHeatmap({ years, columns, values }: Props) {
 
         {years.map((y, i) => (
           <div key={y} className="contents">
-            <div className="flex items-center text-xs font-medium text-muted-foreground">
-              {y}
-            </div>
+            <div className="flex items-center text-xs font-medium text-muted-foreground">{y}</div>
             {columns.map((c, j) => {
               const v = values[i]?.[j] ?? null
               return (

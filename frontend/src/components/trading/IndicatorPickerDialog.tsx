@@ -120,15 +120,20 @@ export function IndicatorPickerDialog({
    */
   const rows = useMemo(() => {
     const alpha = (list: CatalogEntry[]) => [...list].sort((a, b) => a.name.localeCompare(b.name))
-    if (section === 'favourites') return alpha(favourites.map((id) => byId.get(id)).filter((d): d is CatalogEntry => !!d))
-    if (section === 'recent') return recent.map((id) => byId.get(id)).filter((d): d is CatalogEntry => !!d)
+    if (section === 'favourites')
+      return alpha(favourites.map((id) => byId.get(id)).filter((d): d is CatalogEntry => !!d))
+    if (section === 'recent')
+      return recent.map((id) => byId.get(id)).filter((d): d is CatalogEntry => !!d)
     if (section === 'all') return alpha(catalog)
     return alpha(catalog.filter((d) => d.category === section))
   }, [section, catalog, favourites, recent, byId])
 
   const filter = query.trim().toLowerCase()
   const shown = useMemo(
-    () => (filter ? rows.filter((d) => d.name.toLowerCase().includes(filter) || d.id.includes(filter)) : rows),
+    () =>
+      filter
+        ? rows.filter((d) => d.name.toLowerCase().includes(filter) || d.id.includes(filter))
+        : rows,
     [rows, filter]
   )
 

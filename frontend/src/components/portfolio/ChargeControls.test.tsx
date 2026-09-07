@@ -1,10 +1,7 @@
 import { useState } from 'react'
 import { describe, expect, it } from 'vitest'
+import { type ChargeState, DEFAULT_CHARGES } from '@/lib/portfolioRequest'
 import { render, screen, userEvent } from '@/test/test-utils'
-import {
-  DEFAULT_CHARGES,
-  type ChargeState,
-} from '@/lib/portfolioRequest'
 import { ChargeControls } from './ChargeControls'
 
 function Harness() {

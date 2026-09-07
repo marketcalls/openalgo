@@ -7,8 +7,9 @@
  * zoom and pan for free, and it is the same renderer the trading terminal uses,
  * so the two look and behave alike.
  */
-import { useEffect, useRef, useState } from 'react'
+
 import { createChart } from 'openalgo-charts'
+import { useEffect, useRef, useState } from 'react'
 import { buildChartTheme } from '@/lib/trading/chartTheme'
 import { useThemeStore } from '@/stores/themeStore'
 
@@ -47,7 +48,12 @@ export function PortfolioLineChart({ series, height = 320, format }: Props) {
 
     const handles = series.map((s) =>
       chart.addSeries(s.area ? 'area' : 'line', {
-        style: { color: s.color, lineWidth: 2, topColor: `${s.color}33`, bottomColor: `${s.color}00` },
+        style: {
+          color: s.color,
+          lineWidth: 2,
+          topColor: `${s.color}33`,
+          bottomColor: `${s.color}00`,
+        },
       })
     )
 
@@ -88,17 +94,12 @@ export function PortfolioLineChart({ series, height = 320, format }: Props) {
       <div className="flex flex-wrap items-center gap-4 text-xs">
         {series.map((s, i) => (
           <span key={s.name} className="flex items-center gap-1.5">
-            <span
-              className="inline-block h-2 w-2 rounded-sm"
-              style={{ background: s.color }}
-            />
+            <span className="inline-block h-2 w-2 rounded-sm" style={{ background: s.color }} />
             <span className="text-muted-foreground">{s.name}</span>
             <span className="tabular-nums">{readout?.values[i] ?? ''}</span>
           </span>
         ))}
-        {readout && (
-          <span className="ml-auto text-muted-foreground">{readout.label}</span>
-        )}
+        {readout && <span className="ml-auto text-muted-foreground">{readout.label}</span>}
       </div>
       <div ref={holder} style={{ height }} />
     </div>

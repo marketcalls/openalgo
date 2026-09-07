@@ -62,12 +62,9 @@ export function CrisisChart({ periods }: Props) {
   // The timeline runs across the whole reported history, so each band's
   // position and width are comparable between rows.
   const first = new Date(`${ordered[0].start}T00:00:00Z`).getTime()
-  const last = Math.max(
-    ...ordered.map((p) => new Date(`${p.end}T00:00:00Z`).getTime())
-  )
+  const last = Math.max(...ordered.map((p) => new Date(`${p.end}T00:00:00Z`).getTime()))
   const total = Math.max(last - first, 1)
-  const at = (iso: string) =>
-    ((new Date(`${iso}T00:00:00Z`).getTime() - first) / total) * 100
+  const at = (iso: string) => ((new Date(`${iso}T00:00:00Z`).getTime() - first) / total) * 100
 
   return (
     <div className="space-y-3">
@@ -81,10 +78,7 @@ export function CrisisChart({ periods }: Props) {
         const port = p.portfolio ?? 0
         const bench = p.benchmark
         return (
-          <div
-            key={p.key}
-            className="grid grid-cols-[15rem_10rem_1fr] items-center gap-3"
-          >
+          <div key={p.key} className="grid grid-cols-[15rem_10rem_1fr] items-center gap-3">
             {/* What, and how long */}
             <div className="min-w-0">
               <div className="truncate text-sm" title={p.note || p.label}>

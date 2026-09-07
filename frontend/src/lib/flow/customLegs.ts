@@ -95,40 +95,42 @@ function text(value: unknown): string {
  */
 export function parseCustomLegs(raw: unknown): CustomLeg[] {
   if (!Array.isArray(raw)) return []
-  return raw.filter((entry) => entry && typeof entry === 'object').map((entry) => {
-    const leg = entry as Record<string, unknown>
-    const strike = text(leg.strike)
-    const explicitMode = text(leg.strikeMode).toUpperCase()
-    // A leg written by hand may carry a strike without naming the mode.
-    const strikeMode: StrikeMode =
-      explicitMode === 'STRIKE' || (explicitMode !== 'OFFSET' && strike !== '')
-        ? 'STRIKE'
-        : 'OFFSET'
+  return raw
+    .filter((entry) => entry && typeof entry === 'object')
+    .map((entry) => {
+      const leg = entry as Record<string, unknown>
+      const strike = text(leg.strike)
+      const explicitMode = text(leg.strikeMode).toUpperCase()
+      // A leg written by hand may carry a strike without naming the mode.
+      const strikeMode: StrikeMode =
+        explicitMode === 'STRIKE' || (explicitMode !== 'OFFSET' && strike !== '')
+          ? 'STRIKE'
+          : 'OFFSET'
 
-    const expiry = text(leg.expiry).toUpperCase()
-    const expiryType = text(leg.expiryType).toLowerCase()
-    const expiryMode: ExpiryMode = expiry ? 'DATE' : expiryType ? 'TYPE' : 'INHERIT'
+      const expiry = text(leg.expiry).toUpperCase()
+      const expiryType = text(leg.expiryType).toLowerCase()
+      const expiryMode: ExpiryMode = expiry ? 'DATE' : expiryType ? 'TYPE' : 'INHERIT'
 
-    const optionType = text(leg.optionType).toUpperCase()
-    const action = text(leg.action).toUpperCase()
+      const optionType = text(leg.optionType).toUpperCase()
+      const action = text(leg.action).toUpperCase()
 
-    return {
-      strikeMode,
-      offset: text(leg.offset).toUpperCase() || (strikeMode === 'OFFSET' ? 'ATM' : ''),
-      strike,
-      expiryMode,
-      expiryType: expiryType || 'current_week',
-      expiry,
-      optionType: optionType === 'PE' ? 'PE' : 'CE',
-      action: action === 'SELL' ? 'SELL' : 'BUY',
-      quantity: text(leg.quantity) || '1',
-      product: text(leg.product).toUpperCase(),
-      priceType: text(leg.priceType ?? leg.pricetype).toUpperCase(),
-      price: text(leg.price),
-      triggerPrice: text(leg.triggerPrice ?? leg.trigger_price),
-      splitSize: text(leg.splitSize ?? leg.splitsize),
-    }
-  })
+      return {
+        strikeMode,
+        offset: text(leg.offset).toUpperCase() || (strikeMode === 'OFFSET' ? 'ATM' : ''),
+        strike,
+        expiryMode,
+        expiryType: expiryType || 'current_week',
+        expiry,
+        optionType: optionType === 'PE' ? 'PE' : 'CE',
+        action: action === 'SELL' ? 'SELL' : 'BUY',
+        quantity: text(leg.quantity) || '1',
+        product: text(leg.product).toUpperCase(),
+        priceType: text(leg.priceType ?? leg.pricetype).toUpperCase(),
+        price: text(leg.price),
+        triggerPrice: text(leg.triggerPrice ?? leg.trigger_price),
+        splitSize: text(leg.splitSize ?? leg.splitsize),
+      }
+    })
 }
 
 /** Problems found on one leg, keyed by field. */

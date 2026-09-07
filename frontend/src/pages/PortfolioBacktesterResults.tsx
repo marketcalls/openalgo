@@ -13,21 +13,20 @@ import { CrisisChart } from '@/components/portfolio/CrisisChart'
 import { EoyChart } from '@/components/portfolio/EoyChart'
 import { MetricGuide } from '@/components/portfolio/MetricGuide'
 import { MonthlyReturnsHeatmap } from '@/components/portfolio/MonthlyReturnsHeatmap'
-import { WeeklyReturnsHeatmap } from '@/components/portfolio/WeeklyReturnsHeatmap'
 import { PortfolioLineChart } from '@/components/portfolio/PortfolioLineChart'
+import { WeeklyReturnsHeatmap } from '@/components/portfolio/WeeklyReturnsHeatmap'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { cn } from '@/lib/utils'
 import { healthGradeTone } from '@/lib/portfolioRequest'
+import { cn } from '@/lib/utils'
 import { usePortfolioBacktestStore } from '@/stores/portfolioBacktestStore'
 
 const pct = (v: number | null | undefined, dp = 2) =>
   v === null || v === undefined ? '-' : `${(v * 100).toFixed(dp)}%`
 const num = (v: number | null | undefined, dp = 2) =>
   v === null || v === undefined ? '-' : v.toFixed(dp)
-const money = (v: number) =>
-  `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+const money = (v: number) => `₹${v.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
 
 /** A metric with its benchmark counterpart, the way the tabs present them. */
 function Stat({
@@ -191,9 +190,8 @@ export default function PortfolioBacktesterResults() {
         <Card className="border-amber-500/40">
           <CardContent className="p-4 text-sm">
             <span className="font-medium text-amber-500">Check the data: </span>
-            {warnings.join(', ')} moved far enough in one session to look like an
-            unadjusted split or bonus. Re-ingest that history before trusting these
-            numbers.
+            {warnings.join(', ')} moved far enough in one session to look like an unadjusted split
+            or bonus. Re-ingest that history before trusting these numbers.
           </CardContent>
         </Card>
       )}
@@ -223,9 +221,7 @@ export default function PortfolioBacktesterResults() {
               label="Total Return"
               value={pct(
                 result.equity.length
-                  ? result.equity[result.equity.length - 1].value /
-                      result.meta.initial_capital -
-                      1
+                  ? result.equity[result.equity.length - 1].value / result.meta.initial_capital - 1
                   : null
               )}
               sub={`${result.meta.sessions} sessions`}
@@ -257,9 +253,8 @@ export default function PortfolioBacktesterResults() {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">What the trading cost</CardTitle>
               <p className="text-sm text-muted-foreground">
-                The real schedule, itemised. Note which line dominates, it is
-                not brokerage, which is why zero-brokerage does not make
-                rebalancing free.
+                The real schedule, itemised. Note which line dominates, it is not brokerage, which
+                is why zero-brokerage does not make rebalancing free.
               </p>
             </CardHeader>
             <CardContent className="p-0">
@@ -278,9 +273,7 @@ export default function PortfolioBacktesterResults() {
                     .map(([k, v]) => (
                       <tr key={k as string} className="border-b">
                         <td className="p-2.5 pl-4">{k}</td>
-                        <td className="p-2.5 pr-4 text-right tabular-nums">
-                          {money(v as number)}
-                        </td>
+                        <td className="p-2.5 pr-4 text-right tabular-nums">{money(v as number)}</td>
                       </tr>
                     ))}
                   <tr className="font-semibold">
@@ -291,20 +284,17 @@ export default function PortfolioBacktesterResults() {
                   </tr>
                   <tr className="text-muted-foreground">
                     <td className="p-2.5 pl-4">
-                      Return given up ({(result.costs.turnover * 100).toFixed(1)}%
-                      turnover)
+                      Return given up ({(result.costs.turnover * 100).toFixed(1)}% turnover)
                     </td>
-                    <td className="p-2.5 pr-4 text-right tabular-nums">
-                      {pct(result.costs.drag)}
-                    </td>
+                    <td className="p-2.5 pr-4 text-right tabular-nums">{pct(result.costs.drag)}</td>
                   </tr>
                 </tbody>
               </table>
             </CardContent>
           </Card>
           <p className="text-xs text-muted-foreground">
-            Returns are price-only: broker history excludes dividends, so income
-            is not counted here.
+            Returns are price-only: broker history excludes dividends, so income is not counted
+            here.
           </p>
         </TabsContent>
 
@@ -313,8 +303,7 @@ export default function PortfolioBacktesterResults() {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Cumulative Returns</CardTitle>
               <p className="text-sm text-muted-foreground">
-                Value of {money(result.meta.initial_capital)} invested on{' '}
-                {result.meta.start}
+                Value of {money(result.meta.initial_capital)} invested on {result.meta.start}
               </p>
             </CardHeader>
             <CardContent>
@@ -342,8 +331,7 @@ export default function PortfolioBacktesterResults() {
           <div>
             <h3 className="text-base font-semibold">Understanding your results</h3>
             <p className="text-sm text-muted-foreground">
-              What each number means, what good looks like, and where this
-              portfolio landed.
+              What each number means, what good looks like, and where this portfolio landed.
             </p>
           </div>
           <MetricGuide metrics={m as unknown as Record<string, number | null>} />
@@ -395,9 +383,8 @@ export default function PortfolioBacktesterResults() {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Itemised P&amp;L</CardTitle>
               <p className="text-sm text-muted-foreground">
-                Contribution is each holding's share of the portfolio return, so the
-                column sums to the total. It differs from the holding's own return
-                because of its weight.
+                Contribution is each holding's share of the portfolio return, so the column sums to
+                the total. It differs from the holding's own return because of its weight.
               </p>
             </CardHeader>
             <CardContent className="p-0">
@@ -418,9 +405,7 @@ export default function PortfolioBacktesterResults() {
                     {result.items.map((it) => (
                       <tr key={it.symbol} className="border-b last:border-0">
                         <td className="p-3 font-medium">{it.symbol}</td>
-                        <td className="p-3 text-right tabular-nums">
-                          {money(it.invested)}
-                        </td>
+                        <td className="p-3 text-right tabular-nums">{money(it.invested)}</td>
                         <td
                           className={cn(
                             'p-3 text-right tabular-nums',
@@ -432,9 +417,7 @@ export default function PortfolioBacktesterResults() {
                         <td className="p-3 text-right tabular-nums text-muted-foreground">
                           {money(it.costs)}
                         </td>
-                        <td className="p-3 text-right tabular-nums">
-                          {pct(it.symbol_return)}
-                        </td>
+                        <td className="p-3 text-right tabular-nums">{pct(it.symbol_return)}</td>
                         <td className="p-3 text-right font-medium tabular-nums">
                           {pct(it.contribution_pct)}
                         </td>
@@ -472,8 +455,8 @@ export default function PortfolioBacktesterResults() {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Correlation Heatmap</CardTitle>
               <p className="text-sm text-muted-foreground">
-                Red moves together, blue moves apart. Holdings that all move
-                together are one bet wearing several names.
+                Red moves together, blue moves apart. Holdings that all move together are one bet
+                wearing several names.
               </p>
             </CardHeader>
             <CardContent>
@@ -490,8 +473,8 @@ export default function PortfolioBacktesterResults() {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Drawdown</CardTitle>
               <p className="text-sm text-muted-foreground">
-                How far below the previous peak, and for how long. The shape
-                matters more than the worst number.
+                How far below the previous peak, and for how long. The shape matters more than the
+                worst number.
               </p>
             </CardHeader>
             <CardContent>
@@ -509,58 +492,51 @@ export default function PortfolioBacktesterResults() {
               />
             </CardContent>
           </Card>
-          {result.series.drawdown_episodes &&
-            result.series.drawdown_episodes.length > 0 && (
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base">Worst Episodes</CardTitle>
-                </CardHeader>
-                <CardContent className="p-0">
-                  <table className="w-full text-sm">
-                    <thead className="border-b text-xs text-muted-foreground">
-                      <tr>
-                        <th className="p-3 text-left">Start</th>
-                        <th className="p-3 text-left">Valley</th>
-                        <th className="p-3 text-left">Recovered</th>
-                        <th className="p-3 text-right">Days</th>
-                        <th className="p-3 text-right">Depth</th>
+          {result.series.drawdown_episodes && result.series.drawdown_episodes.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Worst Episodes</CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <table className="w-full text-sm">
+                  <thead className="border-b text-xs text-muted-foreground">
+                    <tr>
+                      <th className="p-3 text-left">Start</th>
+                      <th className="p-3 text-left">Valley</th>
+                      <th className="p-3 text-left">Recovered</th>
+                      <th className="p-3 text-right">Days</th>
+                      <th className="p-3 text-right">Depth</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.series.drawdown_episodes.map((d) => (
+                      <tr key={`${d.start}-${d.valley}`} className="border-b last:border-0">
+                        <td className="p-3">{d.start}</td>
+                        <td className="p-3">{d.valley}</td>
+                        <td className="p-3">{d.end}</td>
+                        <td className="p-3 text-right tabular-nums">{d.days}</td>
+                        <td className="p-3 text-right tabular-nums text-rose-500">
+                          {pct(d.depth)}
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {result.series.drawdown_episodes.map((d) => (
-                        <tr
-                          key={`${d.start}-${d.valley}`}
-                          className="border-b last:border-0"
-                        >
-                          <td className="p-3">{d.start}</td>
-                          <td className="p-3">{d.valley}</td>
-                          <td className="p-3">{d.end}</td>
-                          <td className="p-3 text-right tabular-nums">{d.days}</td>
-                          <td className="p-3 text-right tabular-nums text-rose-500">
-                            {pct(d.depth)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </CardContent>
-              </Card>
-            )}
+                    ))}
+                  </tbody>
+                </table>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="periodreturns" className="space-y-4">
-          {result.series.yearly_returns &&
-            result.series.yearly_returns.length > 0 && (
-              <>
+          {result.series.yearly_returns && result.series.yearly_returns.length > 0 && (
+            <>
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-base">
-                    EOY Returns vs Benchmark
-                  </CardTitle>
+                  <CardTitle className="text-base">EOY Returns vs Benchmark</CardTitle>
                   <p className="text-sm text-muted-foreground">
-                    One pair of bars per calendar year. The dashed red line is the
-                    portfolio's own average year. A run of ordinary years beside
-                    one spectacular one should read as exactly that.
+                    One pair of bars per calendar year. The dashed red line is the portfolio's own
+                    average year. A run of ordinary years beside one spectacular one should read as
+                    exactly that.
                   </p>
                 </CardHeader>
                 <CardContent>
@@ -576,9 +552,8 @@ export default function PortfolioBacktesterResults() {
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base">Yearly Returns</CardTitle>
                   <p className="text-sm text-muted-foreground">
-                    An investor lives through calendar years, not annualised
-                    averages, "did it beat the index this year" is the question
-                    actually asked of a portfolio.
+                    An investor lives through calendar years, not annualised averages, "did it beat
+                    the index this year" is the question actually asked of a portfolio.
                   </p>
                 </CardHeader>
                 <CardContent className="p-0">
@@ -600,9 +575,7 @@ export default function PortfolioBacktesterResults() {
                           <td
                             className={cn(
                               'p-3 text-right tabular-nums',
-                              (y.portfolio ?? 0) >= 0
-                                ? 'text-emerald-500'
-                                : 'text-rose-500'
+                              (y.portfolio ?? 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'
                             )}
                           >
                             {pct(y.portfolio)}
@@ -613,9 +586,7 @@ export default function PortfolioBacktesterResults() {
                           <td
                             className={cn(
                               'p-3 text-right font-medium tabular-nums',
-                              (y.difference ?? 0) >= 0
-                                ? 'text-emerald-500'
-                                : 'text-rose-500'
+                              (y.difference ?? 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'
                             )}
                           >
                             {y.difference === null || y.difference === undefined
@@ -641,15 +612,15 @@ export default function PortfolioBacktesterResults() {
                   </table>
                 </CardContent>
               </Card>
-              </>
-            )}
+            </>
+          )}
           {result.series.monthly_returns && (
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-base">Monthly Returns</CardTitle>
                 <p className="text-sm text-muted-foreground">
-                  A run of bad months is what makes people abandon a strategy, and
-                  an annualised number cannot show one.
+                  A run of bad months is what makes people abandon a strategy, and an annualised
+                  number cannot show one.
                 </p>
               </CardHeader>
               <CardContent>
@@ -665,9 +636,7 @@ export default function PortfolioBacktesterResults() {
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-base">Weekly Returns</CardTitle>
-                <p className="text-sm text-muted-foreground">
-                  Select a year to see every week.
-                </p>
+                <p className="text-sm text-muted-foreground">Select a year to see every week.</p>
               </CardHeader>
               <CardContent>
                 <WeeklyReturnsHeatmap series={result.series.weekly_returns} />
@@ -696,70 +665,63 @@ export default function PortfolioBacktesterResults() {
                 value={pct(result.series.seasonality.avg_down_month)}
                 tone="bad"
               />
-              <Stat
-                label="Win Months"
-                value={pct(result.series.seasonality.win_months, 0)}
-              />
-              <Stat
-                label="Win Quarters"
-                value={pct(result.series.seasonality.win_quarters, 0)}
-              />
+              <Stat label="Win Months" value={pct(result.series.seasonality.win_months, 0)} />
+              <Stat label="Win Quarters" value={pct(result.series.seasonality.win_quarters, 0)} />
             </div>
           )}
-          {result.series.return_quantiles &&
-            result.series.return_quantiles.length > 0 && (
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base">Return Quantiles</CardTitle>
-                  <p className="text-sm text-muted-foreground">
-                    How the spread narrows with holding period. The share of
-                    periods that ended down is the practical read.
-                  </p>
-                </CardHeader>
-                <CardContent className="p-0">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead className="border-b text-xs text-muted-foreground">
-                        <tr>
-                          <th className="p-3 text-left">Period</th>
-                          <th className="p-3 text-right">n</th>
-                          <th className="p-3 text-right">Worst</th>
-                          <th className="p-3 text-right">25%</th>
-                          <th className="p-3 text-right">Median</th>
-                          <th className="p-3 text-right">75%</th>
-                          <th className="p-3 text-right">Best</th>
-                          <th className="p-3 text-right">Ended down</th>
+          {result.series.return_quantiles && result.series.return_quantiles.length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">Return Quantiles</CardTitle>
+                <p className="text-sm text-muted-foreground">
+                  How the spread narrows with holding period. The share of periods that ended down
+                  is the practical read.
+                </p>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="border-b text-xs text-muted-foreground">
+                      <tr>
+                        <th className="p-3 text-left">Period</th>
+                        <th className="p-3 text-right">n</th>
+                        <th className="p-3 text-right">Worst</th>
+                        <th className="p-3 text-right">25%</th>
+                        <th className="p-3 text-right">Median</th>
+                        <th className="p-3 text-right">75%</th>
+                        <th className="p-3 text-right">Best</th>
+                        <th className="p-3 text-right">Ended down</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.series.return_quantiles.map((q) => (
+                        <tr key={q.period} className="border-b last:border-0">
+                          <td className="p-3 font-medium">{q.period}</td>
+                          <td className="p-3 text-right tabular-nums text-muted-foreground">
+                            {q.count}
+                          </td>
+                          <td className="p-3 text-right tabular-nums text-rose-500">
+                            {pct(q.min)}
+                          </td>
+                          <td className="p-3 text-right tabular-nums">{pct(q.q1)}</td>
+                          <td className="p-3 text-right font-medium tabular-nums">
+                            {pct(q.median)}
+                          </td>
+                          <td className="p-3 text-right tabular-nums">{pct(q.q3)}</td>
+                          <td className="p-3 text-right tabular-nums text-emerald-500">
+                            {pct(q.max)}
+                          </td>
+                          <td className="p-3 text-right tabular-nums">
+                            {pct(q.negative_share, 0)}
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {result.series.return_quantiles.map((q) => (
-                          <tr key={q.period} className="border-b last:border-0">
-                            <td className="p-3 font-medium">{q.period}</td>
-                            <td className="p-3 text-right tabular-nums text-muted-foreground">
-                              {q.count}
-                            </td>
-                            <td className="p-3 text-right tabular-nums text-rose-500">
-                              {pct(q.min)}
-                            </td>
-                            <td className="p-3 text-right tabular-nums">{pct(q.q1)}</td>
-                            <td className="p-3 text-right font-medium tabular-nums">
-                              {pct(q.median)}
-                            </td>
-                            <td className="p-3 text-right tabular-nums">{pct(q.q3)}</td>
-                            <td className="p-3 text-right tabular-nums text-emerald-500">
-                              {pct(q.max)}
-                            </td>
-                            <td className="p-3 text-right tabular-nums">
-                              {pct(q.negative_share, 0)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         <TabsContent value="rolling" className="space-y-4">
@@ -771,8 +733,8 @@ export default function PortfolioBacktesterResults() {
                     Rolling Sharpe ({result.series.rolling.window} sessions)
                   </CardTitle>
                   <p className="text-sm text-muted-foreground">
-                    A flattering full-period Sharpe can hide one that has been
-                    deteriorating for a year.
+                    A flattering full-period Sharpe can hide one that has been deteriorating for a
+                    year.
                   </p>
                 </CardHeader>
                 <CardContent>
@@ -836,8 +798,8 @@ export default function PortfolioBacktesterResults() {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Rebalancing Comparison</CardTitle>
               <p className="text-sm text-muted-foreground">
-                The same holdings under every rule. Trading more is not better -
-                watch the cost drag column against what the extra trades bought.
+                The same holdings under every rule. Trading more is not better - watch the cost drag
+                column against what the extra trades bought.
               </p>
             </CardHeader>
             <CardContent className="p-0">
@@ -861,10 +823,7 @@ export default function PortfolioBacktesterResults() {
                       return (
                         <tr
                           key={v.label}
-                          className={cn(
-                            'border-b last:border-0',
-                            bestSharpe && 'bg-emerald-500/5'
-                          )}
+                          className={cn('border-b last:border-0', bestSharpe && 'bg-emerald-500/5')}
                         >
                           <td className="p-3 font-medium">
                             {v.label}
@@ -872,9 +831,7 @@ export default function PortfolioBacktesterResults() {
                               <span className="ml-2 text-xs text-emerald-500">best</span>
                             )}
                           </td>
-                          <td className="p-3 text-right tabular-nums">
-                            {pct(v.total_return)}
-                          </td>
+                          <td className="p-3 text-right tabular-nums">{pct(v.total_return)}</td>
                           <td className="p-3 text-right tabular-nums">{pct(v.cagr)}</td>
                           <td className="p-3 text-right font-medium tabular-nums">
                             {num(v.sharpe)}
@@ -904,21 +861,19 @@ export default function PortfolioBacktesterResults() {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Equity Curves</CardTitle>
               <p className="text-sm text-muted-foreground">
-                On one axis, because the difference between two schedules is
-                usually invisible in their headline returns.
+                On one axis, because the difference between two schedules is usually invisible in
+                their headline returns.
               </p>
             </CardHeader>
             <CardContent>
               <PortfolioLineChart
                 height={320}
                 format={money}
-                series={Object.entries(result.rebalancing_sweep.curves).map(
-                  ([label, data], i) => ({
-                    name: label,
-                    color: ['#3b82f6', '#22c55e', '#f59e0b', '#a855f7', '#ef4444'][i % 5],
-                    data,
-                  })
-                )}
+                series={Object.entries(result.rebalancing_sweep.curves).map(([label, data], i) => ({
+                  name: label,
+                  color: ['#3b82f6', '#22c55e', '#f59e0b', '#a855f7', '#ef4444'][i % 5],
+                  data,
+                }))}
               />
             </CardContent>
           </Card>
@@ -926,8 +881,8 @@ export default function PortfolioBacktesterResults() {
 
         <TabsContent value="robustness" className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            A single backtest answers “what happened”. These answer whether it
-            would have held on windows you did not pick, and how much was luck.
+            A single backtest answers “what happened”. These answer whether it would have held on
+            windows you did not pick, and how much was luck.
           </p>
 
           {result.walk_forward.summary ? (
@@ -937,9 +892,7 @@ export default function PortfolioBacktesterResults() {
                   label="Windows Positive"
                   value={pct(result.walk_forward.summary.positive_share, 0)}
                   sub={`of ${result.walk_forward.summary.count} rolling windows`}
-                  tone={
-                    result.walk_forward.summary.positive_share > 0.7 ? 'good' : undefined
-                  }
+                  tone={result.walk_forward.summary.positive_share > 0.7 ? 'good' : undefined}
                 />
                 <Stat
                   label="Median Window"
@@ -954,9 +907,9 @@ export default function PortfolioBacktesterResults() {
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base">Walk-Forward Windows</CardTitle>
                   <p className="text-sm text-muted-foreground">
-                    The spread is the point, not the average. A strategy whose whole
-                    result came from one exceptional stretch looks very different
-                    here from one that worked repeatedly.
+                    The spread is the point, not the average. A strategy whose whole result came
+                    from one exceptional stretch looks very different here from one that worked
+                    repeatedly.
                   </p>
                 </CardHeader>
                 <CardContent className="p-0">
@@ -1011,10 +964,9 @@ export default function PortfolioBacktesterResults() {
                   Monte Carlo, {result.monte_carlo.paths.toLocaleString()} paths
                 </CardTitle>
                 <p className="text-sm text-muted-foreground">
-                  Block bootstrap, not independent days: drawing single days
-                  destroys volatility clustering and makes drawdowns look far
-                  milder than markets produce. Seeded, so the risk numbers do not
-                  change each time you look at them.
+                  Block bootstrap, not independent days: drawing single days destroys volatility
+                  clustering and makes drawdowns look far milder than markets produce. Seeded, so
+                  the risk numbers do not change each time you look at them.
                 </p>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -1083,13 +1035,10 @@ export default function PortfolioBacktesterResults() {
         <TabsContent value="allocation" className="space-y-4">
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">
-                Portfolio Allocation Over Time
-              </CardTitle>
+              <CardTitle className="text-base">Portfolio Allocation Over Time</CardTitle>
               <p className="text-sm text-muted-foreground">
-                What you actually held, session by session. Bands widen as winners
-                run and snap back on each rebalance. A portfolio left alone stops
-                being the one you chose.
+                What you actually held, session by session. Bands widen as winners run and snap back
+                on each rebalance. A portfolio left alone stops being the one you chose.
               </p>
             </CardHeader>
             <CardContent className="pl-12">
@@ -1107,8 +1056,8 @@ export default function PortfolioBacktesterResults() {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Target versus Realised</CardTitle>
               <p className="text-sm text-muted-foreground">
-                The average weight actually held differs from the target whenever
-                the portfolio was allowed to drift.
+                The average weight actually held differs from the target whenever the portfolio was
+                allowed to drift.
               </p>
             </CardHeader>
             <CardContent className="p-0">
@@ -1132,9 +1081,7 @@ export default function PortfolioBacktesterResults() {
                           {pct(it.weight_target, 1)}
                         </td>
                         <td className="p-3 text-right tabular-nums">{pct(avg, 1)}</td>
-                        <td className="p-3 text-right tabular-nums">
-                          {pct(it.weight_final, 1)}
-                        </td>
+                        <td className="p-3 text-right tabular-nums">{pct(it.weight_final, 1)}</td>
                         <td
                           className={cn(
                             'p-3 text-right font-medium tabular-nums',
@@ -1181,9 +1128,9 @@ export default function PortfolioBacktesterResults() {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Co-movement Clusters</CardTitle>
               <p className="text-sm text-muted-foreground">
-                Holdings correlated above {result.structure.threshold} are grouped:
-                they behave as one position, whatever their names or sectors say.
-                A shock to any member hits the whole cluster.
+                Holdings correlated above {result.structure.threshold} are grouped: they behave as
+                one position, whatever their names or sectors say. A shock to any member hits the
+                whole cluster.
               </p>
             </CardHeader>
             <CardContent className="space-y-2">
@@ -1206,10 +1153,7 @@ export default function PortfolioBacktesterResults() {
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {c.members.map((m) => (
-                      <span
-                        key={m}
-                        className="rounded bg-muted px-1.5 py-0.5 text-xs"
-                      >
+                      <span key={m} className="rounded bg-muted px-1.5 py-0.5 text-xs">
                         {m}
                       </span>
                     ))}
@@ -1257,10 +1201,9 @@ export default function PortfolioBacktesterResults() {
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base">How it splits</CardTitle>
                   <p className="text-sm text-muted-foreground">
-                    Selection is an equal-weighted basket of the same holdings
-                    against the benchmark: the picks, with sizing removed.
-                    Allocation is the realized gross portfolio against that
-                    basket. Trading costs bridge gross to net. Together they
+                    Selection is an equal-weighted basket of the same holdings against the
+                    benchmark: the picks, with sizing removed. Allocation is the realized gross
+                    portfolio against that basket. Trading costs bridge gross to net. Together they
                     sum to the net excess.
                   </p>
                 </CardHeader>
@@ -1274,9 +1217,7 @@ export default function PortfolioBacktesterResults() {
                       ].map(([label, v]) => (
                         <tr key={label as string} className="border-b">
                           <td className="p-3">{label}</td>
-                          <td className="p-3 text-right tabular-nums">
-                            {pct(v as number)}
-                          </td>
+                          <td className="p-3 text-right tabular-nums">{pct(v as number)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1288,51 +1229,51 @@ export default function PortfolioBacktesterResults() {
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base">Contribution by Holding</CardTitle>
                   <p className="text-sm text-muted-foreground">
-                    Each holding's share of the out- or under-performance, not its
-                    standalone result, the column sums to the excess.
+                    Each holding's share of the out- or under-performance, not its standalone
+                    result, the column sums to the excess.
                   </p>
                 </CardHeader>
                 <CardContent className="p-0">
                   {(result.attribution.holdings ?? []).length > 0 ? (
                     <table className="w-full text-sm">
-                    <thead className="border-b text-xs text-muted-foreground">
-                      <tr>
-                        <th className="p-3 text-left">Symbol</th>
-                        <th className="p-3 text-right">Weight</th>
-                        <th className="p-3 text-right">Own return</th>
-                        <th className="p-3 text-right">vs benchmark</th>
-                        <th className="p-3 text-right">Contribution</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(result.attribution.holdings ?? []).map((h) => (
-                        <tr key={h.symbol} className="border-b last:border-0">
-                          <td className="p-3 font-medium">{h.symbol}</td>
-                          <td className="p-3 text-right tabular-nums text-muted-foreground">
-                            {pct(h.weight, 1)}
-                          </td>
-                          <td className="p-3 text-right tabular-nums">{pct(h.return)}</td>
-                          <td
-                            className={cn(
-                              'p-3 text-right tabular-nums',
-                              h.vs_benchmark >= 0 ? 'text-emerald-500' : 'text-rose-500'
-                            )}
-                          >
-                            {h.vs_benchmark >= 0 ? '+' : ''}
-                            {(h.vs_benchmark * 100).toFixed(2)}%
-                          </td>
-                          <td
-                            className={cn(
-                              'p-3 text-right font-medium tabular-nums',
-                              h.contribution >= 0 ? 'text-emerald-500' : 'text-rose-500'
-                            )}
-                          >
-                            {h.contribution >= 0 ? '+' : ''}
-                            {(h.contribution * 100).toFixed(2)}%
-                          </td>
+                      <thead className="border-b text-xs text-muted-foreground">
+                        <tr>
+                          <th className="p-3 text-left">Symbol</th>
+                          <th className="p-3 text-right">Weight</th>
+                          <th className="p-3 text-right">Own return</th>
+                          <th className="p-3 text-right">vs benchmark</th>
+                          <th className="p-3 text-right">Contribution</th>
                         </tr>
-                      ))}
-                    </tbody>
+                      </thead>
+                      <tbody>
+                        {(result.attribution.holdings ?? []).map((h) => (
+                          <tr key={h.symbol} className="border-b last:border-0">
+                            <td className="p-3 font-medium">{h.symbol}</td>
+                            <td className="p-3 text-right tabular-nums text-muted-foreground">
+                              {pct(h.weight, 1)}
+                            </td>
+                            <td className="p-3 text-right tabular-nums">{pct(h.return)}</td>
+                            <td
+                              className={cn(
+                                'p-3 text-right tabular-nums',
+                                h.vs_benchmark >= 0 ? 'text-emerald-500' : 'text-rose-500'
+                              )}
+                            >
+                              {h.vs_benchmark >= 0 ? '+' : ''}
+                              {(h.vs_benchmark * 100).toFixed(2)}%
+                            </td>
+                            <td
+                              className={cn(
+                                'p-3 text-right font-medium tabular-nums',
+                                h.contribution >= 0 ? 'text-emerald-500' : 'text-rose-500'
+                              )}
+                            >
+                              {h.contribution >= 0 ? '+' : ''}
+                              {(h.contribution * 100).toFixed(2)}%
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
                     </table>
                   ) : (
                     <p className="p-4 text-sm text-muted-foreground">
@@ -1342,9 +1283,7 @@ export default function PortfolioBacktesterResults() {
                 </CardContent>
               </Card>
 
-              <p className="text-xs text-muted-foreground">
-                {result.attribution.method}
-              </p>
+              <p className="text-xs text-muted-foreground">{result.attribution.method}</p>
             </>
           ) : (
             <Card>
@@ -1368,16 +1307,8 @@ export default function PortfolioBacktesterResults() {
                 value={pct(result.crisis.summary.hit_rate, 0)}
                 sub="beat the benchmark"
               />
-              <Stat
-                label="Worst Crisis"
-                value={pct(result.crisis.summary.worst)}
-                tone="bad"
-              />
-              <Stat
-                label="Best Period"
-                value={pct(result.crisis.summary.best)}
-                tone="good"
-              />
+              <Stat label="Worst Crisis" value={pct(result.crisis.summary.worst)} tone="bad" />
+              <Stat label="Best Period" value={pct(result.crisis.summary.best)} tone="good" />
             </div>
           )}
 
@@ -1407,9 +1338,9 @@ export default function PortfolioBacktesterResults() {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Crisis Period Summary</CardTitle>
               <p className="text-sm text-muted-foreground">
-                How the portfolio held up when it mattered, against the benchmark
-                over the same window. Recoveries are included on purpose, a
-                crashes-only view flatters anything defensive.
+                How the portfolio held up when it mattered, against the benchmark over the same
+                window. Recoveries are included on purpose, a crashes-only view flatters anything
+                defensive.
               </p>
             </CardHeader>
             <CardContent>
@@ -1436,15 +1367,11 @@ export default function PortfolioBacktesterResults() {
                       <tr key={c.key} className="border-b last:border-0">
                         <td className="p-3">
                           <div className="font-medium">{c.label}</div>
-                          {c.note && (
-                            <div className="text-xs text-muted-foreground">{c.note}</div>
-                          )}
+                          {c.note && <div className="text-xs text-muted-foreground">{c.note}</div>}
                         </td>
                         <td className="p-3 text-xs text-muted-foreground">
                           {c.scope === 'india' ? 'Domestic' : 'Global'}
-                          {c.partial && (
-                            <span className="ml-1 text-amber-500">partial</span>
-                          )}
+                          {c.partial && <span className="ml-1 text-amber-500">partial</span>}
                         </td>
                         <td className="p-3 text-xs text-muted-foreground">
                           {c.start} → {c.end}
@@ -1472,7 +1399,9 @@ export default function PortfolioBacktesterResults() {
                             (c.excess ?? 0) >= 0 ? 'text-emerald-500' : 'text-rose-500'
                           )}
                         >
-                          {c.excess === null ? '-' : `${c.excess >= 0 ? '+' : ''}${(c.excess * 100).toFixed(2)}%`}
+                          {c.excess === null
+                            ? '-'
+                            : `${c.excess >= 0 ? '+' : ''}${(c.excess * 100).toFixed(2)}%`}
                         </td>
                       </tr>
                     ))}
@@ -1488,9 +1417,8 @@ export default function PortfolioBacktesterResults() {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">Portfolio Health</CardTitle>
               <p className="text-sm text-muted-foreground">
-                Every pillar shows the inputs it read, the formula it applied and
-                the weight it carried, so you can disagree with the grade and see
-                exactly where.
+                Every pillar shows the inputs it read, the formula it applied and the weight it
+                carried, so you can disagree with the grade and see exactly where.
               </p>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -1512,8 +1440,8 @@ export default function PortfolioBacktesterResults() {
                 </div>
                 {result.health.unmeasured.length > 0 && (
                   <div className="text-xs text-muted-foreground">
-                    {result.health.unmeasured.join(', ')} could not be measured and
-                    were left out rather than scored zero
+                    {result.health.unmeasured.join(', ')} could not be measured and were left out
+                    rather than scored zero
                   </div>
                 )}
               </div>

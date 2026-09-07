@@ -1,5 +1,5 @@
-import type { OptionType } from './strategyMath'
 import type { OptionChainResponse, OptionData, OptionStrike } from '@/types/option-chain'
+import type { OptionType } from './strategyMath'
 
 export interface ChainIdentity {
   exchange: string
@@ -46,7 +46,10 @@ export function chainIdentity(exchange: string, underlying: string, expiry: stri
   return `${exchange}:${underlying}:${normalizeExpiryCode(expiry)}`
 }
 
-export function chainMatches(response: ListedOptionChainResponse, identity: ChainIdentity): boolean {
+export function chainMatches(
+  response: ListedOptionChainResponse,
+  identity: ChainIdentity
+): boolean {
   return (
     response.exchange === identity.exchange &&
     response.underlying === identity.underlying &&
@@ -105,7 +108,10 @@ export function resolveOptionContract(
   }
 }
 
-export function parseFinitePrice(raw: string | number): { value: number | null; error: string | null } {
+export function parseFinitePrice(raw: string | number): {
+  value: number | null
+  error: string | null
+} {
   if (typeof raw === 'string' && raw.trim() === '') {
     return { value: null, error: 'Enter a price' }
   }

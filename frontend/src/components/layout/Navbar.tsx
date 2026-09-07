@@ -87,12 +87,7 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
 
   return (
     <nav className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div
-        className={cn(
-          'px-4 flex h-14 items-center',
-          fluid ? 'w-full' : 'container mx-auto'
-        )}
-      >
+      <div className={cn('px-4 flex h-14 items-center', fluid ? 'w-full' : 'container mx-auto')}>
         {/* Mobile Menu */}
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
           <SheetTrigger asChild className="md:hidden">
@@ -126,9 +121,7 @@ export function Navbar({ fluid = false }: NavbarProps = {}) {
                   const active = isActive(item.href)
                   const cls = cn(
                     'flex items-center gap-3 rounded-lg px-3 py-3 text-sm transition-colors min-h-[44px] touch-manipulation',
-                    active
-                      ? 'bg-primary text-primary-foreground'
-                      : 'hover:bg-muted active:bg-muted'
+                    active ? 'bg-primary text-primary-foreground' : 'hover:bg-muted active:bg-muted'
                   )
                   const inner = (
                     <>

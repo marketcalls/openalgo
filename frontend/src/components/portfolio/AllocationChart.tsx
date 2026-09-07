@@ -24,17 +24,19 @@ interface Props {
 // Distinct at a glance, and stable per position so a symbol keeps its colour
 // between the chart and the legend.
 const PALETTE = [
-  '#3b82f6', '#f59e0b', '#14b8a6', '#ef4444', '#22c55e',
-  '#a855f7', '#06b6d4', '#f97316', '#84cc16', '#ec4899',
+  '#3b82f6',
+  '#f59e0b',
+  '#14b8a6',
+  '#ef4444',
+  '#22c55e',
+  '#a855f7',
+  '#06b6d4',
+  '#f97316',
+  '#84cc16',
+  '#ec4899',
 ]
 
-export function AllocationChart({
-  dates,
-  symbols,
-  series,
-  average,
-  height = 300,
-}: Props) {
+export function AllocationChart({ dates, symbols, series, average, height = 300 }: Props) {
   const [hover, setHover] = useState<number | null>(null)
   if (dates.length === 0 || symbols.length === 0) return null
 
@@ -50,9 +52,7 @@ export function AllocationChart({
     const upper = lower.map((v, i) => v + (values[i] ?? 0))
     running = upper
     const top = upper.map((v, i) => `${x(i).toFixed(3)},${(100 - v * 100).toFixed(3)}`)
-    const bottom = lower
-      .map((v, i) => `${x(i).toFixed(3)},${(100 - v * 100).toFixed(3)}`)
-      .reverse()
+    const bottom = lower.map((v, i) => `${x(i).toFixed(3)},${(100 - v * 100).toFixed(3)}`).reverse()
     return {
       symbol,
       colour: PALETTE[s % PALETTE.length],
