@@ -344,18 +344,22 @@ def _dispatch_sandbox(api_key: str, order: dict[str, Any]) -> DispatchResult:
 
 
 def _dispatch_live(api_key: str, order: dict[str, Any]) -> DispatchResult:
-    auth_token, broker, error = resolve_live_auth(api_key)
-    if error:
-        # Deliberately not attempted. See the module docstring: refusing and
-        # saying so leaves a recoverable situation, and a silent failure does
-        # not.
-        return DispatchResult(ok=False, error=error)
-
     from services.place_order_service import place_order_with_auth
 
-    original = dict(order)
-    original["apikey"] = api_key
     try:
+        # Inside the try so the finally below releases the scoped sessions
+        # resolve_live_auth opens (auth_db) even on the early-return path —
+        # strategy dispatch runs on the tick-feed green thread, where no
+        # teardown_appcontext ever fires (see utils/db_sessions.py).
+        auth_token, broker, error = resolve_live_auth(api_key)
+        if error:
+            # Deliberately not attempted. See the module docstring: refusing and
+            # saying so leaves a recoverable situation, and a silent failure does
+            # not.
+            return DispatchResult(ok=False, error=error)
+
+        original = dict(order)
+        original["apikey"] = api_key
         ok, response, _status = place_order_with_auth(
             dict(order),
             auth_token,
@@ -369,6 +373,15 @@ def _dispatch_live(api_key: str, order: dict[str, Any]) -> DispatchResult:
     except Exception:
         logger.exception("Live order placement raised for %s", order.get("symbol"))
         return DispatchResult(ok=False, error="Live order placement failed")
+    finally:
+        # Strategy dispatch runs on the tick-feed green thread, outside any
+        # Flask request context — no teardown_appcontext ever fires here, so
+        # the scoped sessions opened for the placement (including the
+        # idempotency store) are released explicitly per the contract in
+        # utils/db_sessions.py.
+        from utils.db_sessions import remove_all_scoped_sessions
+
+        remove_all_scoped_sessions()
 
     return _normalise(ok, response)
 

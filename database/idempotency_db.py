@@ -1,0 +1,385 @@
+# database/idempotency_db.py
+"""
+Application-level order idempotency store.
+
+Maps (api_key_hash, client_order_id) -> broker orderid so a client that
+retries a timed-out /api/v1/placeorder POST gets the existing order echoed
+back instead of a duplicate position. Also records the caller-supplied
+`tag` so the orderbook can echo it.
+
+Design notes:
+
+* **Keyed by SHA-256 of the OpenAlgo apikey**, never the plaintext. The
+  auth module already treats the apikey as a secret (Argon2 verify, hashed
+  cache keys); this store must not introduce a plaintext copy.
+* **One row per placement attempt resolution.** A successful placement
+  writes (client_order_id -> orderid). A duplicate POST short-circuits at
+  the service layer and replays the recorded response — the broker is never
+  called twice for the same client_order_id.
+* **In-flight reservations.** A row is written before the broker call
+  (status="in_flight") so a retry racing a slow placement cannot double-fire.
+  If the placement fails, the reservation is released so a corrected retry
+  with the same id is not blocked forever.
+* **TTL.** Rows expire after ORDER_IDEMPOTENCY_TTL_HOURS (default 24h) so
+  the table cannot grow unbounded; a client_order_id reused after expiry is
+  treated as new. This matches broker-side order-book retention horizons
+  closely enough for the timeout-retry use case.
+* **Own SQLite file** (idempotency.db) with the project-wide NullPool
+  engine policy — writes are one per order placement, reads are one per
+  placement, so contention is negligible.
+"""
+
+import hashlib
+import os
+import threading
+from datetime import datetime, timedelta
+
+from sqlalchemy import Column, DateTime, Float, Index, Integer, String, UniqueConstraint
+from sqlalchemy import text as sa_text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import scoped_session, sessionmaker
+
+from database.engine_factory import create_db_engine
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+IDEMPOTENCY_DATABASE_URL = os.getenv("IDEMPOTENCY_DATABASE_URL", "sqlite:///db/idempotency.db")
+
+# Defaults mirroring restx_api.schemas.OrderSchema, applied when a raw request
+# omits the field: the reserve path sees the raw payload (validate_order_data
+# discards the schema-loaded dict), so the store normalises here to keep
+# records faithful to what the broker will actually execute.
+DEFAULT_PRODUCT = "MIS"
+DEFAULT_PRICETYPE = "MARKET"
+# Price types with no caller-fixed execution price: for these the order book's
+# "price" is the broker's average fill, not a limit price, so a recorded
+# default price must not be compared against it.
+MARKETISH_PRICETYPES = frozenset({"", "MARKET", "SL-M"})
+
+# Project-wide pooling policy (database/engine_factory.py): SQLite engines
+# use NullPool so no descriptor is held between operations.
+idempotency_engine = create_db_engine(IDEMPOTENCY_DATABASE_URL)
+
+IDEMPOTENCY_TTL_HOURS = int(os.getenv("ORDER_IDEMPOTENCY_TTL_HOURS", "24"))
+
+idempotency_session = scoped_session(
+    sessionmaker(autocommit=False, autoflush=False, bind=idempotency_engine)
+)
+IdempotencyBase = declarative_base()
+IdempotencyBase.query = idempotency_session.query_property()
+
+
+class ClientOrderId(IdempotencyBase):
+    """A client-supplied idempotency key and the order it resolved to."""
+
+    __tablename__ = "client_order_ids"
+
+    id = Column(Integer, primary_key=True)
+    api_key_hash = Column(
+        String(64), nullable=False, index=True
+    )  # sha256 hex of the OpenAlgo apikey
+    client_order_id = Column(String(128), nullable=False)
+    orderid = Column(String(64), nullable=True)  # broker/OpenAlgo orderid once known
+    tag = Column(
+        String(128), nullable=True
+    )  # caller's original `tag` passthrough, echoed in the orderbook
+    # in_flight: broker call not yet resolved. placed: orderid recorded.
+    # unresolved: an ambiguous failure (transport error, 5xx, 200 without an
+    # orderid) — the order may exist at the broker; a retry must reconcile.
+    status = Column(String(16), nullable=False, default="in_flight")
+    # Original order parameters, recorded so an unresolved key can be
+    # reconciled against the broker order book on retry, and so a corrected
+    # retry (different parameters) can be refused instead of double-placing.
+    symbol = Column(String(64), nullable=True)
+    exchange = Column(String(32), nullable=True)
+    action = Column(String(16), nullable=True)
+    # Float, not Integer: crypto/USDT perps trade fractional lots (0.001 BTC);
+    # an Integer column plus int() coercion made 1.1 and 1.9 compare equal.
+    quantity = Column(Float, nullable=True)
+    price = Column(Float, nullable=True)
+    # Remaining request-shaping parameters recorded so a corrected retry
+    # changing any of them is refused instead of double-placing (a LIMIT
+    # retry must not slip through a MARKET reservation, etc.).
+    product = Column(String(16), nullable=True)
+    pricetype = Column(String(16), nullable=True)
+    trigger_price = Column(Float, nullable=True)
+    # naive local now(): the project-wide convention (see strategy_book_db /
+    # master_contract_status_db); utcnow here would silently skew TTL pruning
+    # against rows written by earlier versions.
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+    updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        # The idempotency key is (user, client id) — one resolution per pair.
+        UniqueConstraint("api_key_hash", "client_order_id", name="uq_client_order_ids_key"),
+    )
+
+
+Index("ix_client_order_ids_created_at", ClientOrderId.created_at)
+# The orderbook echoes labels per orderid on every poll; (api_key_hash,
+# orderid) covers that lookup without scanning the user's partition.
+Index(
+    "ix_client_order_ids_api_key_hash_orderid",
+    ClientOrderId.api_key_hash,
+    ClientOrderId.orderid,
+)
+
+
+_init_lock = threading.Lock()
+_initialized = False
+
+
+def _hash_api_key(api_key: str) -> str:
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+
+def init_idempotency_db() -> None:
+    """Create tables if absent. Idempotent; safe to call per-request."""
+    global _initialized
+    if _initialized:
+        return
+    with _init_lock:
+        if _initialized:
+            return
+        IdempotencyBase.metadata.create_all(bind=idempotency_engine)
+        # create_all only builds indexes for new tables. Existing installs
+        # created client_order_ids without the created_at / (api_key_hash,
+        # orderid) indexes, so add them explicitly (IF NOT EXISTS semantics).
+        with idempotency_engine.connect() as conn:
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_client_order_ids_created_at "
+                "ON client_order_ids (created_at)",
+                "CREATE INDEX IF NOT EXISTS ix_client_order_ids_api_key_hash_orderid "
+                "ON client_order_ids (api_key_hash, orderid)",
+            ):
+                conn.execute(sa_text(stmt))
+            conn.commit()
+        if IDEMPOTENCY_DATABASE_URL.startswith("sqlite"):
+            # Existing installs: add the reconciliation parameter columns
+            # (create_all only adds columns to brand-new tables).
+            _add_missing_columns()
+        _initialized = True
+
+
+_RECONCILIATION_COLUMNS = (
+    ("symbol", "VARCHAR(64)"),
+    ("exchange", "VARCHAR(32)"),
+    ("action", "VARCHAR(16)"),
+    ("quantity", "FLOAT"),
+    ("price", "FLOAT"),
+    ("product", "VARCHAR(16)"),
+    ("pricetype", "VARCHAR(16)"),
+    ("trigger_price", "FLOAT"),
+)
+
+
+def _add_missing_columns() -> None:
+    """Add the reconciliation parameter columns when upgrading an existing store."""
+    with idempotency_engine.connect() as conn:
+        cols = {row[1] for row in conn.execute(sa_text("PRAGMA table_info(client_order_ids)"))}
+        for name, ddl in _RECONCILIATION_COLUMNS:
+            if name not in cols:
+                conn.execute(sa_text(f"ALTER TABLE client_order_ids ADD COLUMN {name} {ddl}"))
+        conn.commit()
+
+
+def _prune_expired(session) -> None:
+    """Delete rows older than the TTL. Called opportunistically on writes."""
+    cutoff = datetime.now() - timedelta(hours=IDEMPOTENCY_TTL_HOURS)
+    session.query(ClientOrderId).filter(ClientOrderId.created_at < cutoff).delete()
+    session.commit()
+
+
+def reserve_client_order_id(
+    api_key: str,
+    client_order_id: str,
+    tag: str | None = None,
+    order_params: dict | None = None,
+) -> tuple[str, str | None]:
+    """Claim (api_key, client_order_id) before the broker call.
+
+    INSERT-first: the unique constraint on (api_key_hash, client_order_id)
+    makes the claim atomic, so two concurrent retries cannot both proceed.
+
+    Args:
+        order_params: the original request parameters (symbol/exchange/
+            action/quantity/price) recorded for broker reconciliation of
+            unresolved keys.
+
+    Returns:
+        ("reserved", None) — this call created the reservation and must
+        proceed with the placement, then record_success() or release it.
+        ("existing", status) — another call already claimed the key; status
+        is "placed" (replay the recorded orderid), "unresolved" (a previous
+        ambiguous attempt may have placed; reconcile first) or "in_flight"
+        (a placement is racing right now; caller should report 409).
+    """
+    init_idempotency_db()
+    key_hash = _hash_api_key(api_key)
+    params = order_params or {}
+    with _init_lock:
+        try:
+            row = ClientOrderId(
+                api_key_hash=key_hash,
+                client_order_id=client_order_id,
+                tag=tag,
+                status="in_flight",
+                symbol=params.get("symbol"),
+                exchange=params.get("exchange"),
+                action=params.get("action"),
+                quantity=float(params["quantity"])
+                if params.get("quantity") is not None
+                else None,
+                # Absent ≡ schema default (see DEFAULT_* above); a LIMIT price
+                # of 0.0 must be recorded as 0.0, never NULL, or the replay
+                # check would silently skip the comparison.
+                price=float(params.get("price") or 0.0),
+                product=params.get("product") or DEFAULT_PRODUCT,
+                pricetype=params.get("pricetype") or DEFAULT_PRICETYPE,
+                trigger_price=float(params.get("trigger_price") or 0.0),
+            )
+            idempotency_session.add(row)
+            _prune_expired(idempotency_session)
+            idempotency_session.commit()
+            return "reserved", None
+        except IntegrityError:
+            idempotency_session.rollback()
+            existing = (
+                idempotency_session.query(ClientOrderId)
+                .filter_by(api_key_hash=key_hash, client_order_id=client_order_id)
+                .one_or_none()
+            )
+            # End the read transaction: with NullPool the checked-out
+            # connection is held until the transaction closes, and the
+            # caller may not touch this thread's session again for a while.
+            idempotency_session.commit()
+            if existing is None:
+                # Row vanished between the conflict and the re-read (TTL prune).
+                # Nothing is in flight, so the caller may retry the reserve.
+                return "vacated", None
+            return "existing", existing.status
+
+
+def record_success(api_key: str, client_order_id: str, orderid: str) -> None:
+    """Attach the broker orderid to an in_flight reservation."""
+    init_idempotency_db()
+    key_hash = _hash_api_key(api_key)
+    with _init_lock:
+        row = (
+            idempotency_session.query(ClientOrderId)
+            .filter_by(api_key_hash=key_hash, client_order_id=client_order_id)
+            .one_or_none()
+        )
+        if row is None:
+            # Reservation lost (manual DB wipe mid-flight): record fresh so the
+            # mapping still exists for orderbook echo and dedupe.
+            row = ClientOrderId(
+                api_key_hash=key_hash, client_order_id=client_order_id, status="in_flight"
+            )
+            idempotency_session.add(row)
+        row.orderid = str(orderid)
+        row.status = "placed"
+        idempotency_session.commit()
+
+
+def release_client_order_id(api_key: str, client_order_id: str) -> None:
+    """Drop an in_flight reservation after a failed placement.
+
+    A retry with the same id must be allowed to proceed after a failure —
+    blocking it would turn one broker outage into a permanent 409 for that id.
+    """
+    init_idempotency_db()
+    key_hash = _hash_api_key(api_key)
+    with _init_lock:
+        row = (
+            idempotency_session.query(ClientOrderId)
+            .filter_by(api_key_hash=key_hash, client_order_id=client_order_id)
+            .one_or_none()
+        )
+        if row is not None and row.status == "in_flight":
+            idempotency_session.delete(row)
+            idempotency_session.commit()
+
+
+def mark_unresolved(api_key: str, client_order_id: str) -> None:
+    """Flag an in-flight reservation whose outcome is unknowable.
+
+    Used when the broker call failed ambiguously (transport error, 5xx, an
+    accepted-but-unacknowledged order): the order may exist at the broker,
+    so the reservation is kept — a retry must reconcile with the broker
+    before another placement instead of re-placing blindly. Never touches
+    a row that already resolved to "placed".
+    """
+    init_idempotency_db()
+    key_hash = _hash_api_key(api_key)
+    with _init_lock:
+        row = (
+            idempotency_session.query(ClientOrderId)
+            .filter_by(api_key_hash=key_hash, client_order_id=client_order_id)
+            .one_or_none()
+        )
+        if row is not None and row.status == "in_flight":
+            row.status = "unresolved"
+            idempotency_session.commit()
+
+
+def get_resolution(api_key: str, client_order_id: str) -> dict | None:
+    """Return the recorded resolution for a key, or None if unknown.
+
+    Shape: {"orderid": str|None, "status": "in_flight"|"placed"|"unresolved",
+    "tag": str|None}
+    An in_flight resolution means a placement is racing right now; an
+    unresolved one means a previous attempt may or may not have reached the
+    broker.
+    """
+    init_idempotency_db()
+    key_hash = _hash_api_key(api_key)
+    row = (
+        idempotency_session.query(ClientOrderId)
+        .filter_by(api_key_hash=key_hash, client_order_id=client_order_id)
+        .one_or_none()
+    )
+    # End the read transaction so the NullPool connection is not held until
+    # this thread's next DB use (see utils/db_sessions.py).
+    idempotency_session.commit()
+    if row is None:
+        return None
+    return {
+        "orderid": row.orderid,
+        "status": row.status,
+        "tag": row.tag,
+        "symbol": row.symbol,
+        "exchange": row.exchange,
+        "action": row.action,
+        "quantity": row.quantity,
+        "price": row.price,
+        "product": row.product,
+        "pricetype": row.pricetype,
+        "trigger_price": row.trigger_price,
+    }
+
+
+def get_labels_for_orderids(api_key: str, orderids: list[str]) -> dict[str, dict[str, str]]:
+    """Return {orderid: {"client_order_id", "tag"}} for the given orderids.
+
+    Used by the orderbook service to echo caller-supplied fields onto
+    broker-proxied orderbook rows.
+    """
+    if not orderids:
+        return {}
+    init_idempotency_db()
+    key_hash = _hash_api_key(api_key)
+    rows = (
+        idempotency_session.query(ClientOrderId)
+        .filter(
+            ClientOrderId.api_key_hash == key_hash,
+            ClientOrderId.orderid.in_([str(o) for o in orderids]),
+        )
+        .all()
+    )
+    # End the read transaction so the NullPool connection is not held until
+    # this thread's next DB use (see utils/db_sessions.py).
+    idempotency_session.commit()
+    return {row.orderid: {"client_order_id": row.client_order_id, "tag": row.tag} for row in rows}
