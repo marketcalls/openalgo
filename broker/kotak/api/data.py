@@ -104,10 +104,12 @@ def _history_retry_delay(headers, attempt: int) -> float:
 
 class BrokerData:
     def __init__(self, auth_token):
-        # Updated for Neo API v2: session_token:::session_sid:::base_url:::access_token
+        # Neo API v2: session_token:::session_sid:::base_url:::access_token, with
+        # an optional 5th data_center part on tokens issued since streaming
+        # needed it. Take the first four so both lengths parse.
         self.session_token, self.session_sid, self.base_url, self.access_token = auth_token.split(
             ":::"
-        )
+        )[:4]
 
         # baseUrl is mandatory; it comes from MPIN validation. Raise if missing.
         if not self.base_url or not self.base_url.startswith("http"):

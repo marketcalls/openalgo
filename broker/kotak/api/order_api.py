@@ -26,7 +26,7 @@ def get_api_response(endpoint, auth_token, method="GET", payload=""):
     """
     Updated for Kotak Neo API v2 - uses dynamic baseUrl, httpx connection pooling, and new header structure
     """
-    session_token, session_sid, base_url, access_token = auth_token.split(":::")
+    session_token, session_sid, base_url, access_token = auth_token.split(":::")[:4]
 
     # Debug logging for baseUrl
     logger.debug(f"ORDER API - Using baseUrl: {base_url}")
@@ -235,7 +235,7 @@ def get_open_position(tradingsymbol, exchange, producttype, auth_token):
 
 
 def place_order_api(data, auth_token):
-    session_token, session_sid, base_url, access_token = auth_token.split(":::")
+    session_token, session_sid, base_url, access_token = auth_token.split(":::")[:4]
 
     # Debug logging for baseUrl
     logger.debug(f"PLACE ORDER API - Using baseUrl: {base_url}")
@@ -439,7 +439,7 @@ def close_all_positions(current_api_key, auth_token):
 
 
 def cancel_order(orderid, auth_token):
-    session_token, session_sid, base_url, access_token = auth_token.split(":::")
+    session_token, session_sid, base_url, access_token = auth_token.split(":::")[:4]
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -476,7 +476,7 @@ def cancel_order(orderid, auth_token):
 
 
 def modify_order(data, auth_token):
-    session_token, session_sid, base_url, access_token = auth_token.split(":::")
+    session_token, session_sid, base_url, access_token = auth_token.split(":::")[:4]
 
     # Debug logging for baseUrl
     logger.debug(f"MODIFY ORDER API - Using baseUrl: {base_url}")
