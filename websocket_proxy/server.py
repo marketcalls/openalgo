@@ -1114,12 +1114,26 @@ class WebSocketProxy:
         # adapter's underlying connection is actually ready; otherwise a broker
         # HTTP 401/403 is hidden behind a locally successful WebSocket login.
         adapter = self.broker_adapters.get(user_id)
+        adapter_ready = False
         if adapter is not None:
-            for _ in range(WS_CONNECT_READY_TIMEOUT):
+            for attempt in range(WS_CONNECT_READY_TIMEOUT):
                 if bool(getattr(adapter, "connected", False)):
+                    adapter_ready = True
+                    logger.info(
+                        f"Broker adapter ready for user {user_id} after "
+                        f"{attempt * WS_CONNECT_READY_POLL_INTERVAL}s"
+                    )
                     break
+                logger.info(
+                    f"Waiting for broker adapter for user {user_id} to become "
+                    f"ready ({attempt + 1}/{WS_CONNECT_READY_TIMEOUT})"
+                )
                 await aio.sleep(WS_CONNECT_READY_POLL_INTERVAL)
-        if adapter is None or not bool(getattr(adapter, "connected", False)):
+        if not adapter_ready:
+            logger.warning(
+                f"Broker adapter readiness wait failed for user {user_id} "
+                f"after {WS_CONNECT_READY_TIMEOUT * WS_CONNECT_READY_POLL_INTERVAL}s"
+            )
             self.broker_adapters.pop(user_id, None)
             if adapter is not None:
                 try:
