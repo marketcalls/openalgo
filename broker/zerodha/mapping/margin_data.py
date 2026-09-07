@@ -1,6 +1,7 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Zerodha Margin API https://kite.trade/docs/connect/v3/margins/
 
+from broker.zerodha.mapping.mcx_contract_size import to_kite_quantity
 from database.token_db import get_br_symbol
 from utils.logging import get_logger
 
@@ -51,7 +52,9 @@ def transform_margin_positions(positions):
                 "variety": "regular",  # Default variety for margin calculation
                 "product": map_product_type(position["product"]),
                 "order_type": map_order_type(position["pricetype"]),
-                "quantity": int(position["quantity"]),
+                # Kite prices MCX margin per contract, so this leaves in
+                # the same units the matching order will.
+                "quantity": int(to_kite_quantity(position["quantity"], symbol, exchange)),
                 "price": float(position.get("price", 0)),
                 "trigger_price": float(position.get("trigger_price", 0)),
             }

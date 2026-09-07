@@ -181,10 +181,14 @@ Both migrate idempotently (added `lowest_price`, `target`, `mode` columns).
 
 ## 10. Known limitations / dependencies
 
-- **MCX/CDS lot size = 1** in the current broker master contract (`SymToken`) — CRUDEOIL
-  should be 100, USDINR 1000. This is a **master-contract data issue (platform-wide)**, not
-  a scalping defect; MCX/CDS orders will be mis-sized until the master contract is
-  refreshed/fixed in the broker layer. NSE/BSE/NFO/BFO lot sizes are correct.
+- **CDS lot size = 1** in the current broker master contract (`SymToken`) — USDINR should
+  be 1000. This is a **master-contract data issue (platform-wide)**, not a scalping defect;
+  CDS orders will be mis-sized until the master contract is refreshed/fixed in the broker
+  layer. NSE/BSE/NFO/BFO lot sizes are correct.
+  MCX is resolved: Kite reports `lot_size = 1` for every MCX instrument because it counts
+  MCX quantity in contracts, so `broker/zerodha` now writes the real lot (CRUDEOIL 100) to
+  `SymToken.lotsize` and converts back to contracts at the Kite boundary. See
+  `broker/zerodha/mapping/mcx_contract_size.py`.
 - **macOS function keys:** F6/F7 may not reach the browser; on-screen buttons always work.
 - The `scalping_sl_update` SocketIO push is best-effort (wrapped in try/except); the books
   still reconcile via order events regardless.
