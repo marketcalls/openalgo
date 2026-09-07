@@ -3,14 +3,18 @@ IV Chart Blueprint
 Serves intraday Implied Volatility chart data for ATM options.
 """
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, g, jsonify, request, session
 from flask_cors import cross_origin
 
-from database.auth_db import get_api_key_for_tradingview, get_auth_token
+from database.auth_db import (
+    get_api_key_for_tradingview,
+    get_auth_token,
+    get_broker_name_for_user,
+)
 from services.intervals_service import get_intervals
 from services.iv_chart_service import get_default_symbols, get_iv_chart_data
 from utils.logging import get_logger
-from utils.session import check_session_validity
+from utils.session import apikey_or_session, check_session_validity
 
 logger = get_logger(__name__)
 
@@ -19,15 +23,27 @@ ivchart_bp = Blueprint("ivchart_bp", __name__, url_prefix="/")
 
 @ivchart_bp.route("/ivchart/api/iv-data", methods=["POST"])
 @cross_origin()
-@check_session_validity
+@apikey_or_session
 def iv_data():
     """Get intraday IV time series for ATM CE and PE options."""
     try:
-        broker = session.get("broker")
+        # The decorator already verified the credential (body, ?apikey or
+        # X-API-Key — all surfaced as g.openalgo_apikey) and stored the
+        # username in g.openalgo_user: resolve the broker from that verified
+        # identity — no second key verification (its result could even
+        # race a key rotation), and the raw key never touches broker_cache.
+        # Browser logins fall back to the session, which stores the broker
+        # name directly.
+        decorator_api_key = getattr(g, "openalgo_apikey", None)
+        broker = (
+            get_broker_name_for_user(g.openalgo_user)
+            if decorator_api_key
+            else session.get("broker")
+        )
         if not broker:
             return jsonify({"status": "error", "message": "Broker not set in session"}), 400
 
-        login_username = session["user"]
+        login_username = getattr(g, "openalgo_user", None) or session.get("user")
         auth_token = get_auth_token(login_username)
         if auth_token is None:
             return jsonify({"status": "error", "message": "Authentication required"}), 401
@@ -68,11 +84,11 @@ def iv_data():
 
 @ivchart_bp.route("/ivchart/api/default-symbols", methods=["POST"])
 @cross_origin()
-@check_session_validity
+@apikey_or_session
 def default_symbols():
     """Get ATM CE and PE symbol names for the given underlying and expiry."""
     try:
-        login_username = session.get("user")
+        login_username = getattr(g, "openalgo_user", None) or session.get("user")
         if not login_username:
             return jsonify({"status": "error", "message": "Authentication required"}), 401
 
@@ -108,11 +124,11 @@ def default_symbols():
 
 @ivchart_bp.route("/ivchart/api/intervals", methods=["GET"])
 @cross_origin()
-@check_session_validity
+@apikey_or_session
 def intervals():
     """Get broker-supported intraday intervals."""
     try:
-        login_username = session.get("user")
+        login_username = getattr(g, "openalgo_user", None) or session.get("user")
         if not login_username:
             return jsonify({"status": "error", "message": "Authentication required"}), 401
 

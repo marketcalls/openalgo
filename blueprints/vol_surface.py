@@ -3,13 +3,17 @@ Volatility Surface Blueprint
 Serves 3D implied volatility surface data for index options.
 """
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, g, jsonify, request, session
 from flask_cors import cross_origin
 
-from database.auth_db import get_api_key_for_tradingview, get_auth_token
+from database.auth_db import (
+    get_api_key_for_tradingview,
+    get_auth_token,
+    get_broker_name_for_user,
+)
 from services.vol_surface_service import get_vol_surface_data
 from utils.logging import get_logger
-from utils.session import check_session_validity
+from utils.session import apikey_or_session, check_session_validity
 
 logger = get_logger(__name__)
 
@@ -18,15 +22,27 @@ vol_surface_bp = Blueprint("vol_surface_bp", __name__, url_prefix="/")
 
 @vol_surface_bp.route("/volsurface/api/surface-data", methods=["POST"])
 @cross_origin()
-@check_session_validity
+@apikey_or_session
 def surface_data():
     """Get 3D volatility surface data across strikes and expiries."""
     try:
-        broker = session.get("broker")
+        # The decorator already verified the credential (body, ?apikey or
+        # X-API-Key — all surfaced as g.openalgo_apikey) and stored the
+        # username in g.openalgo_user: resolve the broker from that verified
+        # identity — no second key verification (its result could even
+        # race a key rotation), and the raw key never touches broker_cache.
+        # Browser logins fall back to the session, which stores the broker
+        # name directly.
+        decorator_api_key = getattr(g, "openalgo_apikey", None)
+        broker = (
+            get_broker_name_for_user(g.openalgo_user)
+            if decorator_api_key
+            else session.get("broker")
+        )
         if not broker:
             return jsonify({"status": "error", "message": "Broker not set in session"}), 400
 
-        login_username = session["user"]
+        login_username = getattr(g, "openalgo_user", None) or session.get("user")
         auth_token = get_auth_token(login_username)
         if auth_token is None:
             return jsonify({"status": "error", "message": "Authentication required"}), 401

@@ -54,6 +54,99 @@ def set_session_login_time():
     logger.info(f"Session login time set to: {now_ist}")
 
 
+def _enforce_csrf_for_session() -> None:
+    """Run the app's CSRF check for a session-authenticated request.
+
+    The analytics blueprints are exempted wholesale in app.py — headless
+    apikey clients carry no token, and a bearer credential in the body is
+    not CSRF-able — so without this the exemption would also drop the token
+    check for browser users. Raises flask_wtf.csrf.CSRFError (a 400) on a
+    missing/invalid token, exactly what Flask-WTF enforced on these routes
+    before the exemption existed.
+
+    Mirrors the gate CSRFProtect's own before_request hook applies before
+    protect(): CSRFProtect.protect() itself no longer checks the enabled
+    flag, so a disabled deployment (CSRF_ENABLED=FALSE) must be honored
+    here. Safe methods are already skipped inside protect().
+    """
+    from flask import current_app
+
+    if not current_app.config.get("WTF_CSRF_ENABLED", True):
+        return
+    csrf = current_app.extensions.get("csrf")
+    if csrf is not None:
+        csrf.protect()
+
+
+def apikey_or_session(f):
+    """
+    Accept either a valid Flask session OR a valid API key in the request
+    body (`{"apikey": ...}`), query parameter (`?apikey=...`), or header
+    (`X-API-Key: ...`). Resolves the authenticated username into
+    `flask.g.openalgo_user` and `flask.g.openalgo_apikey` so the wrapped
+    route can use `g.openalgo_user or session.get("user")`.
+
+    Stream B1 (2026-08-08): the analytics blueprints (gex/gamma_density/
+    ivchart/ivsmile/vol_surface/oiprofile/oitracker) were session-only, so
+    the gateway's apikey-based client could not proxy them. This decorator
+    reuses the SAME credential verification as the /api/v1 restx surface
+    (`get_username_by_apikey`), so an apikey grants exactly the data reads
+    it already grants on /api/v1/* — nothing more.
+    """
+
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        from flask import g, jsonify, request
+
+        from database.auth_db import get_username_by_apikey
+
+        # 1. apikey path: check JSON body, then query param, then header.
+        provided = None
+        if request.is_json:
+            body = request.get_json(silent=True) or {}
+            provided = body.get("apikey") if isinstance(body, dict) else None
+        if not isinstance(provided, str) or not provided:
+            provided = request.args.get("apikey")
+        if not isinstance(provided, str) or not provided:
+            provided = request.headers.get("X-API-Key")
+        if isinstance(provided, str) and provided:
+            username = get_username_by_apikey(provided)
+            if username is None:
+                return jsonify({"status": "error", "message": "Invalid openalgo apikey"}), 401
+            g.openalgo_user = username
+            g.openalgo_apikey = provided
+            return f(*args, **kwargs)
+
+        # 2. session fallback: unchanged browser behavior — CSRF included.
+        #    The blueprint-level exemption in app.py removed the automatic
+        #    token check from this branch, so it is re-applied here.
+        if is_session_valid():
+            _enforce_csrf_for_session()
+            g.openalgo_user = session.get("user")
+            return f(*args, **kwargs)
+
+        # 3. neither: replicate check_session_validity's cleanup and response.
+        revoke_user_tokens()
+        session.clear()
+
+        is_ajax = (
+            request.headers.get("X-Requested-With") == "XMLHttpRequest"
+            or request.headers.get("Accept", "").startswith("application/json")
+            or request.content_type == "application/json"
+            or request.is_json
+        )
+        if is_ajax:
+            return jsonify({
+                "status": "error",
+                "error": "session_expired",
+                "message": "Your session has expired. Please log in again.",
+            }), 401
+
+        return redirect(url_for("auth.login"))
+
+    return decorated_function
+
+
 def is_session_valid():
     """Check if the current session is valid"""
     if not session.get("logged_in"):
