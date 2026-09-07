@@ -1159,6 +1159,7 @@ class WebSocketProxy:
                     f"Skipping cleanup for unready adapter for user {user_id}; "
                     "another authentication attempt owns the current adapter"
                 )
+            self.user_mapping.pop(client_id, None)
             await self.send_error(
                 client_id,
                 "BROKER_CONNECTION_ERROR",
