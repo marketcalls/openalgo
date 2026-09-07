@@ -289,7 +289,7 @@ def get_kotak_master_filepaths():
     auth_token = get_auth_token(login_username)
 
     # Updated for Neo API v2: trading_token:::trading_sid:::base_url:::access_token
-    trading_token, trading_sid, base_url, access_token = auth_token.split(":::")
+    trading_token, trading_sid, base_url, access_token = auth_token.split(":::")[:4]
 
     # Use the baseUrl from auth token first, then try alternatives
     # Sometimes scripmaster API is on different servers

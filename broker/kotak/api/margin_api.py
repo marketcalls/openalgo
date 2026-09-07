@@ -24,7 +24,7 @@ def calculate_single_margin(position_data, auth_token):
         Tuple of (response, parsed_response_data)
     """
     # Parse auth token
-    session_token, session_sid, base_url, access_token = auth_token.split(":::")
+    session_token, session_sid, base_url, access_token = auth_token.split(":::")[:4]
 
     # Debug logging for baseUrl
     logger.debug(f"MARGIN API - Using baseUrl: {base_url}")

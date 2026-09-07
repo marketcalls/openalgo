@@ -104,10 +104,12 @@ def _history_retry_delay(headers, attempt: int) -> float:
 
 class BrokerData:
     def __init__(self, auth_token):
-        # Updated for Neo API v2: session_token:::session_sid:::base_url:::access_token
+        # Neo API v2: session_token:::session_sid:::base_url:::access_token, with
+        # an optional 5th data_center part on tokens issued since streaming
+        # needed it. Take the first four so both lengths parse.
         self.session_token, self.session_sid, self.base_url, self.access_token = auth_token.split(
             ":::"
-        )
+        )[:4]
 
         # baseUrl is mandatory; it comes from MPIN validation. Raise if missing.
         if not self.base_url or not self.base_url.startswith("http"):
@@ -500,10 +502,11 @@ class BrokerData:
         try:
             # Kotak Neo's quotes endpoint rejects a request carrying 50 symbols with
             # HTTP 400 "Please set the Neo symbol max value to 50.", so the effective
-            # server-side cap is below 50 even though the docs state no limit at all.
-            # Observed against the live endpoint: 42 symbols returns 200, 50 returns
-            # 400, so the cap sits somewhere in 42-49. 25 keeps a wide margin; URL
-            # length is not the constraint (25 entries is roughly 350 characters).
+            # server-side cap is below the 50 the docs claim (documented 2026-09-01;
+            # before that they stated no limit at all). Observed against the live
+            # endpoint: 42 symbols returns 200, 50 returns 400, so the cap sits
+            # somewhere in 42-49. 25 keeps a wide margin; URL length is not the
+            # constraint (25 entries is roughly 350 characters).
             BATCH_SIZE = 25
             RATE_LIMIT_DELAY = 0.2  # 5 requests/sec = 125 symbols/sec (under 500 limit)
 

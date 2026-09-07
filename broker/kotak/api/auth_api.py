@@ -133,16 +133,33 @@ def authenticate_broker(mobile_number, totp, mpin):
         trading_token = data_dict["data"]["token"]
         trading_sid = data_dict["data"]["sid"]
         base_url = data_dict["data"].get("baseUrl", "")
+        # Which data centre this account lives in ("E43", "E21", ...). Kotak
+        # resolves the market-data feed host per data centre from a config
+        # service, so streaming needs this to know whether the account is
+        # routed to SFeed or cdtstream. See streaming/kotak_feed_config.py.
+        data_center = data_dict["data"].get("dataCenter", "")
 
         if not base_url:
             logger.warning("baseUrl not found in MPIN validation response, API calls may fail")
+        if not data_center:
+            logger.warning(
+                "dataCenter not found in MPIN validation response; market-data streaming "
+                "will fall back to the default SFeed endpoint"
+            )
 
         logger.info("Kotak TOTP authentication completed successfully")
-        logger.debug(f"Base URL for API calls: {base_url}")
+        logger.debug(f"Base URL for API calls: {base_url}, data centre: {data_center}")
 
-        # Create auth string: trading_token:::trading_sid:::base_url:::access_token
-        # This format allows extracting all components needed for subsequent API calls
-        auth_string = f"{trading_token}:::{trading_sid}:::{base_url}:::{access_token}"
+        # Auth string: trading_token:::trading_sid:::base_url:::access_token:::data_center
+        #
+        # data_center is appended, never inserted. Tokens issued before it was
+        # captured have four parts and are still valid, so every reader takes
+        # the first four positionally and treats a missing fifth as unknown -
+        # inserting it anywhere else would invalidate every stored token and
+        # force all existing users to log in again.
+        auth_string = (
+            f"{trading_token}:::{trading_sid}:::{base_url}:::{access_token}:::{data_center}"
+        )
         logger.debug(f"AUTH TOKEN CREATED for base URL: {base_url}")
 
         return auth_string, None
